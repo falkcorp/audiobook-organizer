@@ -314,115 +314,167 @@ func (mfs *Service) searchMetadataForBook(
 		return fn(ctx)
 	}
 
-	for _, src := range sources {
-		// Stop promptly if the caller cancelled — don't start another source.
-		if err := ctx.Err(); err != nil {
-			break
-		}
-		var allResults []metadata.BookMetadata
-		var lastErr error
-		sourcesTried = append(sourcesTried, src.Name())
-		cacheHit := false
+	// Fan out across sources. Each provider now has its OWN rate-limit token
+	// bucket in internal/metadata/providerhttp, so running sources concurrently
+	// does not make them contend for tokens with each other -- that is precisely
+	// what made this unsafe before and safe now. Previously every source was
+	// queried in series, and with up to four search attempts per source plus a
+	// scoring pass, one book's search took a measured 13s on production.
+	//
+	// Only the I/O half is parallel. The dedupe/scoring merge below stays
+	// sequential and in source order, because `sources` is PRIORITY-ORDERED and
+	// the dedupe is first-wins: parallelizing the merge would make which source
+	// wins a duplicate title+author nondeterministic between runs.
+	type sourceFetch struct {
+		name       string
+		results    []metadata.BookMetadata
+		baseScores []float64
+		baseTier   string
+		failedErr  string
+	}
+	fetched := make([]sourceFetch, len(sources))
 
-		// Check the metadata fetch cache before hitting the
-		// external API. Cache key is (bookID, source name) —
-		// on hit, we use the cached results as-is and skip the
-		// Search* calls entirely. On miss we fall through to
-		// the API path and write the result back at the end
-		// of the per-source block.
-		//
-		// Added 2026-04-11 after the OpenAI quota incident
-		// where re-fetching 8000 books hit every external API
-		// 8000 times even for books we'd already matched with
-		// high confidence.
-		maxAge := time.Duration(config.AppConfig.MetadataFetchCacheTTLDays) * 24 * time.Hour
-		if cached, _, cerr := database.GetCachedMetadataFetchWithMaxAge(mfs.db, id, src.Name(), maxAge); cerr == nil && cached != nil {
-			var cachedResults []metadata.BookMetadata
-			if jerr := json.Unmarshal(cached.Results, &cachedResults); jerr == nil {
-				// Keep the in-memory []BookMetadata internally consistent with the
-				// year-kind flag (#1940): entries cached before it shipped
-				// deserialize with PublishYearIsAudiobookRelease=false, so re-derive
-				// it from the source (cache key includes src.Name()). NOTE: on the
-				// search path this is defensive-only — candidates carry Source and
-				// re-derive the flag at apply time (service_apply.go) — but it keeps
-				// the two cache-replay sites symmetric.
-				isRelease := metadata.SourceProducesAudiobookReleaseYear(src.Name())
-				for i := range cachedResults {
-					cachedResults[i].PublishYearIsAudiobookRelease = isRelease
-				}
-				allResults = cachedResults
-				cacheHit = true
-				slog.Debug("metadata-search cache HIT for ( ) — results, age", "id", id, "name", src.Name(), "count", len(cachedResults), "value", time.Since(cached.CachedAt).Round(time.Second))
+	var fg errgroup.Group
+	fg.SetLimit(sourceFanoutLimit())
+	for srcIdx, source := range sources {
+		srcIdx, src := srcIdx, source
+		fg.Go(func() error {
+			// Stop promptly if the caller cancelled — don't start another source.
+			if err := ctx.Err(); err != nil {
+				return nil
 			}
-		}
+			var allResults []metadata.BookMetadata
+			var lastErr error
+			var failedErr string
+			cacheHit := false
 
-		if !cacheHit {
-			// If author hint provided, use title+author search for better results
-			if searchAuthor != "" {
+			// Check the metadata fetch cache before hitting the
+			// external API. Cache key is (bookID, source name) —
+			// on hit, we use the cached results as-is and skip the
+			// Search* calls entirely. On miss we fall through to
+			// the API path and write the result back at the end
+			// of the per-source block.
+			//
+			// Added 2026-04-11 after the OpenAI quota incident
+			// where re-fetching 8000 books hit every external API
+			// 8000 times even for books we'd already matched with
+			// high confidence.
+			maxAge := time.Duration(config.AppConfig.MetadataFetchCacheTTLDays) * 24 * time.Hour
+			if cached, _, cerr := database.GetCachedMetadataFetchWithMaxAge(mfs.db, id, src.Name(), maxAge); cerr == nil && cached != nil {
+				var cachedResults []metadata.BookMetadata
+				if jerr := json.Unmarshal(cached.Results, &cachedResults); jerr == nil {
+					// Keep the in-memory []BookMetadata internally consistent with the
+					// year-kind flag (#1940): entries cached before it shipped
+					// deserialize with PublishYearIsAudiobookRelease=false, so re-derive
+					// it from the source (cache key includes src.Name()). NOTE: on the
+					// search path this is defensive-only — candidates carry Source and
+					// re-derive the flag at apply time (service_apply.go) — but it keeps
+					// the two cache-replay sites symmetric.
+					isRelease := metadata.SourceProducesAudiobookReleaseYear(src.Name())
+					for i := range cachedResults {
+						cachedResults[i].PublishYearIsAudiobookRelease = isRelease
+					}
+					allResults = cachedResults
+					cacheHit = true
+					slog.Debug("metadata-search cache HIT for ( ) — results, age", "id", id, "name", src.Name(), "count", len(cachedResults), "value", time.Since(cached.CachedAt).Round(time.Second))
+				}
+			}
+
+			if !cacheHit {
+				// If author hint provided, use title+author search for better results
+				if searchAuthor != "" {
+					if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
+						return src.SearchByTitleAndAuthor(c, searchTitle, searchAuthor)
+					}); serr == nil {
+						allResults = append(allResults, results...)
+					} else {
+						lastErr = serr
+						slog.Debug("metadata-search SearchByTitleAndAuthor( ) error", "name", src.Name(), "searchTitle", searchTitle, "searchAuthor", searchAuthor, "error", serr)
+					}
+				}
+
+				// Narrator-as-author fallback: author/narrator fields are frequently
+				// swapped in audiobook metadata. Try searching with the narrator as
+				// author to catch these cases.
+				if bookNarrator != "" && bookNarrator != searchAuthor {
+					if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
+						return src.SearchByTitleAndAuthor(c, searchTitle, bookNarrator)
+					}); serr == nil {
+						allResults = append(allResults, results...)
+					} else {
+						slog.Debug("metadata-search narrator-as-author fallback( ) error", "name", src.Name(), "searchTitle", searchTitle, "narrator", bookNarrator, "error", serr)
+					}
+				}
+
+				// Always also search by title only to get broader results
 				if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
-					return src.SearchByTitleAndAuthor(c, searchTitle, searchAuthor)
+					return src.SearchByTitle(c, searchTitle)
 				}); serr == nil {
 					allResults = append(allResults, results...)
 				} else {
 					lastErr = serr
-					slog.Debug("metadata-search SearchByTitleAndAuthor( ) error", "name", src.Name(), "searchTitle", searchTitle, "searchAuthor", searchAuthor, "error", serr)
+					slog.Debug("metadata-search SearchByTitle() error", "name", src.Name(), "value", searchTitle, "error", serr)
 				}
-			}
-
-			// Narrator-as-author fallback: author/narrator fields are frequently
-			// swapped in audiobook metadata. Try searching with the narrator as
-			// author to catch these cases.
-			if bookNarrator != "" && bookNarrator != searchAuthor {
-				if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
-					return src.SearchByTitleAndAuthor(c, searchTitle, bookNarrator)
-				}); serr == nil {
-					allResults = append(allResults, results...)
-				} else {
-					slog.Debug("metadata-search narrator-as-author fallback( ) error", "name", src.Name(), "searchTitle", searchTitle, "narrator", bookNarrator, "error", serr)
+				// SearchByTitle with original title if different
+				if searchTitle != book.Title {
+					if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
+						return src.SearchByTitle(c, book.Title)
+					}); serr == nil {
+						allResults = append(allResults, results...)
+					} else {
+						lastErr = serr
+					}
 				}
-			}
 
-			// Always also search by title only to get broader results
-			if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
-				return src.SearchByTitle(c, searchTitle)
-			}); serr == nil {
-				allResults = append(allResults, results...)
-			} else {
-				lastErr = serr
-				slog.Debug("metadata-search SearchByTitle() error", "name", src.Name(), "value", searchTitle, "error", serr)
-			}
-			// SearchByTitle with original title if different
-			if searchTitle != book.Title {
-				if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
-					return src.SearchByTitle(c, book.Title)
-				}); serr == nil {
-					allResults = append(allResults, results...)
-				} else {
-					lastErr = serr
+				// If all calls failed (no results and there was an error), record it
+				if len(allResults) == 0 && lastErr != nil {
+					failedErr = lastErr.Error()
 				}
-			}
 
-			// If all calls failed (no results and there was an error), record it
-			if len(allResults) == 0 && lastErr != nil {
-				sourcesFailed[src.Name()] = lastErr.Error()
-			}
+				slog.Debug("metadata-search returned raw results for", "name", src.Name(), "count", len(allResults), "searchTitle", searchTitle)
 
-			slog.Debug("metadata-search returned raw results for", "name", src.Name(), "count", len(allResults), "searchTitle", searchTitle)
-
-			// Write to cache on a successful non-empty fetch.
-			// Empty and error cases are not cached so they can
-			// be retried. Cache is best-effort — a Put failure
-			// is logged but doesn't fail the outer search.
-			if len(allResults) > 0 {
-				if blob, merr := json.Marshal(allResults); merr == nil {
-					if perr := database.PutCachedMetadataFetch(mfs.db, id, src.Name(), blob, 0); perr != nil {
-						slog.Warn("metadata-search cache put failed for ( )", "id", id, "name", src.Name(), "error", perr)
+				// Write to cache on a successful non-empty fetch.
+				// Empty and error cases are not cached so they can
+				// be retried. Cache is best-effort — a Put failure
+				// is logged but doesn't fail the outer search.
+				if len(allResults) > 0 {
+					if blob, merr := json.Marshal(allResults); merr == nil {
+						if perr := database.PutCachedMetadataFetch(mfs.db, id, src.Name(), blob, 0); perr != nil {
+							slog.Warn("metadata-search cache put failed for ( )", "id", id, "name", src.Name(), "error", perr)
+						}
 					}
 				}
 			}
-		}
 
-		baseScores, baseTier := mfs.ScoreBaseCandidates(ctx, book, allResults, searchWords)
+
+			baseScores, baseTier := mfs.ScoreBaseCandidates(ctx, book, allResults, searchWords)
+			fetched[srcIdx] = sourceFetch{
+				name:       src.Name(),
+				results:    allResults,
+				baseScores: baseScores,
+				baseTier:   baseTier,
+				failedErr:  failedErr,
+			}
+			return nil
+		})
+	}
+	// Errors are never returned above (a failing source is recorded per-source and
+	// must not abort the others), so Wait's error is structurally always nil.
+	_ = fg.Wait()
+
+	// Merge in SOURCE ORDER — see the note above about first-wins dedupe.
+	for srcIdx := range sources {
+		sf := fetched[srcIdx]
+		if sf.name == "" {
+			continue // cancelled before this source ran
+		}
+		src := sources[srcIdx]
+		sourcesTried = append(sourcesTried, sf.name)
+		if sf.failedErr != "" {
+			sourcesFailed[sf.name] = sf.failedErr
+		}
+		allResults := sf.results
+		baseScores, baseTier := sf.baseScores, sf.baseTier
 		slog.Debug("metadata-search scored results from with tier", "count", len(allResults), "name", src.Name(), "baseTier", baseTier)
 
 		for i, r := range allResults {
@@ -540,6 +592,7 @@ func (mfs *Service) searchMetadataForBook(
 				GoogleRatingCount:    r.GoogleRatingCount,
 			})
 		}
+	}
 	}
 
 	// Try ASIN lookup: either the whole query is an ASIN, or extract one from the query
