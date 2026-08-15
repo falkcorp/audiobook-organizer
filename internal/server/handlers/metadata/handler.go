@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-08-11
+// last-edited: 2026-08-15
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -618,7 +618,16 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 	if pool := h.fileIOPool; pool != nil {
 		bookID := id
 		mfs := h.metadataFetchService
+		pendingCover := resp.PendingCoverURL
 		pool.Submit(bookID, func() {
+			// Cover download runs FIRST and in the background. It used to run
+			// inline in ApplyMetadataCandidate, where it was ~4s of a measured
+			// 6.44s request. It has to precede the file I/O below because
+			// ApplyMetadataFileIO embeds the cover into the audio files, and an
+			// embed that runs before the download would embed the previous image.
+			if pendingCover != "" {
+				mfs.DownloadPendingCover(bookID, pendingCover)
+			}
 			mfs.ApplyMetadataFileIO(bookID)
 			if shouldWriteBack {
 				if _, wbErr := mfs.WriteBackMetadataForBook(bookID); wbErr != nil {
