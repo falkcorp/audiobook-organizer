@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.4.0
+// version: 5.5.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-07-17
+// last-edited: 2026-08-15
 
 package metafetch
 
@@ -197,37 +197,56 @@ func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string)
 		return
 	}
 
-	// Check if the new cover is different from what's already embedded.
-	// Skip archive + embed if they match (same hash).
 	newCoverData, _ := os.ReadFile(coverPath)
+	newHash := ""
 	if len(newCoverData) > 0 {
-		newHash := fmt.Sprintf("%x", sha256.Sum256(newCoverData))[:12]
-		existingData, _, _ := metadata.ExtractCoverArtBytes(files[0])
-		if len(existingData) > 0 {
-			existingHash := fmt.Sprintf("%x", sha256.Sum256(existingData))[:12]
-			if newHash == existingHash {
-				slog.Debug("cover art unchanged for book , skipping embed", "id", book.ID)
-				return
-			}
-		}
+		newHash = fmt.Sprintf("%x", sha256.Sum256(newCoverData))[:12]
 	}
 
-	// Archive the old cover from the first file before overwriting
-	mfs.archiveExistingCover(book.ID, files[0])
-
-	// Embed new cover into all files.
-	// EmbedCoverArtSafe imports the file from a Deluge-protected path before
-	// writing if the pre-flight guard is wired (mfs.safeWriteDeps).
-	embedded := 0
+	// Every file of a multi-file book must carry the artwork. The skip check is
+	// therefore PER FILE.
+	//
+	// It used to compare only files[0] and return for the whole book on a match,
+	// which is all-or-nothing in the wrong direction: a book whose first file
+	// already had the cover skipped the embed for every remaining file, so those
+	// files stayed permanently artwork-less and no amount of re-running fixed it.
+	// Comparing per file both closes that hole and keeps the saving, since a file
+	// that already matches is still skipped — and skipping is what matters, as an
+	// embed is a full rewrite of the audio file.
+	embedded, skipped, failed := 0, 0, 0
+	archived := false
 	for _, f := range files {
+		if newHash != "" {
+			if existingData, _, _ := metadata.ExtractCoverArtBytes(f); len(existingData) > 0 {
+				if fmt.Sprintf("%x", sha256.Sum256(existingData))[:12] == newHash {
+					skipped++
+					continue
+				}
+			}
+		}
+
+		// Archive the cover we are about to overwrite, once per book, from the
+		// first file we actually touch.
+		if !archived {
+			mfs.archiveExistingCover(book.ID, f)
+			archived = true
+		}
+
+		// EmbedCoverArtSafe imports the file from a Deluge-protected path before
+		// writing if the pre-flight guard is wired (mfs.safeWriteDeps).
 		if err := tagger.EmbedCoverArtSafe(context.Background(), f, coverPath, mfs.safeWriteDeps); err != nil {
 			slog.Warn("cover art embedding failed for", "value", f, "error", err)
+			failed++
 		} else {
 			embedded++
 		}
 	}
-	if embedded > 0 {
-		slog.Info("cover art embedded into file(s) for book", "count", embedded, "id", book.ID)
+	if embedded > 0 || failed > 0 {
+		slog.Info("cover art embed complete for book",
+			"id", book.ID, "embedded", embedded, "skipped_unchanged", skipped, "failed", failed, "files", len(files))
+	} else if skipped > 0 {
+		slog.Debug("cover art already present in every file, nothing to embed",
+			"id", book.ID, "files", len(files))
 	}
 }
 
