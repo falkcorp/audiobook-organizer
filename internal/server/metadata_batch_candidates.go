@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-07-13
+// last-edited: 2026-08-15
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -18,6 +18,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/oklog/ulid/v2"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -503,60 +504,102 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 		resultsByBook[r.BookID] = r
 	}
 
+	// Apply in parallel with a bounded pool, assembling the response strictly in
+	// request order. Each goroutine owns exactly one slot in `outcomes` and the
+	// slice is read only after Wait, so the slots need no lock. Building the
+	// counters and the error list from that ordered slice afterwards — rather
+	// than appending from the workers — is what keeps `errors` deterministic:
+	// appending concurrently would both race and reorder the messages the user
+	// sees between two identical requests.
+	type applyOutcome struct {
+		applied bool
+		skipped bool
+		errMsg  string
+	}
+	outcomes := make([]applyOutcome, len(req.BookIDs))
+
+	g, gctx := errgroup.WithContext(c.Request.Context())
+	g.SetLimit(writeBackWorkers())
+
+	for i, bookID := range req.BookIDs {
+		i, bookID := i, bookID
+		g.Go(func() error {
+			if gctx.Err() != nil {
+				outcomes[i] = applyOutcome{errMsg: fmt.Sprintf("%s: canceled: %v", bookID, gctx.Err())}
+				return nil
+			}
+
+			opResult, ok := resultsByBook[bookID]
+			if !ok {
+				outcomes[i] = applyOutcome{skipped: true}
+				return nil
+			}
+
+			var cr CandidateResult
+			if err := json.Unmarshal([]byte(opResult.ResultJSON), &cr); err != nil {
+				outcomes[i] = applyOutcome{errMsg: fmt.Sprintf("%s: failed to parse result", bookID)}
+				return nil
+			}
+			if cr.Candidate == nil || cr.Status != "matched" {
+				outcomes[i] = applyOutcome{skipped: true}
+				return nil
+			}
+
+			candidate := *cr.Candidate
+			if _, err := mfs.ApplyMetadataCandidate(bookID, candidate, nil); err != nil {
+				outcomes[i] = applyOutcome{errMsg: fmt.Sprintf("%s: apply failed: %v", bookID, err)}
+				return nil
+			}
+
+			// Persist "applied" status so re-opens of the dialog don't show
+			// this book as still needing review. Mirrors the reject handler.
+			cr.Status = "applied"
+			if updatedJSON, err := json.Marshal(cr); err == nil {
+				_ = store.CreateOperationResult(&database.OperationResult{
+					OperationID: req.OperationID,
+					BookID:      bookID,
+					ResultJSON:  string(updatedJSON),
+					Status:      "applied",
+				})
+			}
+
+			// Queue file I/O through the worker pool (bounded concurrency).
+			if pool := s.fileIOPool; pool != nil {
+				bid := bookID
+				pool.Submit(bid, func() {
+					mfs.ApplyMetadataFileIO(bid)
+					if _, err := mfs.WriteBackMetadataForBook(bid); err != nil {
+						slog.Warn("write-back failed for", "bid", bid, "err", err)
+					}
+					if s.writeBackBatcher != nil {
+						s.writeBackBatcher.Enqueue(bid)
+					}
+				})
+			}
+
+			outcomes[i] = applyOutcome{applied: true}
+			return nil
+		})
+	}
+	// No worker returns a non-nil error — every per-book failure is recorded in
+	// outcomes[i].errMsg so it reaches the user in the `errors` array — but the
+	// result is checked rather than discarded in case that ever changes.
+	if err := g.Wait(); err != nil {
+		httputil.InternalError(c, "failed to apply candidates", err)
+		return
+	}
+
 	applied := 0
 	skipped := 0
 	var errors []string
-
-	for _, bookID := range req.BookIDs {
-		opResult, ok := resultsByBook[bookID]
-		if !ok {
+	for _, o := range outcomes {
+		switch {
+		case o.applied:
+			applied++
+		case o.skipped:
 			skipped++
-			continue
-		}
-
-		var cr CandidateResult
-		if err := json.Unmarshal([]byte(opResult.ResultJSON), &cr); err != nil {
-			errors = append(errors, fmt.Sprintf("%s: failed to parse result", bookID))
-			continue
-		}
-		if cr.Candidate == nil || cr.Status != "matched" {
-			skipped++
-			continue
-		}
-
-		candidate := *cr.Candidate
-		_, err := mfs.ApplyMetadataCandidate(bookID, candidate, nil)
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: apply failed: %v", bookID, err))
-			continue
-		}
-
-		applied++
-
-		// Persist "applied" status so re-opens of the dialog don't show
-		// this book as still needing review. Mirrors the reject handler.
-		cr.Status = "applied"
-		if updatedJSON, err := json.Marshal(cr); err == nil {
-			_ = store.CreateOperationResult(&database.OperationResult{
-				OperationID: req.OperationID,
-				BookID:      bookID,
-				ResultJSON:  string(updatedJSON),
-				Status:      "applied",
-			})
-		}
-
-		// Queue file I/O through the worker pool (bounded concurrency).
-		if pool := s.fileIOPool; pool != nil {
-			bid := bookID
-			pool.Submit(bid, func() {
-				mfs.ApplyMetadataFileIO(bid)
-				if _, err := mfs.WriteBackMetadataForBook(bid); err != nil {
-					slog.Warn("write-back failed for", "bid", bid, "err", err)
-				}
-				if s.writeBackBatcher != nil {
-					s.writeBackBatcher.Enqueue(bid)
-				}
-			})
+		case o.errMsg != "":
+			errors = append(errors, o.errMsg)
 		}
 	}
 

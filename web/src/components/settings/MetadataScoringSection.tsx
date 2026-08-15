@@ -1,7 +1,7 @@
 // file: web/src/components/settings/MetadataScoringSection.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-07-11
+// last-edited: 2026-08-15
 
 import {
   Box,
@@ -38,6 +38,7 @@ const SCORING_DEFAULTS = {
   series_number_exact_boost: 2.0,
   series_number_wrong_penalty: 0.5,
   bulk_fetch_workers: 4,
+  write_back_workers: 4,
   duration_tier_multipliers: [1.3, 1.2, 1.1, 1.0, 0.75, 0.5],
   duration_tier_scores: [20, 15, 10, 0, -10, -20],
 } satisfies Partial<api.MetadataScoringConfig>;
@@ -338,9 +339,9 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
 
       <Divider sx={{ my: 3 }} />
 
-      {/* Bulk fetch */}
+      {/* Concurrency */}
       <Typography variant="subtitle1" gutterBottom>
-        Bulk fetch
+        Concurrency
       </Typography>
       <Grid container spacing={2}>
         {numField(
@@ -350,8 +351,16 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
           1,
           1,
         )}
-        {resetButton('Reset bulk fetch to defaults', {
+        {numField(
+          'write_back_workers',
+          'Write-back workers',
+          'Concurrent workers writing tags into audio files (bulk write-back, batch save to files)',
+          1,
+          1,
+        )}
+        {resetButton('Reset concurrency to defaults', {
           bulk_fetch_workers: SCORING_DEFAULTS.bulk_fetch_workers,
+          write_back_workers: SCORING_DEFAULTS.write_back_workers,
         })}
       </Grid>
     </Box>
