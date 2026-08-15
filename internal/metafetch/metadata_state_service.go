@@ -68,7 +68,7 @@ func (mss *MetadataStateService) LoadMetadataState(bookID string) (map[string]me
 
 	// Migrate legacy state
 	if err := mss.SaveMetadataState(bookID, legacy); err != nil {
-				slog.Warn("failed to migrate legacy metadata state for", "id", bookID, "error", err)
+		slog.Warn("failed to migrate legacy metadata state for", "id", bookID, "error", err)
 	}
 
 	return legacy, nil
@@ -147,7 +147,7 @@ func (mss *MetadataStateService) recordChange(bookID, field, changeType, source 
 		ChangedAt:     time.Now(),
 	}
 	if err := mss.db.RecordMetadataChange(record); err != nil {
-				slog.Warn("failed to record metadata change for /", "id", bookID, "field", field, "error", err)
+		slog.Warn("failed to record metadata change for /", "id", bookID, "field", field, "error", err)
 	}
 }
 

@@ -84,7 +84,7 @@ func TestTranscribedTitleAgrees(t *testing.T) {
 		want              bool
 	}{
 		{"The Way of Kings", "The Way of Kings", true},
-		{"the way of kings", "The Way of Kings", true},         // normalized
+		{"the way of kings", "The Way of Kings", true},                // normalized
 		{"The Way of Kings (Stormlight 1)", "The Way of Kings", true}, // substring
 		{"The Final Empire", "The Way of Kings", false},
 		{"", "The Way of Kings", false},

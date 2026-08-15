@@ -576,15 +576,15 @@ func TestFilterUnchangedTags_UnchangedCustomTags(t *testing.T) {
 	// Prepare a tag map with custom tag values that match what ExtractMetadata
 	// would return from a real file
 	tagMap := map[string]interface{}{
-		"title":            "Test Book",
-		"album":            "Test Album",
-		"artist":           "Test Author",
-		"book_id":          "book-123",
-		"open_library_id":  "ol-456",
-		"hardcover_id":     "hc-789",
-		"google_books_id":  "gb-012",
-		"edition":          "1st",
-		"print_year":       "2020",
+		"title":           "Test Book",
+		"album":           "Test Album",
+		"artist":          "Test Author",
+		"book_id":         "book-123",
+		"open_library_id": "ol-456",
+		"hardcover_id":    "hc-789",
+		"google_books_id": "gb-012",
+		"edition":         "1st",
+		"print_year":      "2020",
 	}
 
 	// Since the file doesn't exist, all tags will be returned (safe fallback).
@@ -616,8 +616,8 @@ func TestFilterUnchangedTags_MissingFile(t *testing.T) {
 	missingFile := "/tmp/nonexistent-file-xyz.m4b"
 
 	tagMap := map[string]interface{}{
-		"title":    "Test Book",
-		"book_id":  "test-id",
+		"title":   "Test Book",
+		"book_id": "test-id",
 	}
 
 	filtered := FilterUnchangedTags(missingFile, tagMap)

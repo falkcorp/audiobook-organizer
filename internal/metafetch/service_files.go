@@ -66,11 +66,11 @@ func backupFileBeforeWrite(filePath string) {
 	if err := os.Link(filePath, backupPath); err != nil {
 		// Hardlink failed — fall back to copy
 		if err := fileops.SafeCopy(filePath, backupPath, fileops.OperationConfig{}); err != nil {
-						slog.Warn("backup before tag write failed:", "path", filePath, "error", err)
+			slog.Warn("backup before tag write failed:", "path", filePath, "error", err)
 			return
 		}
 	}
-		slog.Debug("backup before tag write", "path", backupPath)
+	slog.Debug("backup before tag write", "path", backupPath)
 }
 
 // ApplyMetadataFileIO runs the slow file operations after metadata is applied:
@@ -91,7 +91,7 @@ func (mfs *Service) ApplyMetadataFileIO(id string) {
 	// Run file rename + tag write pipeline
 	if config.AppConfig.AutoRenameOnApply || config.AppConfig.AutoWriteTagsOnApply {
 		if err := mfs.runApplyPipeline(id, book); err != nil {
-						slog.Warn("apply pipeline failed for", "id", id, "error", err)
+			slog.Warn("apply pipeline failed for", "id", id, "error", err)
 		}
 	}
 }
@@ -123,7 +123,7 @@ func removeEmptyDirs(dir, stopAt string) {
 		if err := os.Remove(dir); err != nil {
 			break
 		}
-				slog.Info("removed empty directory", "value", dir)
+		slog.Info("removed empty directory", "value", dir)
 		dir = filepath.Dir(dir)
 	}
 }

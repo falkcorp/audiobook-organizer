@@ -245,7 +245,7 @@ func (mfs *Service) loadMetadataState(bookID string) (map[string]metadataFieldSt
 	}
 
 	if err := mfs.saveMetadataState(bookID, legacy); err != nil {
-				slog.Warn("failed to migrate legacy metadata state for", "id", bookID, "error", err)
+		slog.Warn("failed to migrate legacy metadata state for", "id", bookID, "error", err)
 	}
 	return legacy, nil
 }
