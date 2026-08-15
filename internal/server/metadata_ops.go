@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-08-13
+// last-edited: 2026-08-15
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -68,6 +68,25 @@ func bulkFetchWorkers() int {
 		return w
 	}
 	return defaultBulkFetchWorkers
+}
+
+// defaultWriteBackWorkers is the fallback pool size for the write-back paths
+// (runBulkWriteBack, metadata.batch-save) when
+// config.AppConfig.MetadataScoring.WriteBackWorkers is unset (<=0). These
+// workers are disk/TagLib-bound rather than provider-bound, so the ceiling is
+// the library filesystem, not a remote rate limit. 4 replaces the previous
+// hardcoded 2.
+const defaultWriteBackWorkers = 4
+
+// writeBackWorkers resolves the configured write-back pool size, falling back to
+// defaultWriteBackWorkers when unset. The `> 0` guard is load-bearing, not
+// decorative: an unmarshalled config that never set the key yields 0, and a
+// zero-sized pool would consume the job channel with nobody draining it.
+func writeBackWorkers() int {
+	if w := config.AppConfig.MetadataScoring.WriteBackWorkers; w > 0 {
+		return w
+	}
+	return defaultWriteBackWorkers
 }
 
 // providerSemaphore bounds in-flight live search calls per source name. The map
@@ -824,7 +843,7 @@ func (s *Server) runBulkWriteBack(
 	startIdx int,
 	progress operations.ProgressReporter,
 ) error {
-	const workers = 2
+	workers := writeBackWorkers()
 
 	store := s.Store()
 	mfs := s.metadataFetchService
@@ -834,97 +853,146 @@ func (s *Server) runBulkWriteBack(
 		_ = progress.Log("info", fmt.Sprintf("resuming bulk write-back from index %d/%d", startIdx, total), nil)
 	}
 
-	type job struct {
-		id   string
-		book *database.Book
-	}
-
-	jobCh := make(chan job, workers*2)
+	// The channel carries bare IDs. Previously it carried a pre-loaded
+	// *database.Book because the PRODUCER did GetBookByID, isProtectedPath,
+	// GetBookTags and RunApplyPipelineRenameOnly synchronously before handing
+	// off — a full rename (the slowest step in the whole loop) ran on the single
+	// producer goroutine while every consumer sat idle. All of that per-book work
+	// now happens inside the workers.
+	//
+	// Buffer is 32x the pool rather than 2x. The old workers*2 buffer meant the
+	// producer blocked as soon as it was a couple of items ahead, so a single
+	// slow book stalled the feed for everyone; with only IDs in flight the buffer
+	// is nearly free (a []string of a few hundred entries).
+	jobCh := make(chan string, workers*32)
 	var wg sync.WaitGroup
-	var written, failed atomic.Int64
-	var mu sync.Mutex
+	var written, failed, skipped atomic.Int64
+
+	// ckptMu guards ONLY SaveCheckpoint, which writes a shared state blob to the
+	// store. It deliberately does NOT wrap progress.Log / progress.UpdateProgress:
+	// the reporter serializes those internally on its own progressMu, so the mutex
+	// that used to wrap them here was redundant and was serializing every worker
+	// through the reporter for no benefit.
+	//
+	// Honesty note on the checkpoint value: with N workers finishing out of order,
+	// the completion COUNT is no longer a valid resume INDEX — a resume from that
+	// index can skip a straggler and re-do a book that already finished. Write-back
+	// is idempotent (it rewrites the same tags from the same DB row), so re-doing is
+	// harmless; skipping is the real cost, and it is bounded by the in-flight window
+	// (at most `workers` books). Accepted deliberately: without a checkpoint at all,
+	// a restart replays the entire library from zero.
+	var ckptMu sync.Mutex
+
+	// canceled is set by any worker (or the feeder) that observes cancellation so
+	// the "canceled" log line is emitted exactly once rather than once per worker.
+	var canceled atomic.Bool
+
+	processOne := func(bookID string) {
+		book, err := store.GetBookByID(bookID)
+		if err != nil || book == nil {
+			failed.Add(1)
+			_ = progress.Log("warn", fmt.Sprintf("book %s: not found", bookID), nil)
+			return
+		}
+		if s.isProtectedPath(book.FilePath) {
+			skipped.Add(1)
+			_ = progress.Log("info", fmt.Sprintf("book %s: skipping protected path", bookID), nil)
+			return
+		}
+		if tags, tagErr := store.GetBookTags(bookID); tagErr == nil {
+			if policy.EvaluatePolicy(tags).NoWriteback {
+				skipped.Add(1)
+				_ = progress.Log("info", fmt.Sprintf("book %s: skipping write-back (policy:no-writeback tag)", bookID), nil)
+				return
+			}
+		}
+
+		// Rename FIRST, then re-read, then lock. Order matters: the rename moves
+		// the file, so a lock taken on the pre-rename path would guard a path
+		// nothing is about to be written to. The rename itself is guarded on the
+		// OLD path so two workers cannot move the same file at once.
+		if doRename {
+			releaseOld := writeBackPathLocks.lock(book.FilePath)
+			renameErr := mfs.RunApplyPipelineRenameOnly(bookID, book)
+			releaseOld()
+			if renameErr != nil {
+				_ = progress.Log("warn", fmt.Sprintf("book %s: rename failed: %v", bookID, renameErr), nil)
+			}
+			if fresh, freshErr := store.GetBookByID(bookID); freshErr == nil && fresh != nil {
+				book = fresh
+			}
+		}
+
+		// Serialize on the destination path. See path_locks.go for the three
+		// hazards this closes (version-group siblings, protected-path redirect,
+		// and the one-second-granularity .bak- backup name).
+		release := writeBackPathLocks.lock(book.FilePath)
+		count, writeErr := mfs.WriteBackMetadataForBook(bookID)
+		release()
+
+		if writeErr != nil {
+			failed.Add(1)
+			_ = progress.Log("warn", fmt.Sprintf("book %s: write-back failed: %v", bookID, writeErr), nil)
+			return
+		}
+		written.Add(1)
+		if count > 0 && s.activityWriter != nil {
+			activity.LogBatch(s.activityWriter, opID, "metadata-apply", "write-back",
+				activity.BatchItem{Name: book.Title, Count: count})
+		}
+	}
 
 	for range workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := range jobCh {
-				if ctx.Err() != nil {
-					return
+			for bookID := range jobCh {
+				// Cancellation is checked per item inside the worker, not only in
+				// the feeder: with a deep buffer the feeder can be finished long
+				// before the workers are, so a feeder-only check would let a
+				// canceled op keep writing files for the length of the backlog.
+				if ctx.Err() != nil || progress.IsCanceled() {
+					canceled.Store(true)
+					continue // drain, don't return — returning would deadlock the feeder
 				}
-				count, writeErr := mfs.WriteBackMetadataForBook(j.id)
-				if writeErr != nil {
-					failed.Add(1)
-					mu.Lock()
-					_ = progress.Log("warn", fmt.Sprintf("book %s: write-back failed: %v", j.id, writeErr), nil)
-					mu.Unlock()
-				} else {
-					written.Add(1)
-					if count > 0 && s.activityWriter != nil {
-						activity.LogBatch(s.activityWriter, opID, "metadata-apply", "write-back",
-							activity.BatchItem{Name: j.book.Title, Count: count})
-					}
-				}
-				done := written.Load() + failed.Load()
-				mu.Lock()
-				_ = progress.UpdateProgress(int(done), total, fmt.Sprintf("processing %d/%d (%d written, %d failed)", done, total, written.Load(), failed.Load()))
+				processOne(bookID)
+
+				done := written.Load() + failed.Load() + skipped.Load()
+				// UpdateProgress on EVERY item, unconditionally: this is what resets
+				// the registry stuck-op watchdog (5-minute default ProgressTimeout).
+				// The message is deliberately coarse-grained in shape but carries the
+				// running tallies the operator needs.
+				_ = progress.UpdateProgress(int(done), total,
+					fmt.Sprintf("processing %d/%d (%d written, %d failed, %d skipped)", done, total, written.Load(), failed.Load(), skipped.Load()))
 				if done%10 == 0 {
+					ckptMu.Lock()
 					_ = operations.SaveCheckpoint(store, opID, "bulk_write_back", "writing", int(done), total)
+					ckptMu.Unlock()
 				}
-				mu.Unlock()
 			}
 		}()
 	}
 
 	for i := startIdx; i < total; i++ {
 		if ctx.Err() != nil || progress.IsCanceled() {
-			mu.Lock()
+			canceled.Store(true)
 			_ = progress.Log("info", fmt.Sprintf("canceled after feeding %d/%d books", i-startIdx, total-startIdx), nil)
-			mu.Unlock()
 			break
 		}
-
-		bookID := bookIDs[i]
-		book, err := store.GetBookByID(bookID)
-		if err != nil || book == nil {
-			failed.Add(1)
-			mu.Lock()
-			_ = progress.Log("warn", fmt.Sprintf("book %s: not found", bookID), nil)
-			mu.Unlock()
-			continue
-		}
-		if s.isProtectedPath(book.FilePath) {
-			mu.Lock()
-			_ = progress.Log("info", fmt.Sprintf("book %s: skipping protected path", bookID), nil)
-			mu.Unlock()
-			continue
-		}
-		if tags, tagErr := store.GetBookTags(bookID); tagErr == nil {
-			if policy.EvaluatePolicy(tags).NoWriteback {
-				mu.Lock()
-				_ = progress.Log("info", fmt.Sprintf("book %s: skipping write-back (policy:no-writeback tag)", bookID), nil)
-				mu.Unlock()
-				continue
-			}
-		}
-		if doRename {
-			if renameErr := mfs.RunApplyPipelineRenameOnly(bookID, book); renameErr != nil {
-				mu.Lock()
-				_ = progress.Log("warn", fmt.Sprintf("book %s: rename failed: %v", bookID, renameErr), nil)
-				mu.Unlock()
-			}
-		}
-
 		select {
-		case jobCh <- job{id: bookID, book: book}:
+		case jobCh <- bookIDs[i]:
 		case <-ctx.Done():
 		}
 	}
 	close(jobCh)
 	wg.Wait()
 
+	if canceled.Load() {
+		_ = progress.Log("info", "bulk write-back canceled before completing all books", nil)
+	}
+
 	_ = operations.ClearState(store, opID)
-	summary := fmt.Sprintf("bulk write-back complete: %d written, %d failed out of %d", written.Load(), failed.Load(), total)
+	summary := fmt.Sprintf("bulk write-back complete: %d written, %d failed, %d skipped out of %d", written.Load(), failed.Load(), skipped.Load(), total)
 	_ = progress.Log("info", summary, nil)
 	if s.activityWriter != nil {
 		activity.FlushOperation(s.activityWriter, opID)

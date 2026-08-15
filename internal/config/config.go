@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.76.0
+// version: 1.77.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-08-12
+// last-edited: 2026-08-15
 
 package config
 
@@ -316,6 +316,14 @@ type MetadataScoringConfig struct {
 
 	// --- new: bulk-fetch concurrency (default 4; consumed by TASK-05) ---
 	BulkFetchWorkers int `json:"bulk_fetch_workers" mapstructure:"bulk_fetch_workers"`
+
+	// WriteBackWorkers is the worker-pool size for the bulk write-back /
+	// batch-save paths that write tags into audio files (see
+	// internal/server/metadata_ops.go writeBackWorkers()). Distinct from
+	// BulkFetchWorkers: that pool is network-bound against metadata providers,
+	// this one is disk/TagLib-bound against the library. Default 4; 0 or
+	// negative falls back to the compiled-in default.
+	WriteBackWorkers int `json:"write_back_workers" mapstructure:"write_back_workers"`
 }
 
 // f64Ptr returns a pointer to v. Used to populate the pointer-typed scoring
@@ -1310,6 +1318,7 @@ func InitConfig() {
 	viper.SetDefault("metadata_scoring.duration_tier_multipliers", []float64{1.30, 1.20, 1.10, 1.00, 0.75, 0.50})
 	viper.SetDefault("metadata_scoring.duration_tier_scores", []float64{20, 15, 10, 0, -10, -20})
 	viper.SetDefault("metadata_scoring.bulk_fetch_workers", 4)
+	viper.SetDefault("metadata_scoring.write_back_workers", 4)
 
 	// AI backend-mode toggle. Modes default empty (resolved from legacy fields
 	// by EffectiveEmbeddingMode / EffectiveLLMMode). LocalBaseURL uses a
@@ -1344,6 +1353,7 @@ func InitConfig() {
 	viper.BindEnv("metadata_scoring.series_number_exact_boost", "METADATA_SCORING_SERIES_NUMBER_EXACT_BOOST")               //nolint:errcheck
 	viper.BindEnv("metadata_scoring.series_number_wrong_penalty", "METADATA_SCORING_SERIES_NUMBER_WRONG_PENALTY")           //nolint:errcheck
 	viper.BindEnv("metadata_scoring.bulk_fetch_workers", "METADATA_SCORING_BULK_FETCH_WORKERS")                             //nolint:errcheck
+	viper.BindEnv("metadata_scoring.write_back_workers", "METADATA_SCORING_WRITE_BACK_WORKERS")                             //nolint:errcheck
 
 	// Unified dedup scoring defaults (SPEC 1 §3–4, T011).
 	// These are consumed by internal/dedup/unified.LoadScoreConfig via Viper.
@@ -1646,6 +1656,7 @@ func InitConfig() {
 				DurationTierScores:      getFloat64Slice("metadata_scoring.duration_tier_scores"),
 
 				BulkFetchWorkers: viper.GetInt("metadata_scoring.bulk_fetch_workers"),
+				WriteBackWorkers: viper.GetInt("metadata_scoring.write_back_workers"),
 			},
 
 			// AI backend-mode toggle (nested sub-struct). Modes default empty
@@ -2115,6 +2126,7 @@ func ResetToDefaults() {
 				DurationTierScores:      []float64{20, 15, 10, 0, -10, -20},
 
 				BulkFetchWorkers: 4,
+				WriteBackWorkers: 4,
 			},
 
 			// AI backend-mode toggle. Modes empty at rest (derived from legacy
