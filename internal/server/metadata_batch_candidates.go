@@ -472,6 +472,11 @@ func (s *Server) handleGetLatestMetadataFetch(c *gin.Context) {
 	}{Operations: out, Count: len(out)})
 }
 
+// batchApplyConcurrency bounds how many books handleBatchApplyCandidates applies
+// at once. Mirrors the const of the same name in internal/server/handlers, which
+// bounds the cache-backed sibling endpoint doing the same DB-bound apply work.
+const batchApplyConcurrency = 4
+
 // handleBatchApplyCandidates applies stored metadata candidates for the selected books.
 func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 	// The list this feeds is memoised; a status change must not keep offering a
@@ -519,7 +524,15 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 	outcomes := make([]applyOutcome, len(req.BookIDs))
 
 	g, gctx := errgroup.WithContext(c.Request.Context())
-	g.SetLimit(writeBackWorkers())
+	// Deliberately NOT writeBackWorkers(): this handler does not write back.
+	// The per-book work left on the request path is DB-bound
+	// (ApplyMetadataCandidate + CreateOperationResult); the file work already
+	// goes to s.fileIOPool. Tying it to the write-back knob would mean an
+	// operator raising write_back_workers to speed up DISK writes also widened
+	// the in-request DB fan-out here, which is not what that knob says it does.
+	// Matches batchApplyConcurrency in the sibling handler, which does the same
+	// work for the cache-backed endpoint.
+	g.SetLimit(batchApplyConcurrency)
 
 	for i, bookID := range req.BookIDs {
 		i, bookID := i, bookID
