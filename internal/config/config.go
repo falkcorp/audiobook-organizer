@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.77.0
+// version: 1.78.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-08-15
 
@@ -324,6 +324,16 @@ type MetadataScoringConfig struct {
 	// this one is disk/TagLib-bound against the library. Default 4; 0 or
 	// negative falls back to the compiled-in default.
 	WriteBackWorkers int `json:"write_back_workers" mapstructure:"write_back_workers"`
+
+	// SourceFanoutWorkers bounds how many metadata SOURCES are queried
+	// concurrently for a single book (see internal/metafetch/service_search.go
+	// sourceFanoutLimit()). This is a third, distinct axis from the two above:
+	// BulkFetchWorkers is how many BOOKS are in flight, this is how many
+	// PROVIDERS are in flight per book, and the two multiply. Keep it small —
+	// each provider has its own token bucket in internal/metadata/providerhttp,
+	// so exceeding the source count buys nothing and only deepens the queue.
+	// Default 4; 0 or negative falls back to the compiled-in default.
+	SourceFanoutWorkers int `json:"source_fanout_workers" mapstructure:"source_fanout_workers"`
 }
 
 // f64Ptr returns a pointer to v. Used to populate the pointer-typed scoring
@@ -1656,6 +1666,7 @@ func InitConfig() {
 				DurationTierScores:      getFloat64Slice("metadata_scoring.duration_tier_scores"),
 
 				BulkFetchWorkers: viper.GetInt("metadata_scoring.bulk_fetch_workers"),
+				SourceFanoutWorkers: viper.GetInt("metadata_scoring.source_fanout_workers"),
 				WriteBackWorkers: viper.GetInt("metadata_scoring.write_back_workers"),
 			},
 
@@ -2126,6 +2137,7 @@ func ResetToDefaults() {
 				DurationTierScores:      []float64{20, 15, 10, 0, -10, -20},
 
 				BulkFetchWorkers: 4,
+				SourceFanoutWorkers: 4,
 				WriteBackWorkers: 4,
 			},
 
