@@ -115,9 +115,10 @@ production symptom; revert the title logic → 4 fail).
 
 | | |
 |---|---|
-| Branch #2468 | `perf/writeback-io-amplification`, 7 commits, CI running at handoff |
-| Branch #2469 | `perf/server-metadata-parallelism` (agent-authored), CI running |
-| Worktrees | `.worktrees/writeback-io-amp`, `.worktrees/server-parallelism` — remove after merge |
+| #2468 | **MERGED** (`7c591529` on main) — write/tag correctness + I/O |
+| #2469 | **MERGED** — server parallelism (agent-authored) |
+| Worktrees | clean; `git worktree list` shows main only |
+| Open PRs | zero |
 | Local tests | metafetch, metadata, tagger, fileops, organizer, audiobooks: **6/6 pass** |
 | Known-noise | see below — **resolved**, they are slow, not broken |
 
@@ -137,11 +138,12 @@ to raise the timeout or split the packages, not to chase a phantom bug.
 
 ## Next actions, in order
 
-1. **Merge #2468 and #2469** once CI is green (required set: `Minimal CI / Minimal
-   CI Summary`, `Require changelog fragment`, `TODO Fragment Headers`).
-2. **Close the native-taglib gap before a bulk run.** Either build the static libs
-   locally, or deploy and run a *small* write-back cohort first and verify with
-   `ffprobe` that tags landed and files are intact.
+1. ~~Merge #2468 and #2469~~ — **done**, both merged, main at `7c591529`.
+2. **Deploy (`make deploy-debug`), then canary before any bulk run.** Pick a
+   handful of multi-file books, run write-back, and check with `ffprobe` that the
+   track tag landed, chapter titles survived, cover art is present in EVERY file,
+   and the audio is intact. Then run it a **second** time and confirm it writes
+   **0** files. That single check exercises both root causes at once.
 3. **Measure.** Nothing here has a stopwatch on it. The removed I/O is provable
    from the code; the wall-clock saving is not yet measured. Run write-back twice
    over a fixed unchanged cohort — the second run must write **0** files. Today
