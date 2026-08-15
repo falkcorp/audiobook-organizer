@@ -14,16 +14,16 @@ func TestFilterCoverlessCandidates(t *testing.T) {
 		name        string
 		input       []MetadataCandidate
 		wantIndices map[int]bool // indices that should be in the output
-		wantCount   int            // expected count of results
+		wantCount   int          // expected count of results
 	}{
 		{
 			name: "ASIN candidate survives",
 			input: []MetadataCandidate{
 				{
-					Title:     "Cover-less ASIN",
-					CoverURL:  "",
-					Source:    "Audnexus (Audible)",
-					Score:     1.0,
+					Title:    "Cover-less ASIN",
+					CoverURL: "",
+					Source:   "Audnexus (Audible)",
+					Score:    1.0,
 				},
 				{
 					Title:    "With Cover",

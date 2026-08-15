@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-08-15
 
@@ -22,6 +22,26 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/oklog/ulid/v2"
 )
+
+// renderableCoverURL decides what cover_url to persist during an apply.
+//
+// applied is what ApplyMetadataToBook just wrote; when the candidate carried a
+// cover that is the candidate's REMOTE url. The UI serves covers through
+// /api/v1/covers/proxy, which rejects hosts outside its allow-list, so a remote
+// url renders as NOTHING. Return the previous (local, working) cover instead and
+// let the background download repoint it once the image is on disk.
+//
+// If the applied value is anything other than that remote url — a local path, or
+// unchanged because the candidate had no cover — keep it.
+func renderableCoverURL(previous, applied *string, candidateRemote string) *string {
+	if candidateRemote == "" || applied == nil {
+		return applied
+	}
+	if *applied == candidateRemote {
+		return previous
+	}
+	return applied
+}
 
 func (mfs *Service) ApplyMetadataToBook(book *database.Book, meta metadata.BookMetadata) {
 	originalTitle := book.Title
@@ -551,7 +571,25 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	// Record history BEFORE applying changes so old values are correct
 	mfs.RecordChangeHistory(book, meta, candidate.Source)
 
+	// Remember the cover we are currently serving. ApplyMetadataToBook overwrites
+	// book.CoverURL with the candidate's REMOTE url, which is not renderable by
+	// the UI: it proxies covers through /api/v1/covers/proxy, which rejects hosts
+	// outside its allow-list ("URL not from an allowed cover source", observed as
+	// a 400 for m.media-amazon.com).
+	//
+	// That was harmless while the download ran inline, because the remote value
+	// was replaced with the local path microseconds later and never observed.
+	// Once the download moved to the background it became visible: the apply
+	// response carried the remote url, the UI proxied it, got a 400, and the
+	// cover went BLANK until the background download finished and a refresh
+	// picked up the local path.
+	previousCoverURL := book.CoverURL
+
 	mfs.ApplyMetadataToBook(book, meta)
+
+	// Keep serving the previous cover until the new one is actually on disk.
+	// DownloadPendingCover repoints this at the local path when it completes.
+	book.CoverURL = renderableCoverURL(previousCoverURL, book.CoverURL, meta.CoverURL)
 
 	// Set review status and record which provider supplied the metadata
 	matched := "matched"
