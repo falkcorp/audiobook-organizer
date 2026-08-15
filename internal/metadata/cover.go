@@ -1,5 +1,5 @@
 // file: internal/metadata/cover.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4efaa7b8-e29a-47f3-84f7-39b46bfc9a01
 
 package metadata
@@ -7,6 +7,7 @@ package metadata
 import (
 	"context"
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
 	"io"
 	"net"
 	"net/http"
@@ -93,12 +94,13 @@ func safeCoverDialContext(ctx context.Context, network, addr string) (net.Conn, 
 // Skips download if the file already exists. Only accepts image/* content types.
 // Rejects non-http(s) URLs and URLs that resolve to private/reserved IPs.
 func DownloadCoverArt(coverURL string, destDir string, bookID string) (string, error) {
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			DialContext: safeCoverDialContext,
-		},
-	}
+	// Rate-limited, but the SSRF guard is preserved: safeCoverDialContext refuses
+	// private/reserved IPs and MUST stay on the transport. providerhttp wraps the
+	// caller's transport rather than replacing it, so throttling is added without
+	// dropping the security control.
+	client := providerhttp.ClientWithTransport("cover", &http.Transport{
+		DialContext: safeCoverDialContext,
+	})
 	return downloadCoverArtWithClient(client, coverURL, destDir, bookID)
 }
 

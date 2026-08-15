@@ -1,5 +1,5 @@
 // file: internal/metadata/audible.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a9b8c7d6-e5f4-3a2b-1c0d-9e8f7a6b5c4d
 // last-edited: 2026-07-13
 
@@ -16,7 +16,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
 )
 
 // AudibleClient fetches audiobook metadata from Audible's undocumented catalog API.
@@ -33,7 +34,7 @@ func NewAudibleClient() *AudibleClient {
 		baseURL = "https://api.audible.com/1.0"
 	}
 	return &AudibleClient{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: providerhttp.Client("audible"),
 		baseURL:    strings.TrimRight(baseURL, "/"),
 	}
 }
@@ -41,7 +42,7 @@ func NewAudibleClient() *AudibleClient {
 // NewAudibleClientWithBaseURL creates a client with a custom base URL (for testing).
 func NewAudibleClientWithBaseURL(baseURL string) *AudibleClient {
 	return &AudibleClient{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: providerhttp.Client("audible"),
 		baseURL:    strings.TrimRight(baseURL, "/"),
 	}
 }
