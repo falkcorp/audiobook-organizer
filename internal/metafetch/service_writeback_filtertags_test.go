@@ -125,6 +125,78 @@ func TestFilterTagsAgainst_TrackMatching(t *testing.T) {
 	}
 }
 
+// TestChapterTitleFor covers the per-chapter title preservation rule.
+//
+// Both multi-file write paths used to overwrite the title tag of every file with
+// a synthetic "NN - Book Title" on every run, so real chapter titles were
+// destroyed and could not be recovered. "" means "leave the existing title".
+func TestChapterTitleFor(t *testing.T) {
+	const bookTitle = "The Long Way Home"
+
+	tests := []struct {
+		name    string
+		current string
+		want    string
+		why     string
+	}{
+		{
+			name:    "real chapter title is preserved",
+			current: "Chapter 1: Departure",
+			want:    "",
+			why:     "publisher chapter titles are the metadata the owner wants kept",
+		},
+		{
+			name:    "single-word chapter title is preserved",
+			current: "Prologue",
+			want:    "",
+			why:     "short titles are still real titles",
+		},
+		{
+			name:    "numbered title for a DIFFERENT book is preserved",
+			current: "05 - Some Other Book",
+			want:    "",
+			why:     "matches the numeric shape but the suffix is not this book, so it is not ours",
+		},
+		{
+			name:    "empty title is synthesized",
+			current: "",
+			want:    "01 - The Long Way Home",
+			why:     "nothing to preserve",
+		},
+		{
+			name:    "whitespace-only title is synthesized",
+			current: "   ",
+			want:    "01 - The Long Way Home",
+			why:     "blank after trimming carries no information",
+		},
+		{
+			name:    "bare book title is synthesized",
+			current: bookTitle,
+			want:    "01 - The Long Way Home",
+			why:     "every file carrying the same book title says nothing about which chapter it is",
+		},
+		{
+			name:    "our own previous output is refreshed",
+			current: "07 - The Long Way Home",
+			want:    "01 - The Long Way Home",
+			why:     "renumbering must still propagate when the track count changed",
+		},
+		{
+			name:    "already correct value is returned unchanged",
+			current: "01 - The Long Way Home",
+			want:    "01 - The Long Way Home",
+			why:     "returning it lets the unchanged-tag filter drop it as a no-op",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := chapterTitleFor(tt.current, "01 - The Long Way Home", bookTitle)
+			assert.Equal(t, tt.want, got, tt.why)
+		})
+	}
+}
+
 // TestFilterTagsAgainst_ChangedValuesStillWritten is the counterweight: the fix
 // must not turn the filter into a blanket "skip everything". Without decoy
 // changed fields, a broken implementation that drops all tags would pass the
