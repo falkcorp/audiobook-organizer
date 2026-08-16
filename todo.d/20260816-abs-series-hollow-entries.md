@@ -1,20 +1,31 @@
-- [ ] **ABS series list returns hollow entries, and the app renders no series at all.**
-      Measured 2026-08-16 against production, using the client's exact query
-      (`?page=0&limit=50&sort=name`, the params AudioBooth actually sends):
-      - 50 results returned, `total=15528` — the server side is healthy and
-        pagination works.
-      - **27 of 50** have an empty `books: []`.
-      - **9 of those 27 are self-contradictory**: `numBooks >= 1` with
-        `books: []` and `totalDuration: 0` (e.g. "Salem's Lot (read by Ron
-        McLarty)" reports `numBooks=1`). The remaining 18 report `numBooks=0`.
+- [ ] **ABS series list emits a non-ABS `books[]` shape, and no series render in ABS clients.**
+      Measured 2026-08-16 against production with the client's exact query
+      (`?page=0&limit=50&sort=name`, what AudioBooth actually sends).
 
-      **Unexplained, and deliberately not assumed:** 23 of the 50 entries are
-      well-formed and have books, yet the app's Series tab shows "No Series
-      Found". The hollow entries are a real bug worth fixing, but they do NOT
-      by themselves explain an empty render — a client that skipped bad entries
-      would still show 23. Do not let the hollow-series finding stand in as the
-      cause of the empty screen without evidence; the likely-but-unverified
-      hypothesis is that the client aborts parsing the whole list on the first
-      malformed entry rather than skipping it.
+      **Root cause (evidenced):** ABS defines a series' `books` as full
+      `LibraryItem` objects. Ours emit six ad-hoc fields only:
+      `duration, id, libraryId, libraryItemId, sequence, title` — no `media`,
+      no `media.metadata`, no `mediaType`, no `coverPath`, no `path`/`ino`.
 
-      Native API is healthy, so the defect is in the ABS compat layer.
+      The control that makes this conclusive is the **playlists** endpoint,
+      which the same app renders correctly: its items embed a complete
+      `libraryItem` with all 20 ABS fields including `media.metadata`,
+      `coverPath` and `mediaType`. Same client, same auth, same library — the
+      one with the correct shape works, the one with the ad-hoc shape does not.
+      A typed (Swift) client decoding `books: [LibraryItem]` fails on the first
+      entry and discards the whole response, which is why **23 of 50
+      well-formed series still render as zero**.
+
+      Ruled out — do not re-investigate:
+      - Not a timeout: series is 20 KB in 0.34s; playlists is 131 KB in 3.2s
+        and renders fine.
+      - Not auth, not pagination, not the query params: HTTP 200,
+        `results=50`, `total=15528`.
+
+      **Secondary bug, worth fixing in the same pass:** 27 of 50 entries have
+      `books: []`, and 9 of those are self-contradictory — `numBooks >= 1` with
+      `books: []` and `totalDuration: 0` (e.g. "Salem's Lot (read by Ron
+      McLarty)" reports `numBooks=1`). The other 18 report `numBooks=0`.
+
+      Fix: build the series `books` array from the same library-item serializer
+      the playlists path already uses, rather than a bespoke projection.
