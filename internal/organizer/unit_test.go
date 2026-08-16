@@ -239,7 +239,13 @@ func TestSanitizePathComponent(t *testing.T) {
 		{"quotes replaced", `a"b`, "a'b"},
 		{"angle brackets removed", "a<b>c", "abc"},
 		{"pipe replaced", "a|b", "a -b"},
-		{"brackets removed", "a[b]c", "abc"},
+		// Brackets are PRESERVED. They are legal on every filesystem we target
+		// and idiomatic in audiobook naming -- "[Unabridged]", "[AAC 128kbps]".
+		// Stripping them was a path_format-only behaviour; the folder/file
+		// naming builder never did, so honouring it here is what makes one
+		// sanitizer serve both. See SanitizePathComponent.
+		{"brackets preserved", "a[b]c", "a[b]c"},
+		{"quality suffix survives intact", "Neural Wraith [AAC 128kbps]", "Neural Wraith [AAC 128kbps]"},
 		{"double spaces collapsed", "a  b", "a b"},
 		{"leading/trailing spaces trimmed", "  hello  ", "hello"},
 		{"clean string unchanged", "hello world", "hello world"},

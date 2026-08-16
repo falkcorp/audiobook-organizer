@@ -43,19 +43,80 @@ package organizer
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
+
+// formatSpecPattern matches a placeholder carrying a printf-style format spec,
+// e.g. "{track:02d}". Note that placeholderNormalizeRegex (\{[A-Za-z_]+\})
+// deliberately does NOT match these -- a spec'd placeholder skips the
+// case-normalizing pass, so expandFormatSpecs lowercases the name itself.
+var formatSpecPattern = regexp.MustCompile(`\{([A-Za-z_]+):([^}]+)\}`)
+
+// numericSpecPattern is the only spec shape accepted: a (possibly zero-padded)
+// decimal. Anything else would reach fmt.Sprintf as an arbitrary verb and could
+// emit "%!(BADVERB)" straight into a filename.
+var numericSpecPattern = regexp.MustCompile(`^0?\d*d$`)
+
+// expandFormatSpecs resolves "{track:02d}"-style placeholders.
+//
+// This runs BEFORE the empty-segment pass, and the ordering is load-bearing in
+// both directions:
+//
+//   - After it, a present track is a plain number, so the segment reads as
+//     non-empty and survives.
+//   - When the track is ABSENT the spec collapses back to the bare "{track}",
+//     which IS a key in the replacement map, so dropEmptyPatternSegments can
+//     drop its whole " - " segment. Emitting "00" here instead would give every
+//     single-file book a "- 00" suffix, which is exactly the shape of bug that
+//     makes a default pattern unusable for one of the two book layouts.
+//
+// A spec on a field that does not take one is left untouched on purpose: the
+// leftover-placeholder guard at the end of BuildPath then reports it as the
+// pattern bug it is, rather than this function inventing a second error path.
+func expandFormatSpecs(pattern string, v PathVars) (string, error) {
+	var specErr error
+
+	out := formatSpecPattern.ReplaceAllStringFunc(pattern, func(match string) string {
+		parts := formatSpecPattern.FindStringSubmatch(match)
+		name, spec := strings.ToLower(parts[1]), parts[2]
+
+		var value int
+		switch name {
+		case "track":
+			value = v.Track
+		case "total_tracks":
+			value = v.TotalTracks
+		default:
+			return match
+		}
+
+		if !numericSpecPattern.MatchString(spec) {
+			specErr = fmt.Errorf("naming pattern contains unsupported format spec %q in %q — only decimal specs such as {track:02d} are supported", spec, match)
+			return match
+		}
+		if value <= 0 {
+			return "{" + name + "}"
+		}
+		return fmt.Sprintf("%"+spec, value)
+	})
+
+	if specErr != nil {
+		return "", specErr
+	}
+	return out, nil
+}
 
 // PathVars is the union of both former variable sets. A caller fills in what it
 // knows; anything left zero is treated as absent and its pattern segment is
 // dropped rather than left half-substituted.
 type PathVars struct {
 	// Identity
-	Author   string
-	Title    string
-	Series   string
+	Author       string
+	Title        string
+	Series       string
 	SeriesNumber string
-	Narrator string
+	Narrator     string
 
 	// Quality / bibliographic (scheme #1 only, before unification)
 	Publisher string
@@ -180,6 +241,13 @@ func (v PathVars) replacements(opts BuildOpts) map[string]string {
 func BuildPath(pattern string, v PathVars, opts BuildOpts) (string, error) {
 	// Normalize {Author} -> {author} so patterns are case-insensitive.
 	result := placeholderNormalizeRegex.ReplaceAllStringFunc(pattern, strings.ToLower)
+
+	// Resolve {track:02d}-style specs first -- see expandFormatSpecs for why
+	// this cannot move after the empty-segment pass.
+	result, err := expandFormatSpecs(result, v)
+	if err != nil {
+		return "", err
+	}
 
 	replacements := v.replacements(opts)
 
