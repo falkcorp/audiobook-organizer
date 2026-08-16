@@ -1,5 +1,5 @@
 // file: internal/scanner/scan_progress_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5f2a9c14-8e63-4b07-a5d9-1c4e7b0f6a38
 // last-edited: 2026-08-16
 
@@ -91,6 +91,48 @@ func TestScanDirectoryParallel_ChecksInLongEnoughToSurviveTheWatchdog(t *testing
 		t.Errorf("got %d progress checkpoints for %d directories, want >= %d — "+
 			"a phase is running silently and the stuck-op watchdog will kill long scans",
 			got, dirCount, want)
+	}
+}
+
+// TestScanDirectoryParallel_ReportsInsideOneHugeDirectory covers the shape
+// that per-directory checkpoints cannot see.
+//
+// The first version of this fix counted directories only. That is fine for a
+// library organized as a folder per book, but a library kept as ONE flat
+// folder of tens of thousands of files has exactly one directory: the
+// discovery walk reports nothing (1 % 20 != 0) and the scan phase reports once,
+// after all the work is already done. The whole scan is a single silent stretch
+// and the watchdog kills it -- the same failure, just reached differently.
+//
+// So this asserts checkpoints happen with dirCount == 1, which is false for
+// any directory-counting implementation no matter how small its interval.
+func TestScanDirectoryParallel_ReportsInsideOneHugeDirectory(t *testing.T) {
+	root := t.TempDir()
+
+	const fileCount = scanProgressEvery * 3
+	for i := range fileCount {
+		f := filepath.Join(root, fmt.Sprintf("track-%03d.mp3", i))
+		if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	prev := config.AppConfig.SupportedExtensions
+	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	t.Cleanup(func() { config.AppConfig.SupportedExtensions = prev })
+
+	spy := &progressSpy{Logger: logger.New("test")}
+
+	if _, err := ScanDirectoryParallel(context.Background(), root, 4, spy); err != nil {
+		t.Fatalf("ScanDirectoryParallel: %v", err)
+	}
+
+	got := spy.count()
+	want := fileCount / scanProgressEvery
+	if got < want {
+		t.Errorf("got %d checkpoints scanning %d files in a SINGLE directory, want >= %d — "+
+			"a flat library reports only per-directory and will be killed mid-scan",
+			got, fileCount, want)
 	}
 }
 
