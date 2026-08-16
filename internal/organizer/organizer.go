@@ -414,29 +414,42 @@ func (o *Organizer) HasResolvedAuthor(book *database.Book) bool {
 	return o.resolveAuthorName(book) != ""
 }
 
-// expandPattern expands a pattern with book metadata
+// expandPattern expands a naming pattern with this book's metadata.
+//
+// This is now a thin adapter over BuildPath, the single target-path builder
+// (see pathbuild.go). It exists to resolve the book's fields -- following
+// AuthorID and SeriesID through the store when the objects are not populated --
+// and hand them over. All pattern semantics live in BuildPath.
 func (o *Organizer) expandPattern(pattern string, book *database.Book) (string, error) {
-	result := placeholderNormalizeRegex.ReplaceAllStringFunc(pattern, strings.ToLower)
+	return BuildPath(pattern, o.pathVars(book, 0, 0, ""), o.buildOpts())
+}
 
-	// Get author name - look up by ID if Author object is nil but AuthorID is set
-	authorName := o.resolveAuthorName(book)
-	if authorName == "" {
-		authorName = placeholderAuthor
+// buildOpts carries the organize-side path decisions. AuthorFallback is what
+// keeps an authorless book in a named directory instead of flat at the library
+// root -- the behaviour the old path_format builder did NOT have.
+func (o *Organizer) buildOpts() BuildOpts {
+	return BuildOpts{
+		AuthorFallback: placeholderAuthor,
+		TitleFallback:  defaultTitle,
+	}
+}
+
+// pathVars collects every naming variable for a book. track/totalTracks/ext are
+// zero-valued for a single-file book and populated per segment for a
+// multi-file one, which is what lets ONE builder serve both.
+func (o *Organizer) pathVars(book *database.Book, track, totalTracks int, ext string) PathVars {
+	intToString := func(i *int) string {
+		if i == nil {
+			return ""
+		}
+		return fmt.Sprintf("%d", *i)
 	}
 
-	title := strings.TrimSpace(book.Title)
-	if title == "" {
-		title = defaultTitle
-	}
-
-	// Get series info - look up by ID if Series object is nil but SeriesID is set
 	seriesName := ""
 	if book.Series != nil {
 		seriesName = strings.TrimSpace(book.Series.Name)
 	} else if book.SeriesID != nil && o.store != nil {
-		// Series object not populated, but we have an ID - look it up
-		series, err := o.store.GetSeriesByID(*book.SeriesID)
-		if err == nil && series != nil {
+		if series, err := o.store.GetSeriesByID(*book.SeriesID); err == nil && series != nil {
 			seriesName = strings.TrimSpace(series.Name)
 		}
 	}
@@ -446,69 +459,25 @@ func (o *Organizer) expandPattern(pattern string, book *database.Book) (string, 
 		seriesNum = fmt.Sprintf("%d", *book.SeriesSequence)
 	}
 
-	// Helper to convert int pointer to string
-	intToString := func(i *int) string {
-		if i == nil {
-			return ""
-		}
-		return fmt.Sprintf("%d", *i)
+	return PathVars{
+		Author:       o.resolveAuthorName(book),
+		Title:        strings.TrimSpace(book.Title),
+		Series:       seriesName,
+		SeriesNumber: seriesNum,
+		Narrator:     strings.TrimSpace(stringOrEmpty(book.Narrator)),
+		Publisher:    stringOrEmpty(book.Publisher),
+		Language:     stringOrEmpty(book.Language),
+		Edition:      stringOrEmpty(book.Edition),
+		Codec:        stringOrEmpty(book.Codec),
+		Quality:      stringOrEmpty(book.Quality),
+		Bitrate:      intToString(book.Bitrate),
+		ISBN10:       stringOrEmpty(book.ISBN10),
+		ISBN13:       stringOrEmpty(book.ISBN13),
+		PrintYear:    intToString(book.PrintYear),
+		Track:        track,
+		TotalTracks:  totalTracks,
+		Ext:          ext,
 	}
-
-	narrator := strings.TrimSpace(stringOrEmpty(book.Narrator))
-
-	// Replacements map
-	replacements := map[string]string{
-		"{title}":         title,
-		"{author}":        authorName,
-		"{series}":        seriesName,
-		"{series_number}": seriesNum,
-		"{narrator}":      narrator,
-		"{publisher}":     stringOrEmpty(book.Publisher),
-		"{language}":      stringOrEmpty(book.Language),
-		"{edition}":       stringOrEmpty(book.Edition),
-		"{print_year}":    intToString(book.PrintYear),
-		"{year}":          intToString(book.PrintYear),
-		"{isbn10}":        stringOrEmpty(book.ISBN10),
-		"{isbn13}":        stringOrEmpty(book.ISBN13),
-		"{bitrate}":       intToString(book.Bitrate),
-		"{codec}":         stringOrEmpty(book.Codec),
-		"{quality}":       stringOrEmpty(book.Quality),
-	}
-
-	// Drop whole segments whose placeholders are ALL empty, before any
-	// substitution happens. This has to run on the raw pattern: it is the only
-	// point at which the connector words around a placeholder are still
-	// identifiable as part of the pattern rather than as book metadata.
-	//
-	// Without it, `{title} - {author} - read by {narrator}` with no narrator
-	// leaves the literal "read by" behind — cleanupPattern trims " -/" but has
-	// no idea "read by" is connective text. Mid-string it is worse: the old
-	// ` - {narrator}` rule ate the wrong dash and produced
-	// "Time Pebbles - read by Jerry Merritt", crediting the AUTHOR as narrator.
-	empties := make(map[string]struct{}, len(replacements))
-	for placeholder, value := range replacements {
-		if strings.TrimSpace(value) == "" {
-			empties[placeholder] = struct{}{}
-		}
-	}
-	result = dropEmptyPatternSegments(result, empties)
-
-	// Perform replacements
-	for placeholder, value := range replacements {
-		if strings.TrimSpace(value) == "" {
-			result = removeEmptySegment(result, placeholder)
-			result = strings.ReplaceAll(result, placeholder, "")
-		} else {
-			result = strings.ReplaceAll(result, placeholder, value)
-		}
-	}
-
-	result = cleanupPattern(result)
-	if leftoverPlaceholderRegex.MatchString(result) {
-		leftover := leftoverPlaceholderRegex.FindAllString(result, -1)
-		return "", fmt.Errorf("naming pattern produced %q with unresolved placeholders %v — book is missing values for these fields, or the pattern references unknown placeholders", result, leftover)
-	}
-	return result, nil
 }
 
 // dropEmptyPatternSegments removes each " - "-delimited segment of a naming
