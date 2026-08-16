@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-08-14
+// last-edited: 2026-08-16
 
 package organizer
 
@@ -1207,12 +1207,14 @@ func (orgSvc *Service) OrganizeDirectoryBook(org *Organizer, book *database.Book
 		return "", err
 	}
 
-	// Verify at least some files were actually copied to the target
-	if len(pathMap) == 0 {
-		return "", fmt.Errorf("no files were copied for %s — all source files missing", book.Title)
-	}
-
-	// Check how many files actually exist in the target directory
+	// The "pathMap is empty" case is now rejected inside OrganizeBookDirectory
+	// itself, so it arrives here as a non-nil err above. It used to be checked
+	// only here, which left the other two callers of OrganizeBookDirectory
+	// (ensureLibraryCopy, organizeMultiFileBook) pointing books at directories
+	// nothing had been copied into.
+	//
+	// The stat check below is NOT redundant with it: pathMap records what
+	// organize believed it wrote, and this verifies the files are still there.
 	copiedCount := 0
 	for _, dstPath := range pathMap {
 		if _, statErr := os.Stat(dstPath); statErr == nil {
