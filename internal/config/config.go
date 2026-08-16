@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.78.0
+// version: 1.79.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-08-15
 
@@ -564,6 +564,14 @@ type Config struct {
 
 	// Performance
 	ConcurrentScans int `json:"concurrent_scans"`
+
+	// ScanProgressEvery is how many directories/files a library scan processes
+	// between progress checkpoints. It exists because the stuck-op watchdog
+	// kills an operation after ProgressTimeout without one, and how long a
+	// batch of N items takes depends entirely on the storage underneath: a
+	// library on slow or high-latency storage may need a smaller interval than
+	// the default of 20. 0 means use the default.
+	ScanProgressEvery int `json:"scan_progress_every" mapstructure:"scan_progress_every"`
 	// ChapterConsolidationThresholdMin is the per-file duration threshold (minutes)
 	// used during scanning to detect chapter-named files. If a group of ≥ 3 files
 	// sharing the same base title (e.g. "01 - My Book", "02 - My Book") each
@@ -1450,6 +1458,7 @@ func InitConfig() {
 
 			// Performance
 			ConcurrentScans:                  viper.GetInt("concurrent_scans"),
+			ScanProgressEvery:                viper.GetInt("scan_progress_every"),
 			ChapterConsolidationThresholdMin: viper.GetInt("chapter_consolidation_threshold_min"),
 			CoalesceShatteredSiblings:        viper.GetBool("coalesce_shattered_siblings"),
 			OperationTimeoutMinutes:          viper.GetInt("operation_timeout_minutes"),
@@ -2065,6 +2074,7 @@ func ResetToDefaults() {
 
 			// Performance
 			ConcurrentScans:         max(runtime.NumCPU(), 4),
+			ScanProgressEvery:       20,
 			OperationTimeoutMinutes: 30,
 			MinBookSizeBytes:        5 * 1024 * 1024,
 			APIRateLimitPerMinute:   100,

@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.53.0
+// version: 1.54.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-08-16
 
@@ -516,11 +516,25 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 	// (audit 2026-07-17 R-5/M8). Atomic: ReadDir failures occur in workers.
 	var walkErrCount atomic.Int64
 
-	// dirsFound / dirsScanned drive the liveness checkpoints below. Both
-	// phases of this function used to run silently; see the comments at each
-	// UpdateProgress call for why that killed the 2026-08-16 rescan.
+	// dirsFound / dirsScanned / filesScanned drive the liveness checkpoints
+	// below. Every phase of this function used to run silently; see the
+	// comments at each UpdateProgress call for why that killed the 2026-08-16
+	// rescan.
+	//
+	// Directory counters alone are not sufficient: a library kept as one flat
+	// folder of tens of thousands of files has exactly one directory, so the
+	// per-directory checkpoints fire once, at the end. filesScanned is what
+	// covers that shape.
 	var dirsFound atomic.Int64
 	var dirsScanned atomic.Int64
+	var filesScanned atomic.Int64
+
+	// Operators with unusually slow storage can widen the interval; 0 or unset
+	// means the default.
+	every := config.AppConfig.ScanProgressEvery
+	if every <= 0 {
+		every = scanProgressEvery
+	}
 
 	registerDirectory := func(path string, info os.FileInfo) bool {
 		if info == nil {
@@ -592,7 +606,7 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 			// The total is genuinely unknown while discovering, so current and
 			// total move together; that is the same "growing denominator"
 			// convention scanFolder already uses for its per-book counter.
-			if n := int(dirsFound.Add(1)); n%scanProgressEvery == 0 {
+			if n := int(dirsFound.Add(1)); n%every == 0 {
 				scanLog.UpdateProgress(n, n, fmt.Sprintf("Discovering folders: %d found (%s)", n, filepath.Base(path)))
 			}
 		}
@@ -621,7 +635,7 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 				// 2026-08-16. Unlike the discovery walk above, the denominator
 				// is known here, so this is real progress rather than a
 				// growing count.
-				if n := int(dirsScanned.Add(1)); n%scanProgressEvery == 0 || n == len(dirs) {
+				if n := int(dirsScanned.Add(1)); n%every == 0 || n == len(dirs) {
 					scanLog.UpdateProgress(n, len(dirs),
 						fmt.Sprintf("Scanning folders: %d/%d (%s)", n, len(dirs), filepath.Base(scanDir)))
 				}
@@ -654,8 +668,18 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 				}
 			}
 
-			// Group files into logical books using album tags
-			localBooks := groupFilesIntoBooks(ctx, audioFiles)
+			// Group files into logical books using album tags.
+			//
+			// The per-file checkpoint is what keeps a single-huge-directory
+			// library alive: with one directory the per-directory counters
+			// above fire once, at the very end, so this callback is the only
+			// thing reporting during what may be hours of tag reading.
+			localBooks := groupFilesIntoBooks(ctx, audioFiles, func() {
+				if n := int(filesScanned.Add(1)); n%every == 0 {
+					scanLog.UpdateProgress(n, n,
+						fmt.Sprintf("Reading tags: %d files (%s)", n, filepath.Base(scanDir)))
+				}
+			})
 
 			// Merge results
 			if len(localBooks) > 0 {
@@ -1864,7 +1888,24 @@ func quickReadMultiFileInfo(filePath string) MultiFileInfo {
 // When all files in a directory share the same non-empty album tag, they become a
 // single directory-based Book (with segments created later). Otherwise, each file
 // is treated as an individual Book (existing hash-based dedup handles linking).
-func groupFilesIntoBooks(ctx context.Context, files []string) []Book {
+// groupFilesIntoBooks groups a directory's audio files into logical books.
+//
+// onFileScanned, if supplied, is invoked once per file as the tag-reading pass
+// walks them. It exists because this loop is the longest uninterrupted stretch
+// of work in a scan: it opens and reads tags from every file in one directory.
+// A library kept as a single flat folder of tens of thousands of files spends
+// its entire scan inside this one call, so per-directory progress reporting
+// cannot see it -- there is only ever one directory -- and the stuck-op
+// watchdog kills the scan while it is working. Variadic so the existing
+// callers and tests need no change.
+func groupFilesIntoBooks(ctx context.Context, files []string, onFileScanned ...func()) []Book {
+	noteFile := func() {
+		for _, fn := range onFileScanned {
+			if fn != nil {
+				fn()
+			}
+		}
+	}
 	if len(files) <= 1 {
 		var books []Book
 		for _, f := range files {
@@ -1885,6 +1926,7 @@ func groupFilesIntoBooks(ctx context.Context, files []string) []Book {
 		infos := make([]MultiFileInfo, len(files))
 		for i, f := range files {
 			infos[i] = quickReadMultiFileInfo(f)
+			noteFile()
 		}
 		if ok, sorted := DetectMultiFileGroup(infos, DefaultMultiFileConfig()); ok {
 			segs := make([]string, len(sorted))
@@ -1942,6 +1984,11 @@ func groupFilesIntoBooks(ctx context.Context, files []string) []Book {
 	var noAlbum []string
 	for _, f := range files {
 		album := quickReadAlbum(f)
+		// This is the other unbounded tag-reading pass, and the one a flat
+		// library actually hits: a folder of many unrelated books fails the
+		// multi-file-group check above and lands here, reading tags from every
+		// file with no checkpoint of its own.
+		noteFile()
 		if album == "" {
 			noAlbum = append(noAlbum, f)
 		} else {
