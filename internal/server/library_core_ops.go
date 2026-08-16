@@ -1,7 +1,7 @@
 // file: internal/server/library_core_ops.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-12
+// last-edited: 2026-08-16
 
 // library_core_ops registers the scan, organize, and transcode OperationDefs
 // that previously went through the legacy BridgeQueue.
@@ -51,18 +51,39 @@ type libraryTranscodeParams struct {
 func (s *Server) RegisterLibraryScanOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "library.scan",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Library Scan",
 		Description:     "Scan the library root directory for new, changed, or removed audiobook files.",
 		DefaultPriority: opsregistry.PriorityNormal,
 		Cancellable:     true,
 		Isolate:         false,
-		Timeout:         4 * time.Hour,
-		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "library.scan",
-		Permissions:     []auth.Permission{auth.PermScanTrigger},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
+		// 24h, raised from 4h on 2026-08-16. The 4h ceiling was not a safety
+		// margin, it was a guillotine: measured against the production library
+		// (63,044 books) a full scan runs at ~208 books/min, so it needed ~5h and
+		// was killed at 4h having reached 41%. Every full scan was structurally
+		// guaranteed to die before finishing, and the timeout kill looks identical
+		// to a hang. A stuck scan is caught by the liveness check-in below, which
+		// is the mechanism actually suited to detecting "stopped making progress";
+		// a wall-clock ceiling only has to be loose enough not to fire on healthy
+		// work.
+		Timeout: 24 * time.Hour,
+		// ResumeRestart, not ResumeDrop. Under ResumeDrop a restart abandoned the
+		// scan and marked it interrupted_dropped — 8 of the 9 scans in the 30 days
+		// to 2026-08-16 ended that way, and not one library.scan has ever reached
+		// `completed`. They were not crashing; they were being discarded by policy.
+		//
+		// ⚠️ THIS RE-RUNS THE SCAN FROM THE START, IT DOES NOT CONTINUE MID-SCAN.
+		// resumeRestart() merges a saved checkpoint blob into params, but
+		// libraryScanParams has no checkpoint fields and nothing in the scan path
+		// calls Checkpoint(), so there is no state to merge. Re-queueing is still
+		// strictly better than dropping — a scan is incremental and skips what is
+		// already ingested — but real mid-scan resume needs the params struct to
+		// carry a phase + high-water mark first. Tracked in todo.d.
+		ResumePolicy:   opsregistry.ResumeRestart,
+		ConcurrencyKey: "library.scan",
+		Permissions:    []auth.Permission{auth.PermScanTrigger},
+		Capabilities:   []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p libraryScanParams
 			if len(rawParams) > 0 {
@@ -127,7 +148,7 @@ type libraryImportParams struct {
 func (s *Server) RegisterLibraryImportOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "library.import",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Manual Import",
 		Description:     "Import audiobooks from a specific folder or file (no full-library scan). The path must resolve under a configured import path.",
@@ -183,7 +204,7 @@ func (s *Server) RegisterLibraryImportOp(reg *opsregistry.Registry) error {
 func (s *Server) RegisterLibraryOrganizeOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "library.organize",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Organize Library",
 		Description:     "Move audiobook files into the canonical directory structure based on current metadata.",
@@ -259,7 +280,7 @@ func (s *Server) RegisterLibraryOrganizeOp(reg *opsregistry.Registry) error {
 func (s *Server) RegisterLibraryTranscodeOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "library.transcode",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Transcode to M4B",
 		Description:     "Transcode an audiobook file to M4B format and register it as a new version.",
