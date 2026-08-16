@@ -55,8 +55,10 @@ func FormatSegmentTitle(format string, title string, track, totalTracks int) str
 // with 85 BookFiles.
 //
 // Replaces:
-//   '/' and '\' (path separators) → ' '
-//   leading '.' (would create hidden dirs / could match parent ".")
+//
+//	'/' and '\' (path separators) → ' '
+//	leading '.' (would create hidden dirs / could match parent ".")
+//
 // Whitespace is collapsed at the per-component SanitizePathComponent step.
 func scrubVar(s string) string {
 	if s == "" {
