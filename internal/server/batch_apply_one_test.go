@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
-// last-edited: 2026-08-15
+// last-edited: 2026-08-16
 //
 // Regression tests for applying ONE book's cached metadata candidate.
 //
@@ -16,6 +16,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -27,6 +28,7 @@ type fakeApplySvc struct {
 	candidates    []json.RawMessage
 	getErr        error
 	applyErr      error
+	fileIOErr     error
 	writeBackErr  error
 	appliedIDs    []string
 	invalidatedID []string
@@ -57,7 +59,10 @@ func (f *fakeApplySvc) InvalidateCachedCandidates(bookID string) error {
 	return nil
 }
 
-func (f *fakeApplySvc) ApplyMetadataFileIO(id string) { f.fileIOIDs = append(f.fileIOIDs, id) }
+func (f *fakeApplySvc) ApplyMetadataFileIO(id string) error {
+	f.fileIOIDs = append(f.fileIOIDs, id)
+	return f.fileIOErr
+}
 
 func (f *fakeApplySvc) WriteBackMetadataForBook(id string, _ ...[]string) (int, error) {
 	f.writeBackIDs = append(f.writeBackIDs, id)
@@ -203,6 +208,66 @@ func TestApplyCachedCandidate_WriteBackFailureStaysApplied(t *testing.T) {
 	}
 	if !out.WriteBackFailed {
 		t.Errorf("WriteBackFailed not set despite a write-back error")
+	}
+}
+
+// TestApplyCachedCandidate_FileIOFailureIsReported is the regression this whole
+// change exists for. ApplyMetadataFileIO — which is where the RENAME happens —
+// used to return nothing, so a failed rename was unreachable to this function
+// and the outcome said Applied:true with WriteBackFailed:false. The API reported
+// a clean apply while the files had never moved.
+//
+// Applied must stay true (the database row really was written) and
+// WriteBackFailed must now be set, so the batch op counts and logs it.
+func TestApplyCachedCandidate_FileIOFailureIsReported(t *testing.T) {
+	svc := &fakeApplySvc{candidates: oneCandidate(t), fileIOErr: errors.New("rename files: cross-device link")}
+	store := &fakeBookReader{book: &database.Book{ID: "b1", FilePath: "/lib/a.m4b"}}
+
+	out := applyCachedCandidateForBook(svc, store, &fakeITunes{}, "b1", true, nil)
+
+	if !out.Applied {
+		t.Fatalf("a file-I/O failure must not unset Applied: %+v", out)
+	}
+	if !out.WriteBackFailed {
+		t.Fatalf("WriteBackFailed not set despite ApplyMetadataFileIO failing: %+v", out)
+	}
+	if out.Err == nil || !strings.Contains(out.Err.Error(), "cross-device link") {
+		t.Errorf("Err = %v, want the file-I/O error surfaced", out.Err)
+	}
+}
+
+// TestApplyCachedCandidate_FileIOFailureStillWritesBack pins that surfacing the
+// file-I/O error did not quietly stop tag writing. Tag writing is independent of
+// the rename — correct tags in a file that did not move are still correct — and
+// it ran unconditionally before the error could be observed. Only which error is
+// reported changed.
+func TestApplyCachedCandidate_FileIOFailureStillWritesBack(t *testing.T) {
+	svc := &fakeApplySvc{candidates: oneCandidate(t), fileIOErr: errors.New("rename files: boom")}
+	store := &fakeBookReader{book: &database.Book{ID: "b1", FilePath: "/lib/a.m4b"}}
+
+	_ = applyCachedCandidateForBook(svc, store, &fakeITunes{}, "b1", true, nil)
+
+	if len(svc.writeBackIDs) != 1 || svc.writeBackIDs[0] != "b1" {
+		t.Errorf("write-back skipped after a file-I/O failure: %v", svc.writeBackIDs)
+	}
+}
+
+// TestApplyCachedCandidate_FileIOErrorWinsOverWriteBackError pins the precedence.
+// A failed rename usually CAUSES the write-back to fail too, because the paths it
+// writes to are the ones that did not move. Reporting the write-back error would
+// name the symptom; the file-I/O error names the fault.
+func TestApplyCachedCandidate_FileIOErrorWinsOverWriteBackError(t *testing.T) {
+	svc := &fakeApplySvc{
+		candidates:   oneCandidate(t),
+		fileIOErr:    errors.New("rename files: the real fault"),
+		writeBackErr: errors.New("downstream symptom"),
+	}
+	store := &fakeBookReader{book: &database.Book{ID: "b1", FilePath: "/lib/a.m4b"}}
+
+	out := applyCachedCandidateForBook(svc, store, &fakeITunes{}, "b1", true, nil)
+
+	if out.Err == nil || !strings.Contains(out.Err.Error(), "the real fault") {
+		t.Errorf("Err = %v, want the file-I/O error to win", out.Err)
 	}
 }
 

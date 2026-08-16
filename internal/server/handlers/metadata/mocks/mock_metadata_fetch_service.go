@@ -115,9 +115,20 @@ func (_c *MockMetadataFetchService_ApplyMetadataCandidate_Call) RunAndReturn(run
 }
 
 // ApplyMetadataFileIO provides a mock function for the type MockMetadataFetchService
-func (_mock *MockMetadataFetchService) ApplyMetadataFileIO(id string) {
-	_mock.Called(id)
-	return
+func (_mock *MockMetadataFetchService) ApplyMetadataFileIO(id string) error {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ApplyMetadataFileIO")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+		r0 = returnFunc(id)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
 }
 
 // MockMetadataFetchService_ApplyMetadataFileIO_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ApplyMetadataFileIO'
@@ -144,13 +155,13 @@ func (_c *MockMetadataFetchService_ApplyMetadataFileIO_Call) Run(run func(id str
 	return _c
 }
 
-func (_c *MockMetadataFetchService_ApplyMetadataFileIO_Call) Return() *MockMetadataFetchService_ApplyMetadataFileIO_Call {
-	_c.Call.Return()
+func (_c *MockMetadataFetchService_ApplyMetadataFileIO_Call) Return(err error) *MockMetadataFetchService_ApplyMetadataFileIO_Call {
+	_c.Call.Return(err)
 	return _c
 }
 
-func (_c *MockMetadataFetchService_ApplyMetadataFileIO_Call) RunAndReturn(run func(id string)) *MockMetadataFetchService_ApplyMetadataFileIO_Call {
-	_c.Run(run)
+func (_c *MockMetadataFetchService_ApplyMetadataFileIO_Call) RunAndReturn(run func(id string) error) *MockMetadataFetchService_ApplyMetadataFileIO_Call {
+	_c.Call.Return(run)
 	return _c
 }
 

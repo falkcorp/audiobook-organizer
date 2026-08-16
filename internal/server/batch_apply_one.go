@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-08-15
+// last-edited: 2026-08-16
 
 package server
 
@@ -26,7 +26,7 @@ type cachedApplyService interface {
 	GetCachedCandidates(bookID string) (*metafetch.MetadataCandidateCache, bool, error)
 	ApplyMetadataCandidate(id string, candidate metafetch.MetadataCandidate, fields []string) (*metafetch.FetchMetadataResponse, error)
 	InvalidateCachedCandidates(bookID string) error
-	ApplyMetadataFileIO(id string)
+	ApplyMetadataFileIO(id string) error
 	WriteBackMetadataForBook(id string, segmentFilter ...[]string) (int, error)
 }
 
@@ -121,8 +121,24 @@ func applyCachedCandidateForBook(
 		release := lockPath(book.FilePath)
 		defer release()
 	}
-	svc.ApplyMetadataFileIO(id)
-	if _, wberr := svc.WriteBackMetadataForBook(id); wberr != nil {
+	// The rename lives in here, and its failure used to be unreachable: this
+	// call returned nothing, so the outcome below said Applied:true whether or
+	// not a single file had moved. Applied stays true — the database change is
+	// real and durable — but the file side is now flagged, which is exactly why
+	// WriteBackFailed is separate from !Applied.
+	//
+	// The write-back below still runs on a file-I/O failure. Skipping it would
+	// be a behaviour change beyond reporting: tag writing is independent of the
+	// rename (correct tags in a file that did not move are still correct), and
+	// it ran unconditionally before this call could report anything. Only the
+	// error we surface changes — fileErr wins because "rename failed" localises
+	// the fault better than the write-back error it would otherwise cause.
+	fileErr := svc.ApplyMetadataFileIO(id)
+	_, wberr := svc.WriteBackMetadataForBook(id)
+	if fileErr != nil {
+		return applyOutcome{Applied: true, WriteBackFailed: true, Err: fileErr}
+	}
+	if wberr != nil {
 		return applyOutcome{Applied: true, WriteBackFailed: true, Err: wberr}
 	}
 	return applyOutcome{Applied: true}

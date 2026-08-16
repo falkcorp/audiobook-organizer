@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.39.0
+// version: 2.40.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-08-12
+// last-edited: 2026-08-16
 
 package server
 
@@ -809,7 +809,9 @@ func NewServer(store database.Store) *Server {
 			slog.Warn("no server instance for apply_metadata recovery of book", "bookID", bookID)
 			return
 		}
-		server.metadataFetchService.ApplyMetadataFileIO(bookID)
+		if err := server.metadataFetchService.ApplyMetadataFileIO(bookID); err != nil {
+			slog.Warn("recovery apply file I/O failed", "bookID", bookID, "err", err)
+		}
 		if _, err := server.metadataFetchService.WriteBackMetadataForBook(bookID); err != nil {
 			slog.Warn("recovery write-back for", "bookID", bookID, "err", err)
 		}
