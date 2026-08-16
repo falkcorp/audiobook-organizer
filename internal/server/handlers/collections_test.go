@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d17e903-2b48-4c81-96af-70e3c5a12b8d
 // last-edited: 2026-08-16
 
@@ -10,14 +10,18 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
@@ -398,4 +402,80 @@ func colGatedRouter(
 	g.DELETE("/collections/:id", gate, h.DeleteCollection)
 	g.POST("/collections/:id/materialize", gate, h.MaterializeCollection)
 	return r
+}
+
+// ── the read path must not write ────────────────────────────────────────────
+
+// colEvalRouter is colRouter with a REAL Bleve index and a store the smart-query
+// evaluator can actually use, so GetCollection reaches its persist branch. The
+// plain colRouter has a nil index on purpose, which makes evaluate() fail and
+// returns from GetCollection before any write — with that fixture this test
+// would pass no matter what the guard did.
+func colEvalRouter(t *testing.T, store handlers.CollectionStore, bookIDs ...string) *gin.Engine {
+	t.Helper()
+
+	idx, err := search.Open(filepath.Join(t.TempDir(), "bleve"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = idx.Close() })
+
+	docs := make([]search.BookDocument, 0, len(bookIDs))
+	for _, id := range bookIDs {
+		docs = append(docs, search.BookDocument{BookID: id, Title: id, Author: "sanderson"})
+	}
+	require.NoError(t, idx.IndexBookBatch(docs))
+
+	evalStore := mocks.NewMockStore(t)
+	evalStore.EXPECT().GetBooksByIDs(mock.Anything).RunAndReturn(func(ids []string) ([]database.Book, error) {
+		books := make([]database.Book, 0, len(ids))
+		for _, id := range ids {
+			books = append(books, database.Book{ID: id})
+		}
+		return books, nil
+	}).Maybe()
+
+	h := handlers.NewCollectionHandler(store, evalStore, func() *search.BleveIndex { return idx })
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	g := r.Group("/api/v1")
+	g.GET("/collections/:id", h.GetCollection)
+	return r
+}
+
+// TestReadingADynamicCollectionTwiceWritesOnce is the regression test for a GET
+// that mutated the database.
+//
+// GetCollection re-evaluates a dynamic collection and stored the result
+// unconditionally. PebbleStore.UpdateCollection sets UpdatedAt=now,
+// Version=prev+1 and commits with pebble.Sync — so every READ was an fsync and a
+// version bump. Version stopped counting changes, and because the ABS DTO exposes
+// UpdatedAt as lastUpdate, a client using it for cache invalidation would re-fetch
+// an untouched collection after every unrelated read, forever.
+//
+// The assertion is a DOSE-RESPONSE, not "never writes": the first read must still
+// persist, because membership genuinely changed from empty. A guard that simply
+// disabled the write would pass "second read writes nothing" and fail here.
+func TestReadingADynamicCollectionTwiceWritesOnce(t *testing.T) {
+	store := &colFakeStore{cols: []database.Collection{{
+		ID:    "c1",
+		Name:  "Sanderson",
+		Type:  database.CollectionTypeDynamic,
+		Query: "author:sanderson",
+		// Deliberately empty: the first read has real work to persist.
+		MaterializedBookIDs: nil,
+	}}}
+	r := colEvalRouter(t, store, "b1", "b2")
+
+	w := colDo(t, r, http.MethodGet, "/api/v1/collections/c1", nil)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, store.updates,
+		"the first read found membership that differs from what is stored and must persist it")
+	require.NotEmpty(t, store.cols[0].MaterializedBookIDs,
+		"the fixture must actually evaluate to something, or the second half of this "+
+			"test compares empty to empty and proves nothing")
+
+	w = colDo(t, r, http.MethodGet, "/api/v1/collections/c1", nil)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	assert.Equal(t, 1, store.updates,
+		"nothing changed between the two reads, so the second must not write: an "+
+			"unconditional persist here makes every GET an fsync and bumps Version")
 }

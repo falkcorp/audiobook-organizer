@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-08-14
+// last-edited: 2026-08-16
 
 package server
 
@@ -51,12 +51,9 @@ var absReservedPaths = []string{
 	"/api/authorize",
 	"/api/me",
 	"/api/libraries",
-	// The collection LIST and CREATE. POST /api/collections 404'd in production on
-	// 2026-08-16 (five attempts in two seconds) because no route existed; now that
-	// one does, the redirect must keep its hands off it. Reserving the POST matters
-	// more than reserving a GET: a 301 drops the request body on many clients, so a
-	// redirected create would arrive empty and "succeed" as a nameless collection.
-	"/api/collections",
+	// NOTE: /api/collections is deliberately NOT here. It has a live /api/v1 twin, so
+	// it belongs in absAppAPICollisions + absCollisionDetailRoutes, which are
+	// method-aware and gated on ABSAPIEnabled. See the comment on that list.
 }
 
 // absReservedPathPrefixes covers ABS sub-trees (e.g. /api/me/sessions/:id).
@@ -71,19 +68,17 @@ var absReservedPathPrefixes = []string{
 	"/api/libraries/",
 	"/api/items/",
 	"/api/session/",
-	// Collection detail and membership edits: /api/collections/:id and
-	// /api/collections/:id/book[/:bookId].
+	// NOTE: "/api/collections/" was here for exactly one commit, 2026-08-16, and the
+	// comment justifying its width said "there is no /api/v1/collections twin — grep
+	// confirms this namespace has exactly one implementation". That was TRUE WHEN
+	// WRITTEN and FALSE ONE COMMIT LATER, when the native API in
+	// handlers/collections.go created the twin — retroactively converting this into
+	// the playlists defect, in the same PR that cited the playlists defect.
 	//
-	// A SUBTREE reservation is correct here, where it was a live bug for playlists.
-	// The playlist case broke six working app routes because /api/v1/playlists/*
-	// exists and the wide reservation converted its redirects into 404s. There is
-	// no /api/v1/collections twin — grep confirms this namespace has exactly one
-	// implementation — so there is no app route for a wide reservation to capture.
-	//
-	// Nor does this change behaviour with the ABS surface DISABLED: these paths
-	// already 404'd via absUnimplementedNamespaces, which this replaces. Same
-	// answer, now for the honest reason.
-	"/api/collections/",
+	// The lesson generalises: "no /api/v1 twin exists" is a fact about a MOMENT, not
+	// a property of a namespace, so it cannot justify a permanently wider
+	// reservation. The method-aware, flag-gated list is correct whether or not a twin
+	// exists today, which is why collections now lives there instead.
 }
 
 // absCollisionDetailRoutes are routes inside an absAppAPICollisions namespace that
@@ -129,33 +124,80 @@ var absReservedPathPrefixes = []string{
 // wider than the implementation converts working routes into 404s silently, because
 // a 404 on a redirect is indistinguishable from a route that never existed.
 //
-// So the match is on METHOD plus EXACTLY ONE remaining segment. A deeper path or a
-// different verb belongs to the app API and keeps redirecting.
+// So the match is on METHOD plus the EXACT route shape. A deeper path or a different
+// verb belongs to the app API and keeps redirecting.
+//
+// Originally this was method + "exactly one remaining segment", which was all
+// playlists needed. Collections needs two-segment routes
+// (/api/collections/:id/book/:bookId), so the rule is now a literal gin-style pattern
+// match — which yields the one-segment behaviour as a special case rather than
+// loosening it. Widening the matcher is safe in a way that widening a PREFIX is not:
+// every route still has to be named explicitly, one line each.
 type absCollisionDetailRoute struct {
-	Method string
-	Prefix string
+	Method  string
+	Pattern string // gin-style; ":name" matches exactly one non-empty segment
 }
 
 var absCollisionDetailRoutes = []absCollisionDetailRoute{
-	{Method: http.MethodGet, Prefix: "/api/playlists/"},
+	{Method: http.MethodGet, Pattern: "/api/playlists/:id"},
+
+	// Collections, added 2026-08-16 with the ABS surface in handlers/abs/collections.go.
+	// This list is EXACTLY the set registered there — no more (a wider claim 404s the
+	// native twin) and no less (a narrower one 301s an ABS client into the app-API
+	// shape). The routes the NATIVE api owns alone are deliberately absent and must
+	// stay absent: GET /api/collections (ABS lists per-library), PUT
+	// /api/collections/:id (ABS uses PATCH), POST /api/collections/:id/materialize.
+	//
+	// Caveat on POST /api/collections with the ABS surface OFF: it redirects, and a
+	// 301 drops the body on many clients, so a create can arrive empty. That is the
+	// pre-existing behaviour of the compat redirect for every app-API POST, not
+	// something specific to collections, and the alternative — reserving it
+	// unconditionally — is strictly worse, because it 404s a route the native twin
+	// answers. Fixing it properly means 308 for non-GET across the whole redirect.
+	{Method: http.MethodPost, Pattern: "/api/collections"},
+	{Method: http.MethodGet, Pattern: "/api/collections/:id"},
+	{Method: http.MethodPatch, Pattern: "/api/collections/:id"},
+	{Method: http.MethodDelete, Pattern: "/api/collections/:id"},
+	{Method: http.MethodPost, Pattern: "/api/collections/:id/book"},
+	{Method: http.MethodDelete, Pattern: "/api/collections/:id/book/:bookId"},
 }
 
 // absCollisionDetailReserved reports whether (method, path) is a route ABS serves
 // natively inside a colliding namespace. The caller must AND this with ABSAPIEnabled.
 func absCollisionDetailReserved(method, path string) bool {
 	for _, r := range absCollisionDetailRoutes {
-		if method != r.Method || !strings.HasPrefix(path, r.Prefix) {
-			continue
+		if method == r.Method && absPatternMatches(r.Pattern, path) {
+			return true
 		}
-		// Exactly one segment: "/api/playlists/abc" yes, "/api/playlists/abc/books"
-		// no — the latter is an app route and must keep its redirect.
-		rest := path[len(r.Prefix):]
-		if rest == "" || strings.Contains(rest, "/") {
-			continue
-		}
-		return true
 	}
 	return false
+}
+
+// absPatternMatches reports whether path matches a gin-style route pattern, where a
+// ":name" segment matches exactly one non-empty path segment.
+//
+// Segment-COUNT equality is the load-bearing part: it is what stops
+// "/api/collections/:id" from claiming "/api/collections/abc/materialize", which is a
+// native-only route. A HasPrefix match would claim it, and that is precisely the bug
+// this whole mechanism exists to prevent.
+func absPatternMatches(pattern, path string) bool {
+	ps := strings.Split(pattern, "/")
+	xs := strings.Split(path, "/")
+	if len(ps) != len(xs) {
+		return false
+	}
+	for i, seg := range ps {
+		if strings.HasPrefix(seg, ":") {
+			if xs[i] == "" {
+				return false
+			}
+			continue
+		}
+		if seg != xs[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // absUnimplementedNamespaces are ABS endpoints we do NOT implement, reserved for the
@@ -235,6 +277,13 @@ var absAppAPICollisions = []string{
 	// matched direct registrations. Seven routes, including reset-password — an
 	// account-recovery path.
 	"/api/users",
+	// Added 2026-08-16. Unlike its neighbours here, collections IS implemented on the
+	// ABS surface — but only partly, and the partial overlap is the whole point: ABS
+	// serves six routes in this namespace and the app API serves six DIFFERENT ones,
+	// with only three shared. The namespace as a whole therefore belongs to the app
+	// API (redirect by default) and ABS claims its six routes individually, by method
+	// and shape, in absCollisionDetailRoutes.
+	"/api/collections",
 }
 
 // absReservedPath reports whether a request path belongs to the ABS surface and must

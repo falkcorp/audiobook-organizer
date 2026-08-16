@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 3ea1d764-95c8-4b02-8f31-6d70a5be2c49
-// last-edited: 2026-08-14
+// last-edited: 2026-08-16
 
 package server
 
@@ -617,6 +617,57 @@ func TestABSRouteListIncludesOpenIDRoutes(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("absRouteList() is missing %q — the registered OpenID surface would again be invisible to the guard tests and the startup route log", w)
+		}
+	}
+}
+
+// TestCollectionsNativeTwinRoutesStillRedirect is the regression test for the seam
+// between the two commits of the collections feature.
+//
+// Commit 1 reserved the whole /api/collections subtree, and justified the width in a
+// comment: "no /api/v1/collections twin — grep confirms this namespace has exactly one
+// implementation". That was TRUE WHEN IT WAS WRITTEN. Commit 2 built the native API and
+// created the twin, which retroactively converted the reservation into exactly the
+// playlists defect (#2332 → #2333 → #2335): a reservation wider than what ABS serves,
+// turning working app routes into silent 404s.
+//
+// Neither existing namespace test could catch it. Both DERIVE their assertions from the
+// very lists the commit edited, so moving an entry between lists moves the assertion
+// instead of failing it. This test names the routes literally.
+func TestCollectionsNativeTwinRoutesStillRedirect(t *testing.T) {
+	// Routes the NATIVE api serves and ABS does not. These must keep redirecting to
+	// their /api/v1 twin no matter whether the ABS surface is enabled.
+	nativeOnly := []struct{ method, path string }{
+		{http.MethodGet, "/api/collections"},                 // ABS lists per-library, not here
+		{http.MethodPut, "/api/collections/c1"},              // ABS uses PATCH
+		{http.MethodPost, "/api/collections/c1/materialize"}, // no ABS concept at all
+	}
+	// Routes ABS serves. Reserved ONLY when the ABS surface is on; with it off the ABS
+	// route was never registered, so reserving would 404 a path the native twin answers.
+	absServed := []struct{ method, path string }{
+		{http.MethodPost, "/api/collections"},
+		{http.MethodGet, "/api/collections/c1"},
+		{http.MethodPatch, "/api/collections/c1"},
+		{http.MethodDelete, "/api/collections/c1"},
+		{http.MethodPost, "/api/collections/c1/book"},
+		{http.MethodDelete, "/api/collections/c1/book/b1"},
+	}
+
+	reserved := func(method, path string, absOn bool) bool {
+		return absReservedPath(path) || (absOn && absCollisionDetailReserved(method, path))
+	}
+
+	for _, absOn := range []bool{false, true} {
+		for _, r := range nativeOnly {
+			require.False(t, reserved(r.method, r.path, absOn),
+				"%s %s is served by the NATIVE api only (ABS enabled=%v); reserving it "+
+					"converts a working app route into a 404", r.method, r.path, absOn)
+		}
+		for _, r := range absServed {
+			require.Equal(t, absOn, reserved(r.method, r.path, absOn),
+				"%s %s must be reserved exactly when the ABS surface is enabled "+
+					"(enabled=%v): on, ABS answers it; off, nothing did and the "+
+					"redirect is the only way to the /api/v1 twin", r.method, r.path, absOn)
 		}
 	}
 }
