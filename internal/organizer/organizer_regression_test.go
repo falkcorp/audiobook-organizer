@@ -1,6 +1,7 @@
 // file: internal/organizer/organizer_regression_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e4f5a6b7-c8d9-e0f1-a2b3-organizer-reg
+// last-edited: 2026-08-16
 
 package organizer
 
@@ -38,12 +39,25 @@ func segsFor(paths ...string) []database.BookFile {
 }
 
 // ---------------------------------------------------------------------------
-// Regression: OrganizeBookDirectory returns empty pathMap when all files missing
-// (Bug: missing source files were silently skipped, but organizeDirectoryBook
-// used to ignore the empty pathMap and mark the book as organized anyway.)
+// Regression: OrganizeBookDirectory ERRORS when nothing was copied.
+//
+// This test used to assert the opposite — (targetDir, empty pathMap, nil err) —
+// and its own comment recorded why that was survivable: "organizeDirectoryBook
+// used to ignore the empty pathMap and mark the book as organized anyway". The
+// fix then went in at that ONE caller. The function kept returning success, and
+// the other two callers never grew the same check:
+//
+//   - ensureLibraryCopy (internal/metafetch/service_apply.go) created a
+//     version-linked book record pointing at the directory.
+//   - organizeMultiFileBook (internal/itunes/service/importer.go) assigned it
+//     to book.FilePath.
+//
+// Both pointed a book at a directory MkdirAll had just created and nothing had
+// been copied into. The check now lives inside OrganizeBookDirectory, so the
+// contract this test pins has deliberately changed.
 // ---------------------------------------------------------------------------
 
-func TestOrganizeBookDirectory_AllFilesMissing_EmptyPathMap(t *testing.T) {
+func TestOrganizeBookDirectory_AllFilesMissing_IsAnError(t *testing.T) {
 	rootDir := t.TempDir()
 
 	cfg := &config.Config{
@@ -55,12 +69,15 @@ func TestOrganizeBookDirectory_AllFilesMissing_EmptyPathMap(t *testing.T) {
 	org := NewOrganizer(cfg)
 
 	book := &database.Book{
+		ID:     "ghost-1",
 		Title:  "Ghost Book",
 		Format: "mp3",
 		Author: &database.Author{Name: "Ghost Author"},
 	}
 
-	// All source paths don't exist
+	// Sources that are simply gone from disk. Note that NONE of these rows is
+	// flagged Missing — that is the whole point. The "all rows flagged missing"
+	// case was already rejected; this is the one that looked like success.
 	segmentPaths := []string{
 		"/nonexistent/ch01.mp3",
 		"/nonexistent/ch02.mp3",
@@ -68,11 +85,13 @@ func TestOrganizeBookDirectory_AllFilesMissing_EmptyPathMap(t *testing.T) {
 	}
 
 	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segsFor(segmentPaths...))
-	// Should succeed (OrganizeBookDirectory skips missing files)
-	// but pathMap should be empty
-	require.NoError(t, err)
-	assert.NotEmpty(t, targetDir, "target dir is still computed even with no files")
-	assert.Empty(t, pathMap, "pathMap must be empty when all source files are missing")
+
+	require.Error(t, err, "organizing a book whose every source has vanished must not report success")
+	assert.Contains(t, err.Error(), "Ghost Book", "the error must name the book")
+	assert.Empty(t, pathMap, "no path mapping may be handed back on the failure path")
+	assert.Empty(t, targetDir,
+		"targetDir must NOT be returned: both callers that lacked the empty-pathMap check "+
+			"assigned it straight onto the book, which is how a book ended up pointing at an empty directory")
 }
 
 func TestOrganizeBookDirectory_PartialFilesMissing(t *testing.T) {

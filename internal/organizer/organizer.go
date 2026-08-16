@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-08-15
+// last-edited: 2026-08-16
 
 package organizer
 
@@ -792,6 +792,27 @@ func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.
 			return "", nil, fmt.Errorf("failed to organize segment %s: %w", fileName, err)
 		}
 		pathMap[srcPath] = dstPath
+	}
+
+	// Nothing landed. Report it HERE rather than leaving each caller to notice,
+	// because "returns a directory path with a nil error" is indistinguishable
+	// from success and two of the three callers took it at face value:
+	// ensureLibraryCopy (internal/metafetch/service_apply.go) created a
+	// version-linked book record pointing at this directory, and
+	// organizeMultiFileBook (internal/itunes/service/importer.go) assigned it to
+	// book.FilePath. Both would have pointed a book at a directory that
+	// MkdirAll had just created and nothing had been copied into.
+	//
+	// Only OrganizeDirectoryBook checked, and it had to re-derive the check
+	// itself — the same shape of bug as the target-path divergence: a rule that
+	// lives in the caller is a rule every future caller must remember.
+	//
+	// This is reachable WITHOUT any row being flagged Missing: the loop above
+	// skips a source that has vanished from disk since the last scan, so rows
+	// that look present can all skip and leave pathMap empty.
+	if len(pathMap) == 0 {
+		return "", nil, fmt.Errorf("organize produced no files for %q (id=%s): all %d planned source file(s) were missing or skipped — re-scan to verify, or restore from backup",
+			book.Title, book.ID, len(planned))
 	}
 
 	return targetDir, pathMap, nil
