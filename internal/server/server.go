@@ -248,6 +248,17 @@ type Server struct {
 	// No plugins are registered until their own bot-tasks wire them in.
 	opRegistry *opsregistry.Registry
 
+	// opRegistrationErrs collects failures from the op-registrar loop in
+	// NewServer. NewServer returns *Server with no error (47 call sites, most
+	// of them tests that never Start), so there is nowhere to return these at
+	// construction time -- until 2026-08-16 they were logged at WARN and
+	// dropped, which meant a registration failure silently removed an
+	// operation from a server that then booted looking perfectly healthy.
+	// Start() refuses to come up while this is non-empty, so the error lands
+	// on the one path where a real deployment happens and stays out of the
+	// way of tests that only construct.
+	opRegistrationErrs []error
+
 	// opHub is the UOS-06 SSE event bus for operations events.
 	// Created in NewServer, wired to opRegistry via SetBus before Start().
 	opHub *opsregistry.EventHub
@@ -601,13 +612,20 @@ func NewServer(store database.Store) *Server {
 	// and the mock store has no UpsertOpDefinitionV2 expectations.
 	if config.AppConfig.RootDir != "" {
 		if err := maintenanceplugin.New(server).Register(server.opRegistry); err != nil {
-			slog.Warn("maintenance plugin register", "err", err)
+			slog.Error("maintenance plugin register", "err", err)
+			server.opRegistrationErrs = append(server.opRegistrationErrs,
+				fmt.Errorf("maintenance plugin register: %w", err))
 		}
 		// Iterate all op registrars. Each file calls addOpRegistrar in its init()
 		// so new ops never require touching this block.
+		//
+		// Every one of the ~55 RegisterOp call sites correctly returns its
+		// error; this loop was the single place that threw them away. Collect
+		// instead, and let Start() decide -- see opRegistrationErrs.
 		for _, reg := range opRegistrars {
 			if err := reg(server, server.opRegistry); err != nil {
-				slog.Warn("op registrar", "err", err)
+				slog.Error("op registrar", "err", err)
+				server.opRegistrationErrs = append(server.opRegistrationErrs, err)
 			}
 		}
 	}

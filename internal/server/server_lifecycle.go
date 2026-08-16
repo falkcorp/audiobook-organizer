@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -292,7 +293,36 @@ func (s *Server) resumeLegacyOp(opID, opType string) {
 	}
 }
 
+// opRegistrationGate reports whether the operations registry came up whole.
+//
+// An op that fails to register does not degrade -- it ceases to exist,
+// silently, while every other subsystem reports healthy. Whatever enqueues it
+// later gets "unknown op" from a server that looks fine, which is a far worse
+// thing to diagnose than a refusal to start. Until 2026-08-16 these failures
+// were logged at WARN in NewServer's registrar loop and dropped, because
+// NewServer has no error return; they are collected on the Server now and
+// enforced here, on the one path where a real deployment happens.
+//
+// Split out of Start so the condition can be tested without booting a server:
+// Start's later stages spawn background goroutines that require a fully wired
+// Server, so a "no errors" control exercised through Start panics rather than
+// demonstrating anything.
+func (s *Server) opRegistrationGate() error {
+	if len(s.opRegistrationErrs) == 0 {
+		return nil
+	}
+	return fmt.Errorf("operation registration failed for %d op(s), refusing to start: %w",
+		len(s.opRegistrationErrs), errors.Join(s.opRegistrationErrs...))
+}
+
 func (s *Server) Start(cfg ServerConfig) error {
+	// Refuse to serve with a hole in the operations registry, before touching
+	// anything else -- nothing below this line should run on a server that is
+	// about to be rejected.
+	if err := s.opRegistrationGate(); err != nil {
+		return err
+	}
+
 	s.externalURL = strings.TrimRight(cfg.ExternalURL, "/")
 
 	// SERVER-LIFECYCLE-FLIP: drive Starter services via the container.
