@@ -322,31 +322,20 @@ func (o *Organizer) generateTargetPath(book *database.Book) (string, error) {
 	// Get file extension
 	ext := filepath.Ext(book.FilePath)
 
-	// Generate folder path
-	folderPath, err := o.expandPattern(o.config.FolderNamingPattern, book)
+	// One composer, shared with ComputeTargetPaths — see BuildRelPath. This
+	// function used to compose folder + file itself, and so did the
+	// metadata-apply path, and the two disagreed.
+	relPath, err := BuildRelPath(o.config.FolderNamingPattern, o.config.FileNamingPattern,
+		o.pathVars(book, 0, 0, strings.TrimPrefix(ext, ".")), o.buildOpts())
 	if err != nil {
-		return "", fmt.Errorf("folder pattern: %w", err)
+		return "", err
 	}
-	folderPath = sanitizePath(folderPath)
 
-	// Generate file name
-	fileName, err := o.expandPattern(o.config.FileNamingPattern, book)
-	if err != nil {
-		return "", fmt.Errorf("file pattern: %w", err)
+	folderPath, fileName := "", relPath
+	if idx := strings.LastIndex(relPath, "/"); idx >= 0 {
+		folderPath, fileName = relPath[:idx], relPath[idx+1:]
 	}
-	// A pattern can now legitimately expand to nothing — e.g. the (unusual)
-	// pattern "{narrator}" for a book with no narrator, which before this
-	// commit expanded to the literal word "narrator". An empty stem would make
-	// the target a bare dotfile (".m4b") that EVERY such book collides on, so
-	// fall back to the book's own title, and only then to defaultTitle.
-	stem := SanitizePathComponent(fileName)
-	if strings.TrimSpace(stem) == "" {
-		stem = SanitizePathComponent(strings.TrimSpace(book.Title))
-	}
-	if strings.TrimSpace(stem) == "" {
-		stem = SanitizePathComponent(defaultTitle)
-	}
-	fileName = stem + ext
+	fileName += ext
 
 	// When iTunes path trimming is enabled, shorten the filename stem so the
 	// Windows-equivalent path stays under MAX_PATH (260 chars). This uses

@@ -10,21 +10,6 @@ import (
 	"strings"
 )
 
-// FormatVars holds all variables available for path/title formatting.
-type FormatVars struct {
-	Author      string
-	Title       string
-	Series      string
-	SeriesPos   string
-	Year        int
-	Narrator    string
-	Lang        string // ISO 639-1 (en, de, fr)
-	Track       int
-	TotalTracks int
-	TrackTitle  string // pre-computed segment title
-	Ext         string
-}
-
 var formatVarPattern = regexp.MustCompile(`\{(\w+)(?::([^}]+))?\}`)
 
 const (
@@ -85,97 +70,6 @@ func scrubVar(s string) string {
 	// Leading dots create hidden files/dirs on POSIX and ".." is parent.
 	s = strings.TrimLeft(s, ".")
 	return s
-}
-
-// FormatPath formats a full file path using the path_format template.
-func FormatPath(format string, vars FormatVars) string {
-	// SCRUB every variable BEFORE substitution so no metadata value can
-	// introduce an unintended path separator. The post-substitution split
-	// at line ~150 below treats every '/' as a directory boundary; if
-	// {title} leaks a '/', the directory tree explodes (see scrubVar comment).
-	author := scrubVar(vars.Author)
-	title := scrubVar(vars.Title)
-	series := scrubVar(vars.Series)
-	seriesPos := scrubVar(vars.SeriesPos)
-	narrator := scrubVar(vars.Narrator)
-	lang := scrubVar(vars.Lang)
-
-	trackTitle := scrubVar(vars.TrackTitle)
-	if trackTitle == "" && vars.Track > 0 {
-		// Use scrubbed title here too — segment title is a path component.
-		trackTitle = FormatSegmentTitle(DefaultSegmentTitleFormat, title, vars.Track, vars.TotalTracks)
-		// FormatSegmentTitle could in theory emit a '/' if a future template
-		// uses one — re-scrub defensively.
-		trackTitle = scrubVar(trackTitle)
-	}
-
-	seriesPrefix := ""
-	if series != "" {
-		seriesPrefix = series
-		if seriesPos != "" {
-			seriesPrefix += " " + seriesPos
-		}
-		seriesPrefix += " - "
-	}
-
-	yearStr := ""
-	if vars.Year > 0 {
-		yearStr = fmt.Sprintf("%d", vars.Year)
-	}
-
-	result := format
-	result = strings.ReplaceAll(result, "{author}", author)
-	result = strings.ReplaceAll(result, "{title}", title)
-	result = strings.ReplaceAll(result, "{series}", series)
-	result = strings.ReplaceAll(result, "{series_position}", seriesPos)
-	result = strings.ReplaceAll(result, "{series_prefix}", seriesPrefix)
-	result = strings.ReplaceAll(result, "{year}", yearStr)
-	result = strings.ReplaceAll(result, "{narrator}", narrator)
-	result = strings.ReplaceAll(result, "{lang}", lang)
-	result = strings.ReplaceAll(result, "{track_title}", trackTitle)
-	result = strings.ReplaceAll(result, "{ext}", vars.Ext)
-
-	// Handle {track} and {total_tracks} with optional format specs
-	result = formatVarPattern.ReplaceAllStringFunc(result, func(match string) string {
-		parts := formatVarPattern.FindStringSubmatch(match)
-		name := parts[1]
-		spec := parts[2]
-		switch name {
-		case "track":
-			if spec != "" {
-				return fmt.Sprintf("%"+spec, vars.Track)
-			}
-			return fmt.Sprintf("%d", vars.Track)
-		case "total_tracks":
-			return fmt.Sprintf("%d", vars.TotalTracks)
-		}
-		return match
-	})
-
-	result = CollapseEmptySegments(result)
-
-	// Sanitize each path component
-	parts := strings.Split(result, "/")
-	for i, part := range parts {
-		parts[i] = SanitizePathComponent(part)
-	}
-	result = strings.Join(parts, "/")
-
-	// Final cleanup of empty segments after sanitization
-	for strings.Contains(result, "//") {
-		result = strings.ReplaceAll(result, "//", "/")
-	}
-	result = strings.Trim(result, "/")
-
-	// Collapse redundant "X - X" duplication in the final segment only.
-	// This catches cases where series name equals title (e.g., "Cobra Outlaw - Cobra Outlaw").
-	pathParts := strings.Split(result, "/")
-	if len(pathParts) > 0 {
-		pathParts[len(pathParts)-1] = collapseRedundantDup(pathParts[len(pathParts)-1])
-		result = strings.Join(pathParts, "/")
-	}
-
-	return result
 }
 
 // CollapseEmptySegments cleans up paths with empty variable substitutions.

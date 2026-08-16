@@ -111,7 +111,7 @@ func TestRenameFilesPhase2CollisionRollsBack(t *testing.T) {
 	if rerr != nil || string(data) != "mover" {
 		t.Errorf("source not rolled back: %q err=%v", data, rerr)
 	}
-	if _, terr := os.Stat(dst + tmpRenameSuffix); !os.IsNotExist(terr) {
+	if _, terr := os.Stat(dst + TmpRenameSuffix); !os.IsNotExist(terr) {
 		t.Error("temp file left behind after rollback")
 	}
 }
@@ -120,7 +120,7 @@ func TestRenameFilesResumesStrandedTemp(t *testing.T) {
 	tmpDir := t.TempDir()
 	src := filepath.Join(tmpDir, "old", "book.m4b") // does NOT exist
 	dst := filepath.Join(tmpDir, "new", "book.m4b")
-	tempPath := dst + tmpRenameSuffix
+	tempPath := dst + TmpRenameSuffix
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestRenameFilesPartialSucceededReportedOnFailure(t *testing.T) {
 	if data, rerr := os.ReadFile(dst2); rerr != nil || string(data) != "occupant" {
 		t.Errorf("occupant destroyed: %q err=%v", data, rerr)
 	}
-	if _, terr := os.Stat(dst2 + tmpRenameSuffix); !os.IsNotExist(terr) {
+	if _, terr := os.Stat(dst2 + TmpRenameSuffix); !os.IsNotExist(terr) {
 		t.Error("temp file left behind after rollback")
 	}
 }

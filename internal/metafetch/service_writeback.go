@@ -11,11 +11,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"log/slog"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -435,12 +435,10 @@ func (mfs *Service) generateSegmentTitles(bookID string, bookTitle string) error
 
 	totalTracks := len(bookFiles)
 
-	// Determine segment title format from config
-	segTitleFormat := config.AppConfig.SegmentTitleFormat
-	if segTitleFormat == "" {
-		segTitleFormat = DefaultSegmentTitleFormat
-	}
-
+	// The per-file DISPLAY title, not a path. This is the one thing the old
+	// segment_title_format config key still fed, so the key is gone but the
+	// format survives as a constant — a book_file.Title is a database field and
+	// has nothing to do with where the file lives on disk.
 	for i := range bookFiles {
 		// Auto-assign track numbers if zero
 		if bookFiles[i].TrackNumber == 0 {
@@ -449,7 +447,7 @@ func (mfs *Service) generateSegmentTitles(bookID string, bookTitle string) error
 		bookFiles[i].TrackCount = totalTracks
 
 		// Compute file title
-		title := FormatSegmentTitle(segTitleFormat, bookTitle, bookFiles[i].TrackNumber, totalTracks)
+		title := organizer.FormatSegmentTitle(organizer.DefaultSegmentTitleFormat, bookTitle, bookFiles[i].TrackNumber, totalTracks)
 		bookFiles[i].Title = title
 
 		if err := mfs.db.UpdateBookFile(bookFiles[i].ID, &bookFiles[i]); err != nil {
@@ -487,50 +485,16 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book) error {
 		return nil
 	}
 
-	// Resolve author name
-	var authorName string
-	if book.AuthorID != nil {
-		if author, aerr := mfs.db.GetAuthorByID(*book.AuthorID); aerr == nil && author != nil {
-			authorName = author.Name
-		}
+	// Plan the rename through the Organizer — same store lookups for
+	// author/series, same "Unknown Author" fallback, same naming patterns as the
+	// organize path. The hand-rolled FormatVars + path_format block that used to
+	// live here computed a DIFFERENT target, which is what made organize and
+	// apply drag books back and forth between two answers.
+	entries, err := newPathOrganizer(mfs.db).ComputeTargetPaths(book, bookFiles)
+	if err != nil {
+		// A broken naming pattern must not fall through to a rename.
+		return fmt.Errorf("compute target paths for book %s: %w", id, err)
 	}
-
-	// Resolve series name and position
-	var seriesName, seriesPos string
-	if book.SeriesID != nil {
-		if series, serr := mfs.db.GetSeriesByID(*book.SeriesID); serr == nil && series != nil {
-			seriesName = series.Name
-		}
-		if book.SeriesSequence != nil {
-			seriesPos = strconv.Itoa(*book.SeriesSequence)
-		}
-	}
-
-	year := 0
-	if book.AudiobookReleaseYear != nil {
-		year = *book.AudiobookReleaseYear
-	}
-
-	vars := FormatVars{
-		Author:    authorName,
-		Title:     book.Title,
-		Series:    seriesName,
-		SeriesPos: seriesPos,
-		Year:      year,
-		Narrator:  derefString(book.Narrator),
-		Lang:      derefString(book.Language),
-	}
-
-	pathFormat := config.AppConfig.PathFormat
-	if pathFormat == "" {
-		pathFormat = DefaultPathFormat
-	}
-	segTitleFormat := config.AppConfig.SegmentTitleFormat
-	if segTitleFormat == "" {
-		segTitleFormat = DefaultSegmentTitleFormat
-	}
-
-	entries := ComputeTargetPaths(config.AppConfig.RootDir, pathFormat, segTitleFormat, book, bookFiles, vars)
 
 	if config.AppConfig.AutoRenameOnApply && !hasCheckpoint(mfs.db, id, phaseRename) {
 		renameResult, renameErr := RenameFiles(entries)

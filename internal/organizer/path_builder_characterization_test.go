@@ -140,15 +140,27 @@ func TestChar_S1_QualityVocabulary(t *testing.T) {
 }
 
 // --- Scheme #2 behaviours that MUST survive unification ---
+//
+// These were written against FormatPath. FormatPath is deleted, so they now run
+// against BuildPath — which is the point: the behaviours had to survive the
+// builder that carried them.
 
 // TestChar_S2_ScrubsSeparatorsBeforeSubstitution pins the security property.
 // A title containing a path separator must not create directory levels.
+//
+// This is the behaviour internal/metafetch's hand-copied twin NEVER had. Real
+// production data — a title of "Tarkin - Star Wars - 3/85" — split into a
+// directory plus a file, and the next scan read 85 single-file directories as
+// 85 separate Book records.
 func TestChar_S2_ScrubsSeparatorsBeforeSubstitution(t *testing.T) {
-	got := FormatPath("{author}/{title}.{ext}", FormatVars{
+	got, err := BuildPath("{author}/{title}", PathVars{
 		Author: "A",
 		Title:  "../../etc/passwd",
 		Ext:    "m4b",
-	})
+	}, BuildOpts{})
+	if err != nil {
+		t.Fatalf("BuildPath: %v", err)
+	}
 	if strings.Contains(got, "..") {
 		t.Errorf("path traversal survived scrubbing: %q", got)
 	}
@@ -159,44 +171,54 @@ func TestChar_S2_ScrubsSeparatorsBeforeSubstitution(t *testing.T) {
 
 // TestChar_S2_MultiFileVocabulary pins the variables scheme #1 has never had.
 func TestChar_S2_MultiFileVocabulary(t *testing.T) {
-	got := FormatPath("{author}/{title}/{track_title}.{ext}", FormatVars{
+	got, err := BuildPath("{author}/{title}/{track_title}", PathVars{
 		Author: "A", Title: "T", Ext: "mp3",
 		Track: 3, TotalTracks: 12,
-	})
+	}, BuildOpts{})
+	if err != nil {
+		t.Fatalf("BuildPath: %v", err)
+	}
 	if !strings.Contains(got, "3") {
 		t.Errorf("track number lost: %q", got)
 	}
-	t.Logf("scheme #2 multi-file result: %q", got)
+	t.Logf("multi-file result: %q", got)
 }
 
-// TestChar_S2_CollapsesEmptySegments pins the fallback that differs from
-// scheme #1: an absent author removes the segment rather than naming it.
+// TestChar_S2_CollapsesEmptySegments pins that the collapsing fallback is still
+// REACHABLE. It is no longer a property of a rival builder — it is what
+// BuildOpts.AuthorFallback == "" selects, and the organize path opts out of it
+// by setting placeholderAuthor. Keeping both reachable from one builder is the
+// whole design: the two former schemes differed on this and each was right for
+// its caller.
 func TestChar_S2_CollapsesEmptySegments(t *testing.T) {
-	got := FormatPath("{author}/{title}.{ext}", FormatVars{Title: "T", Ext: "m4b"})
+	got, err := BuildPath("{author}/{title}", PathVars{Title: "T", Ext: "m4b"}, BuildOpts{})
+	if err != nil {
+		t.Fatalf("BuildPath: %v", err)
+	}
 	if strings.Contains(got, placeholderAuthor) {
-		t.Errorf("scheme #2 unexpectedly used the scheme #1 placeholder: %q", got)
+		t.Errorf("empty AuthorFallback unexpectedly produced the placeholder: %q", got)
 	}
 	if strings.HasPrefix(got, "/") {
 		t.Errorf("empty leading segment not collapsed: %q", got)
 	}
-	t.Logf("scheme #2 missing-author result: %q (scheme #1 would say %q/...)", got, placeholderAuthor)
 }
 
-// --- The divergence itself, pinned as a fact ---
+// --- The divergence, now pinned as AGREEMENT ---
 
-// TestChar_SchemesDisagree records that the two builders produce different
-// paths for the same book under the CURRENT production config. This is the
-// ping-pong: whichever engine ran last moves the file to its own answer.
+// TestChar_SchemesAgree is the conformance test. It was written as
+// TestChar_SchemesDisagree, recording that the organize path and the
+// metadata-apply path produced different targets for the same book under the
+// live production config — four directory levels against two. Since
+// ReOrganizeInPlace is a true os.Rename, that made each engine drag the file
+// back toward its own answer forever.
 //
-// When the builders are unified this test should be updated to assert
-// agreement - it is deliberately written to fail loudly if someone "fixes" the
-// symptom without understanding it.
-func TestChar_SchemesDisagree(t *testing.T) {
+// It now asserts they are EQUAL, and it is the test that must never be deleted:
+// two implementations of one question drift the moment nothing compares them.
+func TestChar_SchemesAgree(t *testing.T) {
 	// Live production values, read from the running server on 2026-08-15.
 	const (
-		prodFolder     = "{author}/{series}/{title} ({print_year})"
-		prodFile       = "{title} - {author} - read by {narrator}"
-		prodPathFormat = "{author}/{series_prefix}{title}/{track_title}.{ext}"
+		prodFolder = "{author}/{series}/{title} ({print_year})"
+		prodFile   = "{title} - {author} - read by {narrator}"
 	)
 
 	year := 1951
@@ -209,25 +231,142 @@ func TestChar_SchemesDisagree(t *testing.T) {
 	}
 
 	org := charOrganizer(prodFolder, prodFile)
-	s1, err := org.generateTargetPath(book)
+
+	organizePath, err := org.generateTargetPath(book)
 	if err != nil {
-		t.Fatalf("scheme #1: %v", err)
+		t.Fatalf("organize path: %v", err)
 	}
 
-	s2 := FormatPath(prodPathFormat, FormatVars{
-		Author: "Isaac Asimov",
-		Title:  "Foundation",
-		Series: "Foundation",
-		Year:   year,
-		Ext:    "m4b",
-		Track:  1,
-	})
+	// The apply path, for the same book as a single-file entry.
+	entries, err := org.ComputeTargetPaths(book, []database.BookFile{{
+		ID:       "virtual-1",
+		FilePath: "/src/foundation.m4b",
+		Format:   "m4b",
+	}})
+	if err != nil {
+		t.Fatalf("apply path: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("apply path planned %d renames, want exactly 1", len(entries))
+	}
+	applyPath := entries[0].TargetPath
 
-	t.Logf("scheme #1 (organize)      : %s", s1)
-	t.Logf("scheme #2 (metadata apply): %s", s2)
+	t.Logf("organize      : %s", organizePath)
+	t.Logf("metadata apply: %s", applyPath)
 
-	if strings.TrimPrefix(s1, "/lib/") == s2 {
-		t.Log("schemes now AGREE - if this is intentional, update this test to assert agreement")
+	if organizePath != applyPath {
+		t.Errorf("the two path builders disagree — this is the ping-pong:\n"+
+			"  organize      : %s\n"+
+			"  metadata apply: %s", organizePath, applyPath)
+	}
+}
+
+// TestChar_AlreadyOrganizedBookPlansNoRename is the ping-pong stated as its
+// observable symptom. A book already sitting at its organize-computed target
+// must produce ZERO rename entries — if the apply path plans a move for a file
+// organize just put there, the two are still fighting.
+func TestChar_AlreadyOrganizedBookPlansNoRename(t *testing.T) {
+	year := 1951
+	book := &database.Book{
+		Title:     "Foundation",
+		FilePath:  "/src/foundation.m4b",
+		Author:    &database.Author{Name: "Isaac Asimov"},
+		Series:    &database.Series{Name: "Foundation"},
+		PrintYear: &year,
+	}
+
+	org := charOrganizer("{author}/{series}/{title} ({print_year})", "{title} - {author}")
+
+	target, err := org.generateTargetPath(book)
+	if err != nil {
+		t.Fatalf("organize path: %v", err)
+	}
+
+	// Now the file IS at that target — exactly the state organize leaves behind.
+	entries, err := org.ComputeTargetPaths(book, []database.BookFile{{
+		ID:       "f1",
+		FilePath: target,
+		Format:   "m4b",
+	}})
+	if err != nil {
+		t.Fatalf("apply path: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("apply planned %d rename(s) for a book already at its organized path %q:\n  → %s",
+			len(entries), target, entries[0].TargetPath)
+	}
+}
+
+// TestChar_MultiFileBookNamesEveryFileDistinctly covers the requirement the
+// unification exists to serve: "make sure it's file and folder aware so it
+// updates all the rows correctly". Every file of a directory book must get its
+// OWN target — if two collide, one file overwrites the other and a book_file
+// row is stranded.
+func TestChar_MultiFileBookNamesEveryFileDistinctly(t *testing.T) {
+	book := &database.Book{
+		Title:    "Foundation",
+		FilePath: "/src/foundation",
+		Author:   &database.Author{Name: "Isaac Asimov"},
+	}
+
+	org := charOrganizer("{author}/{title}", "{title} - {track:02d}")
+
+	files := make([]database.BookFile, 0, 12)
+	for i := 1; i <= 12; i++ {
+		files = append(files, database.BookFile{
+			ID:          "f" + string(rune('a'+i-1)),
+			FilePath:    "/src/foundation/ch" + string(rune('0'+i%10)) + ".mp3",
+			Format:      "mp3",
+			TrackNumber: i,
+		})
+	}
+
+	entries, err := org.ComputeTargetPaths(book, files)
+	if err != nil {
+		t.Fatalf("apply path: %v", err)
+	}
+	if len(entries) != 12 {
+		t.Fatalf("planned %d renames for a 12-file book, want 12", len(entries))
+	}
+
+	seen := make(map[string]string, len(entries))
+	for _, e := range entries {
+		if prev, dup := seen[e.TargetPath]; dup {
+			t.Errorf("two files share one target — one would overwrite the other:\n"+
+				"  %s\n  %s\n  → %s", prev, e.SourcePath, e.TargetPath)
+		}
+		seen[e.TargetPath] = e.SourcePath
+	}
+
+	// Zero-padded so a file manager sorts them correctly.
+	if !strings.HasSuffix(entries[0].TargetPath, "Foundation - 01.mp3") {
+		t.Errorf("first track = %q, want a zero-padded \"Foundation - 01.mp3\"", entries[0].TargetPath)
+	}
+}
+
+// TestChar_SingleFileBookDropsTheTrackSegment is the other half of the same
+// requirement, and the reason the default file pattern can carry {track:02d} at
+// all: a book with ONE file must not be named "Foundation - 01.m4b".
+func TestChar_SingleFileBookDropsTheTrackSegment(t *testing.T) {
+	book := &database.Book{
+		Title:    "Foundation",
+		FilePath: "/src/foundation.m4b",
+		Author:   &database.Author{Name: "Isaac Asimov"},
+	}
+
+	org := charOrganizer("{author}", "{title} - {track:02d}")
+
+	entries, err := org.ComputeTargetPaths(book, []database.BookFile{{
+		ID: "f1", FilePath: "/src/foundation.m4b", Format: "m4b", TrackNumber: 1,
+	}})
+	if err != nil {
+		t.Fatalf("apply path: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("planned %d renames, want 1", len(entries))
+	}
+	if want := "/lib/Isaac Asimov/Foundation.m4b"; entries[0].TargetPath != want {
+		t.Errorf("single-file target = %q, want %q", entries[0].TargetPath, want)
 	}
 }
 

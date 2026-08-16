@@ -16,9 +16,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// tmpRenameSuffix is appended to the target path to form the intermediate
-// temp path used by RenameFiles' two-phase rename.
-const tmpRenameSuffix = ".tmp-rename"
+// TmpRenameSuffix is appended to the target path to form the intermediate temp
+// path used by RenameFiles' two-phase rename. Exported so internal/metafetch
+// shares the one constant: a file stranded at a temp path is only recoverable
+// by a process that recognizes the suffix, so two copies of it would mean two
+// definitions of "recoverable".
+const TmpRenameSuffix = ".tmp-rename"
 
 // FileRenameEntry represents a planned file rename operation.
 type FileRenameEntry struct {
@@ -35,10 +38,22 @@ type FilePipelineResult struct {
 }
 
 // ComputeTargetPaths computes the target file paths for all files of a book
-// using the path format template and format variables.
-func ComputeTargetPaths(rootDir, pathFormat, segTitleFormat string, book *database.Book, files []database.BookFile, vars FormatVars) []FileRenameEntry {
+// through BuildRelPath — the SAME composer Organizer.generateTargetPath uses.
+//
+// It used to run its own builder (FormatPath, driven by path_format) while
+// organize ran another (driven by folder_naming_pattern + file_naming_pattern).
+// Under the production config of 2026-08-15 they disagreed by two whole
+// directory levels, and since ReOrganizeInPlace is a true os.Rename, each one
+// dragged a book back toward its own answer indefinitely. Both now expand the
+// same two patterns; a book that is already organized produces zero entries
+// instead of a rename back and forth.
+//
+// It returns an error rather than a best-effort path when a pattern is broken:
+// a bad pattern must stop the rename, not quietly relocate the whole library to
+// a path built from a half-substituted template.
+func ComputeTargetPaths(rootDir, folderPattern, filePattern string, files []database.BookFile, vars PathVars, opts BuildOpts) ([]FileRenameEntry, error) {
 	if rootDir == "" || len(files) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// Sort files by track number then filepath
@@ -78,21 +93,28 @@ func ComputeTargetPaths(rootDir, pathFormat, segTitleFormat string, book *databa
 		}
 
 		segVars := vars
+		segVars.Ext = ext
 		segVars.Track = trackNum
 		segVars.TotalTracks = totalTracks
-		segVars.Ext = ext
 
-		// Compute segment title
-		if segTitleFormat == "" {
-			segTitleFormat = DefaultSegmentTitleFormat
+		// A one-file book has no track to name. Leaving Track set to 1 would
+		// make the default pattern "{title} - {track:02d}" produce
+		// "Foundation - 01.m4b" for a book that has exactly one file — the
+		// segment has to be ABSENT, not 1, for the empty-segment rule to drop
+		// it. This is what lets ONE pattern serve both book layouts.
+		if totalTracks <= 1 {
+			segVars.Track = 0
+			segVars.TotalTracks = 0
 		}
-		segVars.TrackTitle = FormatSegmentTitle(segTitleFormat, vars.Title, trackNum, totalTracks)
 
-		if pathFormat == "" {
-			pathFormat = DefaultPathFormat
+		relPath, err := BuildRelPath(folderPattern, filePattern, segVars, opts)
+		if err != nil {
+			return nil, err
 		}
-		relPath := FormatPath(pathFormat, segVars)
 		targetPath := filepath.Join(rootDir, relPath)
+		if ext != "" {
+			targetPath += "." + ext
+		}
 
 		if targetPath != f.FilePath {
 			entries = append(entries, FileRenameEntry{
@@ -103,13 +125,34 @@ func ComputeTargetPaths(rootDir, pathFormat, segTitleFormat string, book *databa
 		}
 	}
 
-	return entries
+	return entries, nil
+}
+
+// ComputeTargetPaths plans the rename of every file of a book using this
+// Organizer's config, store and naming patterns.
+//
+// This method — not the package function — is what other packages should call.
+// The metadata-apply path used to assemble its own variables, its own patterns
+// and its own builder, and every one of the three differed from organize's.
+// Going through the Organizer means the apply path resolves author and series
+// through the same store lookups, applies the same "Unknown Author" fallback,
+// and expands the same two patterns. It cannot arrive at a different answer,
+// which is the only durable form of "the two agree".
+func (o *Organizer) ComputeTargetPaths(book *database.Book, files []database.BookFile) ([]FileRenameEntry, error) {
+	return ComputeTargetPaths(
+		o.config.RootDir,
+		o.config.FolderNamingPattern,
+		o.config.FileNamingPattern,
+		files,
+		o.pathVars(book, 0, 0, ""),
+		o.buildOpts(),
+	)
 }
 
 // ComputeTargetPathsFromSegments is a backward-compatible wrapper that accepts
 // BookSegment slices and converts them to BookFile before computing paths.
 // Deprecated: callers should use ComputeTargetPaths with []BookFile directly.
-func ComputeTargetPathsFromSegments(rootDir, pathFormat, segTitleFormat string, book *database.Book, segments []database.BookSegment, vars FormatVars) []FileRenameEntry {
+func ComputeTargetPathsFromSegments(rootDir, folderPattern, filePattern string, segments []database.BookSegment, vars PathVars, opts BuildOpts) ([]FileRenameEntry, error) {
 	files := make([]database.BookFile, 0, len(segments))
 	for _, seg := range segments {
 		trackNum := 0
@@ -139,7 +182,7 @@ func ComputeTargetPathsFromSegments(rootDir, pathFormat, segTitleFormat string, 
 		}
 		files = append(files, bf)
 	}
-	return ComputeTargetPaths(rootDir, pathFormat, segTitleFormat, book, files, vars)
+	return ComputeTargetPaths(rootDir, folderPattern, filePattern, files, vars, opts)
 }
 
 // RenameFilesResult holds the outcome of a rename operation.
@@ -205,7 +248,7 @@ func RenameFiles(entries []FileRenameEntry) (*RenameFilesResult, error) {
 	var temps []renameTemp
 	for _, entry := range entries {
 		if _, err := os.Stat(entry.SourcePath); os.IsNotExist(err) {
-			tempPath := entry.TargetPath + tmpRenameSuffix
+			tempPath := entry.TargetPath + TmpRenameSuffix
 			if _, terr := os.Stat(tempPath); terr == nil {
 				slog.Warn("RenameFiles resuming stranded temp file from interrupted rename",
 					"temp_path", tempPath, "target_path", entry.TargetPath)
@@ -231,7 +274,7 @@ func RenameFiles(entries []FileRenameEntry) (*RenameFilesResult, error) {
 			return result, fmt.Errorf("create target dir %s: %w", targetDir, err)
 		}
 
-		tempPath := entry.TargetPath + tmpRenameSuffix
+		tempPath := entry.TargetPath + TmpRenameSuffix
 		if err := safeRename(entry.SourcePath, tempPath); err != nil {
 			// Rollback temps already moved
 			rollbackRenameTemps(temps, result)
