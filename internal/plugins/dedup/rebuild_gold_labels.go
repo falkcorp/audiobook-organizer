@@ -95,6 +95,7 @@ func (r rebuildReport) summary() string {
 func (p *Plugin) rebuildGoldLabelsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.rebuild-gold-labels",
+		Liveness: sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Rebuild mechanically-derived gold labels",
 		Description: "Re-derives label_source=rule and label_source=auto_high_conf gold labels against " +

@@ -28,6 +28,7 @@ type DurationBackfillParams struct {
 func (p *Plugin) durationBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "acoustid.duration-backfill",
+		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "acoustid",
 		DisplayName:     "AcoustID DurationSec repair",
 		Description:     "Re-derives AcoustIDFingerprintDurationSec for book_files that have a fingerprint but DurationSec==0 (STOREFID follow-up). Dry-run by default; pass live=true to write.",

@@ -143,6 +143,7 @@ func decideTitleRepair(in titleRepairBook, agreedFn func(dirPath string) (agreed
 func (p *Plugin) titleRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.title-repair",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Repair leaked chapter-tag titles (CONS-17b)",
 		Description:     "Re-derives each multi-file book's title via the CONS-17b all-chapters-agree check and repairs stored titles that are per-chapter tag residue (e.g. 'Big Finish Ident'). Skips single-file books and any title with override/fetched provenance. Default dry-run previews old→new; set apply=true to write.",

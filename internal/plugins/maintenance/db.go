@@ -19,6 +19,7 @@ func (p *Plugin) dbOptimizeDef() sdk.OperationDef {
 	sched := "0 2 * * 0" // 02:00 every Sunday
 	return sdk.OperationDef{
 		ID:              "maintenance.db-optimize",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Optimize database",
 		Description:     "Runs VACUUM/ANALYZE/WAL-checkpoint on all database stores.",

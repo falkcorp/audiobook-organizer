@@ -22,6 +22,7 @@ import (
 func (p *Plugin) pathUpdateDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "deluge.path-update",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:          "deluge",
 		DisplayName:     "Update Deluge torrent path",
 		Description:     "Updates a torrent's storage path in Deluge after a book is relocated.",

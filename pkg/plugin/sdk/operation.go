@@ -10,6 +10,7 @@ import "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 // Type aliases for operation definition and control types.
 type OperationDef = registry.OperationDef
 type ResumePolicy = registry.ResumePolicy
+type LivenessMode = registry.LivenessMode
 type Priority = registry.Priority
 type ActorMode = registry.ActorMode
 type Phase = registry.Phase
@@ -22,6 +23,15 @@ const (
 	ResumeRequeue     = registry.ResumeRequeue
 	ResumeDrop        = registry.ResumeDrop
 	ResumeAsk         = registry.ResumeAsk
+)
+
+// Liveness mode constants. Every OperationDef must declare one; the registry
+// refuses LivenessUnspecified. See registry.LivenessMode.
+const (
+	LivenessUnspecified = registry.LivenessUnspecified
+	LivenessRunItems    = registry.LivenessRunItems
+	LivenessManual      = registry.LivenessManual
+	LivenessNone        = registry.LivenessNone
 )
 
 // Priority level constants.

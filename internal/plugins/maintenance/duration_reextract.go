@@ -151,6 +151,7 @@ func extractWithTimeout(ctx context.Context, filePath string) (*mediainfo.MediaI
 func (p *Plugin) durationReextractDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.duration-reextract",
+		Liveness: sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Re-extract real book durations (fingerprint-first)",
 		Description: "Reads the real per-file duration already stored from fingerprinting (AcoustIDFingerprintDurationSec) first — a fast DB pass — " +

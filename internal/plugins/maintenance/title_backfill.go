@@ -33,6 +33,7 @@ type pendingUpdate struct {
 func (p *Plugin) titleBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.title-backfill",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Strip chapter prefixes from book titles",
 		Description:     "Scans all books and removes leading chapter/track markers from Book.Title (e.g. '(76/85) Tarkin' → 'Tarkin'). Default dry-run previews changes; set dryRun=false to apply.",

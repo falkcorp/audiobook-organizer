@@ -30,6 +30,7 @@ import (
 func (p *Plugin) resetAllDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "acoustid.reset-all",
+		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "acoustid",
 		DisplayName:     "Reset all AcoustID fingerprints",
 		Description:     "Clears every stored AcoustID fingerprint segment, drops acoustid dedup candidates, wipes the LSH index, and re-enqueues a forced rescan.",

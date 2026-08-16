@@ -50,6 +50,7 @@ type EmbedScanParams struct {
 func (p *Plugin) embedScanDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "dedup.embed-scan",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:          "dedup",
 		DisplayName:     "Embed all books",
 		Description:     "Re-embeds every primary book that lacks a fresh embedding. Pass {\"async\":true} to use the OpenAI Batch API instead of synchronous per-book calls.",

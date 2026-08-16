@@ -70,6 +70,7 @@ const bookSigInlineBytesPerBook = 22 * 1024
 func (p *Plugin) bookSigSidecarMigrateDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.booksig-sidecar-migrate",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Migrate inline book signatures into the book_sig: sidecar",
 		Description: "Dry-run audit (default) or explicit apply of the #2387 storage migration. " +

@@ -84,6 +84,7 @@ type labeledExampleStore interface {
 func (p *Plugin) rescoreLabeledExamplesDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.rescore-labeled-examples",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:      "dedup",
 		DisplayName: "Rescore labeled examples (populate ScoreBreakdowns for calibration)",
 		Description: "Recomputes each labeled dedup pair's ScoreBreakdown with the engine's " +

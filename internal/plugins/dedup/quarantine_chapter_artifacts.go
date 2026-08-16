@@ -53,6 +53,7 @@ type quarantineChapterParams struct {
 func (p *Plugin) quarantineChapterArtifactsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.quarantine-chapter-artifacts",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:      "dedup",
 		DisplayName: "Quarantine chapter-file artifacts",
 		Description: "Soft-deletes single short books whose generic title collides with many others " +

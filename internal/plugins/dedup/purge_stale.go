@@ -28,6 +28,7 @@ import (
 func (p *Plugin) purgeStaleDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "dedup.purge-stale",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "Cleanup stale dedup candidates",
 		Description:     "Deletes pending dedup candidates that are no longer valid (chapter files in same folder, same version-group, distinct series volumes).",

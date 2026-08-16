@@ -118,6 +118,7 @@ type calibrateScoringParams struct {
 func (p *Plugin) calibrateScoringDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "metafetch.calibrate-scoring",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:      "metafetch",
 		DisplayName: "Calibrate metadata scoring (report only)",
 		Description: "Read-only INIT-3-T1 harness: replays persisted metadata-candidate caches " +

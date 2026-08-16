@@ -68,6 +68,7 @@ func etaSuffix(phaseStart time.Time, done, total int) string {
 func (p *Plugin) fullScanDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "dedup.full-scan",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:          "dedup",
 		DisplayName:     "Full dedup scan",
 		Description:     "Runs a full embedding-based dedup scan, purging stale candidates first.",

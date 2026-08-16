@@ -104,6 +104,7 @@ type regroupPayload struct {
 func (p *Plugin) regroupShatteredAIDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.regroup-shattered-ai",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Regroup shattered books (dry-run · review-queue producer)",
 		Description: "Scans the whole library, groups the single-file books left by the broken iTunes import " +

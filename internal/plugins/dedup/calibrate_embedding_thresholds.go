@@ -110,6 +110,7 @@ type calibrateEmbeddingThresholdsParams struct {
 func (p *Plugin) calibrateEmbeddingThresholdsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.calibrate-embedding-thresholds",
+		Liveness: sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Calibrate embedding thresholds (report only)",
 		Description: "Read-only DEDUP-2/3 harness: scores the labeled gold dataset with the " +

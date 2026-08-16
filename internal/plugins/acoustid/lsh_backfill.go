@@ -56,6 +56,7 @@ type lshIndexChecker interface {
 func (p *Plugin) lshBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "acoustid.lsh-backfill",
+		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "acoustid",
 		DisplayName:     "Backfill LSH fingerprint index",
 		Description:     "Walks every BookFile and populates the fpidx LSH index for rows that have a stored AcoustIDFingerprint but no fpidx_meta entry. Idempotent.",

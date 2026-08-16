@@ -51,6 +51,7 @@ type libraryTranscodeParams struct {
 func (s *Server) RegisterLibraryScanOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "library.scan",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Library Scan",
 		Description:     "Scan the library root directory for new, changed, or removed audiobook files.",
@@ -126,6 +127,7 @@ type libraryImportParams struct {
 func (s *Server) RegisterLibraryImportOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "library.import",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Manual Import",
 		Description:     "Import audiobooks from a specific folder or file (no full-library scan). The path must resolve under a configured import path.",
@@ -181,6 +183,7 @@ func (s *Server) RegisterLibraryImportOp(reg *opsregistry.Registry) error {
 func (s *Server) RegisterLibraryOrganizeOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "library.organize",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Organize Library",
 		Description:     "Move audiobook files into the canonical directory structure based on current metadata.",
@@ -256,6 +259,7 @@ func (s *Server) RegisterLibraryOrganizeOp(reg *opsregistry.Registry) error {
 func (s *Server) RegisterLibraryTranscodeOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "library.transcode",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Transcode to M4B",
 		Description:     "Transcode an audiobook file to M4B format and register it as a new version.",

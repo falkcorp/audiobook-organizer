@@ -21,6 +21,7 @@ import (
 func (p *Plugin) optimizeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "library.optimize",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Library optimize sweep",
 		Description:     "Chains cleanup-stale → fingerprint-rescan(missing) → dedup-acoustid-scan → backfill into one user-triggered maintenance pass.",

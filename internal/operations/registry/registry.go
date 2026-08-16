@@ -433,6 +433,26 @@ func (r *Registry) RegisterOp(def OperationDef) error {
 	if def.ResumePolicy == ResumeUnspecified {
 		return fmt.Errorf("registry: OperationDef.ResumePolicy must not be ResumeUnspecified (id=%s)", def.ID)
 	}
+	// Liveness is a required declaration, not a hint. Until 2026-08-16 "report
+	// your progress" was a convention that nothing checked, so an op that never
+	// touched its reporter was indistinguishable from one that reported and
+	// then wedged -- both got a "stuck" strike at five minutes, and the usual
+	// response was to raise ProgressTimeout, which hides the first case
+	// permanently. Refusing the zero value is what makes the contract a
+	// contract.
+	if def.Liveness == LivenessUnspecified {
+		return fmt.Errorf("registry: OperationDef.Liveness must be declared (id=%s): "+
+			"use LivenessRunItems if the op runs its work through registry.RunItems (preferred), "+
+			"LivenessManual if it calls reporter.UpdateProgress itself, or LivenessNone with an "+
+			"explicit ProgressTimeout if it genuinely cannot report", def.ID)
+	}
+	// LivenessNone must cost something, or it becomes the default answer.
+	// Naming a timeout forces the author to decide how long silence is
+	// acceptable for this specific op instead of inheriting 5m by omission.
+	if def.Liveness == LivenessNone && def.ProgressTimeout == 0 {
+		return fmt.Errorf("registry: OperationDef.Liveness is LivenessNone but ProgressTimeout is unset (id=%s): "+
+			"an op that never reports must state how long it may run in silence", def.ID)
+	}
 
 	r.mu.Lock()
 	if _, exists := r.defs[def.ID]; exists {
@@ -463,7 +483,17 @@ func (r *Registry) RegisterOp(def OperationDef) error {
 		r.logger.Warn("registry: failed to upsert op_definitions_v2", "id", def.ID, "error", err)
 	}
 
-	r.logger.Info("registry: registered op", "id", def.ID, "plugin", def.Plugin)
+	// Log the opted-out set at WARN on every boot. An op that never reports is
+	// a permanent blind spot for the watchdog; keeping the list visible in the
+	// startup log is what stops it from growing quietly.
+	if def.Liveness == LivenessNone {
+		r.logger.Warn("registry: registered op that never reports progress",
+			"id", def.ID, "plugin", def.Plugin, "progress_timeout", def.ProgressTimeout,
+			"hint", "the watchdog cannot tell whether this op is working or wedged")
+	}
+
+	r.logger.Info("registry: registered op", "id", def.ID, "plugin", def.Plugin,
+		"liveness", def.Liveness.String())
 	return nil
 }
 

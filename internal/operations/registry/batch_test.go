@@ -33,6 +33,7 @@ import (
 func batchableDef(id string, bw, bmw time.Duration) registry.OperationDef {
 	return registry.OperationDef{
 		ID:           id,
+		Liveness:     registry.LivenessManual,
 		Plugin:       "test",
 		DisplayName:  "Batch Test Op",
 		Run:          func(_ context.Context, _ json.RawMessage, _ registry.Reporter) error { return nil },
@@ -378,6 +379,7 @@ func TestBatch_NonBatchableOpsUnaffected(t *testing.T) {
 	const defID = "test.non-batchable"
 	def := registry.OperationDef{
 		ID:           defID,
+		Liveness:     registry.LivenessManual,
 		Plugin:       "test",
 		DisplayName:  "Non-Batchable",
 		Run:          func(_ context.Context, _ json.RawMessage, _ registry.Reporter) error { return nil },
@@ -474,6 +476,7 @@ func TestBatch_DefaultWindows(t *testing.T) {
 	const defID = "test.batch-defaults"
 	def := registry.OperationDef{
 		ID:           defID,
+		Liveness:     registry.LivenessManual,
 		Plugin:       "test",
 		DisplayName:  "Batch Defaults",
 		Run:          func(_ context.Context, _ json.RawMessage, _ registry.Reporter) error { return nil },

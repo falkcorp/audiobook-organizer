@@ -93,6 +93,7 @@ func (r cleanupOrphanAuthorReport) summary() string {
 func (p *Plugin) cleanupOrphanAuthorEmbeddingsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.cleanup-orphan-author-embeddings",
+		Liveness: sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Clean up orphaned author embeddings",
 		Description: "Author-side counterpart to dedup.cleanup-orphan-embeddings (books): finds " +

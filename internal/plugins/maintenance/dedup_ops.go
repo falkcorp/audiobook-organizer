@@ -22,6 +22,8 @@ import (
 func (p *Plugin) dedupLLMReviewDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.dedup-llm-review",
+		Liveness: sdk.LivenessNone,
+		ProgressTimeout: 60 * time.Minute, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "Dedup LLM review",
 		Description:     "Runs LLM review of ambiguous author-dedup candidates.",
@@ -52,6 +54,7 @@ func (p *Plugin) aiDedupBatchDef() sdk.OperationDef {
 	sched := "0 0 * * *" // midnight daily
 	return sdk.OperationDef{
 		ID:              "maintenance.ai-dedup-batch",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "AI author dedup batch",
 		Description:     "Submits authors to the OpenAI Batch API for dedup review (50% cheaper, up to 24h turnaround).",

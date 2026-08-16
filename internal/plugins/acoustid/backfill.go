@@ -33,6 +33,7 @@ func (p *Plugin) backfillDef() sdk.OperationDef {
 	sched := "0 3 * * *"
 	return sdk.OperationDef{
 		ID:              "acoustid.backfill",
+		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "acoustid",
 		DisplayName:     "AcoustID backfill",
 		Description:     "Generates AcoustID fingerprints for files missing acoustid_seg0.",

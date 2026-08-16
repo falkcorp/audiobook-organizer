@@ -49,6 +49,7 @@ type checkBookParams struct {
 func (p *Plugin) checkBookDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.check-book",
+		Liveness: sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Dedup check (per-book)",
 		Description: "Runs a per-book dedup check after import, coalescing burst enqueues " +

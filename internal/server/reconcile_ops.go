@@ -38,6 +38,7 @@ type reconcileApplyOpParams struct {
 func (s *Server) RegisterReconcileScanOpV2(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "reconcile.scan",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "reconcile",
 		DisplayName:     "Reconcile Scan",
 		Description:     "Scan for books with missing files and match them to untracked files on disk.",
@@ -77,6 +78,7 @@ func (s *Server) RegisterReconcileScanOpV2(reg *opsregistry.Registry) error {
 func (s *Server) RegisterReconcileApplyOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "reconcile.apply",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "reconcile",
 		DisplayName:     "Reconcile Apply",
 		Description:     "Apply a set of file-to-book reconcile matches, moving files and updating the database.",

@@ -20,6 +20,8 @@ func (p *Plugin) batchPollerDef() sdk.OperationDef {
 	sched := "*/5 * * * *" // every 5 minutes
 	return sdk.OperationDef{
 		ID:              "maintenance.batch-poller",
+		Liveness: sdk.LivenessNone,
+		ProgressTimeout: 5 * time.Minute, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "OpenAI batch poller",
 		Description:     "Polls OpenAI for completed batch jobs and routes results to the appropriate handler.",

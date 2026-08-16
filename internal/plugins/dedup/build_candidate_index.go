@@ -55,6 +55,7 @@ const candidateStatusIndexScanLimit = 2_000_000
 func (p *Plugin) buildCandidateStatusIndexDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.build-candidate-status-index",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:      "dedup",
 		DisplayName: "Build candidate status secondary index",
 		Description: "Backfills the dedup:s: status secondary index over dedup candidates, " +

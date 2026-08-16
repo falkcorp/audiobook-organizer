@@ -82,6 +82,7 @@ type reembedEmbeddingsParams struct {
 func (p *Plugin) reembedEmbeddingsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.reembed-embeddings",
+		Liveness: sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Re-embed corpus (embedding model change)",
 		Description: "Re-embeds every book whose stored embedding was produced by a " +

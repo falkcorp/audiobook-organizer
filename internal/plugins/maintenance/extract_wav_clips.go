@@ -27,6 +27,7 @@ const extractWAVPageSize = 500 // larger pages — pure I/O, no GPU wait
 func (p *Plugin) extractWAVClipsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.extract-wav-clips",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Extract WAV clips for transcription cache",
 		Description:     "Extracts the first 90 seconds of each book's first audio file and saves the result in {library}/.wav-cache/{hash}.wav. Also hashes the source file and the extracted clip, persists the source SHA-256 to BookFile.FileHash (when missing), and creates a content-stable hardlink so the transcription cache survives organize path changes.",

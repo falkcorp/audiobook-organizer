@@ -146,6 +146,7 @@ type chapterPersister interface {
 func (p *Plugin) chaptersBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.chapters-backfill",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Backfill embedded chapters (single-file books)",
 		Description: "Extracts the embedded chapter timeline from single-file audiobook containers that have none " +

@@ -33,6 +33,7 @@ type autoResolveParams struct {
 func (p *Plugin) autoResolveDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "dedup.auto-resolve",
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "Auto-resolve CERTAIN dedup candidates (Tier 1)",
 		Description:     "Dry-run by default: reports which Band-CERTAIN dedup candidates WOULD auto-merge (≥2 primary signals or a whole-book-signature true_dup label). apply=true performs the merges, gated by the dedup.auto_resolve_enabled kill switch and a max_merges cap.",

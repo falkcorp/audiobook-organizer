@@ -69,6 +69,7 @@ type LSHIndexStore interface {
 func (p *Plugin) lshIndexBuildDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "dedup.lsh-index-build",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:          "dedup",
 		DisplayName:     "Build LSH fingerprint index",
 		Description:     "Builds the fpidx: secondary index over whole-file AcoustID fingerprints, enabling fast near-duplicate lookup without a full O(N) scan.",

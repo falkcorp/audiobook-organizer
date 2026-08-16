@@ -136,6 +136,7 @@ type calibrateCompositeParams struct {
 func (p *Plugin) calibrateCompositeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.calibrate-composite",
+		Liveness: sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Calibrate composite scorer (report; apply gated)",
 		Description: "Replays each labeled pair's stored ScoreBreakdown signals through " +

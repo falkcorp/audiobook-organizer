@@ -48,6 +48,7 @@ type datasetBackfillParams struct {
 func (p *Plugin) datasetBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.dataset-backfill",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:      "dedup",
 		DisplayName: "Backfill dedup tuning dataset",
 		Description: "Builds a labeled example per pending candidate, runs deterministic catchers, " +

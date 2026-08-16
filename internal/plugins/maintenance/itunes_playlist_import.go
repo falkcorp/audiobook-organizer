@@ -76,6 +76,7 @@ type itunesPlaylistImportParams struct {
 func (p *Plugin) itunesPlaylistImportDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.itunes-playlist-import",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Import iTunes smart (dynamic) playlists",
 		Description:     "Reads smart playlists from an iTunes Library.xml export (preferred) or a binary .itl, translates each Smart Criteria blob into our query DSL, and creates a matching smart UserPlaylist. Read-only with respect to iTunes — writes only to our own store. Idempotent: playlists already imported are skipped by iTunes persistent ID. Default dry-run reports what would be imported; set dryRun=false to apply.",

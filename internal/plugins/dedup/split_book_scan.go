@@ -23,6 +23,7 @@ import (
 func (p *Plugin) splitBookScanDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "dedup.split-book-scan",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "Split-book backfill scan",
 		Description:     "Scans the library for one-Book-per-chapter clusters and saves merge candidates.",

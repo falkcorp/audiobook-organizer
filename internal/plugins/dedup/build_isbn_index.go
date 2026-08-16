@@ -44,6 +44,7 @@ type buildISBNIndexParams struct {
 func (p *Plugin) buildISBNIndexDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.build-isbn-index",
+		Liveness: sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Build ISBN/ASIN secondary index",
 		Description: "Backfills the book:isbn10:, book:isbn13:, and book:asin: secondary " +

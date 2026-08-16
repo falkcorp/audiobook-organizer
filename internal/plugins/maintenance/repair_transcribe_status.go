@@ -188,6 +188,7 @@ func classifyStatusRepair(b database.Book) repairVerdict {
 func (p *Plugin) repairTranscribeStatusDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.repair-transcribe-status",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Repair transcribe status after a transport outage",
 		Description:     "Fixes transcribe_status rows that record a TRANSPORT failure (the Whisper endpoint was unreachable) rather than a transcription failure. A day-long outage on 2026-07-01 marked ~77% of the library whisper_error while their transcripts, dated four days earlier, survived intact. This recomputes the status from the stored text (credits -> ok, else unparsed), or clears it back to never-attempted where there is no text. Never calls Whisper, never touches transcript text, and leaves genuine failures and the [SILENCE] sentinel alone. Defaults to dry_run=true.",

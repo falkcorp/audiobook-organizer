@@ -21,6 +21,7 @@ func (p *Plugin) metadataRefreshDef() sdk.OperationDef {
 	sched := "0 6 * * *" // 06:00 daily
 	return sdk.OperationDef{
 		ID:              "maintenance.metadata-refresh",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Metadata refresh scan",
 		Description:     "Re-fetches metadata for books with incomplete records.",
@@ -45,6 +46,7 @@ func (p *Plugin) runMetadataRefresh(ctx context.Context, _ json.RawMessage, repo
 func (p *Plugin) metadataUpgradeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.metadata-upgrade",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Metadata source upgrade",
 		Description:     "Upgrades metadata from lower-quality sources (Google Books) to richer ones (Hardcover, Audible) where a high-confidence match is available.",
@@ -92,6 +94,7 @@ func (p *Plugin) isbnEnrichmentDef() sdk.OperationDef {
 	sched := "0 7 * * *" // 07:00 daily
 	return sdk.OperationDef{
 		ID:              "maintenance.isbn-enrichment",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "ISBN enrichment",
 		Description:     "Searches external metadata sources for missing ISBN identifiers. Checkpoints every 100 books.",

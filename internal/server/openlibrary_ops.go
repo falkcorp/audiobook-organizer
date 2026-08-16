@@ -33,6 +33,7 @@ type olImportOpParams struct {
 func (s *Server) RegisterOLDownloadOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "openlibrary.download",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "openlibrary",
 		DisplayName:     "OpenLibrary Dump Download",
 		Description:     "Download OpenLibrary data dump files (editions, authors, works).",
@@ -74,6 +75,7 @@ func (s *Server) RegisterOLDownloadOp(reg *opsregistry.Registry) error {
 func (s *Server) RegisterOLImportOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "openlibrary.import",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "openlibrary",
 		DisplayName:     "OpenLibrary Dump Import",
 		Description:     "Import OpenLibrary data dump files into the local search store.",

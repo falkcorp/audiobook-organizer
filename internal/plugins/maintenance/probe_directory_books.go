@@ -108,6 +108,7 @@ var (
 func (p *Plugin) probeDirectoryBooksDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.probe-directory-books",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Probe directory-shaped books (tier 2 · re-classify)",
 		Description: "Tier-2 escalation over the directory-shaped unlinked books that relink-unlinked-books could only " +

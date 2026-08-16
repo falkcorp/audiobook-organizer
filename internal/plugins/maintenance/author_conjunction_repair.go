@@ -94,6 +94,7 @@ const (
 func (p *Plugin) authorConjunctionRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.author-conjunction-repair",
+		Liveness: sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Repair author names with a stranded ampersand",
 		Description: "Repairs author rows named like '& Conrad Westmaas', created when an " +

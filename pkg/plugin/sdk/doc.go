@@ -48,6 +48,15 @@
 //	        Isolate:         false,
 //	        Timeout:         30 * time.Second,
 //	        Capabilities:    nil,
+//	        // Every def must declare how it keeps the watchdog informed;
+//	        // RegisterOp rejects the zero value. This one does no reportable
+//	        // work, so it declares LivenessNone and names its own budget.
+//	        // Prefer LivenessRunItems (registry.RunItems stamps per item) or
+//	        // LivenessManual (call rep.UpdateProgress yourself) for real work.
+//	        // Note rep.Log does NOT count as progress: a spin loop that logs
+//	        // is still a spin loop.
+//	        Liveness:        sdk.LivenessNone,
+//	        ProgressTimeout: 30 * time.Second,
 //	        Run: func(_ context.Context, _ json.RawMessage, rep sdk.Reporter) error {
 //	            return rep.Log(slog.LevelInfo, "hello from greeter plugin")
 //	        },

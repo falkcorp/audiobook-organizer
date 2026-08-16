@@ -29,6 +29,7 @@ import (
 func (s *Server) RegisterLibrarySizeRefreshOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "library.size-refresh",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Library Size Refresh",
 		Description:     "Walk the library + import-path trees to refresh on-disk size cache.",

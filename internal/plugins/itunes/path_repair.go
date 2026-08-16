@@ -17,6 +17,7 @@ import (
 func (p *Plugin) pathRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:                    "itunes.path-repair",
+		Liveness: sdk.LivenessManual,
 		Plugin:                "itunes",
 		DisplayName:           "iTunes Path Repair",
 		Description:           "Repair iTunes track paths that reference stale file locations.",

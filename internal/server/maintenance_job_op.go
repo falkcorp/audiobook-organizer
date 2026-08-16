@@ -28,6 +28,7 @@ type maintenanceJobOpParams struct {
 func (s *Server) RegisterMaintenanceJobOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "maintenance.job",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Maintenance Job",
 		Description:     "Run a named maintenance job.",

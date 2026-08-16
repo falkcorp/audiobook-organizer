@@ -17,6 +17,7 @@ import (
 func (p *Plugin) positionSyncDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "itunes.position-sync",
+		Liveness: sdk.LivenessManual,
 		Plugin:      "itunes",
 		DisplayName: "iTunes Position Sync",
 		Description: "Sync reading positions between iTunes bookmarks and the app.",
