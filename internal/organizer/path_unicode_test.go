@@ -22,6 +22,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // asianTitles are real-shaped titles in scripts with multi-byte encodings,
@@ -217,31 +219,50 @@ func TestSanitizePathComponent_InvisibleAndControlCharacters(t *testing.T) {
 // decomposes a Hangul syllable into jamo. "해리" is 6 bytes composed and 12
 // decomposed, with no visual difference whatsoever.
 func TestSanitizePathComponent_NormalizesToNFC(t *testing.T) {
-	cases := []struct {
-		name     string
-		nfd, nfc string
-	}{
-		{"korean hangul jamo", "해리", "해리"},
-		{"latin combining acute", "Amélie Nothomb", "Amélie Nothomb"},
-		{"japanese dakuten", "が", "が"},
-		{"vietnamese stacked", "Nguyễn", "Nguyễn"},
+	// Derive both forms from ONE literal rather than writing an NFD literal and
+	// an NFC literal side by side. Editors, gofmt and some filesystems silently
+	// normalize source files, so a hand-written "decomposed" literal can arrive
+	// already composed -- and then the test compares a string to itself and
+	// passes no matter what the code does.
+	//
+	// This is not hypothetical: the first version of this test hard-coded both
+	// forms, and the Korean and Japanese cases stayed GREEN with normalization
+	// removed, because the two literals in the file were byte-identical. Only
+	// the Latin cases caught the mutation. Constructing the forms at runtime is
+	// what makes the test measure the thing it claims to measure.
+	titles := map[string]string{
+		"korean hangul jamo":    "\ud574\ub9ac \ud3ec\ud130",
+		"latin combining acute": "Am\u00e9lie Nothomb",
+		"japanese dakuten":      "\u304c\u304e\u3050\u3052\u3054",
+		"vietnamese stacked":    "Nguy\u1ec5n Nh\u1eadt \u00c1nh",
+		"thai":                  "\u0e41\u0e2e\u0e23\u0e4c\u0e23\u0e35\u0e48",
 	}
 
 	dir := t.TempDir()
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			gotNFD := SanitizePathComponent(tc.nfd)
-			gotNFC := SanitizePathComponent(tc.nfc)
+	for name, title := range titles {
+		t.Run(name, func(t *testing.T) {
+			nfd := norm.NFD.String(title)
+			nfc := norm.NFC.String(title)
+			if nfd == nfc {
+				t.Skipf("%q has no distinct NFD form, so there is nothing to normalize", title)
+			}
+
+			gotNFD := SanitizePathComponent(nfd)
+			gotNFC := SanitizePathComponent(nfc)
 
 			if gotNFD != gotNFC {
 				t.Errorf("the same title in two encodings sanitized differently:\n  NFD -> %q (% x)\n  NFC -> %q (% x)\nThese are two directories that render identically.",
 					gotNFD, gotNFD, gotNFC, gotNFC)
 			}
 
-			// Both spellings must land on ONE file, not two. os.WriteFile is
-			// idempotent, so a second distinct name shows up as a second entry.
-			for _, form := range []string{tc.nfd, tc.nfc} {
-				p := filepath.Join(dir, tc.name, SanitizePathComponent(form)+".m4b")
+			// Both spellings must land on ONE file, not two.
+			//
+			// Note this half of the assertion is weaker than it looks on macOS:
+			// APFS compares names normalized, so it would collapse the two even
+			// without the fix. The string comparison above is the part that is
+			// filesystem-independent, and it is the one that caught the bug.
+			for _, form := range []string{nfd, nfc} {
+				p := filepath.Join(dir, name, SanitizePathComponent(form)+".m4b")
 				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 					t.Fatalf("MkdirAll: %v", err)
 				}
@@ -249,7 +270,7 @@ func TestSanitizePathComponent_NormalizesToNFC(t *testing.T) {
 					t.Fatalf("WriteFile(%q): %v", p, err)
 				}
 			}
-			entries, err := os.ReadDir(filepath.Join(dir, tc.name))
+			entries, err := os.ReadDir(filepath.Join(dir, name))
 			if err != nil {
 				t.Fatalf("ReadDir: %v", err)
 			}
