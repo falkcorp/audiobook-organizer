@@ -36,10 +36,16 @@ func (s *Server) wireOperationsRoutes(
 	// all using the identical `:id` param name, so Gin registers them cleanly.
 	protected.GET("/operations", s.perm(auth.PermLibraryView), operationsH.ListOperations)
 	protected.GET("/operations/stale", s.perm(auth.PermLibraryView), operationsH.ListStaleOperations)
-	protected.POST("/operations/scan", s.perm(auth.PermScanTrigger), operationsH.StartScan)
-	protected.POST("/operations/organize", s.perm(auth.PermScanTrigger), operationsH.StartOrganize)
-	protected.POST("/operations/transcode", s.perm(auth.PermScanTrigger), operationsH.StartTranscode)
-	protected.POST("/operations/optimize", s.perm(auth.PermScanTrigger), operationsH.StartOptimize)
+	// RETIRED 2026-08-16: POST /operations/{scan,organize,transcode,optimize}.
+	//
+	// All four were pure shims — the handler body was a single launchOp() call
+	// forwarding to registry.EnqueueOp, which is exactly what POST /operations/v2
+	// does. They added no behaviour, only a second response shape, and that shape
+	// was wrong: they answered 202 {"op_id":...,"id":...} unwrapped while the web
+	// client read `.data.id`, so `op.id` threw, the caller's catch swallowed it,
+	// and the UI said "Failed to start scan" WHILE THE SCAN WAS RUNNING.
+	//
+	// Callers now POST /operations/v2 {def_id: "library.scan", params: {...}}.
 	protected.GET("/operations/:id/status", s.perm(auth.PermLibraryView), operationsH.GetOperationStatus)
 	protected.GET("/operations/:id/logs", s.perm(auth.PermLibraryView), operationsH.GetOperationLogs)
 	protected.GET("/operations/:id/result", s.perm(auth.PermLibraryView), operationsH.GetOperationResult)

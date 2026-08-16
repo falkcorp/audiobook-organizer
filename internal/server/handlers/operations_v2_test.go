@@ -6,6 +6,9 @@
 package handlers_test
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +22,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // newOpsV2Ctx builds a gin context with the given path params and an optional
@@ -262,4 +266,58 @@ func TestOperationsV2Handler_OperationsSSE_StreamThenDisconnect(t *testing.T) {
 	body := w.Body.String()
 	assert.Contains(t, body, ": heartbeat")
 	assert.Contains(t, body, "event: op.created")
+}
+
+// TestTriggerOperationV2_ParamsArriveDecodable carries forward the contract that
+// launch_params_test.go used to protect for the retired /operations/{scan,
+// organize,transcode} shims.
+//
+// Those shims read the raw request body as []byte and handed it to
+// EnqueueOp(params any), which json.Marshal's its argument — and marshalling a
+// []byte BASE64-ENCODES it. A body of {"book_ids":["b1"]} was stored as the JSON
+// string "eyJib29rX2lkcyI6...", every op decoding it hit "cannot unmarshal string
+// into Go value of type ...", and before wave 3 that error was discarded, leaving
+// the params struct zero — so an organize with an explicit book_ids list ran with
+// BookIDs nil, which downstream means the WHOLE LIBRARY.
+//
+// Deleting the shims removes that specific defect by construction: params arrive
+// here already decoded into `any`, so there is no []byte to mis-marshal. This test
+// exists so "by construction" is asserted rather than assumed, on the one path
+// that now carries every trigger.
+//
+// It deliberately CAPTURES the enqueued params instead of matching mock.Anything.
+// The sibling success test above passes mock.Anything for this argument, which
+// means it would go green against the base64 bug too — matching on Anything is
+// how a payload defect hides from a test that appears to cover it.
+func TestTriggerOperationV2_ParamsArriveDecodable(t *testing.T) {
+	var captured any
+	registry := handlersmocks.NewMockOperationsRegistry(t)
+	registry.EXPECT().EnqueueOp(mock.Anything, "library.organize", mock.Anything).
+		RunAndReturn(func(_ context.Context, _ string, params any, _ ...opsregistry.EnqueueOption) (string, error) {
+			captured = params
+			return "op-1", nil
+		})
+
+	h := handlers.NewOperationsV2Handler(nil, registry, nil)
+	c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2",
+		`{"def_id":"library.organize","params":{"book_ids":["b1","b2"],"fetch_metadata_first":true}}`, nil)
+	h.TriggerOperationV2(c)
+	require.Equal(t, http.StatusAccepted, w.Code)
+
+	// Round-trip exactly as the registry does before handing params to the op.
+	raw, err := json.Marshal(captured)
+	require.NoError(t, err)
+	require.False(t, bytes.HasPrefix(bytes.TrimSpace(raw), []byte(`"`)),
+		"params marshalled to a JSON STRING (%s) — that is the base64 shape the "+
+			"retired shims produced, and every op decoding it silently got zero values", raw)
+
+	var got struct {
+		BookIDs            []string `json:"book_ids"`
+		FetchMetadataFirst bool     `json:"fetch_metadata_first"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &got),
+		"the op must be able to decode what the trigger enqueued")
+	require.Equal(t, []string{"b1", "b2"}, got.BookIDs,
+		"an explicit selection must survive the trigger; nil here means WHOLE LIBRARY downstream")
+	require.True(t, got.FetchMetadataFirst, "flags must survive the trigger too")
 }
