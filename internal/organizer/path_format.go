@@ -1,6 +1,7 @@
 // file: internal/organizer/path_format.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a7b3c1d2-e4f5-6789-abcd-ef0123456789
+// last-edited: 2026-08-16
 
 package organizer
 
@@ -8,6 +9,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 var formatVarPattern = regexp.MustCompile(`\{(\w+)(?::([^}]+))?\}`)
@@ -105,9 +108,40 @@ func CollapseEmptySegments(path string) string {
 func SanitizePathComponent(s string) string {
 	// Control characters and non-printable bytes never belong in a filename;
 	// some are legal on POSIX and make the file effectively unaddressable.
+	//
+	// This is a DENY-LIST on purpose. "Strip everything invisible" is the
+	// tempting version and it corrupts data: U+200C/U+200D are invisible but
+	// select between conjunct and separated forms in Devanagari (changing what
+	// the word says), and they bind emoji sequences. Everything removed here is
+	// meaningless in a filename, not merely invisible.
 	s = strings.Map(func(r rune) rune {
-		if r < 32 || r == 127 {
+		switch {
+		case r < 32 || r == 127:
+			// C0 controls and DEL.
 			return -1
+		case r >= 0x80 && r <= 0x9f:
+			// C1 controls. U+0085 NEL in particular is a line break that
+			// strings.Map's predecessor let straight through.
+			return -1
+		case r == 0x200b || r == 0xfeff:
+			// Zero-width space and BOM: invisible AND meaningless, so two
+			// titles differing only by one of these produce two directories
+			// that render identically.
+			return -1
+		case r == 0x200e || r == 0x200f || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069):
+			// Bidi marks, embeddings, overrides and isolates. U+202E makes a
+			// filename render as text it does not contain.
+			return -1
+		case r == 0x2028 || r == 0x2029:
+			// Line and paragraph separators.
+			return -1
+		case r == utf8.RuneError:
+			// Already-invalid input; do not carry it into a filename.
+			return -1
+		case r == 0x00a0 || r == 0x2007 || r == 0x202f:
+			// Non-breaking spaces. Keep the word gap, but as a real space so
+			// the whitespace collapse below can see it.
+			return ' '
 		}
 		return r
 	}, s)
@@ -135,12 +169,84 @@ func SanitizePathComponent(s string) string {
 	}
 	s = strings.TrimSpace(s)
 
-	// Most filesystems cap a single component at 255 bytes. Leave room for an
-	// extension and the ".tmp" suffix the two-phase rename parks files under.
-	if len(s) > 200 {
-		s = strings.TrimSpace(s[:200])
+	// Most filesystems cap a single component at 255 BYTES, not characters.
+	// Leave room for an extension and the ".tmp-rename" suffix the two-phase
+	// rename parks files under.
+	//
+	// The cut must land on a rune boundary. This used to be a plain s[:200],
+	// which is correct for ASCII and silently catastrophic otherwise: a CJK
+	// rune is 3 bytes, so a Japanese or Korean title longer than ~67 characters
+	// got sliced mid-rune and the result was not valid UTF-8. The filesystem
+	// rejects that outright -- open() returns EILSEQ, "illegal byte sequence"
+	// -- so no such book could be organized at all. It failed at the syscall,
+	// not in any string comparison, which is why only a test that actually
+	// creates the file catches it.
+	s = truncateOnRuneBoundary(s, maxComponentBytes)
+
+	// Windows strips trailing dots and spaces from a name rather than
+	// rejecting it, so "Book Title." is created as "Book Title" and every
+	// later lookup by the original name misses. The library is reachable over
+	// SMB as W:\, so this has to hold even though ext4 and ZFS accept both.
+	// Done AFTER truncation, which can expose a new trailing dot.
+	s = strings.TrimRight(s, ". ")
+
+	// MS-DOS device names are still reserved by Win32 in every directory, with
+	// or without an extension: "NUL.m4b" is as unopenable as "NUL". Suffix
+	// rather than drop, so the book keeps a recognizable name.
+	if isWindowsReservedName(s) {
+		s += "_"
 	}
 	return s
+}
+
+// maxComponentBytes is the budget for one path component. The filesystem limit
+// is 255 bytes; the headroom covers the extension plus TmpRenameSuffix.
+const maxComponentBytes = 200
+
+// truncateOnRuneBoundary cuts s to at most max bytes without splitting a rune,
+// then drops any combining marks left dangling at the cut. A trailing combining
+// mark is legal UTF-8 but renders as a mark floating on nothing, and in Thai
+// and Devanagari it is a fragment of a cluster whose base character is gone.
+func truncateOnRuneBoundary(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	s = s[:cut]
+
+	for len(s) > 0 {
+		r, size := utf8.DecodeLastRuneInString(s)
+		if !unicode.In(r, unicode.Mn, unicode.Me, unicode.Mc) {
+			break
+		}
+		s = s[:len(s)-size]
+	}
+	return strings.TrimSpace(s)
+}
+
+// windowsReservedNames are the MS-DOS device names Win32 still reserves.
+var windowsReservedNames = map[string]struct{}{
+	"con": {}, "prn": {}, "aux": {}, "nul": {},
+	"com0": {}, "com1": {}, "com2": {}, "com3": {}, "com4": {},
+	"com5": {}, "com6": {}, "com7": {}, "com8": {}, "com9": {},
+	"lpt0": {}, "lpt1": {}, "lpt2": {}, "lpt3": {}, "lpt4": {},
+	"lpt5": {}, "lpt6": {}, "lpt7": {}, "lpt8": {}, "lpt9": {},
+}
+
+// isWindowsReservedName reports whether s collides with a reserved device name.
+// The check is case-insensitive and ignores any extension, because Win32
+// resolves "nul.m4b" and "NUL" to the same device.
+func isWindowsReservedName(s string) bool {
+	base := s
+	if i := strings.Index(base, "."); i >= 0 {
+		base = base[:i]
+	}
+	_, reserved := windowsReservedNames[strings.ToLower(strings.TrimSpace(base))]
+	return reserved
 }
 
 // collapseRedundantDup strips "X - X" → "X" in a single path segment,
