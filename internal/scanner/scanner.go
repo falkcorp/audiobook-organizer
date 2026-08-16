@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.52.0
+// version: 1.53.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-08-16
 
@@ -44,6 +44,18 @@ var saveBook func(ctx context.Context, book *Book) error = saveBookToDatabase
 
 // defaultLog is a package-level logger for functions that cannot accept a logger parameter.
 var defaultLog = logger.New("scanner")
+
+// scanProgressEvery is how many directories ScanDirectoryParallel processes
+// between liveness checkpoints.
+//
+// The bound that matters is wall-clock, not count: the stuck-op watchdog kills
+// an operation after ProgressTimeout (5m) without an UpdateProgress. A single
+// directory is scanned in well under a second even when it holds hundreds of
+// files, so 20 keeps the gap between checkpoints to seconds while costing one
+// progress write per 20 directories rather than one per directory -- the
+// reporter persists each update, so checkpointing every single directory would
+// add ~13k writes to a full-library scan for no extra safety.
+const scanProgressEvery = 20
 
 // Counters for store failures that were previously swallowed silently
 // (audit 2026-07-17 H5). Package-level atomics because saveBookToDatabase is
@@ -504,6 +516,12 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 	// (audit 2026-07-17 R-5/M8). Atomic: ReadDir failures occur in workers.
 	var walkErrCount atomic.Int64
 
+	// dirsFound / dirsScanned drive the liveness checkpoints below. Both
+	// phases of this function used to run silently; see the comments at each
+	// UpdateProgress call for why that killed the 2026-08-16 rescan.
+	var dirsFound atomic.Int64
+	var dirsScanned atomic.Int64
+
 	registerDirectory := func(path string, info os.FileInfo) bool {
 		if info == nil {
 			return false
@@ -562,6 +580,21 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 			if !registerDirectory(path, info) {
 				return filepath.SkipDir
 			}
+			// Checkpoint during discovery. Until 2026-08-16 this walk ran
+			// start-to-finish without a single UpdateProgress, so on a large
+			// import root it looked identical to a hung process: the caller
+			// had logged "Scanning folder N/M" and then went quiet for as long
+			// as the walk took. The stuck-op watchdog kills an operation after
+			// ProgressTimeout (5m) of silence, which is exactly how the
+			// 2026-08-16 rescan died -- mid-walk of a folder holding 17,469
+			// books, with the process demonstrably busy the whole time.
+			//
+			// The total is genuinely unknown while discovering, so current and
+			// total move together; that is the same "growing denominator"
+			// convention scanFolder already uses for its per-book counter.
+			if n := int(dirsFound.Add(1)); n%scanProgressEvery == 0 {
+				scanLog.UpdateProgress(n, n, fmt.Sprintf("Discovering folders: %d found (%s)", n, filepath.Base(path)))
+			}
 		}
 		return nil
 	})
@@ -579,8 +612,20 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 		wg.Add(1)
 		go func(scanDir string) {
 			defer wg.Done()
-			semaphore <- struct{}{}        // Acquire
-			defer func() { <-semaphore }() // Release
+			semaphore <- struct{}{} // Acquire
+			defer func() {
+				<-semaphore // Release
+				// Checkpoint per completed directory. This is the long phase
+				// -- it stats and group-detects every audio file under each
+				// directory -- and it reported nothing at all until
+				// 2026-08-16. Unlike the discovery walk above, the denominator
+				// is known here, so this is real progress rather than a
+				// growing count.
+				if n := int(dirsScanned.Add(1)); n%scanProgressEvery == 0 || n == len(dirs) {
+					scanLog.UpdateProgress(n, len(dirs),
+						fmt.Sprintf("Scanning folders: %d/%d (%s)", n, len(dirs), filepath.Base(scanDir)))
+				}
+			}()
 
 			// Read directory entries
 			entries, err := os.ReadDir(scanDir)
@@ -699,13 +744,47 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		scanLog.Info("scan complete: %d files processed", total)
 	}()
 
+	// Build the AI fallback parser from the configured LLM backend.
+	//
+	// Until 2026-08-16 this block ignored AIBackend entirely: it constructed
+	// the cloud OpenAI parser whenever EnableAIParsing was set, passing
+	// enabled=true unconditionally. The effect was that a deployment with
+	// ai_backend.llm_mode="disabled" and a local Ollama endpoint configured
+	// still sent every scan batch to api.openai.com -- which is exactly how
+	// the 2026-08-16 rescan burned its batches against an exhausted-credit
+	// key. Routing through EffectiveLLMMode makes the operator's setting the
+	// thing that decides, and keeps this in step with the "llmparser" service
+	// in internal/ai/register.go rather than being a second, divergent copy.
 	var aiParser *ai.OpenAIParser
 	aiEnabled := false
 	if config.AppConfig.EnableAIParsing {
-		if config.AppConfig.OpenAIAPIKey == "" {
-			scanLog.Warn("AI parsing enabled but OpenAI API key is not configured")
-		} else {
-			aiParser = ai.NewOpenAIParser(&config.AppConfig, config.AppConfig.OpenAIAPIKey, true)
+		cfg := &config.AppConfig
+		switch mode := cfg.EffectiveLLMMode(); mode {
+		case config.AIBackendModeDisabled:
+			scanLog.Info("AI parsing skipped: llm_mode is disabled")
+		case config.AIBackendModeLocal:
+			baseURL := cfg.AIBackend.LocalBaseURL
+			if baseURL == "" {
+				baseURL = cfg.Embedding.BaseURL
+			}
+			if baseURL == "" {
+				scanLog.Warn("AI parsing enabled with llm_mode=local but no local base URL is configured")
+				break
+			}
+			aiParser = ai.NewOpenAIParserWithBaseURL(cfg, "ollama", baseURL, cfg.AIBackend.LocalLLMModel, true)
+			if aiParser != nil && aiParser.IsEnabled() {
+				aiEnabled = true
+				scanLog.Info("local LLM parser initialized for filename metadata fallback (base_url=%s model=%s)",
+					baseURL, cfg.AIBackend.LocalLLMModel)
+			} else {
+				scanLog.Warn("failed to initialize local LLM parser, AI fallback disabled")
+			}
+		default: // openai, openai-fallback-local
+			if cfg.OpenAIAPIKey == "" {
+				scanLog.Warn("AI parsing enabled but OpenAI API key is not configured")
+				break
+			}
+			aiParser = ai.NewOpenAIParser(cfg, cfg.OpenAIAPIKey, true)
 			if aiParser != nil && aiParser.IsEnabled() {
 				aiEnabled = true
 				scanLog.Debug("OpenAI parser initialized for filename metadata fallback")
