@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-08-13
+// last-edited: 2026-08-16
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -431,7 +431,24 @@ func (ts *TaskScheduler) reachableViaMaintenanceWindow(name string) bool {
 }
 
 // WaitForOperation polls until an operation completes or the context is canceled.
-func (ts *TaskScheduler) WaitForOperation(ctx context.Context, opID string) {
+//
+// onPoll, if given, is called with the child operation on every poll tick
+// (~5s) while it is still running. It exists so a supervising op can prove it
+// is alive to the watchdog while it blocks here.
+//
+// Without it, a supervisor that waits on children reports progress once per
+// child, and any child that runs longer than the supervisor's ProgressTimeout
+// (5m by default) makes the supervisor look wedged. maintenance.window is
+// exactly that shape and accounted for 28 of the 44 stuck-op cancellations in
+// the 30 days to 2026-08-16: it was healthy every time, and being killed for
+// waiting.
+//
+// Heartbeating here does not blind the watchdog to a hung child. The child is a
+// registered operation with its own watchdog entry and its own ProgressTimeout;
+// if it wedges, IT is struck and canceled, its status goes terminal, and this
+// loop returns. Striking the parent instead would abandon every remaining task
+// in the window because one of them misbehaved.
+func (ts *TaskScheduler) WaitForOperation(ctx context.Context, opID string, onPoll ...func(op *database.Operation)) {
 	store := ts.deps.Store()
 	if store == nil {
 		return
@@ -449,6 +466,11 @@ func (ts *TaskScheduler) WaitForOperation(ctx context.Context, opID string) {
 			}
 			if op.Status == "completed" || op.Status == "failed" || op.Status == "canceled" {
 				return
+			}
+			for _, fn := range onPoll {
+				if fn != nil {
+					fn(op)
+				}
 			}
 		}
 	}

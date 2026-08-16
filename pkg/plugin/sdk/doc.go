@@ -1,7 +1,7 @@
 // file: pkg/plugin/sdk/doc.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-05-08
+// last-edited: 2026-08-16
 
 // Package sdk provides the STABLE public API for audiobook-organizer plugins.
 //
