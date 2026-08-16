@@ -349,3 +349,7 @@ backups/
 
 # ABS reference-oracle derived data (media must never be committed)
 testdata/abs-oracle/library/
+
+# Written by `make coverage-check-short` as local running state; the committed
+# floor is .ci/coverage-floor.txt, which stays tracked.
+.ci/coverage-last.txt

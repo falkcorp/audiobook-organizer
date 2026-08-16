@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.18.0
+# version: 2.19.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-08-14
+# last-edited: 2026-08-16
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -50,7 +50,7 @@ help:
 	@echo ""
 	@echo "Testing:"
 	@echo "  make test           - Run Go backend tests (full — includes slow prop tests, ~15 min)"
-	@echo "  make test-short     - Run Go backend tests in -short mode (slow prop tests skipped, ~1 min)"
+	@echo "  make test-short     - Run Go backend tests in -short mode + coverage (slow prop tests skipped, ~8 min)"
 	@echo "  make test-all       - Run all tests: backend (full) + frontend"
 	@echo "  make test-all-short - Run all tests: backend (-short) + frontend (for local ci)"
 	@echo "  make test-nightly   - Run all tests including slow property tests (for nightly CI)"
@@ -193,13 +193,23 @@ test-fast-short: vet
 ## Produces coverage.out as a side effect (consumed by coverage-check-short).
 ## Use for fast dev iteration and for sweep-style refactors where the
 ## primary gate is `go build ./...`. CI still runs the full suite.
+##
+## ONE pass, with -race and -coverprofile together. This used to be two full
+## runs of the suite — once with -race, then again with -coverprofile — which
+## cost almost exactly double for no benefit. Measured on an idle machine
+## 2026-08-16: -race alone 493s, -coverprofile alone 473s, both together 500s.
+## Combining is 466s cheaper per invocation (966s -> 500s, -48%) and only 7s
+## more than -race by itself. Coverage is byte-identical either way (47.0%,
+## 81950 profile lines), so the coverage-check-short floor is unaffected.
+## -covermode=atomic is required with -race and was already in use.
+##
+## The second run also discarded its output (>/dev/null 2>&1), so a failure
+## that happened only under the coverage run produced a silent non-zero exit
+## with nothing to read. One pass removes that failure mode for free.
 test-short: vet
-	@echo "🧪 Running backend tests (-short — slow prop tests skipped)..."
-	@go test ./... -short -race -timeout 25m
-	@echo "✅ Short backend tests passed"
-	@echo "📊 Generating coverage profile (separate run)..."
-	@go test ./... -short -coverprofile=coverage.out -covermode=atomic -timeout 25m >/dev/null 2>&1
-	@echo "✅ Coverage profile generated"
+	@echo "🧪 Running backend tests (-short — slow prop tests skipped, with coverage)..."
+	@go test ./... -short -race -coverprofile=coverage.out -covermode=atomic -timeout 25m
+	@echo "✅ Short backend tests passed, coverage profile generated"
 
 ## vet: Run go vet across every package. Catches hand-written mock
 ## drift (the stubStore / PR #234 incident) before tests even compile.
