@@ -11,6 +11,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 var formatVarPattern = regexp.MustCompile(`\{(\w+)(?::([^}]+))?\}`)
@@ -105,7 +107,29 @@ func CollapseEmptySegments(path string) string {
 // Square brackets are deliberately NOT stripped. They are legal on every
 // filesystem we target (ext4, APFS, NTFS, ZFS) and are idiomatic in audiobook
 // naming — "[Unabridged]", "[AAC 128kbps]".
+//
+// The stages below run in a fixed order and the order is load-bearing:
+//
+//  1. NFC normalization -- must precede everything, so later stages see one
+//     canonical form rather than two encodings of it
+//  2. invisible sweep -- before the replacer, so a stripped character cannot
+//     leave two spaces the collapse would miss
+//  3. ".." neutralization
+//  4. unsafe-character replacement + whitespace collapse
+//  5. rune-aware truncation -- after all substitutions, which change length
+//  6. trailing dot/space trim -- after truncation, which can expose a new one
+//  7. reserved-name escape -- last, so it sees the final name
 func SanitizePathComponent(s string) string {
+	// Compose to NFC. The same title reaches us in two encodings depending on
+	// where it came from: macOS hands out NFD, Linux and most taggers use NFC.
+	// Untreated they are different byte strings, so one book produces two
+	// directories that render identically and neither lookup finds the other.
+	//
+	// It matters most in Korean, where NFD does not merely detach an accent --
+	// it decomposes a Hangul syllable into its jamo. "해리" is 6 bytes
+	// composed and 12 decomposed, with no visual difference at all.
+	s = norm.NFC.String(s)
+
 	// Control characters and non-printable bytes never belong in a filename;
 	// some are legal on POSIX and make the file effectively unaddressable.
 	//
