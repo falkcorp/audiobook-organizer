@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-08-15
+// last-edited: 2026-08-16
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -1542,8 +1542,13 @@ func TestUpdateConfig(t *testing.T) {
 		"auto_organize":         true,
 		"scan_on_startup":       false,
 		"folder_naming_pattern": "{author}/{title}",
-		"file_naming_pattern":   "{title}",
-		"log_level":             "debug",
+		// Was "{title}". Validate now rejects a file pattern with no per-track
+		// placeholder, because every file of a multi-file book expands to the
+		// same name -- the config that stranded 38,895 files in production.
+		// This test is about the config endpoint, not about naming, so it uses
+		// a pattern that is actually valid.
+		"file_naming_pattern": "{title} - {track:02d}",
+		"log_level":           "debug",
 	}
 	body, _ := json.Marshal(payload)
 
