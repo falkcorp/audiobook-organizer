@@ -28,6 +28,7 @@ var (
 	_ BookSegmentStore    = (*PebbleStore)(nil)
 	_ PlaylistStore       = (*PebbleStore)(nil)
 	_ UserPlaylistStore   = (*PebbleStore)(nil)
+	_ CollectionStore     = (*PebbleStore)(nil)
 	_ ImportPathStore     = (*PebbleStore)(nil)
 	_ OperationStore      = (*PebbleStore)(nil)
 	_ TagStore            = (*PebbleStore)(nil)

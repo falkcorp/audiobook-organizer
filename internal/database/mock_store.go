@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.85.0
+// version: 1.86.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-14
+// last-edited: 2026-08-16
 
 package database
 
@@ -286,6 +286,14 @@ type MockStore struct {
 	UpdateUserPlaylistFunc         func(pl *UserPlaylist) error
 	DeleteUserPlaylistFunc         func(id string) error
 	ListDirtyUserPlaylistsFunc     func() ([]UserPlaylist, error)
+
+	// Collections (server-wide; static or dynamic)
+	CreateCollectionFunc    func(col *Collection) (*Collection, error)
+	GetCollectionFunc       func(id string) (*Collection, error)
+	GetCollectionByNameFunc func(name string) (*Collection, error)
+	ListCollectionsFunc     func(collectionType string, limit, offset int) ([]Collection, int, error)
+	UpdateCollectionFunc    func(col *Collection) error
+	DeleteCollectionFunc    func(id string) error
 
 	// API keys
 	CreateAPIKeyFunc        func(key *APIKey) (*APIKey, error)
@@ -1608,6 +1616,48 @@ func (m *MockStore) ListPurgedBookVersions() ([]BookVersion, error) {
 }
 
 // ---- User playlists (spec 3.4) ----
+
+func (m *MockStore) CreateCollection(col *Collection) (*Collection, error) {
+	if m.CreateCollectionFunc != nil {
+		return m.CreateCollectionFunc(col)
+	}
+	return col, nil
+}
+
+func (m *MockStore) GetCollection(id string) (*Collection, error) {
+	if m.GetCollectionFunc != nil {
+		return m.GetCollectionFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetCollectionByName(name string) (*Collection, error) {
+	if m.GetCollectionByNameFunc != nil {
+		return m.GetCollectionByNameFunc(name)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListCollections(collectionType string, limit, offset int) ([]Collection, int, error) {
+	if m.ListCollectionsFunc != nil {
+		return m.ListCollectionsFunc(collectionType, limit, offset)
+	}
+	return nil, 0, nil
+}
+
+func (m *MockStore) UpdateCollection(col *Collection) error {
+	if m.UpdateCollectionFunc != nil {
+		return m.UpdateCollectionFunc(col)
+	}
+	return nil
+}
+
+func (m *MockStore) DeleteCollection(id string) error {
+	if m.DeleteCollectionFunc != nil {
+		return m.DeleteCollectionFunc(id)
+	}
+	return nil
+}
 
 func (m *MockStore) CreateUserPlaylist(pl *UserPlaylist) (*UserPlaylist, error) {
 	if m.CreateUserPlaylistFunc != nil {
