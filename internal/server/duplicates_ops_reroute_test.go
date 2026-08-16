@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops_reroute_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4a9c1f27-8b3e-4d05-9a61-2f7c0d3e6b58
-// last-edited: 2026-07-18
+// last-edited: 2026-08-15
 
 // F6 regression test: the dedup.book-merge op (POST /audiobooks/merge) was
 // rerouted from the legacy dedup.MergeBooks hard-delete path to
@@ -28,7 +28,7 @@ import (
 func t10IntPtr(v int) *int { return &v }
 
 func TestApplyBookMergeReroute_SoftDeletesAndReassignsExternalIDs(t *testing.T) {
-	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "pebble"))
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "pebble"))
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestApplyBookMergeReroute_SoftDeletesAndReassignsExternalIDs(t *testing.T) 
 // non-primary, leaving the group with NO primary and the keep book neither
 // primary nor soft-deleted. The reroute must exclude keepID from the loser set.
 func TestApplyBookMergeReroute_KeepIDInMergeIDs(t *testing.T) {
-	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "pebble"))
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "pebble"))
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

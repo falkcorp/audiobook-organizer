@@ -1,7 +1,7 @@
 // file: internal/server/import_collision_test.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 9c0d1e2f-3a4b-5c6d-7e8f-9a0b1c2d3e4f
-// last-edited: 2026-06-17
+// last-edited: 2026-08-15
 
 package server
 
@@ -24,7 +24,7 @@ func setupImportCollisionServer(t *testing.T) (*Server, database.Store) {
 	gin.SetMode(gin.TestMode)
 
 	pebblePath := filepath.Join(t.TempDir(), "pebble")
-	store, err := database.NewPebbleStore(pebblePath)
+	store, err := database.NewPebbleStoreInMemory(pebblePath)
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}

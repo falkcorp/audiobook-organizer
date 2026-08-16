@@ -1,7 +1,7 @@
 // file: internal/server/deluge_centralization_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b7c4d2a-1e5f-4870-b8c5-9f0e1d2c3a4b
-// last-edited: 2026-05-05
+// last-edited: 2026-08-15
 //
 // Tests for NotifyDelugeAfterOrganize: the integration between the
 // library centralization (organize) pipeline and Deluge's move_storage.
@@ -92,7 +92,7 @@ func wireMockDeluge(t *testing.T, mock *mockDelugeServer) {
 // active BookVersion with the given torrentHash, and returns the store.
 func newTestStoreWithVersion(t *testing.T, bookID, torrentHash string) *database.PebbleStore {
 	t.Helper()
-	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}

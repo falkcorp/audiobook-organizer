@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.132.0
+// version: 1.133.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-08-14
+// last-edited: 2026-08-15
 
 package database
 
@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/matcher"
@@ -244,9 +245,47 @@ func (p *PebbleStore) writeCachedLibraryStats(s *LibraryStats) {
 
 // NewPebbleStore creates a new PebbleDB store
 func NewPebbleStore(path string) (*PebbleStore, error) {
-	db, err := pebble.Open(path, &pebble.Options{
-		FormatMajorVersion: pebble.FormatNewest,
-	})
+	return newPebbleStore(path, nil)
+}
+
+// NewPebbleStoreInMemory opens a PebbleDB backed by an in-memory filesystem.
+// Nothing it writes ever reaches the disk, and the contents vanish when the
+// process exits.
+//
+// This exists for tests. Every Pebble write in this package passes pebble.Sync
+// explicitly, so on a real filesystem each one costs a genuine fsync. That is
+// invisible in production — a handful of syncs against a long-lived database —
+// but a test that builds a fresh store pays it for all 60 migrations plus every
+// op-definition upsert, and internal/server did that 275 times.
+//
+// Measured on 2026-08-15: setupTestServer cost 1.61s, of which 0.935s was
+// RunMigrations, 0.522s NewServer and 0.152s this constructor. A CPU profile
+// showed 90ms of CPU for the 1.6s — 94% of it blocked in os.(*File).Sync, not
+// computing. Backing the same code with vfs.NewMem took the identical work to
+// 0.01s and the internal/server package from 585.1s to 41.8s. The migrations
+// still run; only the flush to disk goes away.
+//
+// Two alternatives were measured and rejected: Options.DisableWAL fails
+// outright ("pebble: WAL disabled") because the writes pass pebble.Sync
+// explicitly, and Options.WALMinSyncInterval made it *worse* (4.95s) by adding
+// wait rather than removing syncs.
+//
+// Callers that need bytes on a real disk — anything that copies, backs up or
+// re-opens the database by path — must use NewPebbleStore instead. Each call
+// gets its own isolated filesystem, so two stores opened at the same path do
+// not share state.
+func NewPebbleStoreInMemory(path string) (*PebbleStore, error) {
+	return newPebbleStore(path, vfs.NewMem())
+}
+
+// newPebbleStore is the shared constructor. A nil fs means the real filesystem,
+// which is what production uses.
+func newPebbleStore(path string, fs vfs.FS) (*PebbleStore, error) {
+	opts := &pebble.Options{FormatMajorVersion: pebble.FormatNewest}
+	if fs != nil {
+		opts.FS = fs
+	}
+	db, err := pebble.Open(path, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open PebbleDB: %w", err)
 	}

@@ -1,7 +1,7 @@
 // file: internal/server/ai_jobs_handlers_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 136d5ad0-d226-471a-8c2c-64992ba3882d
-// last-edited: 2026-06-10
+// last-edited: 2026-08-15
 
 // NOTE(fable5 T022): Ported from SQLiteStore to PebbleStore.
 
@@ -26,7 +26,7 @@ func setupAIJobsTestServer(t *testing.T) (*Server, *database.PebbleStore) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
-	store, err := database.NewPebbleStore(t.TempDir())
+	store, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	require.NoError(t, database.RunMigrations(store))
 

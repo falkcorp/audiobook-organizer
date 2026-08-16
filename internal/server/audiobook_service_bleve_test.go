@@ -1,5 +1,6 @@
 // file: internal/server/audiobook_service_bleve_test.go
-// version: 1.0.0
+// version: 1.1.0
+// last-edited: 2026-08-15
 // guid: 7f3d5a4b-9c5a-4a70-b8c5-3d7e0f1b9a99
 
 package server
@@ -18,7 +19,7 @@ import (
 // and indexed docs so search paths can be verified end-to-end.
 func setupBleveBackedService(t *testing.T) (*AudiobookService, *database.PebbleStore, *search.BleveIndex) {
 	t.Helper()
-	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}
@@ -96,7 +97,7 @@ func TestService_SearchFallsBackOnParserFailure(t *testing.T) {
 }
 
 func TestService_NoIndexUsesLegacy(t *testing.T) {
-	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}

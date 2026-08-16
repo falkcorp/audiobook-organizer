@@ -1,5 +1,6 @@
 // file: internal/server/reading_handlers_test.go
-// version: 1.1.1
+// version: 1.2.0
+// last-edited: 2026-08-15
 // guid: 4f9a2c1d-5b8e-4f70-a7d6-2e8c0f1b9a57
 
 package server
@@ -20,7 +21,7 @@ func setupReadingTestServer(t *testing.T) *Server {
 	// Spec 3.6 features live on PebbleDB (SQLite has no-op stubs),
 	// so override the default SQLite test setup with a PebbleStore.
 	pebblePath := t.TempDir() + "/pebble"
-	store, err := database.NewPebbleStore(pebblePath)
+	store, err := database.NewPebbleStoreInMemory(pebblePath)
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}

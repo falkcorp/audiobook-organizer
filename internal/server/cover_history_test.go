@@ -1,7 +1,7 @@
 // file: internal/server/cover_history_test.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-05-07
+// last-edited: 2026-08-15
 
 package server
 
@@ -29,7 +29,7 @@ func setupCoverHistoryServer(t *testing.T) (*Server, database.Store, string) {
 	config.AppConfig.RootDir = rootDir
 
 	pebblePath := filepath.Join(t.TempDir(), "pebble")
-	store, err := database.NewPebbleStore(pebblePath)
+	store, err := database.NewPebbleStoreInMemory(pebblePath)
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}

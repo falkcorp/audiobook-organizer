@@ -1,7 +1,7 @@
 // file: internal/server/activity_handlers_test.go
-// version: 5.1.0
+// version: 5.2.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-06-13
+// last-edited: 2026-08-15
 
 // Updated for Phase 2 handler extraction: tests now use handlers.ActivityHandler
 // directly instead of *Server methods.
@@ -253,7 +253,7 @@ func TestListOperationActivity_FallbackToOpLogs(t *testing.T) {
 	dir := t.TempDir()
 
 	// Main store: PebbleStore implements OpsV2Store (has op_logs_v2 in Pebble).
-	sqlStore, err := database.NewPebbleStore(filepath.Join(dir, "main.pebble"))
+	sqlStore, err := database.NewPebbleStoreInMemory(filepath.Join(dir, "main.pebble"))
 	require.NoError(t, err)
 	require.NoError(t, database.RunMigrations(sqlStore))
 	defer sqlStore.Close()

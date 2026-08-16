@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_window_handlers_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d5e6f7a8-b9c0-1234-efab-456789012345
-// last-edited: 2026-06-16
+// last-edited: 2026-08-15
 
 package server
 
@@ -28,7 +28,7 @@ func setupMaintenanceTestServer(t *testing.T) *Server {
 	gin.SetMode(gin.TestMode)
 
 	pebblePath := filepath.Join(t.TempDir(), "pebble")
-	store, err := database.NewPebbleStore(pebblePath)
+	store, err := database.NewPebbleStoreInMemory(pebblePath)
 	require.NoError(t, err, "open pebble store")
 
 	origStore := database.GetGlobalStore()
