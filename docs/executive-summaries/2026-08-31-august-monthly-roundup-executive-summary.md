@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
-<!-- last-edited: 2026-08-14 -->
+<!-- last-edited: 2026-08-16 -->
 
 # Executive Summary: August 2026 Monthly Roundup
 
-**Period covered:** 2026-08-01 through 2026-08-14 (**month in progress** — this is
+**Period covered:** 2026-08-01 through 2026-08-16 (**month in progress** — this is
 updated as work lands, not a closed record).
 **Individual write-ups this consolidates:** the seven dated summaries in this directory
 from 2026-08-04 to 2026-08-09, linked inline below.
@@ -198,6 +198,53 @@ Two tests that had been marked "expected to fail" are now ordinary passing tests
 
 ---
 
+## 6. Collections: a button the app had, and a feature the server did not
+
+**What it was.** The mobile app has had a "collections" feature — a way to group books
+into a named shelf — for as long as it has been connected to this server. The server
+never implemented it. Pressing the button produced an error the app did not explain;
+on 16 August it was tried five times in two seconds and failed every time. Worse, the
+screen that *lists* your collections did have a working address, and it answered
+politely with an empty list. There was no way to tell "the server has no collections
+feature" from "you have not made any collections yet" — so the honest failure was
+hidden behind a reassuring one.
+
+**Why it mattered.** This is the second time this month the same shape caused a
+problem: a feature that reports emptiness rather than absence looks like it is working
+and leaves the user to conclude they did something wrong. Anyone who tried to organise
+their library this way lost the attempt silently and had no reason to report a bug.
+
+**The fix.** Collections are now built, in two forms. A **hand-picked** collection is
+a shelf you add books to yourself. A **rule-based** collection is defined by a saved
+search — "everything by this author added since January" — and fills itself from that
+rule, so it stays useful without maintenance. Collections are shared across the whole
+server rather than being private to one account, which is what was asked for: a shelf
+one person curates is visible to everyone. Creating or editing one requires either
+administrator rights or a new "manage collections" permission that can be granted on
+its own; viewing them is open to anyone who can see the library, so handing someone
+the ability to organise the shelves does not require handing them the keys to
+everything else.
+
+One limit worth stating plainly, because the word "dynamic" promises more than the
+first version delivers: a rule-based collection re-runs its rule when someone opens it
+in the web interface, or when a refresh is explicitly requested. Nothing yet refreshes
+it in the background. A collection created and then only ever viewed in the mobile app
+will show the membership it had when it was created. That is a deliberate first
+version, not an oversight, and the follow-up is tracked.
+
+Two defects were caught in this work before it shipped rather than after, both by
+tests written specifically to disprove the change rather than confirm it. The first:
+reserving the collections address space for the mobile app was done too broadly, and
+would have broken the very web-interface features it was meant to support — the same
+mistake, in the same file, that took out working features twice earlier this month.
+The comment justifying it was accurate when written and false one commit later,
+because the second commit created the thing the first had verified did not exist. The
+second: simply *viewing* a rule-based collection wrote it back to disk every time,
+which would have made every collection look freshly modified on every glance and
+defeated the caching the app relies on to stay fast.
+
+---
+
 ## Themes worth carrying into next month
 
 1. **A silent fallback is worse than a loud failure.** The transcription outage, the
@@ -209,3 +256,7 @@ Two tests that had been marked "expected to fail" are now ordinary passing tests
    developer machine that was not the build server. Each looked like evidence.
 3. **Being wrong on the record is fine; leaving it there is not.** Three summaries this
    month correct earlier ones. That is the system working.
+4. **A comment that records a fact can go stale faster than code that records a rule.**
+   The collections work justified a decision with "we checked, the conflicting thing
+   does not exist" — true when written, false one commit later, in the same change. A
+   check that runs is worth more than a check that was run once and written down.
