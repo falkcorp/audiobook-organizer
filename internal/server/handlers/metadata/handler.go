@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-08-15
+// last-edited: 2026-08-16
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -628,7 +628,12 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 			if pendingCover != "" {
 				mfs.DownloadPendingCover(bookID, pendingCover)
 			}
-			mfs.ApplyMetadataFileIO(bookID)
+			// Same constraint as the batch sibling: the HTTP response has
+			// already been written by the time this runs, so a failure can only
+			// be logged.
+			if err := mfs.ApplyMetadataFileIO(bookID); err != nil {
+				slog.Warn("background apply file I/O failed", "bookID", bookID, "err", err)
+			}
 			if shouldWriteBack {
 				if _, wbErr := mfs.WriteBackMetadataForBook(bookID); wbErr != nil {
 					slog.Warn("background write-back for", "bookID", bookID, "wbErr", wbErr)

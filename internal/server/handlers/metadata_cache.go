@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-08-15
+// last-edited: 2026-08-16
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -58,7 +58,12 @@ type MetadataCacheFetchService interface {
 	// ApplyMetadataFileIO runs the slow post-apply file work: cover-art
 	// embedding, tag writing and (when enabled) renaming. Gated in prod by
 	// auto_write_tags_on_apply / auto_rename_on_apply.
-	ApplyMetadataFileIO(id string)
+	//
+	// A non-nil error means the file work did not fully land -- most often the
+	// rename failed. It does NOT mean nothing happened: rows for renames that
+	// did succeed are already persisted, so callers report the database apply
+	// as successful and flag only the file side.
+	ApplyMetadataFileIO(id string) error
 	// WriteBackMetadataForBook writes the book's current DB metadata into the
 	// audio files themselves and returns the number of files written.
 	WriteBackMetadataForBook(id string, segmentFilter ...[]string) (int, error)

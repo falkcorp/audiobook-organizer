@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 3.4.0
+// version: 3.5.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-08-15
+// last-edited: 2026-08-16
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -580,7 +580,13 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 			if pool := s.fileIOPool; pool != nil {
 				bid := bookID
 				pool.Submit(bid, func() {
-					mfs.ApplyMetadataFileIO(bid)
+					// Logged, not returned: this runs in the pool AFTER the
+					// handler has already answered, so outcomes[i] is long
+					// since written. The response cannot report it; the log is
+					// the only channel left.
+					if err := mfs.ApplyMetadataFileIO(bid); err != nil {
+						slog.Warn("background apply file I/O failed", "bid", bid, "err", err)
+					}
 					if _, err := mfs.WriteBackMetadataForBook(bid); err != nil {
 						slog.Warn("write-back failed for", "bid", bid, "err", err)
 					}

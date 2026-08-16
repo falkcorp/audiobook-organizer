@@ -1,11 +1,12 @@
 // file: internal/metafetch/service_files.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 969b284a-5657-442b-beba-275e325e000b
-// last-edited: 2026-06-16
+// last-edited: 2026-08-16
 
 package metafetch
 
 import (
+	"fmt"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -77,10 +78,34 @@ func backupFileBeforeWrite(filePath string) {
 // cover embed, tag write-back, file rename. Cover download is done inline
 // in ApplyMetadataCandidate so the response includes the updated cover URL.
 // Designed to run in a background goroutine.
-func (mfs *Service) ApplyMetadataFileIO(id string) {
+//
+// It returns an error when the file work did not fully land. Until 2026-08-16
+// it returned nothing and swallowed the pipeline failure into a slog.Warn, so
+// no caller could tell a completed rename from a failed one — and
+// applyCachedCandidateForBook reported Applied:true either way, i.e. the API
+// said the apply succeeded while the files had never moved.
+//
+// WHAT A NON-NIL ERROR MEANS: "the file work did not fully land", NOT "nothing
+// happened". runApplyPipeline deliberately persists the book_file rows for
+// every rename that DID succeed before returning the failure, so a partial
+// rename is durable and already recorded. Callers must therefore keep
+// reporting the database apply as successful and flag only the file side --
+// see applyOutcome.WriteBackFailed, which exists for exactly this shape.
+//
+// The cover embed is deliberately NOT part of the returned error:
+// embedCoverInBookFiles reports nothing and a missing cover must not mask a
+// rename failure or block the pipeline below it.
+func (mfs *Service) ApplyMetadataFileIO(id string) error {
 	book, err := mfs.db.GetBookByID(id)
-	if err != nil || book == nil {
-		return
+	if err != nil {
+		return fmt.Errorf("apply file I/O: load book %s: %w", id, err)
+	}
+	if book == nil {
+		// Reported rather than ignored: the two recovery handlers replay file
+		// ops recorded before a restart, and a book that has since been deleted
+		// is the one case where this is expected and benign. Naming it lets the
+		// caller log which book vanished instead of silently doing nothing.
+		return fmt.Errorf("apply file I/O: book %s not found", id)
 	}
 
 	// Embed cover art into audio files (slow: ffmpeg)
@@ -91,9 +116,10 @@ func (mfs *Service) ApplyMetadataFileIO(id string) {
 	// Run file rename + tag write pipeline
 	if config.AppConfig.AutoRenameOnApply || config.AppConfig.AutoWriteTagsOnApply {
 		if err := mfs.runApplyPipeline(id, book); err != nil {
-			slog.Warn("apply pipeline failed for", "id", id, "error", err)
+			return fmt.Errorf("apply file I/O: pipeline for book %s: %w", id, err)
 		}
 	}
+	return nil
 }
 
 // computeITunesPath converts a local file path to an iTunes file:// URL

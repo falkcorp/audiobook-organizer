@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
-// last-edited: 2026-08-15
+// last-edited: 2026-08-16
 
 // Narrow dependency interfaces for the metadata-domain HTTP handlers (the 19
 // per-book + library metadata endpoints extracted from the server package's
@@ -105,7 +105,7 @@ type MetadataFetchService interface {
 	FetchAndCache(ctx context.Context, bookID, query, author, narrator, series string, opts metafetch.SearchOptions) (*metafetch.MetadataCandidateCache, error)
 	SearchMetadataForBookWithOptions(id, query, author, narrator, series string, opts metafetch.SearchOptions) (*metafetch.SearchMetadataResponse, error)
 	ApplyMetadataCandidate(id string, candidate metafetch.MetadataCandidate, fields []string) (*metafetch.FetchMetadataResponse, error)
-	ApplyMetadataFileIO(id string)
+	ApplyMetadataFileIO(id string) error
 
 	// DownloadPendingCover fetches the candidate's cover art and repoints the
 	// book at the local copy. Runs in the background: it was ~4s of a measured

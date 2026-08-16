@@ -1,7 +1,7 @@
 // file: internal/server/file_io_pool.go
-// version: 2.3.4
+// version: 2.4.0
 // guid: c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-07-03
+// last-edited: 2026-08-16
 //
 // Bounded worker pool for file I/O operations (cover embed, tag write,
 // rename). Tracks pending jobs in PebbleDB so they survive restarts.
@@ -227,7 +227,9 @@ func InitFileIOPool() {
 			slog.Warn("no server instance for apply_metadata recovery of book", "bookID", bookID)
 			return
 		}
-		srv.metadataFetchService.ApplyMetadataFileIO(bookID)
+		if err := srv.metadataFetchService.ApplyMetadataFileIO(bookID); err != nil {
+			slog.Warn("recovery apply file I/O failed", "bookID", bookID, "err", err)
+		}
 		if _, err := srv.metadataFetchService.WriteBackMetadataForBook(bookID); err != nil {
 			slog.Warn("recovery write-back for", "bookID", bookID, "err", err)
 		}
