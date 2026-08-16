@@ -1,7 +1,7 @@
 // file: internal/server/search_reconciler_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a1e7c40-2b83-4f16-90ad-6c4b1f2e8d55
-// last-edited: 2026-08-09
+// last-edited: 2026-08-15
 //
 // Tests for search-index reconciliation after a dropped index event.
 //
@@ -31,7 +31,7 @@ import (
 func newDropOnlyServer(t *testing.T) (*Server, *database.PebbleStore, *search.BleveIndex) {
 	t.Helper()
 
-	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestReconciler_DrainsRepeatedDropsOfOneBookOnce(t *testing.T) {
 }
 
 func TestReconciler_NoIndexIsANoOp(t *testing.T) {
-	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}

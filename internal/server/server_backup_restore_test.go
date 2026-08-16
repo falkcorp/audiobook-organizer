@@ -1,7 +1,7 @@
 // file: internal/server/server_backup_restore_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c2f1e0d-9a8b-7c6d-5e4f-3a2b1c0d9e8f
-// last-edited: 2026-01-24
+// last-edited: 2026-08-15
 
 package server
 
@@ -20,7 +20,7 @@ import (
 )
 
 func TestRestoreBackup_Success(t *testing.T) {
-	server, cleanup := setupTestServer(t)
+	server, cleanup := setupTestServerRealFS(t)
 	defer cleanup()
 
 	wd, err := os.Getwd()
@@ -63,7 +63,7 @@ func TestRestoreBackup_Success(t *testing.T) {
 }
 
 func TestDeleteBackup_Success(t *testing.T) {
-	server, cleanup := setupTestServer(t)
+	server, cleanup := setupTestServerRealFS(t)
 	defer cleanup()
 
 	wd, err := os.Getwd()

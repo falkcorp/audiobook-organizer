@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops_hydrate_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b9d41f27-8e6a-4c02-9f5b-2a7c14e630d8
-// last-edited: 2026-07-13
+// last-edited: 2026-08-15
 
 package server
 
@@ -99,7 +99,7 @@ func assertRecordIntact(t *testing.T, store *database.PebbleStore, id string) *d
 // for the full-record wipe: reverting the call site to a bare UpdateBook literal
 // reintroduces the wipe inside the tested function and fails this test.
 func TestAssignPublisherPreservingRecord(t *testing.T) {
-	store, err := database.NewPebbleStore(t.TempDir())
+	store, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestAssignPublisherPreservingRecord(t *testing.T) {
 // write path (resolve-production-author site #2) sets ONLY AuthorID (plus the
 // book_authors join) and leaves every other field intact.
 func TestAssignResolvedAuthorPreservingRecord(t *testing.T) {
-	store, err := database.NewPebbleStore(t.TempDir())
+	store, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestAssignResolvedAuthorPreservingRecord(t *testing.T) {
 // no row, NOTHING is written — the helper returns an error and does not create or
 // mutate any record (fail-closed).
 func TestAssignPreservingRecord_FailClosedOnMissing(t *testing.T) {
-	store, err := database.NewPebbleStore(t.TempDir())
+	store, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

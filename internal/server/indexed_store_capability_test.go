@@ -1,7 +1,7 @@
 // file: internal/server/indexed_store_capability_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2c7f4b18-6e93-4a52-9d81-5f0a3b6c8e27
-// last-edited: 2026-08-10
+// last-edited: 2026-08-15
 
 package server
 
@@ -26,7 +26,7 @@ import (
 // internal/merge's sync-follow hook — the thing that keeps a listener's position
 // attached to a book across a dedup merge — silently degraded to a no-op.
 func TestIndexedStorePreservesCapabilityLookups(t *testing.T) {
-	inner, err := database.NewPebbleStore(t.TempDir())
+	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestIndexedStorePreservesCapabilityLookups(t *testing.T) {
 // writes through to the inner store, rather than merely satisfying the type
 // assertion.
 func TestIndexedStoreCapabilityRoundTrip(t *testing.T) {
-	inner, err := database.NewPebbleStore(t.TempDir())
+	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestIndexedStoreCapabilityRoundTrip(t *testing.T) {
 // Pebble store is indistinguishable from an unsupported backend at a bare
 // assertion, so the fallback fires and the configuration looks supported.
 func TestIndexedStoreResolvesConcretePebbleStore(t *testing.T) {
-	inner, err := database.NewPebbleStore(t.TempDir())
+	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestIndexedStoreResolvesConcretePebbleStore(t *testing.T) {
 // dry-run call cannot distinguish fixed from broken and a non-dry-run call would
 // wipe the store; they are covered by AsPebbleStore's own tests instead.
 func TestWipeFixupsReachPebbleThroughDecorator(t *testing.T) {
-	inner, err := database.NewPebbleStore(t.TempDir())
+	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestWipeFixupsReachPebbleThroughDecorator(t *testing.T) {
 // pebble_store_versiongroup_backfill_test.go in package database, which can
 // reach the raw keys.
 func TestIndexedStoreExposesVersionGroupBackfill(t *testing.T) {
-	inner, err := database.NewPebbleStore(t.TempDir())
+	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}

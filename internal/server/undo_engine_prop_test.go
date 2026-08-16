@@ -1,5 +1,6 @@
 // file: internal/server/undo_engine_prop_test.go
-// version: 1.2.0
+// version: 1.3.0
+// last-edited: 2026-08-15
 // guid: 1ff3d071-4c60-4bb0-92ed-d197fe8ad9d0
 //
 // Property-based tests for the undo engine (plan 4.5 task 8).
@@ -40,7 +41,7 @@ import (
 // they never collide with each other's changes.
 func newPropStore(t *testing.T) database.Store {
 	t.Helper()
-	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}

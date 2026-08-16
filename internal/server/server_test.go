@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-07-03
+// last-edited: 2026-08-15
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -32,7 +32,29 @@ import (
 )
 
 // setupTestServer creates a test server with in-memory database
+// setupTestServer builds a test server on an IN-MEMORY database.
+//
+// Every Pebble write passes pebble.Sync, so on a real filesystem each of the 60
+// migrations and every op-definition upsert costs a genuine fsync. This helper
+// is called 275 times across 35 files, and that fsync bill was 1.55s of every
+// one of them — 237 of the package's 909 tests sat in a single 1.50-1.75s band,
+// and the package took 585s. On an in-memory FS the same work costs 0.01s and
+// the package takes 42s. See database.NewPebbleStoreInMemory for the profile.
+//
+// If your test needs the database to exist as bytes on disk — it copies, backs
+// up, or re-opens the DB by path — use setupTestServerRealFS instead.
 func setupTestServer(t *testing.T) (*Server, func()) {
+	return setupTestServerFS(t, true)
+}
+
+// setupTestServerRealFS builds a test server whose database is real files on
+// disk. Only for tests that operate on those files directly; everything else
+// should use setupTestServer, which is ~150x faster to construct.
+func setupTestServerRealFS(t *testing.T) (*Server, func()) {
+	return setupTestServerFS(t, false)
+}
+
+func setupTestServerFS(t *testing.T, inMemory bool) (*Server, func()) {
 	// Set Gin to test mode
 	gin.SetMode(gin.TestMode)
 
@@ -50,7 +72,12 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 	}
 
 	// Initialize database
-	store, err := database.NewPebbleStore(config.AppConfig.DatabasePath)
+	var store *database.PebbleStore
+	if inMemory {
+		store, err = database.NewPebbleStoreInMemory(config.AppConfig.DatabasePath)
+	} else {
+		store, err = database.NewPebbleStore(config.AppConfig.DatabasePath)
+	}
 	require.NoError(t, err)
 	database.SetGlobalStore(store)
 

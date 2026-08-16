@@ -1,7 +1,7 @@
 // file: internal/server/deluge_integration_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-07-03
+// last-edited: 2026-08-15
 //
 // Integration tests for Deluge notification helpers and HTTP handlers.
 // Service logic moved to internal/deluge/integration.go; tests updated to
@@ -90,7 +90,7 @@ func TestHandleDelugeStatus_NotConfigured(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	pebblePath := filepath.Join(t.TempDir(), "pebble")
-	store, err := database.NewPebbleStore(pebblePath)
+	store, err := database.NewPebbleStoreInMemory(pebblePath)
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestHandleDelugeStatus_Configured(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	pebblePath := filepath.Join(t.TempDir(), "pebble")
-	store, err := database.NewPebbleStore(pebblePath)
+	store, err := database.NewPebbleStoreInMemory(pebblePath)
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestNotifyDelugeAfterVersionSwap(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	pebblePath := filepath.Join(t.TempDir(), "pebble")
-	store, err := database.NewPebbleStore(pebblePath)
+	store, err := database.NewPebbleStoreInMemory(pebblePath)
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestNotifyDelugeAfterVersionSwap(t *testing.T) {
 // Case 1: DelugeMoveEnabled=true, TorrentHash set — MoveStorage is called
 // with the *restored original path*, not the centralized path.
 func TestNotifyDelugeAfterUndo_Enabled(t *testing.T) {
-	store, err := database.NewPebbleStore(t.TempDir() + "/db")
+	store, err := database.NewPebbleStoreInMemory(t.TempDir() + "/db")
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestNotifyDelugeAfterUndo_Enabled(t *testing.T) {
 
 // Case 2: DelugeMoveEnabled=false — MoveStorage is NOT called.
 func TestNotifyDelugeAfterUndo_Disabled(t *testing.T) {
-	store, err := database.NewPebbleStore(t.TempDir() + "/db")
+	store, err := database.NewPebbleStoreInMemory(t.TempDir() + "/db")
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestNotifyDelugeAfterUndo_Disabled(t *testing.T) {
 
 // Case 3: TorrentHash is empty — MoveStorage is NOT called.
 func TestNotifyDelugeAfterUndo_NoHash(t *testing.T) {
-	store, err := database.NewPebbleStore(t.TempDir() + "/db")
+	store, err := database.NewPebbleStoreInMemory(t.TempDir() + "/db")
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestNotifyDelugeAfterUndo_NoHash(t *testing.T) {
 // Case 4: Deluge returns an error — NotifyDelugeAfterUndo must not propagate
 // the error (best-effort, non-fatal).
 func TestNotifyDelugeAfterUndo_DelugeError(t *testing.T) {
-	store, err := database.NewPebbleStore(t.TempDir() + "/db")
+	store, err := database.NewPebbleStoreInMemory(t.TempDir() + "/db")
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}

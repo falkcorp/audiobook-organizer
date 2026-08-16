@@ -1,7 +1,7 @@
 // file: internal/server/similar_books_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 1e2f3a4b-5c6d-7e8f-9a0b-1c2d3e4f5a6b
-// last-edited: 2026-05-03
+// last-edited: 2026-08-15
 
 package server
 
@@ -22,7 +22,7 @@ func setupSimilarBooksServer(t *testing.T) *Server {
 	gin.SetMode(gin.TestMode)
 
 	pebblePath := filepath.Join(t.TempDir(), "pebble")
-	store, err := database.NewPebbleStore(pebblePath)
+	store, err := database.NewPebbleStoreInMemory(pebblePath)
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestHandleSimilarBooks_NoAuthorNoSeries(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	pebblePath := filepath.Join(t.TempDir(), "pebble")
-	store, err := database.NewPebbleStore(pebblePath)
+	store, err := database.NewPebbleStoreInMemory(pebblePath)
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}

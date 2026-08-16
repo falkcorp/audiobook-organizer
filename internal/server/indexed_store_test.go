@@ -1,5 +1,6 @@
 // file: internal/server/indexed_store_test.go
-// version: 1.1.0
+// version: 1.2.0
+// last-edited: 2026-08-15
 // guid: 6e3f5a2b-8c5a-4a70-b8c5-3d7e0f1b9a89
 
 package server
@@ -35,7 +36,7 @@ func drainQueue(t *testing.T, srv *Server) {
 }
 
 func TestIndexedStore_CreateReindexes(t *testing.T) {
-	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}
@@ -83,7 +84,7 @@ func TestIndexedStore_CreateReindexes(t *testing.T) {
 }
 
 func TestIndexedStore_DeleteRemovesFromIndex(t *testing.T) {
-	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}
@@ -128,7 +129,7 @@ func TestIndexedStore_DeleteRemovesFromIndex(t *testing.T) {
 func TestIndexedStore_EnqueueSafeAfterClose(t *testing.T) {
 	// Regression: closing the queue then calling enqueueIndex must
 	// be safe (no panic on send-on-closed-channel).
-	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}
@@ -167,7 +168,7 @@ func TestIndexedStore_EnqueueSafeAfterClose(t *testing.T) {
 }
 
 func TestIndexedStore_UpdateReindexes(t *testing.T) {
-	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}

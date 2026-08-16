@@ -1,5 +1,6 @@
 // file: internal/server/playlist_handlers_test.go
-// version: 1.0.1
+// version: 1.1.0
+// last-edited: 2026-08-15
 // guid: 8b4d6f3e-9c4a-4a70-b8c5-3d7e0f1b9a89
 
 package server
@@ -24,7 +25,7 @@ func setupPlaylistTestServer(t *testing.T) *Server {
 	t.Helper()
 
 	pebblePath := filepath.Join(t.TempDir(), "pebble")
-	store, err := database.NewPebbleStore(pebblePath)
+	store, err := database.NewPebbleStoreInMemory(pebblePath)
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}

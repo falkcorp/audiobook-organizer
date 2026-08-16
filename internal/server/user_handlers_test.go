@@ -1,5 +1,6 @@
 // file: internal/server/user_handlers_test.go
-// version: 1.0.1
+// version: 1.1.0
+// last-edited: 2026-08-15
 
 package server
 
@@ -20,7 +21,7 @@ func setupUserHandlerServer(t *testing.T) (*Server, database.Store) {
 	gin.SetMode(gin.TestMode)
 
 	pebblePath := filepath.Join(t.TempDir(), "pebble")
-	store, err := database.NewPebbleStore(pebblePath)
+	store, err := database.NewPebbleStoreInMemory(pebblePath)
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}

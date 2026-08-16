@@ -1,5 +1,6 @@
 // file: internal/server/pipeline_checkpoint_test.go
-// version: 2.0.0
+// version: 2.1.0
+// last-edited: 2026-08-15
 // guid: 8a9b0c1d-2e3f-4a70-b8c5-3d7e0f1b9a99
 //
 // Tests for the server's pipeline checkpoint forwarding layer.
@@ -16,7 +17,7 @@ import (
 )
 
 func TestCheckpointForwarding(t *testing.T) {
-	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}
@@ -41,7 +42,7 @@ func TestCheckpointForwarding(t *testing.T) {
 }
 
 func TestCleanupStaleCheckpointsForwarding(t *testing.T) {
-	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}
