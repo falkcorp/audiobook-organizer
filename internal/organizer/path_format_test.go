@@ -1,7 +1,7 @@
 // file: internal/organizer/path_format_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: a7b3c1d2-e4f5-6789-abcd-ef0123456f01
-// last-edited: 2026-08-15
+// last-edited: 2026-08-16
 
 package organizer
 
@@ -125,6 +125,98 @@ func TestBuildPath_TarkinReproducesAsOneFile(t *testing.T) {
 	}
 	if strings.Count(got, "/") != 2 {
 		t.Fatalf("BuildRelPath emitted %q — expected exactly 2 path separators (author/, title-folder/), got %d", got, strings.Count(got, "/"))
+	}
+}
+
+// TestBuildRelPath_SeparatorInFilePatternStaysOneComponent pins the OTHER way a
+// stray directory gets created, which scrubVar does not and cannot cover.
+//
+// scrubVar sanitizes variable VALUES before substitution. From 2026-03-03
+// (f29c3ce6) to 2026-08-15 (c54721c7) the separator arrived in the TEMPLATE
+// instead: the shipped default of segment_title_format was
+//
+//	"{title} - {track}/{total_tracks}"
+//
+// so {track_title} expanded to "Pink Bean Series - 1/9" with every value
+// perfectly clean. On disk that is a directory. Measured damage before the
+// default was deleted: 2,535 bogus directories, 2,584 stranded
+// "<n>.<ext>.tmp-rename" files, 35.2 GB, 77 books left with no other copy.
+//
+// The two bugs are indistinguishable in the wreckage they leave and were
+// conflated for months because of it. This test exists so the template half
+// stays covered even though the config key that carried it is gone.
+//
+// The cases below are NOT defended by the same mechanism, which is worth
+// stating because a reader who assumes one guard covers all three will delete
+// the wrong one. Verified by removing the BuildRelPath guard and re-running:
+//
+//	segment_title_format route  -> still PASSES. {track_title} is materialized
+//	                               into the replacement map, so scrubVar
+//	                               catches it as a value. (The metafetch twin
+//	                               had no scrubVar, which is why this route was
+//	                               still stranding files on 2026-08-14.)
+//	separator in file pattern   -> FAILS: "…/Pink Bean Series - 1/9", stem "9".
+//	                               Only the BuildRelPath guard covers this, and
+//	                               file_naming_pattern is user-configurable.
+//	backslash                   -> still PASSES; SanitizePathComponent inside
+//	                               BuildPath already maps "\" to " ".
+func TestBuildRelPath_SeparatorInFilePatternStaysOneComponent(t *testing.T) {
+	// The exact prod vars behind
+	// "Harper Bliss/Pink Bean - Pink Bean Series/Pink Bean Series - 1/9.m4b".
+	vars := PathVars{
+		Author:      "Harper Bliss",
+		Series:      "Pink Bean",
+		Title:       "Pink Bean Series",
+		Track:       1,
+		TotalTracks: 9,
+		Ext:         "m4b",
+	}
+
+	cases := []struct {
+		name        string
+		filePattern string
+		opts        BuildOpts
+	}{
+		{
+			name:        "separator via segment_title_format (the prod default)",
+			filePattern: "{track_title}",
+			opts:        BuildOpts{SegmentTitleFormat: "{title} - {track}/{total_tracks}"},
+		},
+		{
+			name:        "separator written directly into the file pattern",
+			filePattern: "{title} - {track}/{total_tracks}",
+		},
+		{
+			name:        "backslash separator",
+			filePattern: `{title} - {track}\{total_tracks}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := BuildRelPath(testFolderPattern, tc.filePattern, vars, tc.opts)
+			if err != nil {
+				t.Fatalf("BuildRelPath: %v", err)
+			}
+
+			// testFolderPattern contributes one separator, and BuildRelPath
+			// joins folder to stem with one more. Anything beyond that is a
+			// directory nobody asked for.
+			const templateSlashes = 2
+			if n := strings.Count(got, "/"); n != templateSlashes {
+				t.Errorf("BuildRelPath(file=%q) = %q\n  has %d '/' separators; want %d.\n  The file pattern manufactured a directory level.",
+					tc.filePattern, got, n, templateSlashes)
+			}
+
+			// The stem is what the file is actually named. Assert the value,
+			// not just the shape: collapsing the separator to a space is what
+			// makes the forward fix agree with the recovery of the files this
+			// bug already stranded.
+			stem := got[strings.LastIndex(got, "/")+1:]
+			if want := "Pink Bean Series - 1 9"; stem != want {
+				t.Errorf("stem = %q, want %q", stem, want)
+			}
+		})
 	}
 }
 
