@@ -18,3 +18,14 @@
   deliberate: an operation stuck in a loop that logs is still stuck, and
   treating chatter as a sign of life would blind the watchdog to the exact
   problem it exists to catch.
+
+### Fixed
+
+- The nightly maintenance window is no longer cancelled part-way through for
+  being "stuck" while it is simply waiting. It runs each maintenance task in
+  turn and waits for it to finish, and a single task routinely takes longer than
+  the five minutes of silence the watchdog allows — so a perfectly healthy run
+  looked identical to a frozen one. It was 28 of the 44 operations cancelled for
+  inactivity in the preceding month. It now reports the running task's own
+  progress while it waits, so a real freeze is still caught: the task it is
+  waiting on is watched independently.

@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.11.0
+// version: 3.12.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-08-16
 

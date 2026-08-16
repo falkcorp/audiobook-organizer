@@ -1,7 +1,7 @@
 // file: internal/server/scheduler_maintenance_window_op.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2a4b6c8d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-06-16
+// last-edited: 2026-08-16
 
 package server
 
@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
@@ -27,7 +28,7 @@ import (
 func (s *Server) RegisterMaintenanceWindowOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "maintenance.window",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Maintenance Window",
 		Description:     "Run all maintenance-window-eligible tasks in order.",
@@ -156,8 +157,23 @@ func (s *Server) RegisterMaintenanceWindowOp(reg *opsregistry.Registry) error {
 						fmt.Sprintf("Task %s failed to start: %s", name, errMsg),
 						activity.Scheduled, mwTag)
 				} else if taskOp != nil {
-					// Wait for the task operation to complete before starting next
-					ts.WaitForOperation(ctx, taskOp.ID)
+					// Wait for the task operation to complete before starting next.
+					//
+					// Heartbeat on every poll tick. This op reports once per task,
+					// and a single maintenance task routinely runs longer than the
+					// 5m ProgressTimeout, so a supervisor that is waiting normally
+					// is indistinguishable from one that is wedged. 28 of the 44
+					// stuck-op cancellations in the 30 days to 2026-08-16 were
+					// this op. This mechanism explains that shape; whether each of
+					// the 28 was individually healthy was not verified.
+					//
+					// The child has its own watchdog entry, so a genuinely hung
+					// task is still caught; see WaitForOperation's doc comment.
+					ts.WaitForOperation(ctx, taskOp.ID, func(child *database.Operation) {
+						_ = reporter.UpdateProgress(i, len(eligible),
+							fmt.Sprintf("Task %d/%d: %s — %s (%d%%)",
+								i+1, len(eligible), name, child.Message, child.Progress))
+					})
 					completedOp, _ := store.GetOperationByID(taskOp.ID)
 					if completedOp != nil && completedOp.Status == "failed" {
 						errMsg := ""

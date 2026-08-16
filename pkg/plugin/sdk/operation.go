@@ -1,7 +1,7 @@
 // file: pkg/plugin/sdk/operation.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-07
+// last-edited: 2026-08-16
 
 package sdk
 
