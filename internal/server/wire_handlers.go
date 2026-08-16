@@ -85,6 +85,11 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		config.AppConfig.AutoOrganize,
 	)
 	playlistH := handlers.NewPlaylistHandlerWithGetter(s.Store(), s.SearchIndex)
+	// The store is passed twice on purpose: once as the narrow CollectionStore
+	// this handler writes through, once as the wider store the query evaluator
+	// reads books and per-user state from. Keeping them separate parameters means
+	// the handler's own dependency surface stays inspectable.
+	collectionH := handlers.NewCollectionHandler(s.Store(), s.Store(), s.SearchIndex)
 	pluginsH := handlers.NewPluginsHandler(s.pluginRegistry, config.AppConfig.Plugins)
 	versionsH := handlers.NewVersionsHandler(s.Store())
 
@@ -635,7 +640,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	}
 
 	// ── Register protected routes via per-domain methods ─────────────────────
-	s.wireLibraryRoutes(protected, cacheH, activityH, splitBookH, filesystemH, organizeH, metaCacheH, readingH, playlistH, userH, versionsH)
+	s.wireLibraryRoutes(protected, cacheH, activityH, splitBookH, filesystemH, organizeH, metaCacheH, readingH, playlistH, collectionH, userH, versionsH)
 	s.wireMediaRoutes(protected, itunesH, aiH, diagH, toolsH, aiBackendsH, pluginsH)
 	s.wireEntitiesRoutes(protected, entitiesH)
 	s.wireOperationsRoutes(protected, opsV2H, operationsH)

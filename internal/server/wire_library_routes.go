@@ -25,6 +25,7 @@ func (s *Server) wireLibraryRoutes(
 	metaCacheH *handlers.MetadataCacheHandler,
 	readingH *handlers.ReadingHandler,
 	playlistH *handlers.PlaylistHandler,
+	collectionH *handlers.CollectionHandler,
 	userH *handlers.UserHandler,
 	versionsH *handlers.VersionsHandler,
 ) {
@@ -83,6 +84,28 @@ func (s *Server) wireLibraryRoutes(
 	protected.DELETE("/playlists/:id/books/:bookID", playlistH.RemoveBookFromPlaylist)
 	protected.POST("/playlists/:id/reorder", playlistH.ReorderPlaylist)
 	protected.POST("/playlists/:id/materialize", playlistH.MaterializePlaylist)
+
+	// Collections. This is the ONLY surface that can create a dynamic
+	// (query-backed) collection: Audiobookshelf has no such concept, so its
+	// create payload has nowhere to put a query and everything made through the
+	// ABS routes is static.
+	//
+	// 🔴 EVERY WRITE IS GATED, unlike the playlist block directly above, where
+	// only the list carries s.perm and POST/PUT/DELETE carry nothing. That is not
+	// an inconsistency to tidy up later: collections are server-wide, so an
+	// ungated write here would let any authenticated user rewrite what every
+	// other user sees. The ABS surface enforces the same permission, and it has
+	// to be both — anyone locked out on one surface could otherwise just call the
+	// other.
+	//
+	// Reads are open to any authenticated caller by design: server-wide means
+	// everyone sees them.
+	protected.GET("/collections", s.perm(auth.PermLibraryView), collectionH.ListCollections)
+	protected.GET("/collections/:id", s.perm(auth.PermLibraryView), collectionH.GetCollection)
+	protected.POST("/collections", s.perm(auth.PermCollectionsManage), collectionH.CreateCollection)
+	protected.PUT("/collections/:id", s.perm(auth.PermCollectionsManage), collectionH.UpdateCollection)
+	protected.DELETE("/collections/:id", s.perm(auth.PermCollectionsManage), collectionH.DeleteCollection)
+	protected.POST("/collections/:id/materialize", s.perm(auth.PermCollectionsManage), collectionH.MaterializeCollection)
 
 	// User management
 	users := protected.Group("/users")
