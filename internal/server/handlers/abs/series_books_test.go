@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/series_books_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7f2c5d81-3ab9-4e60-9c47-58d3e0b6a214
-// last-edited: 2026-08-13
+// last-edited: 2026-08-16
 
 package abs_test
 
@@ -82,16 +82,47 @@ func absSeriesRows(t *testing.T, h *harness, tok string) map[string]map[string]a
 	return rows
 }
 
+// absBookTitles reads each book's title from media.metadata.title.
+//
+// It used to read a top-level "title". That field existed only because this
+// route emitted a six-field ad-hoc book object instead of an ABS LibraryItem,
+// which is why no ABS client could decode the series list and the app showed
+// "No Series Found" while this test passed. The title now lives where ABS puts
+// it, so reading it from there is also an assertion that the shape is right:
+// if the response regresses to the flat projection, every title comes back
+// empty and the callers below fail.
 func absBookTitles(row map[string]any) []string {
 	books, _ := row["books"].([]any)
 	out := make([]string, 0, len(books))
 	for _, b := range books {
-		if m, ok := b.(map[string]any); ok {
-			title, _ := m["title"].(string)
-			out = append(out, title)
+		m, ok := b.(map[string]any)
+		if !ok {
+			continue
 		}
+		media, _ := m["media"].(map[string]any)
+		meta, _ := media["metadata"].(map[string]any)
+		title, _ := meta["title"].(string)
+		out = append(out, title)
 	}
 	return out
+}
+
+// absBookIsLibraryItem reports whether a series book carries the fields an ABS
+// client requires of a LibraryItem. This is the shape check the old test could
+// not make, because the old shape had none of them.
+func absBookIsLibraryItem(b any) bool {
+	m, ok := b.(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, k := range []string{"id", "libraryId", "mediaType", "media", "path"} {
+		if _, present := m[k]; !present {
+			return false
+		}
+	}
+	media, _ := m["media"].(map[string]any)
+	_, hasMeta := media["metadata"]
+	return hasMeta
 }
 
 func TestLibrarySeries_BooksAreTheSeriesOwnBooksInSequenceOrder(t *testing.T) {
@@ -160,4 +191,64 @@ func absSeriesKeys(m map[string]map[string]any) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestLibrarySeries_BooksAreLibraryItems pins the 2026-08-16 fix.
+//
+// The series list returned HTTP 200 with 50 plausible rows and the app's Series
+// tab showed "No Series Found". The books were not LibraryItem objects: they
+// carried six ad-hoc fields (id, libraryItemId, libraryId, title, sequence,
+// duration) and none of media, media.metadata, mediaType, coverPath or path.
+//
+// The control that identified it is the playlists route, which the same client
+// renders correctly and which embeds a full libraryItem via minifiedItem. A
+// typed client decodes books: [LibraryItem] as a unit, so one undecodable entry
+// discards the entire response — which is why 23 of 50 series having real books
+// still put zero on screen.
+//
+// Asserting the FIELDS rather than a rendered title is the point: a test that
+// only checked titles passed against the broken shape for as long as it shipped.
+func TestLibrarySeries_BooksAreLibraryItems(t *testing.T) {
+	seed := absSeedTwoSeries(t)
+	h := newHarness(t, "jwt", nil, withLibrary(seed), withUserData(fixtureUserData()))
+	h.seedUser(t, "u1", "oracle", "", "pw-pw-pw-pw")
+	tok := str(t, userObj(t, h.login(t, "oracle", "pw-pw-pw-pw")), "accessToken")
+
+	odyssey, ok := absSeriesRows(t, h, tok)["Odyssey Cycle"]
+	if !ok {
+		t.Fatal("series list has no 'Odyssey Cycle'")
+	}
+
+	books, _ := odyssey["books"].([]any)
+	if len(books) == 0 {
+		t.Fatal("Odyssey Cycle served no books")
+	}
+	for i, b := range books {
+		if !absBookIsLibraryItem(b) {
+			t.Errorf("book %d is not a decodable ABS LibraryItem: %#v\n"+
+				"an ABS client decodes books as [LibraryItem] and drops the WHOLE "+
+				"response on one bad entry — this is why no series rendered", i, b)
+		}
+	}
+}
+
+// TestLibrarySeries_NumBooksMatchesTheBooksServed pins the self-consistency
+// rule. Measured on production 2026-08-16, 9 of 50 series on page 0 reported
+// numBooks >= 1 while carrying books: [] and totalDuration: 0, because books
+// with no resolvable sync id are dropped after the count is taken.
+func TestLibrarySeries_NumBooksMatchesTheBooksServed(t *testing.T) {
+	seed := absSeedTwoSeries(t)
+	h := newHarness(t, "jwt", nil, withLibrary(seed), withUserData(fixtureUserData()))
+	h.seedUser(t, "u1", "oracle", "", "pw-pw-pw-pw")
+	tok := str(t, userObj(t, h.login(t, "oracle", "pw-pw-pw-pw")), "accessToken")
+
+	for name, row := range absSeriesRows(t, h, tok) {
+		books, _ := row["books"].([]any)
+		num, _ := row["numBooks"].(float64)
+		if int(num) != len(books) {
+			t.Errorf("%s: numBooks=%d but %d books served — a row that reports a "+
+				"count it cannot list forces the client to guess which to believe",
+				name, int(num), len(books))
+		}
+	}
 }
