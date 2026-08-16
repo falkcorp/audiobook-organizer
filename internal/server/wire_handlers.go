@@ -229,8 +229,8 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// a live hub and invoke HandleSSE instead of 503 (mirrors the operations
 	// getScheduler seam). s.olService is passed as a CONCRETE
 	// pointer (factoryReset reaches its .Mu / .OLStore fields, which an interface
-	// cannot abstract); the handler nil-checks it directly. s.operationsHandler
-	// (set just above) backs OperationLogsProvider. The store is passed as a LAZY
+	// cannot abstract); the handler nil-checks it directly. OperationLogsProvider is backed by
+	// the v2 handler (see below). The store is passed as a LAZY
 	// provider closure (not a snapshot): the original handlers read s.Store() at
 	// request time, and a router-integration test swaps server.store post-wire to
 	// inject a mock — snapshotting would miss it. s.Store() returns the
@@ -247,10 +247,13 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	if s.pluginRegistry != nil {
 		sysPlugins = s.pluginRegistry
 	}
-	var sysOpLogs system.OperationLogsProvider
-	if s.operationsHandler != nil {
-		sysOpLogs = s.operationsHandler
-	}
+	// OperationLogsProvider is served by the V2 handler, not the legacy one. The
+	// legacy GetOperationLogs fell back to the `operations` table when v2 had no
+	// row, and that table never moves rows out of `pending` — 183 of 200 rows read
+	// as pending against production on 2026-08-16. Diagnostics reading stale
+	// "pending" for a finished op is exactly the kind of confidently-wrong answer
+	// this migration exists to remove.
+	var sysOpLogs system.OperationLogsProvider = opsV2H
 	systemH := system.New(
 		// Lazy store provider: resolve s.Store() at request time (late binding, as
 		// the original handlers did). A test swaps server.store post-wire, so a

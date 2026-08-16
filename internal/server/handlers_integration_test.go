@@ -93,10 +93,10 @@ func newSystemHandler(s *Server) *system.Handler {
 	if s.pluginRegistry != nil {
 		plugins = s.pluginRegistry
 	}
-	var opLogs system.OperationLogsProvider
-	if s.operationsHandler != nil {
-		opLogs = s.operationsHandler
-	}
+	// Mirrors wireHandlers: OperationLogsProvider is the v2 handler now. The
+	// legacy one fell back to the `operations` table, which never leaves pending.
+	var opLogs system.OperationLogsProvider = handlers.NewOperationsV2Handler(
+		database.GetOpsV2(s.Store()), nil, nil)
 	return system.New(
 		func() system.SystemStore { return s.Store() },
 		sysSvc,
