@@ -38,6 +38,46 @@ func (p *Plugin) Name() string { return "iTunes/Music Library" }
 // Version implements sdk.Plugin.
 func (p *Plugin) Version() string { return "1.0.0" }
 
+// registeredDefs is the whitelist of OperationDefs this plugin puts into the
+// registry.
+//
+// It is a whitelist, not "everything in this package", because registering a
+// def does not ADD an operation -- it REPLACES whatever else claims that ID.
+// Container.PostInit runs before NewServer's opRegistrars loop (server.go:567
+// vs :625), so a plugin def always wins a collision and the server's
+// registration is the one rejected.
+//
+// From 2026-07-17 until 2026-08-16 this package registered four stubs. Three of
+// them -- itunes.sync, itunes.path-reconcile, itunes.path-repair -- shadowed
+// the working implementations in internal/server/itunes_ops.go and
+// itunes_path_ops.go, which wire Importer.Sync, Paths.Reconcile and
+// Repair.Repair. Each stub returned nil, so all three operations reported
+// "completed" in production without doing anything. The only evidence was one
+// WARN per boot from the registrar loop, and that WARN was swallowed.
+//
+// The importDef exclusion below already described this exact hazard in a
+// comment; it was simply never applied to its siblings.
+//
+// Split out of Register so the whitelist can be asserted in a test without an
+// enabled Service (Enabled() reads an unexported deps.Config).
+func (p *Plugin) registeredDefs() []sdk.OperationDef {
+	return []sdk.OperationDef{
+		// EXCLUDED, all stubs whose real implementation lives in internal/server:
+		//   syncDef           -> server.RegisterITunesSyncOp (Importer.Sync)
+		//   importDef         -> server.RegisterITunesImportOp (Importer.Execute)
+		//   pathReconciledDef -> server.RegisterITunesPathReconcileOp (Paths.Reconcile)
+		//   pathRepairDef     -> server.RegisterITunesPathRepairOp (Repair.Repair)
+		//
+		// positionSyncDef is a stub too, but it has no server-side counterpart,
+		// so it stays registered: dropping it would make the op vanish rather
+		// than fail, and "unknown op" is a worse error than an honest one. Its
+		// Run returns an error instead of nil -- see runPositionSync. The real
+		// implementation it should call, svc.Positions.Sync, exists and has
+		// never been wired to anything.
+		p.positionSyncDef(),
+	}
+}
+
 // Register registers all iTunes OperationDefs with the UOS registry.
 // Returns nil if the service is nil or disabled (nil-guard pattern).
 func (p *Plugin) Register(r sdk.Registry) error {
@@ -46,18 +86,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		return nil
 	}
 
-	defs := []sdk.OperationDef{
-		p.syncDef(),
-		// importDef is a stub — the canonical itunes.import op is
-		// registered by server.RegisterITunesImportOp (itunes_ops.go),
-		// which wires Importer.Execute. Registering the stub here would
-		// collide with the real one and route through a no-op subprocess.
-		p.pathReconciledDef(),
-		p.pathRepairDef(),
-		p.positionSyncDef(),
-	}
-
-	for _, def := range defs {
+	for _, def := range p.registeredDefs() {
 		if err := r.RegisterOp(def); err != nil {
 			return fmt.Errorf("register %s: %w", def.ID, err)
 		}

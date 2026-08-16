@@ -8,7 +8,6 @@ package itunes
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -39,8 +38,7 @@ func (p *Plugin) runImport(ctx context.Context, _ json.RawMessage, reporter sdk.
 	// NOTE: the canonical itunes.import op is registered by
 	// server.RegisterITunesImportOp (itunes_ops.go); this stub is
 	// intentionally unregistered (see Register in plugin.go).
-	_ = reporter.Log(slog.LevelWarn, "op not implemented — no-op", slog.String("def_id", "itunes.import"))
-	return nil
+	return errNotImplemented("itunes.import")
 }
 
 // Ensure methods are referenced so staticcheck doesn't flag them as unused (U1000).
