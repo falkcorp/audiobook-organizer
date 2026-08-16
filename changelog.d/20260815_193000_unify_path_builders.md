@@ -44,6 +44,16 @@ against the disk. The rows now come from the same planner that did the copying,
 and each is checked against what is actually on disk before being written — a
 file that organize skipped keeps a row pointing at where it really is.
 
+Routing all three through one planner is not on its own enough: the plan is a
+pure function of its arguments, so the paths agree only if they pass the same
+rows, and they did not. `OrganizeDirectoryBook` pre-filtered `book_file` rows
+with an empty `FilePath`; `CreateOrganizedVersion` and the metafetch apply paths
+passed `GetBookFiles` straight through. One such row changes the file count and,
+because `""` sorts first, shifts every position-derived track number by one — so
+organize writes `… - 07.mp3` while the row writer plans `… - 08.mp3`, finds
+nothing there, and falls back to the un-organized source path. The row set is
+now normalized inside the planner, where no caller can opt out of it.
+
 ### Removed
 
 #### The `path_format` and `segment_title_format` settings
