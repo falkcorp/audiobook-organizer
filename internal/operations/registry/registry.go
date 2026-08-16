@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.10.0
+// version: 3.11.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-08-07
+// last-edited: 2026-08-16
 
 package registry
 
@@ -809,6 +809,14 @@ func (r *Registry) publishOpCreated(row database.OperationV2Row, resumed bool) {
 // regardless of whether a bus is wired.
 func (r *Registry) publishOpTerminal(opID, defID, status string) {
 	metrics.ClearOpProgress(opID, defID)
+
+	// Mirror the terminal status onto the legacy v1 operations row, if this op
+	// has one. Done here rather than at the four call sites because every
+	// terminal path already funnels through this function, so no future
+	// terminal path can forget it — which is exactly how the scheduler's ops
+	// ended up permanently "pending" while a handful of hand-written call sites
+	// got it right.
+	r.propagateLegacyOpStatus(opID, status)
 
 	if r.bus == nil {
 		return
