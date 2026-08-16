@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.51.0
+// version: 1.52.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-07-30
+// last-edited: 2026-08-16
 
 package scanner
 
@@ -1100,6 +1100,20 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		const batchSize = 20
 		const delayBetweenBatches = 2 * time.Second
 
+		// consecutiveFailures aborts the phase when the AI backend is down
+		// rather than persistently unavailable for this one batch.
+		//
+		// On 2026-08-16 the OpenAI account hit credit_balance_exhausted, so
+		// every one of 77 batches failed after 3 attempts with 2s+8s backoff
+		// plus the 5s inter-batch sleep below -- roughly 25 minutes of
+		// guaranteed-useless work. Nothing here reported progress while it
+		// happened, so the watchdog struck library.scan as stuck at 5m1s and
+		// killed the whole scan, discarding a completed 3,917-file walk. The
+		// same shape applies to a bad API key or a sustained outage.
+		const maxConsecutiveFailures = 3
+		consecutiveFailures := 0
+		totalBatches := (len(aiCandidates) + batchSize - 1) / batchSize
+
 		for start := 0; start < len(aiCandidates); start += batchSize {
 			if ctx.Err() != nil {
 				break
@@ -1110,6 +1124,15 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				end = len(aiCandidates)
 			}
 			batch := aiCandidates[start:end]
+
+			// Report before the call, not after: a batch takes up to 30s and a
+			// failing one takes longer, so reporting only on success leaves
+			// gaps that exceed the watchdog's ProgressTimeout. This phase is
+			// why library.scan could complete its entire file walk and still
+			// be canceled for inactivity.
+			batchNum := start/batchSize + 1
+			scanLog.UpdateProgress(batchNum, totalBatches,
+				fmt.Sprintf("AI parsing batch %d/%d (%d books)", batchNum, totalBatches, len(batch)))
 
 			// Collect filenames for this batch
 			filenames := make([]string, len(batch))
@@ -1123,12 +1146,33 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 
 			if aiErr != nil {
 				scanLog.Warn("AI batch parsing failed (batch %d-%d): %v", start, end, aiErr)
+
+				// A permanent backend state -- no credits, revoked key, quota
+				// exhausted -- will not clear by the next batch. Retrying it 76
+				// more times cannot succeed and merely delays the rest of the
+				// scan by 25 minutes, so stop the phase on the first one.
+				if isPermanentAIFailure(aiErr) {
+					scanLog.Warn("AI batch parsing disabled for this scan after a non-retryable error at batch %d/%d: %v — "+
+						"the remaining %d books keep their filename-derived metadata",
+						batchNum, totalBatches, aiErr, len(aiCandidates)-start)
+					break
+				}
+
+				consecutiveFailures++
+				if consecutiveFailures >= maxConsecutiveFailures {
+					scanLog.Warn("AI batch parsing disabled for this scan: %d consecutive batch failures at batch %d/%d — "+
+						"the remaining %d books keep their filename-derived metadata",
+						consecutiveFailures, batchNum, totalBatches, len(aiCandidates)-start)
+					break
+				}
+
 				// Rate limit error — wait longer before retry/next batch
 				if start+batchSize < len(aiCandidates) {
 					time.Sleep(5 * time.Second)
 				}
 				continue
 			}
+			consecutiveFailures = 0
 
 			// Apply results
 			for i, idx := range batch {

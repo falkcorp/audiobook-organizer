@@ -29,3 +29,14 @@
   inactivity in the preceding month. It now reports the running task's own
   progress while it waits, so a real freeze is still caught: the task it is
   waiting on is watched independently.
+
+- Library scans no longer die at the AI-parsing stage. After walking every file
+  the scan hands filenames to the AI for cleanup, in batches — and that stage
+  never reported progress, so a scan that had already done all its real work got
+  cancelled for inactivity five minutes in and threw the whole walk away. It now
+  reports per batch. Separately, when the AI provider returns something that
+  cannot resolve on its own — no credits, a revoked key — the scan stops asking
+  instead of working through every remaining batch against the same answer, and
+  says so in the log. Those books keep the metadata derived from their
+  filenames. A scan of a 3,917-file library was failing this way on 2026-08-16
+  because the OpenAI account had run out of credits.
