@@ -1,6 +1,7 @@
 // file: internal/activity/writer.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f
+// last-edited: 2026-08-16
 
 package activity
 
@@ -136,13 +137,26 @@ func (w *Writer) sendEntry(line string) {
 		Type:        "system",
 		Level:       parsed.Level,
 		Source:      parsed.Source,
-		Summary:     parsed.Message,
+		Summary:     RenderSummary(parsed),
 		OperationID: parsed.OpID,
 	}
 	// Propagate component into Details so EnrichTags can produce
 	// a component: tag without requiring a DB schema change.
 	if parsed.Component != "" {
 		entry.Details = map[string]any{"component": parsed.Component}
+	}
+	// Keep the attrs structured as well as rendered. RenderSummary is for
+	// reading; Details is what a consumer can actually query, and a path or a
+	// book id is worth more as a field than as a substring of a sentence.
+	if len(parsed.Attrs) > 0 {
+		if entry.Details == nil {
+			entry.Details = make(map[string]any, len(parsed.Attrs))
+		}
+		for _, a := range parsed.Attrs {
+			if _, exists := entry.Details[a.Key]; !exists {
+				entry.Details[a.Key] = a.Value
+			}
+		}
 	}
 	if isBatchable(entry) {
 		w.batcher.Submit(BatchKey{
@@ -254,6 +268,156 @@ type ParsedLogLine struct {
 	Message   string // human-readable message text
 	OpID      string // operation_id / op_id slog attribute, if present
 	Component string // component / subsystem slog attribute or source-path derived name
+	// Attrs are the slog key=value attributes other than the structural ones
+	// (time/level/msg/source, and the op_id/component keys lifted into the
+	// fields above), in the order they appeared.
+	//
+	// These used to be discarded outright, which is what produced activity-log
+	// rows reading "cover art saved to" (to WHERE?) and "ISBN enrichment
+	// succeeded for" (for WHAT?) -- the sentence is the slog MESSAGE and the
+	// thing it is about is an ATTR.
+	Attrs []LogAttr
+}
+
+// LogAttr is one slog key=value attribute from a log line.
+type LogAttr struct {
+	Key   string
+	Value string
+}
+
+// structuralSlogKeys are the attrs that are already represented elsewhere in
+// ParsedLogLine, so repeating them in a rendered summary would be noise.
+var structuralSlogKeys = map[string]struct{}{
+	"time": {}, "level": {}, "msg": {}, "source": {},
+	"op_id": {}, "operation_id": {}, "opID": {},
+	"component": {}, "subsystem": {}, "pkg": {},
+}
+
+// trailingPrepositions are the words that, when a log message ENDS with one,
+// mean the message is a sentence fragment whose object is the first attr.
+// "cover art saved to" + path=/lib/x.jpg reads correctly as
+// "cover art saved to /lib/x.jpg", where "cover art saved to path=/lib/x.jpg"
+// does not. Any other shape gets plain key=value appending, which is honest
+// even when it is not elegant.
+var trailingPrepositions = map[string]struct{}{
+	"to": {}, "for": {}, "from": {}, "at": {}, "in": {},
+	"on": {}, "of": {}, "with": {}, "into": {}, "by": {},
+}
+
+// RenderSummary builds the human-readable activity summary for a parsed line:
+// the message, followed by the attrs that carry its actual content.
+func RenderSummary(p ParsedLogLine) string {
+	if len(p.Attrs) == 0 {
+		return p.Message
+	}
+	msg := strings.TrimRight(p.Message, " ")
+	attrs := p.Attrs
+
+	// Sentence fragment ("... saved to", "... succeeded for", "... wrote:")
+	// takes the first attr's value bare as its object.
+	var b strings.Builder
+	b.WriteString(msg)
+	if msg != "" && endsWithPreposition(msg) {
+		b.WriteString(" ")
+		b.WriteString(attrs[0].Value)
+		attrs = attrs[1:]
+	}
+	for _, a := range attrs {
+		b.WriteString(" ")
+		b.WriteString(a.Key)
+		b.WriteString("=")
+		b.WriteString(a.Value)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// endsWithPreposition reports whether msg's last word is a preposition, or msg
+// ends in a colon — either way the sentence is left dangling without its object.
+func endsWithPreposition(msg string) bool {
+	if strings.HasSuffix(msg, ":") {
+		return true
+	}
+	idx := strings.LastIndexByte(msg, ' ')
+	if idx < 0 {
+		return false
+	}
+	_, ok := trailingPrepositions[strings.ToLower(msg[idx+1:])]
+	return ok
+}
+
+// scanSlogAttrs walks a slog TextHandler line and returns every key=value pair
+// in order, correctly handling quoted values that themselves contain spaces,
+// '=' or escaped quotes.
+//
+// This exists because the old parser located the message with
+// strings.LastIndexByte(line, '"'), which finds the last quote in the WHOLE
+// line rather than the message's own closing quote. With no quoted attrs after
+// it that lands on the right character by luck; with one, the "message" swallows
+// the rest of the line. That is why the activity log showed
+//
+//	ISBN enrichment found" isbn="9780553293357" title="Foundation
+//
+// complete with the stray quote — the same defect that elsewhere merely looked
+// like "attributes are dropped".
+func scanSlogAttrs(line string) []LogAttr {
+	var attrs []LogAttr
+	i := 0
+	for i < len(line) {
+		for i < len(line) && line[i] == ' ' {
+			i++
+		}
+		eq := -1
+		for j := i; j < len(line); j++ {
+			if line[j] == '=' {
+				eq = j
+				break
+			}
+			if line[j] == ' ' {
+				break
+			}
+		}
+		if eq < 0 {
+			break
+		}
+		key := line[i:eq]
+		i = eq + 1
+		var val string
+		if i < len(line) && line[i] == '"' {
+			i++
+			var sb strings.Builder
+			for i < len(line) {
+				if line[i] == '\\' && i+1 < len(line) {
+					sb.WriteByte(line[i+1])
+					i += 2
+					continue
+				}
+				if line[i] == '"' {
+					i++
+					break
+				}
+				sb.WriteByte(line[i])
+				i++
+			}
+			val = sb.String()
+		} else {
+			start := i
+			for i < len(line) && line[i] != ' ' {
+				i++
+			}
+			val = line[start:i]
+		}
+		if key != "" {
+			attrs = append(attrs, LogAttr{Key: key, Value: val})
+		}
+	}
+	return attrs
+}
+
+// isSlogTextLine reports whether the line is in slog TextHandler format.
+func isSlogTextLine(line string) bool {
+	return strings.HasPrefix(line, "time=") &&
+		strings.Contains(line, " level=") &&
+		strings.Contains(line, " msg=")
 }
 
 // ParseLogLineFull extracts all structured fields from a single log line,
@@ -263,10 +427,22 @@ func ParseLogLineFull(line string) ParsedLogLine {
 	p := ParsedLogLine{}
 	p.Level, p.Source, p.Message = parseLogLineCore(line)
 
-	// For slog text lines, also extract op_id, component, and subsystem attrs.
-	if strings.HasPrefix(line, "time=") && strings.Contains(line, " level=") && strings.Contains(line, " msg=") {
+	// For slog text lines, also extract op_id, component, and subsystem attrs,
+	// and keep everything else: the content of these messages lives in the
+	// attrs, and dropping them is what left the activity log saying "cover art
+	// saved to" without saying where.
+	if isSlogTextLine(line) {
 		p.OpID = extractSlogAttr(line, "op_id", "operation_id", "opID")
 		p.Component = extractSlogAttr(line, "component", "subsystem", "pkg")
+		for _, a := range scanSlogAttrs(line) {
+			if _, structural := structuralSlogKeys[a.Key]; structural {
+				continue
+			}
+			if a.Value == "" {
+				continue
+			}
+			p.Attrs = append(p.Attrs, a)
+		}
 	}
 
 	// If no explicit component, derive one from the source path field when the
@@ -371,35 +547,33 @@ func parseLogLineCore(line string) (level, source, message string) {
 	// extracting msg, recurse so the wrapped "[INFO] source: message"
 	// payload parses through the standard [level] branch and gets a
 	// proper source.
-	if strings.HasPrefix(line, "time=") && strings.Contains(line, " level=") && strings.Contains(line, " msg=") {
+	if isSlogTextLine(line) {
+		// One structured scan for the whole line rather than three independent
+		// string searches. The previous msg extraction used
+		// strings.LastIndexByte(msg, '"'), which takes the last quote in the
+		// REST OF THE LINE -- correct only when no attribute after msg is
+		// quoted, and otherwise swallowing every following attr into the
+		// message, stray quote included.
 		lvl := "info"
-		if li := strings.Index(line, " level="); li >= 0 {
-			rest := line[li+len(" level="):]
-			if sp := strings.IndexByte(rest, ' '); sp > 0 {
-				lvl = strings.ToLower(rest[:sp])
+		msg := ""
+		for _, a := range scanSlogAttrs(line) {
+			switch a.Key {
+			case "level":
+				lvl = strings.ToLower(a.Value)
+			case "msg":
+				msg = a.Value
 			}
 		}
-		mi := strings.Index(line, " msg=")
-		if mi >= 0 {
-			msg := line[mi+len(" msg="):]
-			// msg is quoted text; trim surrounding quotes and unescape \"
-			if len(msg) > 0 && msg[0] == '"' {
-				if end := strings.LastIndexByte(msg, '"'); end > 0 {
-					msg = msg[1:end]
-				}
-				msg = strings.ReplaceAll(msg, `\"`, `"`)
-			}
-			// Recurse: msg often starts with "[INFO] source: ..." in our
-			// code so the standard branch can extract a real source.
-			if msg != "" && msg != line {
-				rlvl, rsrc, rmsg := ParseLogLine(msg)
-				if rsrc != "server" || rlvl != "info" {
-					return rlvl, rsrc, rmsg
-				}
-				return lvl, "server", msg
+		// Recurse: msg often starts with "[INFO] source: ..." in our
+		// code so the standard branch can extract a real source.
+		if msg != "" && msg != line {
+			rlvl, rsrc, rmsg := ParseLogLine(msg)
+			if rsrc != "server" || rlvl != "info" {
+				return rlvl, rsrc, rmsg
 			}
 			return lvl, "server", msg
 		}
+		return lvl, "server", msg
 	}
 
 	work := line
