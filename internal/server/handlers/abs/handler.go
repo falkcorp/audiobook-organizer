@@ -209,6 +209,11 @@ type Options struct {
 	// Playlists is optional: nil keeps the playlist route answering the empty page
 	// it answered before, which is a valid Page<T>, rather than 500-ing.
 	Playlists PlaylistStore
+	// Collections is optional on the same terms as Playlists: nil keeps the list
+	// route answering the empty page, and the write routes report the feature as
+	// unavailable rather than 500-ing. Unlike playlists these are server-wide —
+	// see collections.go.
+	Collections CollectionStore
 
 	// CoverRoot is config.AppConfig.RootDir — the library root that
 	// metadata.CoverPathForBook resolves covers under, and the base for the relative
@@ -239,6 +244,7 @@ type Handler struct {
 	progress    ProgressStore
 	bookmarks   BookmarkStore
 	playlists   PlaylistStore
+	collections CollectionStore
 	coverRoot   string
 	libraryName string
 
@@ -322,6 +328,7 @@ func New(o Options) (*Handler, error) {
 		identity:    o.Identity,
 		chapters:    o.Chapters,
 		playlists:   o.Playlists,
+		collections: o.Collections,
 		progress:    o.Progress,
 		bookmarks:   o.Bookmarks,
 		coverRoot:   o.CoverRoot,
@@ -400,8 +407,24 @@ func (h *Handler) Register(r gin.IRouter) {
 	r.GET("/api/libraries/:libraryId/items", auth, h.LibraryItems)
 	r.GET("/api/libraries/:libraryId/personalized", auth, h.Personalized)
 	r.GET("/api/libraries/:libraryId/series", auth, h.LibrarySeries)
-	r.GET("/api/libraries/:libraryId/collections", auth, h.EmptyPage)
+	r.GET("/api/libraries/:libraryId/collections", auth, h.LibraryCollections)
 	r.GET("/api/libraries/:libraryId/playlists", auth, h.LibraryPlaylists)
+	// Collection CRUD. POST /api/collections is the route the app called and got
+	// a 404 from on 2026-08-16 — five times in two seconds, which is what a user
+	// pressing Create repeatedly looks like in the journal.
+	//
+	// No collision-table entry is needed: "/api/collections" is already in
+	// absUnimplementedNamespaces, so absReservedPath() matches it and these paths
+	// never enter the /api/* → /api/v1/* redirect. That reservation matters more
+	// here than it did for playlists — a 301 on a POST drops the body on many
+	// clients, so an unreserved create route would "succeed" with an empty
+	// payload. Writes are gated on PermCollectionsManage inside each handler.
+	r.GET("/api/collections/:id", auth, h.CollectionDetail)
+	r.POST("/api/collections", auth, h.CreateCollection)
+	r.PATCH("/api/collections/:id", auth, h.UpdateCollection)
+	r.DELETE("/api/collections/:id", auth, h.DeleteCollection)
+	r.POST("/api/collections/:id/book", auth, h.AddBookToCollection)
+	r.DELETE("/api/collections/:id/book/:bookId", auth, h.RemoveBookFromCollection)
 	// The DETAIL route the app calls when a playlist is opened. Without it the
 	// path 301'd into /api/v1/playlists/:id and every playlist rendered empty.
 	// Reserved from the redirect by the "/api/playlists/" prefix — see
