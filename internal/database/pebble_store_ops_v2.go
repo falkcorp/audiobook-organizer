@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.8.0
+// version: 3.9.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-07-03
+// last-edited: 2026-08-16
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -520,7 +520,18 @@ func (p *PebbleStore) ListOperationsV2Since(since time.Time, limit int) (rows []
 		if err := json.Unmarshal(iter.Value(), &row); err != nil {
 			continue
 		}
-		if !row.QueuedAt.Before(since) {
+		// The window bounds HISTORY, not live work. An operation that has not
+		// completed is current by definition, however long ago it was queued —
+		// filtering on QueuedAt alone meant an op simply had to RUN longer than
+		// the window to disappear from its own timeline. A library.scan running
+		// 1h50m returned an empty timeline in production on 2026-08-16 while it
+		// was logging once a second, and an empty list reads as "nothing is
+		// running."
+		//
+		// Keyed on CompletedAt rather than a set of status strings on purpose: a
+		// status list has to be updated every time a new terminal state is added,
+		// and silently under-reports until someone remembers.
+		if row.CompletedAt == nil || !row.QueuedAt.Before(since) {
 			all = append(all, row)
 		}
 	}
