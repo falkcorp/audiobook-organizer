@@ -8,7 +8,6 @@ package itunes
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -37,6 +36,5 @@ func (p *Plugin) positionSyncDef() sdk.OperationDef {
 func (p *Plugin) runPositionSync(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	// TODO: Implement iTunes position sync operation.
 	// This should call p.svc.Positions.Sync().
-	_ = reporter.Log(slog.LevelWarn, "op not implemented — no-op", slog.String("def_id", "itunes.position-sync"))
-	return nil
+	return errNotImplemented("itunes.position-sync")
 }
