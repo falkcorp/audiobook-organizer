@@ -284,17 +284,20 @@ func TestOrganizeBookDirectory_PathTraversalPrevented(t *testing.T) {
 	// Either way, it should NOT create files outside rootDir
 }
 
-func TestSanitizeFilename_StripsDotDot(t *testing.T) {
-	result := sanitizeFilename("../../../etc/passwd")
+// Retargeted from the deleted sanitizeFilename onto SanitizePathComponent, the
+// package's single sanitizer. The traversal guard has to live on the surviving
+// function or it does not live anywhere.
+func TestSanitizePathComponent_StripsDotDot(t *testing.T) {
+	result := SanitizePathComponent("../../../etc/passwd")
 	assert.NotContains(t, result, "..", "dot-dot sequences must be neutralized")
 
 	// Single ".." also stripped
-	result2 := sanitizeFilename("..evil")
+	result2 := SanitizePathComponent("..evil")
 	assert.NotContains(t, result2, "..")
 }
 
-func TestSanitizeFilename_PreservesNormalDots(t *testing.T) {
-	result := sanitizeFilename("Dr. Who - Season 1.m4b")
+func TestSanitizePathComponent_PreservesNormalDots(t *testing.T) {
+	result := SanitizePathComponent("Dr. Who - Season 1.m4b")
 	assert.Contains(t, result, "Dr.")
 	assert.Contains(t, result, "1.m4b")
 }

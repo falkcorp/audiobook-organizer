@@ -192,13 +192,36 @@ func CollapseEmptySegments(path string) string {
 	return path
 }
 
-// SanitizePathComponent removes filesystem-unsafe characters from a path component.
+// SanitizePathComponent removes filesystem-unsafe characters from a path
+// component. It is the ONLY sanitizer in this package.
+//
+// It used to have a rival: organizer.go's sanitizeFilename, which ran a second
+// time over output BuildPath had already sanitized. Almost all of its rules were
+// dead by then (there is no ':' left to replace after this function has run) —
+// the one rule that still fired was stripping '[' and ']', so the second pass
+// existed only to undo the first. Two sanitizers is the same defect as two path
+// builders. This one absorbed the rules that were genuinely unique to it —
+// control characters and ".." — and the other was deleted.
+//
+// Square brackets are deliberately NOT stripped. They are legal on every
+// filesystem we target (ext4, APFS, NTFS, ZFS) and are idiomatic in audiobook
+// naming — "[Unabridged]", "[AAC 128kbps]".
 func SanitizePathComponent(s string) string {
-	// Square brackets are deliberately NOT stripped. They are legal on every
-	// filesystem we target (ext4, APFS, NTFS, ZFS) and are idiomatic in
-	// audiobook naming — "[Unabridged]", "[AAC 128kbps]". Stripping them was a
-	// path_format-only behaviour that silently mangled patterns the
-	// folder/file naming builder had always honoured.
+	// Control characters and non-printable bytes never belong in a filename;
+	// some are legal on POSIX and make the file effectively unaddressable.
+	s = strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 {
+			return -1
+		}
+		return r
+	}, s)
+
+	// Neutralize ".." so no single component can be a parent-directory
+	// reference. BuildPath's CollapseEmptySegments already folds these, but
+	// this function is also called directly, and a traversal guard that only
+	// holds on one call path is not a guard.
+	s = strings.ReplaceAll(s, "..", "_")
+
 	replacer := strings.NewReplacer(
 		"/", " ",
 		"\\", " ",

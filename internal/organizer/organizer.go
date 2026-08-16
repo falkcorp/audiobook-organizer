@@ -339,12 +339,12 @@ func (o *Organizer) generateTargetPath(book *database.Book) (string, error) {
 	// commit expanded to the literal word "narrator". An empty stem would make
 	// the target a bare dotfile (".m4b") that EVERY such book collides on, so
 	// fall back to the book's own title, and only then to defaultTitle.
-	stem := sanitizeFilename(fileName)
+	stem := SanitizePathComponent(fileName)
 	if strings.TrimSpace(stem) == "" {
-		stem = sanitizeFilename(strings.TrimSpace(book.Title))
+		stem = SanitizePathComponent(strings.TrimSpace(book.Title))
 	}
 	if strings.TrimSpace(stem) == "" {
-		stem = sanitizeFilename(defaultTitle)
+		stem = SanitizePathComponent(defaultTitle)
 	}
 	fileName = stem + ext
 
@@ -561,47 +561,22 @@ func cleanupPattern(pattern string) string {
 	return pattern
 }
 
-// sanitizePath sanitizes a path for filesystem use
+// sanitizePath sanitizes a multi-component relative path, one component at a
+// time. It is a thin wrapper over SanitizePathComponent, the package's single
+// sanitizer — the "/" separators are structure and must survive; everything
+// between them is a component.
+//
+// The private sanitizeFilename this used to call is gone. It duplicated
+// SanitizePathComponent for every character that mattered and disagreed with it
+// on exactly one: it stripped '[' and ']'. Since BuildPath sanitizes before
+// returning, that made the second pass a no-op except where it silently undid
+// the first. See SanitizePathComponent.
 func sanitizePath(path string) string {
 	parts := strings.Split(path, "/")
 	for i, part := range parts {
-		parts[i] = sanitizeFilename(part)
+		parts[i] = SanitizePathComponent(part)
 	}
 	return strings.Join(parts, "/")
-}
-
-// sanitizeFilename sanitizes a filename for filesystem use
-func sanitizeFilename(name string) string {
-	// Remove control characters and non-printable bytes
-	name = strings.Map(func(r rune) rune {
-		if r < 32 || r == 127 {
-			return -1
-		}
-		return r
-	}, name)
-
-	// Prevent path traversal — strip ".." components
-	name = strings.ReplaceAll(name, "..", "_")
-
-	invalid := []string{"<", ">", ":", "\"", "|", "?", "*"}
-	for _, char := range invalid {
-		name = strings.ReplaceAll(name, char, "_")
-	}
-
-	// Strip brackets (ugly in paths, cause shell escaping issues)
-	name = strings.ReplaceAll(name, "[", "")
-	name = strings.ReplaceAll(name, "]", "")
-
-	re := regexp.MustCompile(`\s+`)
-	name = re.ReplaceAllString(name, " ")
-	name = strings.TrimSpace(name)
-
-	// Limit filename length (255 byte max on most filesystems, leave room for extension + .tmp)
-	if len(name) > 200 {
-		name = name[:200]
-	}
-
-	return name
 }
 
 // ensureUnderRoot verifies that fullPath is inside rootDir after cleaning.
