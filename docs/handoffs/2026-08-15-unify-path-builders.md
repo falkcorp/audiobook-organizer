@@ -1,12 +1,16 @@
 <!-- file: docs/handoffs/2026-08-15-unify-path-builders.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 8c41f7d2-3a95-4e60-b8d1-05f2e9a37c46 -->
 <!-- last-edited: 2026-08-15 -->
 
 # HANDOFF — unify the two target-path builders
 
 **Branch:** `refactor/unify-path-builders` · **Worktree:** `.worktrees/pathmerge`
-**Last commit:** `7b3e56d7` (WIP, does not pass tests — 2 known regressions, listed below)
+**Code tip:** `4f9908ca` (WIP, does not pass tests — 2 known regressions, listed below)
+**Rebased onto:** `e05c670c` = main with PR #2478 merged
+
+> SHAs below are post-rebase. If they do not resolve, the branch was rebased again —
+> `git log --oneline origin/main..HEAD` gives the current three.
 
 ---
 
@@ -81,7 +85,7 @@ ended up with two sets of path controls fighting each other.
 
 ## State
 
-### Done (committed, `7b3e56d7`)
+### Done (committed, `4f9908ca`)
 
 1. **`internal/organizer/pathbuild.go`** (NEW) — `BuildPath(pattern, PathVars, BuildOpts)`,
    the single builder. Superset of both. Order of operations inside it matters and is
@@ -94,7 +98,7 @@ ended up with two sets of path controls fighting each other.
 3. **`internal/organizer/path_format.go`** — `SanitizePathComponent` no longer strips
    `[` and `]` (legal everywhere, idiomatic in audiobook names; verified no test depended
    on the stripping) and gained the 200-byte cap that only scheme #1 had.
-4. **`internal/organizer/path_builder_characterization_test.go`** (commit `11e41ad3`) —
+4. **`internal/organizer/path_builder_characterization_test.go`** (commit `cef97b90`) —
    8 tests pinning both builders. **These are the safety net; they already caught two
    real regressions.** Keep them green.
 
@@ -223,5 +227,5 @@ qualifies for an executive summary, in the SAME PR.
 ## Rollback
 
 Everything is on `refactor/unify-path-builders`, nothing merged, prod untouched. Drop the
-branch and nothing changes. The characterization tests (commit `11e41ad3`) are worth
+branch and nothing changes. The characterization tests (commit `cef97b90`) are worth
 keeping regardless of whether the unification lands.
