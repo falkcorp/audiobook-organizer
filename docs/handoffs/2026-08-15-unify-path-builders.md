@@ -214,8 +214,9 @@ qualifies for an executive summary, in the SAME PR.
   but it is **not** what churns the library. Retire it rather than spend the merge on it.
 - **The taglib CGO write path is verified good** (task #13, closed). 24/24 tags land on
   both `.m4b` and `.mp3`, confirmed independently with ffprobe.
-- **PR #2478** (memfs test stores, `internal/server` 585.1s → 98.0s, 0 failures) is open
-  and independent of all of this.
+- **PR #2478** (memfs test stores, `internal/server` 585.1s → 98.0s, 0 failures) is
+  **MERGED** (`e05c670c`). This branch has been rebased onto it, so the organizer tests
+  here already run on the fast in-memory fixtures.
 
 ---
 
