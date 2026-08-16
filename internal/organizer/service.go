@@ -1236,6 +1236,19 @@ func (orgSvc *Service) OrganizeDirectoryBook(org *Organizer, book *database.Book
 // target if it exists, fall back to the source if THAT still exists, and only
 // then take the plan on faith (the file is missing either way, and the planned
 // path is where a restore should put it).
+//
+// This RECOMPUTES a plan for an organize that already ran, so it is only correct
+// while both calls see the same inputs. Two seams, both checked 2026-08-15:
+//   - Same *database.Book. OrganizeOneBook and CreateOrganizedVersion are handed
+//     the same &book in one loop iteration (service.go:~934 and ~1010) and
+//     nothing mutates it in between, so pathVars cannot drift. A metadata write
+//     landing between them would miss every stat and silently keep every source
+//     path.
+//   - Same book_file rows. OrganizeDirectoryBook writes NO rows -- it returns
+//     targetDir and nothing else -- so the GetBookFiles below still returns
+//     source paths, which is what the plan is keyed on. If a caller is ever
+//     added that rewrites rows before this runs, planned[bf.FilePath] misses
+//     for every file and every row silently keeps its source path.
 func resolveOrganizedFilePath(srcPath string, planned map[string]string, log logger.Logger) string {
 	dstPath, ok := planned[srcPath]
 	if !ok || dstPath == "" || dstPath == srcPath {
