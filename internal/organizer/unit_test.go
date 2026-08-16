@@ -92,100 +92,86 @@ func TestFormatSegmentTitle(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// FormatPath
+// BuildPath
 // ---------------------------------------------------------------------------
 
-func TestFormatPath(t *testing.T) {
+// Retargeted from the deleted FormatPath. One expectation IMPROVED in the move:
+// a zero year used to leave "Book ().m4b" on disk, because FormatPath had no
+// equivalent of cleanupPattern. BuildPath removes the orphaned parentheses.
+func TestBuildPath_Vocabulary(t *testing.T) {
 	tests := []struct {
-		name   string
-		format string
-		vars   FormatVars
-		want   string
+		name    string
+		pattern string
+		vars    PathVars
+		want    string
 	}{
 		{
-			name:   "default format with all vars",
-			format: DefaultPathFormat,
-			vars: FormatVars{
-				Author:      "Isaac Asimov",
-				Title:       "Foundation",
-				Series:      "Foundation",
-				SeriesPos:   "1",
-				Track:       1,
-				TotalTracks: 5,
-				Ext:         "m4b",
+			name:    "default shape with all vars",
+			pattern: "{author}/{series_prefix}{title}/{track_title}",
+			vars: PathVars{
+				Author:       "Isaac Asimov",
+				Title:        "Foundation",
+				Series:       "Foundation",
+				SeriesNumber: "1",
+				Track:        1,
+				TotalTracks:  5,
+				Ext:          "m4b",
 			},
-			want: "Isaac Asimov/Foundation 1 - Foundation/Foundation - 1_5.m4b",
+			want: "Isaac Asimov/Foundation 1 - Foundation/Foundation - 1_5",
 		},
 		{
-			name:   "no series prefix when series empty",
-			format: "{author}/{series_prefix}{title}/{track_title}.{ext}",
-			vars: FormatVars{
+			name:    "no series prefix when series empty",
+			pattern: "{author}/{series_prefix}{title}/{track_title}",
+			vars: PathVars{
 				Author:      "Author",
 				Title:       "Title",
 				Track:       1,
 				TotalTracks: 3,
 				Ext:         "mp3",
 			},
-			want: "Author/Title/Title - 1_3.mp3",
+			want: "Author/Title/Title - 1_3",
 		},
 		{
-			name:   "series prefix without position",
-			format: "{series_prefix}{title}",
-			vars: FormatVars{
-				Title:  "Book",
-				Series: "MySeries",
-			},
-			want: "MySeries - Book",
+			name:    "series prefix without position",
+			pattern: "{series_prefix}{title}",
+			vars:    PathVars{Title: "Book", Series: "MySeries"},
+			want:    "MySeries - Book",
 		},
 		{
-			name:   "pre-computed track title used",
-			format: "{author}/{track_title}.{ext}",
-			vars: FormatVars{
-				Author:     "Auth",
-				TrackTitle: "Chapter 1",
-				Ext:        "flac",
-			},
-			want: "Auth/Chapter 1.flac",
+			name:    "pre-computed track title used",
+			pattern: "{author}/{track_title}",
+			vars:    PathVars{Author: "Auth", TrackTitle: "Chapter 1", Ext: "flac"},
+			want:    "Auth/Chapter 1",
 		},
 		{
-			name:   "year substitution",
-			format: "{author}/{title} ({year}).{ext}",
-			vars: FormatVars{
-				Author: "Auth",
-				Title:  "Book",
-				Year:   2023,
-				Ext:    "m4b",
-			},
-			want: "Auth/Book (2023).m4b",
+			name:    "year substitution",
+			pattern: "{author}/{title} ({year})",
+			vars:    PathVars{Author: "Auth", Title: "Book", PrintYear: "2023"},
+			want:    "Auth/Book (2023)",
 		},
 		{
-			name:   "year zero omitted leaves parens",
-			format: "{author}/{title} ({year}).{ext}",
-			vars: FormatVars{
-				Author: "Auth",
-				Title:  "Book",
-				Year:   0,
-				Ext:    "m4b",
-			},
-			want: "Auth/Book ().m4b",
+			// FormatPath wrote "Book ()" here — a literal empty pair of
+			// parentheses in every filename for a book with no year.
+			name:    "absent year drops its parentheses",
+			pattern: "{author}/{title} ({year})",
+			vars:    PathVars{Author: "Auth", Title: "Book"},
+			want:    "Auth/Book",
 		},
 		{
-			name:   "narrator and lang",
-			format: "{narrator}/{lang}/{title}.{ext}",
-			vars: FormatVars{
-				Narrator: "Narrator A",
-				Lang:     "en",
-				Title:    "Book",
-				Ext:      "mp3",
-			},
-			want: "Narrator A/en/Book.mp3",
+			name:    "narrator and lang",
+			pattern: "{narrator}/{lang}/{title}",
+			vars:    PathVars{Narrator: "Narrator A", Language: "en", Title: "Book"},
+			want:    "Narrator A/en/Book",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := FormatPath(tt.format, tt.vars)
+			got, err := BuildPath(tt.pattern, tt.vars, BuildOpts{})
+			if err != nil {
+				t.Fatalf("BuildPath(%q): %v", tt.pattern, err)
+			}
 			if got != tt.want {
-				t.Errorf("FormatPath() = %q, want %q", got, tt.want)
+				t.Errorf("BuildPath(%q) = %q, want %q", tt.pattern, got, tt.want)
 			}
 		})
 	}
@@ -264,19 +250,32 @@ func TestSanitizePathComponent(t *testing.T) {
 // ComputeTargetPaths
 // ---------------------------------------------------------------------------
 
-func TestComputeTargetPaths(t *testing.T) {
-	book := &database.Book{
-		ID:     "book-1",
-		Title:  "My Book",
-		Author: &database.Author{Name: "Author"},
+// Retargeted from the path_format signature. ComputeTargetPaths now takes the
+// folder + file naming patterns (the same two the organize path expands) and
+// returns an error, because BuildPath refuses a pattern it cannot fully
+// resolve rather than writing a half-substituted path to disk.
+const (
+	utFolder = "{author}"
+	utFile   = "{title}"
+)
+
+func mustCompute(t *testing.T, rootDir, folder, file string, files []database.BookFile, vars PathVars) []FileRenameEntry {
+	t.Helper()
+	entries, err := ComputeTargetPaths(rootDir, folder, file, files, vars, BuildOpts{})
+	if err != nil {
+		t.Fatalf("ComputeTargetPaths: %v", err)
 	}
-	vars := FormatVars{
+	return entries
+}
+
+func TestComputeTargetPaths(t *testing.T) {
+	vars := PathVars{
 		Author: "Author",
 		Title:  "My Book",
 	}
 
 	t.Run("empty root returns nil", func(t *testing.T) {
-		result := ComputeTargetPaths("", DefaultPathFormat, DefaultSegmentTitleFormat, book, []database.BookFile{
+		result := mustCompute(t, "", utFolder, utFile, []database.BookFile{
 			{ID: "f1", FilePath: "/old/file.m4b", Format: "m4b"},
 		}, vars)
 		if result != nil {
@@ -285,7 +284,7 @@ func TestComputeTargetPaths(t *testing.T) {
 	})
 
 	t.Run("empty files returns nil", func(t *testing.T) {
-		result := ComputeTargetPaths("/root", DefaultPathFormat, DefaultSegmentTitleFormat, book, nil, vars)
+		result := mustCompute(t, "/root", utFolder, utFile, nil, vars)
 		if result != nil {
 			t.Errorf("expected nil for empty files, got %v", result)
 		}
@@ -295,7 +294,7 @@ func TestComputeTargetPaths(t *testing.T) {
 		files := []database.BookFile{
 			{ID: "f1", FilePath: "/old/file1.m4b", Format: "m4b", Missing: true},
 		}
-		result := ComputeTargetPaths("/root", DefaultPathFormat, DefaultSegmentTitleFormat, book, files, vars)
+		result := mustCompute(t, "/root", utFolder, utFile, files, vars)
 		if len(result) != 0 {
 			t.Errorf("expected 0 entries for all-missing files, got %d", len(result))
 		}
@@ -305,7 +304,7 @@ func TestComputeTargetPaths(t *testing.T) {
 		files := []database.BookFile{
 			{ID: "f1", FilePath: "/old/file.m4b", Format: "m4b"},
 		}
-		result := ComputeTargetPaths("/root", DefaultPathFormat, "", book, files, vars)
+		result := mustCompute(t, "/root", utFolder, utFile, files, vars)
 		if len(result) != 1 {
 			t.Fatalf("expected 1 entry, got %d", len(result))
 		}
@@ -315,26 +314,27 @@ func TestComputeTargetPaths(t *testing.T) {
 		if result[0].SourcePath != "/old/file.m4b" {
 			t.Errorf("source = %q", result[0].SourcePath)
 		}
-		// Target should be under /root
 		if !filepath.IsAbs(result[0].TargetPath) {
 			t.Errorf("target not absolute: %q", result[0].TargetPath)
 		}
 	})
 
+	// This one is the ping-pong, stated as a unit test: a file already sitting
+	// at its computed target must plan NO rename. When organize and apply ran
+	// different builders, each one saw the other's output as "wrong" here and
+	// planned a move back.
 	t.Run("file already at target not included", func(t *testing.T) {
-		// Compute what the target would be, then set source = target
 		files := []database.BookFile{
 			{ID: "f1", FilePath: "/old/file.m4b", Format: "m4b"},
 		}
-		entries := ComputeTargetPaths("/root", DefaultPathFormat, "", book, files, vars)
+		entries := mustCompute(t, "/root", utFolder, utFile, files, vars)
 		if len(entries) == 0 {
-			t.Skip("no entries produced")
+			t.Fatal("expected an entry to compare against")
 		}
-		// Now set source = computed target
 		files[0].FilePath = entries[0].TargetPath
-		result := ComputeTargetPaths("/root", DefaultPathFormat, "", book, files, vars)
+		result := mustCompute(t, "/root", utFolder, utFile, files, vars)
 		if len(result) != 0 {
-			t.Errorf("expected 0 entries when source == target, got %d", len(result))
+			t.Errorf("expected 0 entries when source == target, got %d → %s", len(result), result[0].TargetPath)
 		}
 	})
 
@@ -344,17 +344,14 @@ func TestComputeTargetPaths(t *testing.T) {
 			{ID: "f1", FilePath: "/old/a.m4b", Format: "m4b", TrackNumber: 1},
 			{ID: "f2", FilePath: "/old/b.m4b", Format: "m4b", TrackNumber: 2},
 		}
-		result := ComputeTargetPaths("/root", DefaultPathFormat, "", book, files, vars)
-		// All should produce entries (paths differ from /old/...)
-		if len(result) < 1 {
-			t.Skip("no entries produced")
+		result := mustCompute(t, "/root", utFolder, "{title} - {track:02d}", files, vars)
+		if len(result) != 3 {
+			t.Fatalf("expected 3 entries, got %d", len(result))
 		}
-		// Check ordering by verifying segment IDs
 		ids := make([]string, len(result))
 		for i, e := range result {
 			ids[i] = e.SegmentID
 		}
-		// f1 should come before f2 which should come before f3
 		for i := 0; i < len(ids)-1; i++ {
 			if ids[i] > ids[i+1] {
 				t.Errorf("entries not sorted by track: %v", ids)
@@ -367,7 +364,7 @@ func TestComputeTargetPaths(t *testing.T) {
 		files := []database.BookFile{
 			{ID: "f1", FilePath: "/old/file.mp3"},
 		}
-		result := ComputeTargetPaths("/root", "{title}.{ext}", "", book, files, vars)
+		result := mustCompute(t, "/root", "", utFile, files, vars)
 		if len(result) != 1 {
 			t.Fatalf("expected 1 entry, got %d", len(result))
 		}
@@ -380,12 +377,21 @@ func TestComputeTargetPaths(t *testing.T) {
 		files := []database.BookFile{
 			{ID: "f1", FilePath: "/old/file", Format: "m4b"},
 		}
-		result := ComputeTargetPaths("/root", "{title}.{ext}", "", book, files, vars)
+		result := mustCompute(t, "/root", "", utFile, files, vars)
 		if len(result) != 1 {
 			t.Fatalf("expected 1 entry, got %d", len(result))
 		}
 		if ext := filepath.Ext(result[0].TargetPath); ext != ".m4b" {
 			t.Errorf("expected .m4b extension, got %q in path %q", ext, result[0].TargetPath)
+		}
+	})
+
+	// A pattern the book cannot satisfy must FAIL, not silently produce a path
+	// with "{unknown}" in it and rename the whole library into it.
+	t.Run("broken pattern is an error, not a best-effort path", func(t *testing.T) {
+		files := []database.BookFile{{ID: "f1", FilePath: "/old/file.m4b", Format: "m4b"}}
+		if _, err := ComputeTargetPaths("/root", utFolder, "{title} {unknown_field}", files, vars, BuildOpts{}); err == nil {
+			t.Error("expected an error for an unresolvable pattern, got nil")
 		}
 	})
 }
@@ -395,12 +401,7 @@ func TestComputeTargetPaths(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestComputeTargetPathsFromSegments(t *testing.T) {
-	book := &database.Book{
-		ID:     "book-1",
-		Title:  "Test",
-		Author: &database.Author{Name: "Auth"},
-	}
-	vars := FormatVars{Author: "Auth", Title: "Test"}
+	vars := PathVars{Author: "Auth", Title: "Test"}
 
 	trackNum := 1
 	totalTracks := 2
@@ -430,7 +431,10 @@ func TestComputeTargetPathsFromSegments(t *testing.T) {
 		},
 	}
 
-	result := ComputeTargetPathsFromSegments("/root", DefaultPathFormat, "", book, segments, vars)
+	result, err := ComputeTargetPathsFromSegments("/root", utFolder, utFile, segments, vars, BuildOpts{})
+	if err != nil {
+		t.Fatalf("ComputeTargetPathsFromSegments: %v", err)
+	}
 	// seg-2 is inactive (Missing=true), should be skipped
 	if len(result) != 1 {
 		t.Fatalf("expected 1 entry (inactive skipped), got %d", len(result))
@@ -1506,12 +1510,15 @@ func TestGenerateTargetDirPath_Error(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// FormatPath edge cases
+// BuildPath edge cases
 // ---------------------------------------------------------------------------
 
-func TestFormatPath_TrackFormatSpec(t *testing.T) {
-	// Test {track:03d} format spec in FormatPath
-	vars := FormatVars{
+// Retargeted from FormatPath. The format spec was the one scheme-#2 feature the
+// first unification pass dropped outright, and dropping it did not degrade
+// gracefully — BuildPath's leftover-placeholder guard turned an unexpanded
+// "{track:03d}" into a hard error. See pathbuild_test.go for the full set.
+func TestBuildPath_TrackFormatSpecWithTrackTitle(t *testing.T) {
+	vars := PathVars{
 		Author:      "Auth",
 		Title:       "Book",
 		Track:       5,
@@ -1519,9 +1526,12 @@ func TestFormatPath_TrackFormatSpec(t *testing.T) {
 		TrackTitle:  "Ch5",
 		Ext:         "mp3",
 	}
-	got := FormatPath("{author}/{track:03d} - {track_title}.{ext}", vars)
-	if got != "Auth/005 - Ch5.mp3" {
-		t.Errorf("FormatPath with format spec = %q", got)
+	got, err := BuildPath("{author}/{track:03d} - {track_title}", vars, BuildOpts{})
+	if err != nil {
+		t.Fatalf("BuildPath: %v", err)
+	}
+	if got != "Auth/005 - Ch5" {
+		t.Errorf("BuildPath with format spec = %q, want %q", got, "Auth/005 - Ch5")
 	}
 }
 

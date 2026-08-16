@@ -107,6 +107,47 @@ func expandFormatSpecs(pattern string, v PathVars) (string, error) {
 	return out, nil
 }
 
+// BuildRelPath composes the folder pattern and the file pattern into ONE
+// library-relative path, extension excluded -- the caller appends that, because
+// only the caller knows which file of a multi-file book it is naming.
+//
+// Every target path in the codebase goes through here. That is the whole point:
+// the organize path and the metadata-apply path used to compose their own, and
+// they composed them differently (four directory levels against two), so each
+// one dragged files back toward its own answer forever.
+//
+// The two patterns are expanded SEPARATELY rather than joined into
+// "folder/file" first. dropEmptyPatternSegments works on " - "-delimited
+// segments, and a joined pattern would let a folder segment and a file segment
+// merge into one -- an absent series could then swallow part of the filename.
+func BuildRelPath(folderPattern, filePattern string, v PathVars, opts BuildOpts) (string, error) {
+	folder, err := BuildPath(folderPattern, v, opts)
+	if err != nil {
+		return "", fmt.Errorf("folder pattern: %w", err)
+	}
+
+	stem, err := BuildPath(filePattern, v, opts)
+	if err != nil {
+		return "", fmt.Errorf("file pattern: %w", err)
+	}
+
+	// A pattern can legitimately expand to nothing -- e.g. "{narrator}" for a
+	// book with no narrator. An empty stem would make the target a bare dotfile
+	// (".m4b") that EVERY such book collides on, so fall back to the title and
+	// only then to the configured placeholder.
+	if strings.TrimSpace(stem) == "" {
+		stem = SanitizePathComponent(strings.TrimSpace(v.Title))
+	}
+	if strings.TrimSpace(stem) == "" {
+		stem = SanitizePathComponent(opts.TitleFallback)
+	}
+
+	if folder == "" {
+		return stem, nil
+	}
+	return folder + "/" + stem, nil
+}
+
 // PathVars is the union of both former variable sets. A caller fills in what it
 // knows; anything left zero is treated as absent and its pattern segment is
 // dropped rather than left half-substituted.
@@ -192,22 +233,12 @@ func (v PathVars) replacements(opts BuildOpts) map[string]string {
 		totalStr = fmt.Sprintf("%d", v.TotalTracks)
 	}
 
-	seriesPrefix := ""
-	if s := strings.TrimSpace(v.Series); s != "" {
-		seriesPrefix = s
-		if v.SeriesNumber != "" {
-			seriesPrefix += " " + v.SeriesNumber
-		}
-		seriesPrefix += " - "
-	}
-
 	raw := map[string]string{
 		"{author}":          author,
 		"{title}":           title,
 		"{series}":          v.Series,
 		"{series_number}":   v.SeriesNumber,
 		"{series_position}": v.SeriesNumber,
-		"{series_prefix}":   seriesPrefix,
 		"{narrator}":        v.Narrator,
 		"{publisher}":       v.Publisher,
 		"{language}":        v.Language,
@@ -226,10 +257,26 @@ func (v PathVars) replacements(opts BuildOpts) map[string]string {
 		"{ext}":             v.Ext,
 	}
 
-	out := make(map[string]string, len(raw))
+	out := make(map[string]string, len(raw)+1)
 	for k, val := range raw {
 		out[k] = scrubVar(strings.TrimSpace(val))
 	}
+
+	// {series_prefix} is built AFTER the trim pass, from the already-scrubbed
+	// series values, because its trailing " - " is pattern structure rather than
+	// metadata. Building it alongside the others put it through TrimSpace, which
+	// ate the trailing space and turned "MySeries - Book" into "MySeries -Book"
+	// on every series book in the library.
+	if series := out["{series}"]; series != "" {
+		prefix := series
+		if num := out["{series_number}"]; num != "" {
+			prefix += " " + num
+		}
+		out["{series_prefix}"] = prefix + " - "
+	} else {
+		out["{series_prefix}"] = ""
+	}
+
 	return out
 }
 

@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -425,46 +424,18 @@ func (mfs *Service) RunApplyPipelineRenameOnly(id string, book *database.Book) e
 		return nil
 	}
 
-	var authorName string
-	if book.AuthorID != nil {
-		if author, aerr := mfs.db.GetAuthorByID(*book.AuthorID); aerr == nil && author != nil {
-			authorName = author.Name
-		}
+	// Plan the rename through the Organizer, so it resolves author/series and
+	// expands the naming patterns exactly the way the organize path does. This
+	// block used to hand-roll its own FormatVars and read path_format — a
+	// separate builder that disagreed with organize by two directory levels and
+	// pulled every book back and forth between the two answers.
+	entries, err := newPathOrganizer(mfs.db).ComputeTargetPaths(book, bookFiles)
+	if err != nil {
+		// A broken naming pattern must NOT fall through to a rename: the target
+		// would be built from a half-substituted template and would relocate the
+		// library somewhere no scan expects.
+		return fmt.Errorf("compute target paths for book %s: %w", id, err)
 	}
-	var seriesName, seriesPos string
-	if book.SeriesID != nil {
-		if series, serr := mfs.db.GetSeriesByID(*book.SeriesID); serr == nil && series != nil {
-			seriesName = series.Name
-		}
-		if book.SeriesSequence != nil {
-			seriesPos = strconv.Itoa(*book.SeriesSequence)
-		}
-	}
-	year := 0
-	if book.AudiobookReleaseYear != nil {
-		year = *book.AudiobookReleaseYear
-	}
-
-	vars := FormatVars{
-		Author:    authorName,
-		Title:     book.Title,
-		Series:    seriesName,
-		SeriesPos: seriesPos,
-		Year:      year,
-		Narrator:  derefString(book.Narrator),
-		Lang:      derefString(book.Language),
-	}
-
-	pathFormat := config.AppConfig.PathFormat
-	if pathFormat == "" {
-		pathFormat = DefaultPathFormat
-	}
-	segTitleFormat := config.AppConfig.SegmentTitleFormat
-	if segTitleFormat == "" {
-		segTitleFormat = DefaultSegmentTitleFormat
-	}
-
-	entries := ComputeTargetPaths(config.AppConfig.RootDir, pathFormat, segTitleFormat, book, bookFiles, vars)
 
 	renameResult, renameErr := RenameFiles(entries)
 	// Even when RenameFiles returns an error, entries in renameResult.Succeeded
