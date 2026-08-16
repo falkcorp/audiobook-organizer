@@ -67,8 +67,15 @@ func TestWatchdog_StuckBeforeFirstProgress(t *testing.T) {
 	}
 	awaitStatus(t, store, opID, "canceled", 3*time.Second)
 
-	if n := len(store.strikesOfKind(opID, "stuck")); n == 0 {
-		t.Error("expected at least 1 stuck strike, got 0")
+	// Reclassified 2026-08-16: this op never calls UpdateProgress, which is now
+	// its own strike kind. R-2's guarantee is unchanged and still asserted --
+	// an op that hangs before its first report is detected and canceled rather
+	// than being invisible forever -- but the strike now says which of the two
+	// causes it was, because "never reported once" usually means the op is not
+	// wired to its reporter rather than that its work is wedged. See
+	// liveness_test.go and internal/operations/progress.go.
+	if n := len(store.strikesOfKind(opID, "never_reported")); n == 0 {
+		t.Error("expected at least 1 never_reported strike, got 0")
 	}
 }
 

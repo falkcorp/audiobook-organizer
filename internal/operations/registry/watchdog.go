@@ -1,7 +1,7 @@
 // file: internal/operations/registry/watchdog.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
-// last-edited: 2026-07-17
+// last-edited: 2026-08-16
 
 package registry
 
@@ -23,8 +23,12 @@ const (
 //
 //   - uncheckpointed: ResumeRestart ops that haven't checkpointed in
 //     ≥5 consecutive minutes (and whose def sets MinCheckpointInterval).
-//   - stuck: ops whose last_progress_at is older than def.ProgressTimeout.
-//     The run's context is canceled; the worker will set terminal status.
+//   - stuck: ops that reported progress at least once and then went quiet for
+//     longer than def.ProgressTimeout. The run's context is canceled; the
+//     worker will set terminal status.
+//   - never_reported: ops that have not reported progress even once since
+//     StartedAt. Same cancellation, different diagnosis: this usually means the
+//     op is not wired to its reporter, not that its work is wedged.
 //
 // Infinite-restart detection happens in worker.go at run start time, not
 // here, because it needs to be enforced before the run begins.
@@ -98,10 +102,22 @@ func (r *Registry) watchdogCycle() {
 		// cancellations when UpdateOpProgressV2 is queued behind PebbleDB L0
 		// compaction. Fall back to the DB row only when the atomic is unset (zero).
 		var lastProgress time.Time
+		// everReported separates two states that produced an identical strike
+		// until 2026-08-16, and which call for opposite responses. An op that
+		// reported and then went quiet is stuck: go and see what it is blocked
+		// on. An op that has never reported once is, far more often, not wired
+		// to its reporter at all — the work may be perfectly healthy while the
+		// only channel that could say so is missing. Raising ProgressTimeout
+		// "fixes" the first and merely hides the second, which is precisely what
+		// three separate workarounds did before the LoggerFromReporter stub was
+		// found (see internal/operations/progress.go).
+		everReported := false
 		if ts := h.lastProgressAt.Load(); ts != 0 {
 			lastProgress = time.Unix(0, ts).UTC()
+			everReported = true
 		} else if row.LastProgressAt != nil {
 			lastProgress = *row.LastProgressAt
+			everReported = true
 		} else if row.StartedAt != nil {
 			// R-2: no progress has EVER been reported (atomic unset, DB row nil).
 			// Marking an op running stamps StartedAt but never LastProgressAt, so
@@ -112,10 +128,24 @@ func (r *Registry) watchdogCycle() {
 			lastProgress = *row.StartedAt
 		}
 		if !lastProgress.IsZero() && now.Sub(lastProgress) > progressTimeout {
-			r.writeStrike(h.id, def.ID, def.Plugin, "stuck",
-				fmt.Sprintf("no progress for %s (timeout=%s)", now.Sub(lastProgress).Round(time.Second), progressTimeout))
-			r.logger.Warn("registry: canceling stuck op", "op_id", h.id, "def_id", def.ID,
-				"idle_since", lastProgress)
+			idle := now.Sub(lastProgress).Round(time.Second)
+			if everReported {
+				r.writeStrike(h.id, def.ID, def.Plugin, "stuck",
+					fmt.Sprintf("no progress for %s (timeout=%s)", idle, progressTimeout))
+				r.logger.Warn("registry: canceling stuck op", "op_id", h.id, "def_id", def.ID,
+					"idle_since", lastProgress)
+			} else {
+				// ERROR, not WARN: a healthy op being killed because nothing
+				// can hear it is a defect in the operation's plumbing, and it
+				// will recur on every single run until someone changes code.
+				r.writeStrike(h.id, def.ID, def.Plugin, "never_reported",
+					fmt.Sprintf("never reported progress in the %s since it started (timeout=%s); "+
+						"the op is most likely not wired to its reporter", idle, progressTimeout))
+				r.logger.Error("registry: canceling op that never reported progress",
+					"op_id", h.id, "def_id", def.ID, "started_at", lastProgress, "ran_for", idle,
+					"hint", "Run never called reporter.UpdateProgress — run the work through "+
+						"registry.RunItems, or report directly; raising ProgressTimeout only hides this")
+			}
 			h.cancelIfActive()
 			continue // don't also check uncheckpointed for the same op
 		}

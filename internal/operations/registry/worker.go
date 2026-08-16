@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.13.0
+// version: 2.14.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-08-07
+// last-edited: 2026-08-16
 
 package registry
 
@@ -282,7 +282,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		// C-5: notify the dep scheduler on ALL terminal transitions (the
 		// subprocess path previously notified on none of them).
 		r.notifyDepTerminal(finalStatus, qr)
-		emitOpFinishedLog(runCtx, reporter, runStartedAt, finalStatus, runErr, true)
+		emitOpFinishedLog(runCtx, reporter, runStartedAt, finalStatus, runErr, true, h.lastProgressAt.Load() != 0)
 		r.logger.Info("registry: subprocess run finished", "op_id", qr.opID, "status", finalStatus)
 		return false
 	}
@@ -440,7 +440,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	// for the same subject can be re-evaluated or failed as appropriate.
 	r.notifyDepTerminal(finalStatus, qr)
 
-	emitOpFinishedLog(runCtx, reporter, runStartedAt, finalStatus, runErr, false)
+	emitOpFinishedLog(runCtx, reporter, runStartedAt, finalStatus, runErr, false, h.lastProgressAt.Load() != 0)
 	r.logger.Info("registry: run finished", "op_id", qr.opID, "status", finalStatus)
 	return false
 }
@@ -462,17 +462,49 @@ func (r *Registry) notifyDepTerminal(finalStatus string, qr *queuedRun) {
 	}
 }
 
+// neverReportedGrace is how long an op may run without reporting before its
+// silence is treated as a wiring defect rather than ordinary brevity. Most ops
+// are legitimately sub-second and have nothing to report; the threshold sits
+// well below the 5m ProgressTimeout so the warning arrives while the op is
+// still succeeding, not after it starts being killed.
+const neverReportedGrace = 60 * time.Second
+
+// shouldWarnNeverReported is split out as a pure function so the policy can be
+// tested without standing up a registry, a store and a worker pool.
+func shouldWarnNeverReported(runDuration time.Duration, everReported bool) bool {
+	return !everReported && runDuration >= neverReportedGrace
+}
+
 // emitOpFinishedLog emits the canonical "operation finished" line through
 // the reporter's tagged logger. Every op gets this line regardless of
 // whether its Run emitted one. Downstream readers can rely on a
 // phase=end tag + structured outcome instead of parsing the message.
-func emitOpFinishedLog(ctx context.Context, rep Reporter, startedAt time.Time, outcome string, runErr error, subprocess bool) {
-	durMs := time.Since(startedAt).Milliseconds()
+func emitOpFinishedLog(ctx context.Context, rep Reporter, startedAt time.Time, outcome string, runErr error, subprocess bool, everReported bool) {
+	runDuration := time.Since(startedAt)
+	durMs := runDuration.Milliseconds()
 	attrs := []slog.Attr{
 		slog.String("phase", "end"),
 		slog.String("outcome", outcome),
 		slog.Int64("duration_ms", durMs),
 		slog.Bool("subprocess", subprocess),
+	}
+
+	// An op that did real work without ever reporting is one slow run away from
+	// being killed by the watchdog, and says nothing about itself until then.
+	// Flagging it on a SUCCESSFUL run is what turns a latent outage into a bug
+	// report: library.scan was in this state from 2026-05-11, completing
+	// quietly on a small library, and only became visible once the library grew
+	// past five minutes of scanning. The watchdog cannot catch this case --
+	// by definition the op finished in time.
+	if shouldWarnNeverReported(runDuration, everReported) {
+		rep.Logger().LogAttrs(ctx, slog.LevelError, "operation never reported progress",
+			slog.String("phase", "end"),
+			slog.String("outcome", outcome),
+			slog.Int64("duration_ms", durMs),
+			slog.String("hint", "this op ran for "+runDuration.Round(time.Second).String()+
+				" without a single reporter.UpdateProgress call; it will be canceled as stuck once it "+
+				"exceeds ProgressTimeout. Run the work through registry.RunItems, or report directly."),
+		)
 	}
 	if runErr != nil {
 		attrs = append(attrs, slog.String("error", runErr.Error()))
