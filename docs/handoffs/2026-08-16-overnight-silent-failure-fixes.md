@@ -17,6 +17,10 @@ prod"), so the deploy that the previous handoff had deliberately left undone is 
 - Built with `make deploy-debug`, per the standing "prod stays on DEBUG" rule.
 - **This is the first production binary containing the target-path unification (#2479)
   and the write-back I/O fixes (#2468–#2470)**, plus all four of tonight's fixes.
+- **Prod runs `5aeb02a8`. `main` is ahead, at `20023a5d`.** The difference is docs and a
+  Makefile change only — nothing behavioural is missing from prod, so **no redeploy is
+  needed**. Stated here rather than only in the tally below, because this is where you'd
+  look before deciding.
 - The only ERROR in the logs is `"Failed to start HTTP/3 server" err="http: Server closed"`
   from the *outgoing* pid during the restart — a shutdown artifact, not a startup failure.
   Worth knowing so you don't chase it: it appears on every restart.
