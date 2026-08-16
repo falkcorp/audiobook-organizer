@@ -402,7 +402,16 @@ func TestComplexRealWorldPaths(t *testing.T) {
 	}
 }
 
-// TestSanitizationWithRealWorldData tests filename sanitization
+// TestSanitizationWithRealWorldData tests filename sanitization.
+//
+// Retargeted from the deleted sanitizeFilename onto SanitizePathComponent, the
+// package's single sanitizer. Three expectations changed with it, and each
+// change is the surviving builder's rule winning over the one that only ever
+// ran as a redundant second pass:
+//
+//	':' becomes " -" rather than '_'   (readable, and what patterns already saw)
+//	'"' becomes "'"  rather than '_'
+//	'[' and ']' are PRESERVED           (idiomatic: "[Unabridged]", "[AAC 128kbps]")
 func TestSanitizationWithRealWorldData(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -412,17 +421,20 @@ func TestSanitizationWithRealWorldData(t *testing.T) {
 		{
 			name:     "colon in title",
 			input:    "Title: Subtitle",
-			expected: "Title_ Subtitle",
+			expected: "Title - Subtitle",
 		},
 		{
-			name:     "multiple special chars - slash not replaced",
+			// This is a COMPONENT sanitizer, so a '/' is not structure here —
+			// it is a separator that leaked in from metadata and becomes a
+			// space. Structure is expressed by the pattern, never by a value.
+			name:     "multiple special chars including a leaked separator",
 			input:    "Book/Title? With<Bad>Chars|",
-			expected: "Book/Title_ With_Bad_Chars_",
+			expected: "Book Title WithBadChars -",
 		},
 		{
 			name:     "question mark and asterisk",
 			input:    "What? Why* Title",
-			expected: "What_ Why_ Title",
+			expected: "What Why Title",
 		},
 		{
 			name:     "series with hashtag",
@@ -430,14 +442,14 @@ func TestSanitizationWithRealWorldData(t *testing.T) {
 			expected: "Series #5 - Title",
 		},
 		{
-			name:     "parentheses preserved, brackets stripped",
+			name:     "parentheses and brackets both preserved",
 			input:    "Title (Narrator) [2020]",
-			expected: "Title (Narrator) 2020",
+			expected: "Title (Narrator) [2020]",
 		},
 		{
-			name:     "brackets with series info stripped",
+			name:     "brackets with series info preserved",
 			input:    "[The Expanse 9.0] Leviathan Falls",
-			expected: "The Expanse 9.0 Leviathan Falls",
+			expected: "[The Expanse 9.0] Leviathan Falls",
 		},
 		{
 			name:     "parentheses unabridged preserved",
@@ -452,7 +464,7 @@ func TestSanitizationWithRealWorldData(t *testing.T) {
 		{
 			name:     "quotes replaced",
 			input:    `"Quoted Title"`,
-			expected: `_Quoted Title_`,
+			expected: `'Quoted Title'`,
 		},
 		{
 			name:     "multiple spaces collapsed",
@@ -463,7 +475,7 @@ func TestSanitizationWithRealWorldData(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := sanitizeFilename(tt.input)
+			result := SanitizePathComponent(tt.input)
 			if result != tt.expected {
 				t.Errorf("expected: %q\ngot:      %q", tt.expected, result)
 			}

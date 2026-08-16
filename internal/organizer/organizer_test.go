@@ -28,6 +28,11 @@ func (h *testOrganizeHooks) OnCollision(bookID, occupant string) {
 
 // stringPtr is now defined in rename.go (same package)
 
+// Retargeted from the deleted sanitizeFilename. The expectations for ':' and
+// '?' changed with it: the surviving sanitizer writes ':' as " -" and drops '?'
+// rather than turning both into '_'. Nothing on the organize path saw the old
+// behaviour anyway — BuildPath had already replaced those characters before
+// sanitizeFilename ever ran.
 func TestSanitizeFilename(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -35,15 +40,16 @@ func TestSanitizeFilename(t *testing.T) {
 		expected string
 	}{
 		{"valid filename", "My Audiobook", "My Audiobook"},
-		{"invalid chars", "Book:Title?", "Book_Title_"},
+		{"invalid chars", "Book:Title?", "Book -Title"},
 		{"multiple spaces", "Book  Title", "Book Title"},
 		{"long filename", strings.Repeat("a", 250), strings.Repeat("a", 200)},
 		{"control chars stripped", "hello\x00world\x01test", "helloworldtest"},
+		{"brackets preserved", "Book [Unabridged]", "Book [Unabridged]"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := sanitizeFilename(tt.input)
+			result := SanitizePathComponent(tt.input)
 			if tt.name == "long filename" {
 				if len(result) != 200 {
 					t.Errorf("expected length 200, got %d", len(result))
@@ -865,8 +871,11 @@ func TestSanitizePath(t *testing.T) {
 		expected string
 	}{
 		{"simple path", "author/book", "author/book"},
-		{"invalid chars in parts", "auth:or/bo<ok", "auth_or/bo_ok"},
+		// Per-component rules now come from SanitizePathComponent: ':' → " -",
+		// '<' dropped. The "/" separators are structure and survive.
+		{"invalid chars in parts", "auth:or/bo<ok", "auth -or/book"},
 		{"multiple parts", "a/b/c", "a/b/c"},
+		{"brackets survive in a component", "author/book [Unabridged]", "author/book [Unabridged]"},
 	}
 
 	for _, tt := range tests {
