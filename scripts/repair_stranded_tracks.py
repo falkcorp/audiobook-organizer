@@ -119,64 +119,64 @@ def audio_md5(path: str) -> str | None:
 def find_bogus_dirs(root: str) -> list[str]:
     """Find the directories the bug created, WITHOUT matching legitimate ones.
 
-    The obvious rule -- "named '<x> - <n>' and holding only '<n>.<ext>' files"
-    -- is far too broad. A perfectly ordinary multi-disc folder ("The Stand -
-    1" holding "01.mp3", "02.mp3", ...) matches it exactly. Measured against
-    this library that rule claimed 42,668 directories where 2,535 exist: a
-    16x false-positive rate, aimed at an irreplaceable dataset.
+    The naive rule -- named "<x> - <n>", holding only "<n>.<ext>" -- is far too
+    broad: an ordinary multi-disc folder ("The Stand - 1" holding "01.mp3",
+    "02.mp3", ...) matches it exactly. Measured here it claimed 42,668
+    directories where ~2,500 exist, aimed at an irreplaceable dataset.
 
-    So the detector is seeded from evidence rather than from shape:
+    Seeding from ".tmp-rename" is too NARROW, and that error is the more
+    dangerous of the two because it looks like it worked. That suffix marks a
+    rename that FAILED. Where the bug's rename succeeded, the file sits in the
+    wrong directory under a perfectly ordinary name with nothing to betray it.
+    "Rath's Deception" has 31 such directories and not one .tmp-rename.
+    Recovering only the failures would have left most of the damage in place
+    while reporting success.
 
-      1. SEED. A directory of the right shape containing a ".tmp-rename" file
-         is certainly wreckage -- that suffix only exists because the rename
-         that would have removed it failed.
-      2. EXPAND, within affected books only. The bug also produced renames
-         that SUCCEEDED into the wrong directory, leaving a plain "<n>.<ext>"
-         with no ".tmp-rename" to betray it. Those are only recognizable by
-         company: same book, same title stem, same total-track value as a
-         seeded sibling.
+    So the rule is structural, and rests on one invariant the bug guarantees:
 
-    A book with no seed is never touched, so an ordinary disc folder is out of
-    scope no matter what it is called.
+        THE FILENAME IS THE TOTAL TRACK COUNT.
+
+    "<title> - <track>/<total>.<ext>" means the directory's number is a track
+    and the file's number is the total, so track <= total ALWAYS. In a real
+    multi-disc layout the filename is a track within that disc and bears no
+    relation to the number of discs, so "Disc - 1/01.mp3, Disc - 2/01.mp3" has
+    max(dir)=2 > max(file)=1 and is rejected.
+
+    Combined with "every such directory holds one or two files" (a real disc
+    folder holds the whole disc) and "at least two sibling directories share
+    the title stem", this selects the wreckage and nothing else.
     """
-    seeds: list[str] = []
-    candidates: dict[str, list[str]] = collections.defaultdict(list)
+    groups: dict[tuple[str, str], list[tuple[str, int, list[int]]]] = collections.defaultdict(list)
 
     for dirpath, dirnames, filenames in os.walk(root):
-        base = os.path.basename(dirpath)
-        dm = DIR_RE.match(base)
+        dm = DIR_RE.match(os.path.basename(dirpath))
         if not dm or dirnames or not filenames:
             continue
         matches = [FILE_RE.match(f) for f in filenames]
         if not all(matches):
             continue
-
-        book = os.path.dirname(dirpath)
-        candidates[book].append(dirpath)
-        if any(f.endswith(TMP_SUFFIX) for f in filenames):
-            seeds.append(dirpath)
-
-    seeded_books: dict[str, set[tuple[str, int]]] = collections.defaultdict(set)
-    for d in seeds:
-        dm = DIR_RE.match(os.path.basename(d))
-        if not dm:
+        # A real disc directory holds the disc. Wreckage holds one file per
+        # (track, edition) -- observed as 1, or 2 where two editions collided.
+        if len(filenames) > 2:
             continue
-        for f in os.listdir(d):
-            fm = FILE_RE.match(f)
-            if fm:
-                seeded_books[os.path.dirname(d)].add((dm.group("title"), int(fm.group("total"))))
+        totals = [int(m.group("total")) for m in matches if m]
+        book = os.path.dirname(dirpath)
+        groups[(book, dm.group("title"))].append((dirpath, int(dm.group("track")), totals))
 
-    found = set(seeds)
-    for book, signatures in seeded_books.items():
-        for d in candidates.get(book, []):
-            dm = DIR_RE.match(os.path.basename(d))
-            if not dm:
-                continue
-            for f in os.listdir(d):
-                fm = FILE_RE.match(f)
-                if fm and (dm.group("title"), int(fm.group("total"))) in signatures:
-                    found.add(d)
-                    break
+    found: list[str] = []
+    for (_book, _title), members in groups.items():
+        if len(members) < 2:
+            continue
+        all_totals = {t for _, _, ts in members for t in ts}
+        max_track = max(tr for _, tr, _ in members)
+        # The invariant. One violation disqualifies the whole group -- a real
+        # layout that happens to satisfy it for some members is not wreckage.
+        if max_track > max(all_totals):
+            continue
+        # Sanity: a book does not have more distinct "totals" than editions.
+        if len(all_totals) > 3:
+            continue
+        found.extend(d for d, _, _ in members)
 
     return sorted(found)
 
