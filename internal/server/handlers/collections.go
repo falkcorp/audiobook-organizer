@@ -250,11 +250,36 @@ func (h *CollectionHandler) GetCollection(c *gin.Context) {
 		httputil.RespondWithOK(c, col)
 		return
 	}
+	// Persist ONLY on an actual change. UpdateCollection sets UpdatedAt=now,
+	// Version=prev+1 and commits with pebble.Sync, so an unconditional write here
+	// would make every READ an fsync plus a version bump — and Version would stop
+	// meaning "times this collection changed". It is also client-visible: the ABS
+	// DTO exposes UpdatedAt as lastUpdate, which clients use for cache
+	// invalidation, so an idle collection would look freshly-modified on every
+	// unrelated read and be re-fetched forever.
+	changed := !sameIDs(col.MaterializedBookIDs, ids)
 	col.MaterializedBookIDs = ids
-	// Best-effort persist: the response is already correct without it, so a write
-	// failure must not turn a successful read into an error.
-	_ = h.store.UpdateCollection(col)
+	if changed {
+		// Best-effort persist: the response is already correct without it, so a
+		// write failure must not turn a successful read into an error.
+		_ = h.store.UpdateCollection(col)
+	}
 	httputil.RespondWithOK(c, col)
+}
+
+// sameIDs reports whether two materialized-membership slices are equal, order
+// included. Order matters: it is the collection's sort order, so a reorder with
+// identical members is a real change worth persisting.
+func sameIDs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // UpdateCollection — PUT /api/v1/collections/:id
@@ -367,10 +392,17 @@ func (h *CollectionHandler) MaterializeCollection(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
 	}
+	// Same no-op guard as the read path, for the same reason: this endpoint is what
+	// a periodic refresh would call, so writing unconditionally would bump
+	// Version/UpdatedAt on every cycle whether or not membership moved. Unlike the
+	// read path a write failure IS reported here — the caller asked for a write.
+	changed := !sameIDs(col.MaterializedBookIDs, ids)
 	col.MaterializedBookIDs = ids
-	if uerr := h.store.UpdateCollection(col); uerr != nil {
-		httputil.InternalError(c, "failed to store materialized collection", uerr)
-		return
+	if changed {
+		if uerr := h.store.UpdateCollection(col); uerr != nil {
+			httputil.InternalError(c, "failed to store materialized collection", uerr)
+			return
+		}
 	}
 	httputil.RespondWithOK(c, col)
 }
