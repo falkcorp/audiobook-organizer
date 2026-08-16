@@ -1,5 +1,5 @@
 // file: internal/server/organize_service_regression_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-organize-regr
 
 package server
@@ -58,7 +58,15 @@ func TestOrganizeDirectoryBook_AllSourceFilesMissing(t *testing.T) {
 
 	_, err := svc.OrganizeDirectoryBook(org, book, testLog)
 	assert.Error(t, err, "should fail when all source files are missing")
-	assert.Contains(t, err.Error(), "all source files missing")
+
+	// The wording moved with the check. This used to be OrganizeDirectoryBook's
+	// own "all source files missing" guard; the same condition is now rejected
+	// inside OrganizeBookDirectory so that ensureLibraryCopy and
+	// organizeMultiFileBook — which never had the guard, and pointed books at
+	// empty directories — get it too. What this test pins is the OUTCOME: this
+	// call still fails, and the message still identifies the book and the cause.
+	assert.Contains(t, err.Error(), "Ghost Book", "the error must name the book")
+	assert.Contains(t, err.Error(), "missing", "the error must say why")
 }
 
 func TestOrganizeDirectoryBook_NoBookFiles(t *testing.T) {
