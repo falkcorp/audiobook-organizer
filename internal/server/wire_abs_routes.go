@@ -51,6 +51,12 @@ var absReservedPaths = []string{
 	"/api/authorize",
 	"/api/me",
 	"/api/libraries",
+	// The collection LIST and CREATE. POST /api/collections 404'd in production on
+	// 2026-08-16 (five attempts in two seconds) because no route existed; now that
+	// one does, the redirect must keep its hands off it. Reserving the POST matters
+	// more than reserving a GET: a 301 drops the request body on many clients, so a
+	// redirected create would arrive empty and "succeed" as a nameless collection.
+	"/api/collections",
 }
 
 // absReservedPathPrefixes covers ABS sub-trees (e.g. /api/me/sessions/:id).
@@ -65,6 +71,19 @@ var absReservedPathPrefixes = []string{
 	"/api/libraries/",
 	"/api/items/",
 	"/api/session/",
+	// Collection detail and membership edits: /api/collections/:id and
+	// /api/collections/:id/book[/:bookId].
+	//
+	// A SUBTREE reservation is correct here, where it was a live bug for playlists.
+	// The playlist case broke six working app routes because /api/v1/playlists/*
+	// exists and the wide reservation converted its redirects into 404s. There is
+	// no /api/v1/collections twin — grep confirms this namespace has exactly one
+	// implementation — so there is no app route for a wide reservation to capture.
+	//
+	// Nor does this change behaviour with the ABS surface DISABLED: these paths
+	// already 404'd via absUnimplementedNamespaces, which this replaces. Same
+	// answer, now for the honest reason.
+	"/api/collections/",
 }
 
 // absCollisionDetailRoutes are routes inside an absAppAPICollisions namespace that
@@ -190,7 +209,14 @@ func absCollisionDetailReserved(method, path string) bool {
 // If one of these is ever implemented on the ABS surface, MOVE it to the lists above
 // rather than deleting it — it must stay excluded from the redirect either way.
 var absUnimplementedNamespaces = []string{
-	"/api/collections",
+	// "/api/collections" was here until 2026-08-16, when the surface was actually
+	// implemented (handlers/abs/collections.go). It moved to absReservedPaths +
+	// absReservedPathPrefixes below. Leaving it here would have been harmless to
+	// ROUTING — absReservedPath() matches either list, so the redirect is skipped
+	// either way — but it would have left a list titled "endpoints we do NOT
+	// implement" naming one we do, and TestUnimplementedABSNamespacesAre404NotRedirect
+	// derives its assertions from this list, so it would have demanded a 404 from
+	// the route that now answers.
 	"/api/podcasts",
 }
 
@@ -391,9 +417,10 @@ func (s *Server) wireABSRoutes() {
 		// Chapters and Progress are OPTIONAL by design: without chapters the mapper
 		// synthesizes one per track (what real ABS does for a multi-file book anyway),
 		// and without progress a session still plays, it just starts at 0.
-		Chapters:  asChapterStore(s.Store()),
-		Playlists: asPlaylistStore(s.Store()),
-		Progress:  asProgressStore(s.Store()),
+		Chapters:    asChapterStore(s.Store()),
+		Playlists:   asPlaylistStore(s.Store()),
+		Collections: asCollectionStore(s.Store()),
+		Progress:    asProgressStore(s.Store()),
 		// Phase 6 write half. Already asserted non-nil above (bookmarkStore), so
 		// the CRUD routes always register on the supported backend.
 		Bookmarks:   bookmarkStore,
@@ -597,6 +624,17 @@ func absRouteList() []string {
 func asPlaylistStore(s any) abshandler.PlaylistStore {
 	if ps, ok := s.(abshandler.PlaylistStore); ok {
 		return ps
+	}
+	return nil
+}
+
+// asCollectionStore narrows the store to the collection slice, or nil when the
+// backend does not implement it. Nil is a supported state: the list route falls
+// back to the empty page and the write routes report the feature unavailable,
+// rather than the whole ABS surface failing to build.
+func asCollectionStore(s any) abshandler.CollectionStore {
+	if cs, ok := s.(abshandler.CollectionStore); ok {
+		return cs
 	}
 	return nil
 }

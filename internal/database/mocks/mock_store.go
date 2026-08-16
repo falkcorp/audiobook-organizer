@@ -31477,6 +31477,68 @@ func (_c *MockStore_CreateBookVersion_Call) RunAndReturn(run func(v *database.Bo
 	return _c
 }
 
+// CreateCollection provides a mock function for the type MockStore
+func (_mock *MockStore) CreateCollection(col *database.Collection) (*database.Collection, error) {
+	ret := _mock.Called(col)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CreateCollection")
+	}
+
+	var r0 *database.Collection
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(*database.Collection) (*database.Collection, error)); ok {
+		return returnFunc(col)
+	}
+	if returnFunc, ok := ret.Get(0).(func(*database.Collection) *database.Collection); ok {
+		r0 = returnFunc(col)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.Collection)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(*database.Collection) error); ok {
+		r1 = returnFunc(col)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_CreateCollection_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CreateCollection'
+type MockStore_CreateCollection_Call struct {
+	*mock.Call
+}
+
+// CreateCollection is a helper method to define mock.On call
+//   - col *database.Collection
+func (_e *MockStore_Expecter) CreateCollection(col any) *MockStore_CreateCollection_Call {
+	return &MockStore_CreateCollection_Call{Call: _e.mock.On("CreateCollection", col)}
+}
+
+func (_c *MockStore_CreateCollection_Call) Run(run func(col *database.Collection)) *MockStore_CreateCollection_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 *database.Collection
+		if args[0] != nil {
+			arg0 = args[0].(*database.Collection)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_CreateCollection_Call) Return(collection *database.Collection, err error) *MockStore_CreateCollection_Call {
+	_c.Call.Return(collection, err)
+	return _c
+}
+
+func (_c *MockStore_CreateCollection_Call) RunAndReturn(run func(col *database.Collection) (*database.Collection, error)) *MockStore_CreateCollection_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // CreateDeferredITunesUpdate provides a mock function for the type MockStore
 func (_mock *MockStore) CreateDeferredITunesUpdate(bookID string, persistentID string, oldPath string, newPath string, updateType string) error {
 	ret := _mock.Called(bookID, persistentID, oldPath, newPath, updateType)
@@ -32937,6 +32999,57 @@ func (_c *MockStore_DeleteBookVersion_Call) Return(err error) *MockStore_DeleteB
 }
 
 func (_c *MockStore_DeleteBookVersion_Call) RunAndReturn(run func(id string) error) *MockStore_DeleteBookVersion_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// DeleteCollection provides a mock function for the type MockStore
+func (_mock *MockStore) DeleteCollection(id string) error {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteCollection")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+		r0 = returnFunc(id)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_DeleteCollection_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteCollection'
+type MockStore_DeleteCollection_Call struct {
+	*mock.Call
+}
+
+// DeleteCollection is a helper method to define mock.On call
+//   - id string
+func (_e *MockStore_Expecter) DeleteCollection(id any) *MockStore_DeleteCollection_Call {
+	return &MockStore_DeleteCollection_Call{Call: _e.mock.On("DeleteCollection", id)}
+}
+
+func (_c *MockStore_DeleteCollection_Call) Run(run func(id string)) *MockStore_DeleteCollection_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_DeleteCollection_Call) Return(err error) *MockStore_DeleteCollection_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_DeleteCollection_Call) RunAndReturn(run func(id string) error) *MockStore_DeleteCollection_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -38972,6 +39085,130 @@ func (_c *MockStore_GetBooksByWorkID_Call) Return(books []database.Book, err err
 }
 
 func (_c *MockStore_GetBooksByWorkID_Call) RunAndReturn(run func(workID string) ([]database.Book, error)) *MockStore_GetBooksByWorkID_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetCollection provides a mock function for the type MockStore
+func (_mock *MockStore) GetCollection(id string) (*database.Collection, error) {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetCollection")
+	}
+
+	var r0 *database.Collection
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (*database.Collection, error)); ok {
+		return returnFunc(id)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) *database.Collection); ok {
+		r0 = returnFunc(id)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.Collection)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(id)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetCollection_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetCollection'
+type MockStore_GetCollection_Call struct {
+	*mock.Call
+}
+
+// GetCollection is a helper method to define mock.On call
+//   - id string
+func (_e *MockStore_Expecter) GetCollection(id any) *MockStore_GetCollection_Call {
+	return &MockStore_GetCollection_Call{Call: _e.mock.On("GetCollection", id)}
+}
+
+func (_c *MockStore_GetCollection_Call) Run(run func(id string)) *MockStore_GetCollection_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetCollection_Call) Return(collection *database.Collection, err error) *MockStore_GetCollection_Call {
+	_c.Call.Return(collection, err)
+	return _c
+}
+
+func (_c *MockStore_GetCollection_Call) RunAndReturn(run func(id string) (*database.Collection, error)) *MockStore_GetCollection_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetCollectionByName provides a mock function for the type MockStore
+func (_mock *MockStore) GetCollectionByName(name string) (*database.Collection, error) {
+	ret := _mock.Called(name)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetCollectionByName")
+	}
+
+	var r0 *database.Collection
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (*database.Collection, error)); ok {
+		return returnFunc(name)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) *database.Collection); ok {
+		r0 = returnFunc(name)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.Collection)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(name)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetCollectionByName_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetCollectionByName'
+type MockStore_GetCollectionByName_Call struct {
+	*mock.Call
+}
+
+// GetCollectionByName is a helper method to define mock.On call
+//   - name string
+func (_e *MockStore_Expecter) GetCollectionByName(name any) *MockStore_GetCollectionByName_Call {
+	return &MockStore_GetCollectionByName_Call{Call: _e.mock.On("GetCollectionByName", name)}
+}
+
+func (_c *MockStore_GetCollectionByName_Call) Run(run func(name string)) *MockStore_GetCollectionByName_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetCollectionByName_Call) Return(collection *database.Collection, err error) *MockStore_GetCollectionByName_Call {
+	_c.Call.Return(collection, err)
+	return _c
+}
+
+func (_c *MockStore_GetCollectionByName_Call) RunAndReturn(run func(name string) (*database.Collection, error)) *MockStore_GetCollectionByName_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -45117,6 +45354,86 @@ func (_c *MockStore_ListBooksByITunesPID_Call) RunAndReturn(run func(limit int, 
 	return _c
 }
 
+// ListCollections provides a mock function for the type MockStore
+func (_mock *MockStore) ListCollections(collectionType string, limit int, offset int) ([]database.Collection, int, error) {
+	ret := _mock.Called(collectionType, limit, offset)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListCollections")
+	}
+
+	var r0 []database.Collection
+	var r1 int
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(string, int, int) ([]database.Collection, int, error)); ok {
+		return returnFunc(collectionType, limit, offset)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, int, int) []database.Collection); ok {
+		r0 = returnFunc(collectionType, limit, offset)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.Collection)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, int, int) int); ok {
+		r1 = returnFunc(collectionType, limit, offset)
+	} else {
+		r1 = ret.Get(1).(int)
+	}
+	if returnFunc, ok := ret.Get(2).(func(string, int, int) error); ok {
+		r2 = returnFunc(collectionType, limit, offset)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockStore_ListCollections_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListCollections'
+type MockStore_ListCollections_Call struct {
+	*mock.Call
+}
+
+// ListCollections is a helper method to define mock.On call
+//   - collectionType string
+//   - limit int
+//   - offset int
+func (_e *MockStore_Expecter) ListCollections(collectionType any, limit any, offset any) *MockStore_ListCollections_Call {
+	return &MockStore_ListCollections_Call{Call: _e.mock.On("ListCollections", collectionType, limit, offset)}
+}
+
+func (_c *MockStore_ListCollections_Call) Run(run func(collectionType string, limit int, offset int)) *MockStore_ListCollections_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 int
+		if args[1] != nil {
+			arg1 = args[1].(int)
+		}
+		var arg2 int
+		if args[2] != nil {
+			arg2 = args[2].(int)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ListCollections_Call) Return(collections []database.Collection, n int, err error) *MockStore_ListCollections_Call {
+	_c.Call.Return(collections, n, err)
+	return _c
+}
+
+func (_c *MockStore_ListCollections_Call) RunAndReturn(run func(collectionType string, limit int, offset int) ([]database.Collection, int, error)) *MockStore_ListCollections_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListDirtyUserPlaylists provides a mock function for the type MockStore
 func (_mock *MockStore) ListDirtyUserPlaylists() ([]database.UserPlaylist, error) {
 	ret := _mock.Called()
@@ -51162,6 +51479,57 @@ func (_c *MockStore_UpdateBookVersion_Call) Return(err error) *MockStore_UpdateB
 }
 
 func (_c *MockStore_UpdateBookVersion_Call) RunAndReturn(run func(v *database.BookVersion) error) *MockStore_UpdateBookVersion_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// UpdateCollection provides a mock function for the type MockStore
+func (_mock *MockStore) UpdateCollection(col *database.Collection) error {
+	ret := _mock.Called(col)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateCollection")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(*database.Collection) error); ok {
+		r0 = returnFunc(col)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_UpdateCollection_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateCollection'
+type MockStore_UpdateCollection_Call struct {
+	*mock.Call
+}
+
+// UpdateCollection is a helper method to define mock.On call
+//   - col *database.Collection
+func (_e *MockStore_Expecter) UpdateCollection(col any) *MockStore_UpdateCollection_Call {
+	return &MockStore_UpdateCollection_Call{Call: _e.mock.On("UpdateCollection", col)}
+}
+
+func (_c *MockStore_UpdateCollection_Call) Run(run func(col *database.Collection)) *MockStore_UpdateCollection_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 *database.Collection
+		if args[0] != nil {
+			arg0 = args[0].(*database.Collection)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_UpdateCollection_Call) Return(err error) *MockStore_UpdateCollection_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_UpdateCollection_Call) RunAndReturn(run func(col *database.Collection) error) *MockStore_UpdateCollection_Call {
 	_c.Call.Return(run)
 	return _c
 }
