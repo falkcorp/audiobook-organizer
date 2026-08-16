@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d7e8f9a0-b1c2-4d3e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-06-13
+// last-edited: 2026-08-16
 
 package database
 
@@ -172,4 +172,56 @@ func TestOperationV2Row_SubjectFields_RoundTrip(t *testing.T) {
 	require.Equal(t, "b4", got.SubjectID)
 	require.Equal(t, row.Requirements, got.Requirements)
 	require.Equal(t, uint64(7), got.ReqSnapshotRev)
+}
+
+// TestListOperationsV2Since_KeepsLiveOpsOutsideTheWindow pins the rule that a
+// still-running operation is never filtered out by the time window.
+//
+// The timeline endpoint defaults to since=15m and filtered purely on QueuedAt, so
+// an operation simply had to RUN longer than the window to vanish from its own
+// timeline. Measured against production 2026-08-16: a library.scan that had been
+// running for 1h50m returned {"operations":[]} while it was actively logging once
+// a second. The one operation a user most needs to see — the long one still going —
+// was the one guaranteed to be hidden, and an empty list is indistinguishable from
+// "nothing is running."
+//
+// The window bounds HISTORY. Anything unfinished is current by definition, so
+// membership keys on CompletedAt rather than on a list of status strings, which
+// would drift the first time a new status is added.
+func TestListOperationsV2Since_KeepsLiveOpsOutsideTheWindow(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	now := time.Now().UTC()
+	old := now.Add(-2 * time.Hour)
+	done := now.Add(-90 * time.Minute)
+
+	// Running for two hours, never finished — the production case.
+	live := buildTestOpRow("op-live", "running")
+	live.QueuedAt = old
+	live.StartedAt = &old
+	require.NoError(t, s.InsertOperationV2(live))
+
+	// Finished two hours ago. Genuinely history; the window must still exclude it,
+	// otherwise this test would pass with the filter removed entirely.
+	fin := buildTestOpRow("op-finished", "completed")
+	fin.QueuedAt = old
+	fin.StartedAt = &old
+	fin.CompletedAt = &done
+	require.NoError(t, s.InsertOperationV2(fin))
+
+	rows, err := s.ListOperationsV2Since(now.Add(-15*time.Minute), 200)
+	require.NoError(t, err)
+
+	ids := map[string]bool{}
+	for _, r := range rows {
+		ids[r.ID] = true
+	}
+	require.True(t, ids["op-live"],
+		"a still-running operation must appear regardless of how long it has been "+
+			"running; filtering it out is what made the live scan invisible")
+	require.False(t, ids["op-finished"],
+		"a finished operation outside the window is history and must stay filtered — "+
+			"without this the test would also pass if the window were simply deleted")
 }
