@@ -611,9 +611,12 @@ func (f *fakeDirOrganizer) OrganizeBook(book *database.Book) (string, string, er
 	return "", "", fmt.Errorf("file_path %s is a directory but single-file organize was requested", book.FilePath)
 }
 
-func (f *fakeDirOrganizer) OrganizeBookDirectory(book *database.Book, segmentPaths []string) (string, map[string]string, error) {
+func (f *fakeDirOrganizer) OrganizeBookDirectory(book *database.Book, files []database.BookFile) (string, map[string]string, error) {
 	f.calledDirectory = true
-	f.segmentPaths = segmentPaths
+	f.segmentPaths = make([]string, 0, len(files))
+	for _, bf := range files {
+		f.segmentPaths = append(f.segmentPaths, bf.FilePath)
+	}
 	return f.targetDir, f.pathMap, nil
 }
 

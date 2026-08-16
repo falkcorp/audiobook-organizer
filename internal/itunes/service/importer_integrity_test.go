@@ -190,13 +190,13 @@ func (o *w8MultiFileOrganizer) OrganizeBook(book *database.Book) (string, string
 	return "", "", fmt.Errorf("OrganizeBook must not be called for a multi-file book")
 }
 
-func (o *w8MultiFileOrganizer) OrganizeBookDirectory(book *database.Book, segmentPaths []string) (string, map[string]string, error) {
+func (o *w8MultiFileOrganizer) OrganizeBookDirectory(book *database.Book, files []database.BookFile) (string, map[string]string, error) {
 	o.mu.Lock()
 	o.dirCalls++
 	o.mu.Unlock()
-	pathMap := make(map[string]string, len(segmentPaths))
-	for _, p := range segmentPaths {
-		pathMap[p] = "/organized/Multi Book/" + filepath.Base(p)
+	pathMap := make(map[string]string, len(files))
+	for _, bf := range files {
+		pathMap[bf.FilePath] = "/organized/Multi Book/" + filepath.Base(bf.FilePath)
 	}
 	return "/organized/Multi Book", pathMap, nil
 }

@@ -1608,15 +1608,15 @@ func (imp *Importer) organizeOneBook(book *database.Book, log logger.Logger) err
 // OrganizeBookDirectory, then updates the book's FilePath and each
 // BookFile's FilePath to reflect the new organized locations.
 func (imp *Importer) organizeMultiFileBook(org BookOrganizer, book *database.Book, files []database.BookFile, log logger.Logger) error {
-	segmentPaths := make([]string, 0, len(files))
+	segments := make([]database.BookFile, 0, len(files))
 	for _, f := range files {
 		if f.FilePath == "" {
 			continue
 		}
-		segmentPaths = append(segmentPaths, f.FilePath)
+		segments = append(segments, f)
 	}
 
-	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segmentPaths)
+	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segments)
 	if err != nil {
 		return err
 	}

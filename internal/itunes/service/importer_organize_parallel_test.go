@@ -74,7 +74,7 @@ func (o *concurrencyTrackingOrganizer) OrganizeBook(book *database.Book) (string
 	return key, "copy", nil
 }
 
-func (o *concurrencyTrackingOrganizer) OrganizeBookDirectory(book *database.Book, segmentPaths []string) (string, map[string]string, error) {
+func (o *concurrencyTrackingOrganizer) OrganizeBookDirectory(book *database.Book, files []database.BookFile) (string, map[string]string, error) {
 	return "", nil, fmt.Errorf("not exercised by this test: all books are single-file")
 }
 

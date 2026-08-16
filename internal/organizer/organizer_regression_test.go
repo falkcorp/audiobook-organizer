@@ -5,6 +5,7 @@
 package organizer
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,6 +15,27 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// segsFor builds BookFile rows for the given paths, numbered 1..n.
+//
+// OrganizeBookDirectory took []string until 2026-08-15 and named each
+// destination filepath.Base(src) -- it never applied the file naming pattern.
+// It takes rows now because the pattern needs the track number, so these tests
+// hand it the same shape the real callers do. The patterns below moved to
+// "{title} - {track:02d}" for the same reason: a multi-file book under a
+// track-less pattern has every file competing for one filename, which is a
+// property of that pattern and not something these tests are here to pin.
+func segsFor(paths ...string) []database.BookFile {
+	files := make([]database.BookFile, 0, len(paths))
+	for i, p := range paths {
+		files = append(files, database.BookFile{
+			ID:          "seg-" + filepath.Base(p),
+			FilePath:    p,
+			TrackNumber: i + 1,
+		})
+	}
+	return files
+}
 
 // ---------------------------------------------------------------------------
 // Regression: OrganizeBookDirectory returns empty pathMap when all files missing
@@ -28,7 +50,7 @@ func TestOrganizeBookDirectory_AllFilesMissing_EmptyPathMap(t *testing.T) {
 		RootDir:              rootDir,
 		OrganizationStrategy: "copy",
 		FolderNamingPattern:  "{author}/{title}",
-		FileNamingPattern:    "{title}",
+		FileNamingPattern:    "{title} - {track:02d}",
 	}
 	org := NewOrganizer(cfg)
 
@@ -45,7 +67,7 @@ func TestOrganizeBookDirectory_AllFilesMissing_EmptyPathMap(t *testing.T) {
 		"/nonexistent/ch03.mp3",
 	}
 
-	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segmentPaths)
+	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segsFor(segmentPaths...))
 	// Should succeed (OrganizeBookDirectory skips missing files)
 	// but pathMap should be empty
 	require.NoError(t, err)
@@ -64,7 +86,7 @@ func TestOrganizeBookDirectory_PartialFilesMissing(t *testing.T) {
 		RootDir:              rootDir,
 		OrganizationStrategy: "copy",
 		FolderNamingPattern:  "{author}/{title}",
-		FileNamingPattern:    "{title}",
+		FileNamingPattern:    "{title} - {track:02d}",
 	}
 	org := NewOrganizer(cfg)
 
@@ -80,7 +102,7 @@ func TestOrganizeBookDirectory_PartialFilesMissing(t *testing.T) {
 		filepath.Join(importDir, "ch03.mp3"), // missing
 	}
 
-	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segmentPaths)
+	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segsFor(segmentPaths...))
 	require.NoError(t, err)
 	assert.NotEmpty(t, targetDir)
 	assert.Len(t, pathMap, 1, "only the one existing file should be in pathMap")
@@ -107,7 +129,7 @@ func TestOrganizeBookDirectory_DstAlreadyExists(t *testing.T) {
 		RootDir:              rootDir,
 		OrganizationStrategy: "copy",
 		FolderNamingPattern:  "{author}/{title}",
-		FileNamingPattern:    "{title}",
+		FileNamingPattern:    "{title} - {track:02d}",
 	}
 	org := NewOrganizer(cfg)
 
@@ -118,12 +140,12 @@ func TestOrganizeBookDirectory_DstAlreadyExists(t *testing.T) {
 	}
 
 	// First organize
-	targetDir, pathMap, err := org.OrganizeBookDirectory(book, []string{srcPath})
+	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segsFor(srcPath))
 	require.NoError(t, err)
 	require.Len(t, pathMap, 1)
 
 	// Second organize of same book — dst already exists
-	targetDir2, pathMap2, err := org.OrganizeBookDirectory(book, []string{srcPath})
+	targetDir2, pathMap2, err := org.OrganizeBookDirectory(book, segsFor(srcPath))
 	require.NoError(t, err)
 	assert.Equal(t, targetDir, targetDir2, "target dir should be the same")
 	assert.Len(t, pathMap2, 1, "dst-exists should still be included in pathMap")
@@ -140,7 +162,7 @@ func TestOrganizeBookDirectory_EmptySegments(t *testing.T) {
 		RootDir:              rootDir,
 		OrganizationStrategy: "copy",
 		FolderNamingPattern:  "{author}/{title}",
-		FileNamingPattern:    "{title}",
+		FileNamingPattern:    "{title} - {track:02d}",
 	}
 	org := NewOrganizer(cfg)
 
@@ -150,7 +172,7 @@ func TestOrganizeBookDirectory_EmptySegments(t *testing.T) {
 		Author: &database.Author{Name: "Author"},
 	}
 
-	_, _, err := org.OrganizeBookDirectory(book, []string{})
+	_, _, err := org.OrganizeBookDirectory(book, nil)
 	assert.Error(t, err, "empty segment list should error")
 }
 
@@ -161,11 +183,11 @@ func TestOrganizeBookDirectory_NilBook(t *testing.T) {
 		RootDir:              rootDir,
 		OrganizationStrategy: "copy",
 		FolderNamingPattern:  "{author}/{title}",
-		FileNamingPattern:    "{title}",
+		FileNamingPattern:    "{title} - {track:02d}",
 	}
 	org := NewOrganizer(cfg)
 
-	_, _, err := org.OrganizeBookDirectory(nil, []string{"/some/file.m4b"})
+	_, _, err := org.OrganizeBookDirectory(nil, segsFor("/some/file.m4b"))
 	assert.Error(t, err, "nil book should error")
 }
 
@@ -186,7 +208,7 @@ func TestOrganizeBookDirectory_CopyPreservesContent(t *testing.T) {
 		RootDir:              rootDir,
 		OrganizationStrategy: "copy",
 		FolderNamingPattern:  "{author}/{title}",
-		FileNamingPattern:    "{title}",
+		FileNamingPattern:    "{title} - {track:02d}",
 	}
 	org := NewOrganizer(cfg)
 
@@ -196,10 +218,10 @@ func TestOrganizeBookDirectory_CopyPreservesContent(t *testing.T) {
 		Author: &database.Author{Name: "Author"},
 	}
 
-	_, pathMap, err := org.OrganizeBookDirectory(book, []string{
+	_, pathMap, err := org.OrganizeBookDirectory(book, segsFor(
 		filepath.Join(importDir, "ch01.mp3"),
 		filepath.Join(importDir, "ch02.mp3"),
-	})
+	))
 	require.NoError(t, err)
 	require.Len(t, pathMap, 2)
 
@@ -224,7 +246,7 @@ func TestOrganizeBookDirectory_SrcEqualsDst(t *testing.T) {
 		RootDir:              rootDir,
 		OrganizationStrategy: "copy",
 		FolderNamingPattern:  "{author}/{title}",
-		FileNamingPattern:    "{title}",
+		FileNamingPattern:    "{title} - {track:02d}",
 	}
 	org := NewOrganizer(cfg)
 
@@ -234,16 +256,135 @@ func TestOrganizeBookDirectory_SrcEqualsDst(t *testing.T) {
 		Author: &database.Author{Name: "Author"},
 	}
 
-	// Pre-create the target directory and file
+	// Pre-create the target directory and the file AT ITS PATTERN NAME. This
+	// used to be "book.m4b": under the old builder the destination was
+	// filepath.Base(src), so any filename at all was already "in place". The
+	// file pattern decides the name now, so only the pattern's own answer is.
 	targetDir := filepath.Join(rootDir, "Author", "SamePlace")
 	require.NoError(t, os.MkdirAll(targetDir, 0755))
-	filePath := filepath.Join(targetDir, "book.m4b")
+	filePath := filepath.Join(targetDir, "SamePlace.m4b")
 	require.NoError(t, os.WriteFile(filePath, []byte("data"), 0644))
 
-	_, pathMap, err := org.OrganizeBookDirectory(book, []string{filePath})
+	_, pathMap, err := org.OrganizeBookDirectory(book, segsFor(filePath))
 	require.NoError(t, err)
 	assert.Len(t, pathMap, 1, "src==dst should still be included in pathMap")
 	assert.Equal(t, filePath, pathMap[filePath])
+}
+
+// TestOrganizeBookDirectory_AppliesFileNamingPattern is the F8 assertion: a
+// directory book must be FILE aware, not just folder aware.
+//
+// Until 2026-08-15 OrganizeBookDirectory expanded the folder pattern and then
+// kept filepath.Base(src) as the filename, so a book whose files were named
+// "01 - track.mp3" landed in the right directory under the wrong names -- and
+// ComputeTargetPaths, running the file pattern on the metadata-apply path for
+// the same book, planned different ones. Each path then renamed toward its own
+// answer for as long as both kept running.
+func TestOrganizeBookDirectory_AppliesFileNamingPattern(t *testing.T) {
+	rootDir := t.TempDir()
+	importDir := t.TempDir()
+
+	srcNames := []string{"aaa-junk-name.mp3", "zzz-other-junk.mp3", "mmm-more-junk.mp3"}
+	var srcPaths []string
+	for _, n := range srcNames {
+		p := filepath.Join(importDir, n)
+		require.NoError(t, os.WriteFile(p, []byte("audio-"+n), 0644))
+		srcPaths = append(srcPaths, p)
+	}
+
+	cfg := &config.Config{
+		RootDir:              rootDir,
+		OrganizationStrategy: "copy",
+		FolderNamingPattern:  "{author}/{title}",
+		FileNamingPattern:    "{title} - {track:02d}",
+	}
+	org := NewOrganizer(cfg)
+
+	book := &database.Book{
+		Title:  "Foundation",
+		Format: "mp3",
+		Author: &database.Author{Name: "Isaac Asimov"},
+	}
+
+	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segsFor(srcPaths...))
+	require.NoError(t, err)
+	require.Len(t, pathMap, 3)
+
+	// segsFor numbers 1..n in the order given, so the junk names map to tracks
+	// in THAT order -- not alphabetically, which is the whole reason this takes
+	// rows instead of paths.
+	want := map[string]string{
+		srcPaths[0]: filepath.Join(targetDir, "Foundation - 01.mp3"),
+		srcPaths[1]: filepath.Join(targetDir, "Foundation - 02.mp3"),
+		srcPaths[2]: filepath.Join(targetDir, "Foundation - 03.mp3"),
+	}
+	assert.Equal(t, want, pathMap, "each file must be renamed by the file naming pattern")
+	for _, dst := range want {
+		assert.FileExists(t, dst)
+	}
+}
+
+// TestOrganizeBookDirectory_TracklessPatternDoesNotCollapseBook is the guard on
+// the most dangerous consequence of making organize file-aware.
+//
+// The production file naming pattern on 2026-08-15 was
+// "{title} - {author} - read by {narrator}" — no {track} placeholder. Expanding
+// it per file gives every file of a multi-file book the SAME name, so copying
+// to those paths would collapse a 40-part book into one file. That could not
+// happen while the destination was filepath.Base(src), which is exactly why it
+// has to be tested now: the collapse is a NEW failure mode introduced by the
+// fix, not an old one, and it would have destroyed multi-file books library-wide.
+func TestOrganizeBookDirectory_TracklessPatternDoesNotCollapseBook(t *testing.T) {
+	rootDir := t.TempDir()
+	importDir := t.TempDir()
+
+	var srcPaths []string
+	for i := 1; i <= 12; i++ {
+		p := filepath.Join(importDir, fmt.Sprintf("part%02d.mp3", i))
+		require.NoError(t, os.WriteFile(p, []byte(fmt.Sprintf("audio-%02d", i)), 0644))
+		srcPaths = append(srcPaths, p)
+	}
+
+	cfg := &config.Config{
+		RootDir:              rootDir,
+		OrganizationStrategy: "copy",
+		FolderNamingPattern:  "{author}/{title}",
+		FileNamingPattern:    "{title} - {author} - read by {narrator}", // the live prod pattern
+	}
+	org := NewOrganizer(cfg)
+
+	book := &database.Book{
+		Title:  "Foundation",
+		Format: "mp3",
+		Author: &database.Author{Name: "Isaac Asimov"},
+	}
+
+	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segsFor(srcPaths...))
+	require.NoError(t, err)
+	require.Len(t, pathMap, 12, "every file must be planned")
+
+	// Distinct targets...
+	distinct := map[string]struct{}{}
+	for _, dst := range pathMap {
+		distinct[dst] = struct{}{}
+	}
+	assert.Len(t, distinct, 12, "a track-less pattern must not map 12 files onto one name")
+
+	// ...and 12 real files on disk, with their content intact.
+	dirEntries, err := os.ReadDir(targetDir)
+	require.NoError(t, err)
+	assert.Len(t, dirEntries, 12, "all 12 files must survive organize")
+	for src, dst := range pathMap {
+		srcData, readErr := os.ReadFile(src)
+		require.NoError(t, readErr)
+		dstData, readErr := os.ReadFile(dst)
+		require.NoError(t, readErr)
+		assert.Equal(t, srcData, dstData, "content must match for %s", filepath.Base(dst))
+	}
+
+	// Zero padded to a uniform width so 9 and 10 still sort correctly.
+	assert.Contains(t, pathMap[srcPaths[8]], " - 09.mp3")
+	assert.Contains(t, pathMap[srcPaths[9]], " - 10.mp3")
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +400,7 @@ func TestOrganizeBookDirectory_PathTraversalPrevented(t *testing.T) {
 		RootDir:              rootDir,
 		OrganizationStrategy: "copy",
 		FolderNamingPattern:  "{author}/{title}",
-		FileNamingPattern:    "{title}",
+		FileNamingPattern:    "{title} - {track:02d}",
 	}
 	org := NewOrganizer(cfg)
 
@@ -270,9 +411,9 @@ func TestOrganizeBookDirectory_PathTraversalPrevented(t *testing.T) {
 		Author: &database.Author{Name: "../../../root"},
 	}
 
-	targetDir, _, err := org.OrganizeBookDirectory(book, []string{
+	targetDir, _, err := org.OrganizeBookDirectory(book, segsFor(
 		filepath.Join(importDir, "file.m4b"),
-	})
+	))
 
 	// With our security fix, ".." is replaced with "__" so the path stays inside rootDir
 	if err == nil {

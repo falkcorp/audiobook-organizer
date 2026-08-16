@@ -665,18 +665,52 @@ func (o *Organizer) symlinkFile(src, dst string) error {
 	return os.Symlink(absSrc, dst)
 }
 
+// PlanFilePaths returns current file path -> organized target path for every
+// non-missing file of a directory book, using the SAME planner
+// OrganizeBookDirectory copies with. Because the plan is a pure function of the
+// root, the two patterns and the rows, a caller that needs to know where
+// OrganizeBookDirectory put things can recompute it instead of having the map
+// threaded down to it -- which is what CreateOrganizedVersion does. Files
+// already at their target map to themselves.
+func (o *Organizer) PlanFilePaths(book *database.Book, files []database.BookFile) (map[string]string, error) {
+	planned, err := planTargetPaths(o.config.RootDir, o.config.FolderNamingPattern,
+		o.config.FileNamingPattern, files, o.pathVars(book, 0, 0, ""), o.buildOpts())
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(planned))
+	for _, e := range planned {
+		out[e.SourcePath] = e.TargetPath
+	}
+	return out, nil
+}
+
 // OrganizeBookDirectory organizes a multi-file book (directory) by copying each
-// segment file into the target directory generated from the book's metadata.
-// Returns the target directory path and a map of old→new segment file paths.
-func (o *Organizer) OrganizeBookDirectory(book *database.Book, segmentPaths []string) (string, map[string]string, error) {
+// of its files into the target directory generated from the book's metadata.
+// Returns the target directory path and a map of old→new file paths.
+//
+// It takes []database.BookFile rather than the []string of paths it took until
+// 2026-08-15 because a path string carries no track number. This function used
+// to keep filepath.Base(src) as the destination filename -- it applied the
+// folder pattern and never the file pattern -- so a directory book was folder
+// aware but not file aware, and its filenames could never agree with what
+// ComputeTargetPaths planned for the very same book on the metadata-apply path.
+// Deriving the track from sort position alone would not fix it: whenever
+// TrackNumber is set and disagrees with alphabetical order the two paths would
+// still land on different names. Both now run planTargetPaths over the same
+// rows, so they cannot disagree.
+func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.BookFile) (string, map[string]string, error) {
 	if book == nil {
 		return "", nil, fmt.Errorf("invalid book")
 	}
-	if len(segmentPaths) == 0 {
+	if len(files) == 0 {
 		return "", nil, fmt.Errorf("no segment files to organize")
 	}
 
-	// Generate target directory from folder naming pattern
+	// Generate target directory from folder naming pattern. This is the same
+	// BuildPath call BuildRelPath makes for the folder half (expandPattern is a
+	// thin adapter over it), so the directory here and the directory inside each
+	// planned target path are the same string by construction.
 	folderPath, err := o.expandPattern(o.config.FolderNamingPattern, book)
 	if err != nil {
 		return "", nil, fmt.Errorf("folder pattern: %w", err)
@@ -684,14 +718,23 @@ func (o *Organizer) OrganizeBookDirectory(book *database.Book, segmentPaths []st
 	folderPath = sanitizePath(folderPath)
 	targetDir := filepath.Join(o.config.RootDir, folderPath)
 
+	planned, err := planTargetPaths(o.config.RootDir, o.config.FolderNamingPattern,
+		o.config.FileNamingPattern, files, o.pathVars(book, 0, 0, ""), o.buildOpts())
+	if err != nil {
+		return "", nil, err
+	}
+	if len(planned) == 0 {
+		return "", nil, fmt.Errorf("all %d file(s) for %q (id=%s) are flagged missing on disk — re-scan to verify, or restore from backup", len(files), book.Title, book.ID)
+	}
+
 	if err := os.MkdirAll(targetDir, 0775); err != nil {
 		return "", nil, fmt.Errorf("failed to create target directory: %w", err)
 	}
 
-	pathMap := make(map[string]string, len(segmentPaths))
-	for _, srcPath := range segmentPaths {
-		fileName := filepath.Base(srcPath)
-		dstPath := filepath.Join(targetDir, fileName)
+	pathMap := make(map[string]string, len(planned))
+	for _, entry := range planned {
+		srcPath, dstPath := entry.SourcePath, entry.TargetPath
+		fileName := filepath.Base(dstPath)
 
 		// Verify dstPath stays inside targetDir (defense against crafted filenames)
 		if err := ensureUnderRoot(dstPath, targetDir); err != nil {
@@ -708,9 +751,27 @@ func (o *Organizer) OrganizeBookDirectory(book *database.Book, segmentPaths []st
 			continue
 		}
 
-		// Skip if target already exists
-		if _, err := os.Stat(dstPath); err == nil {
-			pathMap[srcPath] = dstPath
+		// A file already at the destination is only OURS if it is the same file
+		// or byte-identical in size. Recording an unrelated occupant here would
+		// point this book's row at another book's file: the previous code did a
+		// bare os.Stat and wrote pathMap[src] = dst for whatever it found, which
+		// was survivable while the destination name was just filepath.Base(src)
+		// and is not now that the file naming pattern decides it.
+		if dstInfo, statErr := os.Stat(dstPath); statErr == nil {
+			srcInfo, srcErr := os.Stat(srcPath)
+			switch {
+			case srcErr == nil && os.SameFile(srcInfo, dstInfo):
+				pathMap[srcPath] = dstPath
+			case srcErr == nil && srcInfo.Size() == dstInfo.Size():
+				// Interrupted copy/reflink from an earlier run: same content,
+				// different inode. Adopt it rather than re-copying.
+				pathMap[srcPath] = dstPath
+			default:
+				slog.Warn("organizeFile destination already occupied by a different file — leaving this file's row unchanged",
+					"book_id", book.ID, "book_title", book.Title,
+					"source_path", srcPath, "dest_path", dstPath,
+					"source_stat_error", srcErr)
+			}
 			continue
 		}
 

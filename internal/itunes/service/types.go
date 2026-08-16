@@ -11,11 +11,13 @@ import "github.com/falkcorp/audiobook-organizer/internal/database"
 // package never imports internal/config.
 type BookOrganizer interface {
 	OrganizeBook(book *database.Book) (newPath, sidecar string, err error)
-	// OrganizeBookDirectory organizes a multi-file (merged) book by moving
-	// each of its per-track segment paths into the book's target directory.
-	// Returns the new target directory and a map of old segment path ->
-	// new segment path so callers can update per-file records.
-	OrganizeBookDirectory(book *database.Book, segmentPaths []string) (targetDir string, pathMap map[string]string, err error)
+	// OrganizeBookDirectory organizes a multi-file (merged) book by moving each
+	// of its per-track files into the book's target directory. It takes the
+	// BookFile rows rather than bare paths because the destination filename
+	// comes from the file naming pattern, which needs the track number.
+	// Returns the new target directory and a map of old file path -> new file
+	// path so callers can update per-file records.
+	OrganizeBookDirectory(book *database.Book, files []database.BookFile) (targetDir string, pathMap map[string]string, err error)
 }
 
 // ValidateRequest is the wire type for POST /itunes/validate.

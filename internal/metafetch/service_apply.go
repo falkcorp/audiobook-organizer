@@ -347,12 +347,11 @@ func (mfs *Service) ensureLibraryCopy(book *database.Book) *database.Book {
 	var pathMap map[string]string
 
 	if len(activeFiles) > 1 {
-		// Multi-file: organize all book files to library directory
-		filePaths := make([]string, len(activeFiles))
-		for i, bf := range activeFiles {
-			filePaths[i] = bf.FilePath
-		}
-		targetDir, pm, err := org.OrganizeBookDirectory(book, filePaths)
+		// Multi-file: organize all book files to library directory. Hand over
+		// the full bookFiles slice, not activeFiles -- OrganizeBookDirectory
+		// skips Missing rows for copying but counts them for track numbering,
+		// so passing only the survivors would renumber the book.
+		targetDir, pm, err := org.OrganizeBookDirectory(book, bookFiles)
 		if err != nil {
 			slog.Warn("failed to create library copy for multi-file book", "id", book.ID, "error", err)
 			return nil
