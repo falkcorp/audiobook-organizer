@@ -1,12 +1,73 @@
 // file: internal/metadata/taglib_tagmap.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
 //
 // Shared tag map builder used by both WASM and CGO taglib writers.
 
 package metadata
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+// positiveIntTag renders a metadata value that is conceptually a positive
+// integer, accepting whichever concrete type the caller happened to use.
+//
+// WHY THIS EXISTS. "year" and "series_index" were read with a bare
+// `.(int)` assertion. Callers do not agree on the type — the review/apply path
+// builds its tag map with string values, and metadata decoded from JSON arrives
+// as float64 — so for those callers the assertion failed, the tag was silently
+// dropped, and the file never received it.
+//
+// That silence is self-sustaining, and it is the same defect that hid in "track"
+// until 2026-08-15: the unchanged-tag filter compares the value it wants against
+// the value on disk, finds it absent, decides a write is needed, and this
+// function then discards it. Next run, identical. The write "succeeds" every
+// time and the value never lands, so the file is rewritten in full forever.
+//
+// series_index was measured doing exactly this in production on 2026-08-16.
+// "year" is the more dangerous of the two because it IS mapped in the filter's
+// currentVals, so it loops without even logging the unmapped-key warning.
+//
+// Returns ok=false for zero, negative, unparseable or absent values, which
+// leaves the tag out entirely — the correct conservative behaviour.
+func positiveIntTag(v interface{}) (string, bool) {
+	switch n := v.(type) {
+	case int:
+		if n > 0 {
+			return strconv.Itoa(n), true
+		}
+	case int32:
+		if n > 0 {
+			return strconv.FormatInt(int64(n), 10), true
+		}
+	case int64:
+		if n > 0 {
+			return strconv.FormatInt(n, 10), true
+		}
+	case float64: // JSON numbers decode to float64
+		if n > 0 {
+			return strconv.FormatInt(int64(n), 10), true
+		}
+	case float32:
+		if n > 0 {
+			return strconv.FormatInt(int64(n), 10), true
+		}
+	case string:
+		s := strings.TrimSpace(n)
+		if s == "" {
+			return "", false
+		}
+		// Tolerate a decimal string ("4.0") as well as a plain integer;
+		// series positions in particular arrive in both shapes.
+		if f, err := strconv.ParseFloat(s, 64); err == nil && f > 0 {
+			return strconv.FormatInt(int64(f), 10), true
+		}
+	}
+	return "", false
+}
 
 // buildWriteTagMap converts metadata map[string]interface{} to the
 // map[string][]string format that TagLib's property API expects.
@@ -27,8 +88,8 @@ func buildWriteTagMap(metadata map[string]interface{}) map[string][]string {
 	if genre, ok := metadata["genre"].(string); ok && genre != "" {
 		tags["GENRE"] = []string{genre}
 	}
-	if year, ok := metadata["year"].(int); ok && year > 0 {
-		tags["DATE"] = []string{fmt.Sprintf("%d", year)}
+	if year, ok := positiveIntTag(metadata["year"]); ok {
+		tags["DATE"] = []string{year}
 	}
 	if narrator, ok := metadata["narrator"].(string); ok && narrator != "" {
 		tags["PERFORMER"] = []string{narrator}
@@ -58,8 +119,8 @@ func buildWriteTagMap(metadata map[string]interface{}) map[string][]string {
 			tags["ALBUM"] = []string{""}
 		}
 	}
-	if si, ok := metadata["series_index"].(int); ok && si > 0 {
-		tags["SERIES_INDEX"] = []string{fmt.Sprintf("%d", si)}
+	if si, ok := positiveIntTag(metadata["series_index"]); ok {
+		tags["SERIES_INDEX"] = []string{si}
 	}
 	// TRACKNUMBER is what the reader looks for first (see taglib_reader.go's
 	// parseSlashPair over TRACKNUMBER/TRACK/TRCK), so an "n/total" value written

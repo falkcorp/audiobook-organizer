@@ -429,8 +429,12 @@ func writeM4BCustomTagsWithFFmpeg(filePath string, metadata map[string]interface
 	if series, ok := metadata["series"].(string); ok && series != "" {
 		customTags["SERIES"] = series
 	}
-	if si, ok := metadata["series_index"].(int); ok && si > 0 {
-		customTags["SERIES_INDEX"] = fmt.Sprintf("%d", si)
+	// positiveIntTag, not a bare .(int): callers disagree on the type (the
+	// review/apply path builds string values, JSON decodes to float64) and an
+	// assertion that misses drops the tag silently, which makes the file rewrite
+	// itself on every run forever. See the comment on positiveIntTag.
+	if si, ok := positiveIntTag(metadata["series_index"]); ok {
+		customTags["SERIES_INDEX"] = si
 	}
 	if asin, ok := metadata["asin"].(string); ok && asin != "" {
 		customTags["ASIN"] = asin
@@ -560,11 +564,14 @@ func writeM4BMetadata(filePath string, metadata map[string]interface{}, config f
 			args = append(args, "--rDNSatom", val, "name="+pair[0], "domain="+rdnsDomain)
 		}
 	}
-	if si, ok := metadata["series_index"].(int); ok && si > 0 {
-		args = append(args, "--rDNSatom", fmt.Sprintf("%d", si), "name=SERIES_INDEX", "domain="+rdnsDomain)
-	}
-	// Also try string form of series_index (some callers pass it as string)
-	if si, ok := metadata["series_index"].(string); ok && si != "" {
+	// One coercion for every caller type. This was previously two separate
+	// blocks — an int case and a "some callers pass it as string" case — which
+	// between them still missed float64 (JSON) and would have appended the atom
+	// twice had both ever matched. The other two copies of this logic
+	// (buildWriteTagMap, and the custom-tag block above) each handled a
+	// different subset, which is how series_index came to be written by some
+	// paths and silently dropped by others.
+	if si, ok := positiveIntTag(metadata["series_index"]); ok {
 		args = append(args, "--rDNSatom", si, "name=SERIES_INDEX", "domain="+rdnsDomain)
 	}
 
