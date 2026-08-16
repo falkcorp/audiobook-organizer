@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-08-13
+// last-edited: 2026-08-16
 
 // Package scheduler — task registrations.
 // All 22 registered tasks are defined here. Each task's TriggerFn and
@@ -63,6 +63,36 @@ type labelRefinementCalibrateParams struct{}
 
 // ---- registration -------------------------------------------------------
 
+// v2ScheduledOp is what a scheduled task returns now that it no longer writes a
+// legacy operations row.
+//
+// The 5 tasks below used to do this:
+//
+//	opID := ulid.Make().String()
+//	op, _ := store.CreateOperation(opID, "scan", nil)   // legacy row, status=pending
+//	v2ID, _ := ts.deps.OpRegistry.EnqueueOp(ctx, "library.scan", ...)  // DIFFERENT id
+//	return op, nil
+//
+// The legacy row and the real v2 operation got SEPARATE ids, nothing linked
+// them, and nothing ever updated the legacy row — so it sat at "pending"
+// forever. One orphan per scheduled tick, which is precisely the 183-of-200
+// pending rows measured against production on 2026-08-16, going back six days:
+// purge-deleted, temp-file-cleanup, scan, isbn-enrichment, author-dedup-scan.
+//
+// The return value is consumed for exactly one thing — the scheduler's
+// "started operation" log line (scheduler.go) and the /tasks/:name/run response.
+// Both were therefore reporting an id that NO endpoint could resolve, because
+// the id that exists in v2 is the other one. Synthesizing the row from the v2 id
+// fixes the log and the response as a side effect of removing the orphan.
+func v2ScheduledOp(v2ID, opType string) *database.Operation {
+	return &database.Operation{
+		ID:        v2ID,
+		Type:      opType,
+		Status:    "queued",
+		CreatedAt: time.Now().UTC(),
+	}
+}
+
 func (ts *TaskScheduler) registerAllTasks() {
 	// --- Library tasks ---
 
@@ -101,17 +131,12 @@ func (ts *TaskScheduler) registerAllTasks() {
 					}
 				}
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "scan", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
 			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "library.scan", libraryScanParams{})
 			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue library.scan: %w", enqErr)
 			}
 			ts.setPreviousRunID("library_scan", v2ID)
-			return op, nil
+			return v2ScheduledOp(v2ID, "scan"), nil
 		},
 		IsEnabled: func() bool {
 			// IsEnabled gates the ticker, the startup run AND maintenance-window
@@ -145,15 +170,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "organize", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "library.organize", libraryOrganizeParams{}); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "library.organize", libraryOrganizeParams{})
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue library.organize: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "organize"), nil
 		},
 		IsEnabled:              func() bool { return true },
 		GetInterval:            func() time.Duration { return 0 },
@@ -170,15 +191,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "library-size-refresh", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "library.size-refresh", librarySizeRefreshParams{}); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "library.size-refresh", librarySizeRefreshParams{})
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue library.size-refresh: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "library-size-refresh"), nil
 		},
 		IsEnabled:              func() bool { return true },
 		GetInterval:            func() time.Duration { return 0 },
@@ -591,19 +608,15 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "acoustid-online-lookup", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
 			params := map[string]any{
 				"limit": config.AppConfig.Maintenance.AcoustIDNightlyLimit,
 				"force": false,
 			}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "acoustid.lookup-online", params); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "acoustid.lookup-online", params)
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue acoustid.lookup-online: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "acoustid-online-lookup"), nil
 		},
 		IsEnabled:              func() bool { return config.AppConfig.Maintenance.AcoustIDOnlineLookup },
 		GetInterval:            func() time.Duration { return 0 }, // run only inside the maintenance window
@@ -796,15 +809,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "ai-dedup-batch", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.ai-dedup-batch", nil); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.ai-dedup-batch", nil)
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue ai-dedup-batch: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "ai-dedup-batch"), nil
 		},
 		IsEnabled: func() bool {
 			return config.AppConfig.Scheduled.AIDedupBatch.Enabled && config.AppConfig.EnableAIParsing
