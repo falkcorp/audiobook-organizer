@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.78.0
+// version: 1.79.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-08-15
+// last-edited: 2026-08-16
 
 package config
 
@@ -1006,12 +1006,8 @@ func InitConfig() {
 	viper.SetDefault("auto_organize", true)
 	viper.SetDefault("auto_scan_enabled", false)
 	viper.SetDefault("auto_scan_debounce_seconds", 30)
-	viper.SetDefault("folder_naming_pattern", "{author}/{series}/{title} ({print_year})")
-	// Must stay in step with the FileNamingPattern default in Defaults() below.
-	// "{track:02d}" serves both book layouts: a single-file book has no track so
-	// BuildPath drops the segment ("Foundation.m4b"), a multi-file book gets
-	// zero-padded per-track names ("Foundation - 01.m4b").
-	viper.SetDefault("file_naming_pattern", "{title} - {track:02d}")
+	viper.SetDefault("folder_naming_pattern", DefaultFolderNamingPattern)
+	viper.SetDefault("file_naming_pattern", DefaultFileNamingPattern)
 	viper.SetDefault("create_backups", true)
 
 	// Set storage quota defaults
@@ -1988,6 +1984,10 @@ func (c *Config) Validate() error {
 			errs = append(errs, "file_naming_pattern "+err.Error())
 		}
 	}
+	// Syntax is not the only way a naming pattern destroys data; see
+	// naming_patterns.go. Empty means "unset, viper will supply the default",
+	// which is the convention the two blocks above already follow.
+	errs = append(errs, validateNamingPatterns(c.FolderNamingPattern, c.FileNamingPattern)...)
 
 	for _, ext := range c.SupportedExtensions {
 		if ext == "" {
@@ -2027,18 +2027,9 @@ func ResetToDefaults() {
 			AutoOrganize:            true,
 			AutoScanEnabled:         false,
 			AutoScanDebounceSeconds: 30,
-			FolderNamingPattern:     "{author}/{series}/{title} ({print_year})",
-			// "{track:02d}" serves BOTH book layouts, which is why it is safe as
-			// a default. A single-file book has no track, so BuildPath drops the
-			// whole " - " segment and the file is "Foundation.m4b". A multi-file
-			// book gets "Foundation - 01.m4b", "Foundation - 02.m4b", zero-padded
-			// so any file manager sorts it correctly.
-			//
-			// The previous default, "{title} - {author} - read by {narrator}",
-			// gave every file of a multi-file book the IDENTICAL name — they
-			// would all have collided on one target.
-			FileNamingPattern: "{title} - {track:02d}",
-			CreateBackups:     true,
+			FolderNamingPattern:     DefaultFolderNamingPattern,
+			FileNamingPattern:       DefaultFileNamingPattern,
+			CreateBackups:           true,
 
 			// Storage quotas
 			EnableDiskQuota:    false,
