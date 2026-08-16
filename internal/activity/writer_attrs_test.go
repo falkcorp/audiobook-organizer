@@ -6,10 +6,15 @@
 package activity
 
 import (
+	"context"
+	"fmt"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // The activity log showed rows that had lost the only information that made
@@ -129,4 +134,40 @@ func TestEndsWithPreposition(t *testing.T) {
 	for _, s := range []string{"tag writing failed", "scan complete", "", "toaster"} {
 		assert.False(t, endsWithPreposition(s), "%q is a complete sentence", s)
 	}
+}
+
+// TestWriter_PersistsRenderedSummary closes the gap the direct RenderSummary
+// tests leave open: they prove the renderer is right, not that the writer USES
+// it. Replacing Summary: RenderSummary(parsed) with Summary: parsed.Message —
+// which is exactly the line this change touches, and exactly what the bug was —
+// left every other test in this file green while making the fix inert in
+// production.
+//
+// This drives a real slog line through the real io.Writer and asserts on what
+// was persisted, plus that the attrs survived as queryable details.
+func TestWriter_PersistsRenderedSummary(t *testing.T) {
+	dir := t.TempDir()
+	store, err := database.NewNutsActivityStore(dir)
+	require.NoError(t, err)
+	defer store.Close()
+
+	devNull, err := os.Open(os.DevNull)
+	require.NoError(t, err)
+	defer devNull.Close()
+
+	w := NewWriter(store, 100)
+	w.stdout = devNull
+	require.NoError(t, w.Start(context.Background()))
+
+	fmt.Fprintln(w, `time=2026-08-16T01:00:00.000-04:00 level=INFO msg="cover art saved to" path=/lib/Asimov/cover.jpg`)
+	require.NoError(t, w.Stop(context.Background()))
+
+	entries, total, err := store.Query(context.Background(), database.ActivityFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+
+	assert.Equal(t, "cover art saved to /lib/Asimov/cover.jpg", entries[0].Summary,
+		"the persisted summary must name the path, not trail off after 'to'")
+	assert.Equal(t, "/lib/Asimov/cover.jpg", entries[0].Details["path"],
+		"attrs must also survive as structured details")
 }
