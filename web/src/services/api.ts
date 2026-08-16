@@ -869,8 +869,6 @@ export interface Config {
   maintenance_window_end?: number;
 
   // Smart apply pipeline
-  path_format?: string;
-  segment_title_format?: string;
   auto_rename_on_apply?: boolean;
   auto_write_tags_on_apply?: boolean;
   verify_after_write?: boolean;

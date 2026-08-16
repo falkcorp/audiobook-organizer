@@ -473,7 +473,12 @@ func TestInitConfigDefaults(t *testing.T) {
 	})
 
 	t.Run("path formatting defaults", func(t *testing.T) {
-		assert.Equal(t, "{author}/{series_prefix}{title}/{track_title}.{ext}", AppConfig.PathFormat)
+		// path_format is gone — folder_naming_pattern + file_naming_pattern are
+		// the only path configuration. The file default carries {track:02d},
+		// which the naming-pattern validator must accept.
+		assert.Equal(t, "{author}/{series}/{title} ({print_year})", AppConfig.FolderNamingPattern)
+		assert.Equal(t, "{title} - {track:02d}", AppConfig.FileNamingPattern)
+		assert.NoError(t, validateNamingPattern(AppConfig.FileNamingPattern))
 		assert.True(t, AppConfig.AutoRenameOnApply)
 		assert.True(t, AppConfig.AutoWriteTagsOnApply)
 		assert.True(t, AppConfig.VerifyAfterWrite)

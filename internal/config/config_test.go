@@ -52,7 +52,7 @@ func TestInitConfig(t *testing.T) {
 		t.Errorf("Expected folder_naming_pattern to be '%s', got '%s'", expectedFolderPattern, folderPattern)
 	}
 
-	expectedFilePattern := "{title} - {author} - read by {narrator}"
+	expectedFilePattern := "{title} - {track:02d}"
 	filePattern := viper.GetString("file_naming_pattern")
 	if filePattern != expectedFilePattern {
 		t.Errorf("Expected file_naming_pattern to be '%s', got '%s'", expectedFilePattern, filePattern)
@@ -430,7 +430,7 @@ func TestResetToDefaults(t *testing.T) {
 		t.Errorf("expected FolderNamingPattern to be reset to %q, got %q", expectedFolderPattern, AppConfig.FolderNamingPattern)
 	}
 
-	expectedFilePattern := "{title} - {author} - read by {narrator}"
+	expectedFilePattern := "{title} - {track:02d}"
 	if AppConfig.FileNamingPattern != expectedFilePattern {
 		t.Errorf("expected FileNamingPattern to be reset to %q, got %q", expectedFilePattern, AppConfig.FileNamingPattern)
 	}

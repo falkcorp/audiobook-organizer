@@ -73,8 +73,6 @@ interface SettingsState {
   maintenanceWindowEnabled: boolean;
   maintenanceWindowStart: number;
   maintenanceWindowEnd: number;
-  pathFormat: string;
-  segmentTitleFormat: string;
   autoRenameOnApply: boolean;
   autoWriteTagsOnApply: boolean;
   verifyAfterWrite: boolean;
@@ -572,28 +570,9 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           Controls how metadata is applied to files when using the smart apply pipeline.
-          The path format determines how files are organized on disk.
+          Where files land on disk is set by the folder and file naming patterns above —
+          this pipeline uses those same two patterns, so a book never moves twice.
         </Typography>
-      </Grid>
-
-      <Grid item xs={12}>
-        <TextField
-          fullWidth
-          label="Path Format"
-          value={props.settings.pathFormat}
-          onChange={(e) => props.handleChange('pathFormat', e.target.value)}
-          helperText="Template for file paths. Available: {author}, {series_prefix}, {title}, {track_title}, {ext}, {track}, {total_tracks}, {year}, {narrator}"
-        />
-      </Grid>
-
-      <Grid item xs={12}>
-        <TextField
-          fullWidth
-          label="Segment Title Format"
-          value={props.settings.segmentTitleFormat}
-          onChange={(e) => props.handleChange('segmentTitleFormat', e.target.value)}
-          helperText="Template for segment titles in multi-file books. Available: {title}, {track}, {total_tracks}, {author}"
-        />
       </Grid>
 
       <Grid item xs={12} sm={4}>

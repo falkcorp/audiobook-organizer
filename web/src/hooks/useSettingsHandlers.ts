@@ -494,8 +494,6 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
         metadata_scoring: metadataScoringConfig,
         ...(scheduledConfig ? { scheduled: scheduledConfig } : {}),
         tools: toolsConfig,
-        path_format: settings.pathFormat,
-        segment_title_format: settings.segmentTitleFormat,
         auto_rename_on_apply: settings.autoRenameOnApply,
         auto_write_tags_on_apply: settings.autoWriteTagsOnApply,
         verify_after_write: settings.verifyAfterWrite,
@@ -673,7 +671,7 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
       'purge_soft_deleted_after_days', 'purge_soft_deleted_delete_files', 'log_level', 'log_format',
       'enable_json_logging', 'auto_update_enabled', 'auto_update_channel', 'auto_update_check_minutes',
       'auto_update_window_start', 'auto_update_window_end', 'maintenance_window_enabled',
-      'maintenance_window_start', 'maintenance_window_end', 'path_format', 'segment_title_format',
+      'maintenance_window_start', 'maintenance_window_end',
       'auto_rename_on_apply', 'auto_write_tags_on_apply', 'verify_after_write', 'protected_paths',
       // nested sub-struct keys (CFG-1)
       'embedding', 'dedup', 'metadata_scoring', 'itunes', 'maintenance', 'scheduled', 'auto_update', 'tools',
@@ -698,8 +696,6 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
         case 'log_level':
         case 'log_format':
         case 'auto_update_channel':
-        case 'path_format':
-        case 'segment_title_format':
         case 'protected_paths':
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           if (typeof val === 'string') (cleaned as any)[key] = val;

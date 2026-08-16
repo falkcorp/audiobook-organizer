@@ -758,12 +758,16 @@ type Config struct {
 	APIKeys struct {
 	} `json:"api_keys"`
 
-	// Path formatting & apply pipeline
-	PathFormat           string `json:"path_format"`
-	SegmentTitleFormat   string `json:"segment_title_format"`
-	AutoRenameOnApply    bool   `json:"auto_rename_on_apply"`
-	AutoWriteTagsOnApply bool   `json:"auto_write_tags_on_apply"`
-	VerifyAfterWrite     bool   `json:"verify_after_write"`
+	// Apply pipeline.
+	//
+	// path_format and segment_title_format used to live here. They drove a
+	// SECOND target-path builder that disagreed with folder_naming_pattern +
+	// file_naming_pattern by two directory levels, and because both were live
+	// every organize undid the previous apply. There is now one builder and one
+	// pair of pattern keys; these two are deleted rather than migrated.
+	AutoRenameOnApply    bool `json:"auto_rename_on_apply"`
+	AutoWriteTagsOnApply bool `json:"auto_write_tags_on_apply"`
+	VerifyAfterWrite     bool `json:"verify_after_write"`
 
 	// Scheduled holds settings for all background scheduled tasks.
 	// Previously 23 flat Scheduled* fields (Wave 6 nests them here).
@@ -1003,7 +1007,11 @@ func InitConfig() {
 	viper.SetDefault("auto_scan_enabled", false)
 	viper.SetDefault("auto_scan_debounce_seconds", 30)
 	viper.SetDefault("folder_naming_pattern", "{author}/{series}/{title} ({print_year})")
-	viper.SetDefault("file_naming_pattern", "{title} - {author} - read by {narrator}")
+	// Must stay in step with the FileNamingPattern default in Defaults() below.
+	// "{track:02d}" serves both book layouts: a single-file book has no track so
+	// BuildPath drops the segment ("Foundation.m4b"), a multi-file book gets
+	// zero-padded per-track names ("Foundation - 01.m4b").
+	viper.SetDefault("file_naming_pattern", "{title} - {track:02d}")
 	viper.SetDefault("create_backups", true)
 
 	// Set storage quota defaults
@@ -1264,8 +1272,6 @@ func InitConfig() {
 	viper.SetDefault("download_client.usenet.sabnzbd.api_key", "")
 	viper.SetDefault("download_client.usenet.sabnzbd.use_https", false)
 	// Path formatting & apply pipeline defaults
-	viper.SetDefault("path_format", "{author}/{series_prefix}{title}/{track_title}.{ext}")
-	viper.SetDefault("segment_title_format", "{title} - {track}/{total_tracks}")
 	viper.SetDefault("auto_rename_on_apply", true)
 	viper.SetDefault("auto_write_tags_on_apply", true)
 	viper.SetDefault("verify_after_write", true)
@@ -1592,8 +1598,6 @@ func InitConfig() {
 			},
 
 			// Path formatting & apply pipeline
-			PathFormat:              viper.GetString("path_format"),
-			SegmentTitleFormat:      viper.GetString("segment_title_format"),
 			AutoRenameOnApply:       viper.GetBool("auto_rename_on_apply"),
 			AutoWriteTagsOnApply:    viper.GetBool("auto_write_tags_on_apply"),
 			VerifyAfterWrite:        viper.GetBool("verify_after_write"),
@@ -1665,9 +1669,9 @@ func InitConfig() {
 				DurationTierMultipliers: getFloat64Slice("metadata_scoring.duration_tier_multipliers"),
 				DurationTierScores:      getFloat64Slice("metadata_scoring.duration_tier_scores"),
 
-				BulkFetchWorkers: viper.GetInt("metadata_scoring.bulk_fetch_workers"),
+				BulkFetchWorkers:    viper.GetInt("metadata_scoring.bulk_fetch_workers"),
 				SourceFanoutWorkers: viper.GetInt("metadata_scoring.source_fanout_workers"),
-				WriteBackWorkers: viper.GetInt("metadata_scoring.write_back_workers"),
+				WriteBackWorkers:    viper.GetInt("metadata_scoring.write_back_workers"),
 			},
 
 			// AI backend-mode toggle (nested sub-struct). Modes default empty
@@ -1851,7 +1855,13 @@ func InitConfig() {
 	}) // end Mutate
 }
 
-var validPatternPlaceholder = regexp.MustCompile(`\{[A-Za-z0-9_]+\}`)
+// validPatternPlaceholder accepts a naming-pattern placeholder, optionally
+// carrying a format spec: "{title}", "{track}", "{track:02d}".
+//
+// The spec half is not optional in practice — the default file pattern is
+// "{title} - {track:02d}", and without it this validator rejects the shipped
+// default and every book fails to save its config.
+var validPatternPlaceholder = regexp.MustCompile(`\{[A-Za-z0-9_]+(?::[A-Za-z0-9]+)?\}`)
 
 func hasBalancedBraces(value string) bool {
 	return strings.Count(value, "{") == strings.Count(value, "}")
@@ -2018,8 +2028,17 @@ func ResetToDefaults() {
 			AutoScanEnabled:         false,
 			AutoScanDebounceSeconds: 30,
 			FolderNamingPattern:     "{author}/{series}/{title} ({print_year})",
-			FileNamingPattern:       "{title} - {author} - read by {narrator}",
-			CreateBackups:           true,
+			// "{track:02d}" serves BOTH book layouts, which is why it is safe as
+			// a default. A single-file book has no track, so BuildPath drops the
+			// whole " - " segment and the file is "Foundation.m4b". A multi-file
+			// book gets "Foundation - 01.m4b", "Foundation - 02.m4b", zero-padded
+			// so any file manager sorts it correctly.
+			//
+			// The previous default, "{title} - {author} - read by {narrator}",
+			// gave every file of a multi-file book the IDENTICAL name — they
+			// would all have collided on one target.
+			FileNamingPattern: "{title} - {track:02d}",
+			CreateBackups:     true,
 
 			// Storage quotas
 			EnableDiskQuota:    false,
@@ -2136,9 +2155,9 @@ func ResetToDefaults() {
 				DurationTierMultipliers: []float64{1.30, 1.20, 1.10, 1.00, 0.75, 0.50},
 				DurationTierScores:      []float64{20, 15, 10, 0, -10, -20},
 
-				BulkFetchWorkers: 4,
+				BulkFetchWorkers:    4,
 				SourceFanoutWorkers: 4,
-				WriteBackWorkers: 4,
+				WriteBackWorkers:    4,
 			},
 
 			// AI backend-mode toggle. Modes empty at rest (derived from legacy
@@ -2241,9 +2260,7 @@ func ResetToDefaults() {
 				},
 			},
 
-			// Path formatting & apply pipeline
-			PathFormat:              "{author}/{series_prefix}{title}/{track_title}.{ext}",
-			SegmentTitleFormat:      "{title} - {track}/{total_tracks}",
+			// Apply pipeline
 			AutoRenameOnApply:       true,
 			AutoWriteTagsOnApply:    true,
 			VerifyAfterWrite:        true,
