@@ -205,6 +205,65 @@ func TestSanitizePathComponent_InvisibleAndControlCharacters(t *testing.T) {
 	}
 }
 
+// TestSanitizePathComponent_NormalizesToNFC pins the fix for the quietest bug
+// in this file: the same title, byte-different.
+//
+// macOS hands out NFD, Linux and most taggers use NFC. Untreated, one book
+// produces two directories that are visually identical and neither lookup finds
+// the other -- and because they render the same, it reads as a duplicate-import
+// bug rather than an encoding bug.
+//
+// Korean is the sharp case: NFD does not merely detach an accent, it
+// decomposes a Hangul syllable into jamo. "해리" is 6 bytes composed and 12
+// decomposed, with no visual difference whatsoever.
+func TestSanitizePathComponent_NormalizesToNFC(t *testing.T) {
+	cases := []struct {
+		name     string
+		nfd, nfc string
+	}{
+		{"korean hangul jamo", "해리", "해리"},
+		{"latin combining acute", "Amélie Nothomb", "Amélie Nothomb"},
+		{"japanese dakuten", "が", "が"},
+		{"vietnamese stacked", "Nguyễn", "Nguyễn"},
+	}
+
+	dir := t.TempDir()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotNFD := SanitizePathComponent(tc.nfd)
+			gotNFC := SanitizePathComponent(tc.nfc)
+
+			if gotNFD != gotNFC {
+				t.Errorf("the same title in two encodings sanitized differently:\n  NFD -> %q (% x)\n  NFC -> %q (% x)\nThese are two directories that render identically.",
+					gotNFD, gotNFD, gotNFC, gotNFC)
+			}
+
+			// Both spellings must land on ONE file, not two. os.WriteFile is
+			// idempotent, so a second distinct name shows up as a second entry.
+			for _, form := range []string{tc.nfd, tc.nfc} {
+				p := filepath.Join(dir, tc.name, SanitizePathComponent(form)+".m4b")
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatalf("MkdirAll: %v", err)
+				}
+				if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+					t.Fatalf("WriteFile(%q): %v", p, err)
+				}
+			}
+			entries, err := os.ReadDir(filepath.Join(dir, tc.name))
+			if err != nil {
+				t.Fatalf("ReadDir: %v", err)
+			}
+			if len(entries) != 1 {
+				names := make([]string, 0, len(entries))
+				for _, e := range entries {
+					names = append(names, e.Name())
+				}
+				t.Errorf("the two encodings created %d files, want 1: %q", len(entries), names)
+			}
+		})
+	}
+}
+
 // TestSanitizePathComponent_PreservesMeaningfulJoiners is the counterweight to
 // the test above, and the reason the invisible-character sweep is a deny-list
 // rather than "strip everything with no visible glyph".
