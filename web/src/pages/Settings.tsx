@@ -148,8 +148,6 @@ export interface SettingsState {
   maintenanceWindowEnabled: boolean;
   maintenanceWindowStart: number;
   maintenanceWindowEnd: number;
-  pathFormat: string;
-  segmentTitleFormat: string;
   autoRenameOnApply: boolean;
   autoWriteTagsOnApply: boolean;
   verifyAfterWrite: boolean;
@@ -326,8 +324,6 @@ export function Settings() {
     maintenanceWindowEnd: 4,
 
     // Smart apply pipeline
-    pathFormat: '{author}/{series_prefix}{title}/{track_title}.{ext}',
-    segmentTitleFormat: '{title} - {track}/{total_tracks}',
     autoRenameOnApply: true,
     autoWriteTagsOnApply: true,
     verifyAfterWrite: true,
@@ -596,8 +592,6 @@ export function Settings() {
         maintenanceWindowEnd: config.maintenance?.window_end ?? config.maintenance_window_end ?? 4,
 
         // Smart apply pipeline
-        pathFormat: config.path_format || '{author}/{series_prefix}{title}/{track_title}.{ext}',
-        segmentTitleFormat: config.segment_title_format || '{title} - {track}/{total_tracks}',
         autoRenameOnApply: config.auto_rename_on_apply ?? true,
         autoWriteTagsOnApply: config.auto_write_tags_on_apply ?? true,
         verifyAfterWrite: config.verify_after_write ?? true,
