@@ -34,8 +34,18 @@ func (s *Server) wireOperationsRoutes(
 	// that stay in server_lifecycle.go (active/recent/reconcile/itunes-path-*/
 	// cleanup-version-groups/results/file-ops) — all distinct method+path pairs,
 	// all using the identical `:id` param name, so Gin registers them cleanly.
-	protected.GET("/operations", s.perm(auth.PermLibraryView), operationsH.ListOperations)
-	protected.GET("/operations/stale", s.perm(auth.PermLibraryView), operationsH.ListStaleOperations)
+	// RETIRED 2026-08-16: GET /operations, /operations/:id/status,
+	// /operations/:id/logs.
+	//
+	// All three read the legacy `operations` table, which never transitions rows
+	// out of `pending`: read against production 2026-08-16 it reported 183 of 200
+	// rows pending, some six days old, while the v2 record for the same window
+	// showed 179 completed, 13 interrupted_dropped, 6 canceled, 1 failed. The list
+	// route had no caller at all; status and logs tried v2 first and fell back to
+	// that table, so anything falling through got a confidently wrong answer.
+	//
+	// Replaced by GET /operations/timeline and GET /operations/v2/:id, the latter
+	// now taking ?limit= so it covers the old ?tail= too.
 	// RETIRED 2026-08-16: POST /operations/{scan,organize,transcode,optimize}.
 	//
 	// All four were pure shims — the handler body was a single launchOp() call
@@ -46,8 +56,9 @@ func (s *Server) wireOperationsRoutes(
 	// and the UI said "Failed to start scan" WHILE THE SCAN WAS RUNNING.
 	//
 	// Callers now POST /operations/v2 {def_id: "library.scan", params: {...}}.
-	protected.GET("/operations/:id/status", s.perm(auth.PermLibraryView), operationsH.GetOperationStatus)
-	protected.GET("/operations/:id/logs", s.perm(auth.PermLibraryView), operationsH.GetOperationLogs)
+
+	// ── still on the legacy handler; each needs a v2 home before it can go ──
+	protected.GET("/operations/stale", s.perm(auth.PermLibraryView), operationsH.ListStaleOperations)
 	protected.GET("/operations/:id/result", s.perm(auth.PermLibraryView), operationsH.GetOperationResult)
 	protected.DELETE("/operations/:id", s.perm(auth.PermSettingsManage), operationsH.CancelOperation)
 	protected.POST("/operations/clear-stale", s.perm(auth.PermSettingsManage), operationsH.ClearStaleOperations)

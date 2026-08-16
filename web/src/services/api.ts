@@ -1972,13 +1972,34 @@ export async function startTranscode(
   );
 }
 
+/**
+ * getOperationStatus reads a single operation from the v2 store.
+ *
+ * Was GET /operations/:id/status, which tried v2 first and FELL BACK to the
+ * legacy `operations` table. That fallback is the reason this had to move rather
+ * than simply be renamed: the legacy table never transitions rows out of
+ * `pending`. Read against production on 2026-08-16 it reported 183 of 200 rows
+ * pending, some six days old, while the v2 record for the same period showed
+ * 179 completed. Anything that fell through to it got a confidently wrong answer.
+ *
+ * The v2 field names differ, so the mapping the Go handler used to do
+ * (operationV2ToLegacy) happens here instead. Callers keep the `Operation` shape
+ * they already consume — this is a change of source, not of contract.
+ */
 export async function getOperationStatus(id: string): Promise<Operation> {
-  const response = await apiFetch(`${API_BASE}/operations/${id}/status`);
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to fetch operation status');
-  }
-  const body = await response.json();
-  return body.data;
+  const op = await getOperationV2(id);
+  return {
+    id: op.id,
+    type: op.def_id,
+    status: op.status,
+    progress: op.progress_current ?? 0,
+    total: op.progress_total ?? 0,
+    message: op.progress_message ?? '',
+    created_at: op.queued_at,
+    started_at: op.started_at,
+    completed_at: op.completed_at,
+    error_message: op.error_message,
+  } as Operation;
 }
 
 // Poll an operation until it completes or fails. Calls onProgress with each update.
@@ -2014,23 +2035,27 @@ export async function optimizeDatabase(): Promise<OptimizeDatabaseResult> {
   return body.data;
 }
 
-export async function getOperationLogs(id: string): Promise<OperationLog[]> {
-  const response = await apiFetch(`${API_BASE}/operations/${id}/logs`);
+/**
+ * getOperationLogs reads an operation's log lines from the v2 endpoint.
+ *
+ * Was GET /operations/:id/logs, which — like the status route — fell back to the
+ * legacy `operations` table when v2 had no row. GET /operations/v2/:id returns
+ * the operation AND its logs in one response, so this needs no separate route.
+ */
+export async function getOperationLogs(id: string, limit = 50): Promise<OperationLog[]> {
+  const response = await apiFetch(
+    `${API_BASE}/operations/v2/${encodeURIComponent(id)}?limit=${limit}`
+  );
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to fetch operation logs');
   }
   const body = await response.json();
-  const data = body.data ?? body;
-  return data.items || data.logs || [];
+  return (body?.data?.logs ?? body?.logs ?? []) as OperationLog[];
 }
 
 export async function getOperationLogsTail(id: string, tail: number): Promise<OperationLog[]> {
-  const response = await apiFetch(`${API_BASE}/operations/${id}/logs?tail=${tail}`);
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to fetch operation logs tail');
-  }
-  const data = await response.json();
-  return data.items || data.logs || [];
+  // `tail` becomes the v2 `limit`: both mean "the most recent N lines".
+  return getOperationLogs(id, tail);
 }
 
 export async function cancelOperation(id: string): Promise<void> {

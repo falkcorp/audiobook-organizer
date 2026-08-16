@@ -108,28 +108,6 @@ func (h *Handler) resolveScheduler() Scheduler {
 
 // --- Operation status / cancel ---
 
-// GetOperationStatus implements GET /operations/:id/status.
-func (h *Handler) GetOperationStatus(c *gin.Context) {
-	if h.store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
-		return
-	}
-	id := c.Param("id")
-
-	// Try v2 registry first; fall back to legacy table.
-	if v2, err := h.store.GetOperationV2(id); err == nil && v2 != nil {
-		httputil.RespondWithOK(c, operationV2ToLegacy(v2))
-		return
-	}
-
-	op, err := h.store.GetOperationByID(id)
-	if err != nil || op == nil {
-		httputil.RespondWithNotFound(c, "operation", id)
-		return
-	}
-	httputil.RespondWithOK(c, op)
-}
-
 // operationV2ToLegacy converts a v2 registry row to the legacy Operation shape
 // that the frontend's pollOperation helper expects (id, status, progress, etc.).
 func operationV2ToLegacy(v2 *database.OperationV2Row) database.Operation {
@@ -400,25 +378,6 @@ func (h *Handler) AuditFileConsistency(c *gin.Context) {
 
 // --- Operation listing / logs / result / changes ---
 
-// ListOperations returns a snapshot of currently queued/running operations with
-// basic progress. Implements GET /operations.
-func (h *Handler) ListOperations(c *gin.Context) {
-	params := httputil.ParsePaginationParams(c)
-	if h.store == nil {
-		httputil.RespondWithOK(c, gin.H{"items": []database.Operation{}, "total": 0, "limit": params.Limit, "offset": params.Offset})
-		return
-	}
-	ops, total, err := h.store.ListOperations(params.Limit, params.Offset)
-	if err != nil {
-		httputil.InternalError(c, "failed to list operations", err)
-		return
-	}
-	if ops == nil {
-		ops = []database.Operation{}
-	}
-	httputil.RespondWithOK(c, gin.H{"items": ops, "total": total, "limit": params.Limit, "offset": params.Offset})
-}
-
 // ListStaleOperations implements GET /operations/stale.
 func (h *Handler) ListStaleOperations(c *gin.Context) {
 	timeoutMinutes := config.AppConfig.OperationTimeoutMinutes
@@ -441,52 +400,6 @@ func (h *Handler) ListStaleOperations(c *gin.Context) {
 		"count":           len(stale),
 		"operations":      stale,
 	})
-}
-
-// GetOperationLogs returns logs for a given operation. UOS v2 ops persist their
-// log lines to op_logs_v2 via dbReporter; v1 ops used operation_logs. We query
-// v2 first (canonical for all currently-enqueued ops) and fall back to v1 only
-// if v2 has nothing — legacy rows from before the v2 cutover. Implements GET
-// /operations/:id/logs.
-func (h *Handler) GetOperationLogs(c *gin.Context) {
-	if h.store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
-		return
-	}
-	id := c.Param("id")
-	limit := 1000
-	if tailStr := c.Query("tail"); tailStr != "" {
-		if n, convErr := strconv.Atoi(tailStr); convErr == nil && n > 0 {
-			limit = n
-		}
-	}
-	type logItem struct {
-		Level     string    `json:"level"`
-		Message   string    `json:"message"`
-		Attrs     string    `json:"attrs,omitempty"`
-		CreatedAt time.Time `json:"created_at"`
-	}
-	var items []logItem
-	v2Logs, err := h.store.GetOpLogsV2(id, limit)
-	if err != nil {
-		httputil.InternalError(c, "failed to get operation logs", err)
-		return
-	}
-	for _, l := range v2Logs {
-		items = append(items, logItem{Level: l.Level, Message: l.Message, Attrs: l.Attrs, CreatedAt: l.CreatedAt})
-	}
-	if len(items) == 0 {
-		v1Logs, err := h.store.GetOperationLogs(id)
-		if err == nil {
-			for _, l := range v1Logs {
-				items = append(items, logItem{Level: l.Level, Message: l.Message, CreatedAt: l.CreatedAt})
-			}
-			if len(items) > limit {
-				items = items[len(items)-limit:]
-			}
-		}
-	}
-	httputil.RespondWithOK(c, gin.H{"items": items, "count": len(items)})
 }
 
 // GetOperationResult implements GET /operations/:id/result.

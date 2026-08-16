@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -100,7 +101,21 @@ func (h *OperationsV2Handler) GetOperationV2(c *gin.Context) {
 		return
 	}
 
-	logs, err := h.opsStore.GetOpLogsV2(id, 50)
+	// ?limit= makes this a superset of the retired GET /operations/:id/logs?tail=,
+	// which is what let that route be deleted rather than kept alongside. The 50
+	// default preserves the previous behaviour for callers that pass nothing.
+	//
+	// Capped: the log window is unbounded per op (the running scan had emitted
+	// tens of thousands of lines by the time this was written), so an
+	// unvalidated limit is an easy way to ask the server to marshal all of them.
+	logLimit := 50
+	if raw := c.Query("limit"); raw != "" {
+		if n, convErr := strconv.Atoi(raw); convErr == nil && n > 0 {
+			logLimit = min(n, 5000)
+		}
+	}
+
+	logs, err := h.opsStore.GetOpLogsV2(id, logLimit)
 	if err != nil {
 		// Non-fatal: return the op without logs.
 		logs = nil
@@ -121,6 +136,46 @@ func (h *OperationsV2Handler) GetOperationV2(c *gin.Context) {
 		"operation": opResp,
 		"logs":      logResp,
 	})
+}
+
+// GetOperationLogs serves an operation's log lines on their own, satisfying
+// system.OperationLogsProvider.
+//
+// It exists because the legacy operations handler used to provide this and the
+// system/diagnostics routes consumed it from there. That implementation fell back
+// to the legacy `operations` table, which never moves rows out of `pending`; this
+// one reads v2 only. Same interface, honest source.
+func (h *OperationsV2Handler) GetOperationLogs(c *gin.Context) {
+	id := c.Param("id")
+	if h.opsStore == nil {
+		httputil.RespondWithOK(c, gin.H{"items": []OpLogV2Response{}})
+		return
+	}
+
+	// ?tail= is accepted as an alias for ?limit=: the retired route spelled it
+	// that way and diagnostics callers may still send it.
+	limit := 50
+	for _, key := range []string{"limit", "tail"} {
+		if raw := c.Query(key); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+				limit = min(n, 5000)
+				break
+			}
+		}
+	}
+
+	logs, err := h.opsStore.GetOpLogsV2(id, limit)
+	if err != nil {
+		httputil.InternalError(c, "failed to fetch operation logs", err)
+		return
+	}
+	resp := make([]OpLogV2Response, 0, len(logs))
+	for _, l := range logs {
+		resp = append(resp, logRowToResponse(l))
+	}
+	// Both keys: the retired route answered `items`, the v2 single-op route
+	// answers `logs`, and callers of this provider read one or the other.
+	httputil.RespondWithOK(c, gin.H{"items": resp, "logs": resp})
 }
 
 // CancelOperationV2 implements DELETE /api/v1/operations/v2/:id.

@@ -85,42 +85,6 @@ func run(method, routePath, reqPath string, body []byte, register func(r *gin.En
 
 // --- GetOperationStatus ---
 
-func TestGetOperationStatus_LegacyFound(t *testing.T) {
-	h, store, _, _, _, _ := newTestHandler(t)
-	store.EXPECT().GetOperationV2("op-1").Return(nil, errors.New("not found"))
-	store.EXPECT().GetOperationByID("op-1").Return(&database.Operation{ID: "op-1", Status: "completed"}, nil)
-
-	w := run(http.MethodGet, "/operations/:id/status", "/operations/op-1/status", nil, func(r *gin.Engine) {
-		r.GET("/operations/:id/status", h.GetOperationStatus)
-	})
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-func TestGetOperationStatus_V2Found(t *testing.T) {
-	h, store, _, _, _, _ := newTestHandler(t)
-	now := time.Now()
-	store.EXPECT().GetOperationV2("v2-1").Return(&database.OperationV2Row{ID: "v2-1", DefID: "dedup.scan", Status: "completed", QueuedAt: now}, nil)
-
-	w := run(http.MethodGet, "/operations/:id/status", "/operations/v2-1/status", nil, func(r *gin.Engine) {
-		r.GET("/operations/:id/status", h.GetOperationStatus)
-	})
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "v2-1", resp["data"].(map[string]any)["id"])
-}
-
-func TestGetOperationStatus_NotFound(t *testing.T) {
-	h, store, _, _, _, _ := newTestHandler(t)
-	store.EXPECT().GetOperationV2("nope").Return(nil, errors.New("nf"))
-	store.EXPECT().GetOperationByID("nope").Return(nil, errors.New("nf"))
-
-	w := run(http.MethodGet, "/operations/:id/status", "/operations/nope/status", nil, func(r *gin.Engine) {
-		r.GET("/operations/:id/status", h.GetOperationStatus)
-	})
-	assert.Equal(t, http.StatusNotFound, w.Code)
-}
-
 // --- CancelOperation ---
 
 func TestCancelOperation_ViaPipeline(t *testing.T) {
@@ -259,28 +223,6 @@ func TestAuditFileConsistency_Empty(t *testing.T) {
 
 // --- ListOperations ---
 
-func TestListOperations_Success(t *testing.T) {
-	h, store, _, _, _, _ := newTestHandler(t)
-	store.EXPECT().ListOperations(mock.AnythingOfType("int"), mock.AnythingOfType("int")).
-		Return([]database.Operation{{ID: "o1"}, {ID: "o2"}}, 2, nil)
-	w := run(http.MethodGet, "/operations", "/operations?limit=10&offset=0", nil, func(r *gin.Engine) {
-		r.GET("/operations", h.ListOperations)
-	})
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, float64(2), resp["data"].(map[string]any)["total"])
-}
-
-func TestListOperations_StoreError(t *testing.T) {
-	h, store, _, _, _, _ := newTestHandler(t)
-	store.EXPECT().ListOperations(mock.AnythingOfType("int"), mock.AnythingOfType("int")).Return(nil, 0, errors.New("db"))
-	w := run(http.MethodGet, "/operations", "/operations", nil, func(r *gin.Engine) {
-		r.GET("/operations", h.ListOperations)
-	})
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
-}
-
 // --- ListStaleOperations ---
 
 func TestListStaleOperations_UsesInjectedCollector(t *testing.T) {
@@ -295,36 +237,6 @@ func TestListStaleOperations_UsesInjectedCollector(t *testing.T) {
 }
 
 // --- GetOperationLogs ---
-
-func TestGetOperationLogs_V1Fallback(t *testing.T) {
-	h, store, _, _, _, _ := newTestHandler(t)
-	store.EXPECT().GetOpLogsV2("op-1", 1000).Return(nil, nil)
-	store.EXPECT().GetOperationLogs("op-1").Return([]database.OperationLog{
-		{ID: 1, Level: "info", Message: "a"},
-		{ID: 2, Level: "info", Message: "b"},
-	}, nil)
-	w := run(http.MethodGet, "/operations/:id/logs", "/operations/op-1/logs", nil, func(r *gin.Engine) {
-		r.GET("/operations/:id/logs", h.GetOperationLogs)
-	})
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, float64(2), resp["data"].(map[string]any)["count"])
-}
-
-func TestGetOperationLogs_V2(t *testing.T) {
-	h, store, _, _, _, _ := newTestHandler(t)
-	store.EXPECT().GetOpLogsV2("op-2", 1000).Return([]database.OpLogV2Row{
-		{Level: "info", Message: "x"},
-	}, nil)
-	w := run(http.MethodGet, "/operations/:id/logs", "/operations/op-2/logs", nil, func(r *gin.Engine) {
-		r.GET("/operations/:id/logs", h.GetOperationLogs)
-	})
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, float64(1), resp["data"].(map[string]any)["count"])
-}
 
 // --- GetOperationResult ---
 
