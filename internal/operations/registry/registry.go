@@ -475,6 +475,12 @@ func (r *Registry) RegisterOp(def OperationDef) error {
 		}
 	}
 
+	// The ONLY write to r.defs in this package -- every other reference is a
+	// read. That is what makes the validation above a contract rather than a
+	// suggestion: there is no second path by which a def reaches the registry,
+	// so no op can exist without having declared its Liveness and ResumePolicy.
+	// If you are about to add another assignment here, route it through this
+	// function instead.
 	r.defs[def.ID] = def
 	r.mu.Unlock()
 
