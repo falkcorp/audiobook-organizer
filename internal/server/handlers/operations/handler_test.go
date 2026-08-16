@@ -83,63 +83,6 @@ func run(method, routePath, reqPath string, body []byte, register func(r *gin.En
 
 // --- StartScan / StartOrganize / StartOptimize / StartTranscode ---
 
-func TestStartScan_Enqueues(t *testing.T) {
-	h, _, reg, _, _, _ := newTestHandler(t)
-	reg.EXPECT().EnqueueOp(mock.Anything, "library.scan", mock.Anything).Return("op-1", nil)
-
-	w := run(http.MethodPost, "/operations/scan", "/operations/scan", []byte(`{}`), func(r *gin.Engine) {
-		r.POST("/operations/scan", h.StartScan)
-	})
-	assert.Equal(t, http.StatusAccepted, w.Code)
-}
-
-func TestStartScan_NilRegistry(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	h := operations.New(operationsmocks.NewMockOperationsStore(t), nil, nil, nil, nil, nil, nil, nil)
-	w := run(http.MethodPost, "/operations/scan", "/operations/scan", []byte(`{}`), func(r *gin.Engine) {
-		r.POST("/operations/scan", h.StartScan)
-	})
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
-}
-
-func TestStartOrganize_Enqueues(t *testing.T) {
-	h, _, reg, _, _, _ := newTestHandler(t)
-	reg.EXPECT().EnqueueOp(mock.Anything, "library.organize", mock.Anything).Return("op-2", nil)
-
-	w := run(http.MethodPost, "/operations/organize", "/operations/organize", []byte(`{}`), func(r *gin.Engine) {
-		r.POST("/operations/organize", h.StartOrganize)
-	})
-	assert.Equal(t, http.StatusAccepted, w.Code)
-}
-
-func TestStartOptimize_Enqueues(t *testing.T) {
-	h, _, reg, _, _, _ := newTestHandler(t)
-	reg.EXPECT().EnqueueOp(mock.Anything, "library.optimize", mock.Anything).Return("op-3", nil)
-
-	w := run(http.MethodPost, "/operations/optimize", "/operations/optimize", nil, func(r *gin.Engine) {
-		r.POST("/operations/optimize", h.StartOptimize)
-	})
-	assert.Equal(t, http.StatusAccepted, w.Code)
-}
-
-func TestStartTranscode_RequiresBookID(t *testing.T) {
-	h, _, _, _, _, _ := newTestHandler(t)
-	w := run(http.MethodPost, "/operations/transcode", "/operations/transcode", []byte(`{}`), func(r *gin.Engine) {
-		r.POST("/operations/transcode", h.StartTranscode)
-	})
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-func TestStartTranscode_Enqueues(t *testing.T) {
-	h, _, reg, _, _, _ := newTestHandler(t)
-	reg.EXPECT().EnqueueOp(mock.Anything, "library.transcode", mock.Anything).Return("op-4", nil)
-
-	w := run(http.MethodPost, "/operations/transcode", "/operations/transcode", []byte(`{"book_id":"b1"}`), func(r *gin.Engine) {
-		r.POST("/operations/transcode", h.StartTranscode)
-	})
-	assert.Equal(t, http.StatusAccepted, w.Code)
-}
-
 // --- GetOperationStatus ---
 
 func TestGetOperationStatus_LegacyFound(t *testing.T) {

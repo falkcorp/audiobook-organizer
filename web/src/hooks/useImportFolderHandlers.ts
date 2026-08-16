@@ -92,18 +92,19 @@ export function useImportFolderHandlers(
       },
     }));
 
-    let total = 50;
-    let errors: string[] = [];
+    // `total` and `errors` are seeded, not read from the trigger response.
+    //
+    // This used to read response.total / response.errors, which never existed:
+    // starting a scan is ASYNCHRONOUS and answers only an operation id, so both
+    // were undefined at runtime long before the type said so. The counts arrive
+    // from the operation's own progress updates, which the poller below drives.
+    // Typing the trigger honestly as { id } is what surfaced it.
+    const total = 50;
+    const errors: string[] = [];
     let operationId: string | undefined;
 
     try {
       const response = await api.startScan(folder.path);
-      if (typeof response.total === 'number') {
-        total = response.total;
-      }
-      if (Array.isArray(response.errors)) {
-        errors = response.errors;
-      }
       operationId = response.id;
     } catch (error) {
       console.error('Failed to scan import folder:', error);

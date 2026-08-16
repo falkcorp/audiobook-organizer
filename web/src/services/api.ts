@@ -1900,44 +1900,76 @@ export async function startLibraryImport(path: string): Promise<{ operation_id: 
 }
 
 // Operations
+
+/**
+ * triggerOp enqueues a v2 operation and returns its id.
+ *
+ * Every trigger below used to POST to a dedicated legacy route
+ * (/operations/scan, /operations/organize, ...). Those routes were pure shims:
+ * the Go handler did nothing but forward to the same registry EnqueueOp this
+ * calls directly, so the only thing they added was a second response shape to
+ * get wrong — which is exactly what happened.
+ *
+ * The legacy routes answer `202 {"op_id":..., "id":...}` UNWRAPPED, while the
+ * callers read `.data.id`. `.data` is undefined on that shape, so `op.id` threw
+ * a TypeError, the caller's catch swallowed it, and the UI reported "Failed to
+ * start scan" — while the scan was in fact running. A start that succeeds and
+ * reports failure is worse than one that fails outright: the user starts it
+ * again.
+ *
+ * Returning `{ id }` is what every call site actually consumes.
+ */
+async function triggerOp(
+  defId: string,
+  params: Record<string, unknown>,
+  failureMessage: string
+): Promise<{ id: string }> {
+  const response = await apiFetch(`${API_BASE}/operations/v2`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ def_id: defId, params }),
+  });
+  if (!response.ok) throw await buildApiError(response, failureMessage);
+  const body = await response.json();
+  // The trigger answers `{"op_id": "..."}`; tolerate a `data`-wrapped form so a
+  // future change to the envelope does not silently reintroduce the bug above.
+  const id = body?.op_id ?? body?.id ?? body?.data?.op_id ?? body?.data?.id ?? '';
+  return { id };
+}
+
 export async function startScan(
   folderPath?: string,
-  priority?: number,
+  _priority?: number,
   forceUpdate?: boolean
-): Promise<Operation> {
-  return wrapTrigger('library.scan', async () => {
-    const response = await apiFetch(`${API_BASE}/operations/scan`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        folder_path: folderPath,
-        priority,
-        force_update: forceUpdate,
-      }),
-    });
-    if (!response.ok) throw await buildApiError(response, 'Failed to start scan');
-    return (await response.json()).data;
-  });
+): Promise<{ id: string }> {
+  // _priority is accepted and ignored, exactly as before: the legacy route put it
+  // in the request body, but libraryScanParams has no priority field, so it was
+  // dropped server-side too. Kept in the signature so call sites need no edit.
+  return wrapTrigger('library.scan', () =>
+    triggerOp(
+      'library.scan',
+      { folder_path: folderPath, force_update: forceUpdate },
+      'Failed to start scan'
+    )
+  );
 }
 
 export async function startTranscode(
   bookId: string,
   opts?: { output_format?: string; bitrate?: number; keep_original?: boolean }
-): Promise<Operation> {
-  return wrapTrigger('library.transcode', async () => {
-    const response = await apiFetch(`${API_BASE}/operations/transcode`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+): Promise<{ id: string }> {
+  return wrapTrigger('library.transcode', () =>
+    triggerOp(
+      'library.transcode',
+      {
         book_id: bookId,
         output_format: opts?.output_format,
         bitrate: opts?.bitrate,
         keep_original: opts?.keep_original,
-      }),
-    });
-    if (!response.ok) throw await buildApiError(response, 'Failed to start transcode');
-    return (await response.json()).data;
-  });
+      },
+      'Failed to start transcode'
+    )
+  );
 }
 
 export async function getOperationStatus(id: string): Promise<Operation> {
@@ -2122,22 +2154,20 @@ export async function startOrganize(
   priority?: number,
   bookIds?: string[],
   options?: { fetchMetadataFirst?: boolean; syncITunesFirst?: boolean }
-): Promise<Operation> {
-  return wrapTrigger('library.organize', async () => {
-    const response = await apiFetch(`${API_BASE}/operations/organize`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+): Promise<{ id: string }> {
+  void priority; // ignored server-side; see startScan
+  return wrapTrigger('library.organize', () =>
+    triggerOp(
+      'library.organize',
+      {
         folder_path: folderPath,
-        priority,
         book_ids: bookIds,
         fetch_metadata_first: options?.fetchMetadataFirst,
         sync_itunes_first: options?.syncITunesFirst,
-      }),
-    });
-    if (!response.ok) throw await buildApiError(response, 'Failed to start organize');
-    return (await response.json()).data;
-  });
+      },
+      'Failed to start organize'
+    )
+  );
 }
 
 export async function getSystemLogs(params?: {
@@ -5746,12 +5776,8 @@ export async function runMaintenanceJob(
 
 export async function startOptimize(): Promise<{ operation_id: string }> {
   return wrapTrigger('library.optimize', async () => {
-    const response = await apiFetch(`${API_BASE}/operations/optimize`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
-    if (!response.ok) throw await buildApiError(response, 'Failed to start optimize operation');
-    return response.json();
+    const { id } = await triggerOp('library.optimize', {}, 'Failed to start optimize operation');
+    return { operation_id: id };
   });
 }
 
