@@ -1,12 +1,13 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-07-13
+// last-edited: 2026-08-16
 
 package metafetch
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -2071,14 +2072,71 @@ func TestWriteBackMetadataForBook(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestApplyMetadataFileIO(t *testing.T) {
-	t.Run("book_not_found_no_panic", func(t *testing.T) {
+	t.Run("book_not_found_is_reported", func(t *testing.T) {
 		mock := &database.MockStore{
 			GetBookByIDFunc: func(id string) (*database.Book, error) {
 				return nil, nil
 			},
 		}
 		svc := NewService(mock)
-		// Should not panic
-		svc.ApplyMetadataFileIO("nonexistent")
+		err := svc.ApplyMetadataFileIO("nonexistent")
+		require.Error(t, err, "a missing book must be reported, not silently ignored")
+		assert.Contains(t, err.Error(), "nonexistent", "the error must name the book")
+	})
+
+	t.Run("store_error_is_reported", func(t *testing.T) {
+		mock := &database.MockStore{
+			GetBookByIDFunc: func(id string) (*database.Book, error) {
+				return nil, errors.New("pebble closed")
+			},
+		}
+		svc := NewService(mock)
+		err := svc.ApplyMetadataFileIO("b1")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "pebble closed")
+	})
+
+	// The one that matters. A failure inside runApplyPipeline — which is where
+	// the RENAME lives — used to be swallowed into a slog.Warn, so every caller
+	// saw the same "success" it saw when every file moved cleanly. That is what
+	// let the batch-apply API report Applied:true for books whose files had
+	// never moved.
+	t.Run("pipeline_failure_propagates", func(t *testing.T) {
+		origRename := config.AppConfig.AutoRenameOnApply
+		config.AppConfig.AutoRenameOnApply = true
+		t.Cleanup(func() { config.AppConfig.AutoRenameOnApply = origRename })
+
+		mock := &database.MockStore{
+			GetBookByIDFunc: func(id string) (*database.Book, error) {
+				return &database.Book{ID: id, Title: "A Book", FilePath: "/lib/a.m4b"}, nil
+			},
+			GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
+				return nil, errors.New("list exploded")
+			},
+		}
+		svc := NewService(mock)
+		err := svc.ApplyMetadataFileIO("b1")
+		require.Error(t, err, "a pipeline failure must reach the caller")
+		assert.Contains(t, err.Error(), "list exploded")
+		assert.Contains(t, err.Error(), "b1", "the error must name the book")
+	})
+
+	t.Run("clean_run_returns_nil", func(t *testing.T) {
+		origRename := config.AppConfig.AutoRenameOnApply
+		origTags := config.AppConfig.AutoWriteTagsOnApply
+		config.AppConfig.AutoRenameOnApply = false
+		config.AppConfig.AutoWriteTagsOnApply = false
+		t.Cleanup(func() {
+			config.AppConfig.AutoRenameOnApply = origRename
+			config.AppConfig.AutoWriteTagsOnApply = origTags
+		})
+
+		mock := &database.MockStore{
+			GetBookByIDFunc: func(id string) (*database.Book, error) {
+				return &database.Book{ID: id, FilePath: "/lib/a.m4b"}, nil
+			},
+		}
+		svc := NewService(mock)
+		assert.NoError(t, svc.ApplyMetadataFileIO("b1"))
 	})
 }
