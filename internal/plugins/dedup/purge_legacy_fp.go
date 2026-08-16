@@ -61,6 +61,7 @@ type purgeLegacyFPParams struct {
 func (p *Plugin) purgeLegacyFPDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.purge-legacy-fp-candidates",
+		Liveness: sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Purge legacy fingerprint candidates",
 		Description: "Marks pre-whole-file-fingerprint exact/embedding sim=1.0 candidates as stale-fp. " +

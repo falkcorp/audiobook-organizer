@@ -82,6 +82,7 @@ func (r cleanupOrphanReport) summary() string {
 func (p *Plugin) cleanupOrphanEmbeddingsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.cleanup-orphan-embeddings",
+		Liveness: sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Clean up orphaned book embeddings",
 		Description: "Retroactive counterpart to PR #1802's DeleteBook fix: finds emb:v:book:* rows " +

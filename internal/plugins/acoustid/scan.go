@@ -18,6 +18,7 @@ import (
 func (p *Plugin) scanDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "acoustid.scan",
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "acoustid",
 		DisplayName:     "AcoustID fingerprint scan",
 		Description:     "Runs AcoustID fingerprint-based dedup scan comparing acoustic fingerprints.",

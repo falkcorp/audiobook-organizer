@@ -25,6 +25,7 @@ func (p *Plugin) purgeDeletedDef() sdk.OperationDef {
 	sched := "0 3 * * *" // 03:00 daily
 	return sdk.OperationDef{
 		ID:              "maintenance.purge-deleted",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Purge soft-deleted books",
 		Description:     "Permanently removes soft-deleted books that have exceeded the retention period.",
@@ -58,6 +59,7 @@ func (p *Plugin) tombstoneCleanupDef() sdk.OperationDef {
 	sched := "0 4 * * *" // 04:00 daily
 	return sdk.OperationDef{
 		ID:              "maintenance.tombstone-cleanup",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Resolve author tombstone chains",
 		Description:     "Flattens multi-hop author tombstone chains (A→B→C becomes A→C).",
@@ -97,6 +99,8 @@ func (p *Plugin) tempFileCleanupDef() sdk.OperationDef {
 	sched := "30 1 * * *" // 01:30 daily
 	return sdk.OperationDef{
 		ID:              "maintenance.temp-file-cleanup",
+		Liveness: sdk.LivenessNone,
+		ProgressTimeout: 20 * time.Minute, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "Clean orphaned temp files",
 		Description:     "Removes orphaned *.tmp.m4b / *.tmp.m4a files left by crashed ffmpeg operations.",
@@ -127,6 +131,7 @@ func (p *Plugin) cleanupActivityLogDef() sdk.OperationDef {
 	sched := "0 0 * * *" // midnight daily
 	return sdk.OperationDef{
 		ID:              "maintenance.cleanup-activity-log",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Clean activity log",
 		Description:     "Compacts old change entries into daily digests and prunes old debug entries.",
@@ -165,6 +170,8 @@ func (p *Plugin) purgeOldLogsDef() sdk.OperationDef {
 	sched := "0 2 * * 0" // 02:00 every Sunday
 	return sdk.OperationDef{
 		ID:              "maintenance.purge-old-logs",
+		Liveness: sdk.LivenessNone,
+		ProgressTimeout: 30 * time.Minute, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "Prune old operation logs",
 		Description:     "Prunes operation logs and system activity logs older than the configured retention period.",
@@ -199,6 +206,8 @@ func (p *Plugin) cleanupOldBackupsDef() sdk.OperationDef {
 	sched := "0 5 * * *" // 05:00 daily
 	return sdk.OperationDef{
 		ID:              "maintenance.cleanup-old-backups",
+		Liveness: sdk.LivenessNone,
+		ProgressTimeout: 30 * time.Minute, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "Clean old backup files",
 		Description:     "Removes .bak-* backup files past the configured retention period.",
@@ -258,6 +267,8 @@ func (p *Plugin) trashCleanupDef() sdk.OperationDef {
 	sched := "0 6 * * *" // 06:00 daily
 	return sdk.OperationDef{
 		ID:              "maintenance.trash-cleanup",
+		Liveness: sdk.LivenessNone,
+		ProgressTimeout: 20 * time.Minute, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "Purge trashed book versions",
 		Description:     "Purges trashed book file versions past their 14-day TTL.",
@@ -285,6 +296,8 @@ func (p *Plugin) archiveSweepDef() sdk.OperationDef {
 	sched := "0 7 * * *" // 07:00 daily
 	return sdk.OperationDef{
 		ID:              "maintenance.archive-sweep",
+		Liveness: sdk.LivenessNone,
+		ProgressTimeout: 20 * time.Minute, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "Archive sweep",
 		Description:     "Removes soft-deleted books past the 30-day retention window.",

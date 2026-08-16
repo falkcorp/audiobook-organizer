@@ -16,6 +16,7 @@ import (
 func (p *Plugin) protectedPathsSyncDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "deluge.protected-paths-sync",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "deluge",
 		DisplayName:     "Sync protected paths from Deluge",
 		Description:     "Refreshes the protected-path cache from Deluge torrent save paths.",

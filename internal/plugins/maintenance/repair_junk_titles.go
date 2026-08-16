@@ -31,6 +31,7 @@ type RepairJunkTitlesParams struct {
 func (p *Plugin) repairJunkTitlesDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.repair-junk-titles",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Recover book titles that were replaced by junk",
 		Description: "Repairs books whose stored title is demonstrably not a title — \"read by narrator\" " +

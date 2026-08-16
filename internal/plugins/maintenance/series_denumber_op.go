@@ -73,6 +73,7 @@ func writeSeriesDenumberReport(path string, plans []SeriesMergePlan, allowMedium
 func (p *Plugin) seriesDenumberDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.series-denumber",
+		Liveness: sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Merge series that carry a book number in their name",
 		Description: "A series name should name the series, but many carry the book's position instead " +

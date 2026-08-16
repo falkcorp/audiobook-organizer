@@ -42,6 +42,7 @@ func TestSetupTestServerCleanup_DrainsRunningOpBeforeReturning(t *testing.T) {
 
 	def := opsregistry.OperationDef{
 		ID:              "test.isolation-drain",
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "isolation-test",
 		DisplayName:     "Isolation Drain Test Op",
 		Description:     "Reads global config and ignores ctx, mimicking autoBackup",

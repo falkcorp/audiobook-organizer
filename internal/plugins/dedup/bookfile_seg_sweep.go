@@ -77,6 +77,7 @@ type bookfileSegDropParams struct {
 func (p *Plugin) bookfileSegDropDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.bookfile-seg-drop",
+		Liveness:    sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Drop AcoustID segment fields from BookFile values",
 		Description: "Rewrites Pebble book_file: rows that still carry AcoustIDSeg0..6 values, " +

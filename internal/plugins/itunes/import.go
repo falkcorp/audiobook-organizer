@@ -17,6 +17,7 @@ import (
 func (p *Plugin) importDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:                    "itunes.import",
+		Liveness: sdk.LivenessManual,
 		Plugin:                "itunes",
 		DisplayName:           "iTunes Library Import",
 		Description:           "Import audiobooks from the iTunes/Music library into the organizer.",

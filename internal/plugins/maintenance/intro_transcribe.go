@@ -92,6 +92,7 @@ type introTranscribeParams struct {
 func (p *Plugin) introTranscribeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.transcribe-book-intros",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Transcribe book intros",
 		Description:     "Extracts the first 90 seconds of each book's first audio file and transcribes it with Whisper. Stores the result in TranscribedTitle/Author/Narrator (separate from curated metadata) for disambiguation and dedup cross-checks. Uses batch mode: one Python process per page of 200 books loads the model once. 90s captures past Audible jingles/music intros that caused 30s clips to return only 'This is Audible.' Param reparse_only=true re-runs the parser over already-stored transcripts and rewrites the parsed fields with no ffmpeg/Whisper — use it to apply a parser fix to existing books cheaply.",

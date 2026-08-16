@@ -50,6 +50,7 @@ type OnlineLookupParams struct {
 func (p *Plugin) onlineLookupDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "acoustid.lookup-online",
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "acoustid",
 		DisplayName:     "Look up fingerprints on AcoustID.org",
 		Description:     "For every BookFile with a stored whole-file chromaprint, queries the acoustid.org /v2/lookup API for a MusicBrainz recording match. Stores the top recording_id + score when score >= 0.85. Requires the ACOUSTID_API_KEY env var.",

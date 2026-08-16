@@ -72,6 +72,7 @@ func bookWithoutSig(id string) *database.Book {
 func batchFieldSetDef(id string, bw, bmw time.Duration) registry.OperationDef {
 	return registry.OperationDef{
 		ID:           id,
+		Liveness:     registry.LivenessManual,
 		Plugin:       "test",
 		DisplayName:  "FieldSet Batch Test",
 		Run:          func(_ context.Context, _ json.RawMessage, _ registry.Reporter) error { return nil },

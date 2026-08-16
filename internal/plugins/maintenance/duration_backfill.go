@@ -47,6 +47,7 @@ type durationFix struct {
 func (p *Plugin) durationBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.duration-backfill",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Fix millisecond-valued book file durations",
 		Description:     "Scans all BookFiles for durations mistakenly stored in milliseconds (CONS-16: legacy iTunes import bug) and divides them back to seconds, then recomputes affected book aggregates. Detection uses the file's implied bitrate so genuine durations are never touched. Default dry-run previews changes; set dryRun=false to apply.",

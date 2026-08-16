@@ -35,6 +35,7 @@ type PurgeMillisecondDurationsParams struct {
 func (p *Plugin) purgeMillisecondDurationsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.purge-millisecond-durations",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Convert millisecond book_file durations to seconds",
 		Description: "BookFile.Duration is seconds by convention, but an old iTunes import path stored " +

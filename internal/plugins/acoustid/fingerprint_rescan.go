@@ -49,6 +49,7 @@ type ineligibleEntry struct {
 func (p *Plugin) fingerprintRescanDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "acoustid.fingerprint-rescan",
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "acoustid",
 		DisplayName:     "Fingerprint rescan",
 		Description:     "Generates per-file fingerprints on demand with scope and force options.",

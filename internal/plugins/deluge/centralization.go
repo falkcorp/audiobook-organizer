@@ -24,6 +24,7 @@ import (
 func (p *Plugin) centralizationDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "deluge.centralize",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:          "deluge",
 		DisplayName:     "Centralize Deluge books",
 		Description:     "Moves Deluge-sourced audiobooks from protected paths into the main library.",

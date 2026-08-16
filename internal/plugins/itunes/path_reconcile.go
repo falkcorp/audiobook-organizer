@@ -19,6 +19,7 @@ func (p *Plugin) pathReconciledDef() sdk.OperationDef {
 	// nothing. Restore a schedule only together with a real implementation.
 	return sdk.OperationDef{
 		ID:                    "itunes.path-reconcile",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:                "itunes",
 		DisplayName:           "iTunes Path Reconcile",
 		Description:           "Reconcile iTunes track paths after library reorganizations.",

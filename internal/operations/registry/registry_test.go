@@ -30,6 +30,11 @@ func makeValidDef(id string) registry.OperationDef {
 		Isolate:         false,
 		ResumePolicy:    registry.ResumeDrop,
 		ConcurrencyKey:  "",
+		// Required since 2026-08-16: RegisterOp rejects LivenessUnspecified.
+		// LivenessManual is the honest declaration for a test op whose Run is
+		// supplied per-test -- most of them report nothing, and a test that
+		// cares asserts on the reporter directly.
+		Liveness: registry.LivenessManual,
 	}
 }
 

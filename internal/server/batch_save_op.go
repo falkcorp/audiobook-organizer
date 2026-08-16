@@ -39,6 +39,7 @@ type batchSaveOpParams struct {
 func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "metadata.batch-save",
+		Liveness: opsregistry.LivenessRunItems,
 		Plugin:          "metadata",
 		DisplayName:     "Batch Save to Files",
 		Description:     "Write metadata from database back to audio file tags for a set of books, with optional re-organize.",

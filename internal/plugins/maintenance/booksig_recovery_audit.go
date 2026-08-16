@@ -67,6 +67,7 @@ func (e auditExample) String() string {
 func (p *Plugin) bookSigRecoveryAuditDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.booksig-recovery-audit",
+		Liveness: sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Audit/restore wiped Description/BookSig from snapshots",
 		Description: "Dry-run audit (default) or owner-greenlit apply mode (STOR-1/STOR-2). " +

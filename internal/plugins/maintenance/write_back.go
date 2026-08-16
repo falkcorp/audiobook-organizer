@@ -27,6 +27,7 @@ type BulkWriteBackParams struct {
 func (p *Plugin) bulkWriteBackDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.bulk-write-back",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Bulk write-back",
 		Description:     "Writes metadata tags back to files for a set of books. Interrupted runs surface in UI for operator confirmation before resuming.",

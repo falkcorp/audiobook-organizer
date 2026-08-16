@@ -28,6 +28,7 @@ type bulkWriteBackOpParams struct {
 func (s *Server) RegisterBulkWriteBackOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "library.bulk-write-back",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Bulk Tag Write-back",
 		Description:     "Write metadata from the database back to audio file tags for a set of audiobooks.",

@@ -90,6 +90,7 @@ func (s *Server) handleITunesPathRepair(c *gin.Context) {
 func (s *Server) RegisterITunesPathReconcileOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "itunes.path-reconcile",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "itunes",
 		DisplayName:     "iTunes Path Reconcile",
 		Description:     "Recompute ITunesPath fields for all iTunes-tracked books and enqueue write-back.",
@@ -121,6 +122,7 @@ func (s *Server) RegisterITunesPathReconcileOp(reg *opsregistry.Registry) error 
 func (s *Server) RegisterITunesPathRepairOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "itunes.path-repair",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "itunes",
 		DisplayName:     "iTunes Path Repair",
 		Description:     "Find stale iTunes locations and re-discover correct paths via PID, tag scan, or fuzzy match.",

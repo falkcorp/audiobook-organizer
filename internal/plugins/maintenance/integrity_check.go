@@ -24,6 +24,7 @@ func (p *Plugin) integrityCheckDef() sdk.OperationDef {
 	sched := "30 2 * * *" // 02:30 daily — nightly maintenance window
 	return sdk.OperationDef{
 		ID:              "maintenance.file-integrity-check",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "File integrity check",
 		Description:     "Flags book_file rows where file_hash differs from original_file_hash with no AO tag-write on record (post_metadata_hash empty) — a candidate for external modification or bit-rot. Report-only; takes no action.",

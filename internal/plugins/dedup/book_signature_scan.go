@@ -18,6 +18,7 @@ import (
 func (p *Plugin) bookSignatureScanDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "dedup.book-signature-scan",
+		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "dedup",
 		DisplayName:     "Book signature scan",
 		Description:     "Runs a unified per-book fingerprint scan comparing book signatures.",

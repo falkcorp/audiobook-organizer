@@ -96,6 +96,8 @@ func (a extraOpsProgressAdapter) IsCanceled() bool { return a.r.IsCanceled() }
 func (r *ExtraOpsRegistrar) RegisterDedupLLMReviewOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "scheduler.dedup-llm-review",
+		Liveness: opsregistry.LivenessNone,
+		ProgressTimeout: 2 * time.Hour, // LivenessNone requires an explicit budget
 		Plugin:          "scheduler",
 		DisplayName:     "Dedup LLM Review",
 		Description:     "Run LLM review on ambiguous dedup candidates.",
@@ -125,6 +127,8 @@ func (r *ExtraOpsRegistrar) RegisterDedupLLMReviewOp(reg *opsregistry.Registry) 
 func (r *ExtraOpsRegistrar) RegisterTrashCleanupOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "scheduler.trash-cleanup",
+		Liveness: opsregistry.LivenessNone,
+		ProgressTimeout: 1 * time.Hour, // LivenessNone requires an explicit budget
 		Plugin:          "scheduler",
 		DisplayName:     "Trash Cleanup",
 		Description:     "Purge trashed book versions past their 14-day TTL.",
@@ -151,6 +155,8 @@ func (r *ExtraOpsRegistrar) RegisterTrashCleanupOp(reg *opsregistry.Registry) er
 func (r *ExtraOpsRegistrar) RegisterArchiveSweepOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "scheduler.archive-sweep",
+		Liveness: opsregistry.LivenessNone,
+		ProgressTimeout: 1 * time.Hour, // LivenessNone requires an explicit budget
 		Plugin:          "scheduler",
 		DisplayName:     "Archive Sweep",
 		Description:     "Remove soft-deleted books past the 30-day retention window.",
@@ -177,6 +183,7 @@ func (r *ExtraOpsRegistrar) RegisterArchiveSweepOp(reg *opsregistry.Registry) er
 func (r *ExtraOpsRegistrar) RegisterMetadataUpgradeOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "scheduler.metadata-upgrade",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "scheduler",
 		DisplayName:     "Metadata Upgrade",
 		Description:     "Upgrade metadata from lower-quality sources to richer ones when a high-confidence match is available.",
@@ -219,6 +226,7 @@ func (r *ExtraOpsRegistrar) RegisterMetadataUpgradeOp(reg *opsregistry.Registry)
 func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "scheduler.author-split-scan",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "scheduler",
 		DisplayName:     "Author Split Scan",
 		Description:     "Find and split composite author names into individual author records.",
@@ -399,6 +407,7 @@ func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry)
 func (r *ExtraOpsRegistrar) RegisterDBOptimizeOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "scheduler.db-optimize",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "scheduler",
 		DisplayName:     "Database Optimize",
 		Description:     "Optimize database (VACUUM/compact) for the main, AI scan, and OpenLibrary stores.",
@@ -476,6 +485,8 @@ func (r *ExtraOpsRegistrar) RegisterDBOptimizeOp(reg *opsregistry.Registry) erro
 func (r *ExtraOpsRegistrar) RegisterCleanupOldBackupsOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "scheduler.cleanup-old-backups",
+		Liveness: opsregistry.LivenessNone,
+		ProgressTimeout: 1 * time.Hour, // LivenessNone requires an explicit budget
 		Plugin:          "scheduler",
 		DisplayName:     "Cleanup Old Backups",
 		Description:     "Remove old .bak-* backup files past the configured retention period.",
@@ -534,6 +545,7 @@ func (r *ExtraOpsRegistrar) RegisterCleanupOldBackupsOp(reg *opsregistry.Registr
 func (r *ExtraOpsRegistrar) RegisterISBNEnrichmentOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "scheduler.isbn-enrichment",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "scheduler",
 		DisplayName:     "ISBN Enrichment",
 		Description:     "Enrich missing ISBN identifiers from external metadata sources.",
@@ -562,6 +574,8 @@ func (r *ExtraOpsRegistrar) RegisterISBNEnrichmentOp(reg *opsregistry.Registry) 
 func (r *ExtraOpsRegistrar) RegisterTempFileCleanupOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "scheduler.temp-file-cleanup",
+		Liveness: opsregistry.LivenessNone,
+		ProgressTimeout: 1 * time.Hour, // LivenessNone requires an explicit budget
 		Plugin:          "scheduler",
 		DisplayName:     "Temp File Cleanup",
 		Description:     "Remove orphaned *.tmp.m4b / *.tmp.m4a files left by crashed ffmpeg operations.",
@@ -596,6 +610,7 @@ func (r *ExtraOpsRegistrar) RegisterTempFileCleanupOp(reg *opsregistry.Registry)
 func (r *ExtraOpsRegistrar) RegisterPurgeDeletedOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "scheduler.purge-deleted",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "scheduler",
 		DisplayName:     "Purge Soft-Deleted",
 		Description:     "Purge soft-deleted books past their retention period.",
@@ -631,6 +646,7 @@ func (r *ExtraOpsRegistrar) RegisterPurgeDeletedOp(reg *opsregistry.Registry) er
 func (r *ExtraOpsRegistrar) RegisterTombstoneCleanupOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "scheduler.tombstone-cleanup",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "scheduler",
 		DisplayName:     "Tombstone Cleanup",
 		Description:     "Resolve author tombstone chains (A→B→C becomes A→C).",
@@ -669,6 +685,7 @@ func (r *ExtraOpsRegistrar) RegisterTombstoneCleanupOp(reg *opsregistry.Registry
 func (r *ExtraOpsRegistrar) RegisterResolveProductionAuthorsOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "scheduler.resolve-production-authors",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "scheduler",
 		DisplayName:     "Resolve Production Authors",
 		Description:     "Resolve real authors for production company entries.",
@@ -746,6 +763,7 @@ func (r *ExtraOpsRegistrar) RegisterResolveProductionAuthorsOp(reg *opsregistry.
 func (r *ExtraOpsRegistrar) RegisterMetadataRefreshOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "scheduler.metadata-refresh",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "scheduler",
 		DisplayName:     "Metadata Refresh",
 		Description:     "Re-fetch metadata for incomplete books.",

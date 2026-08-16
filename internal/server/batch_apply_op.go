@@ -59,6 +59,7 @@ type batchApplyOpParams struct {
 func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "metadata.batch-apply-cached",
+		Liveness: opsregistry.LivenessRunItems,
 		Plugin:          "metadata",
 		DisplayName:     "Apply Cached Metadata",
 		Description:     "Apply the highest-scored cached metadata candidate to each of a set of books, optionally writing tags back into the audio files.",

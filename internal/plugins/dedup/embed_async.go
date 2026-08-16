@@ -25,6 +25,7 @@ import (
 func (p *Plugin) embedAsyncDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "dedup.embed-async",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:          "dedup",
 		DisplayName:     "Embed books async (batch API) [deprecated — use embed-scan with async:true]",
 		Description:     "Deprecated: delegates to dedup.embed-scan with async=true. Submits all un-embedded books to the OpenAI Batch API. Results arrive within 24 hours and are ingested automatically.",

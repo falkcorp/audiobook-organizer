@@ -51,6 +51,7 @@ type aiMergeApplyOpParams struct {
 func (s *Server) RegisterAIAuthorReviewOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "ai.author-review",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "ai",
 		DisplayName:     "AI Author Duplicate Review",
 		Description:     "Uses AI to review and identify duplicate author entries in the library.",
@@ -96,6 +97,7 @@ func (s *Server) RegisterAIAuthorReviewOp(reg *opsregistry.Registry) error {
 func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "ai.author-merge-apply",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "ai",
 		DisplayName:     "AI Author Merge Apply",
 		Description:     "Applies AI-suggested author merge, rename, alias, and split actions to the library.",

@@ -30,6 +30,7 @@ type diagnosticsExportOpParams struct {
 func (s *Server) RegisterDiagnosticsExportOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "diagnostics.export",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "diagnostics",
 		DisplayName:     "Export Diagnostics",
 		Description:     "Generate a diagnostics ZIP export for analysis.",

@@ -24,6 +24,7 @@ func (p *Plugin) authorDedupScanDef() sdk.OperationDef {
 	sched := "0 1 * * *" // 01:00 daily
 	return sdk.OperationDef{
 		ID:              "maintenance.author-dedup-scan",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Author dedup scan",
 		Description:     "Refreshes author duplicate-group cache using fuzzy name matching.",
@@ -86,6 +87,7 @@ func (p *Plugin) authorSplitScanDef() sdk.OperationDef {
 	sched := "0 2 * * 1" // 02:00 every Monday
 	return sdk.OperationDef{
 		ID:              "maintenance.author-split-scan",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Author split scan",
 		Description:     "Finds and splits composite author names (e.g. 'Smith, J. & Jones, A.').",
@@ -274,6 +276,7 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, _ json.RawMessage, repo
 func (p *Plugin) resolveProductionAuthorsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.resolve-production-authors",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Resolve production company authors",
 		Description:     "Resolves real authors for production company entries using external metadata.",

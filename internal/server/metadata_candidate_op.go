@@ -35,6 +35,7 @@ type metadataCandidateFetchOpParams = metabatch.FetchOpParams
 func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "metadata.candidate-fetch",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "metadata",
 		DisplayName:     "Fetch Metadata Candidates",
 		Description:     "Fetch and cache metadata candidates for a set of audiobooks (rate-limited, parallel). Results are stored in v1 OperationResult rows for review.",

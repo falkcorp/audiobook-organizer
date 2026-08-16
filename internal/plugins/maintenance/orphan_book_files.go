@@ -33,6 +33,7 @@ func (p *Plugin) orphanBookFilesCleanupDef() sdk.OperationDef {
 	sched := "15 2 * * *" // 02:15 daily — nightly maintenance window
 	return sdk.OperationDef{
 		ID:              "maintenance.orphan-book-files-cleanup",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Orphan book_file cleanup",
 		Description:     "Detects book_file rows whose book_id no longer references an existing book. Reports the count by default; pass {\"delete\": true} to remove the orphans.",

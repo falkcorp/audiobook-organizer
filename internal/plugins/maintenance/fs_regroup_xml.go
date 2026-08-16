@@ -49,6 +49,7 @@ type fsRegroupParams struct {
 func (p *Plugin) fsRegroupXMLDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.fs-regroup-xml",
+		Liveness: sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Heal shattered filesystem books (tag-anchored regroup)",
 		Description: "Regroups filesystem-scanner-shattered books (one-book-per-chapter-subdir) back into " +

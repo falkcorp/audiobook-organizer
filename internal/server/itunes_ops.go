@@ -38,6 +38,7 @@ type itunesSyncOpParams struct {
 func (s *Server) RegisterITunesImportOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "itunes.import",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "itunes",
 		DisplayName:     "iTunes Import",
 		Description:     "Import audiobooks from an iTunes XML library file into the database.",
@@ -84,6 +85,7 @@ func (s *Server) RegisterITunesImportOp(reg *opsregistry.Registry) error {
 func (s *Server) RegisterITunesSyncOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "itunes.sync",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "itunes",
 		DisplayName:     "iTunes Sync",
 		Description:     "Sync the iTunes library XML into the database (incremental, fingerprint-gated).",

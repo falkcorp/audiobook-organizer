@@ -59,6 +59,7 @@ type drainStaleParams struct {
 func (p *Plugin) drainStaleDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.drain-stale",
+		Liveness: sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Drain stale exact candidates",
 		Description: "Re-evaluates pending exact-layer dedup candidates emitted before the CONS-16 " +

@@ -43,6 +43,7 @@ type mineGoldLabelsParams struct {
 func (p *Plugin) mineGoldLabelsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.mine-gold-labels",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:      "dedup",
 		DisplayName: "Mine high-confidence dedup labels",
 		Description: "Labels pending candidates that share a file hash, AcoustID recording id, or " +

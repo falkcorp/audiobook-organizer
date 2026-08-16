@@ -38,6 +38,7 @@ type folderAutoScanOpParams struct {
 func (s *Server) RegisterFolderAutoScanOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "library.folder-auto-scan",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Folder Auto-Scan",
 		Description:     "Auto-scan a newly added import path folder for audiobooks, then optionally organize and dedup.",

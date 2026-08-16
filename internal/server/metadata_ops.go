@@ -546,6 +546,7 @@ func (s *Server) resolveFilterToBookIDs(ctx context.Context, f operations.Filter
 func (s *Server) RegisterBulkMetadataFetchOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "library.bulk-metadata-fetch",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Bulk Metadata Fetch",
 		Description:     "Fetch and cache external metadata for a set of audiobooks. Nothing is written to book records — results appear in the per-book review UI.",

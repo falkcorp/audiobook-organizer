@@ -20,6 +20,8 @@ import (
 func (p *Plugin) seriesNormalizeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.series-normalize",
+		Liveness: sdk.LivenessNone,
+		ProgressTimeout: 30 * time.Minute, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "Normalize series names",
 		Description:     "Strips title/position contamination from series names and enqueues affected books for write-back.",
@@ -63,6 +65,8 @@ func (p *Plugin) seriesPruneDef() sdk.OperationDef {
 	sched := "0 3 * * 2" // 03:00 every Tuesday
 	return sdk.OperationDef{
 		ID:              "maintenance.series-prune",
+		Liveness: sdk.LivenessNone,
+		ProgressTimeout: 30 * time.Minute, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "Prune duplicate series",
 		Description:     "Merges duplicate series and deletes orphan series records.",

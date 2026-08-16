@@ -299,6 +299,7 @@ type dedupExactTriageParams struct {
 func (p *Plugin) dedupExactTriageDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.dedup-exact-triage",
+		Liveness: sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Dedup exact-pending triage (dry-run / apply)",
 		Description:     "Classifies all pending exact-layer dedup candidates into 5 populations (genuine/stub/fragment/title_leak/unknown) and reports counts. Dry-run by default — no candidates are deleted. With apply=true, dismisses every purgeable candidate (stub/title_leak) via a status update; genuine/fragment/unknown candidates are never touched.",

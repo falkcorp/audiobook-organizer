@@ -69,6 +69,7 @@ type relinkParams struct {
 func (p *Plugin) relinkUnlinkedBooksDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.relink-unlinked-books",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Relink unlinked books (detect · repair)",
 		Description: "Finds Book rows that own ZERO book_file rows but whose file_path still resolves on disk, " +

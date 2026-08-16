@@ -62,6 +62,7 @@ type embReencodeParams struct {
 func (p *Plugin) embReencodeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.emb-reencode",
+		Liveness: sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Re-encode embeddings to float16+zstd (T021)",
 		Description: "Rewrites all emb:v: blobs from legacy float32 (v0) to float16+zstd (v1), " +

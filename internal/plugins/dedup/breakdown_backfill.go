@@ -108,6 +108,7 @@ type breakdownBackfillReport struct {
 func (p *Plugin) breakdownBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.breakdown-backfill",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:      "dedup",
 		DisplayName: "Backfill ScoreBreakdowns onto pre-T015 pending candidates",
 		Description: "Recomputes the unified signal set + composed score for every pending dedup " +

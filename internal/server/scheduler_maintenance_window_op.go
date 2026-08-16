@@ -27,6 +27,7 @@ import (
 func (s *Server) RegisterMaintenanceWindowOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "maintenance.window",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Maintenance Window",
 		Description:     "Run all maintenance-window-eligible tasks in order.",

@@ -16,6 +16,8 @@ import (
 func (p *Plugin) syncDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "itunes.sync",
+		Liveness: sdk.LivenessNone,
+		ProgressTimeout: 120 * time.Minute, // LivenessNone requires an explicit budget
 		Plugin:      "itunes",
 		DisplayName: "iTunes Library Sync",
 		Description: "Sync audiobook metadata with the iTunes/Music library.",

@@ -47,6 +47,7 @@ type resolveProductionAuthorOpParams struct {
 func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "entities.author-merge",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "entities",
 		DisplayName:     "Author Merge",
 		Description:     "Merge one or more author records into a single canonical author, relinking all associated books.",
@@ -193,6 +194,7 @@ func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "entities.resolve-production-author",
+		Liveness: opsregistry.LivenessManual,
 		Plugin:          "entities",
 		DisplayName:     "Resolve Production Author",
 		Description:     "Attempt to discover real authors for books attributed to a production company via metadata lookups and AI cover analysis.",

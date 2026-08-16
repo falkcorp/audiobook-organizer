@@ -44,6 +44,7 @@ type tagBackfillParams struct {
 func (p *Plugin) tagBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.tag-backfill",
+		Liveness: sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Backfill lossless file tags (RawTags + track/disc)",
 		Description: "Reads each BookFile's audio tags and backfills the lossless RawTags map plus " +

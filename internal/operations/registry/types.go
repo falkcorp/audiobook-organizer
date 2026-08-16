@@ -46,8 +46,14 @@ type OperationDef struct {
 	MinCheckpointInterval time.Duration
 	// ProgressTimeout is the maximum gap between UpdateProgress calls before the
 	// op is considered stuck and its context is canceled.
-	// Zero means "use default 5m".
+	// Zero means "use default 5m", except when Liveness is LivenessNone, where
+	// RegisterOp requires an explicit non-zero value.
 	ProgressTimeout time.Duration
+
+	// Liveness declares how this op keeps the watchdog informed. There is no
+	// valid zero value: RegisterOp rejects LivenessUnspecified, so an op cannot
+	// be registered without its author answering the question. See LivenessMode.
+	Liveness LivenessMode
 	// ProgressFlushInterval controls how often the lazy background goroutine
 	// persists the in-memory progress clock to the DB for crash-recovery
 	// observability. Zero or negative → default 30s. Greater than 5m → capped
@@ -166,6 +172,67 @@ const (
 	ResumeDrop                            // abandon on restart, mark interrupted_dropped
 	ResumeAsk                             // surface in UI, wait for user choice
 )
+
+// LivenessMode declares how an operation keeps the watchdog informed that it
+// is still making progress. LivenessUnspecified is forbidden; RegisterOp
+// rejects it, exactly as it rejects ResumeUnspecified.
+//
+// This field exists because "call reporter.UpdateProgress" was, until
+// 2026-08-16, a convention rather than a contract. Nothing in the type system
+// distinguished an op that reported from one that never touched its reporter,
+// so the watchdog could not tell a wedged op from an unwired one, and both got
+// the same "stuck" strike after five minutes. In 30 days of production that
+// produced 44 cancellations of ops that were, in several cases, working fine.
+//
+// Requiring a declaration does not by itself make an op report. What it does is
+// remove the option of not answering the question: a new OperationDef cannot
+// reach the registry without its author stating which of these three it is, and
+// the two honest answers both leave a trail.
+type LivenessMode int
+
+const (
+	// LivenessUnspecified is the zero value and is forbidden. An op that has
+	// not said how it reports progress is not registerable.
+	LivenessUnspecified LivenessMode = iota
+
+	// LivenessRunItems means the op drives its work through registry.RunItems,
+	// which stamps the liveness clock per item. Nothing further is required of
+	// the op; this is the mode to prefer.
+	LivenessRunItems
+
+	// LivenessManual means the op calls reporter.UpdateProgress itself.
+	//
+	// Note that reporter.Log does NOT stamp liveness, deliberately: a spin loop
+	// that logs is still a spin loop, and treating chatter as progress would
+	// blind the watchdog to exactly the case it exists for. An op in this mode
+	// that only logs will still be struck -- as never_reported, which names the
+	// cause.
+	LivenessManual
+
+	// LivenessNone means the op does not report progress at all.
+	//
+	// This is the escape hatch for work that genuinely cannot be decomposed,
+	// and it is deliberately the expensive answer: RegisterOp requires an
+	// explicit ProgressTimeout alongside it, so the author has to choose a
+	// number and defend it rather than inheriting the 5m default by silence,
+	// and every op in this mode is logged at WARN on each boot so the opted-out
+	// set stays visible instead of accumulating unseen.
+	LivenessNone
+)
+
+// String implements fmt.Stringer for log and error output.
+func (l LivenessMode) String() string {
+	switch l {
+	case LivenessRunItems:
+		return "run_items"
+	case LivenessManual:
+		return "manual"
+	case LivenessNone:
+		return "none"
+	default:
+		return "unspecified"
+	}
+}
 
 // Priority controls dispatch order within the global worker pool.
 type Priority int
