@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-08-16-the-work-that-said-it-succeeded-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 24b33837-c4c8-4096-822a-83fee40f0194 -->
 <!-- last-edited: 2026-08-16 -->
 
 # The work that said it succeeded
 
-**2026-08-16 — four places the program told you it had done something it hadn't**
+**2026-08-16 — six places the program told you it had done something it hadn't, and the rule that now stops it**
 
 ## The common thread
 
@@ -100,6 +100,64 @@ Those older entries stay stuck. Repairing them means rewriting past records, whi
 deliberate operation to run while watching it, not something to slip in unattended
 overnight.
 
+## 5. Three iTunes jobs that did nothing and called it done
+
+**iTunes Sync**, **Path Reconcile** and **Path Repair** have not done any work since
+mid-July. Running any of them produced a green "completed" row within seconds.
+
+The cause is unusually clean. Each of those three jobs exists **twice** in the program:
+a real working version, and an empty placeholder left behind by a half-finished
+reorganisation. The placeholders load first, and whichever loads first wins the name.
+So the placeholder took the job, did nothing, and reported success — while the working
+version sat unreachable a few files away.
+
+The program noticed. On every startup it wrote three warnings saying the name was
+already taken — 378 of them in the last month. Nothing read those warnings, because the
+part of the startup that collects them **logged them and moved on**. That has also been
+changed: a job that fails to load now stops the server from starting at all, rather than
+producing a server that looks healthy and is quietly missing a feature.
+
+A fourth placeholder, **Position Sync**, had no working version to displace. It now
+reports an honest failure instead of a false success. The real code it should be calling
+exists and has never once been run; switching that on means writing bookmarks and play
+counts across two systems, so it is left alone deliberately.
+
+## 6. Library scans that finished the hard part and were killed anyway
+
+A scan walks every file, then hands the filenames to the AI to tidy up the titles. The
+walk finished — 3,917 files. The AI stage then ran for five minutes without saying
+anything, and the supervisor that watches for frozen jobs concluded it had frozen and
+killed it. **The completed walk was thrown away.**
+
+Two things were wrong. The AI stage never reported progress, so a long stage was
+indistinguishable from a dead one; it now reports on each batch. And every single AI
+request was failing for a reason that could not improve — **the OpenAI account has run
+out of credits** — yet the program kept retrying it, batch after batch, for around
+twenty-five minutes of guaranteed-useless work. It now stops asking after the first
+unrecoverable answer and says why.
+
+**This one needs you.** Until credits are added, scans will complete, but those books
+keep the titles derived from their filenames rather than AI-cleaned ones.
+
+## The rule that now stops this whole category
+
+Every one of these jobs was supposed to report its progress. Nothing ever checked, so
+"didn't report" and "froze solid" looked identical from outside — and the natural
+response to both, giving the job more time, permanently hides the first one. That is how
+a broken progress connection survived three months and got worked around three separate
+times.
+
+Reporting progress is now a **requirement that is enforced, not a convention**. A job
+cannot be added to the system at all unless it states how it reports: automatically,
+by hand, or not at all. The last option has to say how long it may run in silence, and
+is listed on every startup — so the set of unwatched jobs is visible instead of quietly
+growing. All 146 existing jobs were reviewed and labelled.
+
+This does not make every job report *well*. The nightly maintenance window was labelled
+honestly and was still being killed, because it waits on other jobs and a single one can
+outlast the five-minute limit; that was fixed separately. The rule closes the "never
+wired up" hole, not the "reports too rarely" one.
+
 ## The thing that was found by accident, and matters most
 
 While confirming the deployment had worked, the startup log turned out to be reporting
@@ -142,6 +200,14 @@ the actual machinery now catches it.
 The maintenance-job fix is verified on the live system rather than only in tests.
 
 ## What has not been established
+
+Whether anyone actually triggered those three iTunes jobs while they were broken is
+**not known**. That the jobs were unreachable is certain; how often they were asked to
+run is recorded in the database rather than the system log, and was not measured.
+
+The library rescan has still not completed, so the database still points at the old
+locations for the files recovered earlier. It now fails for a reason that is understood
+and fixed rather than a mystery, and will be re-run once that fix is deployed.
 
 The library-wide file reorganisation has not run, and cannot until the scheduling decision
 above is made. Until then, the disagreement about where books live is corrected in
