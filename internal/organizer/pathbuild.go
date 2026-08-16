@@ -1,7 +1,7 @@
 // file: internal/organizer/pathbuild.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f7c4a19-6e58-4b03-9d21-8a05e3f16c74
-// last-edited: 2026-08-15
+// last-edited: 2026-08-16
 
 // The single place a book's target path is computed.
 //
@@ -130,6 +130,39 @@ func BuildRelPath(folderPattern, filePattern string, v PathVars, opts BuildOpts)
 	if err != nil {
 		return "", fmt.Errorf("file pattern: %w", err)
 	}
+
+	// The file pattern names ONE component. A "/" in it is not structure the
+	// way it is in the folder pattern -- it is a directory the caller did not
+	// ask for, and the two-phase rename then parks its payload inside as
+	// "<n>.<ext>.tmp-rename" and fails.
+	//
+	// This is not a hypothetical, though the historical route into it is now
+	// closed by a different guard. From 2026-03-03 (f29c3ce6) to 2026-08-15
+	// (c54721c7) the SHIPPED DEFAULT of segment_title_format was
+	// "{title} - {track}/{total_tracks}", and every multi-file book organized
+	// in that window exploded one directory per track: 2,535 bogus
+	// directories, 2,584 stranded files, 35.2 GB, 77 books with no other copy.
+	//
+	// Be precise about which guard covers which route, because the two are
+	// easy to conflate and the wreckage on disk is identical:
+	//
+	//   - {track_title} is materialized into the replacement map and therefore
+	//     scrubbed as a VALUE by scrubVar. A separator arriving via
+	//     segment_title_format is caught there, not here. It was NOT caught in
+	//     the internal/metafetch twin, which had no scrubVar at all -- which is
+	//     why that route was still stranding files on 2026-08-14.
+	//   - A separator written directly into file_naming_pattern is in the
+	//     TEMPLATE, never passes through scrubVar, and reaches BuildPath, which
+	//     splits on "/" and sanitizes each half. Nothing constrained the result
+	//     to one component. That is the hole this line closes, and
+	//     file_naming_pattern is user-configurable, so it is reachable today.
+	//
+	// Collapsing rather than erroring is deliberate: SanitizePathComponent maps
+	// "/" to " ", which yields exactly the name the file should have had
+	// ("Pink Bean Series - 1/9" -> "Pink Bean Series - 1 9"), so a bad pattern
+	// degrades to a correct flat filename instead of taking organizing down
+	// library-wide.
+	stem = SanitizePathComponent(stem)
 
 	// A pattern can legitimately expand to nothing -- e.g. "{narrator}" for a
 	// book with no narrator. An empty stem would make the target a bare dotfile
