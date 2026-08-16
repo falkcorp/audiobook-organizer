@@ -1177,6 +1177,11 @@ func (orgSvc *Service) OrganizeDirectoryBook(org *Organizer, book *database.Book
 	// them for copying but counts them for track numbering, so a book whose
 	// files are temporarily missing keeps the numbering it will have when they
 	// come back. Filtering them here would renumber the book instead.
+	//
+	// The empty-FilePath skip below is only for the present/missing counters --
+	// planTargetPaths drops those rows itself, deliberately, so that this and
+	// the two row-writing paths cannot disagree about the row set. Do not treat
+	// this loop as the thing that makes the plan correct.
 	var segments []database.BookFile
 	missingCount, presentCount := 0, 0
 	for _, bf := range bookFiles {

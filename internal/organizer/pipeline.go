@@ -80,9 +80,32 @@ func planTargetPaths(rootDir, folderPattern, filePattern string, files []databas
 		return nil, nil
 	}
 
-	// Sort files by track number then filepath
-	sorted := make([]database.BookFile, len(files))
-	copy(sorted, files)
+	// Normalize the row set HERE rather than trusting callers to agree on it.
+	//
+	// The plan is a pure function of (root, patterns, rows, vars), so the three
+	// paths agree only if they pass the same rows -- and they did not:
+	// OrganizeDirectoryBook pre-filtered empty-FilePath rows while
+	// CreateOrganizedVersion and the metafetch apply paths passed GetBookFiles
+	// straight through. One empty-path row is enough to break it: it changes
+	// totalTracks, and since "" sorts first it shifts every position-derived
+	// track number by one. Organize would copy to "... - 07.mp3" while the row
+	// writer planned "... - 08.mp3", found nothing there, and fell back to the
+	// un-organized source -- which still exists, because every organize strategy
+	// is reflink/hardlink/copy/symlink and never a move. The organized book's
+	// rows would then point at the original book's files.
+	//
+	// A row with no path is not a file, so it is dropped outright. Rows flagged
+	// Missing are NOT dropped: see the totalTracks note below.
+	sorted := make([]database.BookFile, 0, len(files))
+	for _, f := range files {
+		if f.FilePath == "" {
+			continue
+		}
+		sorted = append(sorted, f)
+	}
+	if len(sorted) == 0 {
+		return nil, nil
+	}
 	sort.Slice(sorted, func(i, j int) bool {
 		ti := sorted[i].TrackNumber
 		tj := sorted[j].TrackNumber
