@@ -615,37 +615,51 @@ func getRawString(raw map[string]interface{}, keys ...string) string {
 	return ""
 }
 
+// normalizeRawTagValue renders a raw tag value as a trimmed string.
+//
+// It cleans with cleanTagValue rather than strings.TrimSpace. MP4 freeform
+// ("reverse-DNS") atoms carry a four-byte data header that leaks into the value,
+// so SERIES_INDEX reads back as "\x00\x00\x00\x004", not "4". TrimSpace does not
+// strip NUL, and every caller that then did its own strconv.Atoi got an error and
+// silently kept the zero value.
+//
+// That is what made series_index rewrite files forever: the write landed, the
+// read produced 0, the comparison saw "missing", and the next run wrote again.
+// Fields that happened to run their result through cleanTagValue afterwards
+// (title, publisher, series) were unaffected, which is why only the numeric
+// fields — parsed straight from this string — were broken. Cleaning here fixes
+// every consumer at once instead of adding a second sanitising step per caller.
 func normalizeRawTagValue(value interface{}) string {
 	switch typed := value.(type) {
 	case string:
-		return strings.TrimSpace(typed)
+		return cleanTagValue(typed)
 	case []string:
 		for _, s := range typed {
-			if trimmed := strings.TrimSpace(s); trimmed != "" && !looksLikeReleaseGroupTag(trimmed) {
+			if trimmed := cleanTagValue(s); trimmed != "" && !looksLikeReleaseGroupTag(trimmed) {
 				return trimmed
 			}
 		}
 		for _, s := range typed {
-			if trimmed := strings.TrimSpace(s); trimmed != "" {
+			if trimmed := cleanTagValue(s); trimmed != "" {
 				return trimmed
 			}
 		}
 	case []byte:
-		if s := strings.TrimSpace(string(typed)); s != "" {
+		if s := cleanTagValue(string(typed)); s != "" {
 			return s
 		}
 	case *tag.Comm:
 		if typed != nil {
-			if s := strings.TrimSpace(typed.Text); s != "" {
+			if s := cleanTagValue(typed.Text); s != "" {
 				return s
 			}
 		}
 	case tag.Comm:
-		if s := strings.TrimSpace(typed.Text); s != "" {
+		if s := cleanTagValue(typed.Text); s != "" {
 			return s
 		}
 	default:
-		if s := strings.TrimSpace(fmt.Sprint(typed)); s != "" && s != "<nil>" {
+		if s := cleanTagValue(fmt.Sprint(typed)); s != "" && s != "<nil>" {
 			return s
 		}
 	}
