@@ -194,6 +194,11 @@ func CollapseEmptySegments(path string) string {
 
 // SanitizePathComponent removes filesystem-unsafe characters from a path component.
 func SanitizePathComponent(s string) string {
+	// Square brackets are deliberately NOT stripped. They are legal on every
+	// filesystem we target (ext4, APFS, NTFS, ZFS) and are idiomatic in
+	// audiobook naming — "[Unabridged]", "[AAC 128kbps]". Stripping them was a
+	// path_format-only behaviour that silently mangled patterns the
+	// folder/file naming builder had always honoured.
 	replacer := strings.NewReplacer(
 		"/", " ",
 		"\\", " ",
@@ -204,14 +209,19 @@ func SanitizePathComponent(s string) string {
 		"<", "",
 		">", "",
 		"|", " -",
-		"[", "",
-		"]", "",
 	)
 	s = replacer.Replace(s)
 	for strings.Contains(s, "  ") {
 		s = strings.ReplaceAll(s, "  ", " ")
 	}
-	return strings.TrimSpace(s)
+	s = strings.TrimSpace(s)
+
+	// Most filesystems cap a single component at 255 bytes. Leave room for an
+	// extension and the ".tmp" suffix the two-phase rename parks files under.
+	if len(s) > 200 {
+		s = strings.TrimSpace(s[:200])
+	}
+	return s
 }
 
 // collapseRedundantDup strips "X - X" → "X" in a single path segment,
