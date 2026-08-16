@@ -276,70 +276,195 @@ func TestChar_SchemesAgree(t *testing.T) {
 //
 // This runs a real multi-file book through OrganizeBookDirectory on disk and
 // asserts every file landed exactly where ComputeTargetPaths would have put it.
+//
+// SCOPE, so nobody over-trusts it: both legs are handed the SAME rows here, so
+// this proves planTargetPaths is deterministic and that organize actually writes
+// where the plan says. It does NOT prove the three production callers pass the
+// same row set -- that divergence is prevented inside planTargetPaths (it
+// normalizes the rows itself) rather than asserted here, which is why the
+// zero-track case below deliberately includes a pathless row.
 func TestChar_DirectoryOrganizeAgreesWithApply(t *testing.T) {
-	rootDir := t.TempDir()
+	// The middle case is the pattern that was actually configured in production
+	// on 2026-08-15. It has no {track} placeholder at all, so every file of the
+	// book computes the same name and the collision guard has to re-plan with a
+	// numbered suffix. That guard is the highest-stakes code in this change --
+	// without it a 40-part book collapses into one file -- so it gets asserted
+	// through BOTH legs, not just unit-tested on the planner.
+	cases := []struct {
+		name     string
+		filePat  string
+		files    func(srcDir string) []database.BookFile
+		wantPlan int
+	}{
+		{
+			name:    "track placeholder, tracks numbered",
+			filePat: "{title} - {track:02d}",
+			files: func(d string) []database.BookFile {
+				// Deliberately junk source names in non-alphabetical track
+				// order: if the track number came from sort position rather
+				// than the row, the two paths would silently disagree here.
+				return []database.BookFile{
+					{ID: "s3", FilePath: filepath.Join(d, "aaa.m4b"), Format: "m4b", TrackNumber: 3},
+					{ID: "s1", FilePath: filepath.Join(d, "zzz.m4b"), Format: "m4b", TrackNumber: 1},
+					{ID: "s2", FilePath: filepath.Join(d, "mmm.m4b"), Format: "m4b", TrackNumber: 2},
+				}
+			},
+			wantPlan: 3,
+		},
+		{
+			name:    "production track-less pattern, through the collision guard",
+			filePat: "{title} - {author} - read by {narrator}",
+			files: func(d string) []database.BookFile {
+				return []database.BookFile{
+					{ID: "s1", FilePath: filepath.Join(d, "part1.m4b"), Format: "m4b", TrackNumber: 1},
+					{ID: "s2", FilePath: filepath.Join(d, "part2.m4b"), Format: "m4b", TrackNumber: 2},
+					{ID: "s3", FilePath: filepath.Join(d, "part3.m4b"), Format: "m4b", TrackNumber: 3},
+				}
+			},
+			wantPlan: 3,
+		},
+		{
+			name:    "no track numbers at all, plus a pathless row",
+			filePat: "{title} - {track:02d}",
+			files: func(d string) []database.BookFile {
+				// TrackNumber 0 everywhere means numbering falls out of sort
+				// position over the row slice -- the shape where a row-set
+				// mismatch between callers bites hardest. The pathless row is
+				// the mismatch: "" sorts first, so if planTargetPaths kept it,
+				// every track number would shift by one.
+				return []database.BookFile{
+					{ID: "s2", FilePath: filepath.Join(d, "b-second.m4b"), Format: "m4b"},
+					{ID: "ghost", FilePath: "", Format: "m4b"},
+					{ID: "s1", FilePath: filepath.Join(d, "a-first.m4b"), Format: "m4b"},
+				}
+			},
+			wantPlan: 2,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rootDir := t.TempDir()
+			srcDir := t.TempDir()
+
+			src := tc.files(srcDir)
+			for _, f := range src {
+				if f.FilePath == "" {
+					continue
+				}
+				if err := os.WriteFile(f.FilePath, []byte("audio "+f.ID), 0644); err != nil {
+					t.Fatalf("fixture: %v", err)
+				}
+			}
+
+			year := 1951
+			narrator := "Scott Brick"
+			book := &database.Book{
+				Title:     "Foundation",
+				FilePath:  srcDir,
+				Author:    &database.Author{Name: "Isaac Asimov"},
+				Series:    &database.Series{Name: "Foundation"},
+				Narrator:  &narrator,
+				PrintYear: &year,
+			}
+
+			org := charOrganizer("{author}/{series}/{title} ({print_year})", tc.filePat)
+			org.config.RootDir = rootDir
+			org.config.OrganizationStrategy = "copy"
+
+			// What the metadata-apply path plans.
+			entries, err := org.ComputeTargetPaths(book, src)
+			if err != nil {
+				t.Fatalf("apply path: %v", err)
+			}
+			planned := make(map[string]string, len(entries))
+			for _, e := range entries {
+				planned[e.SourcePath] = e.TargetPath
+			}
+			if len(planned) != tc.wantPlan {
+				t.Fatalf("apply path planned %d renames, want %d: %v", len(planned), tc.wantPlan, planned)
+			}
+
+			// Distinct targets, or organize would overwrite its own output.
+			targets := make(map[string]string, len(planned))
+			for srcPath, dst := range planned {
+				if prev, dup := targets[dst]; dup {
+					t.Fatalf("plan gives %q and %q the same target %q", prev, srcPath, dst)
+				}
+				targets[dst] = srcPath
+			}
+
+			// What organize actually does on disk.
+			_, pathMap, err := org.OrganizeBookDirectory(book, src)
+			if err != nil {
+				t.Fatalf("OrganizeBookDirectory: %v", err)
+			}
+
+			if !reflect.DeepEqual(planned, pathMap) {
+				t.Errorf("directory organize and metadata apply disagree — the ping-pong, via OrganizeBookDirectory:\n"+
+					"  organize : %v\n"+
+					"  apply    : %v", pathMap, planned)
+			}
+			for _, dst := range planned {
+				if _, statErr := os.Stat(dst); statErr != nil {
+					t.Errorf("organize reported %q but nothing is there: %v", dst, statErr)
+				}
+			}
+		})
+	}
+}
+
+// TestChar_PlanIgnoresPathlessRows is the assertion the conformance test above
+// structurally cannot make. That test hands both legs the same rows, so it
+// proves the planner is deterministic, not that the three production callers
+// agree on WHICH rows to hand it -- and they did not: OrganizeDirectoryBook
+// pre-filtered rows with an empty FilePath while CreateOrganizedVersion and the
+// metafetch apply paths passed GetBookFiles straight through.
+//
+// One pathless row is enough to break it. It changes totalTracks, and since ""
+// sorts first it shifts every position-derived track number by one, so organize
+// writes "... - 07.mp3" while the row writer plans "... - 08.mp3", finds nothing
+// there, and falls back to the un-organized source. planTargetPaths therefore
+// drops those rows itself; this pins that, by asserting the plan is unchanged by
+// their presence.
+func TestChar_PlanIgnoresPathlessRows(t *testing.T) {
 	srcDir := t.TempDir()
+	real1 := database.BookFile{ID: "s1", FilePath: filepath.Join(srcDir, "a.m4b"), Format: "m4b"}
+	real2 := database.BookFile{ID: "s2", FilePath: filepath.Join(srcDir, "b.m4b"), Format: "m4b"}
+	ghost := database.BookFile{ID: "ghost", Format: "m4b"}
 
-	const (
-		prodFolder = "{author}/{series}/{title} ({print_year})"
-		prodFile   = "{title} - {track:02d}"
-	)
-
-	// Deliberately junk source names in non-alphabetical track order: if the
-	// track number came from sort position rather than the row, the two paths
-	// would silently disagree for exactly this book.
-	src := []database.BookFile{
-		{ID: "s3", FilePath: filepath.Join(srcDir, "aaa.m4b"), Format: "m4b", TrackNumber: 3},
-		{ID: "s1", FilePath: filepath.Join(srcDir, "zzz.m4b"), Format: "m4b", TrackNumber: 1},
-		{ID: "s2", FilePath: filepath.Join(srcDir, "mmm.m4b"), Format: "m4b", TrackNumber: 2},
-	}
-	for _, f := range src {
-		if err := os.WriteFile(f.FilePath, []byte("audio "+f.ID), 0644); err != nil {
-			t.Fatalf("fixture: %v", err)
-		}
-	}
-
-	year := 1951
 	book := &database.Book{
-		Title:     "Foundation",
-		FilePath:  srcDir,
-		Author:    &database.Author{Name: "Isaac Asimov"},
-		Series:    &database.Series{Name: "Foundation"},
-		PrintYear: &year,
+		Title:    "Foundation",
+		FilePath: srcDir,
+		Author:   &database.Author{Name: "Isaac Asimov"},
 	}
+	org := charOrganizer("{author}/{title}", "{title} - {track:02d}")
+	org.config.RootDir = t.TempDir()
 
-	org := charOrganizer(prodFolder, prodFile)
-	org.config.RootDir = rootDir
-	org.config.OrganizationStrategy = "copy"
-
-	// What the metadata-apply path plans.
-	entries, err := org.ComputeTargetPaths(book, src)
-	if err != nil {
-		t.Fatalf("apply path: %v", err)
-	}
-	planned := make(map[string]string, len(entries))
-	for _, e := range entries {
-		planned[e.SourcePath] = e.TargetPath
-	}
-	if len(planned) != len(src) {
-		t.Fatalf("apply path planned %d renames, want %d", len(planned), len(src))
-	}
-
-	// What organize actually does on disk.
-	_, pathMap, err := org.OrganizeBookDirectory(book, src)
-	if err != nil {
-		t.Fatalf("OrganizeBookDirectory: %v", err)
-	}
-
-	if !reflect.DeepEqual(planned, pathMap) {
-		t.Errorf("directory organize and metadata apply disagree — the ping-pong, via OrganizeBookDirectory:\n"+
-			"  organize : %v\n"+
-			"  apply    : %v", pathMap, planned)
-	}
-	for _, dst := range planned {
-		if _, statErr := os.Stat(dst); statErr != nil {
-			t.Errorf("organize reported %q but nothing is there: %v", dst, statErr)
+	plan := func(files []database.BookFile) map[string]string {
+		t.Helper()
+		entries, err := org.ComputeTargetPaths(book, files)
+		if err != nil {
+			t.Fatalf("ComputeTargetPaths: %v", err)
 		}
+		out := make(map[string]string, len(entries))
+		for _, e := range entries {
+			out[e.SourcePath] = e.TargetPath
+		}
+		return out
+	}
+
+	want := plan([]database.BookFile{real1, real2})
+	if len(want) != 2 {
+		t.Fatalf("fixture planned %d renames, want 2: %v", len(want), want)
+	}
+	// The ghost goes first, which is also where "" sorts.
+	got := plan([]database.BookFile{ghost, real1, real2})
+
+	if !reflect.DeepEqual(want, got) {
+		t.Errorf("a pathless row changed the plan — callers that filter and callers that don't will disagree:\n"+
+			"  without ghost: %v\n"+
+			"  with ghost   : %v", want, got)
 	}
 }
 
