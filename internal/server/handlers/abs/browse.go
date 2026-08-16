@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-08-13
+// last-edited: 2026-08-16
 
 package abs
 
@@ -572,10 +572,33 @@ func (h *Handler) LibrarySeries(c *gin.Context) {
 		series = series[start:end]
 	}
 
+	// 🔴 THE BOOK OBJECTS WERE NOT LIBRARY ITEMS, so no series rendered at all.
+	//
+	// ABS defines a series' `books` as full LibraryItem objects. This route
+	// emitted six ad-hoc fields instead -- id, libraryItemId, libraryId, title,
+	// sequence, duration -- with no `media`, no `media.metadata`, no
+	// `mediaType`, no `coverPath`. Measured against production 2026-08-16: the
+	// app's own request returned HTTP 200 with 50 well-formed-looking rows, and
+	// the Series tab showed "No Series Found".
+	//
+	// The control that identifies this as the cause is the PLAYLISTS route,
+	// which the same client renders correctly on the same library with the same
+	// auth: its items embed a complete libraryItem (20 fields, including
+	// media.metadata and coverPath) built by minifiedItem. A typed client
+	// decodes `books: [LibraryItem]` as a unit, so one undecodable entry
+	// discards the whole response -- which is why 23 of the 50 having real
+	// books did not put 23 series on screen. It was 0 or nothing.
+	//
+	// Enrichment is deliberately PAGE-SCOPED. Building library items for every
+	// series would rebuild the whole library on each cache miss; the note above
+	// already measured the unpaginated body at ~10.8 MB / 31,139 book rows.
+	// Only the ~50 series actually being returned are hydrated.
+	enriched := h.seriesPageBooks(c.Request.Context(), series, bySeries)
+
 	results := make([]any, 0, len(series))
 	for _, s := range series {
 		built := bySeries[s.ID]
-		items, total := built.items, built.totalDuration
+		items, total := enriched[s.ID], built.totalDuration
 		if items == nil {
 			items = []any{}
 		}
@@ -591,8 +614,24 @@ func (h *Handler) LibrarySeries(c *gin.Context) {
 			// during widget build (§1.7.3 item 5). Summed from BookSummary.Duration,
 			// which is already an int — do not introduce a float on the way here.
 			"totalDuration": total,
-			"numBooks":      counts[s.ID],
+			// Count the books actually SERVED, not every row the store counts.
+			//
+			// This is the same rule totalDuration above already follows, applied
+			// to the field next to it. Measured on production 2026-08-16, 9 of 50
+			// series on page 0 claimed numBooks >= 1 while carrying books: [] and
+			// totalDuration: 0 -- because seriesBookEntry drops books with no
+			// resolvable sync id, and the count came from a store query that knew
+			// nothing about that. A row that reports a book count it cannot list
+			// is a row the client has to decide how to disbelieve.
+			//
+			// counts is still consulted so a series whose books were all dropped
+			// is visible as such, rather than silently reading as an empty series
+			// that genuinely has no books.
+			"numBooks": len(items),
 		})
+		if want := counts[s.ID]; want != len(items) {
+			h.logSeriesBookCountMismatch(s.ID, s.Name, want, len(items))
+		}
 	}
 	// Total is the FULL series count, NOT len(results). The client decides whether
 	// another page exists with `page*limit < total` (the same rule recorded on
@@ -606,6 +645,86 @@ func (h *Handler) LibrarySeries(c *gin.Context) {
 		Limit:   limit,
 		Page:    page,
 	})
+}
+
+// seriesPageBooks hydrates each series' book list into real ABS LibraryItem
+// objects, for the page being served only.
+//
+// It reuses seriesBooksCached's ordering (reading order, already sorted) and the
+// same minifiedItem serializer the playlists route uses, so the two routes
+// cannot drift into disagreeing about what a library item looks like -- which is
+// exactly the divergence that made this route render nothing while playlists
+// worked.
+//
+// On any failure it returns what it has rather than nothing: a series page
+// missing hydration is worth serving, a 500 is not. That matches the existing
+// rule for counts and seriesBooksCached above.
+func (h *Handler) seriesPageBooks(
+	ctx context.Context,
+	series []database.Series,
+	bySeries map[int]seriesBooksBuilt,
+) map[int][]any {
+	out := make(map[int][]any, len(series))
+
+	// One batched load for the whole page rather than one per series.
+	var ids []string
+	seen := make(map[string]struct{})
+	for _, s := range series {
+		for _, id := range bySeries[s.ID].bookIDs {
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return out
+	}
+
+	books, err := h.library.GetBooksByIDs(ids)
+	if err != nil {
+		return out
+	}
+	views, err := h.loadItemViews(ctx, books)
+	if err != nil {
+		return out
+	}
+
+	byID := make(map[string]libraryItemDTO, len(views))
+	for i := range views {
+		byID[views[i].Book.ID] = h.minifiedItem(&views[i])
+	}
+
+	for _, s := range series {
+		built := bySeries[s.ID]
+		items := make([]any, 0, len(built.bookIDs))
+		for _, id := range built.bookIDs {
+			dto, ok := byID[id]
+			if !ok {
+				// A book that vanished between the cached grouping and now.
+				// Dropping it keeps the array decodable, which is the whole
+				// point of this change; numBooks is computed from what survives.
+				continue
+			}
+			items = append(items, dto)
+		}
+		out[s.ID] = items
+	}
+	return out
+}
+
+// logSeriesBookCountMismatch reports a series whose store count disagrees with
+// the number of books actually served.
+//
+// It is rate-limited by being WARN on a route the app polls: the condition is
+// real (9 of 50 on production 2026-08-16) and worth seeing, but it is a data
+// observation, not a request failure.
+func (h *Handler) logSeriesBookCountMismatch(id int, name string, want, got int) {
+	slog.Warn("abs: series book count disagrees with the books served",
+		"series_id", id, "series_name", name,
+		"store_count", want, "served", got,
+		"note", "books without a resolvable sync id are dropped; numBooks reports what was served")
 }
 
 // absSeriesBooksCacheTTL bounds how long the series→books map is reused. Matches
@@ -628,7 +747,6 @@ const absSeriesBooksCacheTTL = 5 * time.Minute
 // expensive part here is not the grouping: it is MintOrGetSyncID, one call per
 // book. Caching summaries would still mint ~16,500 ids on EVERY series request.
 type seriesBooksBuilt struct {
-	items         []any
 	totalDuration int
 	// bookIDs is the same set in the same order, kept so the ?filter=series.<id>
 	// path on /items can reuse this grouping instead of re-deriving it. Reusing it
@@ -681,13 +799,15 @@ func (h *Handler) seriesBooksCached() (map[int]seriesBooksBuilt, error) {
 			return list[a].Title < list[b].Title
 		})
 
-		built := seriesBooksBuilt{items: make([]any, 0, len(list))}
+		built := seriesBooksBuilt{}
 		for i := range list {
-			entry, ok := h.seriesBookEntry(&list[i])
-			if !ok {
+			// Books with no resolvable sync id are dropped here, before they can
+			// reach the response. The client splits compound ids at a fixed byte
+			// offset of 36, so a 26-char ULID does not merely look wrong, it
+			// mis-parses -- the rule #2366 established for playlist items.
+			if !h.hasSyncID(list[i].ID) {
 				continue
 			}
-			built.items = append(built.items, entry)
 			built.bookIDs = append(built.bookIDs, list[i].ID)
 			// Summed over the books actually SERVED, not over every row in the
 			// series: a duration counting books the client cannot see would
@@ -705,38 +825,16 @@ func (h *Handler) seriesBooksCached() (map[int]seriesBooksBuilt, error) {
 	return m, nil
 }
 
-// seriesBookEntry is the per-book shape embedded in a series row.
+// hasSyncID reports whether a book has a resolvable client-visible sync id.
 //
-// sequence is a STRING, never a number: contract §6.5 / §1.7.3 — Dart's
-// `as String?` on a number THROWS inside build() and red-screens the book detail
-// sheet. An absent sequence is null rather than "0", which would sort and display
-// as a real position the data does not claim.
-// It returns ok=false when the book has no resolvable sync id. Such a book is
-// DROPPED rather than emitted with the raw ULID or a null: the client splits
-// compound ids at a fixed byte offset of 36, so a 26-char ULID does not merely
-// look wrong, it mis-parses — and a null entry red-screens the list outright.
-// That is the same rule #2366 established for playlist items.
-func (h *Handler) seriesBookEntry(b *database.BookSummary) (gin.H, bool) {
-	sid, err := h.identity.MintOrGetSyncID(b.ID)
-	if err != nil || sid == "" {
-		return nil, false
-	}
-	var seq any
-	if b.SeriesSequence != nil {
-		seq = strconv.Itoa(*b.SeriesSequence)
-	}
-	dur := 0
-	if b.Duration != nil {
-		dur = *b.Duration
-	}
-	return gin.H{
-		"id":            sid,
-		"libraryItemId": sid,
-		"libraryId":     h.libraryID(),
-		"title":         b.Title,
-		"sequence":      seq,
-		"duration":      dur,
-	}, true
+// This replaced seriesBookEntry, which built a six-field ad-hoc book object
+// that no ABS client could decode (see the note in LibrarySeries). The
+// filtering it did was the part worth keeping: the id check decides which books
+// can be served at all, and it must happen while the series grouping is built
+// so bookIDs and the served list cannot disagree.
+func (h *Handler) hasSyncID(bookID string) bool {
+	sid, err := h.identity.MintOrGetSyncID(bookID)
+	return err == nil && sid != ""
 }
 
 // absAuthorsCacheTTL bounds how long the built author list is reused.
