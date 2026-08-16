@@ -1,5 +1,5 @@
 <!-- file: docs/handoffs/2026-08-16-overnight-silent-failure-fixes.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7d1a4b60-3e92-4c58-b0a7-2f6c9d81e534 -->
 <!-- last-edited: 2026-08-16 -->
 
@@ -220,20 +220,55 @@ deliberate, supervised action, not something to fold into a behaviour fix unatte
 | **Backfill for stuck legacy rows** | #2483 fixes the forward path only. The already-stuck rows need a one-off supervised pass. |
 | **Maintenance-window watchdog vs. plugin success** | Cancelled at 331s idle; plugin then logged "completed successfully (100%)". Pre-existing disagreement, newly consequential — see #4 above. |
 | **Activity summaries, second half** | Metadata-apply rows leading with the book title rather than a bare "book →" link, and `(none) → 2021` instead of a dangling arrow. Separate change in the emitters + frontend. |
-| **H110 coverage double-run** | `Makefile:196-202` — `test-short` runs `go test ./...` twice, once with `-race` and again with `-coverprofile`, the second discarding all output (`>/dev/null 2>&1`, so a failure there is invisible — itself a silent failure of exactly the species above). Measurement result below. |
+| ~~**H110 coverage double-run**~~ | ✅ **Fixed and merged — PR #2485.** See below. |
+
+## 5. `make test-short` ran the whole suite twice — PR #2485 ✅ merged
+
+Not a correctness bug, but it shares the species: the second run discarded its output with
+`>/dev/null 2>&1`, so a failure occurring *only* under the coverage run produced a silent
+non-zero exit with nothing to read.
+
+`test-short` ran `go test ./...` once with `-race`, then again with `-coverprofile`.
+Measured on an idle machine (a first attempt was **discarded as invalid** — another full
+suite was running concurrently and contending for CPU, which is the same mistake that
+would have produced a confident wrong number):
+
+| Config | Time |
+|---|---|
+| `-race` alone | 493s |
+| `-coverprofile` alone | 473s |
+| **both together** | **500s** |
+
+One combined pass is **466s cheaper per invocation (966s → 500s, −48%)** and only 7s more
+than `-race` by itself. Coverage is byte-identical either way — 47.0%, 81950 profile lines
+— so `coverage-check-short`'s floor is unaffected, and `-covermode=atomic` was already
+required by `-race`. Verified end to end before pushing: 512s, exit 0, coverage 47.0%,
+gate passes. CI then ran the new target on the PR itself.
+
+Also gitignored `.ci/coverage-last.txt`, which the gate writes as local running state and
+which was neither tracked nor ignored — so running the documented target left a dirty tree.
+I swept it into a commit with `git add -A` and had to back it out, which is the footgun
+that rule exists for.
 
 ## COMPLETED / REMAINING / BLOCKED
 
-**COMPLETED: 5** — prod deploy (main, debug build, verified healthy, zero panics/errors);
+**COMPLETED: 7** — prod deploy ×2 (debug build, verified healthy, zero real errors);
 PR #2480 (F7 file-I/O error return); PR #2481 (F6 empty organize is an error);
-PR #2482 (activity summary attrs); PR #2483 (legacy op terminal status).
-**All four PRs merged** (22/22 checks passing each, zero failures); `main` is at `5aeb02a8`,
-which is also what prod is running. Worktrees removed, branches deleted.
+PR #2482 (activity summary attrs); PR #2483 (legacy op terminal status, **verified live in
+prod**); PR #2484 (this handoff); PR #2485 (test-short single pass, −48%).
+**All six PRs merged**, each with 21–22 checks passing and zero failures. Worktrees
+removed, branches deleted. Prod runs `5aeb02a8`; `main` is at `20023a5d` (the two commits
+since prod are docs + the Makefile, neither shipping in the binary).
 
-**REMAINING: 6** — 3 scheduled tasks enabled-but-inert (needs your decision);
-F5-remainder (content hash, deliberately deferred to a waking session); backfill for
-already-stuck legacy op rows; maintenance-watchdog vs. plugin-success disagreement;
-activity summaries second half (emitters + frontend); H110 Makefile change (pending the
-measurement).
+**REMAINING: 5** — 3 scheduled tasks enabled-but-inert (`library_organize`,
+`library_size_refresh`, `metadata_upgrade` — needs your decision); F5-remainder (content
+hash, deliberately deferred to a waking session); backfill for already-stuck legacy op
+rows; maintenance-watchdog vs. plugin-success disagreement; activity summaries second half
+(emitters + frontend).
 
 **BLOCKED: 0**
+
+## If you only read one thing
+
+The relocation from #2479 has **not** run, and `library_organize` is enabled but cannot
+run, so it will not start on its own. That is the decision waiting for you.
