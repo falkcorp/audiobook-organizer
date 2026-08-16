@@ -218,6 +218,61 @@ vet:
 	@go vet ./...
 	@echo "✅ go vet passed"
 
+## mutate: Run mutation testing on ONE package (PKG=./internal/scanner/).
+## Mutation testing answers the question a green suite cannot: would these
+## tests actually FAIL if the code were wrong? It edits the source (flipping
+## conditionals, removing statements), reruns the tests, and reports mutants
+## that SURVIVED -- each survivor is a change no test noticed.
+##
+## PKG IS REQUIRED AND DELIBERATELY NOT DEFAULTED TO ./... . gremlins runs the
+## package's whole test suite once per mutant; several suites here take 30s+
+## (internal/server has hit its 600s timeout), so a repo-wide run is measured in
+## hours, not minutes. Scope it to what you changed.
+##
+##   make mutate PKG=./internal/scanner/
+##   make mutate PKG=./internal/server/handlers/abs/
+##
+## ⚠️ RUN FROM A WORKTREE, NOT THE PRIMARY CHECKOUT. gremlins copies the whole
+## module directory once per worker. This module root is ~34GB because
+## .worktrees/ sits inside it, so the default worker count projects to 340GB+ of
+## copies -- that is how a --dry-run filled a 926GB volume on 2026-08-16. From a
+## worktree the same copy is 1.8GB. scripts/run-mutation.sh REFUSES to run from
+## the primary checkout, budgets the disk before starting, and kills the run if
+## free space crosses the floor.
+##
+## Tunables (env): MUTATE_WORKERS (default 2), MUTATE_MIN_FREE_GB (60),
+## MUTATE_FLOOR_GB (20).
+##
+## Install the pinned binary first: bash scripts/setup-gremlins.sh
+mutate:
+	@if [ -z "$(PKG)" ]; then \
+		echo "PKG is required, e.g. make mutate PKG=./internal/scanner/"; \
+		echo "   (repo-wide mutation runs take hours -- scope it to what you changed)"; \
+		exit 2; \
+	fi
+	@command -v gremlins >/dev/null 2>&1 || { \
+		echo "gremlins not installed. Run: bash scripts/setup-gremlins.sh"; \
+		exit 1; \
+	}
+	@PKG=$(PKG) bash scripts/run-mutation.sh
+
+## mutate-dry: List the mutants gremlins WOULD generate for PKG, without
+## running any tests. Use it to size a run before committing to it, or to check
+## that a package has mutable code at all.
+##
+## NOT free on disk: --dry-run skips the TEST RUNS, not the working-copy staging,
+## so it goes through the same disk guard as a full run.
+mutate-dry:
+	@if [ -z "$(PKG)" ]; then \
+		echo "PKG is required, e.g. make mutate-dry PKG=./internal/scanner/"; \
+		exit 2; \
+	fi
+	@command -v gremlins >/dev/null 2>&1 || { \
+		echo "gremlins not installed. Run: bash scripts/setup-gremlins.sh"; \
+		exit 1; \
+	}
+	@PKG=$(PKG) bash scripts/run-mutation.sh --dry-run
+
 ## mocks: Regenerate mockery-managed mocks from .mockery.yaml.
 ## Run this after editing an interface listed in .mockery.yaml.
 ## Pinned mockery version: v3.7.1 (module github.com/vektra/mockery/v3).
