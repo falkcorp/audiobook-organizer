@@ -72,7 +72,7 @@ type OperationV2Row struct {
 type OpStrikeV2Row struct {
 	DefID       string
 	OperationID string
-	Kind        string // "uncheckpointed" | "stuck" | "infinite_restart"
+	Kind        string // "uncheckpointed" | "stuck" | "never_reported" | "infinite_restart"
 	Details     string // JSON object with plugin, message, etc.
 	OccurredAt  time.Time
 }
