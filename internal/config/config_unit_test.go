@@ -1,6 +1,6 @@
 // file: internal/config/config_unit_test.go
-// version: 1.10.0
-// last-edited: 2026-06-16
+// version: 1.11.0
+// last-edited: 2026-08-16
 
 package config
 
@@ -187,8 +187,12 @@ func TestConfigValidate(t *testing.T) {
 			OrganizationStrategy: "auto",
 			ConcurrentScans:      4,
 			FolderNamingPattern:  "{author}/{title}",
-			FileNamingPattern:    "{title}",
-			SupportedExtensions:  []string{".m4b", ".mp3"},
+			// Was "{title}", which is the shape that stranded 2,584 files in
+			// production: with no per-track placeholder every file of a
+			// multi-file book expands to the same name. Validate now rejects
+			// it, so this case uses the real shipped default.
+			FileNamingPattern:   DefaultFileNamingPattern,
+			SupportedExtensions: []string{".m4b", ".mp3"},
 		}
 		assert.NoError(t, c.Validate())
 	})
