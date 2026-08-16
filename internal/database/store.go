@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.87.0
+// version: 2.88.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-08-06
 
@@ -35,6 +35,7 @@ type Store interface {
 	BookSegmentStore
 	PlaylistStore
 	UserPlaylistStore
+	CollectionStore
 	ImportPathStore
 	OperationStore
 	TagStore
@@ -425,6 +426,47 @@ type UserPlaylist struct {
 const (
 	UserPlaylistTypeStatic = "static"
 	UserPlaylistTypeSmart  = "smart"
+)
+
+// Collection is a SERVER-WIDE, shared grouping of books (the ABS
+// "collection" concept). Every user sees the same collections; unlike
+// UserPlaylist there is no per-user scoping, which is why creation is
+// gated on auth.PermCollectionsManage rather than being self-service.
+//
+// Like UserPlaylist it is either static (an explicit ordered book list)
+// or dynamic (a live-evaluated query). The query DSL, sort directives
+// and evaluator are deliberately THE SAME ones smart playlists use --
+// playlist.EvaluateSmartPlaylist is called directly -- so there is one
+// query language in this system, not two that drift.
+type Collection struct {
+	ID          string `json:"id"` // ULID
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	// Type discriminator: "static" or "dynamic".
+	Type string `json:"type"`
+	// Static collections: ordered book ID list.
+	BookIDs []string `json:"book_ids,omitempty"`
+	// Dynamic collections: DSL query string, sort + limit directives.
+	Query string `json:"query,omitempty"`
+	// SortJSON is a JSON-encoded []{field, direction} for stable ordering.
+	SortJSON string `json:"sort_json,omitempty"`
+	Limit    int    `json:"limit,omitempty"`
+	// MaterializedBookIDs caches the last evaluation of a dynamic
+	// collection so a listing does not have to re-run the query.
+	// Advisory only: readers that need live results re-evaluate.
+	MaterializedBookIDs []string  `json:"materialized_book_ids,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
+	// CreatedByUserID records authorship for audit. It does NOT scope
+	// visibility -- collections are shared by definition.
+	CreatedByUserID string `json:"created_by_user_id,omitempty"`
+	Version         int    `json:"version"`
+}
+
+// Collection type constants.
+const (
+	CollectionTypeStatic  = "static"
+	CollectionTypeDynamic = "dynamic"
 )
 
 // PlaylistItem represents an item in a playlist

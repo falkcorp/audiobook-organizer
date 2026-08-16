@@ -254,6 +254,21 @@ type UserPlaylistStore interface {
 	ListDirtyUserPlaylists() ([]UserPlaylist, error)
 }
 
+// CollectionStore covers server-wide collections: static book lists and
+// dynamic (live-evaluated) queries.
+//
+// There is no ForUser variant, unlike UserPlaylistStore. Collections are shared
+// by every user by design, so a per-user list would be wrong rather than
+// missing.
+type CollectionStore interface {
+	CreateCollection(col *Collection) (*Collection, error)
+	GetCollection(id string) (*Collection, error)
+	GetCollectionByName(name string) (*Collection, error)
+	ListCollections(collectionType string, limit, offset int) ([]Collection, int, error)
+	UpdateCollection(col *Collection) error
+	DeleteCollection(id string) error
+}
+
 // ImportPathStore covers managed import path CRUD.
 type ImportPathStore interface {
 	GetAllImportPaths() ([]ImportPath, error)
