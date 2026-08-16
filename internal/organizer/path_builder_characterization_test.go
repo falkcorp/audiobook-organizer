@@ -40,6 +40,9 @@
 package organizer
 
 import (
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -258,6 +261,107 @@ func TestChar_SchemesAgree(t *testing.T) {
 		t.Errorf("the two path builders disagree — this is the ping-pong:\n"+
 			"  organize      : %s\n"+
 			"  metadata apply: %s", organizePath, applyPath)
+	}
+}
+
+// TestChar_DirectoryOrganizeAgreesWithApply is the THIRD leg of the conformance
+// test, and the one that would have caught F8.
+//
+// TestChar_SchemesAgree compares generateTargetPath to ComputeTargetPaths --
+// both single-file. OrganizeBookDirectory was a third computation of the same
+// question for MULTI-file books, and nothing compared it to either: it expanded
+// the folder pattern and then kept filepath.Base(src) forever. So a directory
+// book organized to one set of names and the apply path planned another, which
+// is the ping-pong with an extra door.
+//
+// This runs a real multi-file book through OrganizeBookDirectory on disk and
+// asserts every file landed exactly where ComputeTargetPaths would have put it.
+func TestChar_DirectoryOrganizeAgreesWithApply(t *testing.T) {
+	rootDir := t.TempDir()
+	srcDir := t.TempDir()
+
+	const (
+		prodFolder = "{author}/{series}/{title} ({print_year})"
+		prodFile   = "{title} - {track:02d}"
+	)
+
+	// Deliberately junk source names in non-alphabetical track order: if the
+	// track number came from sort position rather than the row, the two paths
+	// would silently disagree for exactly this book.
+	src := []database.BookFile{
+		{ID: "s3", FilePath: filepath.Join(srcDir, "aaa.m4b"), Format: "m4b", TrackNumber: 3},
+		{ID: "s1", FilePath: filepath.Join(srcDir, "zzz.m4b"), Format: "m4b", TrackNumber: 1},
+		{ID: "s2", FilePath: filepath.Join(srcDir, "mmm.m4b"), Format: "m4b", TrackNumber: 2},
+	}
+	for _, f := range src {
+		if err := os.WriteFile(f.FilePath, []byte("audio "+f.ID), 0644); err != nil {
+			t.Fatalf("fixture: %v", err)
+		}
+	}
+
+	year := 1951
+	book := &database.Book{
+		Title:     "Foundation",
+		FilePath:  srcDir,
+		Author:    &database.Author{Name: "Isaac Asimov"},
+		Series:    &database.Series{Name: "Foundation"},
+		PrintYear: &year,
+	}
+
+	org := charOrganizer(prodFolder, prodFile)
+	org.config.RootDir = rootDir
+	org.config.OrganizationStrategy = "copy"
+
+	// What the metadata-apply path plans.
+	entries, err := org.ComputeTargetPaths(book, src)
+	if err != nil {
+		t.Fatalf("apply path: %v", err)
+	}
+	planned := make(map[string]string, len(entries))
+	for _, e := range entries {
+		planned[e.SourcePath] = e.TargetPath
+	}
+	if len(planned) != len(src) {
+		t.Fatalf("apply path planned %d renames, want %d", len(planned), len(src))
+	}
+
+	// What organize actually does on disk.
+	_, pathMap, err := org.OrganizeBookDirectory(book, src)
+	if err != nil {
+		t.Fatalf("OrganizeBookDirectory: %v", err)
+	}
+
+	if !reflect.DeepEqual(planned, pathMap) {
+		t.Errorf("directory organize and metadata apply disagree — the ping-pong, via OrganizeBookDirectory:\n"+
+			"  organize : %v\n"+
+			"  apply    : %v", pathMap, planned)
+	}
+	for _, dst := range planned {
+		if _, statErr := os.Stat(dst); statErr != nil {
+			t.Errorf("organize reported %q but nothing is there: %v", dst, statErr)
+		}
+	}
+}
+
+// TestChar_SanitizePathComponentIsIdempotent underwrites a load-bearing
+// assumption: GenerateTargetDirPath and OrganizeBookDirectory run sanitizePath
+// over output BuildPath has ALREADY sanitized, while BuildRelPath does not. The
+// two agree on the folder only if the second pass is a no-op. If it ever stops
+// being one, a directory book's folder drifts one character from the same
+// book's single-file folder and the ping-pong is back.
+func TestChar_SanitizePathComponentIsIdempotent(t *testing.T) {
+	inputs := []string{
+		"", "normal", "Dr. Who - Season 1", "../../../etc/passwd", "..evil",
+		"with/slash", "back\\slash", "colon:name", "star*name", "q?mark",
+		"quote\"name", "<angle>", "pipe|name", "trail...", "  padded  ",
+		"[brackets]", "emoji 🎧 name", "ctrl\x01char", "多字节标题",
+	}
+	for _, in := range inputs {
+		once := SanitizePathComponent(in)
+		twice := SanitizePathComponent(once)
+		if once != twice {
+			t.Errorf("SanitizePathComponent is not idempotent for %q:\n  once : %q\n  twice: %q", in, once, twice)
+		}
 	}
 }
 

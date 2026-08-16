@@ -1336,7 +1336,7 @@ func TestPreviewRename_Success(t *testing.T) {
 
 func TestOrganizeBookDirectory_NilBook_Unit(t *testing.T) {
 	org := &Organizer{config: &config.Config{}}
-	_, _, err := org.OrganizeBookDirectory(nil, []string{"/a.m4b"})
+	_, _, err := org.OrganizeBookDirectory(nil, segsFor("/a.m4b"))
 	if err == nil {
 		t.Fatal("expected error for nil book")
 	}
@@ -1426,6 +1426,7 @@ func TestOrganizeBookDirectory_CopyStrategy(t *testing.T) {
 		config: &config.Config{
 			RootDir:              dstDir,
 			FolderNamingPattern:  "{author}/{title}",
+			FileNamingPattern:    "{title} - {track:02d}",
 			OrganizationStrategy: "copy",
 		},
 	}
@@ -1435,7 +1436,7 @@ func TestOrganizeBookDirectory_CopyStrategy(t *testing.T) {
 		Author: &database.Author{Name: "Author"},
 	}
 
-	targetDir, pathMap, err := org.OrganizeBookDirectory(book, []string{f1, f2})
+	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segsFor(f1, f2))
 	if err != nil {
 		t.Fatalf("OrganizeBookDirectory: %v", err)
 	}
@@ -1462,13 +1463,16 @@ func TestOrganizeBookDirectory_AlreadyAtTarget(t *testing.T) {
 	// Create the target directory structure
 	targetDir := filepath.Join(tmpDir, "Author", "Title")
 	os.MkdirAll(targetDir, 0755)
-	f1 := filepath.Join(targetDir, "ch01.m4b")
+	// Named for the pattern, not arbitrarily: the file pattern decides the
+	// destination filename now, so only its own answer counts as "at target".
+	f1 := filepath.Join(targetDir, "Title.m4b")
 	os.WriteFile(f1, []byte("data"), 0644)
 
 	org := &Organizer{
 		config: &config.Config{
 			RootDir:              tmpDir,
 			FolderNamingPattern:  "{author}/{title}",
+			FileNamingPattern:    "{title} - {track:02d}",
 			OrganizationStrategy: "copy",
 		},
 	}
@@ -1478,7 +1482,7 @@ func TestOrganizeBookDirectory_AlreadyAtTarget(t *testing.T) {
 		Author: &database.Author{Name: "Author"},
 	}
 
-	dir, pathMap, err := org.OrganizeBookDirectory(book, []string{f1})
+	dir, pathMap, err := org.OrganizeBookDirectory(book, segsFor(f1))
 	if err != nil {
 		t.Fatalf("OrganizeBookDirectory: %v", err)
 	}

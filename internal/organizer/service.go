@@ -1173,26 +1173,31 @@ func (orgSvc *Service) OrganizeDirectoryBook(org *Organizer, book *database.Book
 		return "", fmt.Errorf("no segments tracked for %q (id=%s) — run a library scan to detect files in %s", book.Title, book.ID, book.FilePath)
 	}
 
-	var segmentPaths []string
-	missingCount := 0
+	// Pass rows flagged Missing through as well: OrganizeBookDirectory skips
+	// them for copying but counts them for track numbering, so a book whose
+	// files are temporarily missing keeps the numbering it will have when they
+	// come back. Filtering them here would renumber the book instead.
+	var segments []database.BookFile
+	missingCount, presentCount := 0, 0
 	for _, bf := range bookFiles {
 		if bf.FilePath == "" {
 			continue
 		}
 		if bf.Missing {
 			missingCount++
-			continue
+		} else {
+			presentCount++
 		}
-		segmentPaths = append(segmentPaths, bf.FilePath)
+		segments = append(segments, bf)
 	}
 
-	if len(segmentPaths) == 0 {
+	if presentCount == 0 {
 		return "", fmt.Errorf("all %d segments for %q (id=%s) marked missing on disk — re-scan to verify, or restore from backup", missingCount, book.Title, book.ID)
 	}
 
-	log.Info("Organizing %d segment file(s) for %s (from book_files)", len(segmentPaths), book.Title)
+	log.Info("Organizing %d segment file(s) for %s (from book_files)", presentCount, book.Title)
 
-	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segmentPaths)
+	targetDir, pathMap, err := org.OrganizeBookDirectory(book, segments)
 	if err != nil {
 		return "", err
 	}
@@ -1214,6 +1219,31 @@ func (orgSvc *Service) OrganizeDirectoryBook(org *Organizer, book *database.Book
 	}
 
 	return targetDir, nil
+}
+
+// resolveOrganizedFilePath decides what file_path an organized book_file row
+// should carry, given the plan and what is actually on disk.
+//
+// The plan says where organize INTENDED to put the file; it does not prove the
+// copy happened. OrganizeBookDirectory skips files whose destination is unsafe
+// or already occupied by an unrelated file, so a row written straight from the
+// plan can name a path with nothing at it. Disk is the tiebreaker: prefer the
+// target if it exists, fall back to the source if THAT still exists, and only
+// then take the plan on faith (the file is missing either way, and the planned
+// path is where a restore should put it).
+func resolveOrganizedFilePath(srcPath string, planned map[string]string, log logger.Logger) string {
+	dstPath, ok := planned[srcPath]
+	if !ok || dstPath == "" || dstPath == srcPath {
+		return srcPath
+	}
+	if _, err := os.Stat(dstPath); err == nil {
+		return dstPath
+	}
+	if _, err := os.Stat(srcPath); err == nil {
+		log.Warn("organize: planned target %q does not exist; keeping source path %q for this file", dstPath, srcPath)
+		return srcPath
+	}
+	return dstPath
 }
 
 // CreateOrganizedVersion creates a new book record for the organized copy and links it to the original.
@@ -1370,15 +1400,28 @@ func (orgSvc *Service) CreateOrganizedVersion(org *Organizer, book *database.Boo
 		_ = orgSvc.db.SetBookAuthors(newBookID, newAuthors)
 	}
 
-	// Copy book files to the new book with updated paths
+	// Copy book files to the new book with updated paths.
+	//
+	// The per-file path must come from the SAME planner OrganizeBookDirectory
+	// copied with. Until 2026-08-15 this rebuilt it as
+	// filepath.Join(newPath, filepath.Base(bf.FilePath)) -- a third, independent
+	// derivation that silently kept the source filename. It happened to agree
+	// while OrganizeBookDirectory also kept filepath.Base; now that the file
+	// naming pattern decides the destination filename, guessing here would write
+	// every organized book_file row a path with no file at it.
 	if bookFiles, err := orgSvc.db.GetBookFiles(book.ID); err == nil && len(bookFiles) > 0 {
+		var planned map[string]string
+		if isDir {
+			if planned, err = org.PlanFilePaths(book, bookFiles); err != nil {
+				log.Warn("organize: cannot plan organized file paths for %s (%s): %v — per-file rows will keep their source paths", book.Title, book.ID, err)
+			}
+		}
 		for _, bf := range bookFiles {
 			newBF := bf
 			newBF.ID = ulid.Make().String()
 			newBF.BookID = newBookID
 			if isDir && bf.FilePath != "" {
-				fileName := filepath.Base(bf.FilePath)
-				newBF.FilePath = filepath.Join(newPath, fileName)
+				newBF.FilePath = resolveOrganizedFilePath(bf.FilePath, planned, log)
 			} else if !isDir {
 				newBF.FilePath = newPath
 			}

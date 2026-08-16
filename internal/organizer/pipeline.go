@@ -52,6 +52,30 @@ type FilePipelineResult struct {
 // a bad pattern must stop the rename, not quietly relocate the whole library to
 // a path built from a half-substituted template.
 func ComputeTargetPaths(rootDir, folderPattern, filePattern string, files []database.BookFile, vars PathVars, opts BuildOpts) ([]FileRenameEntry, error) {
+	planned, err := planTargetPaths(rootDir, folderPattern, filePattern, files, vars, opts)
+	if err != nil {
+		return nil, err
+	}
+	var entries []FileRenameEntry
+	for _, e := range planned {
+		if e.TargetPath != e.SourcePath {
+			entries = append(entries, e)
+		}
+	}
+	return entries, nil
+}
+
+// planTargetPaths is the shared core: it returns the target path for EVERY
+// non-missing file, including files already sitting at their target.
+//
+// ComputeTargetPaths drops those (a rename plan must not list no-op renames),
+// but OrganizeBookDirectory must not: its pathMap is the authority for what each
+// book_file row's file_path gets set to, and a file that is already in the right
+// place still needs a map entry saying so. Before 2026-08-15 the two computed
+// filenames independently -- OrganizeBookDirectory kept filepath.Base(src) and
+// never applied the file naming pattern at all -- so a directory book was folder
+// aware but not file aware.
+func planTargetPaths(rootDir, folderPattern, filePattern string, files []database.BookFile, vars PathVars, opts BuildOpts) ([]FileRenameEntry, error) {
 	if rootDir == "" || len(files) == 0 {
 		return nil, nil
 	}
@@ -74,8 +98,58 @@ func ComputeTargetPaths(rootDir, folderPattern, filePattern string, files []data
 		return sorted[i].FilePath < sorted[j].FilePath
 	})
 
+	// totalTracks counts every row, INCLUDING rows flagged Missing, which are
+	// then skipped in the loop. That is deliberate: a 12-file book with 11 files
+	// missing off disk is still a 12-track book, so its one surviving file is
+	// named "<title> - 07" and keeps the track number it will still have after
+	// the others are restored. Counting only the survivors would renumber the
+	// whole book every time a file went missing or came back.
 	totalTracks := len(sorted)
+
+	entries, collided, err := planPass(rootDir, folderPattern, filePattern, sorted, totalTracks, vars, opts, false)
+	if err != nil {
+		return nil, err
+	}
+
+	// A file naming pattern with no {track} placeholder gives every file of a
+	// multi-file book the SAME target. That was harmless while the destination
+	// filename was filepath.Base(src) and this function only planned renames;
+	// now that organize copies to these paths, it would collapse a 40-part book
+	// into one file. The production pattern on 2026-08-15 was
+	// "{title} - {author} - read by {narrator}" — no track placeholder at all —
+	// so this is the live configuration, not a hypothetical.
+	//
+	// Disambiguate rather than refuse: a numbered suffix keeps the book intact
+	// and is what the pattern was missing. The suffix goes on EVERY file of the
+	// book, not just the colliding ones, so the numbering is uniform.
+	if collided {
+		slog.Warn("file naming pattern does not distinguish the files of a multi-file book — appending a track suffix so they do not overwrite each other",
+			"file_naming_pattern", filePattern,
+			"title", vars.Title,
+			"files", totalTracks)
+		entries, _, err = planPass(rootDir, folderPattern, filePattern, sorted, totalTracks, vars, opts, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return entries, nil
+}
+
+// planPass builds one full set of target paths. forceTrackSuffix appends the
+// zero-padded track number to every stem; planTargetPaths turns it on for the
+// second pass when the first produced duplicate targets. It reports whether any
+// two files landed on the same target.
+func planPass(rootDir, folderPattern, filePattern string, sorted []database.BookFile, totalTracks int, vars PathVars, opts BuildOpts, forceTrackSuffix bool) ([]FileRenameEntry, bool, error) {
+	// Pad to the width of the largest track number so 9/10 sort as 09/10.
+	width := len(fmt.Sprintf("%d", totalTracks))
+	if width < 2 {
+		width = 2
+	}
+
 	var entries []FileRenameEntry
+	seen := make(map[string]struct{}, len(sorted))
+	collided := false
 
 	for i, f := range sorted {
 		if f.Missing {
@@ -109,23 +183,29 @@ func ComputeTargetPaths(rootDir, folderPattern, filePattern string, files []data
 
 		relPath, err := BuildRelPath(folderPattern, filePattern, segVars, opts)
 		if err != nil {
-			return nil, err
+			return nil, false, err
+		}
+		if forceTrackSuffix && totalTracks > 1 {
+			relPath += fmt.Sprintf(" - %0*d", width, trackNum)
 		}
 		targetPath := filepath.Join(rootDir, relPath)
 		if ext != "" {
 			targetPath += "." + ext
 		}
 
-		if targetPath != f.FilePath {
-			entries = append(entries, FileRenameEntry{
-				SegmentID:  f.ID,
-				SourcePath: f.FilePath,
-				TargetPath: targetPath,
-			})
+		if _, dup := seen[targetPath]; dup {
+			collided = true
 		}
+		seen[targetPath] = struct{}{}
+
+		entries = append(entries, FileRenameEntry{
+			SegmentID:  f.ID,
+			SourcePath: f.FilePath,
+			TargetPath: targetPath,
+		})
 	}
 
-	return entries, nil
+	return entries, collided, nil
 }
 
 // ComputeTargetPaths plans the rename of every file of a book using this
