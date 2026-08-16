@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/MetadataReviewDialog.tsx
-// version: 1.15.0
+// version: 1.16.0
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-08-15
+// last-edited: 2026-08-16
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -172,6 +172,12 @@ export function MetadataReviewDialog({
   const [hideRejected, setHideRejected] = useState(true);
   const [hideNoMatch, setHideNoMatch] = useState(true);
   const [hideSkipped, setHideSkipped] = useState(false);
+  // Hide books that share a candidate with another book — the cards that render
+  // with "Skip All". Those are the ambiguous ones (two parts of one book, or
+  // genuine duplicates) and need a judgement call per group; this toggle gets
+  // them out of the way so the unambiguous one-book-one-candidate rows can be
+  // worked through on their own.
+  const [hideMultiBook, setHideMultiBook] = useState(false);
   const [matchLanguage, setMatchLanguage] = useState<boolean>(loadLanguageFilter);
   const [titleFilter, setTitleFilter] = useState('');
   const [onlyWithTranscription, setOnlyWithTranscription] = useState(false);
@@ -277,7 +283,7 @@ export function MetadataReviewDialog({
     try { return new RegExp(titleFilter, 'i'); } catch { return null; }
   })();
 
-  const filteredResults = results
+  const preGroupFiltered = results
     .filter((r) => !titleRegex || titleRegex.test(r.book.title || ''))
     .filter((r) => !sourceFilter || r.candidate?.source === sourceFilter)
     .filter(
@@ -308,10 +314,55 @@ export function MetadataReviewDialog({
     .filter((r) => !onlyWithTranscription || !!r.book.transcribed_title)
     .filter((r) => !onlyTranscriptionMatched || !!r.candidate?.transcription_boosted);
 
+  // Book ids that share a candidate with at least one other book.
+  //
+  // This is deliberately computed over the WHOLE filtered set rather than the
+  // current page, unlike the `multiGroups` map further down which drives
+  // rendering and is per-page by design. Two files of the same book that land on
+  // opposite sides of a page boundary would each look like a singleton to a
+  // per-page pass and would survive the hide — which is exactly the case this
+  // toggle exists to remove. `candidateKey` is a hoisted function declaration
+  // defined with the grouping code below.
+  const multiBookIds = (() => {
+    if (!hideMultiBook) return new Set<string>();
+    const byKey = new Map<string, string[]>();
+    for (const r of preGroupFiltered) {
+      if (!r.candidate || r.status !== 'matched' || ungroupedIds.has(r.book.id)) continue;
+      const key = candidateKey(r.candidate);
+      const ids = byKey.get(key);
+      if (ids) ids.push(r.book.id);
+      else byKey.set(key, [r.book.id]);
+    }
+    const out = new Set<string>();
+    for (const ids of byKey.values()) {
+      if (ids.length > 1) ids.forEach((id) => out.add(id));
+    }
+    return out;
+  })();
+
+  const filteredResults = hideMultiBook
+    ? preGroupFiltered.filter((r) => !multiBookIds.has(r.book.id))
+    : preGroupFiltered;
+
+  // Deselect anything the multi-book filter has hidden. selectedIds is a Set the
+  // user builds by hand and it does not shrink when a filter hides its members,
+  // so without this "Apply Selected" would still apply a grouped book that was
+  // ticked before the toggle went on — the precise opposite of what the toggle
+  // is for — and the button's count would disagree with what it does.
+  useEffect(() => {
+    if (!hideMultiBook || multiBookIds.size === 0) return;
+    setSelectedIds((prev) => {
+      const next = new Set([...prev].filter((id) => !multiBookIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+    // multiBookIds is rebuilt each render; key the effect on its contents.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hideMultiBook, [...multiBookIds].sort().join(',')]);
+
   // Reset to page 1 when filters change so the user sees the first filtered result.
   useEffect(() => {
     setServerPage(1);
-  }, [sourceFilter, confidenceThreshold, hideApplied, hideRejected, hideSkipped, hideNoMatch, matchLanguage, titleFilter, onlyWithTranscription, onlyTranscriptionMatched]);
+  }, [sourceFilter, confidenceThreshold, hideApplied, hideRejected, hideSkipped, hideNoMatch, hideMultiBook, matchLanguage, titleFilter, onlyWithTranscription, onlyTranscriptionMatched]);
 
   // Go back to page 1 on manual refresh.
   useEffect(() => {
@@ -1427,6 +1478,23 @@ export function MetadataReviewDialog({
                   }
                   label={<Typography variant="body2">Hide No Match</Typography>}
                 />
+                <Tooltip title="Hide any book that shares a match with another book — the grouped cards with 'Skip All'. Those are the ambiguous ones (two parts of the same book, or duplicates) and need a decision per group. Turning this on leaves only the straightforward one-book-one-match rows, and takes the hidden books out of Apply Selected too.">
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        size="small"
+                        checked={hideMultiBook}
+                        onChange={(e) => setHideMultiBook(e.target.checked)}
+                      />
+                    }
+                    label={
+                      <Typography variant="body2">
+                        Hide Multi-Book Matches
+                        {hideMultiBook && multiBookIds.size > 0 ? ` (${multiBookIds.size})` : ''}
+                      </Typography>
+                    }
+                  />
+                </Tooltip>
                 <Tooltip title="Hide candidates whose language doesn't match the book's current language. Books without a language set still show all candidates.">
                   <FormControlLabel
                     control={
