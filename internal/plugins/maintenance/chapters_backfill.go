@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/chapters_backfill.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5d3b7e14-9c62-4a8f-b0d7-2e6194af8c35
-// last-edited: 2026-08-13
+// last-edited: 2026-08-17
 
 // Package maintenance — op maintenance.chapters-backfill.
 //
@@ -70,6 +70,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -93,7 +94,34 @@ type chaptersBackfillParams struct {
 	// BookIDs restricts the run to an explicit set. Used to exercise the op
 	// against a bounded cohort before a whole-library pass.
 	BookIDs []string `json:"bookIds,omitempty"`
+
+	// ResumeFrom is the contiguous-completion watermark a previous attempt
+	// reached: every item below it is provably finished. RunItems slices the
+	// work at this index. The registry merges checkpoint JSON back into params
+	// on ResumeRestart (registry/resume.go), so this arrives populated on a
+	// resumed run and is zero on a fresh one.
+	//
+	// The watermark is only meaningful against a STABLE item order, which is
+	// why runChaptersBackfill sorts the IDs. Books created or deleted between
+	// attempts still shift positions; because IDs are monotonic, creations land
+	// past the watermark and are unaffected, while a deletion below it shifts
+	// the tail left and leaves a few books unexamined until the next run. That
+	// is bounded and self-correcting, and it is the reason resuming is an
+	// optimisation here rather than a correctness mechanism.
+	ResumeFrom int `json:"resumeFrom,omitempty"`
+
+	// AlreadyPersisted carries the write count across a restart so Limit stays
+	// a cap on the WHOLE operation rather than on each attempt. Without it a
+	// twice-restarted run with limit=100 could write 300 books while every
+	// individual attempt honoured its cap.
+	AlreadyPersisted int `json:"alreadyPersisted,omitempty"`
 }
+
+// chaptersBackfillCheckpointEvery is how many completed books pass between
+// checkpoint writes. It trades checkpoint volume against how much work a
+// restart repeats: at 200 a killed run re-probes at most 200 containers, while
+// a 63,000-book library writes ~315 checkpoints rather than 63,000.
+const chaptersBackfillCheckpointEvery = 200
 
 // chapterProbeTimeout bounds one ffprobe invocation. Mirrors
 // probe_directory_books.go's probeFileTimeout: ffprobe reads only the container
@@ -146,7 +174,7 @@ type chapterPersister interface {
 func (p *Plugin) chaptersBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.chapters-backfill",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Backfill embedded chapters (single-file books)",
 		Description: "Extracts the embedded chapter timeline from single-file audiobook containers that have none " +
@@ -155,7 +183,16 @@ func (p *Plugin) chaptersBackfillDef() sdk.OperationDef {
 			"never probed. Multi-file books are skipped deliberately: their persisted form is identical to the " +
 			"live synthesis and would go stale undetectably. Refuses to run when ffprobe is unavailable. " +
 			"DRY RUN unless {\"apply\": true}.",
-		ResumePolicy:    sdk.ResumeDrop,
+		// ResumeRestart, not Drop. This op has the longest Timeout in the
+		// codebase (24h) and re-enumerates the whole library, so an interrupted
+		// run used to throw away a day of ffprobe work. Every item is
+		// self-contained — it probes and persists inside the item function and
+		// accumulates nothing that a later phase consumes — and it is
+		// explicitly idempotent, skipping any book that already has stored
+		// chapters. Those two properties are what make a watermark safe here;
+		// they are exactly what maintenance.duration-backfill lacks, which is
+		// why that op stays on Drop.
+		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		// Shares the ffprobe lane with the other whole-library probe op so the
 		// two cannot saturate every core at once.
@@ -272,6 +309,37 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("restricted to %d explicit book IDs", len(ids)))
 	}
 
+	// A resume watermark counts positions, so the positions have to mean the
+	// same thing on the next attempt. Both stores happen to enumerate in ID
+	// order today (Pebble iterates the book: keyspace, memdb the ID index), but
+	// resuming correctly must not depend on two implementations continuing to
+	// agree — that class of silent divergence is what #2399 was. Sorting here
+	// makes the ordering contract local to this file and testable without a
+	// database. It also covers the explicit-BookIDs path, where the caller's
+	// order is arbitrary; this op is order-independent, so reordering is free.
+	sort.Strings(ids)
+
+	// Clamp rather than trust. A checkpoint written before books were deleted
+	// can name a watermark past the current end; RunItems would return an empty
+	// slice and the op would report success having examined nothing.
+	resumeFrom := params.ResumeFrom
+	if resumeFrom < 0 {
+		resumeFrom = 0
+	}
+	if resumeFrom > len(ids) {
+		resumeFrom = len(ids)
+	}
+	if resumeFrom > 0 {
+		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+			"resuming at book %d/%d (%d already persisted by earlier attempts)",
+			resumeFrom, len(ids), params.AlreadyPersisted))
+	}
+
+	// Writes completed by earlier attempts. Kept separate from c.persisted so
+	// the end-of-run summary still reports what THIS attempt did, while Limit
+	// is enforced against the operation's lifetime total.
+	priorPersisted := int64(params.AlreadyPersisted)
+
 	var c chaptersBackfillCounters
 
 	// CONCURRENCY (CLAUDE.md mandate): a whole-library loop doing one subprocess
@@ -355,7 +423,7 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 			c.wouldPersist.Add(1)
 			return nil
 		}
-		if params.Limit > 0 && c.persisted.Load() >= int64(params.Limit) {
+		if params.Limit > 0 && priorPersisted+c.persisted.Load() >= int64(params.Limit) {
 			c.wouldPersist.Add(1)
 			return nil
 		}
@@ -377,6 +445,26 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 		Concurrency:   runtime.NumCPU(),
 		ProgressTotal: len(ids),
 		ErrMode:       registry.ErrModeCollect,
+		ResumeFrom:    resumeFrom,
+		// Throttle: one checkpoint per 200 completed books. The watermark is a
+		// contiguous prefix, so a restart re-probes at most 200 books — cheap,
+		// since a re-probe is a container-header read and books that already
+		// have chapters short-circuit on a single Pebble get.
+		CheckpointEvery: chaptersBackfillCheckpointEvery,
+		// Every field is carried, not just the watermark. Checkpoint JSON is
+		// MERGED into the resumed run's params, so anything omitted here comes
+		// back as its zero value: dropping Apply would silently downgrade a
+		// live run to a dry run on restart, and dropping BookIDs would widen a
+		// cohort run to the whole library.
+		CheckpointStateFn: func(ctx context.Context, watermark int) error {
+			return reporter.Checkpoint(chaptersBackfillParams{
+				Apply:            params.Apply,
+				Limit:            params.Limit,
+				BookIDs:          params.BookIDs,
+				ResumeFrom:       watermark,
+				AlreadyPersisted: int(priorPersisted + c.persisted.Load()),
+			})
+		},
 		// Reports ELIGIBLE (= persisted + wouldPersist), not persisted. A dry
 		// run never increments persisted, so a label reading it sat at zero for
 		// the whole run and was indistinguishable from a run finding nothing —
