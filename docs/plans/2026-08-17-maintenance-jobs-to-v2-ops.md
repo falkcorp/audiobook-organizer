@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-08-17-maintenance-jobs-to-v2-ops.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 4a71e8c3-92d6-4f15-b03a-7e8d5c1946fb -->
 <!-- last-edited: 2026-08-17 -->
 
@@ -56,7 +56,14 @@ exists.
 | Jobs declaring `CanResume() == false` | 28 | |
 
 The other 6 resumable jobs checkpoint nothing, so their "resume" already means *re-run from
-scratch* — which is exactly `ResumeRestart`'s semantics (restart ≠ resume-mid-progress).
+scratch*.
+
+> **🔴 Correction 2026-08-17 (v1.3.0) — this sentence used to end "…which is exactly
+> `ResumeRestart`'s semantics." That was wrong, and it was wrong in the direction that writes
+> strike rows and force-drops ops.** See
+> [Correction: the 6 are `ResumeRequeue`, not `ResumeRestart`](#correction-the-6-are-resumerequeue-not-resumerestart)
+> below. `ResumeRestart` means *reload last checkpoint and call Run again*
+> (`internal/operations/registry/types.go:170`); *re-run from zero* is `ResumeRequeue` (`:171`).
 
 Resume for the 9 does **not** use the v2 ResumePolicy mechanism — the bridge drops them.
 It runs on a bespoke startup sweep, `resumeLegacyOp` in `internal/server/server_lifecycle.go:261`,
@@ -109,9 +116,91 @@ resume is v2-native, both it and the legacy row become deletable.
 **PR-1 — declare per-job execution policy.** Give `MaintenanceJob` (or a sibling interface)
 what `OperationDef` needs and `CanResume()` cannot express: `ResumePolicy`, `Timeout`,
 `ConcurrencyKey`, `Liveness`, `Capabilities`. Mechanical and behaviour-preserving: every job
-declares exactly what the bridge hardcodes today, except the **9** resumable ones, which declare
-`ResumeRestart`. Nothing reads these yet — the bridge still runs. That is deliberate: it makes
+declares exactly what the bridge hardcodes today, except the **4** jobs identified in the
+correction below. Nothing reads these yet — the bridge still runs. That is deliberate: it makes
 PR-2 a wiring change against declarations already reviewed in isolation.
+
+**Declare the policy methods on `MaintenanceJob` itself, not on an optional sibling interface.**
+All 37 then fail to compile until each answers, so no job can be silently left unset. An optional
+sibling degrades a missed job into `ResumeUnspecified` — which is `= iota` = **0**, the zero value —
+and `registry.go:433` rejects that at *registration*, i.e. a server-startup failure instead of a
+build failure. Never leave the zero value reachable.
+
+### Correction: the 6 are `ResumeRequeue`, not `ResumeRestart`
+
+The four `ResumePolicy` constants (`internal/operations/registry/types.go:169-173`):
+
+| constant | meaning |
+|---|---|
+| `ResumeRestart` | reload last checkpoint, call Run again |
+| `ResumeRequeue` | re-run from zero (**idempotent ops only**) |
+| `ResumeDrop` | abandon on restart, mark `interrupted_dropped` |
+| `ResumeAsk` | surface in UI, wait for user choice |
+
+Declaring `ResumeRestart` on a job that never checkpoints is not a naming quibble — it changes
+runtime behaviour on two paths:
+
+1. **`uncheckpointed` strikes.** `watchdog.go:156` gates the strike on
+   `def.ResumePolicy != ResumeRestart → continue`, and `:159-162` substitutes
+   `defaultMinCheckpointInterval` when the def leaves `MinCheckpointInterval` at zero. So the
+   strike fires for **every** `ResumeRestart` op, not — as the stale comment at `:154` claims —
+   only those that set the field. A 4h job that never checkpoints writes one `op_strikes_v2` row
+   per 5-minute window for its whole run.
+2. **Forced drop.** `worker.go:158-163` → `checkInfiniteRestart` force-drops any `ResumeRestart`
+   op once `ResumeCount >= 3` with `HighWaterProgress == 0` — the permanent state of a job that
+   never checkpoints.
+
+Neither path examines `ResumeRequeue`, which is fully wired (`resume.go:69`, `DeleteOpStateV2`,
+`server_lifecycle.go:122`). Corrected mapping: **3** checkpointing → `ResumeRestart`; **6**
+`CanResume`-but-checkpointless → `ResumeRequeue` *if safe*; **28** → `ResumeDrop`.
+
+### 🔴 …but only 1 of the 6 is safe to declare in PR-1
+
+`ResumeRequeue`'s own doc comment gates it on *idempotent ops only*, and there are **two live,
+divergent implementations of the requeue path**. They disagree on exactly the value this plan
+exists to protect:
+
+| path | entry | params on re-enqueue | verdict |
+|---|---|---|---|
+| registry, walks **v2** rows | `Registry.Start` → `resumeAfterStartup` → `resumeRequeue` (`resume.go`) | `Params: row.Params` — **carried forward** | safe |
+| server, walks **v1** rows | `resumeInterruptedOperations` → `resumeV2Op` (`server_lifecycle.go:122-127`) | `EnqueueOp(ctx, opType, nil)` — **literal `nil`** | 🔴 unsafe |
+
+Both run at startup, against different tables. The `nil` is deliberate and commented
+(`server_lifecycle.go:103-108`: *"the concrete params type is not known at this call site"*), and
+for a `library.scan` it is harmless. For a maintenance job it is **bit-for-bit the preview→mutation
+data-loss bug this plan is built not to regress**: `DryRun` unmarshals to Go's zero value, `false`.
+
+Today the maintenance v1 row's `Type` is `maintenance:<jobID>`, which is not a registered def ID,
+so it falls through to `resumeLegacyOp` — the path that *does* read saved params. That is what
+makes it safe today, and it is precisely what PR-2 changes.
+
+Measured `dry_run` default for each of the 9 (from each job's `DefaultParams()`):
+
+| job | checkpoints | `dry_run` default | PR-1 declares |
+|---|---|---|---|
+| `recompute_book_aggregates` | ✅ | `true` | `ResumeRestart` |
+| `retention_and_hygiene` | ✅ | `true` | `ResumeRestart` |
+| `backfill_file_hashes` | ✅ | `false` | `ResumeRestart` |
+| `bulk_fetch_metadata` | ✗ | *no `dry_run` field* | **`ResumeRequeue`** |
+| `bulk_deluge_import` | ✗ | `true` | `ResumeDrop` + comment |
+| `cleanup_empty_folders` | ✗ | `true` | `ResumeDrop` + comment |
+| `refetch_missing_authors` | ✗ | `true` | `ResumeDrop` + comment |
+| `repair_missing_files` | ✗ | `true` | `ResumeDrop` + comment |
+| `scan_composer_tags` | ✗ | `true` | `ResumeDrop` + comment |
+
+**Only `bulk_fetch_metadata` has no `dry_run` to lose**, so it is the sole safe `ResumeRequeue` in
+PR-1. The other 5 keep `ResumeDrop` — matching what the bridge hardcodes today, so PR-1 stays
+behaviour-preserving — each with a comment naming the params gap. Their upgrade moves to **PR-2**,
+where the divergence can be resolved and the replay actually tested.
+
+Two of those 5 are the reason this is not a paperwork distinction: `cleanup_empty_folders` removes
+directories from disk, and `repair_missing_files` deletes `book_file` rows (cf.
+`docs/audits/2026-08-17-orphan-destination-rows-root-cause.md`). Under nil-params requeue both
+would silently run for real after a deploy-time restart.
+
+**PR-2 owes a conformance test.** One fixture, both requeue implementations, assert the resumed
+params are equal — the two-implementations pattern that has bitten this repo before. Resolving the
+divergence (rather than testing around it) is the better fix; the test is what keeps it resolved.
 
 **PR-2 — dissolve the bridge.** Register 37 op-defs; each job's `Run` becomes
 `func(ctx, params json.RawMessage, reporter registry.Reporter) error`.
