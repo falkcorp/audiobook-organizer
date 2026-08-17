@@ -1,17 +1,19 @@
-- [ ] **Decide the repair for `book_file` rows whose bytes are gone.** `maintenance.missing-file-audit`
-      now measures them (41.8% of rows in a 120-book sample; every one under the organizer's own
-      destination tree, none under the iTunes tree). Two candidate repairs, which differ in kind:
-      delete the phantom row, or re-point it at the surviving file. Deleting is **not** uniformly
-      safe — books whose every row is missing would be left with no files at all, so those need a
-      separate decision. Run the audit library-wide first, then choose. Also worth answering: why
-      the organizer recorded destination rows it never populated (suspect the library-wide move
-      in #2479).
+- [ ] **Decide what to do with the books whose EVERY `book_file` row is dead.** The
+      general repair is decided and built (`maintenance.missing-file-repair`, option
+      "delete only where the book keeps a surviving file"), but it deliberately
+      skips books with no surviving file — 5 of 120 in the sample. Deleting their
+      rows would leave the book with nothing at all. Options: locate the audio by
+      filename/size/hash and re-point the row, mark the book as missing rather than
+      deleting, or leave it. The repair op names these books in its report, so run
+      the audit + a dry run first and decide against the real list.
+
+- [ ] **Answer why the organizer recorded destination rows it never populated.**
+      Every dead path is under the organizer's own destination tree and none under
+      the iTunes tree, which points at the library-wide move in #2479. The repair
+      cleans up the symptom; this is the cause, and without it the rows come back.
+
 - [ ] **Register `HEAD` for the audio/file routes.** The server registers no `HEAD` handler
       anywhere, so `HEAD /api/items/:id/file/:ino/download` 404s on a file that exists. Upstream
       Audiobookshelf runs on Express, which auto-answers `HEAD` for a `GET` route; gin does not.
       Not currently causing failures — the production journal shows real clients only send `GET` —
       but any client that preflights with `HEAD` would see "file not found".
-- [ ] **Differentiate the five `"file not found"` returns** in `internal/server/handlers/abs/stream.go`
-      (lines 53/78/95/145/159). They mean ino-absent, no syncfile for this book, no `book_file` for
-      the syncfile's `CurrentFileID`, `filepath.Abs` failed, and bytes-missing — and none of them
-      logs, so every one presents identically and the next report is undiagnosable.
