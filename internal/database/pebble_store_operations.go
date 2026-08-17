@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_operations.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e4277998-6d7e-4f2a-9b5c-0a620a98105e
-// last-edited: 2026-08-14
+// last-edited: 2026-08-17
 
 package database
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -457,6 +458,26 @@ func (p *PebbleStore) DeleteOperationWithLogs(id string) error {
 	return batch.Commit(pebble.Sync)
 }
 
+// isResumableOpStatus reports whether an operation row in this status should be
+// handed to the startup resume sweep (server_lifecycle.go
+// resumeInterruptedOperations).
+//
+// MATCH THE PREFIX, NOT A LIST. This used to be an inline
+// running/queued/interrupted comparison, while the registry mints a whole family
+// of interrupted_* variants: interrupted_quiesced (registry.go, returned for
+// EVERY ResumePolicy except ResumeDrop), interrupted_dropped,
+// interrupted_restart, interrupted_ask. None of those matched, so the sweep was
+// blind to exactly the rows it exists to resume - a library.scan killed by a
+// deploy on 2026-08-17 sat at interrupted_quiesced and never came back.
+//
+// legacyStatusFor carries this same warning for this same reason. Matching the
+// leading "interrupted" means a seventh variant works without anyone
+// remembering this function exists.
+func isResumableOpStatus(status string) bool {
+	return status == "running" || status == "queued" ||
+		strings.HasPrefix(status, "interrupted")
+}
+
 func (p *PebbleStore) GetInterruptedOperations() ([]Operation, error) {
 	var ops []Operation
 	iter, err := p.db.NewIter(&pebble.IterOptions{
@@ -473,7 +494,7 @@ func (p *PebbleStore) GetInterruptedOperations() ([]Operation, error) {
 		if err := json.Unmarshal(iter.Value(), &op); err != nil {
 			continue
 		}
-		if op.Status == "running" || op.Status == "queued" || op.Status == "interrupted" {
+		if isResumableOpStatus(op.Status) {
 			ops = append(ops, op)
 		}
 	}

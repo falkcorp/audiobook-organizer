@@ -1,12 +1,13 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-08-14
+// last-edited: 2026-08-17
 
 package audiobooks
 
 import (
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"log/slog"
 	"sort"
 	"strconv"
@@ -1082,20 +1083,12 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 	return bsf, true, pebbleLookupsPtr
 }
 
-// splitMultipleNames splits a name string on " & " to support multiple authors/narrators.
+// splitMultipleNames delegates to util.SplitCreditNames, the single source of
+// truth for author/narrator credit splitting. This used to be a local
+// strings.Split(name, " & "), duplicated verbatim in
+// internal/server/handlers/operations/handler.go; both copies are gone.
 func splitMultipleNames(name string) []string {
-	parts := strings.Split(name, " & ")
-	var result []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			result = append(result, p)
-		}
-	}
-	if len(result) == 0 {
-		return []string{name}
-	}
-	return result
+	return util.SplitCreditNames(name)
 }
 
 // FetchBookFilesForBooks performs the targeted batch fetch via memdb's

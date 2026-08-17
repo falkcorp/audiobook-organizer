@@ -25,6 +25,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -247,7 +248,7 @@ func (h *Handler) OptimizeDatabase(c *gin.Context) {
 		// Split compound author names into individual book_authors
 		if book.AuthorID != nil {
 			author, err := h.store.GetAuthorByID(*book.AuthorID)
-			if err == nil && author != nil && strings.Contains(author.Name, " & ") {
+			if err == nil && author != nil && util.IsCompoundCreditName(author.Name) {
 				names := splitMultipleNames(author.Name)
 				if len(names) > 1 {
 					var bookAuthors []database.BookAuthor
@@ -274,7 +275,7 @@ func (h *Handler) OptimizeDatabase(c *gin.Context) {
 		}
 
 		// Split compound narrator names into individual book_narrators
-		if book.Narrator != nil && strings.Contains(*book.Narrator, " & ") {
+		if book.Narrator != nil && util.IsCompoundCreditName(*book.Narrator) {
 			names := splitMultipleNames(*book.Narrator)
 			if len(names) > 1 {
 				var bookNarrators []database.BookNarrator
@@ -309,19 +310,12 @@ func (h *Handler) OptimizeDatabase(c *gin.Context) {
 // splitMultipleNames splits an "A & B & C" string into its trimmed parts. It
 // mirrors the server-package helper of the same name (a trivial pure function
 // that was only used by this domain).
+// splitMultipleNames delegates to util.SplitCreditNames. It was a verbatim
+// second copy of the audiobooks package's " & "-only splitter; package
+// operations deliberately does not import package audiobooks, so the shared
+// implementation lives in the leaf package internal/util.
 func splitMultipleNames(name string) []string {
-	parts := strings.Split(name, " & ")
-	var result []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			result = append(result, p)
-		}
-	}
-	if len(result) == 0 {
-		return []string{name}
-	}
-	return result
+	return util.SplitCreditNames(name)
 }
 
 // SweepTombstones implements POST /operations/sweep-tombstones.
