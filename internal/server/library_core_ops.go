@@ -1,7 +1,7 @@
 // file: internal/server/library_core_ops.go
-// version: 1.6.0
+// version: 1.3.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-16
+// last-edited: 2026-08-17
 
 // library_core_ops registers the scan, organize, and transcode OperationDefs
 // that previously went through the legacy BridgeQueue.
@@ -31,6 +31,21 @@ import (
 type libraryScanParams struct {
 	FolderPath  *string `json:"folder_path,omitempty"`
 	ForceUpdate *bool   `json:"force_update,omitempty"`
+
+	// ResumeFolderIdx / ResumeItemOffset are written by the scan's own
+	// Checkpoint calls and merged back into params by resumeRestart() before
+	// Run is re-invoked. They are not part of the public trigger payload — a
+	// caller may set them, but normally they arrive only from a checkpoint.
+	ResumeFolderIdx  int `json:"resume_folder_idx,omitempty"`
+	ResumeItemOffset int `json:"resume_item_offset,omitempty"`
+}
+
+// libraryScanCheckpoint is the state blob persisted mid-scan. Its JSON field
+// names must match libraryScanParams exactly: resumeRestart() merges the blob
+// into the params object, so a mismatch silently resumes from zero.
+type libraryScanCheckpoint struct {
+	ResumeFolderIdx  int `json:"resume_folder_idx"`
+	ResumeItemOffset int `json:"resume_item_offset"`
 }
 
 type libraryOrganizeParams struct {
@@ -73,13 +88,21 @@ func (s *Server) RegisterLibraryScanOp(reg *opsregistry.Registry) error {
 		// to 2026-08-16 ended that way, and not one library.scan has ever reached
 		// `completed`. They were not crashing; they were being discarded by policy.
 		//
-		// ⚠️ THIS RE-RUNS THE SCAN FROM THE START, IT DOES NOT CONTINUE MID-SCAN.
-		// resumeRestart() merges a saved checkpoint blob into params, but
-		// libraryScanParams has no checkpoint fields and nothing in the scan path
-		// calls Checkpoint(), so there is no state to merge. Re-queueing is still
-		// strictly better than dropping — a scan is incremental and skips what is
-		// already ingested — but real mid-scan resume needs the params struct to
-		// carry a phase + high-water mark first. Tracked in todo.d.
+		// This now genuinely continues mid-scan. resumeRestart() merges the saved
+		// checkpoint blob into params; libraryScanParams carries matching
+		// resume_folder_idx / resume_item_offset fields, and the scan path calls
+		// Checkpoint() after every completed chunk of books and every completed
+		// folder.
+		//
+		// Until 2026-08-17 this comment read "⚠️ THIS RE-RUNS THE SCAN FROM THE
+		// START" — accurate at the time, because nothing in the scan path called
+		// Checkpoint() and there was no state to merge. A 3h50m production scan
+		// that day made the cost concrete.
+		//
+		// Resume granularity is one chunk (scanChunkSize books), NOT one book:
+		// a restart repeats at most the chunk that was in flight. Per-folder
+		// granularity would have been useless here — one production folder holds
+		// ~14,000 items, so a whole folder is hours of work on its own.
 		ResumePolicy:   opsregistry.ResumeRestart,
 		ConcurrencyKey: "library.scan",
 		Permissions:    []auth.Permission{auth.PermScanTrigger},
@@ -106,9 +129,26 @@ func (s *Server) RegisterLibraryScanOp(reg *opsregistry.Registry) error {
 			}
 			logging.Info(ctx, "library scan starting", "folder_path", folderPath)
 
+			if p.ResumeFolderIdx > 0 || p.ResumeItemOffset > 0 {
+				logging.Info(ctx, "library scan resuming from checkpoint",
+					"folder_idx", p.ResumeFolderIdx, "item_offset", p.ResumeItemOffset)
+			}
+
 			scanReq := &scanner.ScanRequest{
-				FolderPath:  p.FolderPath,
-				ForceUpdate: p.ForceUpdate,
+				FolderPath:       p.FolderPath,
+				ForceUpdate:      p.ForceUpdate,
+				ResumeFolderIdx:  p.ResumeFolderIdx,
+				ResumeItemOffset: p.ResumeItemOffset,
+				Checkpoint: func(folderIdx, itemOffset int) {
+					// Errors are deliberately swallowed: a checkpoint is an
+					// optimisation for the NEXT run, and failing the scan
+					// because we could not record where it got to would trade a
+					// working scan for a lost one.
+					_ = reporter.Checkpoint(libraryScanCheckpoint{
+						ResumeFolderIdx:  folderIdx,
+						ResumeItemOffset: itemOffset,
+					})
+				},
 			}
 			progress := registryProgressAdapter{r: reporter}
 			err := s.scanService.PerformScan(ctx, scanReq, operations.LoggerFromReporter(progress))
