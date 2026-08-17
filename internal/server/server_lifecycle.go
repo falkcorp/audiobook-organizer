@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.18.0
+// version: 3.19.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-08-14
+// last-edited: 2026-08-17
 
 package server
 
@@ -93,8 +93,32 @@ func (s *Server) resumeInterruptedOperations() {
 func (s *Server) resumeV2Op(opID, opType string, policy opsregistry.ResumePolicy) {
 	switch policy {
 	case opsregistry.ResumeRestart:
-		// Reset existing row to "queued"; checkpoint saved under the original op ID remains accessible.
-		_ = s.Store().UpdateOperationV2Status(opID, "queued", nil, nil, nil)
+		// Marking the row "queued" is NOT enough, which is what this used to do.
+		// Nothing scans the store for queued rows — the dispatcher works from
+		// the registry's own queue — so a ResumeRestart op was set to "queued"
+		// and then sat there forever. Measured 2026-08-17: a library.scan
+		// (ResumePolicy=ResumeRestart since #2500) was killed by a deploy and
+		// never came back, and no scan was running afterwards.
+		//
+		// Re-enqueue for real, the way ResumeRequeue does. Params are nil for
+		// the same reason they are nil there: the concrete params type is not
+		// known at this call site (LoadParams is generic over T), and every
+		// ResumeRestart op today treats nil as "do the whole thing" — which is
+		// exactly the intended restart semantic. An op that needs its original
+		// params to restart correctly must persist them itself.
+		newID, err := s.opRegistry.EnqueueOp(context.Background(), opType, nil)
+		if err != nil {
+			slog.Warn("Failed to re-enqueue v2 op on restart-resume", "opID", opID, "opType", opType, "err", err)
+			_ = s.Store().UpdateOperationError(opID, "failed to resume: "+err.Error())
+			return
+		}
+		// Close the old row out rather than leaving it mid-flight, so the
+		// timeline shows one finished attempt and one fresh run instead of a
+		// phantom that never moves again.
+		now := time.Now()
+		reason := fmt.Sprintf("interrupted during %s — restarted as %s", opType, newID)
+		_ = s.Store().UpdateOperationV2Status(opID, "interrupted_restart", nil, &now, &reason)
+		slog.Info("Restarted interrupted operation", "oldOpID", opID, "newOpID", newID, "opType", opType)
 	case opsregistry.ResumeRequeue:
 		// Re-enqueue from zero (idempotent op).
 		if _, err := s.opRegistry.EnqueueOp(context.Background(), opType, nil); err != nil {
