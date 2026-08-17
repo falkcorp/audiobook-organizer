@@ -1,11 +1,12 @@
 // file: internal/server/handlers/abs/stream.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e2b19c74-3d05-4f81-a6c3-58790ed4b23f
-// last-edited: 2026-07-30
+// last-edited: 2026-08-17
 
 package abs
 
 import (
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -14,6 +15,36 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/gin-gonic/gin"
 )
+
+// fileNotFound answers the client's 404 unchanged and records WHY on the server.
+//
+// 🔴 FIVE DIFFERENT FAILURES USED TO SHARE ONE SILENT RETURN. The body stays
+// "file not found" for every one of them — that is the protocol contract and the
+// client can do nothing with a finer distinction — but the server could not tell
+// them apart either, and nothing was logged at all. The reasons are genuinely
+// different problems with different fixes:
+//
+//	no_ino             the request carried no ino segment
+//	no_syncfile        no sync file with that ino belongs to this book
+//	no_bookfile_row    the sync file's CurrentFileID matches no book_file row
+//	abs_path_failed    filepath.Abs rejected the stored path
+//	bytes_missing      the row and the path exist; the FILE does not
+//
+// This is not hypothetical tidiness. Diagnosing the live "can't find the file"
+// reports on 2026-08-17 took four separate production probes precisely because the
+// server had recorded 1,036 of these 404s without recording which kind any of them
+// was. The answer turned out to be bytes_missing — 41.8% of book_file rows point at
+// files that are not on disk — and one line of this log would have said so.
+func fileNotFound(c *gin.Context, reason string, attrs ...any) {
+	args := append([]any{
+		"reason", reason,
+		"item", c.Param("id"),
+		"ino", c.Param("ino"),
+		"path", c.Request.URL.Path,
+	}, attrs...)
+	slog.Warn("abs: file not found", args...)
+	respondError(c, http.StatusNotFound, "file not found")
+}
 
 // Byte-serving paths. BOTH of these exist because the two target clients address
 // audio completely differently (§1.8.3):
@@ -50,7 +81,7 @@ func (h *Handler) serveItemFile(c *gin.Context, asAttachment bool) {
 	}
 	ino := strings.TrimSpace(c.Param("ino"))
 	if ino == "" {
-		respondError(c, http.StatusNotFound, "file not found")
+		fileNotFound(c, "no_ino")
 		return
 	}
 
@@ -75,7 +106,10 @@ func (h *Handler) serveItemFile(c *gin.Context, asAttachment bool) {
 		}
 	}
 	if fileID == "" {
-		respondError(c, http.StatusNotFound, "file not found")
+		// The ino is not one of this book's sync files. Either it belongs to another
+		// item (which the book-scoped lookup is deliberately refusing to serve) or the
+		// client is working from a stale item payload.
+		fileNotFound(c, "no_syncfile", "book", book.ID, "syncfiles", len(syncFiles))
 		return
 	}
 
@@ -92,7 +126,10 @@ func (h *Handler) serveItemFile(c *gin.Context, asAttachment bool) {
 		}
 	}
 	if path == "" {
-		respondError(c, http.StatusNotFound, "file not found")
+		// The sync file points at a book_file that is not among this book's rows, or
+		// the row it names carries an empty path. Both are database inconsistencies
+		// rather than anything the request did wrong.
+		fileNotFound(c, "no_bookfile_row", "book", book.ID, "file_id", fileID, "book_files", len(files))
 		return
 	}
 
@@ -142,7 +179,7 @@ func (h *Handler) PublicSessionTrack(c *gin.Context) {
 func (h *Handler) serveAudio(c *gin.Context, path string, asAttachment bool) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		respondError(c, http.StatusNotFound, "file not found")
+		fileNotFound(c, "abs_path_failed", "stored_path", path, "err", err)
 		return
 	}
 	if asAttachment {
@@ -156,7 +193,14 @@ func (h *Handler) serveAudio(c *gin.Context, path string, asAttachment bool) {
 		// A missing or unreadable file is a 404, not a 500: the row exists, the bytes
 		// do not, and a client should treat it as "not available" rather than retrying
 		// a server fault forever.
-		respondError(c, http.StatusNotFound, "file not found")
+		//
+		// 🔴 THIS IS THE ONE THAT ACTUALLY FIRES. Measured 2026-08-17: 41.8% of
+		// book_file rows point at a path with no file behind it, all of them under the
+		// organizer's own destination tree. The served path is logged because it is the
+		// single most useful fact for the next person — it says WHICH tree the row
+		// pointed into, which is what separated "files are gone" from "the organizer
+		// recorded destinations it never populated".
+		fileNotFound(c, "bytes_missing", "served_path", abs, "err", err)
 		return
 	}
 	// The body is already written; stop gin from letting any later middleware append
