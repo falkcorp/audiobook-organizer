@@ -1,10 +1,11 @@
 // file: src/services/api.test.ts
-// version: 1.3.1
+// version: 1.4.0
 // guid: 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
-// last-edited: 2026-06-24
+// last-edited: 2026-08-16
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
+  isOperationTerminal,
   getImportPaths,
   addImportPath,
   addImportPathDetailed,
@@ -188,5 +189,55 @@ describe('api import paths', () => {
       method: 'POST',
       body: JSON.stringify({ book_ids: ['id-1', 'id-2'], organize: true, force: false }),
     }));
+  });
+});
+
+describe('isOperationTerminal', () => {
+  // The exhaustive list of statuses the v2 registry can write, taken from
+  // internal/operations/registry/legacy_op_status.go. Restated here on purpose:
+  // this is the frontend's claim about the backend's vocabulary, and the two
+  // drifting apart is the defect these tests exist to catch. The poller does
+  // not crash when they disagree — it spins at 1s forever while the UI shows
+  // the operation still running.
+  const terminal = [
+    'completed',
+    'failed',
+    'canceled',
+    'interrupted',
+    'interrupted_ask',
+    'interrupted_dropped',
+    'interrupted_quiesced',
+    'interrupted_restart',
+  ];
+  const nonTerminal = ['queued', 'running', 'interrupting'];
+
+  it.each(terminal)('treats %s as terminal', (status) => {
+    expect(isOperationTerminal(status)).toBe(true);
+  });
+
+  it.each(nonTerminal)('treats %s as not terminal', (status) => {
+    expect(isOperationTerminal(status)).toBe(false);
+  });
+
+  it('does not mistake the transitional interrupting state for interrupted', () => {
+    // The prefix rule is only safe because 'interrupting' does not start with
+    // 'interrupted'. If a future status did, the rule would need revisiting.
+    expect('interrupting'.startsWith('interrupted')).toBe(false);
+  });
+
+  it('accepts a status variant it has never been told about', () => {
+    // The point of matching the prefix rather than a list: the registry mints
+    // one interrupted_<policy> status per resume policy, and a hardcoded list
+    // hangs the poller the day a policy is added. OP_V2_TERMINAL had exactly
+    // this bug — it omitted interrupted_quiesced, the default for three of the
+    // four policies.
+    expect(isOperationTerminal('interrupted_some_future_policy')).toBe(true);
+  });
+
+  it('rejects the misspelling that caused the original hang', () => {
+    // The backend mints 'canceled'; the poller waited for 'cancelled'. Asserting
+    // the wrong spelling is NOT terminal keeps anyone from "fixing" the drift by
+    // teaching the frontend to accept both and leaving the mismatch in place.
+    expect(isOperationTerminal('cancelled')).toBe(false);
   });
 });

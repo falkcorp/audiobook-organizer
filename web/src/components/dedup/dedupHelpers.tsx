@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/dedupHelpers.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8C089ABB-8110-41B2-A660-7064FB18C63A
-// last-edited: 2026-05-01
+// last-edited: 2026-08-16
 
 import { useState, useEffect } from 'react';
 import {
@@ -23,7 +23,11 @@ export function cleanDisplayTitle(title: string): string {
 }
 
 export function OperationProgress({ operation, label }: { operation: Operation | null; label?: string }) {
-  if (!operation || operation.status === 'completed' || operation.status === 'failed' || operation.status === 'cancelled') return null;
+  // Hide the progress bar once the operation has stopped. This used to spell
+  // the cancelled state 'cancelled' (two Ls) while the backend mints
+  // 'canceled', so a cancelled operation kept showing a progress bar that would
+  // never advance again.
+  if (!operation || api.isOperationTerminal(operation.status)) return null;
   const pct = operation.total > 0 ? Math.round((operation.progress / operation.total) * 100) : 0;
   return (
     <Paper sx={{ p: 2, mb: 2 }}>
