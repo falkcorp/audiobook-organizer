@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter.go
-// version: 1.2.0
+// version: 1.1.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-05-12
+// last-edited: 2026-08-16
 
 package registry
 
@@ -30,4 +30,24 @@ type Reporter interface {
 	// Pass an empty string to clear the label. Safe to call once per loop
 	// iteration without measurable cost.
 	SetCurrentItem(label string)
+}
+
+// ReporterOpID returns the operation id a Reporter belongs to, or "" if the
+// reporter cannot say.
+//
+// Reporter itself deliberately does not carry OpID: see the comment on
+// (*dbReporter).OpID for why widening the interface would cost twenty-one edits
+// for a concern that only the scheduler has. The production reporter implements
+// it; a fake that does not simply yields "".
+//
+// Callers must therefore treat "" as "unknown", not as an error. The scheduler
+// uses the result to tag activity-log entries, where an empty id means the entry
+// is uncorrelated — the same state those entries were in before the scheduler
+// had any id to give them, and strictly better than the previous behaviour of
+// tagging them with a legacy row that no longer exists.
+func ReporterOpID(rep Reporter) string {
+	if r, ok := rep.(interface{ OpID() string }); ok {
+		return r.OpID()
+	}
+	return ""
 }

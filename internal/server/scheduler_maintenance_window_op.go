@@ -46,7 +46,16 @@ func (s *Server) RegisterMaintenanceWindowOp(reg *opsregistry.Registry) error {
 				return fmt.Errorf("maintenance.window: decode params: %w", err)
 			}
 
-			opID := p.LegacyOpID
+			// Activity-log correlation id. This run's OWN id is preferred: the
+			// scheduler no longer creates a legacy operations row, so LegacyOpID
+			// is empty for anything enqueued after 2026-08-16 and non-empty only
+			// for runs still in flight from before. Tagging with the v2 id also
+			// fixes what the legacy id never did — the entries now point at an
+			// operation that can actually be looked up.
+			opID := opsregistry.ReporterOpID(reporter)
+			if opID == "" {
+				opID = p.LegacyOpID
+			}
 			ignoreWindow := p.IgnoreWindow
 			ts := s.scheduler
 
