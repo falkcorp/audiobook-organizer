@@ -17,9 +17,27 @@ the operation. The count is non-zero only when the trigger call itself throws,
 so a scan that finds ten corrupt files reports "Scan complete. Found N
 audiobooks." and offers no way to see them.
 
-**To restore:** poll the operation (or read its logs — `GET /operations/v2/:id`
-already returns `data.logs` alongside `data.operation`) and feed per-file
-failures into `ScanStatus.errors`.
+**To restore — TWO layers, not one.** An earlier version of this note said the fix
+was to poll the operation and feed per-file failures into `ScanStatus.errors`. That
+assumed the data exists on the backend. Verified 2026-08-17 that it does not:
+
+- **Nothing collects per-file failures.** `Errors []`, `FailedFiles`, `SkippedFiles`
+  do not appear anywhere in `internal/scanner/` — the scan never accumulates which
+  files failed, so there is no list to fetch.
+- **The failures that do get logged are free text, mostly below the bar.**
+  `scanner.go:1672` logs a tag-read failure at **Debug**; `process_file.go:100` logs
+  one at **Warn**. Both interpolate the path into the message string rather than
+  putting it in structured `attrs`, so a client would have to regex file paths out of
+  log prose.
+
+So the work is:
+
+1. **Backend** — emit per-file failures into the operation log at warn/error with the
+   file path (and reason) in structured `attrs`, not interpolated into the message.
+2. **Frontend** — read them off `GET /operations/v2/:id` (which already returns
+   `data.logs` beside `data.operation`, so no new endpoint) into `ScanStatus.errors`.
+
+Scope this as a feature, not a wiring fix.
 
 The E2E test that covered this,
 `web/tests/e2e/scan-import-organize.spec.ts` › *scan operation: handles errors
