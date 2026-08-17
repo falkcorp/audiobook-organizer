@@ -22,14 +22,30 @@ A hit rewrites the row via `UpdateBookFile` at `:566`, setting `FilePath`, `Orig
 `Missing=false`, `FileSize` and `Format` — so the row ends up pointing at an unrelated book's
 audio while *looking* fully repaired. There is no post-write verification of book identity.
 
-**Reachability, measured on the live organizer tree by the prod-ops lane (their measurement, not
-mine):** 4,082 files carry bare-digit basenames across 517 distinct names, and **170 of those
-appear exactly once**, so `case 1:` is reachable rather than theoretical. Controls in the same
-call: normal-named mp3s under one author = 35; a planted nonexistent name = 0.
+**Reachability — measure the ROW side, not the DISK side.** Both numbers exist and only one bounds
+the risk. All measurements by the prod-ops lane; recorded here as theirs.
 
-⚠️ **Still unmeasured, and it is the number that decides severity:** how many *actual* missing
-`book_file` rows currently carry a basename that is a singleton in the index. That is what turns
-this from reachable into actively-firing, and it needs the row set. Measure it before rating this.
+*On-disk* (does the corpus contain singleton basenames at all): 4,082 files carry bare-digit
+basenames across 517 distinct names, **170 of them singletons**. Controls: normal-named mp3s under
+one author = 35; a planted nonexistent name = 0.
+
+*Row-side* (do actual missing rows resolve to a singleton — the only way to reach `case 1:`):
+building the same index tier 2 builds, 379,527 distinct basenames over both search roots, and
+looking up every distinct basename from 260 sampled missing rows gives **1 singleton
+("Dungeon of Pride.m4b") / 101 multi / 1 absent** (planted control ✓).
+
+**So the on-disk figure overstates the risk and the row-side figure is the one to quote: ~1 in
+102.** This corrects the first version of this fragment, which cited the on-disk numbers as
+reachability — the same count-the-wrong-population error the audit header warns about.
+
+The track-slash population specifically does **not** mis-repoint: `131.mp3` occurs **9** times, not
+once (settled by direct `find` after two parses disagreed; known-good control `166.mp3` = 172,
+planted bad control = 0). Nine occurrences reach the multi-match branch, which narrows by parent
+directory — stored parent `Zero History - 2` matches none of the nine real parents — and falls
+through to zero. **A miss, not a mis-repoint.**
+
+⚠️ Consequence for prioritisation: this defect is real and worth fixing on its own merits, but it
+is **not** what blocks the track-slash repair. Do not sequence the repair behind it.
 
 Bare-digit basenames are common because of the `segment_title_format` slash bug (default
 `{title} - {track}/{total_tracks}`, `f29c3ce6` → `c54721c7`, documented at
