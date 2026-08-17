@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_series.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: a1000002-0000-0000-0000-000000000002
-// last-edited: 2026-08-16
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -194,4 +194,9 @@ func csNormalizeSeriesName(name string) string {
 	s = csNonAlphanumRE.ReplaceAllString(s, " ")
 	fields := strings.FieldsFunc(s, unicode.IsSpace)
 	return strings.Join(fields, " ")
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *cleanupSeriesJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

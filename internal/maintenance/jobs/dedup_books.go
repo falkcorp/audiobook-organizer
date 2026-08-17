@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: a1000010-0000-0000-0000-000000000010
-// last-edited: 2026-08-16
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -505,4 +505,9 @@ func ddFilterLive(books []database.Book, deletedIDs map[string]bool) []database.
 		}
 	}
 	return out
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *dedupBooksJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

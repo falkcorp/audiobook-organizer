@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_book_files.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1000005-0000-0000-0000-000000000005
-// last-edited: 2026-07-07
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -13,7 +13,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	ulid "github.com/oklog/ulid/v2"
-	"log/slog")
+	"log/slog"
+)
 
 func init() { maintenance.Register(&backfillBookFilesJob{}) }
 
@@ -72,4 +73,9 @@ func (j *backfillBookFilesJob) Run(ctx context.Context, store database.Store, re
 	_ = created
 	slog.Info("backfill-book-files complete")
 	return nil
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *backfillBookFilesJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

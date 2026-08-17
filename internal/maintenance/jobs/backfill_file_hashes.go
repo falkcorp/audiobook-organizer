@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1000014-0000-0000-0000-000000000014
-// last-edited: 2026-07-06
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -14,17 +14,25 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
-	"log/slog")
+	"log/slog"
+)
 
 func init() { maintenance.Register(&backfillFileHashesJob{}) }
 
 type backfillFileHashesJob struct{}
 
-func (j *backfillFileHashesJob) ID() string          { return "backfill-file-hashes" }
-func (j *backfillFileHashesJob) Name() string        { return "Backfill File Hashes" }
-func (j *backfillFileHashesJob) Category() string    { return "files" }
-func (j *backfillFileHashesJob) DefaultParams() any  { return struct{ DryRun bool `json:"dry_run"` }{DryRun: false} }
-func (j *backfillFileHashesJob) Description() string { return "Compute and store file hashes for book_files missing them" }
+func (j *backfillFileHashesJob) ID() string       { return "backfill-file-hashes" }
+func (j *backfillFileHashesJob) Name() string     { return "Backfill File Hashes" }
+func (j *backfillFileHashesJob) Category() string { return "files" }
+func (j *backfillFileHashesJob) DefaultParams() any {
+	return struct {
+		DryRun bool `json:"dry_run"`
+	}{DryRun: false}
+}
+func (j *backfillFileHashesJob) Description() string {
+	return "Compute and store file hashes for book_files missing them"
+}
+
 // Job supports checkpoint-based resume after restart.
 func (j *backfillFileHashesJob) CanResume() bool { return true }
 func (j *backfillFileHashesJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
@@ -101,4 +109,11 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store database.Store, r
 
 	slog.Info("backfill-file-hashes complete")
 	return nil
+}
+
+// Policy: ResumeRestart because this job checkpoints via
+// operations.SaveCheckpoint, so a resumed run has real progress to reload.
+// PR-2 moves it to reporter.Checkpoint; the policy is unchanged by that move.
+func (j *backfillFileHashesJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.RestartPolicy()
 }

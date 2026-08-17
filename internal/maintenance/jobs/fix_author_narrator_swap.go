@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_author_narrator_swap.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: a1000003-0000-0000-0000-000000000003
-// last-edited: 2026-07-07
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -103,4 +103,9 @@ func (j *fixAuthorNarratorSwapJob) Run(ctx context.Context, store database.Store
 
 	slog.Info("Done found applied dryRun", "found", found, "applied", applied, "dryRun", dryRun)
 	return nil
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *fixAuthorNarratorSwapJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

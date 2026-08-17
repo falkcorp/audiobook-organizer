@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/sweep_pebble_metrics_ttl.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b8c9d0e1-f2a3-0008-1234-000000000008
-// last-edited: 2026-07-31
+// last-edited: 2026-08-17
 
 // Package jobs — maintenance job: sweep expired Pebble metrics snapshots.
 //
@@ -81,4 +81,9 @@ func (j *sweepPebbleMetricsTTLJob) Run(
 	reporter.Log("info", msg, nil)
 	reporter.SetTotal(int(deleted))
 	return nil
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *sweepPebbleMetricsTTLJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

@@ -49,6 +49,14 @@ func (j *dryRunProbeJob) Category() string    { return "test" }
 func (j *dryRunProbeJob) DefaultParams() any  { return j.params }
 func (j *dryRunProbeJob) CanResume() bool     { return j.canResume }
 
+// Policy satisfies the interface for these probes. DefaultPolicy is the honest
+// value: the probes exercise the dry_run persistence path, which the bridge drives
+// with its own hardcoded policy, so a probe declaring anything else would be
+// asserting a behaviour these tests do not exercise.
+func (j *dryRunProbeJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
+}
+
 func (j *dryRunProbeJob) Run(_ context.Context, _ database.Store, _ maintenance.ProgressReporter, dryRun bool) error {
 	j.mu.Lock()
 	j.runs = append(j.runs, dryRun)

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/purge_ua_duplicates.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a4d1e58-9c26-4b73-b0f2-5e8c3a6d9f41
-// last-edited: 2026-08-14
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -275,4 +275,9 @@ func max64(a, b int64) int64 {
 		return a
 	}
 	return b
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *purgeUADuplicatesJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

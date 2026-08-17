@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_library_states.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1000008-0000-0000-0000-000000000008
-// last-edited: 2026-07-07
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -11,7 +11,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
-	"log/slog")
+	"log/slog"
+)
 
 func init() { maintenance.Register(&fixLibraryStatesJob{}) }
 
@@ -76,4 +77,9 @@ func (j *fixLibraryStatesJob) Run(ctx context.Context, store database.Store, rep
 	_ = fixed
 	slog.Info("fix-library-states complete")
 	return nil
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *fixLibraryStatesJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_file_modes.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6d3a9f82-1e47-4b50-8c2d-5f9e7a3b1c48
-// last-edited: 2026-08-14
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -84,4 +84,9 @@ func (j *fixFileModesJob) Run(ctx context.Context, store database.Store, reporte
 		return fmt.Errorf("fix-file-modes: %d chmods failed", failed)
 	}
 	return nil
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *fixFileModesJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

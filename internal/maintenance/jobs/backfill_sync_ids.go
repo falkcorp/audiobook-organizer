@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_sync_ids.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 85ae5c94-d001-49d9-9f65-97f73f32522b
-// last-edited: 2026-07-30
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -147,4 +147,9 @@ func (j *backfillSyncIDsJob) Run(ctx context.Context, store database.Store, repo
 	reporter.Log("info", summary, nil)
 
 	return runErr
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *backfillSyncIDsJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

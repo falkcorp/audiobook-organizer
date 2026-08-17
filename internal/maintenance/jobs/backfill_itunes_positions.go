@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_itunes_positions.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 19a97553-68fc-4ef6-a326-cc9e694d8698
-// last-edited: 2026-08-16
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -591,4 +591,9 @@ func (j *backfillITunesPositionsJob) authoritativeDurationSec(store bookFileRead
 		return float64(*book.Duration), true
 	}
 	return 0, false
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *backfillITunesPositionsJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

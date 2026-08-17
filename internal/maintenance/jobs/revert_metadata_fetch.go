@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/revert_metadata_fetch.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: c8d4e2b3-5f6a-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-04-28
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -209,4 +209,9 @@ func (j *revertMetadataFetchJob) Run(ctx context.Context, store database.Store, 
 	summary := fmt.Sprintf("Reverted %d books (skipped: %d, errors: %d)", reverted, skipped, errors)
 	slog.Info(summary)
 	return nil
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *revertMetadataFetchJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

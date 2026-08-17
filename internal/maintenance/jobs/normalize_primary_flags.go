@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/normalize_primary_flags.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b8e2d19-7c5a-4f60-9d3b-1e6a8c4f2b07
-// last-edited: 2026-08-14
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -133,4 +133,9 @@ func (j *normalizePrimaryFlagsJob) Run(ctx context.Context, store database.Store
 		return fmt.Errorf("normalize-primary-flags: %d of %d writes failed", errCount, len(toFix))
 	}
 	return nil
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *normalizePrimaryFlagsJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

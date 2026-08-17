@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_book_file_paths.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1000011-0000-0000-0000-000000000011
-// last-edited: 2026-07-06
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -11,7 +11,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
-	"log/slog")
+	"log/slog"
+)
 
 func init() { maintenance.Register(&fixBookFilePathsJob{}) }
 
@@ -80,4 +81,9 @@ func (j *fixBookFilePathsJob) Run(ctx context.Context, store database.Store, rep
 	_ = marked
 	slog.Info("fix-book-file-paths complete")
 	return nil
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *fixBookFilePathsJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

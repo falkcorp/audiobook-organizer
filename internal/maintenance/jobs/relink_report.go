@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/relink_report.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: a1000022-0000-0000-0000-000000000022
-// last-edited: 2026-07-07
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -279,4 +279,9 @@ func rrDisambiguate(matches []string, authorName, title string) string {
 		return cands[0].path
 	}
 	return ""
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *relinkReportJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

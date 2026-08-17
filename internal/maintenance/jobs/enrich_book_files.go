@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/enrich_book_files.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1000009-0000-0000-0000-000000000009
-// last-edited: 2026-07-06
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -14,7 +14,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
-	"log/slog")
+	"log/slog"
+)
 
 func init() { maintenance.Register(&enrichBookFilesJob{}) }
 
@@ -92,4 +93,9 @@ func (j *enrichBookFilesJob) Run(ctx context.Context, store database.Store, repo
 	_ = updated
 	slog.Info("enrich-book-files complete")
 	return nil
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *enrichBookFilesJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

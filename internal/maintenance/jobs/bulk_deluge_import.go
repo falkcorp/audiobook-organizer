@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/bulk_deluge_import.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a2b8c6d7-9e0f-1a2b-3c4d-5e6f7a8b9c0d
-// last-edited: 2026-08-16
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -267,4 +267,14 @@ func bdi_ioCopy(src, dest string) error {
 		return fmt.Errorf("io.Copy: %w", err)
 	}
 	return nil
+}
+
+// Policy: ResumeDrop, which is what the bridge does today — deliberately NOT
+// ResumeRequeue despite CanResume() being true and this job checkpointing nothing.
+// It advertises dry_run:true, and server.resumeV2Op re-enqueues with nil params,
+// under which DryRun would silently resolve to false and run the job for real.
+// Revisit in PR-2, where the replay is testable. See RequeuePolicy's doc comment
+// and todo.d/20260817-resumerequeue-two-divergent-implementations.md.
+func (j *bulkDelugeImportJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

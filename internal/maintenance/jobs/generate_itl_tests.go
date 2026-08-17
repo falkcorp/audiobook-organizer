@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/generate_itl_tests.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: b7e3f1a2-4c5d-6e7f-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-07-16
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -17,7 +17,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 
-	"log/slog")
+	"log/slog"
+)
 
 func init() { maintenance.Register(&generateITLTestsJob{}) }
 
@@ -77,4 +78,9 @@ func (j *generateITLTestsJob) Run(ctx context.Context, store database.Store, rep
 		outputDir, len(allBooks), len(allBookFiles))
 	slog.Info(done)
 	return nil
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *generateITLTestsJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

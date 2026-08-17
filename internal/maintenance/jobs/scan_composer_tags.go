@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/scan_composer_tags.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d9e5f3c4-6a7b-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-07-07
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -277,4 +277,14 @@ func sct_categorize(composer, author, narrator, fixMode string) (category, willW
 		return "composer_equals_narrator", ""
 	}
 	return "composer_mismatch", willWrite
+}
+
+// Policy: ResumeDrop, which is what the bridge does today — deliberately NOT
+// ResumeRequeue despite CanResume() being true and this job checkpointing nothing.
+// It advertises dry_run:true, and server.resumeV2Op re-enqueues with nil params,
+// under which DryRun would silently resolve to false and run the job for real.
+// Revisit in PR-2, where the replay is testable. See RequeuePolicy's doc comment
+// and todo.d/20260817-resumerequeue-two-divergent-implementations.md.
+func (j *scanComposerTagsJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

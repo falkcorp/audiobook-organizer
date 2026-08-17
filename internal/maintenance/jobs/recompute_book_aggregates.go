@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/recompute_book_aggregates.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9b0c1d2e-3f4a-5b6c-7d8e-9f0a1b2c3d4e
-// last-edited: 2026-08-16
+// last-edited: 2026-08-17
 
 // Maintenance job: recompute-book-aggregates
 //
@@ -242,4 +242,11 @@ func (j *recomputeBookAggregatesJob) runViaInterface(
 	}
 	slog.Info("recompute-book-aggregates (fallback) complete", "updated", updated, "failed", failed, "dry_run", dryRun)
 	return nil
+}
+
+// Policy: ResumeRestart because this job checkpoints via
+// operations.SaveCheckpoint, so a resumed run has real progress to reload.
+// PR-2 moves it to reporter.Checkpoint; the policy is unchanged by that move.
+func (j *recomputeBookAggregatesJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.RestartPolicy()
 }

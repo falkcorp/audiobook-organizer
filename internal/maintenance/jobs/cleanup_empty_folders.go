@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_empty_folders.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: a1000006-0000-0000-0000-000000000006
-// last-edited: 2026-05-05
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -94,4 +94,14 @@ func (j *cleanupEmptyFoldersJob) Run(ctx context.Context, _ database.Store, repo
 
 	slog.Info("cleanup-empty-folders complete — checked dirs, removed (dry_run)", "dirs_count", len(dirs), "removed", removed, "dryRun", dryRun)
 	return nil
+}
+
+// Policy: ResumeDrop, which is what the bridge does today — deliberately NOT
+// ResumeRequeue despite CanResume() being true and this job checkpointing nothing.
+// It advertises dry_run:true, and server.resumeV2Op re-enqueues with nil params,
+// under which DryRun would silently resolve to false and run the job for real.
+// Revisit in PR-2, where the replay is testable. See RequeuePolicy's doc comment
+// and todo.d/20260817-resumerequeue-two-divergent-implementations.md.
+func (j *cleanupEmptyFoldersJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/relink_missing_to_itunes.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: e0f6a4d5-7b8c-9d0e-1f2a-3b4c5d6e7f80
-// last-edited: 2026-08-16
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -443,4 +443,9 @@ func rmt_disambiguate(matches []string, authorName, title string) string {
 		return cands[0].path
 	}
 	return ""
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *relinkMissingToITunesJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }
