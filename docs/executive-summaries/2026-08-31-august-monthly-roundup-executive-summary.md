@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
-<!-- last-edited: 2026-08-16 -->
+<!-- last-edited: 2026-08-17 -->
 
 # Executive Summary: August 2026 Monthly Roundup
 
-**Period covered:** 2026-08-01 through 2026-08-16 (**month in progress** — this is
+**Period covered:** 2026-08-01 through 2026-08-17 (**month in progress** — this is
 updated as work lands, not a closed record).
 **Individual write-ups this consolidates:** the seven dated summaries in this directory
 from 2026-08-04 to 2026-08-09, linked inline below.
@@ -242,6 +242,41 @@ because the second commit created the thing the first had verified did not exist
 second: simply *viewing* a rule-based collection wrote it back to disk every time,
 which would have made every collection look freshly modified on every glance and
 defeated the caching the app relies on to stay fast.
+
+---
+
+## 7. August 17: a check that could not fail, and the cleanup jobs
+
+Three changes that are invisible from the app but change what the code can quietly get
+wrong.
+
+**A safety check was deleted rather than repaired, because it was proven unable to fail.**
+One of the automated checks claimed to catch a specific kind of mistake: a piece of
+scaffolding drifting out of step with the real thing it stands in for. It was tested by
+deliberately making exactly that mistake — and it reported success. The reason is
+mundane: it was rebuilding the scaffolding with a command that, in this project, rebuilds
+nothing, then checking whether anything had changed. Nothing ever had. It was removed
+rather than fixed, because three other checks *do* catch that mistake, and all three were
+confirmed to go red on the same deliberate break. **A check nobody has ever seen fail is
+not evidence of health.**
+
+**The 37 maintenance jobs each got their own registration.** These are the one-off cleanup
+tasks — repairing file links, recomputing totals, tidying up duplicates. All 37 shared a
+single registration, which meant they also shared one answer to questions like "if the
+server restarts mid-run, what happens?" and "how long may this take?". Giving each job its
+own entry made per-job answers possible for the first time, and **four jobs turned out to
+need a different answer than the shared one gave them.** The other 33 were confirmed
+unchanged rather than assumed so.
+
+**And those jobs' reach into the database was cut roughly in half.** Every cleanup job was
+handed a key to all **398** database operations, whether it needed them or not. Measuring
+what they actually use gave **187** — so that is what they get now. This is a guardrail,
+not a fix: nothing was doing the wrong thing, but a job that starts reaching somewhere new
+now has to say so where a reviewer will see it.
+
+Worth recording honestly: an earlier framing of this work claimed it would delete a large
+piece of test scaffolding. **It does not,** and that was corrected before the work shipped
+rather than discovered afterward.
 
 ---
 
