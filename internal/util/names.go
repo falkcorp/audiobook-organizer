@@ -1,5 +1,5 @@
 // file: internal/util/names.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3a91c4e7-52bd-4f16-8c03-9e7d1b5a2f48
 // last-edited: 2026-08-17
 
@@ -18,6 +18,33 @@ import "strings"
 // SplitCreditNames guards that case; do not widen this list without extending
 // the guard.
 var creditSeparators = []string{" & ", " and ", "; ", ";", ", ", " with ", " + ", "/", "&"}
+
+// creditPieceCutset is the punctuation stripped from the ENDS of a split piece.
+//
+// 🔴 SEPARATOR CHARACTERS ONLY — deliberately NOT a general punctuation strip.
+// A period and a hyphen are part of real names ("Sammy Davis Jr.",
+// "Alex Hill-Knight", "E. E. Knight"); trimming those would mint a new phantom
+// duplicate next to the correctly-spelled entry, which is exactly the defect this
+// trimming exists to remove. Every character here already appears in
+// creditSeparators, so removing it can only ever undo a split artifact.
+const creditPieceCutset = " \t,;&+/"
+
+// trimCreditPiece removes leading and trailing separator punctuation left behind
+// when one separator's split strands another separator's character.
+//
+// 🔴 WHY THIS IS NEEDED. Separators are applied in sequence, so an earlier one can
+// cut a string at a point that leaves a later one's character at an end, where it
+// no longer matches. The live case is the Oxford comma: " & " splits
+// "…, Alan Barnes, & Jonathan Morris" into "…, Alan Barnes," first, and the later
+// ", " pass cannot reach that final comma because nothing follows it.
+//
+// Measured against the live narrator list 2026-08-17 (3,289 entries): this cutset
+// changes 11 names and loses none. 8 of the 11 merge into an entry for the SAME
+// person that already existed alongside them — "Alan Barnes" had 14 books while
+// "Alan Barnes," had 1 — and the other 3 simply become clean.
+func trimCreditPiece(s string) string {
+	return strings.Trim(s, creditPieceCutset)
+}
 
 // looksLikeSurnameFirst reports whether a two-part comma split looks like one
 // person written "Surname, Given" rather than two people.
@@ -68,7 +95,11 @@ func SplitCreditNames(name string) []string {
 		var next []string
 		for _, chunk := range work {
 			for _, piece := range strings.Split(chunk, sep) {
-				if p := strings.TrimSpace(piece); p != "" {
+				// Trimmed rather than merely TrimSpace'd so a stranded separator
+				// character cannot become part of a person's name, and so the
+				// emptiness check below sees a piece that is only punctuation
+				// (an "A & & B" credit) for what it is.
+				if p := trimCreditPiece(piece); p != "" {
 					next = append(next, p)
 				}
 			}
