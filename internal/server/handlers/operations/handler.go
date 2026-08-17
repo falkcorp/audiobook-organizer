@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-08-11
+// last-edited: 2026-08-16
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -498,8 +498,153 @@ func (h *Handler) RunTask(c *gin.Context) {
 	httputil.RespondWithSuccess(c, 202, op)
 }
 
+// taskConfigBinding names, for one task, the config field that each PUT
+// /tasks/:name body field writes to. A nil pointer means the task has no such
+// knob, and the request is rejected rather than acknowledged.
+//
+// The point of the table is that "which fields does this task accept" and
+// "where does each field get written" are the same fact, stated once. The
+// hand-written switch this replaced stated them separately: the case label
+// implied acceptance while the if-bodies did the writing, and nothing tied the
+// 200 response to whether an assignment had actually happened. Cases that bound
+// only a subset therefore reported success for the fields they dropped.
+// Measured 2026-08-16 against production: PUT /tasks/purge_deleted
+// {"enabled":false} answered 200 {"message":"task config updated"} and the task
+// still read back enabled=true. Same shape as the iTunes backfill done-flag — a
+// write-only field that reports success.
+type taskConfigBinding struct {
+	enabled   *bool
+	interval  *int
+	onStartup *bool
+	inWindow  *bool
+
+	// hints explains, per rejected field, what to set instead. Some knobs are
+	// derived rather than absent — purge_deleted's enabled is
+	// PurgeSoftDeletedAfterDays > 0 — so the useful answer names the real config
+	// key instead of reporting the field as merely unsupported.
+	hints map[string]string
+}
+
+// accepted lists the body fields this task can actually apply, so the error
+// message is derived from the same pointers that do the writing and cannot
+// drift away from them.
+func (b taskConfigBinding) accepted() []string {
+	var out []string
+	if b.enabled != nil {
+		out = append(out, "enabled")
+	}
+	if b.interval != nil {
+		out = append(out, "interval_minutes")
+	}
+	if b.onStartup != nil {
+		out = append(out, "run_on_startup")
+	}
+	if b.inWindow != nil {
+		out = append(out, "run_in_maintenance_window")
+	}
+	return out
+}
+
+// describeRejection renders one unsettable field, with its hint when there is
+// one.
+func (b taskConfigBinding) describeRejection(field string) string {
+	if hint := b.hints[field]; hint != "" {
+		return fmt.Sprintf("%s (%s)", field, hint)
+	}
+	return field
+}
+
+// fixedScheduleHint covers tasks whose scheduler definition hardcodes
+// IsEnabled/GetInterval/RunOnStart as constants rather than reading config.
+const fixedScheduleHint = "this task's schedule is fixed in code"
+
+// bindingForTask maps a task name to the config fields its schedule really
+// reads, mirroring the TaskDefinition triggers in internal/scheduler/tasks.go.
+// The second return is false for a task that has no configurable schedule at
+// all.
+func bindingForTask(name string) (taskConfigBinding, bool) {
+	sched := &config.AppConfig.Scheduled
+	maint := &config.AppConfig.Maintenance
+
+	// full is for tasks whose TaskDefinition reads a ScheduledTaskConfig for
+	// enabled/interval/on-startup plus a Maintenance flag for the window.
+	full := func(t *config.ScheduledTaskConfig, window *bool) taskConfigBinding {
+		return taskConfigBinding{
+			enabled:   &t.Enabled,
+			interval:  &t.Interval,
+			onStartup: &t.OnStartup,
+			inWindow:  window,
+		}
+	}
+
+	// windowOnly is for tasks whose only real knob is whether the maintenance
+	// window runs them.
+	windowOnly := func(window *bool, hints map[string]string) taskConfigBinding {
+		return taskConfigBinding{inWindow: window, hints: hints}
+	}
+
+	switch name {
+	case "dedup_refresh":
+		return full(&sched.DedupRefresh, &maint.DedupRefresh), true
+	case "author_split_scan":
+		return full(&sched.AuthorSplit, &maint.AuthorSplit), true
+	case "db_optimize":
+		return full(&sched.DbOptimize, &maint.DbOptimize), true
+	case "metadata_refresh":
+		return full(&sched.MetadataRefresh, &maint.MetadataRefresh), true
+	case "series_prune":
+		return full(&sched.SeriesPrune, &maint.SeriesPrune), true
+	case "library_scan":
+		// All four knobs are real: the task reads Scheduled.LibraryScan for
+		// enabled/interval/on-startup. The previous switch bound only the
+		// maintenance-window flag and silently dropped the other three.
+		return full(&sched.LibraryScan, &maint.LibraryScan), true
+	case "reconcile_scan":
+		// interval_minutes and run_on_startup are read by the task definition
+		// but were not bound before, so they were dropped silently too.
+		return full(&sched.Reconcile, &maint.Reconcile), true
+	case "itunes_sync":
+		return taskConfigBinding{
+			enabled:  &config.AppConfig.ITunes.SyncEnabled,
+			interval: &config.AppConfig.ITunes.SyncInterval,
+			hints: map[string]string{
+				"run_on_startup":            "iTunes sync does not run on startup",
+				"run_in_maintenance_window": "iTunes sync is not part of the maintenance window",
+			},
+		}, true
+	case "purge_deleted":
+		return windowOnly(&maint.PurgeDeleted, map[string]string{
+			"enabled":          "derived from purge_soft_deleted_after_days; set that key via PUT /config, 0 disables the purge",
+			"interval_minutes": "fixed at 6h while purge_soft_deleted_after_days > 0",
+			"run_on_startup":   "derived from purge_soft_deleted_after_days",
+		}), true
+	case "purge_old_logs":
+		return windowOnly(&maint.PurgeOldLogs, map[string]string{
+			"enabled":          "derived from log_retention_days; set that key via PUT /config, 0 disables the purge",
+			"interval_minutes": "fixed at 7d",
+			"run_on_startup":   fixedScheduleHint,
+		}), true
+	case "tombstone_cleanup":
+		return windowOnly(&maint.TombstoneCleanup, map[string]string{
+			"enabled":          fixedScheduleHint,
+			"interval_minutes": "fixed at 24h",
+			"run_on_startup":   fixedScheduleHint,
+		}), true
+	case "library_organize":
+		return windowOnly(&maint.LibraryOrganize, map[string]string{
+			"enabled":          fixedScheduleHint,
+			"interval_minutes": "library_organize runs only inside the maintenance window",
+			"run_on_startup":   fixedScheduleHint,
+		}), true
+	}
+	return taskConfigBinding{}, false
+}
+
 // UpdateTaskConfig updates schedule config for a task. Implements PUT
 // /tasks/:name.
+//
+// A field the named task cannot apply is a 400 naming what the task does
+// accept, never a 200. See taskConfigBinding for why.
 func (h *Handler) UpdateTaskConfig(c *gin.Context) {
 	name := c.Param("name")
 
@@ -514,119 +659,66 @@ func (h *Handler) UpdateTaskConfig(c *gin.Context) {
 		return
 	}
 
-	// Map task name to config fields and apply
-	switch name {
-	case "dedup_refresh":
-		if req.Enabled != nil {
-			config.AppConfig.Scheduled.DedupRefresh.Enabled = *req.Enabled
-		}
-		if req.IntervalMinutes != nil {
-			config.AppConfig.Scheduled.DedupRefresh.Interval = *req.IntervalMinutes
-		}
-		if req.RunOnStartup != nil {
-			config.AppConfig.Scheduled.DedupRefresh.OnStartup = *req.RunOnStartup
-		}
-		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.Maintenance.DedupRefresh = *req.RunInMaintenanceWindow
-		}
-	case "author_split_scan":
-		if req.Enabled != nil {
-			config.AppConfig.Scheduled.AuthorSplit.Enabled = *req.Enabled
-		}
-		if req.IntervalMinutes != nil {
-			config.AppConfig.Scheduled.AuthorSplit.Interval = *req.IntervalMinutes
-		}
-		if req.RunOnStartup != nil {
-			config.AppConfig.Scheduled.AuthorSplit.OnStartup = *req.RunOnStartup
-		}
-		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.Maintenance.AuthorSplit = *req.RunInMaintenanceWindow
-		}
-	case "db_optimize":
-		if req.Enabled != nil {
-			config.AppConfig.Scheduled.DbOptimize.Enabled = *req.Enabled
-		}
-		if req.IntervalMinutes != nil {
-			config.AppConfig.Scheduled.DbOptimize.Interval = *req.IntervalMinutes
-		}
-		if req.RunOnStartup != nil {
-			config.AppConfig.Scheduled.DbOptimize.OnStartup = *req.RunOnStartup
-		}
-		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.Maintenance.DbOptimize = *req.RunInMaintenanceWindow
-		}
-	case "metadata_refresh":
-		if req.Enabled != nil {
-			config.AppConfig.Scheduled.MetadataRefresh.Enabled = *req.Enabled
-		}
-		if req.IntervalMinutes != nil {
-			config.AppConfig.Scheduled.MetadataRefresh.Interval = *req.IntervalMinutes
-		}
-		if req.RunOnStartup != nil {
-			config.AppConfig.Scheduled.MetadataRefresh.OnStartup = *req.RunOnStartup
-		}
-		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.Maintenance.MetadataRefresh = *req.RunInMaintenanceWindow
-		}
-	case "itunes_sync":
-		if req.Enabled != nil {
-			config.AppConfig.ITunes.SyncEnabled = *req.Enabled
-		}
-		if req.IntervalMinutes != nil {
-			config.AppConfig.ITunes.SyncInterval = *req.IntervalMinutes
-		}
-	case "series_prune":
-		if req.Enabled != nil {
-			config.AppConfig.Scheduled.SeriesPrune.Enabled = *req.Enabled
-		}
-		if req.IntervalMinutes != nil {
-			config.AppConfig.Scheduled.SeriesPrune.Interval = *req.IntervalMinutes
-		}
-		if req.RunOnStartup != nil {
-			config.AppConfig.Scheduled.SeriesPrune.OnStartup = *req.RunOnStartup
-		}
-		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.Maintenance.SeriesPrune = *req.RunInMaintenanceWindow
-		}
-	case "purge_deleted":
-		if req.IntervalMinutes != nil {
-			// purge interval is fixed at 6h, but we can update retention days
-		}
-		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.Maintenance.PurgeDeleted = *req.RunInMaintenanceWindow
-		}
-	case "tombstone_cleanup":
-		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.Maintenance.TombstoneCleanup = *req.RunInMaintenanceWindow
-		}
-	case "reconcile_scan":
-		if req.Enabled != nil {
-			config.AppConfig.Scheduled.Reconcile.Enabled = *req.Enabled
-		}
-		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.Maintenance.Reconcile = *req.RunInMaintenanceWindow
-		}
-	case "purge_old_logs":
-		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.Maintenance.PurgeOldLogs = *req.RunInMaintenanceWindow
-		}
-	case "library_scan":
-		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.Maintenance.LibraryScan = *req.RunInMaintenanceWindow
-		}
-	case "library_organize":
-		if req.RunInMaintenanceWindow != nil {
-			config.AppConfig.Maintenance.LibraryOrganize = *req.RunInMaintenanceWindow
-		}
-	default:
+	binding, ok := bindingForTask(name)
+	if !ok {
 		httputil.RespondWithBadRequest(c, fmt.Sprintf("task %q config is not configurable", name))
 		return
 	}
 
-	// Persist to database
+	// Resolve every provided field against the binding BEFORE applying any of
+	// them, so a rejected field cannot leave a half-written config behind.
+	var writes []func()
+	var rejected []string
+	bindBool := func(field string, v, target *bool) {
+		if v == nil {
+			return
+		}
+		if target == nil {
+			rejected = append(rejected, binding.describeRejection(field))
+			return
+		}
+		writes = append(writes, func() { *target = *v })
+	}
+	bindInt := func(field string, v, target *int) {
+		if v == nil {
+			return
+		}
+		if target == nil {
+			rejected = append(rejected, binding.describeRejection(field))
+			return
+		}
+		writes = append(writes, func() { *target = *v })
+	}
+
+	bindBool("enabled", req.Enabled, binding.enabled)
+	bindInt("interval_minutes", req.IntervalMinutes, binding.interval)
+	bindBool("run_on_startup", req.RunOnStartup, binding.onStartup)
+	bindBool("run_in_maintenance_window", req.RunInMaintenanceWindow, binding.inWindow)
+
+	if len(rejected) > 0 {
+		accepted := "no schedule fields"
+		if fields := binding.accepted(); len(fields) > 0 {
+			accepted = strings.Join(fields, ", ")
+		}
+		httputil.RespondWithBadRequest(c, fmt.Sprintf(
+			"task %q cannot set %s; it accepts %s",
+			name, strings.Join(rejected, "; "), accepted))
+		return
+	}
+
+	for _, write := range writes {
+		write()
+	}
+
+	// Persist to database. A failure here means the change is live in memory but
+	// will not survive a restart, which is not "task config updated" — report it
+	// rather than logging a warning under a 200.
 	if h.store != nil {
 		if err := config.SaveConfigToDatabase(h.store); err != nil {
-			slog.Warn("Failed to save task config", "err", err)
+			slog.Error("Failed to save task config", "task", name, "err", err)
+			httputil.RespondWithInternalError(c, fmt.Sprintf(
+				"task %q config applied in memory but could not be persisted: %v", name, err))
+			return
 		}
 	}
 
