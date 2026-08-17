@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_metadata_source_hash.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1000015-0000-0000-0000-000000000015
-// last-edited: 2026-07-07
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -12,7 +12,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
-	"log/slog")
+	"log/slog"
+)
 
 func init() { maintenance.Register(&backfillMetadataSourceHashJob{}) }
 
@@ -99,4 +100,9 @@ func bookMetadataSourceAndID(book *database.BookCore) (string, string) {
 		}
 	}
 	return "", ""
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *backfillMetadataSourceHashJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

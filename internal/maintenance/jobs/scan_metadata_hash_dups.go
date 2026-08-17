@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/scan_metadata_hash_dups.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1000017-0000-0000-0000-000000000017
-// last-edited: 2026-07-07
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -57,4 +57,9 @@ func (j *scanMetadataHashDupsJob) Run(ctx context.Context, store database.Store,
 	}
 	slog.Info("scan-metadata-hash-dups complete duplicate groups", "dups", dups)
 	return nil
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *scanMetadataHashDupsJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

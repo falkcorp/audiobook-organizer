@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/refetch_missing_authors.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: a1000012-0000-0000-0000-000000000012
-// last-edited: 2026-07-07
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -203,4 +203,14 @@ func fileExt(path string) string {
 		}
 	}
 	return ""
+}
+
+// Policy: ResumeDrop, which is what the bridge does today — deliberately NOT
+// ResumeRequeue despite CanResume() being true and this job checkpointing nothing.
+// It advertises dry_run:true, and server.resumeV2Op re-enqueues with nil params,
+// under which DryRun would silently resolve to false and run the job for real.
+// Revisit in PR-2, where the replay is testable. See RequeuePolicy's doc comment
+// and todo.d/20260817-resumerequeue-two-divergent-implementations.md.
+func (j *refetchMissingAuthorsJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_organize_mess.go
-// version: 2.1.1
+// version: 2.2.0
 // guid: a1000007-0000-0000-0000-000000000007
-// last-edited: 2026-05-01
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -166,4 +166,9 @@ func comAllAlpha(s string) bool {
 		}
 	}
 	return len(s) > 0
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *cleanupOrganizeMess) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

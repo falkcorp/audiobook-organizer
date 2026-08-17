@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/retention_and_hygiene.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: e7c9d4a2-f1b3-49a8-8c4f-7d2e5a1f3c9e
-// last-edited: 2026-08-16
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -349,4 +349,11 @@ func isDeadPrefixSweepDone(store retentionFlagStore, flagName string) (bool, err
 // setDeadPrefixSweepDone sets the completion flag.
 func setDeadPrefixSweepDone(store retentionFlagStore, flagName string) error {
 	return store.SetSetting(flagName, "true", "boolean", false)
+}
+
+// Policy: ResumeRestart because this job checkpoints via
+// operations.SaveCheckpoint, so a resumed run has real progress to reload.
+// PR-2 moves it to reporter.Checkpoint; the policy is unchanged by that move.
+func (j *retentionAndHygieneJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.RestartPolicy()
 }

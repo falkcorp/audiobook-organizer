@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1000020-0000-0000-0000-000000000020
-// last-edited: 2026-07-07
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -65,4 +65,9 @@ func (j *mergeChapterGroupsJob) Run(ctx context.Context, store database.Store, r
 	}
 	slog.Info("merge-chapter-groups complete merged", "merged", merged)
 	return nil
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *mergeChapterGroupsJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

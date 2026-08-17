@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/scan_chapter_groups.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1000019-0000-0000-0000-000000000019
-// last-edited: 2026-07-07
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -48,4 +48,9 @@ func (j *scanChapterGroupsJob) Run(ctx context.Context, store database.Store, re
 	}
 	slog.Info("scan-chapter-groups complete groups", "groups_count", len(groups))
 	return nil
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *scanChapterGroupsJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

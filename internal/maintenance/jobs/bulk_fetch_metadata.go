@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/bulk_fetch_metadata.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b3c9d7e8-0f1a-2b3c-4d5e-6f7a8b9c0d1e
-// last-edited: 2026-07-07
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -316,4 +316,12 @@ func bmf_stripChapterFromTitle(title string) string {
 		return title
 	}
 	return strings.TrimSpace(cleaned)
+}
+
+// Policy: ResumeRequeue — CanResume() is true but this job checkpoints nothing,
+// so "resume" already means re-run from zero. It is the ONLY one of the six such
+// jobs safe to declare here, because it is the only one with no dry_run parameter
+// to lose to the nil-params requeue path (see RequeuePolicy's doc comment).
+func (j *bulkFetchMetadataJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.RequeuePolicy()
 }

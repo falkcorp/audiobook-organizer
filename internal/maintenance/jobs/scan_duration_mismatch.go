@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/scan_duration_mismatch.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1000018-0000-0000-0000-000000000018
-// last-edited: 2026-07-07
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -59,4 +59,9 @@ func (j *scanDurationMismatchJob) Run(ctx context.Context, store database.Store,
 	}
 	slog.Info("scan-duration-mismatch complete mismatches", "mismatches", mismatches)
 	return nil
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *scanDurationMismatchJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

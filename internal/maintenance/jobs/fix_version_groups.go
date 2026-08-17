@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_version_groups.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: a1000004-0000-0000-0000-000000000004
-// last-edited: 2026-08-16
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -316,4 +316,9 @@ func vgCreateBookFiles(store bookFileCreator, book *database.Book, filePaths []s
 		}
 	}
 	return nil
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *fixVersionGroupsJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

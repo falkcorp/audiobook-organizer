@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_backups.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: a1000021-0000-0000-0000-000000000021
-// last-edited: 2026-05-01
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -14,7 +14,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
-	"log/slog")
+	"log/slog"
+)
 
 func init() { maintenance.Register(&cleanupBackupsJob{}) }
 
@@ -57,11 +58,16 @@ func (j *cleanupBackupsJob) Run(ctx context.Context, _ database.Store, reporter 
 			}
 		} else {
 			removed++
-			slog.Info("would remove"+path)
+			slog.Info("would remove" + path)
 		}
 		return nil
 	})
 	_ = removed
 	slog.Info("cleanup-backups complete")
 	return err
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *cleanupBackupsJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

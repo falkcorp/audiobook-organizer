@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/repair_missing_files.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: f1a7b5e6-8c9d-0e1f-2a3b-4c5d6e7f8a90
-// last-edited: 2026-08-16
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -570,4 +570,14 @@ func rmfr_repairOne(
 		res.Applied = true
 	}
 	return res
+}
+
+// Policy: ResumeDrop, which is what the bridge does today — deliberately NOT
+// ResumeRequeue despite CanResume() being true and this job checkpointing nothing.
+// It advertises dry_run:true, and server.resumeV2Op re-enqueues with nil params,
+// under which DryRun would silently resolve to false and run the job for real.
+// Revisit in PR-2, where the replay is testable. See RequeuePolicy's doc comment
+// and todo.d/20260817-resumerequeue-two-divergent-implementations.md.
+func (j *repairMissingFilesJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

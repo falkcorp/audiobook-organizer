@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/scan_duplicate_files.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1000016-0000-0000-0000-000000000016
-// last-edited: 2026-07-06
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -57,4 +57,9 @@ func (j *scanDuplicateFilesJob) Run(ctx context.Context, store database.Store, r
 	}
 	slog.Info("scan-duplicate-files complete duplicate groups", "dups", dups)
 	return nil
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *scanDuplicateFilesJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }

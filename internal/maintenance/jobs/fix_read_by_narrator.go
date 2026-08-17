@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_read_by_narrator.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: a1000001-0000-0000-0000-000000000001
-// last-edited: 2026-08-16
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -214,4 +214,9 @@ func rbnrStringDeref(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// Policy declares the bridge's existing behaviour verbatim: see DefaultPolicy.
+func (j *fixReadByNarratorJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
 }
