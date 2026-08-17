@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/policy_declaration_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6d2f8b41-9e73-4c05-a8d6-1b47e903fa25
 // last-edited: 2026-08-17
 
@@ -64,7 +64,7 @@ func TestEveryJobDeclaresAUsablePolicy(t *testing.T) {
 					"default silently applies instead of the declared 4h", p.Timeout)
 			}
 			if len(p.Capabilities) == 0 {
-				t.Errorf("Capabilities is empty; every job reached through the bridge "+
+				t.Errorf("Capabilities is empty; every job reached through the bridge " +
 					"holds library read+write today, so empty is a regression")
 			}
 		})
