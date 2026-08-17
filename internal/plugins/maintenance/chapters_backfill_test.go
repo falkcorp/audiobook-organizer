@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/chapters_backfill_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8a41c0e6-52b7-4d93-9f18-7c3ea05b61d4
-// last-edited: 2026-08-13
+// last-edited: 2026-08-17
 
 package maintenance
 
@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -657,5 +659,197 @@ func TestChaptersBackfill_FallsBackWhenBookFilePathIsMissingNotOnlyEmpty(t *test
 				t.Fatalf("summary = %q, want it to contain %q", summary, want)
 			}
 		})
+	}
+}
+
+// ── case 11: resume ─────────────────────────────────────────────────────────
+//
+// maintenance.chapters-backfill carries the longest Timeout in the codebase
+// (24h) over a whole-library enumeration, so an interrupted run used to throw
+// away a day of ffprobe work under ResumePolicy=Drop. It is now ResumeRestart
+// with a contiguous-completion watermark.
+//
+// The tests below assert the two properties that make that safe — the prefix is
+// really skipped, and the checkpoint carries the WHOLE parameter set — plus the
+// two ways the watermark can be wrong: a stale index past the end, and a Limit
+// that forgets what earlier attempts already wrote.
+
+// chbfCheckpointSpy captures every checkpoint payload the op writes. The
+// embedded fakeReporter discards them, which is the behaviour every other test
+// here wants; resume is the one property that cannot be observed without them.
+type chbfCheckpointSpy struct {
+	fakeReporter
+	mu     sync.Mutex
+	states []chaptersBackfillParams
+}
+
+func (r *chbfCheckpointSpy) Checkpoint(state any) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if p, ok := state.(chaptersBackfillParams); ok {
+		r.states = append(r.states, p)
+	}
+	return nil
+}
+
+func (r *chbfCheckpointSpy) last(t *testing.T) chaptersBackfillParams {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.states) == 0 {
+		t.Fatal("no checkpoint was written; a ResumeRestart op that never " +
+			"checkpoints resumes from zero, which is the bug this replaced")
+	}
+	return r.states[len(r.states)-1]
+}
+
+func chbfRunSpying(t *testing.T, s *database.PebbleStore, params chaptersBackfillParams) *chbfCheckpointSpy {
+	t.Helper()
+	raw, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+	rep := &chbfCheckpointSpy{}
+	p := &Plugin{deps: fakeDeps{store: &chbfDecorator{Store: s}}}
+	if err := p.runChaptersBackfill(context.Background(), raw, rep); err != nil {
+		t.Fatalf("runChaptersBackfill: %v", err)
+	}
+	return rep
+}
+
+// chbfSeedSorted seeds n books and returns their IDs in the SAME order the op
+// processes them, which is sorted order — not creation order.
+func chbfSeedSorted(t *testing.T, s *database.PebbleStore, n int) []string {
+	t.Helper()
+	ids := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		ids = append(ids, chbfSeedBook(t, s, fmt.Sprintf("Book %02d", i), 1))
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// ResumeFrom must skip exactly the completed prefix — no more, no less.
+//
+// Asserted by CHAPTER STATE rather than by probe count, because a probe count
+// alone passes against an op that probed everything and wrote nothing.
+func TestChaptersBackfill_ResumeFromSkipsExactlyTheCompletedPrefix(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds a real PebbleStore; skipped in -short")
+	}
+	chbfStubFFprobe(t)
+	(&chbfProbeSpy{result: chbfChapters()}).install(t)
+
+	s := chbfStore(t)
+	const total, skip = 5, 2
+	ids := chbfSeedSorted(t, s, total)
+
+	chbfRunSpying(t, s, chaptersBackfillParams{Apply: true, ResumeFrom: skip})
+
+	for i, id := range ids {
+		got, _ := s.GetChaptersForBook(id)
+		if i < skip && len(got) != 0 {
+			t.Fatalf("book %d (below the watermark) got %d chapters; the resume "+
+				"prefix was re-processed, so resuming buys nothing", i, len(got))
+		}
+		if i >= skip && len(got) != 6 {
+			t.Fatalf("book %d (at or above the watermark) got %d chapters, want 6; "+
+				"the resume slice skipped work that was never done", i, len(got))
+		}
+	}
+}
+
+// The checkpoint must carry EVERY field, not just the watermark.
+//
+// Checkpoint JSON is merged into the resumed run's params, so any field omitted
+// here comes back as its zero value. Dropping Apply silently downgrades a live
+// run to a dry run on restart; dropping BookIDs widens a bounded cohort run to
+// the whole library. Both failures look like success.
+func TestChaptersBackfill_CheckpointCarriesEveryParamNotJustTheWatermark(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds a real PebbleStore; skipped in -short")
+	}
+	chbfStubFFprobe(t)
+	(&chbfProbeSpy{result: chbfChapters()}).install(t)
+
+	s := chbfStore(t)
+	ids := chbfSeedSorted(t, s, 3)
+	cohort := []string{ids[0], ids[1]}
+
+	rep := chbfRunSpying(t, s, chaptersBackfillParams{
+		Apply: true, Limit: 7, BookIDs: cohort,
+	})
+	got := rep.last(t)
+
+	if !got.Apply {
+		t.Fatal("checkpoint dropped Apply: a restart would silently become a dry run")
+	}
+	if got.Limit != 7 {
+		t.Fatalf("checkpoint Limit = %d, want 7: a restart would lose the write cap", got.Limit)
+	}
+	if len(got.BookIDs) != len(cohort) {
+		t.Fatalf("checkpoint BookIDs = %v, want %v: a restart would widen a "+
+			"2-book cohort run to the whole library", got.BookIDs, cohort)
+	}
+	if got.ResumeFrom != len(cohort) {
+		t.Fatalf("checkpoint ResumeFrom = %d, want %d (all cohort items completed)",
+			got.ResumeFrom, len(cohort))
+	}
+	if got.AlreadyPersisted != len(cohort) {
+		t.Fatalf("checkpoint AlreadyPersisted = %d, want %d: without the running "+
+			"total, Limit resets to full budget on every restart",
+			got.AlreadyPersisted, len(cohort))
+	}
+}
+
+// A watermark past the end must not be trusted.
+//
+// Books deleted between attempts shorten the list, so a stored watermark can
+// exceed it. Slicing on that index panics; trusting it silently reports success
+// having examined nothing.
+func TestChaptersBackfill_ResumeFromPastTheEndIsClampedNotFatal(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds a real PebbleStore; skipped in -short")
+	}
+	chbfStubFFprobe(t)
+	spy := &chbfProbeSpy{result: chbfChapters()}
+	spy.install(t)
+
+	s := chbfStore(t)
+	chbfSeedSorted(t, s, 3)
+
+	chbfRunSpying(t, s, chaptersBackfillParams{Apply: true, ResumeFrom: 99})
+
+	if n := spy.calls.Load(); n != 0 {
+		t.Fatalf("probed %d books past an exhausted watermark, want 0", n)
+	}
+}
+
+// Limit is a cap on the OPERATION, not on each attempt.
+//
+// Asserted at the saturated boundary (AlreadyPersisted >= Limit) rather than
+// mid-budget, because the budget check reads a counter that several workers
+// evaluate concurrently: partway through, the exact number of writes that slip
+// past is racy, while "already over budget" is deterministic for every worker.
+func TestChaptersBackfill_LimitCountsWritesFromEarlierAttempts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds a real PebbleStore; skipped in -short")
+	}
+	chbfStubFFprobe(t)
+	(&chbfProbeSpy{result: chbfChapters()}).install(t)
+
+	s := chbfStore(t)
+	ids := chbfSeedSorted(t, s, 4)
+
+	chbfRunSpying(t, s, chaptersBackfillParams{
+		Apply: true, Limit: 3, AlreadyPersisted: 3,
+	})
+
+	for i, id := range ids {
+		if got, _ := s.GetChaptersForBook(id); len(got) != 0 {
+			t.Fatalf("book %d was written with the limit already spent by earlier "+
+				"attempts (%d chapters); limit=3 became an unbounded 3-per-restart",
+				i, len(got))
+		}
 	}
 }
