@@ -59,6 +59,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// delimiter, three words), so the split scan skips these rows entirely.
 		p.authorConjunctionRepairDef(),
 		p.purgeEmptyAuthorsDef(),
+		p.missingFileAuditDef(),
 		p.seriesNormalizeDef(),
 		p.seriesPruneDef(),
 		p.resolveProductionAuthorsDef(),
