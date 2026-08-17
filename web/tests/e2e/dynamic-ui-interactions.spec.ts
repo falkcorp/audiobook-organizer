@@ -1,15 +1,73 @@
 // file: web/tests/e2e/dynamic-ui-interactions.spec.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9f8e7d6c-5b4a-3210-fedc-ba9876543210
-// last-edited: 2026-08-09
+// last-edited: 2026-08-16
 
 /**
  * E2E tests for dynamic UI interactions with in-place loading states
  * Tests the Sonarr/Radarr-style button spinners and smooth updates
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { setupMockApi, generateTestBooks } from './utils/test-helpers';
+
+/**
+ * routeTrigger stubs the generic v2 trigger for ONE def_id, answering `opId`
+ * after `delayMs`; every other def_id falls through to the shared mock.
+ *
+ * Every operation start moved to `POST /operations/v2 {def_id, params}`
+ * (api.ts:1972), so a spec can no longer tell a scan from an organize by URL —
+ * it has to read the body. Registering this twice is fine: Playwright tries
+ * routes newest-first and `route.fallback()` hands off to the next one.
+ *
+ * The delay is load-bearing. Every test in this file asserts on a transient
+ * loading state, which does not exist if the trigger resolves immediately.
+ */
+const routeTrigger = async (page: Page, defId: string, opId: string, delayMs: number) => {
+  await page.route('**/api/v1/operations/v2', async (route) => {
+    const body = JSON.parse(route.request().postData() || '{}');
+    if (route.request().method() !== 'POST' || body.def_id !== defId) {
+      return route.fallback();
+    }
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ op_id: opId }),
+    });
+  });
+};
+
+/**
+ * routeRunningStatus keeps every polled operation reporting `running`, so a
+ * spinner under test never gets cleared by a completion.
+ *
+ * GET /operations/v2/:id serves status AND logs from one response, and
+ * getOperationV2 (api.ts:544) throws unless the row sits under `data.operation`.
+ */
+const routeRunningStatus = async (page: Page) => {
+  await page.route('**/api/v1/operations/v2/*', async (route) => {
+    const opId = new URL(route.request().url()).pathname.split('/').pop() || '';
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          operation: {
+            id: opId,
+            def_id: opId.includes('scan') ? 'library.scan' : 'library.organize',
+            status: 'running',
+            progress_current: 50,
+            progress_total: 100,
+            progress_message: '',
+            error_message: null,
+          },
+          logs: [],
+        },
+      }),
+    });
+  });
+};
 
 test.describe('Dynamic UI - BookDetail Page', () => {
   test.beforeEach(async ({ page }) => {
@@ -230,55 +288,10 @@ test.describe('Dynamic UI - Library Page', () => {
       ],
     });
 
-    // Override scan and organize POST routes with delays for spinner testing
-    await page.route('**/api/v1/operations/scan', async (route) => {
-      if (route.request().method() === 'POST') {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        await route.fulfill({
-          status: 201,
-          contentType: 'application/json',
-          body: JSON.stringify({
-            id: 'op-scan-123',
-            type: 'scan',
-            status: 'running',
-          }),
-        });
-      } else {
-        await route.fallback();
-      }
-    });
-
-    await page.route('**/api/v1/operations/organize', async (route) => {
-      if (route.request().method() === 'POST') {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        await route.fulfill({
-          status: 201,
-          contentType: 'application/json',
-          body: JSON.stringify({
-            id: 'op-organize-123',
-            type: 'organize',
-            status: 'running',
-          }),
-        });
-      } else {
-        await route.fallback();
-      }
-    });
-
-    // Override operation status to keep returning 'running' for spinner tests
-    await page.route('**/api/v1/operations/*/status', async (route) => {
-      const opId = route.request().url().split('/').at(-2);
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          id: opId,
-          type: opId?.includes('scan') ? 'scan' : 'organize',
-          status: 'running',
-          progress: 50,
-        }),
-      });
-    });
+    // Delay the scan and organize triggers so the spinner state is observable.
+    await routeTrigger(page, 'library.scan', 'op-scan-123', 1000);
+    await routeTrigger(page, 'library.organize', 'op-organize-123', 1000);
+    await routeRunningStatus(page);
 
     await page.goto('/library');
     await page.waitForLoadState('networkidle');
@@ -319,23 +332,8 @@ test.describe('Dynamic UI - Library Page', () => {
     await expect(pathListItem).toBeVisible();
     const refreshButton = pathListItem.getByRole('button').first();
 
-    // Mock the individual scan with delay
-    await page.route('**/api/v1/operations/scan*', async (route) => {
-      if (route.request().method() === 'POST') {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        await route.fulfill({
-          status: 201,
-          contentType: 'application/json',
-          body: JSON.stringify({
-            id: 'op-scan-path-123',
-            type: 'scan',
-            status: 'running',
-          }),
-        });
-      } else {
-        await route.fallback();
-      }
-    });
+    // Mock the individual scan with a longer delay than the beforeEach one.
+    await routeTrigger(page, 'library.scan', 'op-scan-path-123', 2000);
 
     await refreshButton.click();
 
@@ -382,31 +380,8 @@ test.describe('Dynamic UI - Dashboard Page', () => {
     await setupMockApi(page);
 
     // Override specific routes for spinner testing
-    await page.route('**/api/v1/operations/scan', async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          id: 'op-scan-123',
-          type: 'scan',
-          status: 'running',
-        }),
-      });
-    });
-
-    await page.route('**/api/v1/operations/organize', async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          id: 'op-organize-123',
-          type: 'organize',
-          status: 'running',
-        }),
-      });
-    });
+    await routeTrigger(page, 'library.scan', 'op-scan-123', 1000);
+    await routeTrigger(page, 'library.organize', 'op-organize-123', 1000);
 
     await page.goto('/');
     await page.waitForLoadState('networkidle');
@@ -451,18 +426,7 @@ test.describe('Visual Regression - Button States', () => {
     await setupMockApi(page);
 
     // Override scan POST with delay to capture loading state
-    await page.route('**/api/v1/operations/scan', async (route) => {
-      if (route.request().method() === 'POST') {
-        await new Promise((resolve) => setTimeout(resolve, 5000));
-        await route.fulfill({
-          status: 201,
-          contentType: 'application/json',
-          body: JSON.stringify({ id: 'op-vis-1', type: 'scan', status: 'running' }),
-        });
-      } else {
-        await route.fallback();
-      }
-    });
+    await routeTrigger(page, 'library.scan', 'op-vis-1', 5000);
 
     await page.goto('/');
     await page.waitForLoadState('networkidle');
