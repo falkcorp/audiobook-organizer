@@ -29,3 +29,32 @@
       while the `pull_request` run is red. Those are different triggers, so a
       green schedule history is NOT a control for a PR failure — that mistake is
       what made these look like a regression in #2502.
+
+
+## Update 2026-08-16: one of these was NOT pre-existing
+
+The claim above that the E2E failures are all pre-existing was measured on ONE
+spec (`dynamic-ui-interactions`, 6 failed / 4 passed identically on the branch
+and on detached `origin/main`) and then generalised to all 24. That was one
+sample, not a census.
+
+Running the other five failing specs against detached `origin/main` on the same
+machine gave 17 failures; the branch gave 18. The extra one,
+`operation-monitoring.spec.ts:246 > cancels running operation`, was a real
+regression from retiring `DELETE /operations/:id` -- the mock's one-segment
+regex could not match the two-segment `/operations/v2/<id>` path. Fixed in
+`test(e2e): point the cancel mock at the v2 route the client now calls`.
+
+Re-measured after that fix, five specs, same machine:
+
+| | failed | passed |
+|---|---|---|
+| `origin/main` | 17 | 28 |
+| branch | 17 | 28 |
+
+Identical failure sets. The remaining 23 (17 here + 6 in
+`dynamic-ui-interactions`) are genuinely pre-existing.
+
+**Lesson for whoever picks this up:** a failure count is not a failure set. Diff
+the sets with `comm`, per spec, or a regression hides inside an unchanged-looking
+total.
