@@ -1,7 +1,7 @@
 // file: internal/scanner/service.go
-// version: 1.12.0
+// version: 1.6.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-12
+// last-edited: 2026-08-17
 package scanner
 
 import (
@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 
@@ -60,7 +61,30 @@ type ScanRequest struct {
 	FolderPath  *string
 	Priority    *int
 	ForceUpdate *bool
+
+	// ResumeFolderIdx and ResumeItemOffset restore position from a previous
+	// run's checkpoint. Folders before ResumeFolderIdx are skipped entirely;
+	// within ResumeFolderIdx the first ResumeItemOffset books are skipped.
+	//
+	// Per-FOLDER granularity alone is not enough and that is the whole reason
+	// the offset exists: a single production folder holds ~14,000 items, so both
+	// the tag pass and the metadata pass run for hours INSIDE one folder. A
+	// checkpoint that can only say "folder 3 of 5" throws away most of a day's
+	// work on a restart.
+	ResumeFolderIdx  int
+	ResumeItemOffset int
+
+	// Checkpoint, when non-nil, persists resume position. It is called after
+	// each completed chunk of books and once per completed folder. Implementations
+	// must be safe to call from the scan goroutine and should not block.
+	Checkpoint func(folderIdx, itemOffset int)
 }
+
+// scanChunkSize bounds how many books are processed between checkpoints. It
+// trades checkpoint write volume against how much work a restart repeats: at
+// 500 a killed scan loses at most 500 books of metadata extraction, while a
+// 14,000-item folder writes 28 checkpoints rather than 14,000.
+const scanChunkSize = 500
 
 // ScanStats accumulates per-scan book counts by source.
 type ScanStats struct {
@@ -72,15 +96,24 @@ type ScanStats struct {
 // PerformScan executes the multi-folder scan operation.
 // Accepts a logger.Logger for unified logging, progress, and change tracking.
 //
-// R-7: there is intentionally no checkpoint/resume plumbing here. The old
-// PerformScanWithID saved operations.ScanParams via operations.SaveParams for a
-// resume path that never existed — LoadParams[ScanParams] had zero callers and
-// the method itself had zero callers. The v2 "library.scan" OperationDef uses
-// ResumePolicy=ResumeDrop (see internal/server/library_core_ops.go), so an
-// interrupted scan is dropped and simply restarts from scratch on the next run;
-// a full re-walk is idempotent (the scan cache skips unchanged files). The dead
-// save/clear calls were removed to stop implying a resume contract that isn't
-// honored.
+// Checkpoint/resume: ScanRequest.Checkpoint, ResumeFolderIdx and
+// ResumeItemOffset carry position across a restart. Folders already finished are
+// skipped whole; the folder that was in flight resumes at the last completed
+// chunk boundary.
+//
+// History, because this comment previously said the opposite. R-7 removed dead
+// save/clear calls for a resume path that never existed (LoadParams[ScanParams]
+// had zero callers) and recorded that the def used ResumePolicy=ResumeDrop, so a
+// full re-walk was simply accepted. The policy became ResumeRestart in #2500,
+// which stopped an interrupted scan being discarded but still re-ran it from
+// zero — library_core_ops.go said so in capitals. On 2026-08-17 a production
+// scan ran 3h50m+ against a 63,044-book library; losing that to a restart is the
+// cost this plumbing removes.
+//
+// A full re-walk remains correct and idempotent — the scan cache skips unchanged
+// files — so resuming is an optimisation, not a correctness requirement. Nothing
+// breaks if a checkpoint is missing or stale; the worst case is the old
+// behaviour of redoing work.
 func (ss *ScanService) PerformScan(ctx context.Context, req *ScanRequest, log logger.Logger) error {
 	return ss.performScanInternal(ctx, "", req, log)
 }
@@ -192,10 +225,31 @@ func (ss *ScanService) performScanInternal(ctx context.Context, opID string, req
 			return fmt.Errorf("scan canceled")
 		}
 
-		err := ss.scanFolder(ctx, folderIdx, folderPath, foldersToScan, totalFilesAcrossFolders, &processedFiles, stats, opID, log)
+		// Resume: skip folders a previous run already finished. This is the
+		// cheap half of resuming — it avoids re-walking and re-tagging an
+		// entire completed folder.
+		if folderIdx < req.ResumeFolderIdx {
+			log.Info("Resuming: skipping folder %d/%d (already completed): %s",
+				folderIdx+1, len(foldersToScan), folderPath)
+			continue
+		}
+		// Within the folder the previous run died in, skip the books it already
+		// processed. Only that one folder carries an offset; every later folder
+		// starts at zero.
+		itemOffset := 0
+		if folderIdx == req.ResumeFolderIdx {
+			itemOffset = req.ResumeItemOffset
+		}
+
+		err := ss.scanFolder(ctx, folderIdx, folderPath, foldersToScan, totalFilesAcrossFolders, &processedFiles, stats, opID, itemOffset, req.Checkpoint, log)
 		if err != nil {
 			log.Error("Error scanning folder %s: %v", folderPath, err)
 			continue
+		}
+		// The folder finished. Record that, so a restart begins at the next
+		// folder with a zero offset rather than re-entering this one.
+		if req.Checkpoint != nil {
+			req.Checkpoint(folderIdx+1, 0)
 		}
 	}
 
@@ -315,7 +369,7 @@ func (ss *ScanService) countFilesAcrossFolders(foldersToScan []string, log logge
 	return totalFilesAcrossFolders
 }
 
-func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath string, foldersToScan []string, totalFilesAcrossFolders int, processedFiles *atomic.Int32, stats *ScanStats, opID string, log logger.Logger) error {
+func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath string, foldersToScan []string, totalFilesAcrossFolders int, processedFiles *atomic.Int32, stats *ScanStats, opID string, itemOffset int, checkpoint func(folderIdx, itemOffset int), log logger.Logger) error {
 	currentProcessed := int(processedFiles.Load())
 	displayTotal := totalFilesAcrossFolders
 	if currentProcessed > displayTotal {
@@ -385,8 +439,30 @@ func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath
 			}
 		}
 
-		log.Info("Processing metadata for %d books using %d workers", len(books), workers)
-		if err := ProcessBooksParallel(ctx, books, workers, progressCallback, log.With("scanner")); err != nil {
+		// Deterministic order is what makes an offset mean the same thing across
+		// runs. ScanDirectoryParallel returns books in worker-completion order,
+		// which varies run to run — resuming at "offset 4200" against a
+		// differently-ordered slice would skip an arbitrary 4200 books and
+		// re-run others, so the sort is load-bearing, not cosmetic.
+		sort.Slice(books, func(i, j int) bool { return books[i].FilePath < books[j].FilePath })
+
+		start := itemOffset
+		if start < 0 {
+			start = 0
+		}
+		if start > len(books) {
+			start = len(books)
+		}
+		if start > 0 {
+			log.Info("Resuming folder %s at book %d/%d", folderPath, start, len(books))
+			processedFiles.Add(int32(start))
+		}
+
+		log.Info("Processing metadata for %d books using %d workers (from offset %d)", len(books), workers, start)
+		processChunk := func(ctx context.Context, chunk []Book) error {
+			return ProcessBooksParallel(ctx, chunk, workers, progressCallback, log.With("scanner"))
+		}
+		if err := ss.processBookChunks(ctx, books, start, folderIdx, checkpoint, processChunk); err != nil {
 			// Do NOT fall through to auto-organize. These books did not get
 			// their metadata extracted, so their title/author are whatever the
 			// scan started with — frequently empty. Organizing them anyway
@@ -421,6 +497,44 @@ func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath
 	// Update book count for this import path
 	ss.updateImportPathBookCount(folderPath, len(books), log)
 
+	return nil
+}
+
+// processBookChunks runs ProcessBooksParallel over books[start:] in fixed-size
+// chunks, checkpointing the absolute offset after each chunk completes.
+//
+// Chunking is what gives resume a granularity finer than "a whole folder"
+// without giving up parallelism: each chunk is still processed by the full
+// worker pool, and only the boundary between chunks is a synchronisation point.
+// A chunk is checkpointed only after ProcessBooksParallel returns success for
+// it, so a chunk that fails is re-run on resume rather than skipped.
+// process is injected rather than calling ProcessBooksParallel directly so the
+// chunk boundaries and checkpoint sequence can be tested without a database.
+func (ss *ScanService) processBookChunks(
+	ctx context.Context,
+	books []Book,
+	start int,
+	folderIdx int,
+	checkpoint func(folderIdx, itemOffset int),
+	process func(ctx context.Context, chunk []Book) error,
+) error {
+	for off := start; off < len(books); off += scanChunkSize {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		end := off + scanChunkSize
+		if end > len(books) {
+			end = len(books)
+		}
+		if err := process(ctx, books[off:end]); err != nil {
+			// No checkpoint on failure: recording `end` here would let a resume
+			// step over a chunk that never actually processed.
+			return err
+		}
+		if checkpoint != nil {
+			checkpoint(folderIdx, end)
+		}
+	}
 	return nil
 }
 
