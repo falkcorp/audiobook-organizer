@@ -87,12 +87,17 @@ type MockStore struct {
 	DeleteWorkFunc  func(id string) error
 
 	// Author methods
-	GetAllAuthorsFunc    func() ([]Author, error)
-	GetAuthorByIDFunc    func(id int) (*Author, error)
-	GetAuthorByNameFunc  func(name string) (*Author, error)
-	CreateAuthorFunc     func(name string) (*Author, error)
-	DeleteAuthorFunc     func(id int) error
-	UpdateAuthorNameFunc func(id int, name string) error
+	GetAllAuthorsFunc   func() ([]Author, error)
+	GetAuthorByIDFunc   func(id int) (*Author, error)
+	GetAuthorByNameFunc func(name string) (*Author, error)
+	CreateAuthorFunc    func(name string) (*Author, error)
+	DeleteAuthorFunc    func(id int) error
+	// Count overrides. Without these the getters below are hardcoded to empty
+	// maps, so a test asserting on "author has N books" cannot express its own
+	// fixture and silently exercises the zero case instead.
+	GetAllAuthorBookCountsFunc func() (map[int]int, error)
+	GetAllAuthorFileCountsFunc func() (map[int]int, error)
+	UpdateAuthorNameFunc       func(id int, name string) error
 
 	GetAuthorsByIDsFunc func(ids []int) (map[int]*Author, error)
 
@@ -176,15 +181,15 @@ type MockStore struct {
 	ListOperationSummaryLogsFunc func(limit, offset int) ([]OperationSummaryLog, error)
 
 	// System activity log
-	AddSystemActivityLogFunc    func(source, level, message string) error
-	GetSystemActivityLogsFunc   func(source string, limit int) ([]SystemActivityLog, error)
-	PruneOperationLogsFunc      func(olderThan time.Time) (int, error)
-	PruneOperationChangesFunc   func(olderThan time.Time) (int, error)
+	AddSystemActivityLogFunc  func(source, level, message string) error
+	GetSystemActivityLogsFunc func(source string, limit int) ([]SystemActivityLog, error)
+	PruneOperationLogsFunc    func(olderThan time.Time) (int, error)
+	PruneOperationChangesFunc func(olderThan time.Time) (int, error)
 	// CreateOperationChangeFunc lets a test observe the change rows an
 	// operation writes. CreateOperationChange returned a bare nil with no hook,
 	// so a test could assert an operation's SUMMARY but never its CHANGE LOG —
 	// and the two disagreeing, silently, is itself a defect class here.
-	CreateOperationChangeFunc func(change *OperationChange) error
+	CreateOperationChangeFunc   func(change *OperationChange) error
 	PruneSystemActivityLogsFunc func(olderThan time.Time) (int, error)
 
 	// AI jobs
@@ -236,16 +241,16 @@ type MockStore struct {
 	ListUsersFunc         func() ([]User, error)
 
 	// Sessions
-	CreateSessionFunc         func(userID, ip, userAgent string, ttl time.Duration) (*Session, error)
-	GetSessionFunc            func(id string) (*Session, error)
-	RevokeSessionFunc         func(id string) error
-	ListUserSessionsFunc      func(userID string) ([]Session, error)
+	CreateSessionFunc    func(userID, ip, userAgent string, ttl time.Duration) (*Session, error)
+	GetSessionFunc       func(id string) (*Session, error)
+	RevokeSessionFunc    func(id string) error
+	ListUserSessionsFunc func(userID string) ([]Session, error)
 
-	CreateOAuthIdentityFunc                func(identity *OAuthIdentity) (*OAuthIdentity, error)
-	GetOAuthIdentityByProviderSubjectFunc  func(provider, subject string) (*OAuthIdentity, error)
-	GetOAuthIdentitiesForUserFunc          func(userID string) ([]OAuthIdentity, error)
-	DeleteExpiredSessionsFunc func(now time.Time) (int, error)
-	CountUsersFunc            func() (int, error)
+	CreateOAuthIdentityFunc               func(identity *OAuthIdentity) (*OAuthIdentity, error)
+	GetOAuthIdentityByProviderSubjectFunc func(provider, subject string) (*OAuthIdentity, error)
+	GetOAuthIdentitiesForUserFunc         func(userID string) ([]OAuthIdentity, error)
+	DeleteExpiredSessionsFunc             func(now time.Time) (int, error)
+	CountUsersFunc                        func() (int, error)
 
 	// Roles
 	GetRoleByIDFunc   func(id string) (*Role, error)
@@ -861,6 +866,9 @@ func (m *MockStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, er
 }
 
 func (m *MockStore) GetAllAuthorBookCounts() (map[int]int, error) {
+	if m.GetAllAuthorBookCountsFunc != nil {
+		return m.GetAllAuthorBookCountsFunc()
+	}
 	return map[int]int{}, nil
 }
 
@@ -869,6 +877,9 @@ func (m *MockStore) GetAllWorkBookCounts() (map[string]int, error) {
 }
 
 func (m *MockStore) GetAllAuthorFileCounts() (map[int]int, error) {
+	if m.GetAllAuthorFileCountsFunc != nil {
+		return m.GetAllAuthorFileCountsFunc()
+	}
 	return map[int]int{}, nil
 }
 
