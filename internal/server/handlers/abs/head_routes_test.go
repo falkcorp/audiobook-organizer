@@ -51,6 +51,22 @@ func seedServableFile(t *testing.T) (seed *oracleSeed, itemID, ino string, size 
 		LibraryState: strp("organized"), IsPrimaryVersion: boolp(true),
 	}, []database.BookFile{{ID: "head-file", BookID: bookID, FilePath: realPath}}, nil)
 
+	// A REAL cover on disk, at the layout CoverPathForBook globs for.
+	//
+	// Without this the cover test is worthless and was measurably so: with no
+	// cover present, GET answers 404 and HEAD answers 404, so "the two agree"
+	// holds even with the HEAD route unregistered. Removing the registration
+	// survived the mutation run until this file existed — the same
+	// uniformly-dead-instrument failure this whole test file is about, reproduced
+	// inside the test for it.
+	coversDir := filepath.Join(seed.root, "covers")
+	if err := os.MkdirAll(coversDir, 0o750); err != nil {
+		t.Fatalf("MkdirAll(covers): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(coversDir, bookID+".jpg"), []byte("jpeg-ish bytes"), 0o600); err != nil {
+		t.Fatalf("WriteFile(cover): %v", err)
+	}
+
 	id, err := seed.lib.MintOrGetSyncFileID(bookID, "head-file")
 	if err != nil {
 		t.Fatalf("MintOrGetSyncFileID: %v", err)
@@ -140,6 +156,13 @@ func TestHeadRoutes_CoverAcceptsHead(t *testing.T) {
 	get, _ := h.do(t, request{method: http.MethodGet, path: path})
 	head, _ := h.do(t, request{method: http.MethodHead, path: path})
 
+	// The known-good half. Asserted FIRST and fatally: if the fixture has no
+	// cover, GET is 404, HEAD is 404, and the agreement check below passes with
+	// the route unregistered.
+	if get.Code != http.StatusOK {
+		t.Fatalf("GET %s = %d, want 200 — with no cover present both methods 404 "+
+			"and the agreement assertion below proves nothing", path, get.Code)
+	}
 	if head.Code != get.Code {
 		t.Fatalf("HEAD %s = %d but GET = %d; the two must agree on whether a "+
 			"cover exists", path, head.Code, get.Code)
