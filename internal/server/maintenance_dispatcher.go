@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_dispatcher.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 55555555-5555-5555-5555-555555555555
-// last-edited: 2026-08-14
+// last-edited: 2026-08-17
 
 package server
 
@@ -186,7 +186,7 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 			"opID", opID, "jobID", jobID, "dryRun", dryRun, "err", err)
 	}
 
-	if _, err := s.opRegistry.EnqueueOp(c.Request.Context(), "maintenance.job", maintenanceJobOpParams{
+	if _, err := s.opRegistry.EnqueueOp(c.Request.Context(), maintenanceOpID(jobID), maintenanceJobOpParams{
 		LegacyOpID: opID,
 		JobID:      jobID,
 		DryRun:     dryRun,

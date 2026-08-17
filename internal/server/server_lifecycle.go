@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.19.0
+// version: 3.20.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-08-17
 
@@ -303,7 +303,7 @@ func (s *Server) resumeLegacyOp(opID, opType string) {
 					slog.Info("No saved params for interrupted maintenance job; resuming with the advertised dry_run default",
 						"opID", opID, "jobID", jobID, "dryRun", enqParams.DryRun)
 				}
-				if _, enqErr := s.opRegistry.EnqueueOp(context.Background(), "maintenance.job", enqParams); enqErr != nil {
+				if _, enqErr := s.opRegistry.EnqueueOp(context.Background(), maintenanceOpID(jobID), enqParams); enqErr != nil {
 					slog.Warn("Failed to re-enqueue maintenance job () via v2", "opID", opID, "jobID", jobID, "enqErr", enqErr)
 					_ = store.UpdateOperationError(opID, "failed to resume: "+enqErr.Error())
 				}

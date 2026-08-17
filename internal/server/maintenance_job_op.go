@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_job_op.go
-// version: 1.2.0
+// version: 2.0.0
 // guid: 7f3a9c21-4b8e-4d56-a123-0e5f6c7d8e9f
-// last-edited: 2026-05-16
+// last-edited: 2026-08-17
 
 package server
 
@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -19,36 +18,78 @@ import (
 
 type maintenanceJobOpParams struct {
 	LegacyOpID string `json:"legacy_op_id"`
-	JobID      string `json:"job_id"`
-	DryRun     bool   `json:"dry_run"`
+	// JobID is redundant now that each job has its own OperationDef — the job is
+	// captured in the closure, not looked up from params. It is retained because
+	// resume reads params written by an older build (operations.SaveParams /
+	// LoadParams in maintenance_dispatcher.go and server_lifecycle.go), and
+	// dropping the field would silently discard it from those rows.
+	JobID  string `json:"job_id"`
+	DryRun bool   `json:"dry_run"`
 }
 
-// RegisterMaintenanceJobOp registers the "maintenance.job" OperationDef which runs
-// any named maintenance job by ID.
-func (s *Server) RegisterMaintenanceJobOp(reg *opsregistry.Registry) error {
+// maintenanceOpID returns the v2 operation ID for a maintenance job.
+//
+// Job IDs are kebab-case and contain no ':', the only character RegisterOp
+// rejects, so the prefixed form is always a legal op ID. Verified against all 37:
+// zero contain ':' and zero collide with the 144 op IDs already registered.
+func maintenanceOpID(jobID string) string { return "maintenance." + jobID }
+
+// RegisterMaintenanceJobOps registers one OperationDef per maintenance job.
+//
+// This replaces the single "maintenance.job" bridge, which registered ONE
+// OperationDef for all 37 jobs and therefore had to hardcode one policy for every
+// one of them — per-job variation was structurally impossible. Each def now reads
+// its job's Policy() (declared in PR-1, #2531) for resume, timeout, concurrency
+// key, liveness, and capabilities.
+//
+// The "maintenance.job" ID is retired. That strands no data: an in-flight v2 row
+// whose def_id no longer resolves is dropped by resumeAfterStartup
+// (registry/resume.go:58, "unknown def at startup"), and the bridge's policy was
+// ResumeDrop, so such a row took the drop path before this change too. The
+// observable difference across the deploy is one extra warning line.
+//
+// Permissions stay hardcoded to settings.manage rather than consulting the
+// PermissionAware interface. The bridge did the same, and per-job access control
+// is enforced separately by the dispatcher; wiring PermissionAware into the
+// OperationDef would be a behaviour change and belongs in its own PR.
+func (s *Server) RegisterMaintenanceJobOps(reg *opsregistry.Registry) error {
+	for _, job := range maintenance.All() {
+		if err := s.registerMaintenanceJobOp(reg, job); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// registerMaintenanceJobOp registers the OperationDef for a single job.
+func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job maintenance.MaintenanceJob) error {
+	policy := job.Policy()
+	jobID := job.ID()
+
 	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "maintenance.job",
-		Liveness: opsregistry.LivenessManual,
+		ID:              maintenanceOpID(jobID),
+		Liveness:        policy.Liveness,
 		Plugin:          "maintenance",
-		DisplayName:     "Maintenance Job",
-		Description:     "Run a named maintenance job.",
+		DisplayName:     job.Name(),
+		Description:     job.Description(),
 		DefaultPriority: opsregistry.PriorityNormal,
 		Cancellable:     true,
 		Isolate:         false,
-		Timeout:         4 * time.Hour,
-		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "", // parallel maintenance jobs allowed
+		Timeout:         policy.Timeout,
+		ResumePolicy:    policy.ResumePolicy,
+		ConcurrencyKey:  policy.ConcurrencyKey,
 		Permissions:     []auth.Permission{auth.PermSettingsManage},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
+		Capabilities:    policy.Capabilities,
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p maintenanceJobOpParams
-			if err := json.Unmarshal(rawParams, &p); err != nil {
-				return fmt.Errorf("maintenance.job: decode params: %w", err)
+			// Params may legitimately be empty (a requeue re-enqueues with nil),
+			// in which case the zero value is correct: DryRun false, no legacy ID.
+			if len(rawParams) > 0 {
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("%s: decode params: %w", maintenanceOpID(jobID), err)
+				}
 			}
-			job, err := maintenance.Get(p.JobID)
-			if err != nil {
-				return fmt.Errorf("maintenance.job: job %q not found: %w", p.JobID, err)
-			}
+
 			store := s.Store()
 			ctx = maintenance.WithOperationID(ctx, p.LegacyOpID)
 			progress := registryProgressAdapter{r: reporter}
@@ -62,14 +103,10 @@ func (s *Server) RegisterMaintenanceJobOp(reg *opsregistry.Registry) error {
 			// by the job; fall back to the job name.
 			if s.activityWriter != nil && p.LegacyOpID != "" {
 				activity.FlushOperation(s.activityWriter, p.LegacyOpID)
-				if sum, serr := store.GetOperationSummaryLog(p.LegacyOpID); serr == nil && sum != nil {
-					if sum.Result != nil {
-						activity.EmitInfo(s.activityWriter, p.LegacyOpID, job.ID(), job.ID(), *sum.Result, activity.AlwaysShow)
-					} else {
-						activity.EmitInfo(s.activityWriter, p.LegacyOpID, job.ID(), job.ID(), job.Name(), activity.AlwaysShow)
-					}
+				if sum, serr := store.GetOperationSummaryLog(p.LegacyOpID); serr == nil && sum != nil && sum.Result != nil {
+					activity.EmitInfo(s.activityWriter, p.LegacyOpID, jobID, jobID, *sum.Result, activity.AlwaysShow)
 				} else {
-					activity.EmitInfo(s.activityWriter, p.LegacyOpID, job.ID(), job.ID(), job.Name(), activity.AlwaysShow)
+					activity.EmitInfo(s.activityWriter, p.LegacyOpID, jobID, jobID, job.Name(), activity.AlwaysShow)
 				}
 			}
 
@@ -79,5 +116,5 @@ func (s *Server) RegisterMaintenanceJobOp(reg *opsregistry.Registry) error {
 }
 
 func init() {
-	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error { return s.RegisterMaintenanceJobOp(reg) })
+	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error { return s.RegisterMaintenanceJobOps(reg) })
 }
