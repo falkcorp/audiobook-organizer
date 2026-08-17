@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_audit.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4e1c7a92-3b58-4d06-9f21-8c5a0e7b3d64
 // last-edited: 2026-08-17
 
@@ -26,21 +26,30 @@ import (
 // 🔴 WHY THIS EXISTS. Downloads fail with "file not found" because a large share
 // of book_file rows point at paths that hold no bytes.
 //
-// ⚠️ THE NUMBERS BELOW CAME FROM A 120-BOOK SAMPLE AND THE FULL POPULATION
-// CONTRADICTS THEM IN BOTH DIRECTIONS. Superseded 2026-08-17 by a full-library
-// run of this op (all 532,296 rows) — see
+// ⚠️ THE NUMBERS BELOW CAME FROM A 120-BOOK SAMPLE AND THE SAMPLE WAS NOT
+// REPRESENTATIVE. Superseded 2026-08-17 by a full-library run of this op (all
+// 532,296 rows across 61,528 books) — see
 // docs/audits/2026-08-17-missing-file-audit-full-population.md:
 //
-//	                                  120-book sample   full population
-//	rows missing                      41.8%             13.52%  (71,954/532,296)
-//	books with NO surviving file      5                 16,265
-//	missing rows under the iTunes tree  0 ("nothing")   1,006
+//	                                  120-book sample     full population
+//	rows missing                      41.8% (552/1,322)   13.52% (71,954/532,296)
+//	books with NO surviving file      5     (4.2%)        16,265 (26.4%)
+//	missing rows under the iTunes tree  0   ("nothing")   1,006
 //
-// So the sample overstated the row rate by 3x and understated the
-// books-with-nothing-left count by more than three orders of magnitude. Sampling
-// error alone does not produce that; treat the sample figures as retired, not as
-// a rough guide. `unreadable` is 0 across all 532,296 rows, so none of this is a
-// flapping mount.
+// The books-with-nothing-left gap is not sampling noise, and the arithmetic says
+// so rather than an adjective: at the population rate p = 0.2644, a random n = 120
+// draw expects 31.7 such books (sd 4.83). Observing 5 is z = −5.53, exact
+// P(X ≤ 5) = 1.3e−10. The sample was drawn from a non-representative slice.
+//
+// ⚠️ COMPARE RATES, NOT COUNTS. It is tempting to say the sample "understated by
+// 3,253×" (5 → 16,265). That is a ratio of raw counts across populations of 120
+// and 61,528 and it means nothing. The comparable figure is the RATE ratio,
+// 4.2% → 26.4% = 6.3×. For the same reason, do not claim the sample "overstated
+// the row rate by 3×": the sample averaged 11.0 rows/book against the
+// population's 8.6, so the two percentages have different denominators and
+// neither corrects the other.
+//
+// `unreadable` is 0 across all 532,296 rows, so none of this is a flapping mount.
 //
 // 🔴 The "EVERY missing path was under the organizer's own tree, nothing under
 // iTunes" claim below is FALSE as written — 1,006 missing rows are under the
