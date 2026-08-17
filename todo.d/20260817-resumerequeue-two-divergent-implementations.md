@@ -36,3 +36,12 @@ mutations, different lanes.
 Fix direction: resolve the divergence rather than test around it — have `resumeV2Op` read the v1
 row's saved params and pass them through, so both paths replay params identically. Then add a
 conformance test: one fixture, both implementations, assert the resumed params are equal.
+
+**Compounds with a second defect in the same job.** `repair-missing-files` tier 2 accepts a unique
+basename match with no same-book check (`repair_missing_files.go:299-301`), so it can repoint a row
+at an unrelated book's audio — see
+`todo.d/20260817-repair-missing-files-tier2-cross-book-repoint.md`. A silent preview→apply
+transition on *that* job is worse than either defect alone, and it is why the prod-ops lane read
+the tiers statically rather than running a prod dry run to test them. Fix the params divergence
+before anyone is asked to trust a dry run of a repointing job.
+
