@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-08-17-split-scan-ai-phase.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3f0c9a71-6d24-4e18-b5aa-71c2e0d4f9b3 -->
 <!-- last-edited: 2026-08-17 -->
 
@@ -24,10 +24,23 @@ Sampled the running production scan `01M070AVW1XHMH3C03CDRY5J4W` every 10s via
 Throughput over the same window: 723 books in 13.1 min = **0.92 books/s**.
 Excluding time attributed to `ai-parse`: **2.78 books/s**, a 3.0× difference.
 
-> ⚠️ **Scope of this number.** One 13.1-minute window of one folder of one scan.
-> It is enough to establish that the AI phase dominates, and not enough to quote
-> a whole-scan speedup. Re-measure over a longer window before using 3.0× in any
-> planning that depends on it.
+**Re-measured over a doubled window** (24.0 min, 121 samples, 14:18–14:42 UTC),
+which is the check the first table asked for:
+
+| phase | wall-clock | share |
+|---|---:|---:|
+| `ai-parse` | 16.7 min | **69.4%** |
+| `metadata` | 7.4 min | 30.6% |
+
+The split is stable — 66.9% at n=65 and 69.4% at n=121 — so the AI phase
+dominating is a property of the workload, not an artifact of when sampling
+started.
+
+> ⚠️ **Scope of these numbers.** Still one folder of one scan, 24 minutes of a
+> multi-hour run. Enough to establish that the AI phase dominates and that the
+> figure is stable; **not** enough to quote a whole-scan speedup, because folder
+> composition varies and the share of books needing AI parsing varies with it.
+> Re-measure across a folder boundary before using 3.0× in planning.
 
 Instantaneous rates within the window differ by more than an order of magnitude
 (4.7 books/s during a metadata stretch, 0.28 books/s across a stretch containing
