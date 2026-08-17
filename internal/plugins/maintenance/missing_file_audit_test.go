@@ -133,6 +133,45 @@ func TestMissingFileAudit_SkipsRowsWithNoPath(t *testing.T) {
 	}
 }
 
+// 🔴 "I COULD NOT TELL" IS NOT "IT IS NOT THERE".
+//
+// This is the op's most important safety property and the one a reader is most
+// likely to simplify away, because folding unreadable into missing makes the code
+// shorter and every other test still passes. It must not be folded: the Missing
+// count is what a bulk repair gets sized from, so a single unmounted share or a
+// permissions fault would otherwise report the ENTIRE library as lost and invite a
+// mass deletion of rows whose files are fine.
+//
+// The lever is a path containing a NUL byte. Go rejects it before the syscall, so
+// os.Stat returns "invalid argument" identically on every platform — no dependence
+// on filesystem permissions or on name-length limits that differ between a macOS
+// dev box and a Linux CI container.
+func TestMissingFileAudit_UnreadableIsNotCountedAsMissing(t *testing.T) {
+	_, rows := auditFixture(t)
+	rows = append(rows, database.BookFileCore{
+		ID: "f8", BookID: "unreadable", FilePath: "/tmp/cannot\x00stat.m4b",
+	})
+	got := runAudit(t, rows, missingFileAuditParams{})
+
+	if got.Unreadable != 1 {
+		t.Errorf("Unreadable = %d, want 1 — a stat that failed for any reason other than "+
+			"absence must be reported as undetermined", got.Unreadable)
+	}
+	if got.Missing != 3 {
+		t.Errorf("Missing = %d, want 3 — the unreadable row must NOT inflate the missing "+
+			"count that a repair is sized from", got.Missing)
+	}
+	// And it must not be silently counted as present either, which would hide it.
+	if got.Present != 3 {
+		t.Errorf("Present = %d, want 3", got.Present)
+	}
+	// A book whose only row is undetermined is not a book with no files left.
+	if got.BooksAllGone != 1 {
+		t.Errorf("BooksAllGone = %d, want 1 — the undetermined book must not be declared "+
+			"fully broken", got.BooksAllGone)
+	}
+}
+
 // The sample is what lets a human sanity-check the number before acting on it, so
 // it must actually name the missing paths and not, say, the present ones.
 func TestMissingFileAudit_SampleNamesMissingPathsOnly(t *testing.T) {
