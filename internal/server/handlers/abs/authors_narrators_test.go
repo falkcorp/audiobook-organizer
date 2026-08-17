@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/authors_narrators_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4f8b23e7-16c0-4d95-a3e2-58971bd0c4fa
-// last-edited: 2026-08-02
+// last-edited: 2026-08-17
 
 package abs_test
 
@@ -163,12 +163,20 @@ func TestNarrators_EveryEntryCarriesAnID(t *testing.T) {
 // Asserted through the HTTP RESPONSE rather than by calling the helper: a test that
 // recomputed the formula and compared it to itself would pass no matter what the
 // endpoint actually emits.
+// Fixtures must be names that survive SplitCreditNames intact, because the list is
+// now built from split credits (see contributorDTOs) and a compound fixture would
+// legitimately not appear under its original string. Escaping is a property of the
+// base64 OUTPUT, not of the input bytes, so nothing is lost by choosing them:
+// "Zoë O'Malley" encodes to Wm/DqyBPJ01hbGxleQ== — containing BOTH the '/' that
+// would break the image URL path and the '=' padding — which exercises the escape
+// harder than the old "a?b&c=d" did.
 func TestNarrators_IDMatchesTheRealABSFormula(t *testing.T) {
 	names := []string{
 		"Victor Bevine",
-		"Homer, transl. Samuel Butler", // comma + spaces
-		"Ellé Jones",                   // non-ASCII
-		"a?b&c=d",                      // characters that must survive escaping
+		// Comma + spaces, AND the surname-first form the splitter must NOT split.
+		"Butler, Samuel",
+		"Ellé Jones",   // non-ASCII
+		"Zoë O'Malley", // base64 contains '/' and '=' — both must survive escaping
 	}
 	w := newWriteHarness(t)
 	w.seed.lib.addNarrators(names...)
@@ -202,6 +210,21 @@ func TestNarrators_IDMatchesTheRealABSFormula(t *testing.T) {
 		if strings.Contains(got, "/") {
 			t.Errorf("id for %q = %q contains a raw '/', which breaks the image URL path", name, got)
 		}
+	}
+
+	// Guards the guard: if every fixture happened to base64-encode to a string with
+	// nothing to escape, the loop above would pass while asserting nothing about the
+	// escaping at all — the same vacuous-fixture trap the list-shape test documents.
+	escaped := false
+	for _, name := range names {
+		if raw := base64.StdEncoding.EncodeToString([]byte(name)); url.QueryEscape(raw) != raw {
+			escaped = true
+			break
+		}
+	}
+	if !escaped {
+		t.Fatal("no fixture produced a base64 id needing escaping, so this test proves nothing " +
+			"about encodeURIComponent — pick a name whose base64 contains '+', '/' or '='")
 	}
 }
 

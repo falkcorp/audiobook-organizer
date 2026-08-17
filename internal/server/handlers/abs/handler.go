@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-08-13
+// last-edited: 2026-08-17
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -271,12 +271,16 @@ type Handler struct {
 	itemsCountMu sync.Mutex
 	itemsCount   map[string]itemsCountEntry
 
-	// authorsCache holds the fully-built author list. The client requests up to 93
-	// consecutive pages of it (jump-to-letter), and building it walks the whole
-	// library — see authorDTOsCached in browse.go.
+	// authorsCache holds the fully-built contributor index: the author and narrator
+	// lists AND the book ids behind each entry. The client requests up to 93
+	// consecutive pages of the author list (jump-to-letter), and building it walks
+	// the whole library — see authorDTOsCached in browse.go.
+	//
+	// 🔴 ONE POINTER, NOT PARALLEL SLICES. The lists and the id maps are published
+	// together or not at all, so a drill-down can never be answered from a different
+	// build than the tile whose count the user just read.
 	authorsCacheMu sync.Mutex
-	authorsCache   []authorDTO
-	narratorsCache []narratorDTO
+	authorsCache   *contributorIndex
 	authorsCacheAt time.Time
 
 	// seriesBooksCache maps series id → the visible books in that series.
