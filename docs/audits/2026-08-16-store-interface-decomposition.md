@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-16-store-interface-decomposition.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 70654a6c-a4b1-42c7-a06f-ff48ba1783d7 -->
 <!-- last-edited: 2026-08-17 -->
 
@@ -451,8 +451,10 @@ Deleting the 42 config entries is a config-only change, guarded by the real `moc
 **Should `MaintenanceJob.Run` be redesigned?** The agents take opposite positions and both
 arguments are good.
 
-- **Go agent — no.** It is a real framework boundary; re-typing it is a **31-file atomic edit**
-  that cannot be waved. But the interface dictates `Run` and *nothing else*: the free helper
+- **Go agent — no.** It is a real framework boundary; re-typing it is a **37-file atomic edit**
+  that cannot be waved. (The agent said 31; measured 2026-08-17 it is 37 — 37 `Run` receivers,
+  37 files, 37 non-test `maintenance.Register` calls, one each. The argument gets stronger, not
+  weaker.) But the interface dictates `Run` and *nothing else*: the free helper
   functions beneath it (`vgUnlinkOutliers`, `csMergeSeriesGroup`, `ddSoftDeleteBook`,
   `deleteOldOperations`, …) chose `database.Store` with nothing compelling them, and measure 1-4
   methods each. Narrow the layer below; allowlist `Run`. Fully mechanical, no framework change,
@@ -463,7 +465,7 @@ arguments are good.
   "narrow it when you touch it anyway" is weakest. If a sweep happens at all, that package
   *with* the `Run` redesign in scope is the only version it would defend.
 
-**My recommendation: the go agent's.** Same volume captured, no 31-file atomic edit, and it
+**My recommendation: the go agent's.** Same volume captured, no 37-file atomic edit, and it
 leaves the redesign available later. But the reviewer's objection is not answered by my
 recommendation — it is deferred by it, and you should know that.
 

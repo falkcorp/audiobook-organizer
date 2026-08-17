@@ -7,7 +7,8 @@
     `database.Store` parameter: **37** `Run` methods (interface-constrained, not narrowable),
     **10** other methods, **34** free functions — of which 33 are narrowable helpers
     (`maintenance.InjectStore` is the framework's injection setter). Corroborated independently:
-    `maintenance.Register(` appears exactly 37 times.
+    `maintenance.Register(` appears exactly 37 times in non-test code (40 raw — three are test
+    probes in `internal/server`).
 
   - **A circulated derivation is retracted.** The figure had been justified as *"55 functions
     minus 20 `Run` implementations = 35."* Both operands are wrong — 81 and 37 — and the answer
