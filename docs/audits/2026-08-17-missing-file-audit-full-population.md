@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-17-missing-file-audit-full-population.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 75babbdd-5bf3-41e9-a8ba-5281df2898f9 -->
 <!-- last-edited: 2026-08-17 -->
 
@@ -214,14 +214,35 @@ is precisely the population the safety rule waves through.
    `Method` + `NewPath` — i.e. a dry run yields a repoint *plan*, which is exactly
    the artifact step 1 needs.
 
-   🔴 **Unmeasured, and do not read it as "the fix already exists":** whether its
-   candidate search resolves the track-slash shape at all. Our rows carry an extra
-   real directory level and a basename of `131.mp3`, which resembles neither the
-   title nor the final filename, so a basename- or similarity-keyed search may
-   simply miss them. The cheap test is a dry run scoped to the 101 rows verified
-   recoverable in §3 — they plus the two planted-absent controls make it a
-   measurement rather than a smoke test. 101/101 resolving means nothing needs
-   building; anything less names the shapes that do.
+   🔴 **NOW MEASURED — it does not resolve this shape, and one tier can actively
+   corrupt.** The maintenance lane flagged this as unmeasured; reading the four
+   candidate tiers against our row
+   `…/Blue Ant 3 - Zero History/Zero History - 70/131.mp3` (true file:
+   `…/Blue Ant 3 - Zero History/Zero History - 70.mp3`) answers it without a prod
+   run:
+
+   | tier | mechanism | on a track-slash row |
+   |---|---|---|
+   | 1 | iTunes PID → XML Location (`:281`) | **miss** — organizer-tree rows have no `ITunesPersistentID` |
+   | 2 | exact basename in filename index (`:292`) | looks up `131.mp3`; true file is `Zero History - 70.mp3` → **never matches the right file** ⚠️ see below |
+   | 3 | stem-prefix within the same directory (`:341`) | `os.ReadDir` on the phantom parent — **all 25 measured parents are ABSENT**, so this always fails |
+   | 4 | author + title-prefixed album dir (`:366`) | stats `<album>/131.mp3` (absent); its fallback accepts only an album holding **exactly one** audio file, and these books hold 130+ → **miss** |
+
+   ⚠️ **Tier 2 is not merely a miss — it is a silent cross-book corruption risk.**
+   When the index holds exactly one path for the stored basename it accepts it as
+   `method="filename"` with no check that the file belongs to the same book, and
+   only the *multi*-match branch narrows by parent directory and author. Measured
+   on the live tree: **4,082 files have bare-digit names**, across **517 distinct
+   basenames, of which 170 appear exactly once** — so the unverified auto-accept
+   branch is reachable, and a hit would repoint the row at an unrelated book's
+   audio. (Controls in the same call: normal-named mp3s under one author = 35;
+   a planted nonexistent name = 0.)
+
+   **Conclusion: repoint capability for this population must be built, not merely
+   wired up.** The correct target is derived from the *new* naming default and
+   must be `os.Stat`-verified before the write. `repair-missing-files` remains
+   useful as a model for the write itself (`UpdateBookFile` field set at `:566`)
+   and for its dry-run-returns-a-plan shape — not for its candidate search.
 
    ⚠️ **Naming trap, and it has already caused one published error.** These two are
    near-mirrors with opposite mutations — distinguish them by path, never by name:
