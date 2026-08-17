@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-08-17-split-scan-ai-phase.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 3f0c9a71-6d24-4e18-b5aa-71c2e0d4f9b3 -->
 <!-- last-edited: 2026-08-17 -->
 
@@ -114,22 +114,23 @@ Measured cost of the throttle: 13 batches took ~4m32s ≈ 21s/batch, of which 2s
 is the deliberate sleep — roughly **10% of AI time spent sleeping**, and AI time
 is 67% of the scan.
 
-**This is separable from the risky part.** Removing the sleep and giving the
-batch loop modest concurrency does **not** move when writes happen — batches are
-disjoint index ranges into the same `books` slice, applied in memory before
-`saveBookToDatabase` exactly as today. So it carries none of the whole-row
-`UpdateBook` hazard below, and it can ship on its own.
+**Removing the sleep is separable from the risky part.** It does not move when
+writes happen, so it carries none of the whole-row `UpdateBook` hazard above, and
+it can ship on its own.
 
 Suggested first PR, independent of everything else in this document:
 
 1. Make the inter-batch delay conditional on the backend being remote (0 for
-   local), rather than an unconditional constant.
-2. Give the batch loop a small bounded worker pool, sized conservatively (2–4)
-   and configurable.
-3. Re-measure the phase split and compare against the table above.
+   local), rather than an unconditional constant. Worth ~10% of AI time.
+2. Re-measure the phase split and compare against the table above.
 
-**Does the GPU serialize? Measured directly against `<llm-host>:11434`,
-2026-08-17, while the production scan was running:**
+That is the whole list. **A worker pool is deliberately NOT on it** — see below.
+
+## 🔴 RETRACTED: do not add concurrency to the AI batch loop
+
+An earlier revision of this document recommended giving the batch loop a bounded
+worker pool of 2–4. **That recommendation was wrong and is withdrawn.** It rested
+on this probe, run against the LLM host while the production scan was running:
 
 | shape | wall-clock | speedup vs serial |
 |---|---:|---:|
@@ -137,16 +138,61 @@ Suggested first PR, independent of everything else in this document:
 | concurrent, n=3 | 0.44s | 1.86× |
 | concurrent, n=6 | 0.67s | 2.43× |
 
-So the host does **not** serialize internally — concurrency buys real throughput,
-sub-linearly, and client-side parallelism is worth adding.
+The probe used **8-token completions of a trivial prompt at ~0.27s each**, while a
+real batch is 20 filenames taking ~21s. Those sit at opposite ends of the
+prefill/decode curve, so what the probe actually measured was **request-latency
+headroom, not compute headroom.** The document flagged that caveat and then made
+the recommendation anyway.
 
-> ⚠️ **What this probe does not show.** It used 8-token completions of a trivial
-> prompt at ~0.27s each; a real batch is 20 filenames and takes ~21s. Those sit
-> at opposite ends of the prefill/decode curve, so a short-prompt result is
-> latency-bound while a real batch is far more compute-bound. **Do not carry
-> 2.43× over to production batches.** It establishes only that the server accepts
-> concurrent work with sub-linear cost. Re-run the same probe with realistic
-> 20-filename batches before choosing a pool size.
+Direct measurement of the GPU settles it. Sampled every 5s for 25s while the scan
+was in its AI phase:
+
+```
+util 92–93%   temp 95–97 C   clock 1860 MHz (max 2130)   vram 6.7/8.0 GB
+```
+
+At 92–93% utilization the device is **saturated**. Client-side concurrency cannot
+create throughput that is not there; it would only deepen the queue.
+
+### The GPU was hardware-throttling the whole time
+
+From the card's own telemetry, 2026-08-17:
+
+```
+GPU Current Temp        : 97 C
+GPU Shutdown Temp       : 95 C      <-- running ABOVE its own shutdown spec
+GPU Slowdown Temp       : 92 C
+GPU Max Operating Temp  : 88 C
+GPU Target Temperature  : 83 C
+
+HW Slowdown             : Active
+  HW Thermal Slowdown   : Active
+HW Thermal Slowdown ctr : 8,737,239,236 us   (~2h 25m cumulative)
+```
+
+Clocks were pinned at 1860 MHz against a 2130 MHz maximum — about **87% of rated
+clock**, held down by hardware thermal slowdown, not by anything in this codebase.
+
+The scan was cancelled on operator instruction. Within 70s of the load stopping:
+97 C → 61 C, utilization 93% → 7%, and the latched HW Thermal Slowdown cleared.
+A 36 C drop that fast means the cooler does move heat — this is sustained
+100%-duty inference exceeding what that cooling can hold, not a failed fan.
+(`nvidia-smi` reports `[Unknown Error]` for fan speed on this card, which remains
+unexplained and is worth a physical check.)
+
+### What this does to the 69.4% figure
+
+The phase-split measurement above stands — AI parsing really did consume 69.4% of
+scan wall-clock. But its **cause is not purely architectural.** An unknown share
+of it is the card running at 87% clock under thermal slowdown. Any re-measurement
+of the split, and any before/after comparison for the sleep removal, must record
+GPU temperature and clock alongside it, or it will attribute a thermal effect to
+a code change.
+
+**Before optimising this phase in software, fix the thermals.** Recovering
+1860 → 2130 MHz is ~14.5% on the phase that is ~69% of the scan, for zero code
+risk, and it is the only change here that makes the hardware safer rather than
+working it harder.
 
 ## Proposed shape
 
@@ -208,9 +254,14 @@ and can stay. No schema change, no data migration.
 - ~~Is the AI backend local or hosted?~~ **Answered: local Ollama at
   `<llm-host>:11434`.** See the throttle section above — this makes the
   2s inter-batch sleep unjustified and promotes it to the first PR.
-- Does the Ollama host serve concurrent completion requests faster than serially,
-  or does a single 7B model on one GPU serialize internally? This decides whether
-  step 2 of the throttle fix is worth anything. Must be measured against the
-  backend directly, not inferred.
+- ~~Does the Ollama host serve concurrent completion requests faster than
+  serially?~~ **Answered, and it closes the question rather than opening a PR:**
+  the GPU sits at 92–93% utilization under the existing serial load, so there is
+  no compute headroom for a client-side pool to claim. See the retraction section.
+- **New, and it belongs to the hardware, not this codebase:** why does the card
+  reach 97 C — above its own 95 C shutdown spec — under sustained inference, and
+  why does `nvidia-smi` report `[Unknown Error]` for fan speed? Until that is
+  answered, any AI-phase timing measured on this host is confounded by thermal
+  throttling.
 - Does anything downstream depend on AI-derived fields being present at the
   moment `saveBookToDatabase` returns?
