@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_audit.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4e1c7a92-3b58-4d06-9f21-8c5a0e7b3d64
 // last-edited: 2026-08-17
 
@@ -24,16 +24,33 @@ import (
 // --- missing-file-audit ---
 //
 // 🔴 WHY THIS EXISTS. Downloads fail with "file not found" because a large share
-// of book_file rows point at paths that hold no bytes. Measured on the live
-// library 2026-08-17 over a 120-book sample: 552 of 1,322 rows (41.8%) were
-// missing, and 49 of the 120 books (41%) had at least one dead file. Five books
-// had NO surviving file at all.
+// of book_file rows point at paths that hold no bytes.
 //
-// The shape is specific and it is what makes this worth its own op: EVERY missing
-// path was under the organizer's own destination tree
-// (/mnt/bigdata/books/audiobook-organizer/...), while nothing under the iTunes
-// tree was missing. The typical broken book carries two rows — a phantom at the
-// organized path and the real file still in the iTunes tree:
+// ⚠️ THE NUMBERS BELOW CAME FROM A 120-BOOK SAMPLE AND THE FULL POPULATION
+// CONTRADICTS THEM IN BOTH DIRECTIONS. Superseded 2026-08-17 by a full-library
+// run of this op (all 532,296 rows) — see
+// docs/audits/2026-08-17-missing-file-audit-full-population.md:
+//
+//	                                  120-book sample   full population
+//	rows missing                      41.8%             13.52%  (71,954/532,296)
+//	books with NO surviving file      5                 16,265
+//	missing rows under the iTunes tree  0 ("nothing")   1,006
+//
+// So the sample overstated the row rate by 3x and understated the
+// books-with-nothing-left count by more than three orders of magnitude. Sampling
+// error alone does not produce that; treat the sample figures as retired, not as
+// a rough guide. `unreadable` is 0 across all 532,296 rows, so none of this is a
+// flapping mount.
+//
+// 🔴 The "EVERY missing path was under the organizer's own tree, nothing under
+// iTunes" claim below is FALSE as written — 1,006 missing rows are under the
+// iTunes tree, and 61 carry a mangled "/X:/books/itunes/Audiobooks" path. The
+// claim was true of the sample and was never true of the library. It is kept
+// here rather than deleted because the two-row shape it describes is real and
+// still the common case; only the "EVERY"/"nothing" quantifiers were wrong.
+//
+// The typical broken book carries two rows — a phantom at the organized path and
+// the real file still in the iTunes tree:
 //
 //	MISSING .../audiobook-organizer/Morgan Rice/.../A Vow of Glory - ... .m4b
 //	OK      .../itunes/iTunes Media/Audiobooks/Morgan Rice/01 The Sorcerer's ... .m4b
