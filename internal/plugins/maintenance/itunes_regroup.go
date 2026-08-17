@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-07-16
+// last-edited: 2026-08-17
 
 package maintenance
 
@@ -126,7 +126,7 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 // tens of thousands of per-PID / per-book point queries (which made the dry-run
 // take >10min on a 65K/308K library). The file scan yields PID→location directly
 // from BookFile.ITunesPersistentID, so no per-PID lookups are needed. No mutation.
-func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store database.Store, reporter sdk.Reporter) (itunesservice.Snapshot, error) {
+func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store regroupSnapshotReader, reporter sdk.Reporter) (itunesservice.Snapshot, error) {
 	snap := itunesservice.Snapshot{
 		PIDLoc: make(map[string]itunesservice.PIDLoc),
 		Books:  make(map[string]itunesservice.BookMeta),
@@ -244,7 +244,7 @@ func enrichScore(b *database.Book) int {
 // target (creating a fresh book when the target was contested), set the canonical
 // title, then delete books that end empty — re-asserting no files AND no ext-id
 // mappings before each delete (the canary lesson: zero files ≠ zero PID mappings).
-func (p *Plugin) applyRegroupPlan(ctx context.Context, store database.Store, plan itunesservice.RegroupPlan, reporter sdk.Reporter) error {
+func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore, plan itunesservice.RegroupPlan, reporter sdk.Reporter) error {
 	touched := make(map[string]bool)
 	var moved, titled, created, deleted, deleteSkipped, errCount int
 

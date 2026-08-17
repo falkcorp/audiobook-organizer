@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_audit.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e1c7a92-3b58-4d06-9f21-8c5a0e7b3d64
 // last-edited: 2026-08-17
 
@@ -188,7 +188,7 @@ func (p *Plugin) runMissingFileAudit(ctx context.Context, rawParams json.RawMess
 // scraped from a progress string — the counts are the entire product of this op and
 // a destructive repair will be sized from them, so they deserve to be tested
 // directly.
-func auditMissingFiles(ctx context.Context, store database.Store, params missingFileAuditParams, reporter sdk.Reporter) (missingFileReport, error) {
+func auditMissingFiles(ctx context.Context, store bookFileCoreScanner, params missingFileAuditParams, reporter sdk.Reporter) (missingFileReport, error) {
 	sampleLimit := params.SampleLimit
 	if sampleLimit <= 0 {
 		sampleLimit = missingFileSampleLimit

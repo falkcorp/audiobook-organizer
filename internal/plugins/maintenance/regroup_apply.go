@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
-// last-edited: 2026-08-06
+// last-edited: 2026-08-17
 
 // Package maintenance — the APPLY path for the regroup review queue (PR-B2).
 //
@@ -146,7 +146,7 @@ func ApplyMultidisc(store database.Store, combiner bookCombiner) func(context.Co
 //     between a pre-tagged file's track and a freshly-sequenced one.
 //   - Backward compatible: a hold written before DiscNumbers/TrackNumbers existed has
 //     empty arrays → no-op.
-func applyDiscTrackNumbers(store database.Store, survivorID string, p regroupPayload) (int, error) {
+func applyDiscTrackNumbers(store bookFileTrackWriter, survivorID string, p regroupPayload) (int, error) {
 	if len(p.DiscNumbers) == 0 || len(p.TrackNumbers) == 0 {
 		return 0, nil // old payload or a non-confident kind — nothing to assign
 	}
@@ -196,7 +196,7 @@ func applyDiscTrackNumbers(store database.Store, survivorID string, p regroupPay
 // MergeBooks soft-deletes the loser, but a version group must keep BOTH editions
 // visible (the user picks which to play). The group-ID-reuse mirrors
 // merge/service.go: reuse an existing VersionGroupID if any member already has one.
-func ApplyVersionGroup(store database.Store) func(context.Context, database.ReviewItem) error {
+func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.ReviewItem) error {
 	return func(ctx context.Context, item database.ReviewItem) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -346,7 +346,7 @@ func decodeRegroupPayload(item database.ReviewItem) (regroupPayload, error) {
 // like a vanished one, or CombineBooks would move a corpse's files onto a
 // survivor (and the corpse, holding the smallest ULID, could even be picked as
 // the survivor itself).
-func presentMembers(store database.Store, ids []string) ([]string, error) {
+func presentMembers(store bookByIDReader, ids []string) ([]string, error) {
 	present := make([]string, 0, len(ids))
 	for _, id := range ids {
 		b, err := store.GetBookByID(id)

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.18.0
+// version: 3.19.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-08-11
+// last-edited: 2026-08-17
 
 package maintenance
 
@@ -786,7 +786,7 @@ func (p *Plugin) processTranscribePage(
 // produced a transcript this run (OK or Unparsed), which the caller counts as
 // processed.
 func (p *Plugin) applyOutcome(
-	store database.Store,
+	store bookUpdater,
 	log interface {
 		Info(string, ...any)
 		Warn(string, ...any)
@@ -891,7 +891,7 @@ func firstAudioFile(store database.Store, book database.Book) (path, cacheKey, b
 // The book-level FilePath fallback (for single-track iTunes imports with no
 // BookFile rows) is only used when n==0 and no BookFile records exist.
 // Cache key priority: FileHash > fp:sha256(AcoustIDFingerprint) > path:sha256(FilePath).
-func nthAudioFile(store database.Store, book database.Book, n int) (path, cacheKey, bookFileID string, err error) {
+func nthAudioFile(store bookFileLister, book database.Book, n int) (path, cacheKey, bookFileID string, err error) {
 	files, err := store.GetBookFiles(book.ID)
 	if err != nil {
 		return "", "", "", err

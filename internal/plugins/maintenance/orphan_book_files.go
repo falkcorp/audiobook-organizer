@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9d2c4f6a-8e1b-4c5d-9a7b-3e5f1a2c4b6d
-// last-edited: 2026-08-13
+// last-edited: 2026-08-17
 
 package maintenance
 
@@ -216,7 +216,7 @@ func (p *Plugin) runOrphanBookFilesCleanup(ctx context.Context, raw json.RawMess
 // This is the testable core of runOrphanBookFilesCleanup. It does not delete
 // anything — callers that want to delete pass the resulting IDs to
 // Store.DeleteBookFilesByIDs themselves, in chunks.
-func findOrphanBookFiles(ctx context.Context, store database.Store) (orphans []database.BookFileCore, totalFiles int, ownerCount int, err error) {
+func findOrphanBookFiles(ctx context.Context, store orphanFileScanner) (orphans []database.BookFileCore, totalFiles int, ownerCount int, err error) {
 	if ctx.Err() != nil {
 		return nil, 0, 0, ctx.Err()
 	}

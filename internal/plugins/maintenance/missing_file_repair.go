@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_repair.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 50b5022c-9d86-467d-991e-2be9cddf4847
 // last-edited: 2026-08-17
 
@@ -15,7 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -154,7 +153,7 @@ func (p *Plugin) runMissingFileRepair(ctx context.Context, rawParams json.RawMes
 // planMissingFileRepair stats every candidate row and decides, per BOOK, what is
 // safe to prune. Returned as a value so the decisions can be asserted directly in
 // tests rather than inferred from side effects.
-func planMissingFileRepair(ctx context.Context, store database.Store, params missingFileRepairParams, reporter sdk.Reporter) (repairPlan, error) {
+func planMissingFileRepair(ctx context.Context, store bookFileCoreScanner, params missingFileRepairParams, reporter sdk.Reporter) (repairPlan, error) {
 	log := reporter.Logger()
 	maxDeletes := params.MaxDeletes
 	if maxDeletes <= 0 {
@@ -285,7 +284,7 @@ func planMissingFileRepair(ctx context.Context, store database.Store, params mis
 // applyMissingFileRepair executes a plan. Every deleted path is logged before the
 // delete, so the change is reconstructible from the operation log rather than
 // merely gone.
-func applyMissingFileRepair(ctx context.Context, store database.Store, plan repairPlan, reporter sdk.Reporter) (int, error) {
+func applyMissingFileRepair(ctx context.Context, store bookFileBulkDeleter, plan repairPlan, reporter sdk.Reporter) (int, error) {
 	log := reporter.Logger()
 	deleted := 0
 	for off := 0; off < len(plan.RowsToDelete); off += missingFileRepairDeleteBatch {

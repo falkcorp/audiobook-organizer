@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_unlinked.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c17b493a-8d02-4f65-b9e1-604a8f2371cd
-// last-edited: 2026-08-05
+// last-edited: 2026-08-17
 
 // Package maintenance — op maintenance.relink-unlinked-books.
 //
@@ -366,7 +366,7 @@ func relinkOne(store database.Store, f linkintegrity.Finding) (int, error) {
 // createBookFileFor inserts one book_file row. Fields are limited to what can be
 // known without probing the file; everything else is left for the existing
 // backfill ops, which are idempotent.
-func createBookFileFor(store database.Store, b *database.Book, path string, durationSec, track int) error {
+func createBookFileFor(store bookFileCreator, b *database.Book, path string, durationSec, track int) error {
 	var size int64
 	if st, err := os.Stat(path); err == nil {
 		size = st.Size()

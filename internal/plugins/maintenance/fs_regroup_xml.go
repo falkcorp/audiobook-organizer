@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-07-07
+// last-edited: 2026-08-17
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -203,7 +203,7 @@ func (p *Plugin) runFSRegroupXML(ctx context.Context, raw json.RawMessage, repor
 // folder path, reassign any external-ids off the deleted shells, then delete the
 // emptied non-survivor chapter books. Lean by design — stat-only per file, no hashing
 // (the tag-backfill op fills RawTags/hashes after). Recompute aggregates per survivor.
-func (p *Plugin) applyFSRegroup(ctx context.Context, store database.Store, targets []itunesservice.FSRegroupTarget, limit int, reporter sdk.Reporter) error {
+func (p *Plugin) applyFSRegroup(ctx context.Context, store fsRegroupStore, targets []itunesservice.FSRegroupTarget, limit int, reporter sdk.Reporter) error {
 	var (
 		healedBooks, filesAttached, deleted, deleteSkipped, skippedMixed, errCount int
 		lastLog                                                                    = time.Now()
