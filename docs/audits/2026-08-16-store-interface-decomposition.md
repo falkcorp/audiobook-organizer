@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-16-store-interface-decomposition.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 70654a6c-a4b1-42c7-a06f-ff48ba1783d7 -->
 <!-- last-edited: 2026-08-16 -->
 
@@ -44,30 +44,108 @@ The honest sentence about the trend is: **the sweep's gain has been about 60% er
 growth, and has not passed the pre-sweep baseline.** That is still a real trend worth acting
 on — see §9 — but it is not the emergency the earlier framing implied.
 
-### The instrument that works
+### The instrument that works — for the *trend*
 
 ```bash
 git grep -n "database\.Store\b" <ref> -- internal/ cmd/ \
   | grep -v "_test\.go" | grep -vE ':[0-9]+:[[:space:]]*//' | wc -l
 ```
 
-**This is still only indicative.** It cannot see the two type aliases (§6) and it cannot
-distinguish a parameter from a struct field. The gate in §8 must count with `go/types`, not
-grep. Publish both numbers and label the grep one.
+Comparable across refs, so the three-point trend above is sound. **It is not a baseline.**
+See §2b.
+
+---
+
+## 2b. The AST baseline: **338**, and grep undercounts it by 15%
+
+Computed with `golang.org/x/tools/go/packages` at full type resolution (143 packages, 0 load
+errors), counting declarations whose **resolved type is** `database.Store`, non-test, excluding
+generated `/mocks/` packages. This is the number the gate keys on.
+
+| category | count |
+|---|---|
+| function parameter | **280** |
+| struct field | **35** |
+| function result | 8 |
+| package/local var | 6 |
+| interface method **result** | 4 |
+| interface method **param** | 3 |
+| type alias | 2 |
+| **TOTAL** | **338** across **35 packages** |
+
+Top packages: `internal/database` **87** · `internal/maintenance/jobs` **59** ·
+`internal/server` **44** · `internal/plugins/maintenance` **24** · `internal/dedup` 15.
+
+**Three things grep structurally cannot see**, all confirmed here:
+
+1. **Uses inside `internal/database` itself.** Within that package the type is spelled `Store`,
+   not `database.Store`. Grep finds **11** declarations there; the AST finds **87**. That single
+   package hides **76** — and it is the largest holder in the codebase.
+2. **The two type aliases' use sites.** `type Store = database.Store` and
+   `type OrganizeStore = database.Store` mean every downstream use says `Store` / `OrganizeStore`.
+   `go/types` collapses aliases to the same `*types.Named`, so they are counted automatically.
+3. **The category.** Grep cannot tell a parameter (free to narrow, §8) from a struct field (not
+   free). That distinction decides the migration order and grep is blind to it.
+
+### Rule 1's population is **7**, not 6 — and the seventh explains the blind spot
+
+Both hand-scanners in §3 reported 6. `go/types` finds a seventh:
+
+```
+internal/maintenance/job.go:56           MaintenanceJob.Run                    param
+internal/plugins/maintenance/deps.go:22  ServerDeps.ExecuteSeriesPrune         param
+internal/plugins/maintenance/deps.go:22  ServerDeps.ExecuteSeriesNormalizeCore param
+internal/database/store_capability.go:68 StoreUnwrapper.Unwrap                 result   ← MISSED
+internal/plugins/maintenance/deps.go:22  ServerDeps.Store                      result
+internal/server/library_list_warmer.go:152 storeUnwrapper.Unwrap               result
+internal/server/server.go:1177           unwrapper.Unwrap                      result
+```
+
+`StoreUnwrapper.Unwrap` is the *root* of the capability pattern — the one declaration §6 calls
+the single genuinely structural blocker — and **both text scanners missed it**, because it lives
+in `internal/database` and says `Store`. The instrument was blind to the most important member of
+the population it was counting.
+
+**Package globals, after excluding blank-identifier assertions and one function-local
+(`store.go:1245`): three**, exactly as reported in §5 — `internal/database/store.go:1217`
+`globalStore`, `internal/maintenance/job.go:73` `store`, `internal/scanner/scanner.go:171`
+`pkgStore`.
+
+### Reproducing it
+
+The analyzer is ~200 lines and lives outside the repo (a standalone module; it never touches
+`go.mod`). **It carries a self-test** asserting three hand-verified canary sites and exits
+non-zero if the total is 0 or any canary is missing. That guard exists because **its first run
+reported a confident `TOTAL = 0`** — `packages.NeedCompiledGoFiles` is not implied by
+`NeedFiles`, so `CompiledGoFiles` was empty and every file was silently skipped. Zero looked
+exactly like a measurement. Any gate built from this must keep the canaries; see §12.
 
 ---
 
 ## 3. Method, and the instruments that failed
 
-Four measurements in this investigation returned confident, wrong answers. They are recorded
-because the same traps apply to anyone re-running this.
+**Six** measurements in this investigation returned confident, wrong answers. They are recorded
+because the same traps apply to anyone re-running this — and because two of them were caught
+only by a *second, differently-keyed* instrument disagreeing.
 
 | Instrument | Wrong answer | Correct | Failure mode |
 |---|---|---|---|
 | `git grep 'database\.Store'` | 507 occ / 201 files | 286 / 152 | counts comments |
+| the same, as a *baseline* | 286 | **338** (§2b) | blind to `internal/database`'s own 87 declarations, which say `Store` |
 | `grep 'mocks\.MockX'` for mock usage | 8 of 45 used | **3 of 45** | `mocks.` also matches `handlersmocks.`, `dedupmocks.`, … |
 | the same, restricted to importers of `database/mocks` | 2 of 45 used | **3 of 45** | package is imported under **three aliases** — `mocks` (33 files), `dbmocks` (20), `databasemocks` (4) |
 | `gawk` block-scan for interface bodies | 8 sites | **6** | `type vgBackfiller interface{ … }` on one line — the scanner opened a block that never closed and swallowed the next 30 lines |
+| the `go/packages` analyzer, first run | **`TOTAL = 0`** | 338 | `packages.NeedCompiledGoFiles` is not implied by `NeedFiles`; `CompiledGoFiles` was empty so every file was skipped |
+
+**The two text scanners that agreed on 6 were both wrong** — `go/types` found 7, and the one they
+missed (`StoreUnwrapper.Unwrap`) is the single most important member of the population. Agreement
+between two instruments that share a blind spot is not corroboration.
+
+**And `TOTAL = 0` is the most dangerous result in the list**, because nothing about it looks like
+a failure. It is why the analyzer now carries canary assertions and exits non-zero when they are
+missing. This repo already has one gate — `check-mock-fresh` — that has looked like enforcement
+and enforced nothing for months (§11). **Before trusting the §10 gate, feed it a deliberately bad
+input and confirm it fails.**
 
 Three separate greps gave three different mock counts (8 / 3 / 2). Only resolving each
 importing file's actual local alias settled it. **The rule that held: when two differently-keyed
@@ -352,7 +430,7 @@ Ordered so each step is independently valuable and none blocks on the next.
 |---|---|---|---|
 | 1 | **Delete the 42 unused mockery entries** + `internal/scanner/mocks` + `internal/operations/mocks` | ~41,200 lines removed, config-only | none — gated by `mocks-check` |
 | 2 | **Fix or delete `check-mock-fresh`** (`Makefile`) — it runs `go generate` where the repo has **zero** `//go:generate` directives, so it can never fail, and it runs in `make ci` | one target | none |
-| 3 | **Land the gate.** Rule 1 (no `database.Store` in interface method signatures, incl. inline literals), Rule 2 (AST-counted shrink-only baseline keyed on `package:Symbol`), Rule 3 (no `type X = database.Store`) | CI only | **must be tested with a deliberately-bad input before merge** — see §11 |
+| 3 | **Land the gate.** Rule 1 (no `database.Store` in interface method signatures, incl. inline literals — **population 7**, §2b), Rule 2 (shrink-only ratchet keyed on `package:Symbol`, **baseline 338**, §2b), Rule 3 (no `type X = database.Store`) | CI only | **must be tested with a deliberately-bad input before merge** — see §12 |
 | 4 | **Six keystone signatures** — one line each, unblocks every "blocked by callee" site found | 6 lines | measured: §8 |
 | 5 | **Write the missing design doc** at the path `internal/database/store.go:17` already cites | docs | none |
 | 6 | **Split `iface_misc.go`** — 25 of the 40 sub-interfaces live in one 18.6 KB file | pure move | `go build` verifies |
@@ -468,9 +546,11 @@ narrowable helpers; the 41 scanner `getStore()` sites; findings 10 and 11.
 - Which side wins the `wire_abs_routes.go:494` race. The race is certain; the outcome is not.
 - Whether zero-method leaf sites propagate via plain field assignment — the analyzer was blind to
   `x.store = store`, 58 candidate sites, hand-verified n=1.
-- The AST/`go/types` baseline the gate needs. Specified in §10, **not computed.** Expect it near 286
-  minus comments, plus the alias-hidden sites. **Step 3 cannot be scoped without it.**
-- The §8 experiment is n=1 on parameters and says nothing about struct fields.
+- ~~The AST/`go/types` baseline the gate needs.~~ **Computed: 338.** See §2b. My earlier estimate
+  ("near 286") was low by 18% — I had not anticipated that `internal/database`'s own 87
+  declarations are invisible to the grep.
+- The §8 experiment is n=1 on parameters and says nothing about struct fields — and §2b now puts
+  a number on that gap: **35 struct fields**, each needing its own `go build` check.
 
 **One process requirement, from this repo's own history.** `check-mock-fresh` has looked like
 enforcement and enforced nothing for months. Before trusting the §10 gate, **feed it a deliberately
