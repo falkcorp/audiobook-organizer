@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-17-missing-file-audit-full-population.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 75babbdd-5bf3-41e9-a8ba-5281df2898f9 -->
 <!-- last-edited: 2026-08-17 -->
 
@@ -437,7 +437,94 @@ matters because it means one repoint implementation will not cover both:
   `repair-missing-files` tier 2 (§4). The iTunes tree is hands-off for writes;
   everything here was read-only.
 
-## 9. Open items this leaves behind
+## 9. Relink vs remove — and how to verify a relink
+
+`repair-missing-files` dry run, op `01M08FE40VYSMXC7HG2THFHJ6H`, triggered with an
+**explicit** `{"dry_run": true}` rather than relying on the advertised default
+(prod advertises `dry_run:true`; the control `backfill-file-hashes` advertises
+`false`, so the field discriminates).
+
+| outcome | rows |
+|---|---|
+| **could relink** | **22,922** |
+| unresolved — no candidate | **47,920** |
+| ambiguous — refused to guess | **1,034** |
+| *classified* | *71,876 of 71,954* |
+
+By method — and the second row is the problem:
+
+| method | rows |
+|---|---|
+| `pid` (iTunes PID → XML) | 9,104 |
+| **`filename` (unverified tier-2 auto-accept)** | **8,128** |
+| `author_title` | 4,486 |
+| `flat_stem` | 1,193 |
+| `truncation` | 11 |
+
+🔴 **35% of proposed relinks use the one method with no same-book check.** §4's
+row-side measurement (1 singleton in 102 sampled basenames) said this fires
+*rarely in the track-slash population* — that still holds, and it is exactly why
+it under-called the whole-library figure. The sample was not drawn from where
+this method fires. 8,128 is the number that matters.
+
+⚠️ **Correction:** §4 says "four tiers". There are **five** — a tier 4b
+`flat_stem` (`:435`) handles flat iTunes author dirs. It does not rescue the
+track-slash shape (stored stem `131` matches nothing), so §4's conclusion stands,
+but the count was wrong.
+
+### What can actually verify a relink — measured
+
+Signal coverage across 2,077 `book_file` rows of the 60 fully-broken books:
+
+| signal | coverage |
+|---|---|
+| `duration` | **100%** |
+| `file_size` | **100%** |
+| `track_number` | 91.8% |
+| `original_filename` | 12.5% |
+| `file_hash` | 2.2% |
+| `intro_transcription` | 0.4% |
+| `transcribed_title` | 0.3% |
+| **AcoustID fingerprint** (`acoustid_seg0`) | **0%** |
+
+**The content signals are absent exactly where they would be needed.** Fingerprint
+coverage on these rows is zero and transcription is under 1%, so neither can
+adjudicate this repair today. What survives is `file_size` + `duration`, both at
+100%.
+
+**`file_size` works, but only with a tolerance.** Compared stored size against the
+on-disk file for the 7 single-file fully-broken books whose path resolves:
+
+```
+SIZE-MATCH   5 / 7
+SIZE-DIFFER  2 / 7   stored 412,981,032 vs disk 412,982,098  (Δ 1,066 B)
+                     stored 110,775,438 vs disk 110,775,503  (Δ    65 B)
+```
+
+Both deltas are sub-2KB on files of 110–413 MB — the signature of a **tag rewrite
+after the size was recorded**, not a different file. So an equality test would
+reject two correct matches. Use a tolerance (a few tens of KB), and corroborate
+with `duration`, which a tag write does not change.
+
+**Recommended verification before any repoint write**, in cost order — all CPU,
+none needing the GPU:
+
+1. `os.Stat` the derived candidate — it must exist.
+2. `file_size` within tolerance of the stored value.
+3. `duration` match via ffprobe (corroborates, and is immune to tag writes).
+4. `file_hash` / fingerprint / transcript **when present** — decisive, but only
+   2.2% / 0% / 0.3% of the time, so they are a bonus, not the gate.
+
+That is a real identity check in place of "this basename was unique."
+
+### 🐛 Separate defect found here: the `missing` flag is stale
+
+Every one of the 2,077 rows above reports `missing: false` and
+`file_exists: true` via `/audiobooks/:id/files`, while the audit proves each
+path fails `os.Stat`. These are stored columns that nothing maintains. **Do not
+filter on them** — and anything that already does is silently wrong.
+
+## 10. Open items this leaves behind
 
 1. 🛑 **16,265 fully-broken books await a human decision.** Untouched.
 2. ✅ **The repairable-row total is now measured: 25,677** (§7), with 46,277
