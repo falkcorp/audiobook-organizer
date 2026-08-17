@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/MetadataReviewDialog.tsx
-// version: 1.16.0
+// version: 1.17.0
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-08-16
+// last-edited: 2026-08-17
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -55,9 +55,20 @@ const SOURCE_COLORS: Record<string, 'primary' | 'secondary' | 'success' | 'warni
   manual: 'info',
 };
 
-// Matches ActivityLog's selector so users see the same options
-// across pagination controls.
-const PAGE_SIZE_OPTIONS = [25, 50, 100, 250, 500];
+// Review rows are heavy — each renders a full candidate comparison — so this
+// selector deliberately does NOT match ActivityLog's, which lists 250 and 500.
+// A stored size of 250 froze the dialog hard enough that the size control
+// itself could not be reached to change it back (see loadReviewPageSize).
+// 100 is kept because only 250 was observed to lock up; if 100 turns out to
+// stall too, lower MAX_REVIEW_PAGE_SIZE rather than only trimming this list —
+// the clamp is what actually protects users, this list just avoids offering
+// the footgun.
+const PAGE_SIZE_OPTIONS = [25, 50, 100];
+
+// Largest size a stored preference may restore. Anything above is clamped down
+// and rewritten, so a value saved before this cap existed (or by a future build
+// that offers more) can never re-freeze the dialog on open.
+const MAX_REVIEW_PAGE_SIZE = 50;
 
 // Language filter: when enabled (default), candidates whose
 // language disagrees with the book's are hidden. Preference
@@ -124,11 +135,38 @@ function normalizeLanguage(lang: string | undefined | null): string {
 // many times per session — re-picking "250 per page" on every open
 // is annoying.
 
-function loadReviewPageSize(): number {
+// A stored size is CLAMPED, not just validated. The previous version accepted
+// any member of PAGE_SIZE_OPTIONS, and 250 was a member — so a user who picked
+// 250 froze the dialog, and every subsequent open restored 250 and froze it
+// again. The size control is inside the dialog, so there was no way to undo it
+// from the UI: the only escape was clearing localStorage by hand.
+//
+// Clamping on READ (rather than only trimming the options list) is what makes
+// this self-healing for users who already have 250 or 500 persisted from an
+// earlier build — they get 50 on next open without touching devtools.
+export function loadReviewPageSize(): number {
   if (typeof window === 'undefined') return 25;
   const raw = window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_PAGE_SIZE);
-  const n = raw ? Number(raw) : 25;
-  return PAGE_SIZE_OPTIONS.includes(n) ? n : 25;
+  if (raw === null) return 25;
+
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 25;
+  if (PAGE_SIZE_OPTIONS.includes(n)) return n;
+
+  // Out of range or no longer offered. Persist the correction so the bad value
+  // is gone for good rather than being re-clamped on every open.
+  const safe = Math.min(n, MAX_REVIEW_PAGE_SIZE);
+  const corrected = PAGE_SIZE_OPTIONS.includes(safe) ? safe : MAX_REVIEW_PAGE_SIZE;
+  try {
+    window.localStorage.setItem(
+      STORAGE_KEYS.METADATA_REVIEW_PAGE_SIZE,
+      String(corrected)
+    );
+  } catch {
+    // Private-mode / quota failures are non-fatal: the clamp still applies to
+    // this session, it just re-clamps next open instead of persisting.
+  }
+  return corrected;
 }
 
 function formatDuration(seconds: number): string {
