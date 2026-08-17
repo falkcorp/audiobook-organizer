@@ -1,7 +1,7 @@
 // file: internal/server/server_more_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 18a6b0a3-7e78-4e0f-8b8e-0e4c1dbde6de
-// last-edited: 2026-08-12
+// last-edited: 2026-08-16
 
 //go:build !windows
 
@@ -388,20 +388,42 @@ func TestWorkEndpointErrors(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, w.Code)
 }
 
-func TestGetOperationLogsEndpoint(t *testing.T) {
+// TestRetiredLegacyOperationRoutesAreGone asserts that the legacy operation
+// routes stay retired.
+//
+// This replaces TestGetOperationLogsEndpoint, which asserted 200 from
+// GET /operations/:id/logs. That route was retired in the same change that
+// removed GET /operations and /operations/:id/status — see the RETIRED note in
+// wire_operations_routes.go — and the test was left behind asserting a route
+// that no longer existed. It had been failing on main ever since, unnoticed,
+// because the full Go suite is not a blocking check.
+//
+// Asserting the absence is what stops that from recurring in the other
+// direction: re-adding one of these paths now fails here instead of quietly
+// resurrecting a reader of the legacy `operations` table, which never
+// transitions rows out of `pending`.
+func TestRetiredLegacyOperationRoutesAreGone(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	opID := "op-logs"
-	_, err := database.GetGlobalStore().CreateOperation(opID, "scan", nil)
-	require.NoError(t, err)
-	detail := "details"
-	require.NoError(t, database.GetGlobalStore().AddOperationLog(opID, "info", "message", &detail))
+	retired := []struct {
+		method, path, replacedBy string
+	}{
+		{http.MethodGet, "/api/v1/operations", "GET /operations/timeline"},
+		{http.MethodGet, "/api/v1/operations/op-1/status", "GET /operations/v2/:id"},
+		{http.MethodGet, "/api/v1/operations/op-1/logs?tail=1", "GET /operations/v2/:id?limit="},
+		{http.MethodDelete, "/api/v1/operations/op-1", "DELETE /operations/v2/:id"},
+	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/operations/"+opID+"/logs?tail=1", nil)
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	for _, rt := range retired {
+		t.Run(rt.method+" "+rt.path, func(t *testing.T) {
+			req := httptest.NewRequest(rt.method, rt.path, nil)
+			w := httptest.NewRecorder()
+			server.router.ServeHTTP(w, req)
+			require.Equal(t, http.StatusNotFound, w.Code,
+				"%s %s is retired; use %s", rt.method, rt.path, rt.replacedBy)
+		})
+	}
 }
 
 func TestGetAudiobookAndDashboard(t *testing.T) {

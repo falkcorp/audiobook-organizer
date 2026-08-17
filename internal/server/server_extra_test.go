@@ -1,7 +1,7 @@
 // file: internal/server/server_extra_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 61a2d3c4-80ab-4f6f-8c39-15a2ac5b7f0c
-// last-edited: 2026-07-07
+// last-edited: 2026-08-16
 
 package server
 
@@ -280,10 +280,15 @@ func TestOperationEndpointsErrors(t *testing.T) {
 	server.router.ServeHTTP(w, req)
 	require.Equal(t, http.StatusGone, w.Code)
 
-	req = httptest.NewRequest(http.MethodDelete, "/api/v1/operations/bad-id", nil)
+	// Cancel now goes through the v2 route. Both routes answer 204 for an id
+	// they have never heard of, for different reasons: the legacy one
+	// force-updated a legacy `operations` row, while the registry's Cancel
+	// returns nil for an unknown id rather than reporting that there was
+	// nothing to cancel. 204 here is the observed contract, not an endorsement
+	// — see todo.d/20260816-cancel-unknown-op-reports-success.md.
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/operations/v2/bad-id", nil)
 	w = httptest.NewRecorder()
 	server.router.ServeHTTP(w, req)
-	// Cancel falls back to DB update for stale operations, which succeeds.
 	require.Equal(t, http.StatusNoContent, w.Code)
 }
 
