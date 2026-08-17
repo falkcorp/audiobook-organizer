@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-08-17-missing-file-repair-sequencing.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3c9e5a71-8d24-4b16-9f03-6ae2b7d5c481 -->
 <!-- last-edited: 2026-08-17 -->
 
@@ -34,8 +34,60 @@ writes only after a candidate passes the same gate.
 4. `file_hash` / fingerprint / transcript **only when present** — decisive but
    rare (2.2% / 0% / 0.4%), so a bonus, never the gate.
 
-Signals 1–3 are available on 100% of rows. That is the whole reason this is
+Signals 1–3 are available on ~100% of rows. That is the whole reason this is
 buildable today.
+
+### 🔻 Correction: fingerprint coverage is UNMEASURED, not 0%
+
+An earlier draft reported AcoustID coverage as 0% on broken rows. **That was an
+instrument error.** `GET /audiobooks/:id/files`
+(`internal/server/handlers/audiobooks/handler_files.go:146`) serialises
+`acoustid_seg0..6` but **never** emits `AcoustIDFingerprint` — the whole-file
+chromaprint that `store.go:38-42` calls "preferred over the segment fields". The
+probe was blind by construction. (Control: `AcoustIDSeg0` *is* emitted, so the
+grep discriminates.) `/dedup/stats` shows a live `acoustid` candidate layer, so
+fingerprints demonstrably exist.
+
+**Library-wide baseline** (150 books across 6 offsets, 2,395 rows) for the
+signals the API *does* expose:
+
+| signal | coverage |
+|---|---|
+| `file_size` | 99.4% |
+| `duration` | 93.4% |
+| `itunes_persistent_id` | 8.5% |
+| `file_hash` (SHA-256) | 7.3% |
+| `original_file_hash` | 7.3% |
+| `intro_transcription` | 4.1% |
+| `transcribed_title` | 2.8% |
+| `post_metadata_hash` | 0.1% |
+| `acoustid_fingerprint` | **not exposed — unmeasured** |
+
+These are the *right* signals: where present, a SHA-256 or a chromaprint settles
+identity outright. At under 10% they cannot be the gate, but they are a decisive
+top tier when they fire — hence their position in the ladder above.
+
+### Repointing must keep derived data honest
+
+A repoint changes which file a row points at. Every generated signal on that row
+— `file_hash`, `original_file_hash`, `post_metadata_hash`, `AcoustIDFingerprint`,
+`AcoustIDSeg0..6`, `IntroTranscription` and the parsed `Transcribed*` fields —
+was computed from the **old** path. After a repoint each is in one of two states:
+
+- **Corroborating** — it matches the candidate, which is the strongest possible
+  proof the repoint is right. Use it as the gate when present.
+- **Stale** — it describes a file this row no longer points at. It must be
+  cleared or recomputed, never silently carried forward.
+
+Carrying a stale hash forward is worse than having none: it looks like evidence.
+Any repoint implementation must decide this per field, explicitly.
+
+### Fold the coverage census into Phase 1
+
+Phase 1 already walks all 532,296 rows. Have the same pass tally which signals
+each row carries. One sweep then answers, for the real population rather than a
+sample: how many missing rows have a hash, a fingerprint, a transcript — and
+therefore how much of the repair can be adjudicated outright instead of inferred.
 
 ## Phase 0 — do not delete (in force now)
 
