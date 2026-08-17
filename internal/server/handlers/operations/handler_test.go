@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/handler_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 36cf7fbb-8b23-4edb-ad4b-079ab2bd6cf1
 // last-edited: 2026-08-16
 
@@ -606,4 +606,102 @@ func TestUpdateTaskConfig_PurgeDeletedEnabledNamesTheRealKey(t *testing.T) {
 	require.Contains(t, w.Body.String(), "purge_soft_deleted_after_days")
 	require.Contains(t, w.Body.String(), "run_in_maintenance_window",
 		"the error should list what the task does accept")
+}
+
+// schedulerView reports what the real scheduler says about a task, computed
+// through the actual TaskDefinition getters in internal/scheduler/tasks.go.
+//
+// The sibling tests above assert that a PUT changed the config FIELD the
+// binding points at. That is necessary but not sufficient: a getter may OR its
+// field with something else, in which case the field changes and the value the
+// scheduler acts on does not. library_scan's IsEnabled does exactly that with
+// the legacy scan_on_startup key. Asserting through ListTasks closes the gap by
+// checking the value the caller can actually observe rather than the write.
+func schedulerView(t *testing.T, name string) (scheduler.TaskInfo, bool) {
+	t.Helper()
+	ts := scheduler.NewTaskScheduler(scheduler.SchedulerDeps{
+		Store:               func() database.Store { return nil },
+		HasDedupEngine:      func() bool { return false },
+		HasMetadataFetchSvc: func() bool { return false },
+		HasActivitySvc:      func() bool { return false },
+		HasBatchPoller:      func() bool { return false },
+	})
+	for _, info := range ts.ListTasks() {
+		if info.Name == name {
+			return info, true
+		}
+	}
+	return scheduler.TaskInfo{}, false
+}
+
+func TestUpdateTaskConfig_SchedulerReportsTheAppliedValue(t *testing.T) {
+	for _, tc := range acceptedBoolFields() {
+		t.Run(tc.task+"/"+tc.field, func(t *testing.T) {
+			restoreAppConfig(t)
+			before, ok := schedulerView(t, tc.task)
+			if !ok {
+				t.Skipf("%s is not a registered scheduler task", tc.task)
+			}
+			read := func(info scheduler.TaskInfo) bool {
+				switch tc.field {
+				case "enabled":
+					return info.Enabled
+				case "run_on_startup":
+					return info.RunOnStartup
+				case "run_in_maintenance_window":
+					return info.RunInMaintenanceWindow
+				}
+				t.Fatalf("unhandled field %q", tc.field)
+				return false
+			}
+			want := !read(before)
+			w := putTaskConfig(t, tc.task, tc.field, want)
+			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+			after, ok := schedulerView(t, tc.task)
+			require.True(t, ok)
+			require.Equal(t, want, read(after),
+				"PUT /tasks/%s {%q: %v} answered 200 but the scheduler still reports %v",
+				tc.task, tc.field, want, read(after))
+		})
+	}
+}
+
+// TestUpdateTaskConfig_LibraryScanEnabledBeatsLegacyScanOnStartup pins the
+// specific masking this endpoint used to have. Before the fold, this PUT wrote
+// Scheduled.LibraryScan.Enabled=false, answered 200, and IsEnabled() stayed
+// true because it ORs in the legacy scan_on_startup key.
+func TestUpdateTaskConfig_LibraryScanEnabledBeatsLegacyScanOnStartup(t *testing.T) {
+	restoreAppConfig(t)
+	config.AppConfig.ScanOnStartup = true
+	config.AppConfig.Scheduled.LibraryScan.Enabled = true
+
+	before, ok := schedulerView(t, "library_scan")
+	require.True(t, ok)
+	require.True(t, before.Enabled, "precondition: the task should start enabled")
+
+	w := putTaskConfig(t, "library_scan", "enabled", false)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	after, ok := schedulerView(t, "library_scan")
+	require.True(t, ok)
+	require.False(t, after.Enabled,
+		"disabling library_scan must actually disable it, not be masked by scan_on_startup")
+}
+
+// The fold must not over-reach: turning OFF the startup run is not a request to
+// disable the task, so IsEnabled has to survive it.
+func TestUpdateTaskConfig_LibraryScanRunOnStartupOffKeepsTaskEnabled(t *testing.T) {
+	restoreAppConfig(t)
+	config.AppConfig.ScanOnStartup = true
+	config.AppConfig.Scheduled.LibraryScan.Enabled = false
+	config.AppConfig.Scheduled.LibraryScan.OnStartup = false
+
+	w := putTaskConfig(t, "library_scan", "run_on_startup", false)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	after, ok := schedulerView(t, "library_scan")
+	require.True(t, ok)
+	require.False(t, after.RunOnStartup, "run_on_startup=false must take effect")
+	require.True(t, after.Enabled,
+		"clearing the startup run must not silently disable the task; scan_on_startup had it enabled")
 }

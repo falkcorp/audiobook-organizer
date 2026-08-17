@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
 // last-edited: 2026-08-16
 
@@ -523,6 +523,25 @@ type taskConfigBinding struct {
 	// PurgeSoftDeletedAfterDays > 0 — so the useful answer names the real config
 	// key instead of reporting the field as merely unsupported.
 	hints map[string]string
+
+	// foldLegacy normalizes a deprecated config key into the per-task fields
+	// above, and runs once before any caller write is applied.
+	//
+	// A binding pointer is only honest if the task's trigger reads that field
+	// ALONE. library_scan's does not: IsEnabled is
+	// `Scheduled.LibraryScan.Enabled || ScanOnStartup`, kept that way on purpose
+	// so nobody who only ever set the legacy scan_on_startup key loses their
+	// startup scan. The side effect is that while the legacy key is set, writing
+	// enabled=false lands in the struct and the task still reports enabled — a
+	// 200 for a change the caller cannot observe, which is the exact defect this
+	// endpoint is being fixed for.
+	//
+	// Folding is lossless by construction: with the legacy key set, both
+	// IsEnabled() and RunOnStart() already evaluate true, so writing true into
+	// both per-task fields and clearing the legacy key preserves each getter's
+	// value while making the per-task fields the only thing that decides them.
+	// The caller's write then lands on a field that governs.
+	foldLegacy func()
 }
 
 // accepted lists the body fields this task can actually apply, so the error
@@ -598,7 +617,18 @@ func bindingForTask(name string) (taskConfigBinding, bool) {
 		// All four knobs are real: the task reads Scheduled.LibraryScan for
 		// enabled/interval/on-startup. The previous switch bound only the
 		// maintenance-window flag and silently dropped the other three.
-		return full(&sched.LibraryScan, &maint.LibraryScan), true
+		b := full(&sched.LibraryScan, &maint.LibraryScan)
+		// ...but two of those three are OR'd with the legacy scan_on_startup key
+		// in tasks.go, so they only govern once it is folded away. See foldLegacy.
+		b.foldLegacy = func() {
+			if !config.AppConfig.ScanOnStartup {
+				return
+			}
+			sched.LibraryScan.Enabled = true
+			sched.LibraryScan.OnStartup = true
+			config.AppConfig.ScanOnStartup = false
+		}
+		return b, true
 	case "reconcile_scan":
 		// interval_minutes and run_on_startup are read by the task definition
 		// but were not bound before, so they were dropped silently too.
@@ -706,6 +736,11 @@ func (h *Handler) UpdateTaskConfig(c *gin.Context) {
 		return
 	}
 
+	// Fold before applying, and only once a write is actually going to land, so
+	// a rejected or empty request never rewrites config as a side effect.
+	if len(writes) > 0 && binding.foldLegacy != nil {
+		binding.foldLegacy()
+	}
 	for _, write := range writes {
 		write()
 	}
