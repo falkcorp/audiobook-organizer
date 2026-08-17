@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-17-missing-file-audit-full-population.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 75babbdd-5bf3-41e9-a8ba-5281df2898f9 -->
 <!-- last-edited: 2026-08-17 -->
 
@@ -32,23 +32,43 @@ Completed 2026-08-17 16:18:50Z.
 | books partially broken | 1,386 |
 | books intact | 43,877 |
 
-`unreadable = 0` is the load-bearing number: no mount was flapping, so
-"missing" here means the stat genuinely returned `IsNotExist`, not "I could not
-tell". The op counts those separately by design.
+`unreadable = 0` matters because it is what separates "the bytes are gone" from
+"I could not tell" — the op counts those separately by design, and a book with
+any un-stat-able row is skipped entirely by the repair.
 
-### This supersedes the 120-book extrapolation
+⚠️ **Exactly zero across 532,296 network stats deserves the obvious question: is
+the `fileUnreadable` branch reachable at all?** It is —
+`missing_file_audit_test.go:149` `TestMissingFileAudit_UnreadableIsNotCountedAsMissing`
+drives a non-`IsNotExist` stat error and asserts `Unreadable == 1`, so the branch
+is live and covered. What is *not* established is that this NAS mount can
+actually produce such an error under load; the 0 is therefore "no error was
+observed", not "no error is possible". It is strong enough to rely on for the
+repair's skip rule and not strong enough to assert the mount was healthy
+throughout.
 
-The prior figures came from a 120-book sample and are now measured directly:
+### This supersedes the 120-book extrapolation — at the BOOK level
+
+The prior figures came from a 120-book sample. One of the two comparisons holds
+and one does not:
 
 | | sampled (120 books) | measured (61,528 books) |
 |---|---|---|
-| rows missing | 41.8% | **13.52%** |
 | books with no surviving file | 5 (4.2%) | **16,265 (26.4%)** |
+| rows missing | 41.8% (552/1,322) | 13.52% (71,954/532,296) |
 
-The row rate was overstated by ~3×; the fully-broken **book** rate was
-understated by ~6×. 🛑 **The standing STOP-AND-ASK is about "5 books". It is
-16,265 books.** That is a different decision and it is still yours to make —
-nothing was deleted, relocated, or marked.
+**Only the book-level row is a like-for-like rate comparison.** The fully-broken
+book rate was understated by ~6×.
+
+⚠️ **Do not quote the row rates as a "3× overstatement".** They are not
+apples-to-apples: the sample averaged ~11 rows/book against the population's
+~8.6, and there is no record that the 120 books were selected the way the
+population sweep enumerates. Different denominators can produce both numbers
+with neither being wrong. The row figure is reported here as the measured
+population value, not as a correction of the sample.
+
+🛑 **The standing STOP-AND-ASK is about "5 books". It is 16,265 books.** That is
+a different decision and it is still yours to make — nothing was deleted,
+relocated, or marked.
 
 ### Missing rows by tree
 
@@ -143,9 +163,17 @@ table: **repoint, do not delete.**
 ### The other 99 sampled rows are genuine loss
 
 The remaining 99 are almost entirely one cluster
-(`…/The Saga of Recluce/The Saga of Recluce - 01 - The Magic of Recluce/…`) whose
-**entire directory is absent**, not just the named files. Deletion is the correct
-repair for that shape.
+(`…/The Saga of Recluce/The Saga of Recluce - 01 - The Magic of Recluce/…`).
+Verified directly rather than by shape: the **series** directory
+`…/L. E. Modesitt Jr./The Saga of Recluce` exists but holds only two entries —
+`- 17 - Cyador's Heirs` and `- 18 - Heritage of Cyador` — and **both are empty
+directories**. The `- 01 - The Magic of Recluce` book directory is absent
+outright. So there are no bytes anywhere under that book, and deletion is the
+correct repair for this shape.
+
+(An earlier draft of this doc said the "entire directory is absent". The series
+directory is present; the book directory under it is not. The conclusion is
+unchanged and slightly strengthened — the surviving siblings are empty shells.)
 
 ⚠️ **The 101/99 split is NOT a population estimate.** The audit collects its
 sample as the first N missing rows in iteration order, so it is clustered by
@@ -177,6 +205,35 @@ is precisely the population the safety rule waves through.
    `Zero History - 70 131.mp3`, but the file on disk is `Zero History - 70.mp3`.
    The correct target comes from the *new* naming default, not from collapsing
    the old string.
+
+   ⚠️ **A repoint implementation may already exist — evaluate before building.**
+   Reported by the maintenance lane (session `ao-fixes-2`):
+   `internal/maintenance/jobs/repair_missing_files.go`, job `repair-missing-files`,
+   sets `FilePath` / `OriginalFilename` / `Missing=false` / `FileSize` / `Format`
+   via `UpdateBookFile` at `:566`, is dry-run by default, and returns a per-row
+   `Method` + `NewPath` — i.e. a dry run yields a repoint *plan*, which is exactly
+   the artifact step 1 needs.
+
+   🔴 **Unmeasured, and do not read it as "the fix already exists":** whether its
+   candidate search resolves the track-slash shape at all. Our rows carry an extra
+   real directory level and a basename of `131.mp3`, which resembles neither the
+   title nor the final filename, so a basename- or similarity-keyed search may
+   simply miss them. The cheap test is a dry run scoped to the 101 rows verified
+   recoverable in §3 — they plus the two planted-absent controls make it a
+   measurement rather than a smoke test. 101/101 resolving means nothing needs
+   building; anything less names the shapes that do.
+
+   ⚠️ **Naming trap, and it has already caused one published error.** These two are
+   near-mirrors with opposite mutations — distinguish them by path, never by name:
+
+   | file | id | does |
+   |---|---|---|
+   | `internal/maintenance/jobs/repair_missing_files.go` | `repair-missing-files` | **repoints** (`UpdateBookFile`), zero deletes |
+   | `internal/plugins/maintenance/missing_file_repair.go` | `maintenance.missing-file-repair` | **deletes** (`DeleteBookFilesByIDs`) |
+
+   The other lane published "repair_missing_files deletes book_file rows" on that
+   confusion and corrected it in `ea16241f`. Everything else in this document
+   refers to the **deleting** op, by path.
 3. **Only then** run the delete, scoped to the classified-dead set.
 4. The 16,265 fully-broken books remain a human decision (§1).
 
@@ -227,6 +284,26 @@ while leaving the rest. Any future apply must read `CappedAt` explicitly.
 The op reports 60 `sample_paths`, drawn **only from repairable books** — i.e. rows
 it would actually delete. Classified by shape: **24 track-slash, 36 other.**
 
+⚠️ **The shape regex alone cannot make this call, and its limit is known.** In
+the negative-control run it printed `'/x/Title - 3/12.mp3' → True`, which is
+correct for the pattern but means it cannot distinguish a phantom directory from
+a *real* directory named `Title - 3` that genuinely contains `12.mp3`. The
+discriminator is whether the named parent directory exists, and that was tested
+for **all 25 distinct parents** of the 60 candidates:
+
+```
+ABSENT  25/25 phantom parents
+EXISTS  n=34   …/Edward Castle/Unbound Deathlord 3 - Corruption   (good control)
+EXISTS  n=2    …/L. E. Modesitt Jr./The Saga of Recluce           (good control)
+EXISTS  n=4590 /mnt/bigdata/books/audiobook-organizer             (good control)
+ABSENT         /mnt/bigdata/books/__MUST_BE_MISSING__             (bad control)
+```
+
+A first pass of this check listed *everything* as absent, controls included — an
+instrument that cannot answer "exists" is not measuring anything. The run above
+is the re-run with positive controls in the same batch, and it discriminates.
+So the 24/36 split is parent-verified, not regex-asserted.
+
 For all 24 track-slash candidates the expected flat name was tested on disk, with
 a bogus path appended to the same batch:
 
@@ -246,6 +323,22 @@ classify-then-repoint sequencing in §4.
 ### The remaining 36
 
 The other 36 sampled candidates are the `The Saga of Recluce - 01 - The Magic of
-Recluce` cluster, whose entire directory is absent. Those are genuine loss and
+Recluce` cluster, whose book directory is absent (§3). Those are genuine loss and
 deletion is correct for them — which is exactly why the delete set needs
 classifying rather than approving or rejecting wholesale.
+
+## 8. Open items this leaves behind
+
+1. 🛑 **16,265 fully-broken books await a human decision.** Untouched.
+2. **The repairable-row total is unmeasured** — the dry run hit the 20,000
+   `max_deletes` cap (§7). Every count in this document is a floor, not a total.
+3. ⏰ **The unattended `library.scan` scheduler re-fires ≈ 22:12Z**, and a running
+   scan is not a passive observer — it clobbers applied metadata (and it moved the
+   counts under this audit, which is why it was cancelled at 16:12Z). If this
+   audit is to be re-run, or any repair applied, do it away from that boundary or
+   disable `scheduled.library_scan` first.
+4. **The 1,006 iTunes-tree missing rows and the 61 `/X:/…` mangled Windows paths**
+   (§1) are separate findings with no owner. The iTunes tree is hands-off.
+5. **`missing_file_audit.go`'s header comment is factually false** — it claims
+   nothing under the iTunes tree is missing. The maintenance lane has offered to
+   correct it; it is their file.
