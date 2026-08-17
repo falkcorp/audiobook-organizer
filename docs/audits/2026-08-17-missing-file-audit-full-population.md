@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-17-missing-file-audit-full-population.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 75babbdd-5bf3-41e9-a8ba-5281df2898f9 -->
 <!-- last-edited: 2026-08-17 -->
 
@@ -322,12 +322,37 @@ books=61528 repairable=1386 fully-broken(skipped)=16265
 unreadable(skipped)=0 intact=43877 rows_to_delete=20000
 ```
 
-⚠️ **`rows_to_delete=20000` is the `max_deletes` cap, not the real total.** The
+⚠️ **`rows_to_delete=20000` was the `max_deletes` cap, not the real total.** That
 run logged `plan truncated by max_deletes {cap: 20000, run_again_to_continue:
-true}`. `missingFileRepairDefaultMax` is 20,000
-(`missing_file_repair.go:52`). The true repairable-row count is **≥ 20,000 and
-unmeasured** — a capped apply would report "deleted 20,000" and look finished
-while leaving the rest. Any future apply must read `CappedAt` explicitly.
+true}`; `missingFileRepairDefaultMax` is 20,000 (`missing_file_repair.go:52`).
+A capped apply would report "deleted 20,000" and look finished while leaving the
+rest, so any apply must read `CappedAt` explicitly.
+
+### ✅ The true total, now measured
+
+Re-run uncapped — op `01M08ECGMCCP5TTDH6ZGANVA7H`, `{"max_deletes": 1000000}`,
+167s, completed 2026-08-17 18:08:08Z, still a dry run (`apply=false` in the
+start log):
+
+```
+books=61528 repairable=1386 fully-broken(skipped)=16265
+unreadable(skipped)=0 intact=43877 rows_to_delete=25677
+```
+
+**25,677 rows**, and **no `plan truncated` warning was emitted**, which is what
+establishes this as the whole plan rather than another ceiling. The default cap
+was hiding 5,677 rows — 22% of the plan.
+
+That also splits the missing population for the first time:
+
+| | rows |
+|---|---|
+| missing rows in **repairable** books (the delete plan) | **25,677** |
+| missing rows in **fully-broken** books (skipped entirely) | **46,277** |
+| total missing | 71,954 |
+
+So **64% of the missing rows belong to books the repair will not touch at all** —
+the 16,265 books that will not load. The delete plan addresses the smaller share.
 
 ### The delete set was tested directly
 
@@ -377,11 +402,46 @@ Recluce` cluster, whose book directory is absent (§3). Those are genuine loss a
 deletion is correct for them — which is exactly why the delete set needs
 classifying rather than approving or rejecting wholesale.
 
-## 8. Open items this leaves behind
+## 8. The books that will not load are mostly RECOVERABLE
+
+The 16,265 fully-broken books are the user-visible symptom ("a lot of books that
+won't load"). The repair skips them, so the question is not whether to delete
+them but whether their audio still exists. Measured on the 60 fully-broken book
+IDs the op reports, by testing each book's own `file_path` on disk — controls in
+the same batch: a planted path ABSENT ✓, a known-good directory present ✓:
+
+| what is at the book's `file_path` | count of 60 |
+|---|---|
+| **a real audio file**, present right now | **12** |
+| a **directory** containing audio (iTunes author folder) | **43** |
+| **genuinely absent** | **5** |
+
+**Only ~1 in 12 of these books has actually lost its bytes.** For the rest the
+pointer is broken, not the file. Deleting their rows would convert a fixable
+index problem into permanent loss.
+
+⚠️ **Sample of 60 in iteration order, clustered by book — proportion-in-sample,
+not a population estimate for all 16,265.**
+
+**These are a DIFFERENT shape from the track-slash population in §2**, which
+matters because it means one repoint implementation will not cover both:
+
+- **The 12 file-hits are the easy case.** The book already records a correct path
+  to existing audio, e.g. `…/Drake O'Keef/The Seven Deadly Demons/Dungeon of
+  Pride/Dungeon of Pride - Drake O'Keef - read by Steve Campbell.m4b`. Only the
+  `book_file` row disagrees.
+- **The 43 directory-hits are iTunes-tree books** whose `file_path` resolves to an
+  *author* folder holding hundreds of files (Jim Butcher 1,033; Stephen King
+  1,555). Recoverable in principle, but selecting the right file needs a
+  title-matching step that can pick wrong — the same hazard as
+  `repair-missing-files` tier 2 (§4). The iTunes tree is hands-off for writes;
+  everything here was read-only.
+
+## 9. Open items this leaves behind
 
 1. 🛑 **16,265 fully-broken books await a human decision.** Untouched.
-2. **The repairable-row total is unmeasured** — the dry run hit the 20,000
-   `max_deletes` cap (§7). Every count in this document is a floor, not a total.
+2. ✅ **The repairable-row total is now measured: 25,677** (§7), with 46,277
+   missing rows sitting in the skipped fully-broken books. No longer a floor.
 3. ⏰ **The unattended `library.scan` scheduler re-fires ≈ 22:12Z**, and a running
    scan is not a passive observer — it clobbers applied metadata (and it moved the
    counts under this audit, which is why it was cancelled at 16:12Z). If this
