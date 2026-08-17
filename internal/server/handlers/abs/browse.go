@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-08-16
+// last-edited: 2026-08-17
 
 package abs
 
@@ -18,6 +18,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/gin-gonic/gin"
 )
 
@@ -863,35 +864,38 @@ const absAuthorsCacheTTL = 5 * time.Minute
 // Building the list once turns pages 2..93 into slice arithmetic. That is why this
 // caches the whole DOCUMENT rather than just the count: the count was never the
 // expensive part here.
-func (h *Handler) contributorsCached(ctx context.Context) ([]authorDTO, []narratorDTO, error) {
+func (h *Handler) contributorsCached(ctx context.Context) (*contributorIndex, error) {
 	now := h.now()
 
 	h.authorsCacheMu.Lock()
 	if h.authorsCache != nil && now.Sub(h.authorsCacheAt) < absAuthorsCacheTTL {
-		a, n := h.authorsCache, h.narratorsCache
+		idx := h.authorsCache
 		h.authorsCacheMu.Unlock()
-		return a, n, nil
+		return idx, nil
 	}
 	h.authorsCacheMu.Unlock()
 
 	// Built OUTSIDE the lock. Holding it across a full-library scan would serialize
 	// every concurrent page request behind one rebuild — which is precisely the
 	// 93-requests-in-a-row access pattern this exists to serve.
-	authors, narrators, err := h.contributorDTOs(ctx)
+	idx, err := h.contributorDTOs(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	h.authorsCacheMu.Lock()
-	h.authorsCache, h.narratorsCache, h.authorsCacheAt = authors, narrators, now
+	h.authorsCache, h.authorsCacheAt = idx, now
 	h.authorsCacheMu.Unlock()
-	return authors, narrators, nil
+	return idx, nil
 }
 
 // authorDTOsCached is the author-only view of the shared contributor cache.
 func (h *Handler) authorDTOsCached(ctx context.Context) ([]authorDTO, error) {
-	authors, _, err := h.contributorsCached(ctx)
-	return authors, err
+	idx, err := h.contributorsCached(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return idx.authors, nil
 }
 
 // authorDTOs builds the author list once, shared by /authors and /personalized.
@@ -930,6 +934,24 @@ func (h *Handler) visibleBookSummaries(f database.BookSummaryFilter) ([]database
 	}
 }
 
+// contributorIndex is ONE consistent view of the library's contributors: the two
+// client-visible lists, and the visible book ids behind every entry in them.
+//
+// The lists and the id maps exist in the same struct because the drill-down
+// (?filter=authors.<id>) and the tile it was tapped from must be answered from the
+// same build. Keeping them apart is what made the equivalent /items?filter=series
+// bug possible, and the fix there was exactly this: serve the drill-down from the
+// grouping the list itself was rendered from.
+//
+// authorBooks is keyed by author id (an entity); narratorBooks by narrator NAME,
+// because narrators are not entities in Audiobookshelf — see narratorID.
+type contributorIndex struct {
+	authors       []authorDTO
+	narrators     []narratorDTO
+	authorBooks   map[int][]string
+	narratorBooks map[string][]string
+}
+
 // contributorDTOs builds the author AND narrator lists from the VISIBLE books only.
 //
 // Both are derived from one pass so the two tabs can never disagree with each other or
@@ -951,13 +973,19 @@ func (h *Handler) visibleBookSummaries(f database.BookSummaryFilter) ([]database
 //
 // The tab and the book page must agree about who narrated a book, so this uses the
 // same three-tier resolution rather than a second, narrower rule.
-func (h *Handler) contributorDTOs(ctx context.Context) ([]authorDTO, []narratorDTO, error) {
+func (h *Handler) contributorDTOs(ctx context.Context) (*contributorIndex, error) {
 	books, err := h.visibleBookSummaries(absItemFilterBase())
 	if err != nil {
-		return nil, nil, err
+		return nil, err
+	}
+	idx := &contributorIndex{
+		authors:       []authorDTO{},
+		narrators:     []narratorDTO{},
+		authorBooks:   map[int][]string{},
+		narratorBooks: map[string][]string{},
 	}
 	if len(books) == 0 {
-		return []authorDTO{}, []narratorDTO{}, nil
+		return idx, nil
 	}
 	ids := make([]string, 0, len(books))
 	for i := range books {
@@ -966,66 +994,88 @@ func (h *Handler) contributorDTOs(ctx context.Context) ([]authorDTO, []narratorD
 
 	authorsByBook, err := h.library.GetAuthorsByBookIDs(ctx, ids)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	narratorsByBook, err := h.library.GetNarratorsByBookIDs(ctx, ids)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	type authorAgg struct {
-		name  string
-		id    int
-		books int
+		name string
+		id   int
 	}
 	authorSeen := map[int]*authorAgg{}
-	for _, list := range authorsByBook {
-		for _, a := range list {
+	// Walked in the order visibleBookSummaries returned, NOT by ranging the
+	// authorsByBook map, so the id lists — and therefore the drill-down's page
+	// order — are stable between rebuilds rather than reshuffling per request.
+	for i := range books {
+		bookID := books[i].ID
+		for _, a := range authorsByBook[bookID] {
 			if strings.TrimSpace(a.Name) == "" {
 				continue
 			}
-			agg, ok := authorSeen[a.ID]
-			if !ok {
-				agg = &authorAgg{name: a.Name, id: a.ID}
-				authorSeen[a.ID] = agg
+			if _, ok := authorSeen[a.ID]; !ok {
+				authorSeen[a.ID] = &authorAgg{name: a.Name, id: a.ID}
 			}
-			agg.books++
+			// numBooks is len(authorBooks[id]) rather than its own counter, so the
+			// count the tile shows and the set the drill-down pages CANNOT disagree.
+			// A book credited to the same author twice must still count once.
+			if list := idx.authorBooks[a.ID]; len(list) == 0 || list[len(list)-1] != bookID {
+				idx.authorBooks[a.ID] = append(list, bookID)
+			}
 		}
 	}
 	// One entry per VISIBLE book, resolved through the same three tiers the book
 	// page uses. Counting per book (not per junction row) keeps numBooks honest.
-	narratorSeen := map[string]int{}
+	//
+	// 🔴 SPLIT COMPOUND CREDITS. A single stored string "Jeff Hays, Annie Ellicott"
+	// is two people; left whole it became its own Narrators-tab entry reading
+	// "1 book", and the real narrators' counts were short by that book. The library
+	// had entries naming EIGHT narrators. This splits the presentation only — the
+	// stored BookNarrator/NarratorsJSON rows still hold the compound string, and the
+	// web UI still shows it, so this is not the data fix.
+	narratorSeen := map[string]struct{}{}
 	for i := range books {
-		for _, name := range resolveNarratorsFromSummary(&books[i], narratorsByBook[books[i].ID]) {
-			if name = strings.TrimSpace(name); name != "" {
-				narratorSeen[name]++
+		bookID := books[i].ID
+		for _, raw := range resolveNarratorsFromSummary(&books[i], narratorsByBook[bookID]) {
+			for _, name := range util.SplitCreditNames(raw) {
+				if name = strings.TrimSpace(name); name == "" {
+					continue
+				}
+				narratorSeen[name] = struct{}{}
+				// Splitting can yield the same person twice for one book (tier 2 and
+				// tier 3 both naming them); the book must still be listed once.
+				if list := idx.narratorBooks[name]; len(list) == 0 || list[len(list)-1] != bookID {
+					idx.narratorBooks[name] = append(list, bookID)
+				}
 			}
 		}
 	}
 
 	now := msEpoch(h.now())
-	authors := make([]authorDTO, 0, len(authorSeen))
+	idx.authors = make([]authorDTO, 0, len(authorSeen))
 	for _, agg := range authorSeen {
-		authors = append(authors, authorDTO{
+		idx.authors = append(idx.authors, authorDTO{
 			AddedAt:   now,
 			ID:        strconv.Itoa(agg.id),
 			LastFirst: lastFirst(agg.name),
 			LibraryID: h.libraryID(),
 			Name:      agg.name,
-			NumBooks:  agg.books,
+			NumBooks:  len(idx.authorBooks[agg.id]),
 			UpdatedAt: now,
 		})
 	}
-	sort.SliceStable(authors, func(i, j int) bool { return authors[i].Name < authors[j].Name })
+	sort.SliceStable(idx.authors, func(i, j int) bool { return idx.authors[i].Name < idx.authors[j].Name })
 
-	narrators := make([]narratorDTO, 0, len(narratorSeen))
-	for name, count := range narratorSeen {
-		n := count
-		narrators = append(narrators, narratorDTO{ID: narratorID(name), Name: name, NumBooks: &n})
+	idx.narrators = make([]narratorDTO, 0, len(narratorSeen))
+	for name := range narratorSeen {
+		n := len(idx.narratorBooks[name])
+		idx.narrators = append(idx.narrators, narratorDTO{ID: narratorID(name), Name: name, NumBooks: &n})
 	}
-	sort.SliceStable(narrators, func(i, j int) bool { return narrators[i].Name < narrators[j].Name })
+	sort.SliceStable(idx.narrators, func(i, j int) bool { return idx.narrators[i].Name < idx.narrators[j].Name })
 
-	return authors, narrators, nil
+	return idx, nil
 }
 
 // LibraryAuthors handles GET /api/libraries/:libraryId/authors.
@@ -1104,12 +1154,12 @@ func (h *Handler) LibraryNarrators(c *gin.Context) {
 	// Derived from the VISIBLE books, exactly like the author list — ListNarrators
 	// returns every narrator row in the store, including those attached only to
 	// unorganized iTunes-tree books whose "narrator" is really a track name.
-	_, out, err := h.contributorsCached(c.Request.Context())
+	idx, err := h.contributorsCached(c.Request.Context())
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not list narrators")
 		return
 	}
-	respondJSON(c, http.StatusOK, narratorsResponse{Narrators: out})
+	respondJSON(c, http.StatusOK, narratorsResponse{Narrators: idx.narrators})
 }
 
 // narratorID derives a narrator's client-visible id from their name, matching real
@@ -1349,7 +1399,7 @@ func (h *Handler) resolveItem(c *gin.Context) *database.Book {
 // returned, and never block startup.
 func (h *Handler) WarmContributors(ctx context.Context) {
 	started := time.Now()
-	if _, _, err := h.contributorsCached(ctx); err != nil {
+	if _, err := h.contributorsCached(ctx); err != nil {
 		slog.Warn("abs: contributor cache warm failed; the first request will rebuild it", "err", err)
 		return
 	}
@@ -1422,6 +1472,32 @@ func (h *Handler) filteredItems(c *gin.Context, raw string, p pageParams, resp *
 		// the drill-down cannot disagree, and it is already ordered by series
 		// sequence — which is the order a series should be read in.
 		ids = bySeries[seriesID].bookIDs
+	case "authors":
+		// The value is the author ID the /authors list published, which is
+		// strconv.Itoa of the store's int id — not a name.
+		authorID, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			slog.Warn("abs: author filter value is not an author id", "value", value)
+			respondJSON(c, http.StatusOK, resp)
+			return
+		}
+		idx, ierr := h.contributorsCached(c.Request.Context())
+		if ierr != nil {
+			respondError(c, http.StatusInternalServerError, "could not list library items")
+			return
+		}
+		ids = idx.authorBooks[authorID]
+	case "narrators":
+		// Narrators are addressed by NAME, not by id — narratorID is just base64 of
+		// the name, so decoding the filter token yields the name back. Verified
+		// against the live client: it sends narrators.<the id from /narrators>, and
+		// prod logged group=narrators value="Jeff Hays, Annie Ellicott".
+		idx, ierr := h.contributorsCached(c.Request.Context())
+		if ierr != nil {
+			respondError(c, http.StatusInternalServerError, "could not list library items")
+			return
+		}
+		ids = idx.narratorBooks[strings.TrimSpace(value)]
 	default:
 		slog.Warn("abs: unimplemented item filter group, serving empty page",
 			"group", group, "value", value)
