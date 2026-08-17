@@ -186,6 +186,53 @@ in.
 peer flagged, and neither session named it. It is *not* claimed here; it is recorded so it does not
 sit in a mutual-assumption hole.
 
+#### ⚠️ dedup/ is NOT a batch conversion — do not read "18 unowned" as "18 conversions"
+
+The peer session flagged three ops as needing a safety determination before any
+`ResumeDrop→ResumeRestart` sweep, and all three verify exactly (file present, one `ResumeDrop`
+each, op ID as named):
+
+| file | op ID |
+|---|---|
+| `auto_resolve.go` | `dedup.auto-resolve` |
+| `purge_stale.go` | `dedup.purge-stale` |
+| `purge_legacy_fp.go` | `dedup.purge-legacy-fp-candidates` |
+
+`auto_resolve.go` is the one that matters and CLAUDE.md names its exact shape: an auto-merge apply
+path must not double-merge a book processed twice, and the prescribed fix is partitioning into
+disjoint sets, **not** naive resume. Its `ResumeDrop` is plausibly load-bearing rather than an
+oversight.
+
+**But "3 unsafe of 18" is itself an undercount, and the instrument that finds the right number is
+already in the code.** Counting mutating calls *inside the op files* is worthless here — measured,
+and it fails in both directions: the `Update|Save|Set` family is ~90% `reporter.UpdateProgress(`
+and `reporter.SetTotal(`, and `auto_resolve.go` shows **zero** direct store writes because it
+delegates everything to `dedup.Engine.AutoResolveCertain`. The op file is not where the writes
+live, so a grep scoped to it reports the most dangerous op in the directory as inert.
+
+The declared capability is the right instrument, because it is a property the op asserts about
+itself rather than one inferred from its text:
+
+```
+grep -l 'sdk\.CapLibraryWrite' $(grep -rl 'ResumePolicy:\s*sdk\.ResumeDrop' internal/plugins/dedup/)
+  -> 17 of 18
+negative control, CapLibraryRead -> 18 of 18   (so the pattern discriminates: 17 ≠ 18)
+```
+
+**17 of the 18 declare `CapLibraryWrite`.** Exactly one — `calibrate_embedding_thresholds.go` — does
+not. To be precise about what that does and does not establish: declaring a write is **not** the
+same as being non-idempotent, so this is *not* a finding that 17 ops are resume-unsafe. What it does
+establish is that under the "convert only long-running **and** idempotent-per-item ops; unsafe or
+short ones stay `ResumeDrop` with a comment saying why" rule, a safety determination is the
+**default** case in this directory, not the exception. The honest scoping is therefore
+**1 read-only + 17 requiring a per-op determination** — not "15 conversions + 3 problems." Whoever
+picks this up inherits 17 judgement calls, and a batch sweep here would convert an auto-merge apply
+path by default.
+
+One genuine anomaly surfaced by the same table: **`llm_review.go` declares `CapLibraryWrite` with an
+empty `ConcurrencyKey`**, while all 16 other writing ops serialize against themselves with a key
+matching their op ID. That is unrelated to resume policy and is worth its own look.
+
 ### Already-v2-native resume, in this territory
 
 `internal/plugins/maintenance/chapters_backfill.go` is its own sdk op-def
