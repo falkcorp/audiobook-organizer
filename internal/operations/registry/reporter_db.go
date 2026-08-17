@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
-// last-edited: 2026-07-18
+// last-edited: 2026-08-17
 
 package registry
 
@@ -78,8 +78,8 @@ type dbReporter struct {
 	// atomic nanosecond clock. Called at the very top of UpdateProgress before
 	// any lock or DB write, so the watchdog always sees a fresh timestamp even
 	// when UpdateOpProgressV2 is blocked behind PebbleDB compaction.
-	touchProgressFn      func()
-	synchronous          bool          // legacy: write DB on every UpdateProgress
+	touchProgressFn       func()
+	synchronous           bool          // legacy: write DB on every UpdateProgress
 	progressFlushInterval time.Duration // how often lazy flush fires (0 = no lazy flush)
 
 	runCtx context.Context
@@ -526,10 +526,17 @@ func (r *dbReporter) Trigger(ctx context.Context, eventName string, payload any)
 
 // OpID returns the id of the run this reporter belongs to.
 //
-// It is deliberately NOT part of the Reporter interface. Twenty-one types
-// implement Reporter and thirteen of them are test fakes that model progress and
+// It is deliberately NOT part of the Reporter interface. Twenty-four types
+// implement Reporter and fifteen of them are test fakes that model progress and
 // nothing else; adding a method would edit all of them for a concern none of
-// them has. This follows the same optional-capability pattern legacy_op_status.go
+// them has. (Counted structurally on 2026-08-17 — every implementer must declare
+// RunPhase, and `git grep "^func (.*) RunPhase("` returns exactly 24 with zero
+// interface-embedders; sdk.Reporter is a type ALIAS of this interface, not a
+// second one, so the sdk.Reporter fakes are in that 24. The previous figures,
+// 21 and 13, were a name-shaped estimate.) This is also why Reporter needs no
+// generated mock: widening it is a compile error in all 24 at once, which is a
+// stronger gate than any freshness check.
+// This follows the same optional-capability pattern legacy_op_status.go
 // uses for legacyOpStore: production runs on dbReporter, which has it, and
 // callers reach it through ReporterOpID, which degrades to "" rather than
 // panicking on a reporter that does not.

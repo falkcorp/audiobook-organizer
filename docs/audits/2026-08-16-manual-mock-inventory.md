@@ -1,7 +1,7 @@
 <!-- file: docs/audits/2026-08-16-manual-mock-inventory.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 4e91b7c2-8d35-4a6f-b012-7c5ea93d16f8 -->
-<!-- last-edited: 2026-08-16 -->
+<!-- last-edited: 2026-08-17 -->
 
 # Manual-mock inventory and remediation backlog
 
@@ -26,7 +26,7 @@ of the mock-generation config produces code nobody imports.
 | Hand-written doubles found by name pattern | **116** across **101** files |
 | Additional doubles proven to exist beyond that pattern | **≥60** (see §2) |
 | **Estimated true population** | **≈175** |
-| Hand-written impls of one single interface (`registry.Reporter`) | **13 files** |
+| Hand-written impls of one single interface (`registry.Reporter`) | **22** (15 test fakes + 7 prod adapters) |
 
 **Four findings drive everything below:**
 
@@ -34,9 +34,14 @@ of the mock-generation config produces code nobody imports.
    not a well-formed statement.
 2. **The migration that would have fixed this was abandoned mid-flight** (§4). Commit
    `7f2a01e2` is titled "pt 1"; pt 2 never landed.
-3. **CI cannot see any of this** (§5). Both mock gates verify that *listed* mocks are fresh;
-   neither can detect an interface that was never listed. One of the two gates is inert and
-   can never fail at all.
+3. **CI cannot see any of this** (§5). Both mock gates verified that *listed* mocks are
+   fresh; neither can detect an interface that was never listed. One of the two was inert
+   for its stated purpose and was **deleted on 2026-08-17** (§5b) — but note the correction
+   there: `registry.Reporter` is *not* an instance of this blind spot. It has no generated
+   mock and needs none, because every one of its 22 non-production implementers must declare
+   `RunPhase`, so widening the interface is a compile error in all of them at once. The
+   compiler is a stronger gate than a freshness check; do not "fix" this by adding Reporter
+   to `.mockery.yaml`.
 4. **Over-generation is real and concentrated** (§6). 42% of the largest generated file is
    mocks nobody imports.
 
@@ -108,18 +113,41 @@ and then stopped.
 
 ### 5a. The never-listed blind spot
 
-`make ci` runs two mock gates:
+`make ci` runs two mock gates (one as of 2026-08-17 — see 5b):
 
 - `mocks-check` — runs `mockery`, then `git diff --quiet` over `internal/**/mocks/**` plus
   the two in-package `_test.go` mocks. **This is a real gate.**
-- `check-mock-fresh` — see 5b.
+- `check-mock-fresh` — **deleted 2026-08-17**, see 5b. `make ci` now runs one mock gate.
 
 Both answer *"are the mocks we generate up to date?"* **Neither can answer *"is there an
 interface we should be generating and aren't?"*** Every one of the ~175 hand-written doubles
 is therefore green by construction. This is the structural hole the entire inventory lives
 in, and closing it (§9) matters more than any individual conversion.
 
-### 5b. `check-mock-fresh` is inert — it can never fail
+### 5b. `check-mock-fresh` is inert — ✅ DELETED 2026-08-17
+
+> **Resolved, and the original wording below was half wrong — corrected here so the
+> sharper claim is the one that propagates.** The target was deleted, not repaired.
+> It is *not* true that it "can never fail": `git diff --exit-code
+> internal/database/mocks/` fires on **any** uncommitted edit under that directory, so
+> it is a live *dirty-worktree* detector. What it cannot do is the job it was named
+> for. Measured both ways on 2026-08-17:
+>
+> | probe | condition | `check-mock-fresh` | `mocks-check` |
+> |---|---|---|---|
+> | 1 | append a junk line to the committed `mock_store.go` | **exit 2 (fails)** | — |
+> | 2 | add a method to the `Store` interface, leave the mock untouched | **exit 0, prints "Mock is fresh"** | **exit 2 (fails)** |
+>
+> Probe 2 is the failure mode the docstring named, and it is the one the target
+> misses. Probe 1 is why "never fails" is falsifiable in one command — do not repeat it.
+>
+> **Coverage lost by deleting it: none.** Store/mock divergence is a *compile* error via
+> the assertions at `internal/database/iface_assert.go:12` and
+> `internal/database/mock_store.go:30`; `vet` (a `test-short` prerequisite, so already in
+> `make ci`) runs over every package; and `mocks-check` goes red on probe 2 as well.
+> Three independent gates already own it.
+
+The original finding, for the record:
 
 ```make
 check-mock-fresh:

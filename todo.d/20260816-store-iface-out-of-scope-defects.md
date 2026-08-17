@@ -72,6 +72,9 @@ proposal's scope stays reviewable. Items marked ⚠ are agent-reported and not h
       (`scanner_coverage_test.go:655`) because importing the mocks package would cycle.
       Delete the `Scanner:` entry from `.mockery.yaml`; keep the hand-written double.
 - [ ] `internal/operations/mocks` — 206 generated lines, effectively unreferenced.
-- [ ] `Makefile` `check-mock-fresh` — runs `go generate` where the repo has **zero**
-      `//go:generate` directives, so the diff is always clean and the gate can never fail.
-      It runs in `make ci`. Delete it or give it a real directive.
+- [x] `Makefile` `check-mock-fresh` — **DELETED 2026-08-17.** Ran `go generate` where the
+      repo has **zero** `//go:generate` directives, so its regeneration step was a no-op and
+      the following `git diff` only detected a dirty worktree. Measured: mutate the `Store`
+      interface and leave the mock alone and it printed "Mock is fresh", exit 0. Deleted
+      rather than repaired — `iface_assert.go:12`, `mock_store.go:30`, `vet` and `mocks-check`
+      all already go red on that mutation, so no coverage was lost.

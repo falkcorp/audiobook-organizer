@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-08-16
+// last-edited: 2026-08-17
 
 package registry
 
@@ -36,7 +36,7 @@ type Reporter interface {
 // reporter cannot say.
 //
 // Reporter itself deliberately does not carry OpID: see the comment on
-// (*dbReporter).OpID for why widening the interface would cost twenty-one edits
+// (*dbReporter).OpID for why widening the interface would cost twenty-four edits
 // for a concern that only the scheduler has. The production reporter implements
 // it; a fake that does not simply yields "".
 //

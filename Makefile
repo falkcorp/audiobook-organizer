@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.19.0
+# version: 2.20.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-08-16
+# last-edited: 2026-08-17
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -22,7 +22,7 @@ BACKUP_DIR  ?= $(CURDIR)/backups
         web-install web-build web-dev web-test web-lint web-lint-memory \
         test test-short test-all test-all-short test-nightly test-frontend test-e2e test-e2e-demo \
         coverage coverage-check coverage-check-short ci \
-        vet mocks mocks-check check-mock-fresh staticcheck oplint sdkguard \
+        vet mocks mocks-check staticcheck oplint sdkguard \
         docker docker-run docker-stop \
         release-dry-run release-snapshot version \
         build-mtls-bridge build-mtls-bridge-windows \
@@ -301,13 +301,20 @@ mocks-check:
 	fi
 	@echo "✅ Mocks are up to date"
 
-## check-mock-fresh: Check that MockStore is up to date with the Store interface
-check-mock-fresh:
-	@echo "==> Checking mock freshness..."
-	go generate ./internal/database/...
-	git diff --exit-code internal/database/mocks/ || \
-		(echo "ERROR: MockStore is stale. Run 'make generate' and commit." && exit 1)
-	@echo "==> Mock is fresh."
+## (removed 2026-08-17) check-mock-fresh — deleted, not repaired. It claimed to
+## catch a stale MockStore and could not: it ran `go generate
+## ./internal/database/...` in a repo with ZERO //go:generate directives (mocks
+## come from .mockery.yaml), so the regeneration was a no-op and the following
+## `git diff --exit-code internal/database/mocks/` only ever detected a dirty
+## worktree. Measured: add a method to the Store interface and leave the mock
+## alone — the exact drift the docstring named — and it printed "Mock is fresh"
+## and exited 0. Its own error message told you to run `make generate`, a target
+## that does not exist. Coverage lost by removing it: none. Store/mock
+## divergence is a COMPILE error via the assertions at
+## internal/database/iface_assert.go:12 and internal/database/mock_store.go:30,
+## `vet` (a test-short prerequisite) runs over every package, and `mocks-check`
+## below regenerates from .mockery.yaml and diffs. All three go red on that same
+## mutation. Do not reintroduce this target; add cases to mocks-check instead.
 
 ## staticcheck: Run staticcheck (install: go install honnef.co/go/tools/cmd/staticcheck@latest)
 staticcheck:
@@ -488,7 +495,7 @@ coverage-check-short:
 	echo "✅ Coverage $$coverage% meets floor $$floor%"
 
 ## ci: Fast CI check (short tests — prop tests skipped; use test-nightly for full suite)
-ci: mocks-check check-mock-fresh staticcheck sdkguard test-all-short coverage-check-short
+ci: mocks-check staticcheck sdkguard test-all-short coverage-check-short
 	@echo "✅ All CI checks passed!"
 
 ## build-mtls-bridge: Build the mTLS bridge binary (macOS)

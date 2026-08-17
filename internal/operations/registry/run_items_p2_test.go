@@ -1,7 +1,7 @@
 // file: internal/operations/registry/run_items_p2_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4f8a2c6e-1b93-4d57-8e0a-2c9b1d3e4f60
-// last-edited: 2026-07-18
+// last-edited: 2026-08-17
 
 package registry_test
 
@@ -29,12 +29,12 @@ func (r *p2ProgReporter) UpdateProgress(current, _ int, _ string) error {
 	r.mu.Unlock()
 	return nil
 }
-func (r *p2ProgReporter) SetCurrentItem(string)                         {}
-func (r *p2ProgReporter) Log(slog.Level, string, ...slog.Attr) error    { return nil }
-func (r *p2ProgReporter) Logger() *slog.Logger                          { return slog.Default() }
-func (r *p2ProgReporter) Checkpoint(any) error                          { return nil }
-func (r *p2ProgReporter) IsCanceled() bool                              { return false }
-func (r *p2ProgReporter) Trigger(context.Context, string, any) error    { return nil }
+func (r *p2ProgReporter) SetCurrentItem(string)                      {}
+func (r *p2ProgReporter) Log(slog.Level, string, ...slog.Attr) error { return nil }
+func (r *p2ProgReporter) Logger() *slog.Logger                       { return slog.Default() }
+func (r *p2ProgReporter) Checkpoint(any) error                       { return nil }
+func (r *p2ProgReporter) IsCanceled() bool                           { return false }
+func (r *p2ProgReporter) Trigger(context.Context, string, any) error { return nil }
 func (r *p2ProgReporter) RunPhase(ctx context.Context, _ string, fn func(context.Context, registry.Reporter) error) error {
 	return fn(ctx, r)
 }
