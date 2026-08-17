@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-16-manual-mock-inventory.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4e91b7c2-8d35-4a6f-b012-7c5ea93d16f8 -->
 <!-- last-edited: 2026-08-16 -->
 
@@ -144,29 +144,48 @@ or give it a real directive.
 Full line attribution of `internal/database/mocks/mock_store.go` (52,384 of 52,384 lines
 accounted for):
 
+> ## ⚠ CORRECTED 2026-08-16 — the counts in this section were wrong
+>
+> The figures below (**37 unused / 8 referenced / 22,001 dead lines**) were produced by a bare
+> `grep 'mocks\.MockX'`, which **collides with the ten other mock packages in this repo**
+> (`handlersmocks.`, `dedupmocks.`, `entitiesmocks.`, …) and so counted their references as
+> references to `internal/database/mocks`. It also missed the fact that the package is imported
+> under **three different aliases** — `mocks` (33 files), `dbmocks` (20), `databasemocks` (4).
+>
+> Re-measured at `8011a755` by resolving each importing file's actual local alias:
+>
+> | | audit said | **actual** |
+> |---|---|---|
+> | referenced | 8 | **3** — `MockStore` (54 files), `MockImportPathStore` (2), `MockOpsV2Store` (2) |
+> | unused | 37 | **42** |
+> | dead lines in `mock_store.go` | 22,001 (42%) | **40,569 (76%)** |
+>
+> The remediation is unchanged and its payoff is roughly **2× larger** than stated.
+> See [`2026-08-16-store-interface-decomposition.md`](2026-08-16-store-interface-decomposition.md) §3 and §8.
+> This is the same package-collision trap this document itself warns about under *Naming trap* —
+> the audit fell into it while documenting it.
+
 | | Lines | Share |
 |---|---|---|
 | All generated mock code, 16 directories | **89,820** | — |
 | `internal/database/mocks/mock_store.go` | **52,384** | **58% of all generated code** |
 | — `MockStore` alone | 23,536 | 45% of the file |
-| — the **37 unreferenced** database mocks | **22,001** | **42% of the file** |
+| — the ~~37~~ **42** unreferenced database mocks | ~~22,001~~ **40,569** | ~~42%~~ **76% of the file** |
 | `internal/server/handlers/mocks` (next largest) | 13,747 | 15% |
 
 `.mockery.yaml` generates a standalone mock for all **45** `internal/database` interfaces.
-Only **8** are ever referenced: `MockStore`, `MockOpsV2Store`, `MockOperationStore`,
-`MockExternalIDStore`, `MockImportPathStore`, `MockMetadataStore`, `MockPlaylistStore`,
-`MockUserStore`.
+Only **3** are ever referenced: `MockStore`, `MockImportPathStore`, `MockOpsV2Store`.
 
 **Two distinct causes, two different fixes:**
 
-- **The 37 unused mocks (22,001 lines)** — delete their `.mockery.yaml` entries. Zero test
+- **The 42 unused mocks (40,569 lines)** — delete their `.mockery.yaml` entries. Zero test
   impact; nothing imports them. Reversible at one YAML line each plus `make mocks`, so this
   cannot entrench anything.
 - **`MockStore` at 23,536 lines** — not a mock problem. `database.Store` embeds 39
   sub-interfaces (~393 methods) and mockery emits a struct, an expecter, and one `_Call` type
   per method. The mock cannot shrink unless the interface does.
 
-**These are related.** The 37 narrow mocks go unused *because* production constructors accept
+**These are related.** The 42 narrow mocks go unused *because* production constructors accept
 `database.Store` rather than `BookReader` or `WorkStore`. Nobody reaches for `MockBookReader`
 because no function accepts a `BookReader`. Narrowing parameters would make those mocks useful
 *and* reduce `MockStore` usage — and it is a test-quality change, not just a bloat one: a
@@ -352,7 +371,7 @@ is undone by phase 2.**
 | 9 | `internal/scanner.Scanner` — needs a **second** config block emitting in-package unexported to `mock_scanner_test.go` (`internal/scanner/mocks` imports `scanner`, so a plain import cycles). Precedent: `.mockery.yaml:91-94` | 2 doubles |
 | 10 | Delete 3 doubles needing **no config change** — `authorReassignStore`, `applyBookReader`, `revertServiceStore` are structurally satisfied by the existing `mocks.MockStore` | 3 doubles |
 | 11 | **Build the ratchet** (§9a); delete or repair the inert `check-mock-fresh` | Closes the blind spot; retires a dead CI step |
-| 12 | Prune the **37** unreferenced `internal/database` entries from `.mockery.yaml` | **22,001** generated lines |
+| 12 | Prune the **42** unreferenced `internal/database` entries from `.mockery.yaml` | **40,569** generated lines |
 
 ### 9a. The ratchet — how phase 1 reaches phase 2
 
