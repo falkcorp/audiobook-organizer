@@ -1,7 +1,7 @@
 # file: .mockery.yaml
-# version: 1.20.0
+# version: 1.21.0
 # guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-# last-edited: 2026-08-11
+# last-edited: 2026-08-17
 
 # Mockery configuration (v3)
 # NOTE: with-expecter is enabled by default in v3
@@ -19,49 +19,8 @@ packages:
   github.com/falkcorp/audiobook-organizer/internal/database:
     interfaces:
       Store:
-      LifecycleStore:
-      BookReader:
-      BookWriter:
-      BookStore:
-      AuthorReader:
-      AuthorWriter:
-      AuthorStore:
-      SeriesReader:
-      SeriesWriter:
-      SeriesStore:
-      UserReader:
-      UserWriter:
-      UserStore:
-      NarratorStore:
-      WorkStore:
-      SessionStore:
-      OAuthIdentityStore:
-      RoleStore:
-      APIKeyStore:
-      InviteStore:
-      UserPreferenceStore:
-      UserPositionStore:
-      BookVersionStore:
-      BookFileStore:
-      BookSegmentStore:
-      PlaylistStore:
-      UserPlaylistStore:
       ImportPathStore:
       OperationStore:
-      TagStore:
-      UserTagStore:
-      MetadataStore:
-      HashBlocklistStore:
-      ITunesStateStore:
-      PathHistoryStore:
-      ExternalIDStore:
-      RawKVStore:
-      PlaybackStore:
-      SettingsStore:
-      StatsStore:
-      MaintenanceStore:
-      RejectedMetadataStore:
-      SystemActivityStore:
       OpsV2Store:
   github.com/falkcorp/audiobook-organizer/internal/operations:
     config:
