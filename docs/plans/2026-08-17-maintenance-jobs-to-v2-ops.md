@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-08-17-maintenance-jobs-to-v2-ops.md -->
-<!-- version: 1.3.1 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 4a71e8c3-92d6-4f15-b03a-7e8d5c1946fb -->
 <!-- last-edited: 2026-08-17 -->
 
@@ -248,10 +248,16 @@ mutation.
   registered count, so a job silently dropped during conversion fails the build's tests, not
   production. 37 is the number to assert against (verified three ways: 37 `Run` receivers, 37
   files, 37 non-test `maintenance.Register` calls).
-- ⚠️ **`registry.Reporter` has no mock gate.** It is hand-rolled in **25 test files under 21
-  names** and appears **0×** in `.mockery.yaml`; `check-mock-fresh` is inert (0 `//go:generate`).
-  This migration touches Reporter usage, so `go build` is the only thing catching drift. Fixing
-  that gate is tracked separately and should land early.
+- ✅ **`registry.Reporter` needs no mock gate — RETRACTED, this bullet was wrong.** The
+  "25 test files under 21 names" figure was a naming grep. Counted structurally on 2026-08-17
+  (every implementer must declare `RunPhase`; `sdk.Reporter` is a type ALIAS, not a second
+  interface; zero interface-embedders): **24 implementers — 2 production, 7 production
+  adapters, 15 test fakes**, none behind a build tag, all compiled by `go test ./...`. It
+  appears 0× in `.mockery.yaml` and correctly so: widening `Reporter` is a compile error in
+  all 24 at once, which is a stronger gate than any freshness check. `go build` catching drift
+  is the *design*, not a gap. `check-mock-fresh` was separately inert for its own stated
+  purpose and was deleted on 2026-08-17 — see
+  `docs/audits/2026-08-16-manual-mock-inventory.md` §5b for the two probes.
 
 ## Rollback
 
