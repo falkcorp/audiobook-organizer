@@ -262,12 +262,14 @@ func TestOperationEndpointsErrors(t *testing.T) {
 	defer cleanup()
 
 	// opRegistry is always initialized in NewServer — scan/organize return 202 Accepted.
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/operations/scan", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/operations/v2",
+		strings.NewReader(`{"def_id":"library.scan","params":{}}`))
 	w := httptest.NewRecorder()
 	server.router.ServeHTTP(w, req)
 	require.Equal(t, http.StatusAccepted, w.Code)
 
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/operations/organize", nil)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/operations/v2",
+		strings.NewReader(`{"def_id":"library.organize","params":{}}`))
 	w = httptest.NewRecorder()
 	server.router.ServeHTTP(w, req)
 	require.Equal(t, http.StatusAccepted, w.Code)

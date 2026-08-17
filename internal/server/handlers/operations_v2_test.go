@@ -321,3 +321,70 @@ func TestTriggerOperationV2_ParamsArriveDecodable(t *testing.T) {
 		"an explicit selection must survive the trigger; nil here means WHOLE LIBRARY downstream")
 	require.True(t, got.FetchMetadataFirst, "flags must survive the trigger too")
 }
+
+// fakeScanCanceler / fakeScanLister are hand-written because the interfaces are
+// two methods between them and the assertion is about WHICH scan id is passed.
+type fakeScanCanceler struct{ canceled []int }
+
+func (f *fakeScanCanceler) CancelScan(scanID int) error {
+	f.canceled = append(f.canceled, scanID)
+	return nil
+}
+
+type fakeScanLister struct {
+	scans []database.Scan
+	err   error
+}
+
+func (f *fakeScanLister) ListScans() ([]database.Scan, error) { return f.scans, f.err }
+
+// TestCancelOperationV2_CancelsAnAIScanThroughThePipeline covers the branch
+// ported from the legacy DELETE /operations/:id.
+//
+// An AI scan is driven by the pipeline manager, not the ops registry. Only the
+// legacy route knew that; CancelOperationV2 went straight to registry.Cancel.
+// Retiring the legacy route without carrying this over would have left the
+// cancel button answering 204 while the scan kept running — a silent break, and
+// the reason the port had to land BEFORE the deletion rather than after.
+//
+// The registry mock has NO Cancel expectation: mockery fails the test if the
+// handler falls through to it, which is the half that proves the AI-scan branch
+// actually took priority rather than merely also running.
+func TestCancelOperationV2_CancelsAnAIScanThroughThePipeline(t *testing.T) {
+	canceler := &fakeScanCanceler{}
+	lister := &fakeScanLister{scans: []database.Scan{
+		{ID: 7, OperationID: "other-op"},
+		{ID: 42, OperationID: "op-abc"},
+	}}
+	registry := handlersmocks.NewMockOperationsRegistry(t)
+
+	h := handlers.NewOperationsV2Handler(nil, registry, nil,
+		handlers.WithAIScanCancellation(canceler, lister))
+	c, w := newOpsV2Ctx(http.MethodDelete, "/operations/v2/op-abc", "", nil)
+	c.Params = gin.Params{{Key: "id", Value: "op-abc"}}
+	h.CancelOperationV2(c)
+
+	require.Equal(t, http.StatusNoContent, w.Code)
+	require.Equal(t, []int{42}, canceler.canceled,
+		"the scan matched by OperationID must be the one cancelled — OperationID is "+
+			"the only link between an operation and its AI scan")
+}
+
+// TestCancelOperationV2_FallsThroughToTheRegistryForAnOrdinaryOp is the other
+// half: the AI-scan branch must not swallow every cancel. An op with no matching
+// scan still has to reach the registry.
+func TestCancelOperationV2_FallsThroughToTheRegistryForAnOrdinaryOp(t *testing.T) {
+	canceler := &fakeScanCanceler{}
+	lister := &fakeScanLister{scans: []database.Scan{{ID: 7, OperationID: "some-other-op"}}}
+	registry := handlersmocks.NewMockOperationsRegistry(t)
+	registry.EXPECT().Cancel("op-xyz").Return(nil).Once()
+
+	h := handlers.NewOperationsV2Handler(nil, registry, nil,
+		handlers.WithAIScanCancellation(canceler, lister))
+	c, w := newOpsV2Ctx(http.MethodDelete, "/operations/v2/op-xyz", "", nil)
+	c.Params = gin.Params{{Key: "id", Value: "op-xyz"}}
+	h.CancelOperationV2(c)
+
+	require.Equal(t, http.StatusNoContent, w.Code)
+	require.Empty(t, canceler.canceled, "no scan matched; the pipeline must not be touched")
+}

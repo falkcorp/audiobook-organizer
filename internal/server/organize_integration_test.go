@@ -56,7 +56,8 @@ func TestOrganizeService_ViaHTTP(t *testing.T) {
 		// registered after defer cleanup() → runs first (LIFO) to avoid pebble: closed panics.
 		defer func() { _ = server.opRegistry.Shutdown(context.Background()) }()
 	}
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/operations/organize", strings.NewReader("{}"))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/operations/v2",
+		strings.NewReader(`{"def_id":"library.organize","params":{}}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	server.router.ServeHTTP(w, req)

@@ -2059,7 +2059,10 @@ export async function getOperationLogsTail(id: string, tail: number): Promise<Op
 }
 
 export async function cancelOperation(id: string): Promise<void> {
-  const response = await apiFetch(`${API_BASE}/operations/${id}`, {
+  // v2. The legacy DELETE /operations/:id was retired once CancelOperationV2
+  // learned to cancel an AI scan through the pipeline manager, which until then
+  // only the legacy route knew how to do.
+  const response = await apiFetch(`${API_BASE}/operations/v2/${id}`, {
     method: 'DELETE',
   });
   if (!response.ok) {
@@ -2073,18 +2076,6 @@ export async function clearStaleOperations(): Promise<{ cleared: number }> {
   });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to clear stale operations');
-  }
-  const body = await response.json();
-  return body.data;
-}
-
-export async function listOperations(
-  limit = 50,
-  offset = 0
-): Promise<{ items: Operation[]; total: number; limit: number; offset: number }> {
-  const response = await apiFetch(`${API_BASE}/operations?limit=${limit}&offset=${offset}`);
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to fetch operations');
   }
   const body = await response.json();
   return body.data;
