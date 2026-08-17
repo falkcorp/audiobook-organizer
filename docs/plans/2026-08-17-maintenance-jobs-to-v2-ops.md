@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-08-17-maintenance-jobs-to-v2-ops.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 4a71e8c3-92d6-4f15-b03a-7e8d5c1946fb -->
 <!-- last-edited: 2026-08-17 -->
 
@@ -193,10 +193,27 @@ PR-1. The other 5 keep `ResumeDrop` — matching what the bridge hardcodes today
 behaviour-preserving — each with a comment naming the params gap. Their upgrade moves to **PR-2**,
 where the divergence can be resolved and the replay actually tested.
 
-Two of those 5 are the reason this is not a paperwork distinction: `cleanup_empty_folders` removes
-directories from disk, and `repair_missing_files` deletes `book_file` rows (cf.
-`docs/audits/2026-08-17-orphan-destination-rows-root-cause.md`). Under nil-params requeue both
-would silently run for real after a deploy-time restart.
+Two of those 5 are the reason this is not a paperwork distinction, and under nil-params requeue
+both would silently run for real after a deploy-time restart:
+
+- `cleanup_empty_folders` — `os.Remove(dir)` at `cleanup_empty_folders.go:85`, guarded by
+  `if dryRun` at `:82`.
+- `repair_missing_files` — rewrites `book_file` rows in place at `repair_missing_files.go:566`
+  (`UpdateBookFile`, setting `FilePath` / `OriginalFilename` / `Missing=false` / `FileSize` /
+  `Format`), guarded by `if dryRun` at `:532`.
+
+> **⚠️ Correction (v1.3.1).** v1.3.0 of this doc said `repair_missing_files` *deletes* `book_file`
+> rows. **It does not** — it has zero delete calls; it **repoints** them. I had conflated two
+> different files with near-mirror-image names:
+>
+> | file | op/job ID | one of the 37? | mutation |
+> |---|---|---|---|
+> | `internal/maintenance/jobs/repair_missing_files.go` | `repair-missing-files` | ✅ yes | `UpdateBookFile` — repoint |
+> | `internal/plugins/maintenance/missing_file_repair.go` | `maintenance.missing-file-repair` | ❌ no, already v2-native | `DeleteBookFilesByIDs` — delete |
+>
+> The delete lives in the file the **prod-ops lane** runs, not in the one PR-1 touches. The
+> `ResumeDrop` decision for these 5 is unaffected — it rests on all 5 advertising `dry_run: true`,
+> not on the severity of any one of them.
 
 **PR-2 owes a conformance test.** One fixture, both requeue implementations, assert the resumed
 params are equal — the two-implementations pattern that has bitten this repo before. Resolving the

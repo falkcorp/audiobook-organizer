@@ -23,8 +23,15 @@ that before rating severity; it is the difference between a latent trap and an a
 
 Blocks the `ResumeRequeue` upgrade for 5 of the 6 `CanResume`-but-checkpointless maintenance jobs
 in `docs/plans/2026-08-17-maintenance-jobs-to-v2-ops.md` (PR-1 keeps them `ResumeDrop`). Two of
-those 5 are `cleanup_empty_folders` (removes directories) and `repair_missing_files` (deletes
-`book_file` rows).
+those 5 are `cleanup_empty_folders` (`os.Remove(dir)` at `:85`, dry-run guarded at `:82`) and
+`repair_missing_files` (`UpdateBookFile` at `:566` — repoints `FilePath`/`Missing`/`FileSize`,
+dry-run guarded at `:532`).
+
+⚠️ Do not confuse `internal/maintenance/jobs/repair_missing_files.go` (job `repair-missing-files`,
+one of the 37, **repoints**, zero delete calls) with
+`internal/plugins/maintenance/missing_file_repair.go` (op `maintenance.missing-file-repair`,
+already v2-native, **deletes** via `DeleteBookFilesByIDs`). Near-mirror-image filenames, opposite
+mutations, different lanes.
 
 Fix direction: resolve the divergence rather than test around it — have `resumeV2Op` read the v1
 row's saved params and pass them through, so both paths replay params identically. Then add a
