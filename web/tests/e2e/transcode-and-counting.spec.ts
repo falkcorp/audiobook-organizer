@@ -1,6 +1,7 @@
 // file: web/tests/e2e/transcode-and-counting.spec.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901abc
+// last-edited: 2026-08-16
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -65,51 +66,53 @@ async function setupWithTranscode(
 
   await setupMockApi(page, { books, ...extra });
 
-  // Intercept transcode endpoint. The delay is load-bearing: this mock used to
-  // resolve instantly, so the button's 'Converting...' state came and went
-  // before any assertion could observe it.
-  await page.route('**/api/v1/operations/transcode', async (route) => {
+  // Intercept the transcode trigger. Every start now goes through the generic
+  // POST /operations/v2 with a def_id, so this matches on the body rather than
+  // on a per-operation URL, and falls back for any other def_id so the shared
+  // mock still handles scans and organizes.
+  //
+  // The delay is load-bearing: this mock used to resolve instantly, so the
+  // button's 'Converting...' state came and went before any assertion could
+  // observe it.
+  await page.route('**/api/v1/operations/v2', async (route) => {
     const req = route.request();
-    if (req.method() === 'POST') {
-      const body = JSON.parse((await req.postData()) || '{}');
-      transcodeStarted = true;
-      transcodeBookId = body.book_id;
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      return route.fulfill({
-        status: 202,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          id: 'op-transcode-1',
-          type: 'transcode',
-          status: 'running',
-          progress: 0,
-          total: 5,
-          message: 'Starting transcode',
-          created_at: new Date().toISOString(),
-        }),
-      });
+    const body = JSON.parse(req.postData() || '{}');
+    if (req.method() !== 'POST' || body.def_id !== 'library.transcode') {
+      return route.fallback();
     }
-    return route.fallback();
+    transcodeStarted = true;
+    transcodeBookId = body.params?.book_id;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    return route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ op_id: 'op-transcode-1' }),
+    });
   });
 
-  // Intercept operation status polling
+  // Intercept operation status polling. GET /operations/v2/:id carries the
+  // operation under `data.operation` — getOperationV2 throws on any other
+  // shape — and uses the v2 progress_* field names.
   let pollCount = 0;
-  await page.route('**/api/v1/operations/op-transcode-1', async (route) => {
+  await page.route('**/api/v1/operations/v2/op-transcode-1*', async (route) => {
     pollCount++;
     const status = pollCount >= 3 ? 'completed' : 'running';
     const progress = pollCount >= 3 ? 5 : Math.min(pollCount, 4);
+    const operation = {
+      id: 'op-transcode-1',
+      def_id: 'library.transcode',
+      status,
+      progress_current: progress,
+      progress_total: 5,
+      progress_message:
+        status === 'completed' ? 'Complete' : `Transcoding audio (${progress * 20}%)`,
+      error_message: null,
+      queued_at: new Date().toISOString(),
+    };
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        id: 'op-transcode-1',
-        type: 'transcode',
-        status,
-        progress,
-        total: 5,
-        message: status === 'completed' ? 'Complete' : `Transcoding audio (${progress * 20}%)`,
-        created_at: new Date().toISOString(),
-      }),
+      body: JSON.stringify({ data: { operation, logs: [] } }),
     });
   });
 
@@ -585,8 +588,12 @@ test.describe('Transcode Error Handling', () => {
     const book = mp3Book();
     await setupMockApi(page, { books: [book] });
 
-    // Mock transcode to return server error
-    await page.route('**/api/v1/operations/transcode', async (route) => {
+    // Mock the transcode trigger to return a server error. Matches on def_id
+    // and falls back otherwise, so unrelated triggers still reach the shared
+    // mock rather than all failing with this one's error.
+    await page.route('**/api/v1/operations/v2', async (route) => {
+      const body = JSON.parse(route.request().postData() || '{}');
+      if (body.def_id !== 'library.transcode') return route.fallback();
       return route.fulfill({
         status: 500,
         contentType: 'application/json',
@@ -607,8 +614,10 @@ test.describe('Transcode Error Handling', () => {
     const book = mp3Book();
     await setupMockApi(page, { books: [book] });
 
-    // Mock transcode to return 404
-    await page.route('**/api/v1/operations/transcode', async (route) => {
+    // Mock the transcode trigger to return 404; see the def_id note above.
+    await page.route('**/api/v1/operations/v2', async (route) => {
+      const body = JSON.parse(route.request().postData() || '{}');
+      if (body.def_id !== 'library.transcode') return route.fallback();
       return route.fulfill({
         status: 404,
         contentType: 'application/json',

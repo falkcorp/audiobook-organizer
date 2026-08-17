@@ -1,5 +1,5 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.13.0
+// version: 2.14.0
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
 // last-edited: 2026-08-16
 
@@ -1289,15 +1289,29 @@ export async function setupMockApiRoutes(
       return route.fulfill(jsonResponse({ logs: logs[opId] || [], items: logs[opId] || [] }));
     }
 
-    if (pathname === '/api/v1/operations/scan' && method === 'POST') {
-      const scanOp = { id: 'op-scan-1', status: 'running', type: 'scan', progress: 0 };
-      return route.fulfill(jsonResponse({ ...scanOp, data: scanOp }, 201));
-    }
+    // ── Starting an operation ──────────────────────────────────────────────
+    // Two spellings reach the same state change. `POST /operations/v2` is the
+    // one the app actually uses (`triggerOp`, api.ts:1972); the v1
+    // `/operations/{scan,organize}` routes below were retired server-side in
+    // 2c8e3b3c and survive here only because a few specs still stub them
+    // directly. The bodies are shared rather than copied: a mock where the two
+    // diverge lets a spec pass while the feature is broken in the browser.
+    const startScanOp = () => ({
+      id: 'op-scan-1', status: 'running', type: 'scan', progress: 0,
+    });
 
-    if (pathname === '/api/v1/operations/organize' && method === 'POST') {
-      let body: Record<string, unknown> = {};
-      try { body = request.postDataJSON() || {}; } catch { /* ignore */ }
-      const bookIds = Array.isArray(body.book_ids) ? body.book_ids as string[] : [];
+    /**
+     * runOrganizeOp organizes `bookIds` (or the whole library when empty),
+     * mutating mockState.books, and returns the resulting operation row plus
+     * the HTTP status to answer with.
+     *
+     * A book carrying `organize_error` aborts the run AT that book and reports
+     * partial progress — the rollback spec asserts on that count, so the early
+     * return is load-bearing, not defensive.
+     */
+    const runOrganizeOp = (
+      bookIds: string[]
+    ): { op: Record<string, unknown>; status: number } => {
       let errorBook: Record<string, unknown> | null = null;
       const rootDir = (mockState.config.root_dir || '/library').replace(/\/+$/, '');
       mockState.books = mockState.books.map((b) => {
@@ -1317,16 +1331,109 @@ export async function setupMockApiRoutes(
         return b;
       }) as typeof mockState.books;
       if (errorBook) {
-        const errorOp = {
-          id: 'op-org-1', status: 'error', type: 'organize',
-          error_message: (errorBook as Record<string, unknown>).organize_error,
-          progress: bookIds.indexOf((errorBook as Record<string, unknown>).id as string),
-          total: bookIds.length,
+        return {
+          status: 200,
+          op: {
+            id: 'op-org-1', status: 'error', type: 'organize',
+            error_message: (errorBook as Record<string, unknown>).organize_error,
+            progress: bookIds.indexOf((errorBook as Record<string, unknown>).id as string),
+            total: bookIds.length,
+          },
         };
-        return route.fulfill(jsonResponse({ ...errorOp, data: errorOp }, 200));
       }
-      const organizeOp = { id: 'op-org-1', status: 'completed', type: 'organize', progress: bookIds.length || mockState.books.length, total: bookIds.length || mockState.books.length };
-      return route.fulfill(jsonResponse({ ...organizeOp, data: organizeOp }, 201));
+      const count = bookIds.length || mockState.books.length;
+      return {
+        status: 201,
+        op: { id: 'op-org-1', status: 'completed', type: 'organize', progress: count, total: count },
+      };
+    };
+
+    /** Operations minted by POST /operations/v2, so a later GET can find one no fixture declared. */
+    const opStore = mockState.operations as {
+      active?: Array<Record<string, unknown>>;
+      history?: Array<Record<string, unknown>>;
+      timeline?: Array<Record<string, unknown>>;
+      logs?: Record<string, unknown[]>;
+      minted?: Record<string, Record<string, unknown>>;
+    };
+
+    if (pathname === '/api/v1/operations/scan' && method === 'POST') {
+      const scanOp = startScanOp();
+      return route.fulfill(jsonResponse({ ...scanOp, data: scanOp }, 201));
+    }
+
+    if (pathname === '/api/v1/operations/organize' && method === 'POST') {
+      let body: Record<string, unknown> = {};
+      try { body = request.postDataJSON() || {}; } catch { /* ignore */ }
+      const bookIds = Array.isArray(body.book_ids) ? body.book_ids as string[] : [];
+      const { op, status } = runOrganizeOp(bookIds);
+      return route.fulfill(jsonResponse({ ...op, data: op }, status));
+    }
+
+    // POST /operations/v2 — the generic trigger every start now goes through.
+    // The id is echoed under three keys because three callers read three
+    // different ones: `op_id` (triggerOp), `operation_id`
+    // (startBulkMetadataFetch, which reads `body.data`), and `id`.
+    if (pathname === '/api/v1/operations/v2' && method === 'POST') {
+      let body: Record<string, unknown> = {};
+      try { body = request.postDataJSON() || {}; } catch { /* ignore */ }
+      const defId = String(body.def_id || '');
+      const params = (body.params || {}) as Record<string, unknown>;
+      let op: Record<string, unknown>;
+      if (defId === 'library.organize') {
+        const ids = Array.isArray(params.book_ids) ? params.book_ids as string[] : [];
+        op = runOrganizeOp(ids).op;
+      } else if (defId === 'library.scan') {
+        op = startScanOp();
+      } else {
+        op = {
+          id: `op-${defId.replace(/[^a-z0-9]+/gi, '-') || 'generic'}-1`,
+          status: 'running',
+          type: defId,
+          progress: 0,
+        };
+      }
+      op.def_id = defId;
+      opStore.minted = { ...(opStore.minted || {}), [String(op.id)]: op };
+      const opId = String(op.id);
+      return route.fulfill(jsonResponse({ op_id: opId, id: opId, operation_id: opId }, 201));
+    }
+
+    // GET /operations/v2/:id — ONE response carries the operation and its logs.
+    // getOperationV2 (api.ts:544) reads `data.operation` and throws on any
+    // other shape; getOperationLogs (api.ts:2093) reads `data.logs` off this
+    // same body, which is why there is no separate logs route to add.
+    //
+    // Deliberately served from the SAME mockState.operations store the v1
+    // handlers read, translating the fixtures' legacy field names on the way
+    // out. A row already in v2 shape (timeline fixtures are) short-circuits
+    // every `??` and passes through untouched, so no fixture had to change.
+    const getOpV2 = pathname.match(/^\/api\/v1\/operations\/v2\/([^/]+)$/);
+    if (getOpV2 && method === 'GET') {
+      const opId = decodeURIComponent(getOpV2[1]);
+      const declared = [
+        ...(opStore.active || []),
+        ...(opStore.history || []),
+        ...(opStore.timeline || []),
+      ].find((o) => o.id === opId);
+      // Fixture rows win over minted ones; the synthetic completed op is the
+      // last resort, mirroring what the v1 /status handler answered for an
+      // unknown id.
+      const src: Record<string, unknown> = declared
+        || (opStore.minted || {})[opId]
+        || { id: opId, type: 'scan', status: 'completed', progress: 100, total: 100 };
+      const operation = {
+        ...src,
+        id: opId,
+        def_id: src.def_id ?? src.type ?? 'library.scan',
+        status: src.status ?? 'running',
+        progress_current: src.progress_current ?? src.progress ?? 0,
+        progress_total: src.progress_total ?? src.total ?? 0,
+        progress_message: src.progress_message ?? src.message ?? '',
+        error_message: src.error_message ?? null,
+      };
+      const logs = (opStore.logs || {})[opId] || [];
+      return route.fulfill(jsonResponse({ operation, logs }));
     }
 
     // Generic cancel fallback for specs that do not track timeline rows. Same
