@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-08-17-maintenance-jobs-to-v2-ops.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4a71e8c3-92d6-4f15-b03a-7e8d5c1946fb -->
 <!-- last-edited: 2026-08-17 -->
 
@@ -135,10 +135,10 @@ mutation.
 ## Test strategy
 
 - Per PR: `go build ./...`, **full-tree** `go vet ./...`, `go test` on every touched package.
-- **PR-A's dry-run test is the one that matters** — mutation-test it (flip the resumed value to
-  `false` and confirm the test fails). A green test here that does not measure is how the
+- **PR-2's ported dry-run test is the one that matters** — mutation-test it (flip the resumed value
+  to `false` and confirm the test fails). A green test here that does not measure is how the
   original bug shipped.
-- PR-C: assert all 37 op IDs are registered — `maintenance.All()` count must equal the
+- PR-2: assert all 37 op IDs are registered — `maintenance.All()` count must equal the
   registered count, so a job silently dropped during conversion fails the build's tests, not
   production. 37 is the number to assert against (verified three ways: 37 `Run` receivers, 37
   files, 37 non-test `maintenance.Register` calls).
@@ -149,7 +149,7 @@ mutation.
 
 ## Rollback
 
-PR-A through PR-C are independently revertible. PR-D is the point of no return for the legacy
+PR-1 and PR-2 are independently revertible. **PR-3 is the point of no return** for the legacy
 rows — hold it until a restart has been observed resuming correctly in prod.
 
 ## Session territory (2026-08-17)
@@ -157,9 +157,60 @@ rows — hold it until a restart has been observed resuming correctly in prod.
 Claimed here: `internal/maintenance/`, `internal/plugins/maintenance/`, `internal/database/`
 (+ `mocks/`, `.mockery.yaml`), `internal/operations/registry/`, and in `internal/server/` only
 `maintenance_job_op.go`, `maintenance_dispatcher.go`, `server_lifecycle.go`. The other session
-stood down from these and from the 24 queued `ResumeDrop→ResumeRestart` conversions in
-`internal/plugins/maintenance`. Wave 0 errcheck (926 issues, repo-wide) is deferred until after
-this — it touches every error return and is the worst possible overlap with a signature refactor.
+stood down from these. Wave 0 errcheck (926 issues, repo-wide) is deferred until after this — it
+touches every error return and is the worst possible overlap with a signature refactor.
+
+### The `ResumeDrop` population — measured, and the earlier figures were wrong
+
+Both of the numbers in circulation were undercounts from name-shaped surveys. Structural count on
+`main = 3ede9161`, `grep -rn 'ResumePolicy:\s*sdk\.ResumeDrop' internal/plugins/`:
+
+| directory | declarations | files | owner |
+|---|---|---|---|
+| `internal/plugins/maintenance/` | **36** | 26 | claimed here |
+| `internal/plugins/dedup/` | **18** | 18 | ⚠️ **unclaimed by anyone** |
+| `internal/plugins/acoustid/` | 5 | 5 | unclaimed (peer explicitly declined) |
+| `internal/plugins/{deluge,itunes,metafetch}/` | 3 | 3 | unclaimed (peer explicitly declined) |
+| **total** | **62** | **52** | |
+
+Population context: 101 `ResumePolicy:` declarations in total under `internal/plugins/`, of which
+18 are already `ResumeRestart` — so the pattern is discriminating, not matching everything.
+
+Two retractions, both the same failure mode (counting by name instead of by structure, cf.
+`feedback_naming_grep_is_not_a_census`): the figure **24** was mine and was low by 38, and the
+peer's follow-up correction to **62 across 30 files** got the declaration count right but the file
+count wrong — it is **52** files, which is what a policy sweep's blast radius is actually measured
+in.
+
+**`internal/plugins/dedup/` is the real coordination gap** — 18 files, more than double the 8 the
+peer flagged, and neither session named it. It is *not* claimed here; it is recorded so it does not
+sit in a mutual-assumption hole.
+
+### Already-v2-native resume, in this territory
+
+`internal/plugins/maintenance/chapters_backfill.go` is its own sdk op-def
+(`ID: "maintenance.chapters-backfill"`, line 176; `ResumePolicy: sdk.ResumeRestart`, line 195) and
+is **not** one of the 37 bridged jobs — nothing named `chapters_backfill` exists in
+`internal/maintenance/jobs/`. So the checkpoint/resume work in #2522 is live code, not inert, and it
+is the working reference for what this plan's PR-2 is building toward: `ResumeFrom` watermark
+(line 111), `chaptersBackfillCheckpointEvery = 200` (line 124), `CheckpointStateFn` (line 459),
+over a sorted enumeration so ordering is a locally testable contract. Reuse this shape rather than
+inventing a second one.
+
+### Runtime coupling — not a file conflict
+
+`internal/plugins/maintenance/missing_file_audit.go` and `missing_file_repair.go` are in this
+territory, but the peer session runs those ops against **prod on :8484**. The collision is in *time*,
+not in the tree: `missing-file-repair` deletes `book_file` rows. **Ping the peer before editing
+either file**; it pings before starting an apply.
+
+And read `docs/audits/2026-08-17-orphan-destination-rows-root-cause.md` before rehoming the dry_run
+persistence in PR-3. It found that `resolveOrganizedFilePath`
+(`internal/organizer/service.go:1254`) silently returns an unverified destination path when neither
+source nor destination stats — so some "missing" rows may have bytes under a *different* filename
+post-#2479 rather than being genuinely dead, and deleting those is data loss. That is the same
+species of defect as the `SaveParams`/`dry_run` bug this plan is careful not to regress: a value
+that looks resolved but was never verified.
 
 Stale local branches, content fully upstream (`git cherry` all `-`), safe to delete:
 `refactor/retire-operations-v1`, `refactor/server-package-split`.
