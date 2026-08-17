@@ -853,3 +853,65 @@ func TestChaptersBackfill_LimitCountsWritesFromEarlierAttempts(t *testing.T) {
 		}
 	}
 }
+
+// chbfReversingStore hands back ListBookIDs in DESCENDING order.
+//
+// Both production stores enumerate ascending today, so the sort in
+// runChaptersBackfill is invisible against either of them — the guarantee it
+// provides only becomes observable against a store that disagrees. This is that
+// store. It is not hypothetical: ListBooksByITunesPID diverged between the
+// Pebble and memdb paths and shipped (#2399), and a resume watermark counts
+// positions, so an order change silently redefines what "already done" means.
+type chbfReversingStore struct {
+	database.Store
+}
+
+func (d *chbfReversingStore) Unwrap() database.Store { return d.Store }
+
+func (d *chbfReversingStore) ListBookIDs() ([]string, error) {
+	ids, err := d.Store.ListBookIDs()
+	if err != nil {
+		return nil, err
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(ids)))
+	return ids, nil
+}
+
+// The watermark must mean the same books no matter what order the store
+// enumerates in.
+func TestChaptersBackfill_ResumeIsStableAgainstStoreEnumerationOrder(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds a real PebbleStore; skipped in -short")
+	}
+	chbfStubFFprobe(t)
+	(&chbfProbeSpy{result: chbfChapters()}).install(t)
+
+	s := chbfStore(t)
+	const total, skip = 5, 2
+	ids := chbfSeedSorted(t, s, total)
+
+	raw, err := json.Marshal(chaptersBackfillParams{Apply: true, ResumeFrom: skip})
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+	p := &Plugin{deps: fakeDeps{store: &chbfReversingStore{Store: s}}}
+	if err := p.runChaptersBackfill(context.Background(), raw, &chbfCheckpointSpy{}); err != nil {
+		t.Fatalf("runChaptersBackfill: %v", err)
+	}
+
+	// Same expectation as the ascending-store case: the two LOWEST ids are the
+	// completed prefix. Without the sort, a descending store makes the same
+	// watermark skip the two HIGHEST instead — the same number of books, a
+	// different set, and no error anywhere.
+	for i, id := range ids {
+		got, _ := s.GetChaptersForBook(id)
+		if i < skip && len(got) != 0 {
+			t.Fatalf("book %d got %d chapters; with a descending store the "+
+				"watermark selected a different set of books than it names", i, len(got))
+		}
+		if i >= skip && len(got) != 6 {
+			t.Fatalf("book %d got %d chapters, want 6; the watermark skipped "+
+				"books that were never processed", i, len(got))
+		}
+	}
+}
