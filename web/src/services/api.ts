@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.60.0
+// version: 2.61.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-08-16
 
@@ -448,20 +448,65 @@ export interface OperationLog {
   created_at: string;
 }
 
+/**
+ * Every status the v2 registry can write to an operation row.
+ *
+ * The four `interrupted_*` variants are one per resume policy, minted by
+ * interruptedStatus in internal/operations/registry/legacy_op_status.go.
+ * `interrupted_quiesced` is the default for three of the four policies — i.e.
+ * the common case — and was missing from this union until 2026-08-16, which
+ * also made a comparison against it a type error rather than merely a false
+ * one.
+ */
+export type OperationV2Status =
+  | 'queued'
+  | 'running'
+  | 'interrupting'
+  | 'completed'
+  | 'failed'
+  | 'canceled'
+  | 'interrupted'
+  | 'interrupted_ask'
+  | 'interrupted_dropped'
+  | 'interrupted_quiesced'
+  | 'interrupted_restart';
+
+/**
+ * isOperationTerminal reports whether an operation has stopped for good.
+ *
+ * The prefix rule is deliberate, and mirrors legacyStatusFor in
+ * internal/operations/registry/legacy_op_status.go. The registry mints one
+ * `interrupted_<policy>` status per resume policy, so any hardcoded list here
+ * goes stale the moment a policy is added — and a poller that does not
+ * recognise a terminal status does not fail, it spins at 1s forever while the
+ * UI shows the operation still running. Matching the prefix cannot fall behind
+ * the backend that way.
+ *
+ * `interrupting` is deliberately NOT terminal: it is the transitional state
+ * while an operation is being asked to stop, and it does not start with
+ * `interrupted`.
+ *
+ * Takes a plain string rather than OperationV2Status because the legacy
+ * Operation shape types status as string, and getOperationStatus casts a v2
+ * record into it — a narrower parameter would push a cast to the call sites and
+ * hide exactly the drift this exists to prevent.
+ */
+export function isOperationTerminal(status: string): boolean {
+  return (
+    status === 'completed' ||
+    status === 'failed' ||
+    status === 'canceled' ||
+    status.startsWith('interrupted')
+  );
+}
+
 // Operations V2 (UOS-05: new timeline endpoint)
 export interface OperationV2 {
   id: string;
   def_id: string;
   plugin: string;
   display_name: string;
-  status:
-    | 'queued'
-    | 'running'
-    | 'completed'
-    | 'failed'
-    | 'canceled'
-    | 'interrupted_dropped'
-    | 'interrupted_restart';
+  status: OperationV2Status;
   priority: number;
   /** 0 = alert (bell + activity), 1 = activity only */
   notify_level: number;
@@ -2011,7 +2056,10 @@ export async function pollOperation(
   while (true) {
     const op = await getOperationStatus(id);
     onProgress?.(op);
-    if (op.status === 'completed' || op.status === 'failed' || op.status === 'cancelled') {
+    // Was `op.status === 'cancelled'` (two Ls) against a backend that mints
+    // 'canceled' (one L), so this loop never terminated on a cancelled
+    // operation — and it recognised none of the interrupted_* statuses either.
+    if (isOperationTerminal(op.status)) {
       return op;
     }
     await new Promise((r) => setTimeout(r, intervalMs));
@@ -3691,15 +3739,6 @@ export async function batchApplyFromCache(
   };
 }
 
-/** Terminal states for a v2 operation. */
-const OP_V2_TERMINAL = [
-  'completed',
-  'failed',
-  'canceled',
-  'interrupted_dropped',
-  'interrupted_restart',
-];
-
 // pollOperationV2 polls a v2 operation until it reaches a terminal state.
 //
 // Separate from pollOperation, which returns the flattened legacy `Operation`
@@ -3709,10 +3748,10 @@ const OP_V2_TERMINAL = [
 // type, not the endpoint. This comment used to say pollOperation polled v1 and
 // that a v2 id would 404 there; neither has been true since that retirement.
 //
-// pollOperation also ends on 'cancelled' while the backend mints 'canceled',
-// so it never terminates on a cancelled op — see
-// todo.d/20260816-frontend-cancelled-spelling-drift.md. This one tests against
-// OP_V2_TERMINAL instead.
+// Both pollers now share isOperationTerminal. This one used to test against a
+// hardcoded OP_V2_TERMINAL list that omitted 'interrupted_quiesced' — the
+// status three of the four resume policies produce — so it hung on the common
+// interruption just as pollOperation hung on every cancellation.
 export async function pollOperationV2(
   id: string,
   onProgress?: (op: OperationV2) => void,
@@ -3721,7 +3760,7 @@ export async function pollOperationV2(
   for (;;) {
     const op = await getOperationV2(id);
     onProgress?.(op);
-    if (OP_V2_TERMINAL.includes(op.status)) return op;
+    if (isOperationTerminal(op.status)) return op;
     await new Promise((r) => setTimeout(r, intervalMs));
   }
 }

@@ -1,6 +1,6 @@
 // file: web/src/pages/Diagnostics.tsx
-// version: 1.4.0
-// last-edited: 2026-08-10
+// version: 1.5.0
+// last-edited: 2026-08-16
 // guid: f2323fc4-b3e7-4298-9ec5-759447cbd643
 
 import { useState, useCallback, useRef, useEffect } from 'react';
@@ -190,9 +190,18 @@ export function Diagnostics() {
             stopPolling();
             setError(`Operation failed: ${op.errors?.[0] || 'Unknown error'}`);
             setOperationStatus('failed');
-          } else if (op.status === 'cancelled') {
+          } else if (api.isOperationTerminal(op.status)) {
+            // Catch-all, and it must stay LAST: the 'completed' branch above
+            // does real work (fetching the AI results) that a generic terminal
+            // check placed first would skip.
+            //
+            // This was `op.status === 'cancelled'` (two Ls) against a backend
+            // that mints 'canceled', so cancelling never stopped the poll. It
+            // also missed every interrupted_* status. Store the real status
+            // rather than a fixed word — it is rendered directly as the status
+            // chip, so "interrupted_quiesced" should say so.
             stopPolling();
-            setOperationStatus('cancelled');
+            setOperationStatus(op.status);
           }
         } catch (err) {
           stopPolling();
