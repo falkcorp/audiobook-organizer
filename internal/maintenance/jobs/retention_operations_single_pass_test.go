@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/retention_operations_single_pass_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c81f27a-5d94-4e60-b1a8-7f26c0d95ab3
-// last-edited: 2026-08-14
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -109,20 +109,25 @@ func oldOperations(n int, cutoff time.Time) []database.Operation {
 	return ops
 }
 
-// TestDeleteOldOperations_ScansOnce is the amplification guard. The fixture is
+// TestExpiredOperationIDs_ScansOnce is the amplification guard. The fixture is
 // deliberately larger than the old 500-row page size, so a paging
 // implementation cannot satisfy it: it would need at least two calls.
-func TestDeleteOldOperations_ScansOnce(t *testing.T) {
+//
+// The listing call stayed inside expiredOperationIDs rather than moving up into
+// Run when the helper was split, precisely so this assertion keeps a narrow
+// function to point at. Hoisting it would have left the single-pass guarantee
+// testable only through Run, which needs the full database.Store.
+func TestExpiredOperationIDs_ScansOnce(t *testing.T) {
 	cutoff := time.Now().Add(-24 * time.Hour)
 	const total = 1200 // > 2x the old pageSize of 500
 	store := newPagingProbeStore(oldOperations(total, cutoff), false)
 
-	count, err := deleteOldOperations(context.Background(), store, cutoff, true)
+	ids, err := expiredOperationIDs(context.Background(), store, cutoff)
 	if err != nil {
-		t.Fatalf("deleteOldOperations: %v", err)
+		t.Fatalf("expiredOperationIDs: %v", err)
 	}
-	if count != total {
-		t.Errorf("eligible count: got %d, want %d", count, total)
+	if len(ids) != total {
+		t.Errorf("eligible count: got %d, want %d", len(ids), total)
 	}
 	if store.calls != 1 {
 		t.Errorf("ListOperations must be called exactly once for a full scan; got %d calls with limits %v",
@@ -134,18 +139,27 @@ func TestDeleteOldOperations_ScansOnce(t *testing.T) {
 	}
 }
 
-// TestDeleteOldOperations_ConcurrentCreateDoesNotDoubleCount pins the
+// TestExpiredOperationIDs_ConcurrentCreateDoesNotDoubleCount pins the
 // correctness half. With an operation created between calls, a paging
 // implementation re-reads rows and reports more deletions than there are
 // operations.
-func TestDeleteOldOperations_ConcurrentCreateDoesNotDoubleCount(t *testing.T) {
+//
+// It chains both halves of the split — scan, then delete what the scan
+// returned — because the bug being guarded is a DISAGREEMENT between the
+// reported count and the deletions actually made. Asserting only one side
+// would not see it.
+func TestExpiredOperationIDs_ConcurrentCreateDoesNotDoubleCount(t *testing.T) {
 	cutoff := time.Now().Add(-24 * time.Hour)
 	const total = 1200
 	store := newPagingProbeStore(oldOperations(total, cutoff), true)
 
-	count, err := deleteOldOperations(context.Background(), store, cutoff, false)
+	ids, err := expiredOperationIDs(context.Background(), store, cutoff)
 	if err != nil {
-		t.Fatalf("deleteOldOperations: %v", err)
+		t.Fatalf("expiredOperationIDs: %v", err)
+	}
+	count, err := deleteOperations(context.Background(), store, ids)
+	if err != nil {
+		t.Fatalf("deleteOperations: %v", err)
 	}
 
 	// The freshly-created operations are newer than the cutoff, so they are
@@ -172,11 +186,11 @@ func TestDeleteOldOperations_ConcurrentCreateDoesNotDoubleCount(t *testing.T) {
 	}
 }
 
-// TestDeleteOldOperations_RespectsCutoffAcrossLargeSet guards the premise of
+// TestExpiredOperationIDs_RespectsCutoffAcrossLargeSet guards the premise of
 // the two tests above: with a mixed set, only the rows older than the cutoff
 // may be collected. Without this, "collected everything" would satisfy the
 // count assertions for the wrong reason.
-func TestDeleteOldOperations_RespectsCutoffAcrossLargeSet(t *testing.T) {
+func TestExpiredOperationIDs_RespectsCutoffAcrossLargeSet(t *testing.T) {
 	cutoff := time.Now().Add(-24 * time.Hour)
 
 	var ops []database.Operation
@@ -191,9 +205,13 @@ func TestDeleteOldOperations_RespectsCutoffAcrossLargeSet(t *testing.T) {
 	ops = append(ops, oldOperations(stale, cutoff)...)
 
 	store := newPagingProbeStore(ops, false)
-	count, err := deleteOldOperations(context.Background(), store, cutoff, false)
+	ids, err := expiredOperationIDs(context.Background(), store, cutoff)
 	if err != nil {
-		t.Fatalf("deleteOldOperations: %v", err)
+		t.Fatalf("expiredOperationIDs: %v", err)
+	}
+	count, err := deleteOperations(context.Background(), store, ids)
+	if err != nil {
+		t.Fatalf("deleteOperations: %v", err)
 	}
 	if count != stale {
 		t.Errorf("eligible count: got %d, want %d", count, stale)

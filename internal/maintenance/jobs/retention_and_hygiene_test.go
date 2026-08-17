@@ -1,13 +1,14 @@
 // file: internal/maintenance/jobs/retention_and_hygiene_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f8d0e5b9-c2a4-5b1d-9e7f-8c3d2a1b0f5e
-// last-edited: 2026-08-14
+// last-edited: 2026-08-17
 
 package jobs
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -33,40 +34,73 @@ func TestRetentionAndHygieneJob_JobMetadata(t *testing.T) {
 	}
 }
 
-// TestRetentionBoundaryLogic verifies the boundary logic for identifying stale operations.
-// Operations with CreatedAt < cutoffTime should be marked for deletion.
-func TestRetentionBoundaryLogic(t *testing.T) {
-	now := time.Now()
-	cutoffTime := now.AddDate(0, 0, -90) // 90 days ago
+// TestOperationsOlderThan pins the retention decision itself: which operations
+// are old enough to delete.
+//
+// No mock, no fake, no store, no context — the function under test takes a
+// slice and a time and returns a slice, so the test states the input as a
+// literal and reads the answer. That is the entire point of splitting the pure
+// decision out of the I/O (audit §7, Option C).
+//
+// It replaces TestRetentionBoundaryLogic, which asserted
+// `tc.opTime.Before(cutoffTime) == tc.shouldDel` — i.e. it compared
+// time.Before against itself and never called production code at all. It could
+// not call production code, because the decision was welded to a ListOperations
+// call. The table below is the same three boundary cases, now actually routed
+// through the function that makes the decision.
+func TestOperationsOlderThan(t *testing.T) {
+	cutoff := time.Now().AddDate(0, 0, -90) // 90 days ago
 
 	tests := []struct {
-		name      string
-		opTime    time.Time
-		shouldDel bool
+		name string
+		ops  []database.Operation
+		want []string
 	}{
 		{
-			"before cutoff",
-			cutoffTime.Add(-1 * time.Second),
-			true,
+			name: "strictly before the cutoff is expired",
+			ops:  []database.Operation{{ID: "old", CreatedAt: cutoff.Add(-time.Second)}},
+			want: []string{"old"},
 		},
 		{
-			"at cutoff",
-			cutoffTime,
-			false, // CreatedAt.Before(cutoffTime) is false when equal
+			// Before is strict, so an operation stamped exactly at the cutoff
+			// survives this run and ages out on the next one. Stating that here
+			// costs one line; stating it through a fake store costs a fixture.
+			name: "exactly at the cutoff is retained",
+			ops:  []database.Operation{{ID: "edge", CreatedAt: cutoff}},
+			want: nil,
 		},
 		{
-			"after cutoff",
-			cutoffTime.Add(1 * time.Second),
-			false,
+			name: "after the cutoff is retained",
+			ops:  []database.Operation{{ID: "fresh", CreatedAt: cutoff.Add(time.Second)}},
+			want: nil,
+		},
+		{
+			name: "mixed input keeps listing order and drops the rest",
+			ops: []database.Operation{
+				{ID: "fresh-1", CreatedAt: cutoff.Add(time.Hour)},
+				{ID: "old-1", CreatedAt: cutoff.Add(-time.Hour)},
+				{ID: "edge", CreatedAt: cutoff},
+				{ID: "old-2", CreatedAt: cutoff.Add(-48 * time.Hour)},
+			},
+			want: []string{"old-1", "old-2"},
+		},
+		{
+			name: "empty listing yields nothing",
+			ops:  nil,
+			want: nil,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			shouldDelete := tc.opTime.Before(cutoffTime)
-			if shouldDelete != tc.shouldDel {
-				t.Errorf("got shouldDelete=%v, want %v for time %v vs cutoff %v",
-					shouldDelete, tc.shouldDel, tc.opTime, cutoffTime)
+			got := operationsOlderThan(tc.ops, cutoff)
+			if len(got) != len(tc.want) {
+				t.Fatalf("operationsOlderThan = %v, want %v", got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Fatalf("operationsOlderThan = %v, want %v", got, tc.want)
+				}
 			}
 		})
 	}
@@ -110,9 +144,11 @@ func newDeleteTracker(ops []database.Operation) *mockDeleteTracker {
 	return m
 }
 
-// TestDeleteOldOperations_MockDryRun verifies that dry-run counts eligible
-// operations but calls DeleteOperationWithLogs zero times.
-func TestDeleteOldOperations_MockDryRun(t *testing.T) {
+// TestExpiredOperationIDs_SelectsOldRowsWithoutDeleting is the read half. It
+// keeps the selection assertion that TestDeleteOldOperations_MockDryRun used to
+// make, plus the stronger structural claim the split buys: the scan step cannot
+// delete anything, because operationLister does not expose a way to.
+func TestExpiredOperationIDs_SelectsOldRowsWithoutDeleting(t *testing.T) {
 	now := time.Now()
 	cutoff := now.Add(-24 * time.Hour)
 	oldTime := now.Add(-48 * time.Hour)
@@ -125,41 +161,102 @@ func TestDeleteOldOperations_MockDryRun(t *testing.T) {
 	}
 	tracker := newDeleteTracker(ops)
 
-	count, err := deleteOldOperations(context.Background(), tracker, cutoff, true)
+	ids, err := expiredOperationIDs(context.Background(), tracker, cutoff)
 	if err != nil {
-		t.Fatalf("deleteOldOperations dry-run: %v", err)
+		t.Fatalf("expiredOperationIDs: %v", err)
 	}
-	if count != 2 {
-		t.Errorf("dry-run count: got %d, want 2", count)
+	if len(ids) != 2 || ids[0] != "old-1" || ids[1] != "old-2" {
+		t.Errorf("expired ids: got %v, want [old-1 old-2]", ids)
 	}
 	if len(tracker.deleted) != 0 {
-		t.Errorf("dry-run must not delete; got deletions: %v", tracker.deleted)
+		t.Errorf("the scan step must not delete; got deletions: %v", tracker.deleted)
 	}
 }
 
-// TestDeleteOldOperations_MockRealRun verifies that non-dry-run mode calls
-// DeleteOperationWithLogs exactly for old records and not for new ones.
-func TestDeleteOldOperations_MockRealRun(t *testing.T) {
-	now := time.Now()
-	cutoff := now.Add(-24 * time.Hour)
-	oldTime := now.Add(-48 * time.Hour)
-	newTime := now.Add(-1 * time.Hour)
+// TestDeleteOperations_CountMatchesInput is the write half, and it is the piece
+// that keeps the two counts honest after the split.
+//
+// Before the split, one function returned both the dry-run count and the real
+// count, so their agreement was structural. Now Run reports len(expired) for a
+// dry run and deleteOperations' return for a real one; nothing about the types
+// forces those to agree. Pinning "the return equals len(ids) on full success,
+// with exactly one delete call per id" reduces that agreement to a property
+// this test can check locally — the same invariant deleteStaleOperationState's
+// doc comment states when it insists on counting operations, not raw keys.
+func TestDeleteOperations_CountMatchesInput(t *testing.T) {
+	tracker := newDeleteTracker(nil)
+	ids := []string{"a", "b", "c"}
 
-	ops := []database.Operation{
-		{ID: "old-A", CreatedAt: oldTime},
-		{ID: "new-B", CreatedAt: newTime},
-	}
-	tracker := newDeleteTracker(ops)
-
-	count, err := deleteOldOperations(context.Background(), tracker, cutoff, false)
+	count, err := deleteOperations(context.Background(), tracker, ids)
 	if err != nil {
-		t.Fatalf("deleteOldOperations real-run: %v", err)
+		t.Fatalf("deleteOperations: %v", err)
+	}
+	if count != len(ids) {
+		t.Errorf("count: got %d, want %d — a reported count above the delete count is the bug this guards", count, len(ids))
+	}
+	if len(tracker.deleted) != len(ids) {
+		t.Fatalf("delete calls: got %v, want one per id %v", tracker.deleted, ids)
+	}
+	for i, id := range ids {
+		if tracker.deleted[i] != id {
+			t.Errorf("delete call %d: got %q, want %q", i, tracker.deleted[i], id)
+		}
+	}
+}
+
+// TestDeleteOperations_PartialCountOnError pins the other half of the same
+// invariant: a failure mid-run reports the number that actually succeeded, not
+// the number attempted.
+func TestDeleteOperations_PartialCountOnError(t *testing.T) {
+	var attempted []string
+	store := &database.MockStore{
+		DeleteOperationWithLogsFunc: func(id string) error {
+			attempted = append(attempted, id)
+			if id == "boom" {
+				return errors.New("pebble is unhappy")
+			}
+			return nil
+		},
+	}
+
+	count, err := deleteOperations(context.Background(), store, []string{"a", "boom", "c"})
+	if err == nil {
+		t.Fatal("expected the delete error to propagate")
 	}
 	if count != 1 {
-		t.Errorf("count: got %d, want 1", count)
+		t.Errorf("count: got %d, want 1 (only 'a' was deleted)", count)
 	}
-	if len(tracker.deleted) != 1 || tracker.deleted[0] != "old-A" {
-		t.Errorf("expected [old-A] deleted; got %v", tracker.deleted)
+	if len(attempted) != 2 {
+		t.Errorf("must stop at the failure; attempted %v", attempted)
+	}
+}
+
+// TestJobRun_DryRunDeletesNoOperations exercises the dryRun branch where it now
+// lives — in Run — against a real Pebble store.
+//
+// The flag used to be threaded down into the helper, so "a dry run deletes
+// nothing" was assertable one level below Run. Moving the branch up moved the
+// invariant with it, and this test follows it rather than leaving it untested.
+func TestJobRun_DryRunDeletesNoOperations(t *testing.T) {
+	store, cleanup := newPebbleTestStore(t)
+	defer cleanup()
+
+	// Well past the 90-day default retention window, so it is unambiguously
+	// eligible whatever OperationLogRetentionDays happens to be configured as.
+	const opID = "DRYRUNKEEPME"
+	writeOperationRaw(t, store, opID, time.Now().AddDate(0, 0, -400))
+
+	job := &retentionAndHygieneJob{}
+	if err := job.Run(context.Background(), store, &nopReporter{}, true /* dryRun */); err != nil {
+		t.Fatalf("Run dry-run: %v", err)
+	}
+
+	op, err := store.GetOperationByID(opID)
+	if err != nil {
+		t.Fatalf("GetOperationByID: %v", err)
+	}
+	if op == nil {
+		t.Fatal("dry run deleted an eligible operation — dryRun must not reach the delete path")
 	}
 }
 
