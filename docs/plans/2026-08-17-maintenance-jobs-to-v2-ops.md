@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-08-17-maintenance-jobs-to-v2-ops.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 4a71e8c3-92d6-4f15-b03a-7e8d5c1946fb -->
 <!-- last-edited: 2026-08-17 -->
 
@@ -231,7 +231,40 @@ path by default.
 
 One genuine anomaly surfaced by the same table: **`llm_review.go` declares `CapLibraryWrite` with an
 empty `ConcurrencyKey`**, while all 16 other writing ops serialize against themselves with a key
-matching their op ID. That is unrelated to resume policy and is worth its own look.
+matching their op ID. So `dedup.llm-review` can run concurrently with itself while holding a library
+write — the same double-mutation hazard CLAUDE.md describes for auto-merge apply paths, but arriving
+through the **scheduler** rather than through resume, which is why a resume-policy audit would not
+catch it. Filed as `todo.d/20260817-dedup-llm-review-missing-concurrency-key.md`; unowned by either
+session.
+
+#### Every figure above reproduces on three independent instruments
+
+Worth stating because two of the three earlier attempts at this census were inert:
+
+| instrument | ResumeDrop | files | dedup write / read-control |
+|---|---|---|---|
+| `grep` here (a shell function dispatching to **ugrep**) | 62 | 52 | 17 / 18 |
+| the peer session's independent run | 62 | 52 | 17 / 18 |
+| **Python, no regex engine or shell splitting involved** | 62 | 52 | 17 / 18 |
+
+Python also independently returns `calibrate_embedding_thresholds.go` as the sole non-writing op and
+`llm_review.go` as the sole writing op without a non-empty `ConcurrencyKey`.
+
+#### ⚠️ Two shell footguns that silently zero a count — both bite during PR-2's 37-file sweep
+
+1. **zsh does not word-split an unquoted parameter expansion.** Measured in this repo's shell
+   (zsh 5.9): `set -- $FILES` → **1** argv; `set -- $(cmd)` → **18**. So
+   `grep -l 'X' $FILES` passes the whole newline-joined list as a *single bogus filename*, while
+   `grep -l 'X' $(cmd)` works — command substitution *is* split, parameter expansion is not. The peer
+   session's first probe returned **0 writing ops**, which would have read as *"no dedup op declares a
+   library write, the directory is safe to sweep"* — exactly backwards, about ops that delete rows.
+2. **Never put `2>/dev/null` on a counting command.** It converts *"your command was malformed"* into
+   *"the answer is zero"*, and those two are indistinguishable downstream.
+
+The habit that caught it: the negative control must **differ** from the positive probe, not merely be
+non-empty. `0 and 0` is impossible for a working instrument, because two different questions cannot
+return the same answer. Pipe file lists (`xargs grep -l 'X' < list.txt`) rather than interpolating
+them.
 
 ### Already-v2-native resume, in this territory
 
