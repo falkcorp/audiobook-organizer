@@ -58,6 +58,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// SplitCompositeAuthorName("& Conrad Westmaas") returns nil (no
 		// delimiter, three words), so the split scan skips these rows entirely.
 		p.authorConjunctionRepairDef(),
+		p.purgeEmptyAuthorsDef(),
 		p.seriesNormalizeDef(),
 		p.seriesPruneDef(),
 		p.resolveProductionAuthorsDef(),
