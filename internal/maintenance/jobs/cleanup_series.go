@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_series.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: a1000002-0000-0000-0000-000000000002
-// last-edited: 2026-07-06
+// last-edited: 2026-08-16
 
 package jobs
 
@@ -135,7 +135,7 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store database.Store, report
 // csUnlinkAndDeleteSeries only reads book.ID from the passed-in row (BookCore
 // is sufficient — see caller) and hydrates the real writeback target via
 // GetBookByID below, so no heavy-field fidelity is lost.
-func csUnlinkAndDeleteSeries(store database.Store, book *database.BookCore, seriesID int) error {
+func csUnlinkAndDeleteSeries(store seriesUnlinker, book *database.BookCore, seriesID int) error {
 	current, err := store.GetBookByID(book.ID)
 	if err != nil {
 		return fmt.Errorf("GetBookByID: %w", err)
@@ -154,7 +154,7 @@ func csUnlinkAndDeleteSeries(store database.Store, book *database.BookCore, seri
 	return nil
 }
 
-func csMergeSeriesGroup(store database.Store, keepID int, mergeIDs []int) error {
+func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int) error {
 	for _, fromID := range mergeIDs {
 		books, err := store.GetBooksBySeriesIDCore(fromID)
 		if err != nil {

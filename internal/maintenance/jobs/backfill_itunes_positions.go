@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_itunes_positions.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 19a97553-68fc-4ef6-a326-cc9e694d8698
-// last-edited: 2026-07-30
+// last-edited: 2026-08-16
 
 package jobs
 
@@ -97,7 +97,7 @@ func ITunesPositionProgressFraction(currentTimeSec, durationSec float64) float64
 //     stable across runs), with a WARN naming the chosen user and the override.
 //     "Earliest created" is the owner's own account in practice: it is the
 //     account the bootstrap flow creates before any other.
-func ResolveITunesPositionBackfillUser(store database.Store) (string, error) {
+func ResolveITunesPositionBackfillUser(store userLister) (string, error) {
 	users, err := store.ListUsers()
 	if err != nil {
 		return "", fmt.Errorf("list users: %w", err)
@@ -524,7 +524,7 @@ func (j *backfillITunesPositionsJob) desiredState(userID, bookID string, merged 
 // strictly untouched; only a state row that disagrees with the stored position
 // is rewritten, so a run that died between the two writes heals on the next
 // run instead of leaving the book permanently mis-labelled.
-func (j *backfillITunesPositionsJob) repairStateOnly(store database.Store, userID, bookID string, server progress.Progress, existing *database.UserBookState, dryRun bool) positionOutcome {
+func (j *backfillITunesPositionsJob) repairStateOnly(store userBookStateWriter, userID, bookID string, server progress.Progress, existing *database.UserBookState, dryRun bool) positionOutcome {
 	if server.CurrentTime <= 0 {
 		// Nothing stored to describe.
 		return outcomeNotAccepted
@@ -571,7 +571,7 @@ func (j *backfillITunesPositionsJob) repairStateOnly(store database.Store, userI
 // durations from three sources (container / last-chapter-end / track-sum,
 // ~52 ms apart on the measured Odyssey fixture), and mixing them across the
 // fraction and the finished check is what produces a book stuck at 99%.
-func (j *backfillITunesPositionsJob) authoritativeDurationSec(store database.Store, book *database.Book) (float64, bool) {
+func (j *backfillITunesPositionsJob) authoritativeDurationSec(store bookFileReader, book *database.Book) (float64, bool) {
 	files, err := store.GetBookFiles(book.ID)
 	if err != nil {
 		slog.Warn("backfill-itunes-positions: list book files failed, falling back to Book.Duration",

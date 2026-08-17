@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/bulk_deluge_import.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a2b8c6d7-9e0f-1a2b-3c4d-5e6f7a8b9c0d
-// last-edited: 2026-07-07
+// last-edited: 2026-08-16
 
 package jobs
 
@@ -176,7 +176,7 @@ func bdi_buildDelugeClient() *deluge.Client {
 }
 
 // bdi_importToLibrary copies a book file into the library root and updates the DB record.
-func bdi_importToLibrary(cfg *config.Config, delugeClient *deluge.Client, store database.Store, bookFile *database.BookFile) (newPath string, err error) {
+func bdi_importToLibrary(cfg *config.Config, delugeClient *deluge.Client, store bookFileWriter, bookFile *database.BookFile) (newPath string, err error) {
 	if bookFile == nil {
 		return "", fmt.Errorf("bdi_importToLibrary: bookFile is nil")
 	}

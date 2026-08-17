@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: a1000010-0000-0000-0000-000000000010
-// last-edited: 2026-08-14
+// last-edited: 2026-08-16
 
 package jobs
 
@@ -234,7 +234,7 @@ func (j *dedupBooksJob) Run(ctx context.Context, store database.Store, reporter 
 	return nil
 }
 
-func ddFetchAllBooksPaginated(store database.Store) ([]database.Book, error) {
+func ddFetchAllBooksPaginated(store bookPager) ([]database.Book, error) {
 	const pageSize = 500
 	var all []database.Book
 	afterID := ""
@@ -458,7 +458,7 @@ func ddMergeBookFields(dst, src *database.Book) {
 	}
 }
 
-func ddSoftDeleteBook(store database.Store, bookID string) error {
+func ddSoftDeleteBook(store bookSoftDeleter, bookID string) error {
 	current, err := store.GetBookByID(bookID)
 	if err != nil {
 		return fmt.Errorf("GetBookByID %s: %w", bookID, err)

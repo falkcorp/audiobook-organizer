@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_read_by_narrator.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: a1000001-0000-0000-0000-000000000001
-// last-edited: 2026-07-07
+// last-edited: 2026-08-16
 
 package jobs
 
@@ -189,7 +189,7 @@ func rbnrTitleFromFilePath(fp string) string {
 	return title
 }
 
-func rbnrApplyFix(store database.Store, book *database.BookCore, fix *rbnrFixResult) error {
+func rbnrApplyFix(store bookMutator, book *database.BookCore, fix *rbnrFixResult) error {
 	current, err := store.GetBookByID(book.ID)
 	if err != nil {
 		return fmt.Errorf("GetBookByID: %w", err)

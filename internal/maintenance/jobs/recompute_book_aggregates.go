@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/recompute_book_aggregates.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9b0c1d2e-3f4a-5b6c-7d8e-9f0a1b2c3d4e
-// last-edited: 2026-07-31
+// last-edited: 2026-08-16
 
 // Maintenance job: recompute-book-aggregates
 //
@@ -212,7 +212,7 @@ func (j *recomputeBookAggregatesJob) Run(
 // backfill sentinel (which is a Pebble-specific key).
 func (j *recomputeBookAggregatesJob) runViaInterface(
 	ctx context.Context,
-	store database.Store,
+	store bookAggregateRecomputer,
 	reporter maintenance.ProgressReporter,
 	dryRun bool,
 ) error {

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_version_groups.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: a1000004-0000-0000-0000-000000000004
-// last-edited: 2026-07-07
+// last-edited: 2026-08-16
 
 package jobs
 
@@ -200,7 +200,7 @@ func vgLongWords(s string) map[string]bool {
 	return set
 }
 
-func vgUnlinkOutliers(store database.Store, outliers []database.BookCore) error {
+func vgUnlinkOutliers(store bookMutator, outliers []database.BookCore) error {
 	for _, ob := range outliers {
 		current, err := store.GetBookByID(ob.ID)
 		if err != nil {
@@ -295,7 +295,7 @@ func vgFixAuthorDirPath(store database.Store, book *database.BookCore, subdir st
 	return vgCreateBookFiles(store, current, newFiles)
 }
 
-func vgCreateBookFiles(store database.Store, book *database.Book, filePaths []string) error {
+func vgCreateBookFiles(store bookFileCreator, book *database.Book, filePaths []string) error {
 	for _, fp := range filePaths {
 		ext := strings.ToLower(filepath.Ext(fp))
 		format := strings.TrimPrefix(ext, ".")
