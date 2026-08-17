@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/scan_chapter_groups.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1000019-0000-0000-0000-000000000019
 // last-edited: 2026-08-17
 
@@ -9,10 +9,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"log/slog"
+
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
-	"log/slog"
 )
 
 func init() { maintenance.Register(&scanChapterGroupsJob{}) }
@@ -31,7 +31,7 @@ func (j *scanChapterGroupsJob) Description() string {
 	return "Report books that look like multi-chapter parts of the same audiobook"
 }
 func (j *scanChapterGroupsJob) CanResume() bool { return false }
-func (j *scanChapterGroupsJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, _ bool) error {
+func (j *scanChapterGroupsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, _ bool) error {
 	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return err

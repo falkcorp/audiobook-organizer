@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/scan_composer_tags.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d9e5f3c4-6a7b-8c9d-0e1f-2a3b4c5d6e7f
 // last-edited: 2026-08-17
 
@@ -41,7 +41,7 @@ func (j *scanComposerTagsJob) DefaultParams() any {
 }
 func (j *scanComposerTagsJob) CanResume() bool { return true }
 
-func (j *scanComposerTagsJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *scanComposerTagsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	opID := maintenance.OperationIDFromCtx(ctx)
 
 	// Load fix_mode from persisted params when resuming.

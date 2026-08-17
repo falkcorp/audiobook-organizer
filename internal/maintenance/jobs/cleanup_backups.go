@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_backups.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1000021-0000-0000-0000-000000000021
 // last-edited: 2026-08-17
 
@@ -11,10 +11,10 @@ import (
 	"path/filepath"
 	"regexp"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"log/slog"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 
 func init() { maintenance.Register(&cleanupBackupsJob{}) }
@@ -35,7 +35,7 @@ func (j *cleanupBackupsJob) Description() string {
 	return "Delete .backup and .bak files from the library root"
 }
 func (j *cleanupBackupsJob) CanResume() bool { return false }
-func (j *cleanupBackupsJob) Run(ctx context.Context, _ database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *cleanupBackupsJob) Run(ctx context.Context, _ maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	root := config.AppConfig.RootDir
 	if root == "" {
 		slog.Warn("cleanup-backups RootDir not configured")

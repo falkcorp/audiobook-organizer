@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_book_files.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1000005-0000-0000-0000-000000000005
 // last-edited: 2026-08-17
 
@@ -9,11 +9,12 @@ import (
 	"context"
 	"path/filepath"
 
+	"log/slog"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	ulid "github.com/oklog/ulid/v2"
-	"log/slog"
 )
 
 func init() { maintenance.Register(&backfillBookFilesJob{}) }
@@ -32,7 +33,7 @@ func (j *backfillBookFilesJob) Description() string {
 	return "Create book_files rows for books that have none"
 }
 func (j *backfillBookFilesJob) CanResume() bool { return false }
-func (j *backfillBookFilesJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *backfillBookFilesJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return err

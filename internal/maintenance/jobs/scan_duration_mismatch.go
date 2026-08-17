@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/scan_duration_mismatch.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1000018-0000-0000-0000-000000000018
 // last-edited: 2026-08-17
 
@@ -9,9 +9,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"log/slog"
+
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 
 func init() { maintenance.Register(&scanDurationMismatchJob{}) }
@@ -30,7 +30,7 @@ func (j *scanDurationMismatchJob) Description() string {
 	return "Report books whose local duration differs significantly from Audible runtime"
 }
 func (j *scanDurationMismatchJob) CanResume() bool { return false }
-func (j *scanDurationMismatchJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, _ bool) error {
+func (j *scanDurationMismatchJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, _ bool) error {
 	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return err

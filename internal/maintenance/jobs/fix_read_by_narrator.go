@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/fix_read_by_narrator.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: a1000001-0000-0000-0000-000000000001
 // last-edited: 2026-08-17
 
@@ -11,9 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"log/slog"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
-	"log/slog"
 )
 
 func init() { maintenance.Register(&fixReadByNarratorJob{}) }
@@ -33,7 +34,7 @@ func (j *fixReadByNarratorJob) Description() string {
 }
 func (j *fixReadByNarratorJob) CanResume() bool { return false }
 
-func (j *fixReadByNarratorJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *fixReadByNarratorJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	allBooks, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return fmt.Errorf("failed to list books: %w", err)

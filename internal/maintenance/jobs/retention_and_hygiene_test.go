@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/retention_and_hygiene_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: f8d0e5b9-c2a4-5b1d-9e7f-8c3d2a1b0f5e
 // last-edited: 2026-08-17
 
@@ -534,9 +534,9 @@ func writeOperationRaw(t *testing.T, store database.Store, id string, createdAt 
 // external jobs_test package and is not visible from the internal jobs package.
 type nopReporter struct{}
 
-func (r *nopReporter) SetTotal(_ int)                     {}
-func (r *nopReporter) Increment()                         {}
-func (r *nopReporter) Log(_ string, _ string, _ *string)  {}
+func (r *nopReporter) SetTotal(_ int)                    {}
+func (r *nopReporter) Increment()                        {}
+func (r *nopReporter) Log(_ string, _ string, _ *string) {}
 
 // opstateSweepMock builds a MockStore holding opstate keys for four operations:
 // one running (must be KEPT — the resume path may still load it), one completed

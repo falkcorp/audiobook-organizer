@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/fix_book_file_paths.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1000011-0000-0000-0000-000000000011
 // last-edited: 2026-08-17
 
@@ -9,9 +9,10 @@ import (
 	"context"
 	"os"
 
+	"log/slog"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
-	"log/slog"
 )
 
 func init() { maintenance.Register(&fixBookFilePathsJob{}) }
@@ -30,7 +31,7 @@ func (j *fixBookFilePathsJob) Description() string {
 	return "Mark book_files as missing when they no longer exist on disk"
 }
 func (j *fixBookFilePathsJob) CanResume() bool { return false }
-func (j *fixBookFilePathsJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *fixBookFilePathsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	files, err := store.GetAllBookFilesCore()
 	if err != nil {
 		return err

@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.40.0
+// version: 2.41.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-08-16
+// last-edited: 2026-08-17
 
 package server
 
@@ -579,8 +579,7 @@ func NewServer(store database.Store) *Server {
 	// Propagate rootDir into the store so LibraryStats can split organized vs unorganized.
 	resolvedStore.SetRootDir(config.AppConfig.RootDir)
 
-	// Inject the store into the maintenance package so jobs can access it.
-	maintenance.InjectStore(resolvedStore)
+	// Inject the iTunes write-back enqueuer into the maintenance package.
 	if server.writeBackBatcher != nil {
 		maintenance.InjectEnqueuer(server.writeBackBatcher)
 	}

@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_itunes_positions.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 19a97553-68fc-4ef6-a326-cc9e694d8698
 // last-edited: 2026-08-17
 
@@ -192,7 +192,7 @@ const (
 	outcomeFailed
 )
 
-func (j *backfillITunesPositionsJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *backfillITunesPositionsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	userID, err := ResolveITunesPositionBackfillUser(store)
 	if err != nil {
 		return fmt.Errorf("backfill-itunes-positions: %w", err)
@@ -271,7 +271,7 @@ func (j *backfillITunesPositionsJob) Run(ctx context.Context, store database.Sto
 // Every failure path logs the book ID and returns outcomeFailed rather than
 // returning nil quietly: a silently skipped book is a listening position the
 // owner loses without ever being told.
-func (j *backfillITunesPositionsJob) migrateOne(store database.Store, bookmarkStore database.BookmarkStore, userID, bookID string, dryRun bool) migrateResult {
+func (j *backfillITunesPositionsJob) migrateOne(store maintenance.JobStore, bookmarkStore database.BookmarkStore, userID, bookID string, dryRun bool) migrateResult {
 	book, err := store.GetBookByID(bookID)
 	if err != nil {
 		slog.Warn("backfill-itunes-positions: get book failed", "book", bookID, "err", err)

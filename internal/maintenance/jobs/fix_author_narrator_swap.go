@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/fix_author_narrator_swap.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: a1000003-0000-0000-0000-000000000003
 // last-edited: 2026-08-17
 
@@ -10,9 +10,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"log/slog"
+
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 
 func init() { maintenance.Register(&fixAuthorNarratorSwapJob{}) }
@@ -32,7 +32,7 @@ func (j *fixAuthorNarratorSwapJob) Description() string {
 }
 func (j *fixAuthorNarratorSwapJob) CanResume() bool { return false }
 
-func (j *fixAuthorNarratorSwapJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *fixAuthorNarratorSwapJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	const batchSize = 500
 	offset := 0
 	var found, applied int

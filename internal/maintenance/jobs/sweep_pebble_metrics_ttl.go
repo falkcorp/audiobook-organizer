@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/sweep_pebble_metrics_ttl.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b8c9d0e1-f2a3-0008-1234-000000000008
 // last-edited: 2026-08-17
 
@@ -43,7 +43,7 @@ func (j *sweepPebbleMetricsTTLJob) DefaultParams() any {
 // a different backend (SQLite or mock) the job is a no-op so CI tests pass.
 func (j *sweepPebbleMetricsTTLJob) Run(
 	ctx context.Context,
-	store database.Store,
+	store maintenance.JobStore,
 	reporter maintenance.ProgressReporter,
 	dryRun bool,
 ) error {

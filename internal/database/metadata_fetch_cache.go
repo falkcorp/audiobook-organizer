@@ -1,7 +1,7 @@
 // file: internal/database/metadata_fetch_cache.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9e8d7c6b-5a4f-3e2d-1c0b-9a8b7c6d5e4f
-// last-edited: 2026-06-23
+// last-edited: 2026-08-17
 
 package database
 
@@ -70,7 +70,7 @@ func metadataFetchCacheKey(bookID, source string) string {
 // falls through to the API path. The entry is NOT deleted — it
 // remains available for diagnostics and will be overwritten on
 // the next successful fetch.
-func GetCachedMetadataFetchWithMaxAge(store Store, bookID, source string, maxAge time.Duration) (*CachedMetadataEntry, bool, error) {
+func GetCachedMetadataFetchWithMaxAge(store RawKVStore, bookID, source string, maxAge time.Duration) (*CachedMetadataEntry, bool, error) {
 	if bookID == "" || source == "" {
 		return nil, false, nil
 	}
@@ -113,7 +113,7 @@ func GetCachedMetadataFetchWithMaxAge(store Store, bookID, source string, maxAge
 //
 // Thin wrapper around GetCachedMetadataFetchWithMaxAge(maxAge=0)
 // kept for backward compatibility.
-func GetCachedMetadataFetch(store Store, bookID, source string) (*CachedMetadataEntry, error) {
+func GetCachedMetadataFetch(store RawKVStore, bookID, source string) (*CachedMetadataEntry, error) {
 	entry, _, err := GetCachedMetadataFetchWithMaxAge(store, bookID, source, 0)
 	return entry, err
 }
@@ -126,7 +126,7 @@ func GetCachedMetadataFetch(store Store, bookID, source string) (*CachedMetadata
 // the caller but never fails the outer fetch, per the same
 // principle as the embedding cache: the cache is an
 // optimization, not a correctness layer.
-func PutCachedMetadataFetch(store Store, bookID, source string, results json.RawMessage, bestScore float64) error {
+func PutCachedMetadataFetch(store RawKVStore, bookID, source string, results json.RawMessage, bestScore float64) error {
 	if bookID == "" || source == "" {
 		return nil
 	}
@@ -151,7 +151,7 @@ func PutCachedMetadataFetch(store Store, bookID, source string, results json.Raw
 // InvalidateCachedMetadataFetch removes the cache entry for
 // a single (bookID, source) pair. Called after a metadata
 // apply so the next fetch refreshes from the source.
-func InvalidateCachedMetadataFetch(store Store, bookID, source string) error {
+func InvalidateCachedMetadataFetch(store RawKVStore, bookID, source string) error {
 	if bookID == "" || source == "" {
 		return nil
 	}
@@ -165,7 +165,7 @@ func InvalidateCachedMetadataFetch(store Store, bookID, source string) error {
 // CountCachedMetadataFetches returns the number of entries currently
 // stored in the DB-backed metadata fetch cache. Used by the cache stats
 // handler to populate the Size field for this non-in-memory cache.
-func CountCachedMetadataFetches(store Store) (int64, error) {
+func CountCachedMetadataFetches(store RawKVStore) (int64, error) {
 	return store.CountPrefix("metadata_fetch_cache:")
 }
 
@@ -173,7 +173,7 @@ func CountCachedMetadataFetches(store Store) (int64, error) {
 // cache entry for a single book. Called when the book's title
 // or author changes — any cached candidate is now stale because
 // it was queried against different search terms.
-func InvalidateAllCachedMetadataFetchesForBook(store Store, bookID string) error {
+func InvalidateAllCachedMetadataFetchesForBook(store RawKVStore, bookID string) error {
 	if bookID == "" {
 		return nil
 	}

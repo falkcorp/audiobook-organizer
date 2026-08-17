@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_empty_folders.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1000006-0000-0000-0000-000000000006
 // last-edited: 2026-08-17
 
@@ -12,10 +12,10 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"log/slog"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 
 func init() { maintenance.Register(&cleanupEmptyFoldersJob{}) }
@@ -35,7 +35,7 @@ func (j *cleanupEmptyFoldersJob) Description() string {
 }
 func (j *cleanupEmptyFoldersJob) CanResume() bool { return true }
 
-func (j *cleanupEmptyFoldersJob) Run(ctx context.Context, _ database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *cleanupEmptyFoldersJob) Run(ctx context.Context, _ maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	root := config.AppConfig.RootDir
 	if root == "" {
 		slog.Warn("cleanup-empty-folders RootDir not configured")

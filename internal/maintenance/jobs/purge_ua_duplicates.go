@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/purge_ua_duplicates.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7a4d1e58-9c26-4b73-b0f2-5e8c3a6d9f41
 // last-edited: 2026-08-17
 
@@ -65,7 +65,7 @@ func (j *purgeUADuplicatesJob) CanResume() bool { return false } // idempotent
 // pass by accident.
 const uaProbeSize = 64 * 1024
 
-func (j *purgeUADuplicatesJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *purgeUADuplicatesJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	root := config.AppConfig.RootDir
 	if root == "" {
 		return fmt.Errorf("purge-unknown-author-duplicates: RootDir not configured")

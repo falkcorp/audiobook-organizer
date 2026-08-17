@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/revert_metadata_fetch.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c8d4e2b3-5f6a-7b8c-9d0e-1f2a3b4c5d6e
 // last-edited: 2026-08-17
 
@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 
@@ -34,7 +33,7 @@ func (j *revertMetadataFetchJob) Description() string {
 func (j *revertMetadataFetchJob) DefaultParams() any { return &rmf_params{OperationIDs: []string{}} }
 func (j *revertMetadataFetchJob) CanResume() bool    { return false }
 
-func (j *revertMetadataFetchJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *revertMetadataFetchJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	opID := maintenance.OperationIDFromCtx(ctx)
 
 	// Load parameters: fetch_op_ids from operation params if stored.

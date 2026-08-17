@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_sync_ids.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 85ae5c94-d001-49d9-9f65-97f73f32522b
 // last-edited: 2026-08-17
 
@@ -51,7 +51,7 @@ func (j *backfillSyncIDsJob) DefaultParams() any {
 // checkpointing, unlike backfill_file_hashes.go's resumeIndex.
 func (j *backfillSyncIDsJob) CanResume() bool { return false }
 
-func (j *backfillSyncIDsJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *backfillSyncIDsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	syncStore := database.AsSyncIdentityStore(store)
 	fileStore := database.AsSyncFileStore(store)
 	if syncStore == nil || fileStore == nil {

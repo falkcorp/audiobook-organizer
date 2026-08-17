@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/repair_missing_files.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: f1a7b5e6-8c9d-0e1f-2a3b-4c5d6e7f8a90
 // last-edited: 2026-08-17
 
@@ -40,7 +40,7 @@ func (j *repairMissingFilesJob) DefaultParams() any {
 }
 func (j *repairMissingFilesJob) CanResume() bool { return true }
 
-func (j *repairMissingFilesJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *repairMissingFilesJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	opID := maintenance.OperationIDFromCtx(ctx)
 
 	searchRoots := rmfr_searchRoots()

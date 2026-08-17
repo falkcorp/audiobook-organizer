@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/recompute_book_aggregates.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9b0c1d2e-3f4a-5b6c-7d8e-9f0a1b2c3d4e
 // last-edited: 2026-08-17
 
@@ -54,7 +54,7 @@ func (j *recomputeBookAggregatesJob) DefaultParams() any {
 
 func (j *recomputeBookAggregatesJob) Run(
 	ctx context.Context,
-	store database.Store,
+	store maintenance.JobStore,
 	reporter maintenance.ProgressReporter,
 	dryRun bool,
 ) error {

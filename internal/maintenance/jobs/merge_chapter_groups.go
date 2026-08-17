@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1000020-0000-0000-0000-000000000020
 // last-edited: 2026-08-17
 
@@ -9,10 +9,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"log/slog"
+
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
-	"log/slog"
 )
 
 func init() { maintenance.Register(&mergeChapterGroupsJob{}) }
@@ -31,7 +31,7 @@ func (j *mergeChapterGroupsJob) Description() string {
 	return "Merge multi-chapter book files into consolidated book records"
 }
 func (j *mergeChapterGroupsJob) CanResume() bool { return false }
-func (j *mergeChapterGroupsJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *mergeChapterGroupsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return err
