@@ -450,11 +450,35 @@ func (h *Handler) Register(r gin.IRouter) {
 	// (cover images fetchable by anyone who knows a 36-char item UUID; no metadata,
 	// no audio, no progress) is the owner-accepted, documented tradeoff.
 	r.GET("/api/items/:id/cover", h.ItemCover)
+	r.HEAD("/api/items/:id/cover", h.ItemCover)
 
 	// ── Phase 5b: playback ──────────────────────────────────────────────────
 	r.POST("/api/items/:id/play", auth, h.Play)
 	r.GET("/api/items/:id/file/:ino", auth, h.ItemFile)
 	r.GET("/api/items/:id/file/:ino/download", auth, h.ItemFileDownload)
+
+	// HEAD on the byte-serving routes.
+	//
+	// gin registers one method per call, so a GET-only route answers HEAD with
+	// 404 — not 405 — which is indistinguishable from "this file does not
+	// exist". That cost a real measurement: a probe built to find book_file rows
+	// with no bytes behind them reported 100% of 1,786 files missing, and passed
+	// its own sanity check, because a fabricated ino returned the same 404 as
+	// every real one. A uniformly-dead instrument agrees with any hypothesis.
+	//
+	// Verified against production before this change, on the SAME url:
+	//   GET  /api/items/<real>  -> 200
+	//   HEAD /api/items/<real>  -> 404
+	// and after, the pair must differ only in the presence of a body.
+	//
+	// No handler change is needed. Every one of these ends in
+	// httputil.ServeFileWithRange -> http.ServeContent, which already omits the
+	// body for HEAD while still writing Content-Length, Content-Type, ETag and
+	// Accept-Ranges. ABSRequireAuth likewise already accepts ?token= on
+	// MethodHead (middleware/absauth.go:578,603) — the routing table was the
+	// only thing missing.
+	r.HEAD("/api/items/:id/file/:ino", auth, h.ItemFile)
+	r.HEAD("/api/items/:id/file/:ino/download", auth, h.ItemFileDownload)
 	r.POST("/api/session/:id/sync", auth, h.SessionSync)
 	r.POST("/api/session/:id/close", auth, h.SessionClose)
 
