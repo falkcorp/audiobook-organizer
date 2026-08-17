@@ -1,5 +1,5 @@
 // file: internal/operations/registry/legacy_op_status_internal_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8e35b0d7-4a91-4c26-bf08-73d9a15c6e42
 // last-edited: 2026-08-16
 
@@ -189,4 +189,57 @@ func TestPublishOpTerminal_PropagatesToLegacyRow(t *testing.T) {
 
 	require.Len(t, s.updates, 1, "publishOpTerminal must mirror the terminal status onto the legacy row")
 	assert.Equal(t, "completed", s.legacy["leg-1"].Status)
+}
+
+// TestLegacyStatusFor_MapsEveryInterruptedVariantTheRegistryCanMint is the
+// regression test for a silent early return.
+//
+// legacyStatusFor used to enumerate the interrupted variants it knew:
+// interrupted_ask, interrupted_dropped, interrupted. The side that MINTS them
+// had moved on. interruptedStatus returns "interrupted_quiesced" for every
+// ResumePolicy except ResumeDrop — three of the four legal policies — and
+// worker.go publishes "interrupted_restart". Neither matched, so both fell to
+// the default, returned "", and propagateLegacyOpStatus returned before writing
+// anything. The legacy row stayed "pending" forever with nothing logged, which
+// is byte-for-byte indistinguishable from an op that has no legacy twin at all.
+//
+// The cases are DERIVED, not listed: every ResumePolicy the type declares is fed
+// through the real interruptedStatus, so adding a sixth policy puts its status
+// in this test automatically. Listing the variants by hand is the exact mistake
+// being fixed, and a hand-written list here would have been just as stale as the
+// one in legacyStatusFor.
+func TestLegacyStatusFor_MapsEveryInterruptedVariantTheRegistryCanMint(t *testing.T) {
+	// Every policy from the first legal value through the last, read off the
+	// const block in types.go. ResumeUnspecified is excluded deliberately:
+	// RegisterOp refuses it, so no op can ever reach a terminal state under it.
+	for p := ResumeRestart; p <= ResumeAsk; p++ {
+		minted := interruptedStatus(p)
+		t.Run(minted, func(t *testing.T) {
+			assert.Equal(t, "interrupted", legacyStatusFor(minted),
+				"ResumePolicy %d mints %q, which legacyStatusFor must map — "+
+					"returning \"\" strands the legacy row at pending forever, silently", p, minted)
+		})
+	}
+
+	// The variants published as literals rather than via interruptedStatus.
+	// worker.go treats interrupted_restart as a resumable state; server_lifecycle
+	// writes bare "interrupted" when it sweeps rows on restart.
+	for _, s := range []string{"interrupted", "interrupted_restart", "interrupted_ask", "interrupted_dropped"} {
+		t.Run(s, func(t *testing.T) {
+			assert.Equal(t, "interrupted", legacyStatusFor(s))
+		})
+	}
+
+	// The non-interrupted terminals pass through unchanged...
+	for _, s := range []string{"completed", "failed", "canceled"} {
+		assert.Equal(t, s, legacyStatusFor(s), "terminal status %q must map to itself", s)
+	}
+
+	// ...and non-terminal statuses must still map to "", or an op would have its
+	// legacy row closed while it was still running. This is the half that keeps
+	// the prefix match honest: it is a prefix, not a catch-all.
+	for _, s := range []string{"", "queued", "running", "pending", "paused", "interrupting"} {
+		assert.Empty(t, legacyStatusFor(s),
+			"%q is not terminal; mirroring it would close a live op's legacy row", s)
+	}
 }

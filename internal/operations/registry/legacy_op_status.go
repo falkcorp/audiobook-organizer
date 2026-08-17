@@ -1,5 +1,5 @@
 // file: internal/operations/registry/legacy_op_status.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a8c2f61-b703-49de-95e7-1c0d8b5a3e27
 // last-edited: 2026-08-16
 
@@ -7,6 +7,7 @@ package registry
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -35,18 +36,35 @@ type legacyOpParams struct {
 
 // legacyStatusFor maps a v2 terminal status onto the v1 vocabulary.
 //
-// The two vocabularies overlap but are not identical: v2 has interrupted_ask /
-// interrupted_dropped where v1 has a single "interrupted", which is the value
-// server_lifecycle.go already writes when it sweeps rows on restart.
+// The two vocabularies overlap but are not identical: v2 splits "interrupted"
+// into a family of variants where v1 has a single "interrupted", which is the
+// value server_lifecycle.go already writes when it sweeps rows on restart.
+//
+// MATCH THE PREFIX, NOT A LIST. This function used to enumerate the variants —
+// interrupted_ask, interrupted_dropped, interrupted — and it had already drifted
+// behind the side that mints them. The registry also publishes
+// interrupted_quiesced (registry.go interruptedStatus, returned for EVERY
+// ResumePolicy except ResumeDrop) and interrupted_restart (worker.go). Neither
+// matched, so both fell to the default, returned "", and propagateLegacyOpStatus
+// returned early — leaving the legacy row at "pending" forever with nothing
+// logged, which is indistinguishable from an op that has no legacy twin.
+//
+// That mattered more the moment it was written: #2500 moved library.scan to
+// ResumeRestart, which makes interrupted_quiesced its NORMAL outcome across a
+// restart. The two shipped together.
+//
+// The variants are minted in one place and read here, and only the leading
+// "interrupted" is load-bearing for v1 — so match on that and a sixth variant
+// maps correctly without anyone remembering this file exists.
 func legacyStatusFor(v2Status string) string {
 	switch v2Status {
 	case "completed", "failed", "canceled":
 		return v2Status
-	case "interrupted_ask", "interrupted_dropped", "interrupted":
-		return "interrupted"
-	default:
-		return ""
 	}
+	if v2Status == "interrupted" || strings.HasPrefix(v2Status, "interrupted_") {
+		return "interrupted"
+	}
+	return "" // not a terminal status; nothing to mirror
 }
 
 // propagateLegacyOpStatus mirrors a v2 op's terminal status onto the legacy
