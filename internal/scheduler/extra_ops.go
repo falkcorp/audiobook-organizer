@@ -563,7 +563,7 @@ func (r *ExtraOpsRegistrar) RegisterISBNEnrichmentOp(reg *opsregistry.Registry) 
 				return fmt.Errorf("isbn-enrichment: decode params: %w", err)
 			}
 			progress := extraOpsProgressAdapter{r: reporter}
-			return r.runIsbnEnrichment(ctx, progress, p.LegacyOpID)
+			return r.runIsbnEnrichment(ctx, progress, activityOpID(reporter, p))
 		},
 	})
 }
@@ -593,11 +593,12 @@ func (r *ExtraOpsRegistrar) RegisterTempFileCleanupOp(reg *opsregistry.Registry)
 				return fmt.Errorf("temp-file-cleanup: decode params: %w", err)
 			}
 			progress := extraOpsProgressAdapter{r: reporter}
-			removed := sweep.CleanupOrphanedTempFiles(config.AppConfig.RootDir, r.Deps.ActivityWriter, p.LegacyOpID)
-			activity.FlushOperation(r.Deps.ActivityWriter, p.LegacyOpID)
+			actID := activityOpID(reporter, p)
+			removed := sweep.CleanupOrphanedTempFiles(config.AppConfig.RootDir, r.Deps.ActivityWriter, actID)
+			activity.FlushOperation(r.Deps.ActivityWriter, actID)
 			msg := fmt.Sprintf("Removed %d orphaned temp files", removed)
 			_ = progress.Log("info", msg, nil)
-			activity.EmitInfo(r.Deps.ActivityWriter, p.LegacyOpID, "temp-file-cleanup", "temp-file-cleanup", msg,
+			activity.EmitInfo(r.Deps.ActivityWriter, actID, "temp-file-cleanup", "temp-file-cleanup", msg,
 				activity.TagsIf(removed == 0, activity.NoOpTag)...)
 			return nil
 		},
@@ -631,8 +632,9 @@ func (r *ExtraOpsRegistrar) RegisterPurgeDeletedOp(reg *opsregistry.Registry) er
 			prog := sdk.NewProgress(reporter, 0)
 			prog.Start("Starting purge of soft-deleted books")
 			_ = progress.Log("info", "Starting purge of soft-deleted books", nil)
-			r.runAutoPurgeSoftDeleted(ctx, p.LegacyOpID)
-			activity.FlushOperation(r.Deps.ActivityWriter, p.LegacyOpID)
+			actID := activityOpID(reporter, p)
+			r.runAutoPurgeSoftDeleted(ctx, actID)
+			activity.FlushOperation(r.Deps.ActivityWriter, actID)
 			_ = progress.Log("info", "Purge complete", nil)
 			prog.Done("Purge complete")
 			return nil
@@ -887,4 +889,23 @@ func (r *ExtraOpsRegistrar) runMetadataRefreshScan(ctx context.Context, progress
 	_ = progress.Log("info", resultMsg, nil)
 	_ = progress.UpdateProgress(denom, denom, fmt.Sprintf("%s (%d/%d) (100.00%%)", resultMsg, denom, denom))
 	return nil
+}
+
+// activityOpID returns the id to tag this run's activity-log entries with.
+//
+// Activity entries are grouped by an operation id so the UI can show what a run
+// did. These ops used to be handed the id of a legacy operations row created
+// alongside them; the scheduler no longer creates one, so the run's own v2 id is
+// both available and better — the entries now point at an operation that can
+// actually be looked up, which the legacy id stopped being able to promise once
+// the row went away.
+//
+// LegacyOpID remains the fallback for runs still in flight from before the
+// change, whose params were serialised with it. Both empty means uncorrelated
+// entries, which is a degradation in grouping and not a failure.
+func activityOpID(reporter opsregistry.Reporter, p schedulerExtraOpParams) string {
+	if id := opsregistry.ReporterOpID(reporter); id != "" {
+		return id
+	}
+	return p.LegacyOpID
 }

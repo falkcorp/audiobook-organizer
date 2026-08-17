@@ -250,16 +250,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "author-dedup-scan", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			params := authorDedupScanOpParams{LegacyOpID: op.ID}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "dedup.author-scan", params); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "dedup.author-scan", authorDedupScanOpParams{})
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue dedup.author-scan: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "author-dedup-scan"), nil
 		},
 		IsEnabled: func() bool { return config.AppConfig.Scheduled.DedupRefresh.Enabled },
 		GetInterval: func() time.Duration {
@@ -318,15 +313,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "dedup-llm-review", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.dedup-llm-review", schedulerExtraOpParams{LegacyOpID: op.ID}); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.dedup-llm-review", schedulerExtraOpParams{})
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue scheduler.dedup-llm-review: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "dedup-llm-review"), nil
 		},
 		IsEnabled:              func() bool { return ts.deps.HasDedupEngine() },
 		GetInterval:            func() time.Duration { return 0 },
@@ -343,16 +334,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "series-prune", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			params := seriesPruneOpParams{LegacyOpID: op.ID}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "dedup.series-prune", params); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "dedup.series-prune", seriesPruneOpParams{})
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue dedup.series-prune: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "series-prune"), nil
 		},
 		IsEnabled: func() bool { return config.AppConfig.Scheduled.SeriesPrune.Enabled },
 		GetInterval: func() time.Duration {
@@ -375,16 +361,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "series-normalize", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			params := seriesNormalizeOpParams{LegacyOpID: op.ID}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "dedup.series-normalize", params); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "dedup.series-normalize", seriesNormalizeOpParams{})
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue dedup.series-normalize: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "series-normalize"), nil
 		},
 		// Manual-only, and now says so. It has no interval and explicitly opts
 		// out of the maintenance window, so IsEnabled: true described a task
@@ -408,16 +389,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "isbn-enrichment", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			params := schedulerExtraOpParams{LegacyOpID: op.ID}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.isbn-enrichment", params); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.isbn-enrichment", schedulerExtraOpParams{})
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue scheduler.isbn-enrichment: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "isbn-enrichment"), nil
 		},
 		IsEnabled:   func() bool { return ts.deps.HasMetadataFetchSvc() },
 		GetInterval: func() time.Duration { return 6 * time.Hour },
@@ -441,16 +417,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "temp-file-cleanup", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			params := schedulerExtraOpParams{LegacyOpID: op.ID}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.temp-file-cleanup", params); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.temp-file-cleanup", schedulerExtraOpParams{})
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue scheduler.temp-file-cleanup: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "temp-file-cleanup"), nil
 		},
 		IsEnabled:              func() bool { return true },
 		GetInterval:            func() time.Duration { return 0 },
@@ -467,15 +438,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "trash-cleanup", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.trash-cleanup", schedulerExtraOpParams{LegacyOpID: op.ID}); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.trash-cleanup", schedulerExtraOpParams{})
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue scheduler.trash-cleanup: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "trash-cleanup"), nil
 		},
 		IsEnabled:              func() bool { return true },
 		GetInterval:            func() time.Duration { return 0 },
@@ -492,15 +459,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "archive-sweep", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.archive-sweep", schedulerExtraOpParams{LegacyOpID: op.ID}); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.archive-sweep", schedulerExtraOpParams{})
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue scheduler.archive-sweep: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "archive-sweep"), nil
 		},
 		IsEnabled:              func() bool { return true },
 		GetInterval:            func() time.Duration { return 0 },
@@ -517,15 +480,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "metadata-upgrade", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.metadata-upgrade", schedulerExtraOpParams{LegacyOpID: op.ID}); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.metadata-upgrade", schedulerExtraOpParams{})
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue scheduler.metadata-upgrade: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "metadata-upgrade"), nil
 		},
 		IsEnabled:              func() bool { return ts.deps.HasMetadataFetchSvc() },
 		GetInterval:            func() time.Duration { return 0 },
@@ -542,15 +501,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "author-split-scan", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.author-split-scan", schedulerExtraOpParams{LegacyOpID: op.ID}); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.author-split-scan", schedulerExtraOpParams{})
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue scheduler.author-split-scan: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "author-split-scan"), nil
 		},
 		IsEnabled: func() bool { return config.AppConfig.Scheduled.AuthorSplit.Enabled },
 		GetInterval: func() time.Duration {
@@ -573,15 +528,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "db-optimize", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.db-optimize", schedulerExtraOpParams{LegacyOpID: op.ID}); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.db-optimize", schedulerExtraOpParams{})
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue scheduler.db-optimize: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "db-optimize"), nil
 		},
 		IsEnabled: func() bool { return config.AppConfig.Scheduled.DbOptimize.Enabled },
 		GetInterval: func() time.Duration {
@@ -633,15 +584,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "cleanup-old-backups", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.cleanup-old-backups", schedulerExtraOpParams{LegacyOpID: op.ID}); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.cleanup-old-backups", schedulerExtraOpParams{})
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue scheduler.cleanup-old-backups: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "cleanup-old-backups"), nil
 		},
 		IsEnabled:              func() bool { return config.AppConfig.Maintenance.DbOptimize },
 		GetInterval:            func() time.Duration { return 0 },
@@ -658,16 +605,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "purge-deleted", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			params := schedulerExtraOpParams{LegacyOpID: op.ID}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.purge-deleted", params); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.purge-deleted", schedulerExtraOpParams{})
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue scheduler.purge-deleted: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "purge-deleted"), nil
 		},
 		IsEnabled: func() bool { return config.AppConfig.PurgeSoftDeletedAfterDays > 0 },
 		GetInterval: func() time.Duration {
@@ -689,15 +631,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "tombstone-cleanup", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.tombstone-cleanup", schedulerExtraOpParams{LegacyOpID: op.ID}); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.tombstone-cleanup", schedulerExtraOpParams{})
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue scheduler.tombstone-cleanup: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "tombstone-cleanup"), nil
 		},
 		IsEnabled:              func() bool { return true },
 		GetInterval:            func() time.Duration { return 24 * time.Hour },
@@ -714,15 +652,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "resolve-production-authors", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.resolve-production-authors", schedulerExtraOpParams{LegacyOpID: op.ID}); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.resolve-production-authors", schedulerExtraOpParams{})
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue scheduler.resolve-production-authors: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "resolve-production-authors"), nil
 		},
 		IsEnabled: func() bool { return config.AppConfig.Scheduled.ResolveProductionAuthors.Enabled },
 		GetInterval: func() time.Duration {
@@ -745,15 +679,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "metadata-refresh", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.metadata-refresh", schedulerExtraOpParams{LegacyOpID: op.ID}); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.metadata-refresh", schedulerExtraOpParams{})
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue scheduler.metadata-refresh: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "metadata-refresh"), nil
 		},
 		IsEnabled: func() bool { return config.AppConfig.Scheduled.MetadataRefresh.Enabled },
 		GetInterval: func() time.Duration {
@@ -777,15 +707,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "reconcile_scan", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create operation: %w", err)
-			}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.reconcile-scan", nil); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.reconcile-scan", nil)
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue reconcile scan: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "reconcile_scan"), nil
 		},
 		IsEnabled: func() bool { return config.AppConfig.Scheduled.Reconcile.Enabled },
 		GetInterval: func() time.Duration {
@@ -869,15 +795,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "purge_old_logs", nil)
-			if err != nil {
-				return nil, err
-			}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.purge-old-logs", nil); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.purge-old-logs", nil)
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue purge-old-logs: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "purge_old_logs"), nil
 		},
 		IsEnabled:              func() bool { return config.AppConfig.LogRetentionDays > 0 },
 		GetInterval:            func() time.Duration { return 7 * 24 * time.Hour },
@@ -895,15 +817,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			opID := ulid.Make().String()
-			op, err := store.CreateOperation(opID, "cleanup_activity_log", nil)
-			if err != nil {
-				return nil, err
-			}
-			if _, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.cleanup-activity-log", nil); enqErr != nil {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.cleanup-activity-log", nil)
+			if enqErr != nil {
 				return nil, fmt.Errorf("failed to enqueue cleanup-activity-log: %w", enqErr)
 			}
-			return op, nil
+			return v2ScheduledOp(v2ID, "cleanup_activity_log"), nil
 		},
 		IsEnabled:              func() bool { return ts.deps.HasActivitySvc() },
 		GetInterval:            func() time.Duration { return 24 * time.Hour },

@@ -524,6 +524,22 @@ func (r *dbReporter) Trigger(ctx context.Context, eventName string, payload any)
 	return r.bus.Publish(ctx, eventName, payload)
 }
 
+// OpID returns the id of the run this reporter belongs to.
+//
+// It is deliberately NOT part of the Reporter interface. Twenty-one types
+// implement Reporter and thirteen of them are test fakes that model progress and
+// nothing else; adding a method would edit all of them for a concern none of
+// them has. This follows the same optional-capability pattern legacy_op_status.go
+// uses for legacyOpStore: production runs on dbReporter, which has it, and
+// callers reach it through ReporterOpID, which degrades to "" rather than
+// panicking on a reporter that does not.
+//
+// The caller with a real need is the scheduler. Its ops used to be handed a
+// separate legacy operation row's id to tag activity-log entries with; now that
+// they no longer create one, they tag entries with the id of the operation that
+// actually exists.
+func (r *dbReporter) OpID() string { return r.opID }
+
 // SetCurrentItem implements Reporter. Updates the registry's in-memory label
 // for this run and emits an op.current_item SSE event. Zero DB writes.
 func (r *dbReporter) SetCurrentItem(label string) {
