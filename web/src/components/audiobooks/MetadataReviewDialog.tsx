@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/MetadataReviewDialog.tsx
-// version: 1.18.0
+// version: 1.19.0
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
 // last-edited: 2026-08-17
 
@@ -143,6 +143,36 @@ function normalizeLanguage(lang: string | undefined | null): string {
 // Clamping on READ (rather than only trimming the options list) is what makes
 // this self-healing for users who already have 250 or 500 persisted from an
 // earlier build — they get 50 on next open without touching devtools.
+// The "Strict review" preset. Three filters that were always being set together
+// by hand on every single dialog open — hide skipped rows, hide multi-book
+// groups, and only show high-confidence matches. One switch sets all three, and
+// the switch itself persists, so the dialog opens the way you left it.
+//
+// 190 is deliberately above 100: candidate scores are sums that routinely exceed
+// 100%, so 190 means "several strong signals agree", not "impossible".
+export const STRICT_PRESET = {
+  hideSkipped: true,
+  hideMultiBook: true,
+  confidenceThreshold: 190,
+} as const;
+
+/** Default min-confidence when the preset is OFF. */
+export const DEFAULT_CONFIDENCE = 85;
+
+export function loadStrictPreset(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_STRICT_PRESET) === 'true';
+}
+
+function saveStrictPreset(on: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_STRICT_PRESET, String(on));
+  } catch {
+    // Private-mode / quota failure: the preset still applies this session.
+  }
+}
+
 export function loadReviewPageSize(): number {
   if (typeof window === 'undefined') return 25;
   const raw = window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_PAGE_SIZE);
@@ -194,7 +224,12 @@ export function MetadataReviewDialog({
     Map<string, 'pending' | 'applied' | 'rejected' | 'skipped'>
   >(new Map());
   const [sourceFilter, setSourceFilter] = useState<string | null>(null);
-  const [confidenceThreshold, setConfidenceThreshold] = useState(85);
+  // These three are the preset's members: they seed from the persisted preset
+  // so a checked preset survives a reload without re-setting each control.
+  const [strictPreset, setStrictPreset] = useState(loadStrictPreset);
+  const [confidenceThreshold, setConfidenceThreshold] = useState(() =>
+    loadStrictPreset() ? STRICT_PRESET.confidenceThreshold : DEFAULT_CONFIDENCE
+  );
   const [viewMode, setViewMode] = useState<'compact' | 'two-column'>('compact');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
@@ -208,13 +243,13 @@ export function MetadataReviewDialog({
   const [hideApplied, setHideApplied] = useState(true);
   const [hideRejected, setHideRejected] = useState(true);
   const [hideNoMatch, setHideNoMatch] = useState(true);
-  const [hideSkipped, setHideSkipped] = useState(false);
+  const [hideSkipped, setHideSkipped] = useState(() => loadStrictPreset() && STRICT_PRESET.hideSkipped);
   // Hide books that share a candidate with another book — the cards that render
   // with "Skip All". Those are the ambiguous ones (two parts of one book, or
   // genuine duplicates) and need a judgement call per group; this toggle gets
   // them out of the way so the unambiguous one-book-one-candidate rows can be
   // worked through on their own.
-  const [hideMultiBook, setHideMultiBook] = useState(false);
+  const [hideMultiBook, setHideMultiBook] = useState(() => loadStrictPreset() && STRICT_PRESET.hideMultiBook);
   const [matchLanguage, setMatchLanguage] = useState<boolean>(loadLanguageFilter);
   const [titleFilter, setTitleFilter] = useState('');
   const [onlyWithTranscription, setOnlyWithTranscription] = useState(false);
@@ -1397,6 +1432,39 @@ export function MetadataReviewDialog({
                   </>
                 )}
               </Stack>
+
+              {/* Strict review preset. Sets the three filters that were being
+                  re-applied by hand on every open, and persists so they stay
+                  set. Turning it OFF restores the default confidence but leaves
+                  the hide-toggles where they are — flipping it off is usually
+                  "let me widen this a bit", not "reset everything". */}
+              <FormControlLabel
+                sx={{ mb: 1 }}
+                control={
+                  <Switch
+                    size="small"
+                    checked={strictPreset}
+                    onChange={(e) => {
+                      const on = e.target.checked;
+                      setStrictPreset(on);
+                      saveStrictPreset(on);
+                      if (on) {
+                        setHideSkipped(STRICT_PRESET.hideSkipped);
+                        setHideMultiBook(STRICT_PRESET.hideMultiBook);
+                        setConfidenceThreshold(STRICT_PRESET.confidenceThreshold);
+                      } else {
+                        setConfidenceThreshold(DEFAULT_CONFIDENCE);
+                      }
+                    }}
+                  />
+                }
+                label={
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                    Strict review — hide skipped &amp; multi-book, min confidence{' '}
+                    {STRICT_PRESET.confidenceThreshold}%
+                  </Typography>
+                }
+              />
 
               {/* Confidence slider */}
               <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 2 }}>

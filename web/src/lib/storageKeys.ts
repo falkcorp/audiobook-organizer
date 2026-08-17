@@ -1,7 +1,7 @@
 // file: web/src/lib/storageKeys.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5c8a3d7b-2e1f-4a9c-b3d5-1e8f2a9c7d4b
-// last-edited: 2026-08-08
+// last-edited: 2026-08-17
 
 /** Centralised localStorage key constants. */
 export const STORAGE_KEYS = {
@@ -17,6 +17,7 @@ export const STORAGE_KEYS = {
   LIBRARY_RECENT_SEARCHES: 'library_recent_searches',
   METADATA_REVIEW_LANGUAGE_FILTER: 'metadata-review-language-filter',
   METADATA_REVIEW_PAGE_SIZE: 'metadata-review-page-size',
+  METADATA_REVIEW_STRICT_PRESET: 'metadata-review-strict-preset',
   DEDUP_PAGE_SIZE: 'dedup-page-size',
   DEDUP_MULTI_SELECT: 'dedup-multi-select',
   LIBRARY_TAG_CLOUD_EXPANDED: 'library-tag-cloud-expanded',
