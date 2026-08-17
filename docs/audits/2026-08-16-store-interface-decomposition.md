@@ -1,7 +1,7 @@
 <!-- file: docs/audits/2026-08-16-store-interface-decomposition.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 70654a6c-a4b1-42c7-a06f-ff48ba1783d7 -->
-<!-- last-edited: 2026-08-16 -->
+<!-- last-edited: 2026-08-17 -->
 
 # Decomposing `database.Store`: what the evidence actually supports
 
@@ -311,6 +311,61 @@ package boundary, with a `var _ Store = (*database.PebbleStore)(nil)` assertion 
 
 **Do not compose `database` sub-interfaces.** That pattern produced reconcile's 115/11.
 
+### Narrowing is not the only shape — and it is not always the best one
+
+Everything above treats "declare a narrower interface" as the move. It is the default, not the
+only option, and this section originally presented no alternatives. Five shapes are available;
+pick per call site by what the function actually does, not by policy.
+
+| | Shape | Use when | What it buys |
+|---|---|---|---|
+| **B** | **Narrow interface** — explicit method list in the consuming package | 2–4 methods, reads and writes interleaved so they cannot be separated | Declared surface drops to what is used. The dependency remains. |
+| **C** | **Split the pure decision out of the I/O** | the function reads a set, decides something about it, then acts — very often signalled by a `dryRun` parameter whose only job is to skip the acting | **Removes the dependency** from the decision instead of narrowing it. The decision becomes testable with a literal. |
+| **D** | **Pass the function, not an interface** — `f func(id string) error` | exactly one method and no decision logic worth separating | Same as B with less ceremony; no interface, no assertion, no name to keep in sync. |
+| **E** | **Pass the data, not the store** | the callee needs rows the caller already has | Strongest of all: no store parameter at all. |
+| **F** | **The CI gate** (§10 step 3) | forever | Stops new wide declarations regardless of which of B–E is used. |
+
+**C is stronger than B wherever it applies**, and this document should have said so from the
+start. B narrows a dependency; C deletes one. The two are complementary rather than competing —
+C's leftover I/O steps still want B or D.
+
+**Worked example — `deleteOldOperations`** (PR #2503, `internal/maintenance/jobs/retention_and_hygiene.go`).
+The function listed operations, selected the expired ones, and deleted them, with `dryRun`
+threaded in to skip the third step. Split:
+
+```go
+operationsOlderThan(ops []database.Operation, cutoff time.Time) []string  // pure
+expiredOperationIDs(ctx, store operationLister, cutoff)                   // read
+deleteOperations(ctx, store operationDeleter, ids)                        // write
+```
+
+`Run` branches on `dryRun` and either reports `len(expired)` or calls `deleteOperations`.
+
+Two results are worth recording because they generalise:
+
+1. **Once the decision is out, both I/O halves need exactly one method.** The 2-method
+   `retentionOperationStore` became `operationLister` and `operationDeleter`. C does not compete
+   with D — it produces D.
+2. **The test that existed was not testing anything.** `TestRetentionBoundaryLogic` asserted
+   `opTime.Before(cutoff) == want` — it compared `time.Before` against itself and never reached
+   production code. It could not, because the decision was welded to a `ListOperations` call.
+   Its replacement is a five-case table over slice literals with no mock, no fake, no store and
+   no context, and it pins the boundary (an operation stamped exactly at the cutoff is retained)
+   that the old test only appeared to pin.
+
+**C has a cost, and it is the composition.** With one function returning both the dry-run count
+and the real count, their agreement was structural. After the split, `Run` reports `len(expired)`
+for a dry run and `deleteOperations`' return for a real one, and nothing about the types forces
+those to agree — so the invariant moved up into `Run`, the one function in this package that
+cannot be narrowed and is hardest to test. It has to be re-pinned deliberately (here: a test that
+`deleteOperations` returns `len(ids)` on success and the partial count on error). **Budget for
+that whenever C is applied; a split that silently drops an invariant into `Run` is a net loss.**
+
+**How many sites C fits is not yet measured.** An agent estimated "up to 41 candidates across 33
+files" from the presence of a `dryRun` parameter. That is a *naming* signal, and this
+investigation has already been burned twice by counting from names rather than structure (§3).
+Treat it as unverified. ⚠
+
 **The honest counter, which is why §9 exists:** doing this properly means ~150 newly-defined
 per-consumer interfaces across 42 packages, each an independent decision about what its consumer
 may touch. That is categorically larger than "a mechanical sweep," and it is the version of the
@@ -397,11 +452,12 @@ Deleting the 42 config entries is a config-only change, guarded by the real `moc
 arguments are good.
 
 - **Go agent — no.** It is a real framework boundary; re-typing it is a **31-file atomic edit**
-  that cannot be waved. But the interface dictates `Run` and *nothing else*: the ~35 free helper
+  that cannot be waved. But the interface dictates `Run` and *nothing else*: the free helper
   functions beneath it (`vgUnlinkOutliers`, `csMergeSeriesGroup`, `ddSoftDeleteBook`,
   `deleteOldOperations`, …) chose `database.Store` with nothing compelling them, and measure 1-4
-  methods each. ⚠ Narrow the layer below; allowlist `Run`. Fully mechanical, no framework change,
-  and it is where the volume is.
+  methods each. Narrow the layer below; allowlist `Run`. Fully mechanical, no framework change,
+  and it is where the volume is. **The "~35" is now measured — see the census below; it is 34
+  free functions, of which 33 are narrowable helpers.**
 - **Review agent — yes, or don't bother.** `internal/maintenance/jobs` is the densest debt (37
   new wide files in four months, 39 leaf + 17 propagating sites) and it is exactly where
   "narrow it when you touch it anyway" is weakest. If a sweep happens at all, that package
@@ -410,6 +466,69 @@ arguments are good.
 **My recommendation: the go agent's.** Same volume captured, no 31-file atomic edit, and it
 leaves the redesign available later. But the reviewer's objection is not answered by my
 recommendation — it is deferred by it, and you should know that.
+
+### Census of the maintenance packages — measured, and a retraction
+
+Measured 2026-08-17 on `main` @ `29a5e79e` with the `go/types` analyzer over
+`./internal/database ./internal/maintenance/... ./internal/plugins/maintenance/...`
+(non-test, excluding `/mocks/`; the `internal/database` root is required or sub-interface
+discovery silently returns nothing). Declarations with a `database.Store` **parameter**:
+
+| Category | Count | Narrowable? |
+|---|---|---|
+| `Run` methods | **37** | **no** — interface-constrained, all in `internal/maintenance/jobs` |
+| Other methods | **10** | yes |
+| Free functions | **34** | yes, except `maintenance.InjectStore` (`job.go:75`), the framework's store-injection setter → **33 helpers** |
+| **Total** | **81** | **43** |
+
+Free functions by package: `internal/maintenance/jobs` **18** · `internal/plugins/maintenance`
+**15** · `internal/maintenance` **1** (`InjectStore`). Three of the 34 do not touch the store at
+all (unused parameter).
+
+**Corroboration for the 37.** `maintenance.Register(` appears exactly **37** times in non-test
+code — an independently-keyed instrument agreeing with the AST. A `grep` for
+`^func (…) Run(.*database.Store` returns **35**; the two it misses
+(`recompute_book_aggregates.go:55`, `sweep_pebble_metrics_ttl.go:44`) declare their parameters
+one-per-line, so the pattern cannot see them. Hand-checked both. The AST count is the right one,
+and this is the fourth time in this investigation that a single-line grep undercounted a
+multi-line Go declaration.
+
+**🚨 Retraction.** A handoff note derived the "~35" as *"the analyzer found 55 functions in the
+two maintenance packages taking `database.Store`; 20 are `Run` implementations; 55 − 20 = 35."*
+**Both operands are wrong** — the real figures are 81 and 37 — and the correct answer lands at 34
+by coincidence of two errors roughly cancelling. Do not reuse that derivation. It is recorded
+here because a wrong method that produces a right-looking number is the most durable kind of
+error, and this document has already had to retract three figures (§2).
+
+### What PR #2503 actually narrowed — measured A/B, not claimed
+
+Same analyzer, same flags, run against the PR branch and differenced against `main`:
+
+| | main | #2503 | Δ |
+|---|---|---|---|
+| Free functions, `internal/maintenance/jobs` | 18 | **2** | −16 |
+| Free functions, `internal/plugins/maintenance` | 15 | 15 | 0 |
+| Non-`Run` methods | 10 | **7** | −3 |
+| `Run` methods | 37 | 37 | 0 — as designed |
+| **Total store-takers** | **81** | **62** | **−19** |
+
+So **#2503 narrowed 19 declarations: 16 free helpers plus 3 methods.** The shorthand "19 of the
+35 free helpers" that circulated in the handoff is wrong — three of the nineteen are methods, and
+the same miscategorisation put `(*backfillITunesPositionsJob).migrateOne` on a list of "free
+helpers" still to do.
+
+**Remaining after #2503: 24 narrowable declarations** — 15 free helpers in
+`internal/plugins/maintenance`, 2 in `internal/maintenance/jobs` (`vgFixAuthorDirPath`
+`fix_version_groups.go:276`, `ddMergeDuplicateBook` `dedup_books.go:329`, both propagating and
+both unblocked by #2503), and 7 non-`Run` methods. `maintenance.InjectStore` is excluded
+deliberately.
+
+**Monotonicity is now n=2.** §8's claim that narrowing a parameter breaks nothing — `Store` is
+composed purely of embedded sub-interfaces, so `*PebbleStore` and the hand-written `*MockStore`
+satisfy every slice — was measured once (the `tag_helpers.go` experiment). #2503 narrowed 19
+declarations at once with **zero call-site edits and zero test edits**, which is a second,
+much larger observation of the same property. It remains a property of *parameters*; §12's
+caveat that struct fields are untested by this stands.
 
 ### The strongest argument against this whole document, kept verbatim
 
@@ -434,7 +553,7 @@ Ordered so each step is independently valuable and none blocks on the next.
 | 4 | **Six keystone signatures** — one line each, unblocks every "blocked by callee" site found | 6 lines | measured: §8 |
 | 5 | **Write the missing design doc** at the path `internal/database/store.go:17` already cites | docs | none |
 | 6 | **Split `iface_misc.go`** — 25 of the 40 sub-interfaces live in one 18.6 KB file | pure move | `go build` verifies |
-| 7 | **Narrow the ~35 helpers beneath `MaintenanceJob.Run`** — pending §9 | ~35 funcs | mechanical |
+| 7 | **Narrow the 43 narrowable declarations beneath `MaintenanceJob.Run`** (33 free helpers + 10 methods; §9 census). **19 done in PR #2503, 24 remain.** Use B/C/D/E per §7, not B everywhere | 43 decls | mechanical |
 | 8 | Opportunistic narrowing thereafter — **demoted**, per §7 it buys 398→51, not 398→3 | ongoing | low |
 
 ### The six keystone signatures (step 4)
@@ -538,8 +657,16 @@ aliases; sub-interface method counts and the 398 total; the 45/3/42 mock census 
 lines; the build/vet/test-compile experiment.
 
 **Agent-reported, marked ⚠, not re-measured:** per-package distribution of the 140; the 88/286
-maintenance share; consumer arity (162 of 175 ≤3 methods); the ~120 capability sites; the ~35
-narrowable helpers; the 41 scanner `getStore()` sites; findings 10 and 11.
+maintenance share; consumer arity (162 of 175 ≤3 methods); the ~120 capability sites; the 41
+scanner `getStore()` sites; findings 10 and 11; the "up to 41 Option-C candidates across 33
+files" (a `dryRun`-name signal, not a structural count — §7).
+
+**Promoted from ⚠ to measured on 2026-08-17:** the narrowable-helper population in the two
+maintenance packages. **81** declarations take a `database.Store` parameter — 37 `Run` methods
+(not narrowable), 10 other methods, 34 free functions of which 33 are helpers. The previously
+circulated derivation `55 − 20 = 35` is **retracted**: both operands were wrong and the right
+answer emerged from two cancelling errors. Also measured: PR #2503's delta is **19 declarations
+(16 free helpers + 3 methods)**, leaving **24**. Full census, corroboration and retraction in §9.
 
 **Known-unverified:**
 
