@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.12.0
+// version: 2.13.0
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-08-09
+// last-edited: 2026-08-16
 
 import { Page } from '@playwright/test';
 
@@ -1212,9 +1212,17 @@ export async function setupMockApiRoutes(
       return route.fulfill(jsonResponse({ cleared, data: { cleared } }));
     }
 
-    // Cancel an operation: api.cancelOperation issues DELETE /operations/<id>,
-    // then the page re-fetches the timeline, so drop the row here.
-    const cancelOp = pathname.match(/^\/api\/v1\/operations\/([^/]+)$/);
+    // Cancel an operation: api.cancelOperation issues
+    // DELETE /operations/v2/<id>, then the page re-fetches the timeline, so
+    // drop the row here.
+    //
+    // This used to match /operations/<id>, the legacy route, which was retired
+    // once CancelOperationV2 learned to cancel an AI scan through the pipeline
+    // manager. A one-segment pattern cannot match the two-segment v2 path, so
+    // the DELETE fell through to the unhandled-endpoint branch, the row was
+    // never removed, and 'cancels running operation' failed on the assertion
+    // that the progress text had gone.
+    const cancelOp = pathname.match(/^\/api\/v1\/operations\/v2\/([^/]+)$/);
     if (cancelOp && method === 'DELETE') {
       const ops = mockState.operations as { timeline?: Array<Record<string, unknown>> };
       ops.timeline = (ops.timeline || []).filter((op) => op.id !== cancelOp[1]);
@@ -1321,7 +1329,10 @@ export async function setupMockApiRoutes(
       return route.fulfill(jsonResponse({ ...organizeOp, data: organizeOp }, 201));
     }
 
-    if (pathname.match(/\/api\/v1\/operations\/[^/]+$/) && method === 'DELETE') {
+    // Generic cancel fallback for specs that do not track timeline rows. Same
+    // v2 path as the handler above — see its comment for why one segment is
+    // not enough.
+    if (pathname.match(/\/api\/v1\/operations\/v2\/[^/]+$/) && method === 'DELETE') {
       return route.fulfill(jsonResponse({ message: 'Cancelled' }));
     }
 
