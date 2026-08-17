@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.59.0
+// version: 2.60.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-08-15
+// last-edited: 2026-08-16
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -3702,9 +3702,17 @@ const OP_V2_TERMINAL = [
 
 // pollOperationV2 polls a v2 operation until it reaches a terminal state.
 //
-// Separate from pollOperation, which polls the v1 `/operations/:id/status`
-// endpoint — a v2 op id is not addressable there, so reusing it would poll
-// forever against a 404.
+// Separate from pollOperation, which returns the flattened legacy `Operation`
+// shape. Both now read the same v2 record — pollOperation goes through
+// getOperationStatus, which was retargeted at getOperationV2 when
+// GET /operations/:id/status was retired — so the distinction is the response
+// type, not the endpoint. This comment used to say pollOperation polled v1 and
+// that a v2 id would 404 there; neither has been true since that retirement.
+//
+// pollOperation also ends on 'cancelled' while the backend mints 'canceled',
+// so it never terminates on a cancelled op — see
+// todo.d/20260816-frontend-cancelled-spelling-drift.md. This one tests against
+// OP_V2_TERMINAL instead.
 export async function pollOperationV2(
   id: string,
   onProgress?: (op: OperationV2) => void,
