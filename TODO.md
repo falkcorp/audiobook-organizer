@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.31.0 -->
+<!-- version: 10.32.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-08-14 -->
+<!-- last-edited: 2026-08-17 -->
 
 # Project TODO — live items only
 
@@ -5204,8 +5204,20 @@ Companion docs:
     Type-only change (no runtime/data impact); existing `mocks.Store` already satisfies
     every sub-interface so no wave triggers a mockery regen. Old sweep tooling
     (`scripts/{check_store_noops,narrow_struct_services,apply_narrowing}.py`) survives but
-    its hardcoded file lists must be regenerated. **Not started; deferred behind the
-    dedup+review consolidation work (items 50–52).**
+    its hardcoded file lists must be regenerated. ~~Not started~~ — **PARTIALLY DONE
+    2026-08-17 (PR #2534): the `internal/maintenance/jobs` consumer is narrowed.**
+    `MaintenanceJob.Run` now takes a 12-sub-interface `maintenance.JobStore` (187 methods)
+    instead of `database.Store` (40 sub-interfaces, 398 methods) — a 53.0% cut across all
+    37 jobs, with zero `Run` body changes and 8 job files dropping their
+    `internal/database` import entirely. The union was measured from call sites (a lower
+    bound) and then PROVEN by the type checker: the build only passes if every job and
+    every helper it reaches fits inside the 12. Also confirmed the note above: no mockery
+    regen was triggered, and exactly **1** test fake needed editing.
+    ⚠️ Correcting an overclaim carried in earlier notes: **this does NOT delete
+    `database.MockStore`** — it is imported far beyond this package and satisfies
+    `JobStore` too, so the 14 job tests that build one still compile unchanged.
+    **Still not started:** the 8 `internal/server/handlers/*/interfaces.go` +
+    `internal/server/interfaces.go` DI seams, which remain the bulk of this item.
 41. ~~**4.10 — MergeService mock-store unit tests** (H1:2789)~~ — DONE: `internal/merge`
     coverage 70.3%→96.6%. Added 34 tests across external-ID reassignment, ITL-removal
     enqueue, loser soft-delete, nil/empty-override wipe-safety, version-group integrity
