@@ -625,12 +625,12 @@ func TestStartScanOperation(t *testing.T) {
 	_, err := database.GetGlobalStore().CreateImportPath(importDir, "Import")
 	require.NoError(t, err)
 
-	payload := map[string]any{
-		"force_update": true,
-	}
-	body, err := json.Marshal(payload)
+	body, err := json.Marshal(map[string]any{
+		"def_id": "library.scan",
+		"params": map[string]any{"force_update": true},
+	})
 	require.NoError(t, err)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/operations/scan", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/operations/v2", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	server.router.ServeHTTP(w, req)
@@ -672,7 +672,8 @@ func TestStartOrganizeOperation(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/operations/organize", strings.NewReader("{}"))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/operations/v2",
+		strings.NewReader(`{"def_id":"library.organize","params":{}}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	server.router.ServeHTTP(w, req)

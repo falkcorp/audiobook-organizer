@@ -56,11 +56,22 @@ func (s *Server) wireOperationsRoutes(
 	// and the UI said "Failed to start scan" WHILE THE SCAN WAS RUNNING.
 	//
 	// Callers now POST /operations/v2 {def_id: "library.scan", params: {...}}.
+	// RETIRED 2026-08-17: DELETE /operations/:id.
+	//
+	// It differed from DELETE /operations/v2/:id in one way that mattered: it
+	// resolved an AI scan by matching the id against each scan's OperationID and
+	// cancelled it through the pipeline manager, which the registry cannot do.
+	// That branch was ported to CancelOperationV2 FIRST — deleting this route
+	// while v2 still went straight to registry.Cancel would have left the cancel
+	// button answering 204 while the scan ran on.
+	//
+	// Its other behaviour is deliberately not carried over: on a registry miss it
+	// force-marked the LEGACY row canceled, which the scheduler no longer writes
+	// and nothing reads.
 
 	// ── still on the legacy handler; each needs a v2 home before it can go ──
 	protected.GET("/operations/stale", s.perm(auth.PermLibraryView), operationsH.ListStaleOperations)
 	protected.GET("/operations/:id/result", s.perm(auth.PermLibraryView), operationsH.GetOperationResult)
-	protected.DELETE("/operations/:id", s.perm(auth.PermSettingsManage), operationsH.CancelOperation)
 	protected.POST("/operations/clear-stale", s.perm(auth.PermSettingsManage), operationsH.ClearStaleOperations)
 	protected.DELETE("/operations/history", s.perm(auth.PermSettingsManage), operationsH.DeleteOperationHistory)
 	protected.POST("/operations/optimize-database", s.perm(auth.PermSettingsManage), operationsH.OptimizeDatabase)

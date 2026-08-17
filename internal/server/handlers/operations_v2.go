@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -43,12 +44,67 @@ type OperationsV2Handler struct {
 	opsStore database.OpsV2Store
 	registry OperationsRegistry
 	hub      OperationsEventHub
+
+	// AI-scan cancellation, optional. See WithAIScanCancellation.
+	scanCanceler ScanCanceler
+	scanLister   AIScanLister
+}
+
+// ScanCanceler is the narrow *aiscan.PipelineManager subset needed to cancel an
+// in-flight AI scan by scan id.
+//
+// Declared here rather than imported from handlers/operations: that package
+// imports THIS one, so the dependency cannot run the other way. Go's structural
+// typing means the same concrete type satisfies both declarations.
+type ScanCanceler interface {
+	CancelScan(scanID int) error
+}
+
+// AIScanLister is the narrow *database.AIScanStore subset needed to find the AI
+// scan whose OperationID matches the operation being canceled.
+type AIScanLister interface {
+	ListScans() ([]database.Scan, error)
+}
+
+// OperationsV2Option configures an OperationsV2Handler at construction.
+//
+// Options rather than more constructor parameters: NewOperationsV2Handler has 22
+// call sites, 21 of them tests that model the store and registry and have no
+// opinion about AI scans. Widening the signature would edit all of them for a
+// concern none of them has.
+type OperationsV2Option func(*OperationsV2Handler)
+
+// WithAIScanCancellation supplies the collaborators CancelOperationV2 needs to
+// cancel an operation that is really an AI scan.
+//
+// Without it, cancelling such an operation asks the registry to cancel an id it
+// does not own and the scan keeps running. That was the state v2 shipped in;
+// only the legacy DELETE /operations/:id knew about AI scans, so retiring it
+// without this would have silently broken cancellation.
+//
+// UNVERIFIED AT THE WIRING. The handler behaviour is covered by
+// TestCancelOperationV2_CancelsAnAIScanThroughThePipeline, but that nothing
+// dropped this option in wire_handlers.go is not asserted anywhere: the two
+// collaborators are concrete types on Server (*aiscan.PipelineManager,
+// *database.AIScanStore), so no test can substitute them and drive the real
+// construction path. Omitting the option here fails silently in the worst
+// direction — cancel returns 204 and the scan runs on. Tracked in
+// todo.d/20260816-ai-scan-cancel-wiring-unverified.md.
+func WithAIScanCancellation(canceler ScanCanceler, lister AIScanLister) OperationsV2Option {
+	return func(h *OperationsV2Handler) {
+		h.scanCanceler = canceler
+		h.scanLister = lister
+	}
 }
 
 // NewOperationsV2Handler constructs an OperationsV2Handler. The opsStore may be
 // nil (the store does not implement OpsV2Store); the handlers guard for it.
-func NewOperationsV2Handler(opsStore database.OpsV2Store, registry OperationsRegistry, hub OperationsEventHub) *OperationsV2Handler {
-	return &OperationsV2Handler{opsStore: opsStore, registry: registry, hub: hub}
+func NewOperationsV2Handler(opsStore database.OpsV2Store, registry OperationsRegistry, hub OperationsEventHub, opts ...OperationsV2Option) *OperationsV2Handler {
+	h := &OperationsV2Handler{opsStore: opsStore, registry: registry, hub: hub}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 // GetOperationTimeline implements GET /api/v1/operations/timeline?since=15m.
@@ -182,6 +238,36 @@ func (h *OperationsV2Handler) GetOperationLogs(c *gin.Context) {
 // Cancels the operation via the registry (if running) or marks it canceled (if queued).
 func (h *OperationsV2Handler) CancelOperationV2(c *gin.Context) {
 	id := c.Param("id")
+
+	// An AI scan is driven by the pipeline manager, not the ops registry, and
+	// asking the registry to cancel it does nothing. This branch is ported from
+	// the legacy DELETE /operations/:id, which was the only route that knew:
+	// retiring that route without carrying this over would have left the cancel
+	// button returning 204 while the scan carried on.
+	//
+	// The scan is found by matching the operation id against each scan's
+	// OperationID, which is the only link between the two records.
+	if h.scanCanceler != nil && h.scanLister != nil {
+		scans, err := h.scanLister.ListScans()
+		if err != nil {
+			slog.Warn("cancel: could not list AI scans; falling through to the registry",
+				"op_id", id, "error", err)
+		}
+		for _, scan := range scans {
+			if scan.OperationID != id {
+				continue
+			}
+			// A cancel error is logged, not returned: the scan has been asked to
+			// stop and the caller's request is answered either way. This matches
+			// the legacy behaviour exactly.
+			if cerr := h.scanCanceler.CancelScan(scan.ID); cerr != nil {
+				slog.Info("cancel: AI scan cancel warning", "scan", scan.ID, "error", cerr)
+			}
+			httputil.RespondWithNoContent(c)
+			return
+		}
+	}
+
 	if h.registry == nil {
 		httputil.RespondWithInternalError(c, "operations registry not initialized")
 		return

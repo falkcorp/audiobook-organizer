@@ -155,7 +155,22 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 
 	// Resolve the opsV2 store from the composite store (nil if unsupported).
 	opsV2 := database.GetOpsV2(s.Store())
-	opsV2H := handlers.NewOperationsV2Handler(opsV2, opReg, opEventHub)
+
+	// AI-scan cancellation for DELETE /operations/v2/:id. Same typed-nil boxing
+	// guard as the operations-domain wiring below, and for the same reason: a nil
+	// *aiscan.PipelineManager assigned straight into the interface produces a
+	// NON-nil interface, which would sail past the handler's own nil check and
+	// panic on use.
+	var v2Pipeline handlers.ScanCanceler
+	if s.pipelineManager != nil {
+		v2Pipeline = s.pipelineManager
+	}
+	var v2ScanStore handlers.AIScanLister
+	if s.aiScanStore != nil {
+		v2ScanStore = s.aiScanStore
+	}
+	opsV2H := handlers.NewOperationsV2Handler(opsV2, opReg, opEventHub,
+		handlers.WithAIScanCancellation(v2Pipeline, v2ScanStore))
 
 	// Operations domain handler (scan/organize/optimize/transcode triggers,
 	// operation status/logs/result/changes/revert, stale-op management, DB

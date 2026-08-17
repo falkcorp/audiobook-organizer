@@ -82,8 +82,8 @@ func TestE2E_ITunesImportOrganizeWriteBack(t *testing.T) {
 
 	// Step 5: Organize
 	w = httptest.NewRecorder()
-	server.router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/operations/organize",
-		strings.NewReader("{}")))
+	server.router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/operations/v2",
+		strings.NewReader(`{"def_id":"library.organize","params":{}}`)))
 	require.Equal(t, http.StatusAccepted, w.Code)
 	var orgResp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &orgResp))

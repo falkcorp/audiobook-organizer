@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -550,7 +551,8 @@ func TestCoverageStartOrganize(t *testing.T) {
 	defer cleanup()
 
 	t.Run("organize without params", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/operations/organize", bytes.NewBufferString("{}"))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/operations/v2",
+			strings.NewReader(`{"def_id":"library.organize","params":{}}`))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		server.router.ServeHTTP(w, req)
@@ -558,14 +560,20 @@ func TestCoverageStartOrganize(t *testing.T) {
 		assert.Equal(t, http.StatusAccepted, w.Code)
 		var resp map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		assert.NotEmpty(t, resp["id"])
+		// The v2 trigger answers {"op_id": ...} unwrapped. The retired
+		// POST /operations/organize answered {"id", "op_id"}, and the web client
+		// read .data.id off it — which is why it reported "Failed to start scan"
+		// for a scan that had started (#2500).
+		assert.NotEmpty(t, resp["op_id"])
 	})
 
 	t.Run("organize with folder_path", func(t *testing.T) {
 		tempDir := t.TempDir()
-		payload := map[string]any{"folder_path": tempDir}
-		body, _ := json.Marshal(payload)
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/operations/organize", bytes.NewBuffer(body))
+		body, _ := json.Marshal(map[string]any{
+			"def_id": "library.organize",
+			"params": map[string]any{"folder_path": tempDir},
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/operations/v2", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		server.router.ServeHTTP(w, req)
@@ -574,9 +582,11 @@ func TestCoverageStartOrganize(t *testing.T) {
 	})
 
 	t.Run("organize with priority", func(t *testing.T) {
-		payload := map[string]any{"priority": 5}
-		body, _ := json.Marshal(payload)
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/operations/organize", bytes.NewBuffer(body))
+		body, _ := json.Marshal(map[string]any{
+			"def_id": "library.organize",
+			"params": map[string]any{"priority": 5},
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/operations/v2", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		server.router.ServeHTTP(w, req)
@@ -831,12 +841,15 @@ func TestCoverageListSoftDeletedAudiobooks(t *testing.T) {
 // Additional coverage: operations list
 // ---------------------------------------------------------------------------
 
-func TestCoverageListOperations(t *testing.T) {
+func TestCoverageOperationTimeline(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	t.Run("list operations empty", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/operations", nil)
+	// GET /operations listed the legacy table and was retired in #2500; the
+	// timeline is what replaced it. The window is explicit because the default
+	// is 15m, which would make "empty" pass for the wrong reason.
+	t.Run("timeline empty", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/operations/timeline?since=24h", nil)
 		w := httptest.NewRecorder()
 		server.router.ServeHTTP(w, req)
 
@@ -844,14 +857,17 @@ func TestCoverageListOperations(t *testing.T) {
 		var resp map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		data := resp["data"].(map[string]any)
-		assert.NotNil(t, data["items"])
+		assert.NotNil(t, data["operations"])
 	})
 
-	t.Run("list operations with pagination", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/operations?limit=5&offset=0", nil)
+	t.Run("timeline rejects a non-duration window", func(t *testing.T) {
+		// since= takes a Go duration. "30d" is not one, and silently treating an
+		// unparseable window as the default is how a filter comes to answer with
+		// something other than what was asked for.
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/operations/timeline?since=30d", nil)
 		w := httptest.NewRecorder()
 		server.router.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 }
 
@@ -1093,9 +1109,8 @@ func TestCoverageScanOperations(t *testing.T) {
 	defer cleanup()
 
 	t.Run("start scan", func(t *testing.T) {
-		payload := map[string]any{}
-		body, _ := json.Marshal(payload)
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/operations/scan", bytes.NewBuffer(body))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/operations/v2",
+			strings.NewReader(`{"def_id":"library.scan","params":{}}`))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		server.router.ServeHTTP(w, req)
