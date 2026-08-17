@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/retention_and_hygiene.go
-// version: 1.3.0
+// version: 1.5.0
 // guid: e7c9d4a2-f1b3-49a8-8c4f-7d2e5a1f3c9e
-// last-edited: 2026-08-14
+// last-edited: 2026-08-16
 
 package jobs
 
@@ -135,7 +135,7 @@ func (j *retentionAndHygieneJob) Run(ctx context.Context, store database.Store, 
 // so nothing was lost, but the count returned below counted it twice and the job
 // then reported more deletions than it made. One call takes one snapshot, so
 // neither the amplification nor the double-count is reachable.
-func deleteOldOperations(ctx context.Context, store database.Store, cutoffTime time.Time, dryRun bool) (int, error) {
+func deleteOldOperations(ctx context.Context, store retentionOperationStore, cutoffTime time.Time, dryRun bool) (int, error) {
 	slog.Info("deleteOldOperations: scanning operations", "cutoff_time", cutoffTime, "dry_run", dryRun)
 
 	if ctx.Err() != nil {
@@ -189,7 +189,7 @@ func deleteOldOperations(ctx context.Context, store database.Store, cutoffTime t
 // eliminates confusion for future readers of the key schema.
 //
 // Returns the total number of keys deleted across both prefixes.
-func deleteDeadPrefixes(ctx context.Context, store database.Store, dryRun bool) (int, error) {
+func deleteDeadPrefixes(ctx context.Context, store retentionKVStore, dryRun bool) (int, error) {
 	deadPrefixes := []string{"book:series:", "book:author:"}
 	slog.Info("deleteDeadPrefixes: starting sweep",
 		"prefixes", deadPrefixes, "dry_run", dryRun)
@@ -257,7 +257,7 @@ var terminalOpStatuses = map[string]bool{
 // Returns the number of operations whose state was (or in dry-run, would be)
 // cleared — counting operations, not raw keys, so the dry-run count matches
 // the subsequent real run.
-func deleteStaleOperationState(ctx context.Context, store database.Store, dryRun bool) (int, error) {
+func deleteStaleOperationState(ctx context.Context, store retentionOpStateStore, dryRun bool) (int, error) {
 	pairs, err := store.ScanPrefix("opstate:")
 	if err != nil {
 		return 0, fmt.Errorf("scan opstate prefix: %w", err)
@@ -304,7 +304,7 @@ func deleteStaleOperationState(ctx context.Context, store database.Store, dryRun
 // isDeadPrefixSweepDone checks if the dead-prefix sweep completion flag is set.
 // A missing setting (ErrSettingNotFound) is treated as "not done" (returns false, nil)
 // because the flag is created only after the first successful real run.
-func isDeadPrefixSweepDone(store database.Store, flagName string) (bool, error) {
+func isDeadPrefixSweepDone(store retentionFlagStore, flagName string) (bool, error) {
 	setting, err := store.GetSetting(flagName)
 	if err != nil {
 		if errors.Is(err, database.ErrSettingNotFound) {
@@ -319,6 +319,6 @@ func isDeadPrefixSweepDone(store database.Store, flagName string) (bool, error) 
 }
 
 // setDeadPrefixSweepDone sets the completion flag.
-func setDeadPrefixSweepDone(store database.Store, flagName string) error {
+func setDeadPrefixSweepDone(store retentionFlagStore, flagName string) error {
 	return store.SetSetting(flagName, "true", "boolean", false)
 }

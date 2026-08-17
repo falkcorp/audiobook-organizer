@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/repair_missing_files.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: f1a7b5e6-8c9d-0e1f-2a3b-4c5d6e7f8a90
-// last-edited: 2026-07-07
+// last-edited: 2026-08-16
 
 package jobs
 
@@ -259,7 +259,7 @@ func rmfr_repairOne(
 	audioExts map[string]bool,
 	buildIdx func(),
 	getIdx func() map[string][]string,
-	store database.Store,
+	store bookFileMutator,
 	opID string,
 ) rmfr_result {
 	bm := metaByBook[f.BookID]

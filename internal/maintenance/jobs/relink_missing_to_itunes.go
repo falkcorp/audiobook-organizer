@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/relink_missing_to_itunes.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e0f6a4d5-7b8c-9d0e-1f2a-3b4c5d6e7f80
-// last-edited: 2026-07-07
+// last-edited: 2026-08-16
 
 package jobs
 
@@ -174,7 +174,7 @@ func (j *relinkMissingToITunesJob) Run(ctx context.Context, store database.Store
 }
 
 // rmt_updateBookFiles updates all book_file rows that pointed to the old organizer path.
-func rmt_updateBookFiles(store database.Store, bookID, newFP string, fi os.FileInfo, organizerRoot string) {
+func rmt_updateBookFiles(store bookFileMutator, bookID, newFP string, fi os.FileInfo, organizerRoot string) {
 	bookFiles, bfErr := store.GetBookFiles(bookID)
 	if bfErr != nil {
 		return
