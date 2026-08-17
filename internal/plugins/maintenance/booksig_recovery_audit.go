@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_recovery_audit.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 5f2a7c14-9b3e-4d6a-8e1f-2c0d5a9b7e34
-// last-edited: 2026-07-12
+// last-edited: 2026-08-17
 
 package maintenance
 
@@ -334,7 +334,7 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 // the caller) to carry a non-nil Description/BookSigV1 respectively; either
 // may be nil if that field isn't recoverable for this book.
 func restoreRecoverableFields(
-	store database.Store,
+	store bookFieldWriter,
 	id string,
 	descSnapBook *database.Book,
 	sigSnapBook *database.Book,

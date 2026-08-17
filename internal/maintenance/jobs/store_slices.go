@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/store_slices.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3a142df0-9e5d-4ead-9db6-bb75dbed428f
-// last-edited: 2026-08-16
+// last-edited: 2026-08-17
 
 package jobs
 
@@ -11,7 +11,7 @@ import "github.com/falkcorp/audiobook-organizer/internal/database"
 //
 // `MaintenanceJob.Run` (internal/maintenance/job.go:70) takes the full
 // `database.Store` and cannot be narrowed — an interface method's parameter
-// type is fixed for every implementer, and 31 job types implement it. That one
+// type is fixed for every implementer, and 37 job types implement it. That one
 // signature is why this package holds the largest concentration of wide-store
 // declarations in the codebase.
 //

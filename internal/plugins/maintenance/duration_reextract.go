@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 3.9.0
+// version: 3.10.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-07-03
+// last-edited: 2026-08-17
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -197,7 +197,7 @@ type bookProcessResult struct {
 // stored fingerprint values (fast) or ffprobe (slow), and returns what should
 // be written. It never writes to the store. skipBefore is the age threshold:
 // books verified after skipBefore are returned with recentlyVerified=true.
-func processBookForReextract(ctx context.Context, store database.Store, book database.Book, skipBefore time.Time) bookProcessResult {
+func processBookForReextract(ctx context.Context, store bookFileLister, book database.Book, skipBefore time.Time) bookProcessResult {
 	res := bookProcessResult{book: book}
 	if !skipBefore.IsZero() && book.DurationVerifiedAt != nil && book.DurationVerifiedAt.After(skipBefore) {
 		res.recentlyVerified = true
@@ -533,7 +533,7 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 
 // stampVerifiedAt writes DurationVerifiedAt=now to the book record. Called
 // after confirming or correcting a book's duration so future runs can skip it.
-func stampVerifiedAt(store database.Store, reporter sdk.Reporter, bookID string) {
+func stampVerifiedAt(store bookFieldWriter, reporter sdk.Reporter, bookID string) {
 	full, err := store.GetBookByID(bookID)
 	if err != nil || full == nil {
 		return

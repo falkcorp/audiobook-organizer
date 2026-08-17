@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
-// last-edited: 2026-08-06
+// last-edited: 2026-08-17
 
 // Package maintenance — op maintenance.regroup-shattered-ai (PR-B1).
 //
@@ -316,7 +316,7 @@ const reconcileScanLimit = 100_000
 // design: the pending-hold count is bounded (intentional holds only), each delete is a
 // cheap local Pebble write, and DeleteReviewItem/UpsertReviewItem share one mutex, so a
 // worker pool would only add contention.
-func reconcileStaleHolds(ctx context.Context, store database.Store, reporter sdk.Reporter, groups []itunesservice.RegroupGroup, limit int) int {
+func reconcileStaleHolds(ctx context.Context, store reviewHoldStore, reporter sdk.Reporter, groups []itunesservice.RegroupGroup, limit int) int {
 	if limit > 0 {
 		return 0
 	}
