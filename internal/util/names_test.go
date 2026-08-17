@@ -1,5 +1,5 @@
 // file: internal/util/names_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6c05f39a-71b4-4e28-9d1a-3f8b0c27e5d6
 // last-edited: 2026-08-17
 
@@ -73,6 +73,52 @@ func TestIsCompoundCreditName(t *testing.T) {
 	for _, s := range simple {
 		if util.IsCompoundCreditName(s) {
 			t.Errorf("%q must NOT be treated as compound", s)
+		}
+	}
+}
+
+// 🔴 THE OXFORD COMMA LEAKS PUNCTUATION INTO A PERSON'S NAME.
+//
+// Measured on the live library 2026-08-17, AFTER the splitter shipped: the
+// narrator list contained BOTH "Alan Barnes" (14 books) and "Alan Barnes," (1
+// book) as separate people, and 8 such pairs in total across 3,289 entries. The
+// trailing comma is not in the source data — the splitter creates it.
+//
+// Why: creditSeparators applies " & " BEFORE ", ". The real credit below splits on
+// " & " into "Lance Parkin, Stephen Cole, Alan Barnes," + "Jonathan Morris"; the
+// later ", " pass then cannot reach the final comma, because it is now at the end
+// of the string with no space after it and so matches no separator. TrimSpace
+// removes whitespace only, and the comma rides through into the narrator table.
+func TestSplitCreditNames_OxfordCommaDoesNotLeakPunctuation(t *testing.T) {
+	// The literal narratorName of a real book in the production library. A
+	// constructed input would have verified my model of the bug rather than the
+	// bug.
+	const real = "Lance Parkin, Stephen Cole, Alan Barnes, & Jonathan Morris"
+	want := []string{"Lance Parkin", "Stephen Cole", "Alan Barnes", "Jonathan Morris"}
+	if got := util.SplitCreditNames(real); !reflect.DeepEqual(got, want) {
+		t.Errorf("SplitCreditNames(%q) =\n  %#v\nwant\n  %#v", real, got, want)
+	}
+}
+
+// Once the punctuation is trimmed, the two spellings must collapse to ONE entry
+// rather than to two that merely look alike. Pinned separately because a fix that
+// trimmed but ran before the de-dup pass would still emit a duplicate.
+func TestSplitCreditNames_TrimmedFormsDeduplicate(t *testing.T) {
+	got := util.SplitCreditNames("Alan Barnes, & Alan Barnes")
+	if want := []string{"Alan Barnes"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %#v, want %#v — the trimmed forms are the same person", got, want)
+	}
+}
+
+// 🔴 TRIM SEPARATORS, NOT PUNCTUATION IN GENERAL. A period and a hyphen are part of
+// real names; stripping them would mint a NEW phantom duplicate ("Sammy Davis Jr"
+// alongside "Sammy Davis Jr.") — the same defect this fix exists to remove, one
+// character class over.
+func TestSplitCreditNames_KeepsPunctuationThatBelongsToTheName(t *testing.T) {
+	keep := []string{"Sammy Davis Jr.", "Alex Hill-Knight", "E. E. Knight", "Smith, John"}
+	for _, s := range keep {
+		if got := util.SplitCreditNames(s); len(got) != 1 || got[0] != s {
+			t.Errorf("SplitCreditNames(%q) = %#v, want it left exactly alone", s, got)
 		}
 	}
 }
