@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/store_slices.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3a142df0-9e5d-4ead-9db6-bb75dbed428f
 // last-edited: 2026-08-16
 
@@ -33,10 +33,22 @@ import "github.com/falkcorp/audiobook-organizer/internal/database"
 // purely of embedded sub-interfaces, so they satisfy every slice here too.
 // Existing callers and tests need no changes.
 
-// retentionOperationStore is the slice needed to age out completed operation
-// rows and their logs.
-type retentionOperationStore interface {
+// operationLister and operationDeleter are the two halves of what used to be
+// one `retentionOperationStore` covering both. Splitting the helper into a read
+// step, a pure decision, and a write step (see retention_and_hygiene.go) left
+// each I/O step needing exactly one method, so the interface split followed the
+// function split rather than the other way round.
+//
+// One method each is also the point at which a narrow interface stops earning
+// its keep — a `func(limit, offset int) (...)` parameter would say the same
+// thing with less ceremony (Option D in the audit's §7). They are kept as named
+// interfaces here so the compile-time assertions below still cover them and so
+// the retention job reads uniformly with its three siblings.
+type operationLister interface {
 	ListOperations(limit, offset int) ([]database.Operation, int, error)
+}
+
+type operationDeleter interface {
 	DeleteOperationWithLogs(id string) error
 }
 
@@ -140,7 +152,8 @@ type seriesMerger interface {
 // Compile-time proof that the real store satisfies every slice above. Without
 // these, a drifting method signature would only surface at the call sites.
 var (
-	_ retentionOperationStore = (*database.PebbleStore)(nil)
+	_ operationLister         = (*database.PebbleStore)(nil)
+	_ operationDeleter        = (*database.PebbleStore)(nil)
 	_ retentionKVStore        = (*database.PebbleStore)(nil)
 	_ retentionOpStateStore   = (*database.PebbleStore)(nil)
 	_ retentionFlagStore      = (*database.PebbleStore)(nil)

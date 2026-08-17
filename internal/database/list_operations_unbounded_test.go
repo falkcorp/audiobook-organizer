@@ -1,7 +1,7 @@
 // file: internal/database/list_operations_unbounded_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d40b6c1-9e25-4a83-bb17-2c5f8e04d961
-// last-edited: 2026-08-14
+// last-edited: 2026-08-17
 
 package database
 
@@ -12,13 +12,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ListOperations treats limit <= 0 as "no limit". deleteOldOperations in
+// ListOperations treats limit <= 0 as "no limit". expiredOperationIDs in
 // internal/maintenance/jobs relies on that to collect the whole listing in one
 // call instead of paging, so the sentinel is load-bearing for a production
 // retention run rather than a convenience.
 //
 // This test has to exist HERE, against the real PebbleStore. The jobs package
-// exercises deleteOldOperations entirely through a fake Store, so reverting the
+// exercises expiredOperationIDs entirely through a fake Store, so reverting the
 // sentinel in the real implementation leaves every test in that package green —
 // verified by mutation. Were the real store to return an empty page for
 // limit == 0, retention would collect nothing, delete nothing, report success,
