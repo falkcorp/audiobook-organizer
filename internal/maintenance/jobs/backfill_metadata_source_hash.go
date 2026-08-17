@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_metadata_source_hash.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1000015-0000-0000-0000-000000000015
 // last-edited: 2026-08-17
 
@@ -10,9 +10,10 @@ import (
 	"crypto/sha256"
 	"fmt"
 
+	"log/slog"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
-	"log/slog"
 )
 
 func init() { maintenance.Register(&backfillMetadataSourceHashJob{}) }
@@ -31,7 +32,7 @@ func (j *backfillMetadataSourceHashJob) Description() string {
 	return "Compute MetadataSourceHash for books that have one missing"
 }
 func (j *backfillMetadataSourceHashJob) CanResume() bool { return false }
-func (j *backfillMetadataSourceHashJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *backfillMetadataSourceHashJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return err

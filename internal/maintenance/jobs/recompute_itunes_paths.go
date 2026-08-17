@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/recompute_itunes_paths.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1000013-0000-0000-0000-000000000013
 // last-edited: 2026-08-17
 
@@ -8,10 +8,11 @@ package jobs
 import (
 	"context"
 
+	"log/slog"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
-	"log/slog"
 )
 
 func init() { maintenance.Register(&recomputeITunesPathsJob{}) }
@@ -30,7 +31,7 @@ func (j *recomputeITunesPathsJob) Description() string {
 	return "Recompute iTunes path mapping for all book files"
 }
 func (j *recomputeITunesPathsJob) CanResume() bool { return false }
-func (j *recomputeITunesPathsJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *recomputeITunesPathsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	files, err := store.GetAllBookFilesCore()
 	if err != nil {
 		return err

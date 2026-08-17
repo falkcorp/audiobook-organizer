@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1000014-0000-0000-0000-000000000014
 // last-edited: 2026-08-17
 
@@ -10,11 +10,12 @@ import (
 	"fmt"
 	"time"
 
+	"log/slog"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
-	"log/slog"
 )
 
 func init() { maintenance.Register(&backfillFileHashesJob{}) }
@@ -35,7 +36,7 @@ func (j *backfillFileHashesJob) Description() string {
 
 // Job supports checkpoint-based resume after restart.
 func (j *backfillFileHashesJob) CanResume() bool { return true }
-func (j *backfillFileHashesJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	files, err := store.GetAllBookFilesCore()
 	if err != nil {
 		return err

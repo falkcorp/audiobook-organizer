@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/bulk_fetch_metadata.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b3c9d7e8-0f1a-2b3c-4d5e-6f7a8b9c0d1e
 // last-edited: 2026-08-17
 
@@ -42,7 +42,7 @@ func (j *bulkFetchMetadataJob) DefaultParams() any { return &bmf_params{} }
 func (j *bulkFetchMetadataJob) CanResume() bool    { return true }
 func (j *bulkFetchMetadataJob) Permission() string { return string(auth.PermLibraryEditMetadata) }
 
-func (j *bulkFetchMetadataJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	opID := maintenance.OperationIDFromCtx(ctx)
 
 	preferAudible := false

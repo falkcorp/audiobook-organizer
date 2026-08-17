@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/retention_and_hygiene.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: e7c9d4a2-f1b3-49a8-8c4f-7d2e5a1f3c9e
 // last-edited: 2026-08-17
 
@@ -35,7 +35,7 @@ func (j *retentionAndHygieneJob) Description() string {
 }
 func (j *retentionAndHygieneJob) CanResume() bool { return true }
 
-func (j *retentionAndHygieneJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *retentionAndHygieneJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	slog.Info("retention-and-hygiene job starting", "dry_run", dryRun)
 
 	// (1) Operation/OperationLog retention sweep: delete older than N days (default 90).

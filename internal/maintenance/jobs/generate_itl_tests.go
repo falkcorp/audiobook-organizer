@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/generate_itl_tests.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b7e3f1a2-4c5d-6e7f-8a9b-0c1d2e3f4a5b
 // last-edited: 2026-08-17
 
@@ -33,7 +33,7 @@ func (j *generateITLTestsJob) Description() string {
 func (j *generateITLTestsJob) DefaultParams() any { return nil }
 func (j *generateITLTestsJob) CanResume() bool    { return false }
 
-func (j *generateITLTestsJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *generateITLTestsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	if config.AppConfig.RootDir == "" {
 		return fmt.Errorf("root_dir is not configured")
 	}

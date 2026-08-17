@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/fix_library_states.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1000008-0000-0000-0000-000000000008
 // last-edited: 2026-08-17
 
@@ -9,9 +9,9 @@ import (
 	"context"
 	"os"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"log/slog"
+
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 
 func init() { maintenance.Register(&fixLibraryStatesJob{}) }
@@ -30,7 +30,7 @@ func (j *fixLibraryStatesJob) Description() string {
 	return "Reconcile library_state field based on filesystem presence"
 }
 func (j *fixLibraryStatesJob) CanResume() bool { return false }
-func (j *fixLibraryStatesJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *fixLibraryStatesJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return err

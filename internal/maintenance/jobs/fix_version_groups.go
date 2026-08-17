@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/fix_version_groups.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: a1000004-0000-0000-0000-000000000004
 // last-edited: 2026-08-17
 
@@ -13,11 +13,12 @@ import (
 	"regexp"
 	"strings"
 
+	"log/slog"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/oklog/ulid/v2"
-	"log/slog"
 )
 
 func init() { maintenance.Register(&fixVersionGroupsJob{}) }
@@ -35,7 +36,7 @@ func (j *fixVersionGroupsJob) DefaultParams() any {
 func (j *fixVersionGroupsJob) Description() string { return "Fix and normalize version groups" }
 func (j *fixVersionGroupsJob) CanResume() bool     { return false }
 
-func (j *fixVersionGroupsJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *fixVersionGroupsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	allBooks, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return fmt.Errorf("failed to list books: %w", err)
@@ -273,7 +274,7 @@ func vgBestMatchSubdir(parent, title string) string {
 	return bestPath
 }
 
-func vgFixAuthorDirPath(store database.Store, book *database.BookCore, subdir string) error {
+func vgFixAuthorDirPath(store maintenance.JobStore, book *database.BookCore, subdir string) error {
 	current, err := store.GetBookByID(book.ID)
 	if err != nil {
 		return fmt.Errorf("GetBookByID: %w", err)

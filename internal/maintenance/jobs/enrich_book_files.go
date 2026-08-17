@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/enrich_book_files.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1000009-0000-0000-0000-000000000009
 // last-edited: 2026-08-17
 
@@ -12,9 +12,10 @@ import (
 	"strconv"
 	"strings"
 
+	"log/slog"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
-	"log/slog"
 )
 
 func init() { maintenance.Register(&enrichBookFilesJob{}) }
@@ -35,7 +36,7 @@ func (j *enrichBookFilesJob) Description() string {
 	return "Backfill track numbers for book_files from filenames"
 }
 func (j *enrichBookFilesJob) CanResume() bool { return false }
-func (j *enrichBookFilesJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *enrichBookFilesJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	files, err := store.GetAllBookFilesCore()
 	if err != nil {
 		return err

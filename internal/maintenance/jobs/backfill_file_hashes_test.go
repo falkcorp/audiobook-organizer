@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-07-06
+// last-edited: 2026-08-17
 
 package jobs_test
 
@@ -39,7 +39,7 @@ func TestBackfillFileHashesJob_SkipsAlreadyHashed(t *testing.T) {
 	var setCalled bool
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
-		SetBookFileHashFunc: func(id, h string) error { setCalled = true; return nil },
+		SetBookFileHashFunc:     func(id, h string) error { setCalled = true; return nil },
 	}
 
 	j, err := maintenance.Get("backfill-file-hashes")
@@ -64,7 +64,7 @@ func TestBackfillFileHashesJob_HashesNewFile(t *testing.T) {
 	var gotHash string
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
-		SetBookFileHashFunc: func(id, h string) error { gotHash = h; return nil },
+		SetBookFileHashFunc:     func(id, h string) error { gotHash = h; return nil },
 	}
 
 	j, err := maintenance.Get("backfill-file-hashes")
@@ -83,7 +83,7 @@ func TestBackfillFileHashesJob_DryRun_SkipsWrite(t *testing.T) {
 	var setCalled bool
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
-		SetBookFileHashFunc: func(id, h string) error { setCalled = true; return nil },
+		SetBookFileHashFunc:     func(id, h string) error { setCalled = true; return nil },
 	}
 
 	j, err := maintenance.Get("backfill-file-hashes")
@@ -98,7 +98,7 @@ func TestBackfillFileHashesJob_MissingFile_Warns(t *testing.T) {
 	rep := &noopReporter{}
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
-		SetBookFileHashFunc: func(id, h string) error { setCalled = true; return nil },
+		SetBookFileHashFunc:     func(id, h string) error { setCalled = true; return nil },
 	}
 
 	j, err := maintenance.Get("backfill-file-hashes")

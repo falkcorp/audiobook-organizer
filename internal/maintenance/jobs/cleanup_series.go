@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: a1000002-0000-0000-0000-000000000002
 // last-edited: 2026-08-17
 
@@ -12,9 +12,10 @@ import (
 	"strings"
 	"unicode"
 
+	"log/slog"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
-	"log/slog"
 )
 
 func init() { maintenance.Register(&cleanupSeriesJob{}) }
@@ -34,7 +35,7 @@ func (j *cleanupSeriesJob) Description() string {
 }
 func (j *cleanupSeriesJob) CanResume() bool { return false }
 
-func (j *cleanupSeriesJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	allSeries, err := store.GetAllSeries()
 	if err != nil {
 		return fmt.Errorf("failed to list series: %w", err)

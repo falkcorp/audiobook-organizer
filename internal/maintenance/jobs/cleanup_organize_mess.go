@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_organize_mess.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: a1000007-0000-0000-0000-000000000007
 // last-edited: 2026-08-17
 
@@ -15,10 +15,10 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"log/slog"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 
 func init() { maintenance.Register(&cleanupOrganizeMess{}) }
@@ -38,7 +38,7 @@ func (j *cleanupOrganizeMess) Description() string {
 }
 func (j *cleanupOrganizeMess) CanResume() bool { return false }
 
-func (j *cleanupOrganizeMess) Run(ctx context.Context, _ database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *cleanupOrganizeMess) Run(ctx context.Context, _ maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	rootDir := config.AppConfig.RootDir
 	if rootDir == "" {
 		return fmt.Errorf("root_dir is not configured")

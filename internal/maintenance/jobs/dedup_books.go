@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: a1000010-0000-0000-0000-000000000010
 // last-edited: 2026-08-17
 
@@ -38,7 +38,7 @@ func (j *dedupBooksJob) DefaultParams() any {
 func (j *dedupBooksJob) Description() string { return "Detect and merge duplicate books" }
 func (j *dedupBooksJob) CanResume() bool     { return false }
 
-func (j *dedupBooksJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	allBooks, err := ddFetchAllBooksPaginated(store)
 	if err != nil {
 		return fmt.Errorf("failed to list books: %w", err)
@@ -326,7 +326,7 @@ func ddBookScore(b *database.Book) int {
 	return score
 }
 
-func ddMergeDuplicateBook(store database.Store, keeper *database.Book, dup *database.Book, dryRun bool, enqueuer maintenance.WriteBackEnqueuer) error {
+func ddMergeDuplicateBook(store maintenance.JobStore, keeper *database.Book, dup *database.Book, dryRun bool, enqueuer maintenance.WriteBackEnqueuer) error {
 	if dryRun {
 		return nil
 	}

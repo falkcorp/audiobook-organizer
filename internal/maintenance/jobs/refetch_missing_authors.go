@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/refetch_missing_authors.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: a1000012-0000-0000-0000-000000000012
 // last-edited: 2026-08-17
 
@@ -33,7 +33,7 @@ func (j *refetchMissingAuthorsJob) Description() string {
 func (j *refetchMissingAuthorsJob) DefaultParams() any { return &rma_params{DryRun: true} }
 func (j *refetchMissingAuthorsJob) CanResume() bool    { return true }
 
-func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	opID := maintenance.OperationIDFromCtx(ctx)
 
 	// Load all books without an author. Core-typed: the filter/lookup below

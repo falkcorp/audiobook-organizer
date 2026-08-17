@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/fix_file_modes.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6d3a9f82-1e47-4b50-8c2d-5f9e7a3b1c48
 // last-edited: 2026-08-17
 
@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 
@@ -43,7 +42,7 @@ func (j *fixFileModesJob) Description() string {
 }
 func (j *fixFileModesJob) CanResume() bool { return false } // idempotent
 
-func (j *fixFileModesJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *fixFileModesJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	files, err := store.GetAllBookFilesCore()
 	if err != nil {
 		return fmt.Errorf("list book files: %w", err)

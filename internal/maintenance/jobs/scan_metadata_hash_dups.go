@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/scan_metadata_hash_dups.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1000017-0000-0000-0000-000000000017
 // last-edited: 2026-08-17
 
@@ -9,9 +9,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"log/slog"
+
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 
 func init() { maintenance.Register(&scanMetadataHashDupsJob{}) }
@@ -30,7 +30,7 @@ func (j *scanMetadataHashDupsJob) Description() string {
 	return "Scan for books sharing the same metadata source hash"
 }
 func (j *scanMetadataHashDupsJob) CanResume() bool { return false }
-func (j *scanMetadataHashDupsJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, _ bool) error {
+func (j *scanMetadataHashDupsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, _ bool) error {
 	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return err

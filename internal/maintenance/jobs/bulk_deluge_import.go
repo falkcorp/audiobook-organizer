@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/bulk_deluge_import.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a2b8c6d7-9e0f-1a2b-3c4d-5e6f7a8b9c0d
 // last-edited: 2026-08-17
 
@@ -40,7 +40,7 @@ func (j *bulkDelugeImportJob) Description() string {
 func (j *bulkDelugeImportJob) DefaultParams() any { return &bdi_params{DryRun: true} }
 func (j *bulkDelugeImportJob) CanResume() bool    { return true }
 
-func (j *bulkDelugeImportJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *bulkDelugeImportJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	opID := maintenance.OperationIDFromCtx(ctx)
 
 	maxBooks := 0

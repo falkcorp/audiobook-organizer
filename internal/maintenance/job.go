@@ -1,5 +1,5 @@
 // file: internal/maintenance/job.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 11111111-1111-1111-1111-111111111111
 // last-edited: 2026-08-17
 
@@ -64,8 +64,11 @@ type PermissionAware interface {
 // bridge stands. Declaring the policy on the job is the step that makes the 37
 // separate OperationDefs of PR-2 a wiring change rather than a design change.
 //
-// Nothing reads this yet. The bridge still runs and still supplies its own hardcoded
-// values, so adding these declarations is behaviour-preserving by construction.
+// As of PR-2 the bridge is gone and RegisterMaintenanceJobOps reads this per job,
+// so a value here is now load-bearing rather than declarative. Four jobs
+// (backfill-file-hashes, bulk-fetch-metadata, recompute-book-aggregates,
+// retention-and-hygiene) declare something other than DefaultPolicy(); the other
+// 33 assert the bridge's old behaviour was correct for them.
 //
 // ⚠️ The zero value is INVALID and deliberately so: ResumeUnspecified and
 // LivenessUnspecified are both `= iota` = 0, and RegisterOp rejects each
@@ -165,6 +168,40 @@ func RequeuePolicy() ExecutionPolicy {
 	return p
 }
 
+// JobStore is the database surface a maintenance job may use.
+//
+// It replaces database.Store in Run's signature. Store embeds 40 sub-interfaces
+// resolving to 398 methods; the 37 jobs together touch 12 of them — 187 methods,
+// a 53% smaller contract. The union was measured from every direct store.X() call
+// in the job bodies plus the parameter types of every helper a job hands `store`
+// to, not from a naming pattern.
+//
+// Listing the sub-interfaces rather than the methods is deliberate: it mirrors how
+// database.Store itself is built, so a job needing a genuinely new capability adds
+// one line here and that line is the review surface. Widening it should feel like
+// a decision.
+//
+// What this does NOT do: it does not delete database.MockStore. MockStore is
+// imported far beyond this package and satisfies JobStore too, so the 14 job tests
+// that build one still compile unchanged. What it buys is a bounded contract and
+// the option of a small per-job double.
+//
+// Nothing here is a new type — all 12 already existed in internal/database.
+type JobStore interface {
+	database.BookStore
+	database.BookFileStore
+	database.AuthorStore
+	database.OperationStore
+	database.SeriesStore
+	database.ExternalIDStore
+	database.UserStore
+	database.UserPositionStore
+	database.UserTagStore
+	database.SettingsStore
+	database.MetadataStore
+	database.RawKVStore
+}
+
 // PolicyAware is satisfied by every MaintenanceJob. It is a separate interface
 // only so that PR-2's registration code can accept the policy without depending
 // on the rest of the v1 job surface, which PR-2 deletes.
@@ -197,10 +234,5 @@ type MaintenanceJob interface {
 	// job. See ExecutionPolicy — the zero value is invalid.
 	Policy() ExecutionPolicy
 	// Run executes the job. startFrom is the checkpoint index for resumable jobs (0 = fresh start).
-	Run(ctx context.Context, store database.Store, reporter ProgressReporter, dryRun bool) error
+	Run(ctx context.Context, store JobStore, reporter ProgressReporter, dryRun bool) error
 }
-
-var store database.Store
-
-func InjectStore(s database.Store) { store = s }
-func GetStore() database.Store     { return store }

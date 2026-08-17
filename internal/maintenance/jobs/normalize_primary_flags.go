@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/normalize_primary_flags.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4b8e2d19-7c5a-4f60-9d3b-1e6a8c4f2b07
 // last-edited: 2026-08-17
 
@@ -54,7 +54,7 @@ func (j *normalizePrimaryFlagsJob) Description() string {
 }
 func (j *normalizePrimaryFlagsJob) CanResume() bool { return false } // idempotent single pass
 
-func (j *normalizePrimaryFlagsJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *normalizePrimaryFlagsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	// One limit-0 call = one consistent snapshot; offset pages over the async
 	// memdb can skip or repeat rows on snapshot swap (see reconcile #2443).
 	books, err := store.GetAllBooksCore(0, 0)

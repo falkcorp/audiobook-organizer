@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/scan_duplicate_files.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1000016-0000-0000-0000-000000000016
 // last-edited: 2026-08-17
 
@@ -9,9 +9,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"log/slog"
+
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 
 func init() { maintenance.Register(&scanDuplicateFilesJob{}) }
@@ -30,7 +30,7 @@ func (j *scanDuplicateFilesJob) Description() string {
 	return "Scan for book files sharing the same hash"
 }
 func (j *scanDuplicateFilesJob) CanResume() bool { return false }
-func (j *scanDuplicateFilesJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, _ bool) error {
+func (j *scanDuplicateFilesJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, _ bool) error {
 	files, err := store.GetAllBookFilesCore()
 	if err != nil {
 		return err

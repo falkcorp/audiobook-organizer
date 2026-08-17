@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_dryrun_default_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6c1d84af-97b2-4e30-8f55-2b70e9c14d63
-// last-edited: 2026-08-14
+// last-edited: 2026-08-17
 
 package server
 
@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/gin-gonic/gin"
@@ -57,7 +56,7 @@ func (j *dryRunProbeJob) Policy() maintenance.ExecutionPolicy {
 	return maintenance.DefaultPolicy()
 }
 
-func (j *dryRunProbeJob) Run(_ context.Context, _ database.Store, _ maintenance.ProgressReporter, dryRun bool) error {
+func (j *dryRunProbeJob) Run(_ context.Context, _ maintenance.JobStore, _ maintenance.ProgressReporter, dryRun bool) error {
 	j.mu.Lock()
 	j.runs = append(j.runs, dryRun)
 	j.mu.Unlock()

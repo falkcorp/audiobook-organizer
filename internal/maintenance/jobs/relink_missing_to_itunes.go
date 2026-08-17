@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/relink_missing_to_itunes.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: e0f6a4d5-7b8c-9d0e-1f2a-3b4c5d6e7f80
 // last-edited: 2026-08-17
 
@@ -17,7 +17,6 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
@@ -43,7 +42,7 @@ func (j *relinkMissingToITunesJob) DefaultParams() any {
 }
 func (j *relinkMissingToITunesJob) CanResume() bool { return false }
 
-func (j *relinkMissingToITunesJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *relinkMissingToITunesJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	iTunesRoot := config.AppConfig.ITunes.MediaRoot
 	organizerRoot := config.AppConfig.RootDir
 

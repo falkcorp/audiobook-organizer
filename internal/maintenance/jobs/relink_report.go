@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/relink_report.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: a1000022-0000-0000-0000-000000000022
 // last-edited: 2026-08-17
 
@@ -15,10 +15,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"log/slog"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 
 func init() { maintenance.Register(&relinkReportJob{}) }
@@ -38,7 +38,7 @@ func (j *relinkReportJob) Description() string {
 }
 func (j *relinkReportJob) CanResume() bool { return false }
 
-func (j *relinkReportJob) Run(ctx context.Context, store database.Store, reporter maintenance.ProgressReporter, _ bool) error {
+func (j *relinkReportJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, _ bool) error {
 	iTunesRoot := config.AppConfig.ITunes.MediaRoot
 	organizerRoot := config.AppConfig.RootDir
 
