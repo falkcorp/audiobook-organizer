@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-17-missing-file-audit-full-population.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 75babbdd-5bf3-41e9-a8ba-5281df2898f9 -->
 <!-- last-edited: 2026-08-17 -->
 
@@ -228,15 +228,44 @@ is precisely the population the safety rule waves through.
    | 3 | stem-prefix within the same directory (`:341`) | `os.ReadDir` on the phantom parent — **all 25 measured parents are ABSENT**, so this always fails |
    | 4 | author + title-prefixed album dir (`:366`) | stats `<album>/131.mp3` (absent); its fallback accepts only an album holding **exactly one** audio file, and these books hold 130+ → **miss** |
 
-   ⚠️ **Tier 2 is not merely a miss — it is a silent cross-book corruption risk.**
-   When the index holds exactly one path for the stored basename it accepts it as
-   `method="filename"` with no check that the file belongs to the same book, and
-   only the *multi*-match branch narrows by parent directory and author. Measured
-   on the live tree: **4,082 files have bare-digit names**, across **517 distinct
-   basenames, of which 170 appear exactly once** — so the unverified auto-accept
-   branch is reachable, and a hit would repoint the row at an unrelated book's
-   audio. (Controls in the same call: normal-named mp3s under one author = 35;
-   a planted nonexistent name = 0.)
+   ⚠️ **Tier 2 also carries a latent cross-book corruption risk — but it is RARE
+   for this population, and an earlier version of this section overstated it.**
+   When the index holds exactly one path for the stored basename, `case 1:`
+   accepts it as `method="filename"` with **no check that the file belongs to the
+   same book**; only the *multi*-match `default:` branch narrows by parent
+   directory and author. The asymmetry is the tell: the code already knows a bare
+   basename is insufficient proof of identity — that is why the ambiguous path
+   narrows — and then applies that knowledge only when the match is ambiguous.
+   One match is evidence of *uniqueness*, not of *correctness*; the count says
+   nothing about ownership. (Framing due to the maintenance lane.)
+
+   **How often it would actually fire here — measured, and lower than I first
+   implied.** Building the same index shape tier 2 uses (379,527 distinct
+   basenames over both search roots) and looking up every distinct basename from
+   the 260 sampled missing rows:
+
+   ```
+   sample basenames: 102 real + 1 planted control
+     SINGLETON (tier-2 auto-accept) :   1   — "Dungeon of Pride.m4b"
+     multi (goes to narrowing)      : 101
+     absent from index              :   1   — the planted control ✓
+   ```
+
+   The dominant basenames are **not** singletons — verified directly, with
+   controls, rather than via the index parse: `131.mp3` = **9** occurrences
+   (69 of the 200 sampled rows carry it), against a known-good control
+   `166.mp3` = 172 and a planted bad control = 0. So for the track-slash
+   population tier 2 lands in the narrowing branch, narrows to zero (the stored
+   parent `Zero History - 2` matches none of the nine real parents), and falls
+   through — a miss, not a mis-repoint.
+
+   🔻 **Correction to an earlier draft.** It cited "4,082 bare-digit files, 517
+   distinct names, 170 singletons" as if that measured the risk to this
+   population. It does not: those count files **on disk**, not the basenames of
+   **missing rows**. The on-disk figure establishes the branch is reachable in
+   principle; the row-side figure above (1 of 102) is the one that bounds how
+   often it fires here, and it is small. The defect in tier 2 is real and worth
+   fixing on its own merits — it is not what blocks this repair.
 
    **Conclusion: repoint capability for this population must be built, not merely
    wired up.** The correct target is derived from the *new* naming default and
