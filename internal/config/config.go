@@ -448,6 +448,18 @@ func (c *Config) EffectiveLLMMode() string {
 	if c.AIBackend.LLMMode != "" {
 		return c.AIBackend.LLMMode
 	}
+	// A blank llm_mode used to resolve straight to OpenAI whenever an API key
+	// happened to be present. That made an empty config field silently choose a
+	// paid external service, and nothing logged the choice — on 2026-08-16 it
+	// ran a whole library scan against OpenAI until the account hit
+	// credit_balance_exhausted, whereupon 77 consecutive batches failed and the
+	// stuck-op watchdog killed the scan.
+	//
+	// Prefer the local backend when one is configured. Falling back to OpenAI is
+	// still possible, but only when there is no local option at all.
+	if c.AIBackend.LocalBaseURL != "" || c.Embedding.BaseURL != "" {
+		return AIBackendModeLocal
+	}
 	if c.OpenAIAPIKey != "" && (c.EnableAIParsing || c.MetadataScoring.LLMEnabled) {
 		return AIBackendModeOpenAI
 	}

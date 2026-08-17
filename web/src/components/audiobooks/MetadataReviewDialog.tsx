@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/MetadataReviewDialog.tsx
-// version: 1.17.0
+// version: 1.18.0
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
 // last-edited: 2026-08-17
 
@@ -26,7 +26,6 @@ import {
   ToggleButton,
   ToggleButtonGroup,
   Tooltip,
-  LinearProgress,
   Typography,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
@@ -221,14 +220,20 @@ export function MetadataReviewDialog({
   const [onlyWithTranscription, setOnlyWithTranscription] = useState(false);
   const [onlyTranscriptionMatched, setOnlyTranscriptionMatched] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
-  // Live progress of the background apply op, so a long batch shows movement
-  // instead of a spinner that looks identical to a hung request.
-  const [applyOpId, setApplyOpId] = useState<string | null>(null);
-  const [applyProgress, setApplyProgress] = useState<{
-    current: number;
-    total: number;
-    message: string;
-  } | null>(null);
+  // Apply progress is NOT rendered here any more. The dialog dispatches the
+  // background op and returns immediately, so there is nothing to show a bar
+  // for — the bell (OperationsIndicator, fed by useOperationsStore) owns
+  // progress for every background op, this one included.
+  //
+  // Guards the deferred list refresh below: once the dialog unmounts there is
+  // no state left to refresh, and setting it would warn.
+  const applyWatchAliveRef = useRef(true);
+  useEffect(() => {
+    applyWatchAliveRef.current = true;
+    return () => {
+      applyWatchAliveRef.current = false;
+    };
+  }, []);
   // Books in this set have been manually split from their duplicate group and
   // render as standalone rows. Reset when the page changes.
   const [ungroupedIds, setUngroupedIds] = useState<Set<string>>(new Set());
@@ -456,40 +461,34 @@ export function MetadataReviewDialog({
   const runApplyOp = useCallback(
     async (requestedIds: string[], writeBack?: boolean): Promise<boolean> => {
       const dispatch = await api.batchApplyFromCache(requestedIds, writeBack);
-      setApplyOpId(dispatch.op_id);
-      setApplyProgress({ current: 0, total: requestedIds.length, message: 'starting…' });
-      try {
-        const op = await api.pollOperationV2(dispatch.op_id, (o) => {
-          setApplyProgress({
-            current: o.progress_current ?? 0,
-            total: o.progress_total ?? requestedIds.length,
-            message: o.progress_message ?? o.current_item ?? 'applying…',
-          });
+
+      // Hand the op off and return. The apply already runs as a background
+      // operation server-side; awaiting it here was what made the dialog feel
+      // synchronous — you clicked Apply on 100 books and then watched a
+      // progress bar instead of getting on with your evening.
+      //
+      // The bell picks this up for free: OperationsIndicator renders whatever
+      // is in useOperationsStore.activeOperations, and the dispatched op is
+      // there. Same shape as the bulk metadata fetch on the Library page.
+      toast(
+        `Metadata apply queued for ${requestedIds.length.toLocaleString()} book(s) — watch the bell for progress.`,
+        'success'
+      );
+
+      // Still re-read server state rather than diffing a client-side guess —
+      // just when the op FINISHES instead of blocking on it. If the dialog is
+      // closed by then this resolves against an unmounted component, so the
+      // refresh is guarded by the same ref the unmount path clears.
+      hasChangesRef.current = true;
+      void api
+        .pollOperationV2(dispatch.op_id)
+        .catch(() => undefined)
+        .finally(() => {
+          if (!applyWatchAliveRef.current) return;
+          setRefreshKey((k) => k + 1);
         });
-        if (op.status === 'completed') {
-          hasChangesRef.current = true;
-          // progress_message carries the op's own tally, e.g.
-          // "complete: applied 248 of 250 (no candidates 2, ...)".
-          toast(op.progress_message || `Applied metadata to ${requestedIds.length} books`, 'success');
-          return true;
-        }
-        if (op.status === 'canceled') {
-          // Partial work is real and already on disk. Say so instead of
-          // implying the batch left no trace.
-          hasChangesRef.current = true;
-          toast('Metadata apply canceled — books applied before the cancel were kept', 'warning');
-          return true;
-        }
-        toast(op.progress_message || 'Metadata apply failed', 'error');
-        return true;
-      } finally {
-        setApplyOpId(null);
-        setApplyProgress(null);
-        // Always re-read: even a failed or canceled op may have applied some
-        // books before it stopped, and leaving the list stale would show rows
-        // as pending that are already done.
-        setRefreshKey((k) => k + 1);
-      }
+
+      return true;
     },
     [toast]
   );
@@ -1693,31 +1692,8 @@ export function MetadataReviewDialog({
           )}
         </DialogContent>
         <DialogActions sx={{ gap: 2 }}>
-          {/* Live op progress. A long batch used to be indistinguishable from a
-              hung request — same spinner either way — which is what made a
-              working 2-minute apply read as a failure. */}
-          {applyProgress && (
-            <Box sx={{ flex: 1, minWidth: 0, mr: 1 }}>
-              <LinearProgress
-                variant={applyProgress.total > 0 ? 'determinate' : 'indeterminate'}
-                value={
-                  applyProgress.total > 0
-                    ? Math.min(100, (applyProgress.current / applyProgress.total) * 100)
-                    : 0
-                }
-              />
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                noWrap
-                title={applyProgress.message}
-                sx={{ display: 'block' }}
-              >
-                {applyProgress.current}/{applyProgress.total} — {applyProgress.message}
-                {applyOpId ? ` (op ${applyOpId.slice(0, 8)})` : ''}
-              </Typography>
-            </Box>
-          )}
+          {/* No inline apply progress: the dialog no longer waits on the op, so
+              there is nothing here to track. Progress lives in the bell. */}
           <Button onClick={handleClose}>Close</Button>
           <Button
             variant="contained"
