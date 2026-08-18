@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_audit.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4e1c7a92-3b58-4d06-9f21-8c5a0e7b3d64
 // last-edited: 2026-08-17
 
@@ -100,11 +100,116 @@ type missingFileAuditParams struct {
 	SampleLimit int `json:"sample_limit"`
 }
 
+// missingFileSignals counts how many rows carry each stored identity signal.
+//
+// 🔴 WHY THIS IS PART OF THE AUDIT. Repairing a missing row means pointing it at
+// some candidate file, and the only honest way to do that is to VERIFY the
+// candidate is the same file — not to infer it from a filename. Which
+// verifications are available is a property of the data, not of the repair, and
+// this sweep already visits every row, so it is the cheapest possible place to
+// find out.
+//
+// Tallied SEPARATELY for missing and present rows. The present-row tally is the
+// control: a signal that is rare on missing rows but common on present ones means
+// the generator never reached these files, whereas one that is rare on both is
+// simply not populated anywhere. Those imply very different repairs, and a single
+// combined number cannot distinguish them.
+//
+// ⚠️ Fingerprint presence is measured via AcoustIDFingerprintDurationSec, not via
+// the fingerprint itself: stripBookFileForMemdb nils the ~230 KB
+// AcoustIDFingerprint blob in the Core projection, so counting the blob here would
+// report 0% for a library that is fully fingerprinted. The duration is RETAINED
+// and is written by the same fpcalc pass, so it is the honest proxy. An earlier
+// hand probe of this coverage read acoustid_seg0 over the HTTP API and reported
+// 0%; that field is genuinely serialized but is not the preferred whole-file
+// fingerprint, and the API never exposes the one that is.
+type missingFileSignals struct {
+	Rows int
+
+	// Decisive when present — these identify a file by its content.
+	FileHash         int
+	OriginalFileHash int
+	PostMetadataHash int
+	Fingerprint      int
+
+	// Corroborating — cheap, and available on nearly every row.
+	Duration int
+	FileSize int
+
+	// Provenance / secondary.
+	DownloadHash int
+	ITunesPID    int
+
+	// Transcription, per file.
+	TranscribedTitle int
+	IntroTranscribed int
+
+	// AnyDecisive counts rows carrying at least one content-identifying signal —
+	// the share of a repair that could be PROVEN rather than inferred.
+	AnyDecisive int
+}
+
+// tally folds one row into the counters.
+func (s *missingFileSignals) tally(f database.BookFileCore) {
+	s.Rows++
+	decisive := false
+	if f.FileHash != "" {
+		s.FileHash++
+		decisive = true
+	}
+	if f.OriginalFileHash != "" {
+		s.OriginalFileHash++
+		decisive = true
+	}
+	if f.PostMetadataHash != "" {
+		s.PostMetadataHash++
+		decisive = true
+	}
+	if f.AcoustIDFingerprintDurationSec > 0 {
+		s.Fingerprint++
+		decisive = true
+	}
+	if decisive {
+		s.AnyDecisive++
+	}
+	if f.Duration > 0 {
+		s.Duration++
+	}
+	if f.FileSize > 0 {
+		s.FileSize++
+	}
+	if f.DownloadHash != "" {
+		s.DownloadHash++
+	}
+	if f.ITunesPersistentID != "" {
+		s.ITunesPID++
+	}
+	if f.TranscribedTitle != nil && *f.TranscribedTitle != "" {
+		s.TranscribedTitle++
+	}
+	if f.IntroTranscribedAt != nil {
+		s.IntroTranscribed++
+	}
+}
+
+// pct renders n as a percentage of the tallied rows, guarding the empty sweep.
+func (s missingFileSignals) pct(n int) string {
+	if s.Rows == 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.1f%%", 100*float64(n)/float64(s.Rows))
+}
+
 // missingFileReport is the outcome of one sweep.
 type missingFileReport struct {
 	TotalRows int
 	Missing   int
 	Present   int
+
+	// SignalsMissing / SignalsPresent are the identity-signal census, split so the
+	// present rows act as a control for the missing ones.
+	SignalsMissing missingFileSignals
+	SignalsPresent missingFileSignals
 
 	// Unreadable counts rows whose existence could NOT be determined — a
 	// permission error, an I/O error, a dead mount.
@@ -201,9 +306,36 @@ func (p *Plugin) runMissingFileAudit(ctx context.Context, rawParams json.RawMess
 	for _, r := range roots {
 		log.Info("missing-file-audit: missing by tree", "tree", r, "count", report.MissingByRoot[r])
 	}
+	// The identity-signal census, missing rows beside their present-row control.
+	// Logged as one record per arm rather than interleaved, so the two are directly
+	// comparable in the log without arithmetic.
+	for _, arm := range []struct {
+		name string
+		s    missingFileSignals
+	}{
+		{"missing", report.SignalsMissing},
+		{"present (control)", report.SignalsPresent},
+	} {
+		s := arm.s
+		log.Info("missing-file-audit: identity signals",
+			"arm", arm.name, "rows", s.Rows,
+			"any_decisive", fmt.Sprintf("%d (%s)", s.AnyDecisive, s.pct(s.AnyDecisive)),
+			"file_hash", fmt.Sprintf("%d (%s)", s.FileHash, s.pct(s.FileHash)),
+			"original_file_hash", fmt.Sprintf("%d (%s)", s.OriginalFileHash, s.pct(s.OriginalFileHash)),
+			"post_metadata_hash", fmt.Sprintf("%d (%s)", s.PostMetadataHash, s.pct(s.PostMetadataHash)),
+			"fingerprint", fmt.Sprintf("%d (%s)", s.Fingerprint, s.pct(s.Fingerprint)),
+			"duration", fmt.Sprintf("%d (%s)", s.Duration, s.pct(s.Duration)),
+			"file_size", fmt.Sprintf("%d (%s)", s.FileSize, s.pct(s.FileSize)),
+			"download_hash", fmt.Sprintf("%d (%s)", s.DownloadHash, s.pct(s.DownloadHash)),
+			"itunes_pid", fmt.Sprintf("%d (%s)", s.ITunesPID, s.pct(s.ITunesPID)),
+			"transcribed_title", fmt.Sprintf("%d (%s)", s.TranscribedTitle, s.pct(s.TranscribedTitle)),
+			"intro_transcribed", fmt.Sprintf("%d (%s)", s.IntroTranscribed, s.pct(s.IntroTranscribed)))
+	}
+
 	log.Info("missing-file-audit complete",
 		"rows", report.TotalRows, "missing", report.Missing, "unreadable", report.Unreadable,
 		"books_fully_broken", report.BooksAllGone, "books_partially_broken", report.BooksPartial,
+		"missing_rows_with_a_decisive_signal", report.SignalsMissing.AnyDecisive,
 		"sample", report.Sample)
 	return nil
 }
@@ -297,12 +429,18 @@ func auditMissingFiles(ctx context.Context, store bookFileCoreScanner, params mi
 			byBook[id] = t
 		}
 		t.total++
-		if results[i] == fileMissing {
+		switch results[i] {
+		case fileMissing:
 			t.gone++
+			report.SignalsMissing.tally(items[i].file)
 			if len(report.Sample) < sampleLimit {
 				report.Sample = append(report.Sample, items[i].file.FilePath)
 			}
 			report.MissingByRoot[missingPathRoot(items[i].file.FilePath)]++
+		case filePresent:
+			// The control arm. Only present rows, so an unreadable row does not
+			// quietly land in the baseline it is supposed to be compared against.
+			report.SignalsPresent.tally(items[i].file)
 		}
 	}
 	report.BooksTotal = len(byBook)

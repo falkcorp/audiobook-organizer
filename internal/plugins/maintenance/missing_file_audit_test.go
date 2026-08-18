@@ -208,3 +208,82 @@ func TestMissingPathRoot_GroupsByLibraryTree(t *testing.T) {
 		}
 	}
 }
+
+// The identity-signal census decides which repairs are even possible, so it is
+// pinned per-arm and per-field rather than in aggregate.
+//
+// 🔴 THE TWO ARMS CARRY DELIBERATELY DIFFERENT SIGNAL MIXES. The present rows are
+// not filler: they are decoys. If the missing and present tallies were ever
+// swapped, or folded into one counter, every assertion below moves — which is the
+// only reason this test can detect that class of mistake at all. A fixture where
+// both arms looked alike would pass just as happily with the arms crossed.
+func TestMissingFileAudit_SignalCensusSeparatesMissingFromPresent(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatalf("write fixture %s: %v", name, err)
+		}
+		return p
+	}
+	gone := func(name string) string { return filepath.Join(dir, name) }
+
+	fp := 120.0
+	rows := []database.BookFileCore{
+		// PRESENT arm — both hashes, no fingerprint.
+		{ID: "p1", BookID: "b-present", FilePath: write("p1.m4b"),
+			FileHash: "h1", OriginalFileHash: "o1", Duration: 100, FileSize: 10},
+		{ID: "p2", BookID: "b-present", FilePath: write("p2.m4b"),
+			FileHash: "h2", OriginalFileHash: "o2", Duration: 200, FileSize: 20},
+
+		// MISSING arm — a different mix, so a swap cannot go unnoticed.
+		{ID: "m1", BookID: "b-missing", FilePath: gone("m1.m4b"), FileHash: "mh1"},
+		{ID: "m2", BookID: "b-missing", FilePath: gone("m2.m4b"), AcoustIDFingerprintDurationSec: fp},
+		// Carries BOTH kinds of decisive signal — AnyDecisive must count it ONCE.
+		{ID: "m3", BookID: "b-missing", FilePath: gone("m3.m4b"),
+			FileHash: "mh3", AcoustIDFingerprintDurationSec: fp},
+		// Carries NOTHING. This is the row that makes AnyDecisive a real measurement
+		// rather than a restatement of the row count.
+		{ID: "m4", BookID: "b-missing", FilePath: gone("m4.m4b")},
+	}
+
+	rep := runAudit(t, rows, missingFileAuditParams{})
+
+	for _, tc := range []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"missing.Rows", rep.SignalsMissing.Rows, 4},
+		{"missing.FileHash", rep.SignalsMissing.FileHash, 2},
+		{"missing.Fingerprint", rep.SignalsMissing.Fingerprint, 2},
+		{"missing.OriginalFileHash", rep.SignalsMissing.OriginalFileHash, 0},
+		{"missing.Duration", rep.SignalsMissing.Duration, 0},
+		// 3, not 4: m4 has no decisive signal. And 3, not 5: m3 has two and counts once.
+		{"missing.AnyDecisive", rep.SignalsMissing.AnyDecisive, 3},
+
+		{"present.Rows", rep.SignalsPresent.Rows, 2},
+		{"present.FileHash", rep.SignalsPresent.FileHash, 2},
+		{"present.OriginalFileHash", rep.SignalsPresent.OriginalFileHash, 2},
+		{"present.Fingerprint", rep.SignalsPresent.Fingerprint, 0},
+		{"present.Duration", rep.SignalsPresent.Duration, 2},
+		{"present.AnyDecisive", rep.SignalsPresent.AnyDecisive, 2},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = %d, want %d", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
+// pct must not divide by zero on an empty arm — an audit scoped by path_prefix to
+// a tree with no missing rows is a normal, expected outcome, not an error.
+func TestMissingFileSignals_PctHandlesEmptyArm(t *testing.T) {
+	var s missingFileSignals
+	if got := s.pct(0); got != "n/a" {
+		t.Errorf("pct on empty arm = %q, want %q", got, "n/a")
+	}
+	s.Rows, s.FileHash = 4, 1
+	if got := s.pct(s.FileHash); got != "25.0%" {
+		t.Errorf("pct(1 of 4) = %q, want %q", got, "25.0%")
+	}
+}
