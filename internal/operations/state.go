@@ -1,15 +1,13 @@
 // file: internal/operations/state.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-05-03
+// last-edited: 2026-08-18
 
 package operations
 
 import (
 	"encoding/json"
 	"time"
-
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // OperationState is the resumable checkpoint for any operation.
@@ -100,8 +98,45 @@ type BulkImportDelugeParams struct {
 	MaxBooks int  `json:"max_books,omitempty"`
 }
 
+// The state helpers below take one-method interfaces rather than
+// database.OperationStore (30 methods) or database.Store (398). Each function
+// uses exactly one method, and the parameter type is what propagates width: a
+// caller must hold something satisfying the declared type, so a wide parameter
+// forces every caller — and every interface those callers declare — to carry the
+// whole surface. organizer.Store embedded database.OperationStore for precisely
+// this reason: not because the organizer needs 30 operation methods, but because
+// it passes its store to SaveParams and ClearState.
+//
+// Widening any of these back is a decision with a blast radius, not a
+// convenience: prefer adding a new narrow interface beside them.
+
+// OperationStateWriter persists the raw checkpoint blob for an operation.
+type OperationStateWriter interface {
+	SaveOperationState(opID string, state []byte) error
+}
+
+// OperationStateReader reads the raw checkpoint blob for an operation.
+type OperationStateReader interface {
+	GetOperationState(opID string) ([]byte, error)
+}
+
+// OperationStateDeleter removes an operation's persisted state.
+type OperationStateDeleter interface {
+	DeleteOperationState(opID string) error
+}
+
+// OperationParamsWriter persists an operation's immutable parameter blob.
+type OperationParamsWriter interface {
+	SaveOperationParams(opID string, params []byte) error
+}
+
+// OperationParamsReader reads an operation's immutable parameter blob.
+type OperationParamsReader interface {
+	GetOperationParams(opID string) ([]byte, error)
+}
+
 // SaveCheckpoint persists an operation's progress checkpoint.
-func SaveCheckpoint(store database.OperationStore, opID, opType, phase string, index, total int) error {
+func SaveCheckpoint(store OperationStateWriter, opID, opType, phase string, index, total int) error {
 	state := OperationState{
 		OperationID: opID,
 		Type:        opType,
@@ -119,7 +154,7 @@ func SaveCheckpoint(store database.OperationStore, opID, opType, phase string, i
 }
 
 // LoadCheckpoint loads an operation's progress checkpoint. Returns nil if none exists.
-func LoadCheckpoint(store database.OperationStore, opID string) (*OperationState, error) {
+func LoadCheckpoint(store OperationStateReader, opID string) (*OperationState, error) {
 	data, err := store.GetOperationState(opID)
 	if err != nil {
 		return nil, err
@@ -135,7 +170,7 @@ func LoadCheckpoint(store database.OperationStore, opID string) (*OperationState
 }
 
 // SaveParams persists an operation's immutable parameters.
-func SaveParams(store database.OperationStore, opID string, params any) error {
+func SaveParams(store OperationParamsWriter, opID string, params any) error {
 	data, err := json.Marshal(params)
 	if err != nil {
 		return err
@@ -144,7 +179,7 @@ func SaveParams(store database.OperationStore, opID string, params any) error {
 }
 
 // LoadParams loads and deserializes an operation's parameters into the given pointer.
-func LoadParams[T any](store database.Store, opID string) (*T, error) {
+func LoadParams[T any](store OperationParamsReader, opID string) (*T, error) {
 	data, err := store.GetOperationParams(opID)
 	if err != nil {
 		return nil, err
@@ -161,7 +196,7 @@ func LoadParams[T any](store database.Store, opID string) (*T, error) {
 
 // LoadRawParams loads an operation's raw JSON parameters.
 // Returns nil if no params are stored.
-func LoadRawParams(store database.OperationStore, opID string) (json.RawMessage, error) {
+func LoadRawParams(store OperationParamsReader, opID string) (json.RawMessage, error) {
 	data, err := store.GetOperationParams(opID)
 	if err != nil {
 		return nil, err
@@ -170,11 +205,11 @@ func LoadRawParams(store database.OperationStore, opID string) (json.RawMessage,
 }
 
 // SaveRawParams persists raw JSON parameters for an operation.
-func SaveRawParams(store database.OperationStore, opID string, raw json.RawMessage) error {
+func SaveRawParams(store OperationParamsWriter, opID string, raw json.RawMessage) error {
 	return store.SaveOperationParams(opID, raw)
 }
 
 // ClearState removes all persisted state for an operation (called on completion/failure).
-func ClearState(store database.OperationStore, opID string) error {
+func ClearState(store OperationStateDeleter, opID string) error {
 	return store.DeleteOperationState(opID)
 }
