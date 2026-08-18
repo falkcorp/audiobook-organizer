@@ -1,7 +1,7 @@
 // file: internal/transcode/transcode.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: f8a1b2c3-d4e5-6789-abcd-ef0123456789
-// last-edited: 2026-07-18
+// last-edited: 2026-08-18
 
 package transcode
 
@@ -22,6 +22,15 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )
+
+// transcodeStore is what this package actually calls, measured by emptying the
+// interface and reading the compiler's enumeration: 2 methods. It was an
+// inline anonymous interface of database.* embeds — 62 methods — repeated
+// at 1 parameter, invisible to any line-oriented tool.
+type transcodeStore interface {
+	GetBookByID(id string) (*database.Book, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+}
 
 // TranscodeOpts configures a transcode operation.
 type TranscodeOpts struct {
@@ -172,10 +181,7 @@ func BuildChapterMetadataWithProber(inputFiles []string, prober func(string) (fl
 }
 
 // Transcode converts audio files for a book into a single M4B.
-func Transcode(ctx context.Context, opts TranscodeOpts, store interface {
-	database.BookReader
-	database.BookFileStore
-}, progress operations.ProgressReporter) (string, error) {
+func Transcode(ctx context.Context, opts TranscodeOpts, store transcodeStore, progress operations.ProgressReporter) (string, error) {
 	ffmpegPath, err := FindFFmpeg()
 	if err != nil {
 		return "", err

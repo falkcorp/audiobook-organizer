@@ -1,6 +1,7 @@
 // file: internal/auth/seed.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2e8f4a1d-7c3b-4f60-b9d5-1c6e0f2b9a57
+// last-edited: 2026-08-18
 //
 // Seed roles — idempotent upsert of the three canonical roles
 // (admin, editor, viewer) with their permission sets. Called at
@@ -18,6 +19,15 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
+
+// seedStore is what this package actually calls, measured by emptying the
+// interface and reading the compiler's enumeration: 2 methods. It was an
+// inline anonymous interface of database.* embeds — 13 methods — repeated
+// at 1 parameter, invisible to any line-oriented tool.
+type seedStore interface {
+	GetUserByUsername(username string) (*database.User, error)
+	CreateUser(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*database.User, error)
+}
 
 const (
 	SeedRoleAdmin  = "admin"
@@ -115,10 +125,7 @@ const SystemUserID = "_system"
 // SeedSystemUser creates the _system pseudo-user if absent.
 // It has no password and cannot log in — it exists solely as an
 // audit attribution target.
-func SeedSystemUser(store interface {
-	database.UserStore
-	database.RoleStore
-}) error {
+func SeedSystemUser(store seedStore) error {
 	if store == nil {
 		return nil
 	}

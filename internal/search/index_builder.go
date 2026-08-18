@@ -1,6 +1,7 @@
 // file: internal/search/index_builder.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8a1c2f4d-5b3e-4f70-b7d6-2e8d0f1b9a57
+// last-edited: 2026-08-18
 //
 // Helpers that project a database.Book (with its author, series,
 // and tag relations resolved) into a BookDocument ready for
@@ -18,6 +19,17 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
+
+// indexBuilderStore is what this package actually calls, measured by emptying the
+// interface and reading the compiler's enumeration: 4 methods. It was an
+// inline anonymous interface of database.* embeds — 81 methods — repeated
+// at 2 parameters, invisible to any line-oriented tool.
+type indexBuilderStore interface {
+	GetBookByID(id string) (*database.Book, error)
+	GetAuthorByID(id int) (*database.Author, error)
+	GetSeriesByID(id int) (*database.Series, error)
+	GetBookTags(bookID string) ([]string, error)
+}
 
 // defaultDescriptionMaxChars caps the number of UTF-8 characters
 // (runes) of Book.Description that are fed to the bleve index. The
@@ -79,12 +91,7 @@ func truncateForIndex(s string, n int) string {
 // BookToDoc resolves a Book's related rows through the Store and
 // returns the flat BookDocument for indexing. Missing relations are
 // silently skipped — the document is built best-effort.
-func BookToDoc(store interface {
-	database.AuthorReader
-	database.BookReader
-	database.SeriesReader
-	database.TagStore
-}, book *database.Book) BookDocument {
+func BookToDoc(store indexBuilderStore, book *database.Book) BookDocument {
 	doc := BookDocument{
 		BookID: book.ID,
 		Type:   BookDocType,
@@ -172,12 +179,7 @@ func BookToDoc(store interface {
 // ReindexBookByID convenience: load the book + project + index.
 // Used by the update/create hook path; callers that already have a
 // Book struct should call BookToDoc + IndexBook directly.
-func ReindexBookByID(store interface {
-	database.AuthorReader
-	database.BookReader
-	database.SeriesReader
-	database.TagStore
-}, idx *BleveIndex, bookID string) error {
+func ReindexBookByID(store indexBuilderStore, idx *BleveIndex, bookID string) error {
 	if store == nil || idx == nil {
 		return nil
 	}
