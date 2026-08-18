@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.54.0
+// version: 1.55.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-16
+// last-edited: 2026-08-18
 
 package scanner
 
@@ -2419,9 +2419,9 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 				followSyncIdentityOnVersionLink(supersededBookID, supersededBookPath, dbBook.ID)
 				// Check for metadata hash duplicates
 				detectMetadataHashDuplicate(dbBook, defaultLog)
-				if scanHooks != nil {
-					scanHooks.OnBookScanned(dbBook.ID, dbBook.Title)
-					scanHooks.OnImportDedup(dbBook.ID)
+				if hooks := currentScanHooks(); hooks != nil {
+					hooks.OnBookScanned(dbBook.ID, dbBook.Title)
+					hooks.OnImportDedup(dbBook.ID)
 				}
 			}
 			return err
