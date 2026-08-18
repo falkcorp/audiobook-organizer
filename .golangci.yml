@@ -1,5 +1,5 @@
 # file: .golangci.yml
-# version: 1.1.0
+# version: 1.2.0
 # guid: 8d2a1f47-6c93-4b0e-a15d-7f3e28c9b604
 # last-edited: 2026-08-18
 
@@ -137,6 +137,23 @@ linters:
     generated: lax
     paths:
       - web/
+      # `./...` from the repo root descends into `.worktrees/`, which holds full
+      # sibling checkouts of this same module. They do NOT inflate the finding
+      # count -- go/packages dedupes by import path, and every worktree declares
+      # the same module path, so each package is analysed once. What they break
+      # is *attribution*: which copy a finding is reported against is arbitrary,
+      # and golangci-lint's result cache is keyed by file content, so an
+      # unchanged file replays whichever path was recorded first. Measured
+      # 2026-08-18 on b7f4627b: 28 findings from the repo root, 28 from inside a
+      # worktree, 28 from an isolated clone -- but the isolated clone printed
+      # paths pointing back into `.worktrees/handlers/` until the cache was
+      # cleared, after which all 28 paths were local.
+      #
+      # Consequence, and the reason the width gate ratchets on the COUNT rather
+      # than on a per-file baseline: the count is stable across checkouts and
+      # caches, the paths are not. Excluding `.worktrees/` makes local runs
+      # deterministic; it does not change the number.
+      - \.worktrees/
     rules:
       # nolintlint is enabled to make WIDTH overrides auditable — an
       # //nolint:interfacebloat must name the linter and say why. It is NOT a
