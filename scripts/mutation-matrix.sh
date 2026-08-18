@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # file: scripts/mutation-matrix.sh
-# version: 1.1.0
+# version: 1.2.0
 # guid: 7f3b6d21-4c98-4e07-b153-2a86f0e9c47d
 # last-edited: 2026-08-18
 #
@@ -50,6 +50,19 @@
 #   4. SEPARATE A BUILD FAILURE FROM A KILL. A mutation that does not compile
 #      fails `go test` for a reason that has nothing to do with your assertions.
 #      Counting it as killed inflates the score. Reported as BUILD-FAIL.
+#
+# ── WHY EACH KILL NAMES THE TEST THAT CAUGHT IT ───────────────────────────────
+#
+# There is a fifth failure mode no guard can prevent, only make visible: a FLAKY
+# suite. Guard 2 checks the baseline once, so a test that fails intermittently
+# can score a mutation as KILLED without the mutation having been detected at
+# all -- and a bare killed/survived count gives you no way to notice.
+#
+# The remedy is the third column. Every KILLED line records WHICH test failed,
+# so you can check that a mutation was caught by the test you expected rather
+# than by unrelated noise. If a mutation to the census is reported killed by
+# some distant reconcile test, that is not a kill, that is a flake. Read the
+# attribution, not just the score.
 #
 # ── TABLE FORMAT ──────────────────────────────────────────────────────────────
 #
@@ -181,7 +194,22 @@ if ! go_test > "$TMP_LOG" 2>&1; then
     emit "# BASELINE RED -- refusing to run."
     emit "# Every mutation would be recorded as killed regardless of the mutation,"
     emit "# and the score would read 100% while measuring nothing. Fix the suite first."
-    tail -20 "$TMP_LOG" >&2
+    # Name the failing tests rather than dumping a blind tail. These packages log
+    # heavily, and a fixed tail buries the one line you need under warmup noise --
+    # which forces you to re-run the suite by hand just to learn what a guard
+    # already knew. If nothing matched, say so explicitly: a FAIL with no
+    # `--- FAIL:` usually means a panic or a build error, not an assertion.
+    failed="$(grep -E '^\s*--- FAIL: ' "$TMP_LOG" | sed 's/^[[:space:]]*--- FAIL: //' | sort -u)"
+    if [[ -n "$failed" ]]; then
+        emit "# failing tests:"
+        while IFS= read -r line; do emit "#   $line"; done <<< "$failed"
+    else
+        emit "# no '--- FAIL:' line found -- likely a panic or build error, not an assertion."
+    fi
+    # Deliberately NOT deleted: the whole log is the only record of a red baseline,
+    # and re-running to recover it is exactly the waste this branch exists to avoid.
+    kept="${TMP_LOG}.baseline-fail"
+    cp "$TMP_LOG" "$kept" 2>/dev/null && emit "# full output kept at: $kept"
     exit 2
 fi
 emit "# baseline GREEN"
@@ -252,6 +280,18 @@ if [[ "$scored" -gt 0 ]]; then
 else
     emit "# score               : n/a -- nothing scoreable ran"
 fi
+
+# A terminal marker. Results are emitted incrementally, so a run killed partway
+# through leaves a file that looks exactly like a completed one minus the summary
+# -- and a reader who skims to the last KILLED line has no way to tell. If this
+# marker is absent, the run did NOT finish and the counts below it are partial.
+#
+# This is not hypothetical: the first real use of this script was truncated
+# because the script FILE was edited while running. bash reads a script
+# incrementally by byte offset, so editing it in place shifts the ground under
+# the interpreter and it resumes mid-construct. Do not edit a running shell
+# script; and when a results file has no END marker, do not trust its totals.
+emit "# END OF RUN"
 
 if [[ "$FAIL_ON_SURVIVOR" -eq 1 && "$survived" -gt 0 ]]; then
     exit 1
