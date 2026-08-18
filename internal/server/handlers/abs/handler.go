@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-08-17
+// last-edited: 2026-08-18
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -102,6 +102,52 @@ type BookmarkStore interface {
 	DeleteBookmark(userID, itemID string, timeSec float64) error
 }
 
+// LibraryBookReader reads books and their files.
+type LibraryBookReader interface {
+	GetBookByID(id string) (*database.Book, error)
+	GetBooksByIDs(ids []string) ([]database.Book, error)
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+}
+
+// LibrarySummaryReader reads paged and filtered book summaries.
+type LibrarySummaryReader interface {
+	GetAllBookSummaries(limit, offset int) ([]database.BookSummary, error)
+	// The FILTERED pair is what the ABS item list uses. The unfiltered ones above
+	// remain for callers that genuinely want every row; this surface does not, and
+	// using them here is what showed 44,888 items instead of ~16,000.
+	GetAllBookSummariesFiltered(limit, offset int, f database.BookSummaryFilter) ([]database.BookSummary, error)
+	CountBookSummariesFiltered(f database.BookSummaryFilter) (int, error)
+	CountAllBooks() (int, error)
+}
+
+// LibrarySearchReader covers search and facets.
+type LibrarySearchReader interface {
+	SearchBooks(query string, limit, offset int) ([]database.Book, error)
+	GetDistinctGenres() ([]string, error)
+	GetDistinctLanguages() ([]string, error)
+}
+
+// LibraryCreditReader reads contributors for books.
+type LibraryCreditReader interface {
+	GetAuthorsByBookIDs(ctx context.Context, bookIDs []string) (map[string][]database.Author, error)
+	GetNarratorsByBookIDs(ctx context.Context, bookIDs []string) (map[string][]database.Narrator, error)
+	ListNarrators() ([]database.Narrator, error)
+}
+
+// LibraryAuthorReader reads authors and their book counts.
+type LibraryAuthorReader interface {
+	GetAllAuthors() ([]database.Author, error)
+	GetAllAuthorBookCounts() (map[int]int, error)
+}
+
+// LibrarySeriesReader reads series and their book counts.
+type LibrarySeriesReader interface {
+	GetSeriesByIDs(ids []int) (map[int]*database.Series, error)
+	GetAllSeries() ([]database.Series, error)
+	GetAllSeriesBookCounts() (map[int]int, error)
+}
+
 // LibraryStore is the read slice of the library the browse + playback surface needs
 // (Phase 3 / Phase 5b). Every method already exists on database.Store; declaring the
 // narrow interface here keeps store.go untouched and keeps the handler testable
@@ -110,29 +156,17 @@ type BookmarkStore interface {
 // Note what is NOT here: no writer of any kind. The ABS surface is read + play +
 // progress only; management stays on /api/v1 (spec §3.6 router split), and the type
 // system is what enforces that rather than a convention nobody rechecks.
+//
+// Split into the 6 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it.
 type LibraryStore interface {
-	GetBookByID(id string) (*database.Book, error)
-	GetBooksByIDs(ids []string) ([]database.Book, error)
-	GetAllBookSummaries(limit, offset int) ([]database.BookSummary, error)
-	// The FILTERED pair is what the ABS item list uses. The unfiltered ones above
-	// remain for callers that genuinely want every row; this surface does not, and
-	// using them here is what showed 44,888 items instead of ~16,000.
-	GetAllBookSummariesFiltered(limit, offset int, f database.BookSummaryFilter) ([]database.BookSummary, error)
-	CountBookSummariesFiltered(f database.BookSummaryFilter) (int, error)
-	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
-	CountAllBooks() (int, error)
-	SearchBooks(query string, limit, offset int) ([]database.Book, error)
-	GetBookFiles(bookID string) ([]database.BookFile, error)
-	GetAuthorsByBookIDs(ctx context.Context, bookIDs []string) (map[string][]database.Author, error)
-	GetNarratorsByBookIDs(ctx context.Context, bookIDs []string) (map[string][]database.Narrator, error)
-	GetSeriesByIDs(ids []int) (map[int]*database.Series, error)
-	GetAllAuthors() ([]database.Author, error)
-	GetAllAuthorBookCounts() (map[int]int, error)
-	GetAllSeries() ([]database.Series, error)
-	GetAllSeriesBookCounts() (map[int]int, error)
-	ListNarrators() ([]database.Narrator, error)
-	GetDistinctGenres() ([]string, error)
-	GetDistinctLanguages() ([]string, error)
+	LibraryBookReader
+	LibrarySummaryReader
+	LibrarySearchReader
+	LibraryCreditReader
+	LibraryAuthorReader
+	LibrarySeriesReader
 }
 
 // IdentityStore is the sync_item + sync_file keyspace slice.

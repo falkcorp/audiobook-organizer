@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/interfaces.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 43710377-fdb3-490c-872e-fd03309163be
-// last-edited: 2026-07-06
+// last-edited: 2026-08-18
 
 // Narrow dependency interfaces for the entities domain handlers (authors,
 // series, narrators, works). Each interface lists only the methods the
@@ -20,9 +20,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/work"
 )
 
-// EntitiesStore is the narrow database.Store subset the entities handlers
-// require. The concrete database.Store implementations satisfy it.
-type EntitiesStore interface {
+// AuthorEntityStore covers author CRUD.
+type AuthorEntityStore interface {
 	// Authors
 	CountAuthors() (int, error)
 	CreateAuthor(name string) (*database.Author, error)
@@ -30,47 +29,87 @@ type EntitiesStore interface {
 	GetAuthorByName(name string) (*database.Author, error)
 	UpdateAuthorName(id int, name string) error
 	DeleteAuthor(id int) error
+}
+
+// AuthorAliasEntityStore covers author aliases.
+type AuthorAliasEntityStore interface {
 	GetAuthorAliases(authorID int) ([]database.AuthorAlias, error)
 	CreateAuthorAlias(authorID int, aliasName string, aliasType string) (*database.AuthorAlias, error)
 	DeleteAuthorAlias(id int) error
+}
+
+// BookLinkStore reads and writes the links between books and their contributors or series.
+type BookLinkStore interface {
 	// GetBooksByAuthorIDCore is Core-typed (STOREFID P3-W2) — see
 	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetBooksByAuthorIDCore(authorID int) ([]database.BookCore, error)
 	// GetBooksByAuthorIDWithRoleCore is Core-typed (STOREFID P3-W2b) — see
 	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
-
 	// Book authors / narrators join tables
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error
 	GetBookNarrators(bookID string) ([]database.BookNarrator, error)
 	SetBookNarrators(bookID string, narrators []database.BookNarrator) error
+	// GetBooksBySeriesIDCore is Core-typed (STOREFID W4) — see
+	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
+}
+
+// BookEntityStore reads and updates the book row itself.
+type BookEntityStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+}
 
+// NarratorEntityStore covers narrator CRUD.
+type NarratorEntityStore interface {
 	// Narrators
 	CreateNarrator(name string) (*database.Narrator, error)
 	GetNarratorByName(name string) (*database.Narrator, error)
 	ListNarrators() ([]database.Narrator, error)
+}
 
+// SeriesEntityStore covers series CRUD.
+type SeriesEntityStore interface {
 	// Series
 	CountSeries() (int, error)
 	CreateSeries(name string, authorID *int) (*database.Series, error)
 	GetSeriesByID(id int) (*database.Series, error)
-	// GetBooksBySeriesIDCore is Core-typed (STOREFID W4) — see
-	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
 	UpdateSeriesName(id int, name string) error
 	DeleteSeries(id int) error
+}
 
+// WorkEntityStore reads works and their book counts.
+type WorkEntityStore interface {
 	// Works
 	GetAllWorks() ([]database.Work, error)
 	GetAllWorkBookCounts() (map[string]int, error)
 	GetBooksByWorkID(workID string) ([]database.Book, error)
+}
 
+// OperationCreator records an operation for an entity mutation.
+type OperationCreator interface {
 	// Operations (legacy operation row creation for author-merge /
 	// resolve-production-author).
 	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
+}
+
+// EntitiesStore is the narrow database.Store subset the entities handlers
+// require. The concrete database.Store implementations satisfy it.
+//
+// Split into the 8 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it.
+type EntitiesStore interface {
+	AuthorEntityStore
+	AuthorAliasEntityStore
+	BookLinkStore
+	BookEntityStore
+	NarratorEntityStore
+	SeriesEntityStore
+	WorkEntityStore
+	OperationCreator
 }
 
 // WorkService is the narrow audiobook *work.WorkService subset used by the work
