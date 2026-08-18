@@ -1,6 +1,7 @@
 // file: internal/sysinfo/dashboard_service.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9c0d1e2f-3a4b-5c6d-7e8f-9a0b1c2d3e4f
+// last-edited: 2026-08-18
 
 package sysinfo
 
@@ -13,9 +14,13 @@ import (
 )
 
 // dashboardStore is the narrow slice of database.Store this service uses.
+// dashboardStore is what this package actually calls, measured by emptying the
+// interface and reading the compiler's enumeration: 2 methods. It was a
+// pure pass-through of database.* embeds — 13 methods, none of them declared
+// here and almost none of them used.
 type dashboardStore interface {
-	database.PlaylistStore
-	database.StatsStore
+	GetDashboardStats() (*database.DashboardStats, error)
+	GetPlaylistBySeriesID(seriesID int) (*database.Playlist, error)
 }
 
 // DashboardService handles dashboard statistics and metrics collection

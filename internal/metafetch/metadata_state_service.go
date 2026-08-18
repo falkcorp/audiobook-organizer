@@ -1,6 +1,7 @@
 // file: internal/metafetch/metadata_state_service.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
+// last-edited: 2026-08-18
 
 package metafetch
 
@@ -16,9 +17,16 @@ import (
 // metadataStateStore is the narrow slice of database.Store that
 // MetadataStateService needs: metadata field state + change history
 // plus the user preference used as the cache key for state blobs.
+// metadataStateStore is what this package actually calls, measured by emptying the
+// interface and reading the compiler's enumeration: 5 methods. It was a
+// pure pass-through of database.* embeds — 16 methods, none of them declared
+// here and almost none of them used.
 type metadataStateStore interface {
-	database.MetadataStore
-	database.UserPreferenceStore
+	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
+	UpsertMetadataFieldState(state *database.MetadataFieldState) error
+	DeleteMetadataFieldState(bookID, field string) error
+	RecordMetadataChange(record *database.MetadataChangeRecord) error
+	GetUserPreference(key string) (*database.UserPreference, error)
 }
 
 // MetadataStateService handles metadata field state operations
