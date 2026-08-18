@@ -1,5 +1,5 @@
 # file: .interface-width-baseline
-# version: 1.0.0
+# version: 1.1.0
 # guid: 2b8e4f16-9d07-4c3a-b512-6a94ef7d0c38
 # last-edited: 2026-08-18
 #
@@ -9,8 +9,9 @@
 # a baseline nobody lowers is a baseline that stops meaning anything.
 #
 # Why a count and not a per-file list: measured 2026-08-18, the count is stable
-# across checkouts and caches (28 from the repo root, 28 from inside a worktree,
-# 28 from an isolated clone) while the reported PATHS are not -- golangci-lint's
+# across checkouts and caches (the pre-sweep count read 28 from the repo root, 28
+# from inside a worktree, and 28 from an isolated clone) while the reported PATHS
+# are not -- golangci-lint's
 # result cache is keyed by file content, so an unchanged file replays whichever
 # path was recorded first, which for this repo meant paths pointing into sibling
 # worktrees. A per-file baseline would have been built on the unstable half of
@@ -23,6 +24,10 @@
 #   2. Wholesale -- raise the number below. That is a one-line diff in a file
 #      whose only purpose is to hold this number, so it cannot land unnoticed.
 #
-# Baseline set on b7f4627b (2026-08-18) from an isolated clone with a cleared
-# golangci-lint cache.
-28
+# Baseline set 2026-08-18 with a cleared golangci-lint cache, after the split
+# sweep took the count from 28 to 5 (#2542, #2545, #2546, #2547, #2549, #2550,
+# #2553, #2554, #2556). The five held here are documented in
+# docs/audits/2026-08-18-interface-width-shapes.md section 6 -- all five are
+# genuinely wide rather than badly grouped, so this number is expected to hold
+# until the services behind them are split, not to keep ticking down.
+5
