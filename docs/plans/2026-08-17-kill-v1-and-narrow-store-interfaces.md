@@ -1,11 +1,39 @@
 <!-- file: docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3f2c9a41-8e77-4d0b-9a15-6c2b84ef1d37 -->
-<!-- last-edited: 2026-08-17 -->
+<!-- last-edited: 2026-08-18 -->
 
 # Killing the v1 maintenance stack, then narrowing the store interfaces
 
-**Status: PROPOSED — awaiting approval. Nothing in phases 1–3 has been started.**
+**Status: IN PROGRESS.** Phase 1 step 1 landed (#2551). A separate interface-width
+sweep ran ahead of phase 2 and changed its premise — see the update below before
+following phases 2–3 as written.
+
+## Update 2026-08-18 — what the width sweep changed about this plan
+
+Nine PRs (#2542, #2545, #2546, #2547, #2549, #2550, #2553, #2554, #2556) took the
+`interfacebloat` count from **28 to 5**, measured. Three of this plan's assumptions
+did not survive contact:
+
+1. **"Shrinking the sub-interfaces in place would break every consumer."** True for
+   `database.BookReader`, but the reachable win was elsewhere: `organizer.Store`
+   went from 9 entries / 179 transitive methods to 6 / 22 with **no consumer
+   changes**, because the consumers were already only calling 16 of them.
+2. **The lever is parameter types, not declarations.** `organizer.Store` embedded a
+   30-method `OperationStore` for exactly one reason: seven helper functions in
+   `internal/operations/state.go` each took the whole store to call one method.
+   #2552 fixed those seven signatures, and the narrowing followed. This mechanism
+   is invisible to the linter and is the one worth looking for first elsewhere.
+3. **Some of what the gate reported was dead.** `bookHandlerStore` (12 embeds, 182
+   transitive methods) and three siblings had zero references outside their own
+   file. Phase 2 would have spent effort splitting a declaration nothing used;
+   #2554 deleted the file instead.
+
+**Phase 2 item 1 (`JobStore` → per-job interfaces) is unaffected** and remains the
+next real step. Phase 3 should be re-measured before starting: the five survivors
+are documented in
+[`docs/audits/2026-08-18-interface-width-shapes.md`](../audits/2026-08-18-interface-width-shapes.md)
+§6, and none of them is a grouping problem.
 
 ## The finding that should shape this
 
@@ -34,7 +62,7 @@ sub-interfaces themselves" as the next big push.
 
 ---
 
-## Phase 0 — Prerequisite (IN FLIGHT, PR #2536)
+## Phase 0 — Prerequisite (DONE, #2536 merged 2026-08-17)
 
 Enforce `OperationDef.Permissions` on `POST /operations/v2`.
 

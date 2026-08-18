@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-18-interface-width-shapes.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 2.1.0 -->
 <!-- guid: 7e5b0c92-41da-4f38-b6a7-92d3f1e08c54 -->
 <!-- last-edited: 2026-08-18 -->
 
@@ -75,10 +75,25 @@ both 10 embeds + 1 method) belong with the compositions, not the flat lists.
 
 # Part 2 — what measurement showed
 
-Added 2026-08-18, after the flat-list sweep landed (#2542, #2545, #2546, #2547,
-#2549, #2550, #2553) and the count went **28 → 6**. Everything below is measured,
-not estimated; the method that produced each number is stated so it can be
-re-run and disagreed with.
+Added 2026-08-18, after the flat-list sweep landed and the `interfacebloat`
+count went **28 → 5**. Everything below is measured, not estimated; the method
+that produced each number is stated so it can be re-run and disagreed with.
+
+The count is per-PR, because an aggregate figure hides which change earned it:
+
+| After | Findings | What it removed |
+|---|---|---|
+| (before the sweep) | 28 | — |
+| #2542, #2545, #2546, #2547, #2549, #2550 | 9 | the flat-list splits |
+| #2553 | 7 | `AudiobookService` (13), `abs.Store` (10) |
+| #2554 | 6 | `bookHandlerStore` (12) — **deleted, not split** |
+| #2556 | **5** | `organizer.Store` (9 entries / 179 transitive) |
+
+The final 5 were measured, not projected: `main` plus both pending branches
+merged into a scratch tree, `golangci-lint` run with a cleared cache. They are
+`database.Store` (40), `itunes/service.Store` (17), `maintenance.JobStore` (12),
+and the `audiobookStore`/`audiobookUpdateStore` twins (11 each) — see §6 for why
+none of them yields to the same move.
 
 ## 1. The width gate cannot see transitive width
 
@@ -185,3 +200,34 @@ that only agrees with itself is not a census.
 **The honest count is "reported + suppressed."** Two interfaces carry
 `//nolint:interfacebloat` (`database.BookReader`, and one in
 `internal/plugins/maintenance/deps.go`) and are invisible to the reported number.
+
+## 6. Why the remaining five are parked, not skipped
+
+All five survivors resist the split-then-compose move for the same reason, and it
+is worth stating plainly so the next person does not spend a night rediscovering
+it: **they are not badly grouped, they are genuinely wide.**
+
+| Interface | Entries | Methods actually called | Why splitting does not help |
+|---|---|---|---|
+| `database.Store` | 40 | — | The union type itself. Phase 2's job is to make it unreachable, not smaller. |
+| `itunes/service.Store` | 17 | 24 | Seven assignability constraints, incl. `database.OperationStore`. |
+| `maintenance.JobStore` | 12 | — | Deliberate: chosen over per-job interfaces in the #2534 arbitration. |
+| `audiobookStore` | 11 | **44** | See below. |
+| `audiobookUpdateStore` | 11 | — | Twin of the above. |
+
+`audiobookStore` is the instructive one. It declares 11 entries — ten embeds and a
+method — and the service calls **44 distinct store methods** through it. Writing
+those 44 honestly, as named groups, needs six or seven groups of five to eight
+methods each. That is *worse* on the gate than the ten embeds currently hiding
+them, and no more honest to read.
+
+That is not an argument for leaving it alone. It is the measurement telling us the
+problem is in the wrong place: **a service with 44 distinct store dependencies is
+too big, and no arrangement of its interface will fix that.** Splitting the
+*service* would shrink the interface as a side effect. Splitting the interface
+first would produce a tidier declaration in front of the same 44 dependencies.
+
+So this is recorded as a finding rather than started as a refactor. The gate keeps
+reporting all five, which is correct — they are real. The width ratchet's baseline
+is set to 5 so they cannot grow, and any future PR that adds a sixth has to say
+why.
