@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-08-13
+// last-edited: 2026-08-18
 
 package itunesservice
 
@@ -118,9 +118,85 @@ func trackDurationSeconds(t *itunes.Track) int {
 	return int(t.TotalTime / 1000)
 }
 
+// The import pipeline's store surface, measured with an empty-interface compiler
+// probe: emptying itunesservice.Store and building with -gcflags=-e enumerates
+// every method the package actually reaches for. All 24 direct calls resolved to
+// this one file, which is why these groups are named after what the importer
+// does rather than sized to fit a limit -- they are a partition of a measured
+// set with a single consumer, not a bucketing of leftovers.
+//
+// The field below is the lever. It was `store Store`, and a parameter type is
+// what propagates width: holding the 17-embed aggregate here is what obliged
+// itunesservice.Store to stay wide enough to satisfy it.
+
+// bookLookup finds existing books and their files during import, by every key
+// the pipeline dedupes on: ID, path, content hash, and iTunes external ID.
+type bookLookup interface {
+	GetBookByID(id string) (*database.Book, error)
+	GetBookByFilePath(path string) (*database.Book, error)
+	GetBookByFileHash(hash string) (*database.Book, error)
+	GetBookByExternalID(source, externalID string) (string, error)
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	GetBookFileByPID(itunesPID string) (*database.BookFile, error)
+}
+
+// bookWriter creates and updates the books and files an import produces.
+type bookWriter interface {
+	CreateBook(book *database.Book) (*database.Book, error)
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	CreateBookFile(file *database.BookFile) error
+	UpdateBookFile(id string, file *database.BookFile) error
+	BatchUpsertBookFiles(files []*database.BookFile) error
+}
+
+// contributorWriter resolves and links authors and series. Import is
+// get-or-create for both, hence the read and write halves sitting together.
+type contributorWriter interface {
+	CreateAuthor(name string) (*database.Author, error)
+	GetAuthorByName(name string) (*database.Author, error)
+	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
+	SetBookAuthors(bookID string, authors []database.BookAuthor) error
+	CreateSeries(name string, authorID *int) (*database.Series, error)
+	GetSeriesByName(name string, authorID *int) (*database.Series, error)
+}
+
+// itunesImportState is the bookkeeping that makes an import incremental and
+// idempotent: which external IDs are mapped or tombstoned, which hashes are
+// blocked, the library fingerprint, and updates deferred from an earlier run.
+type itunesImportState interface {
+	CreateExternalIDMapping(mapping *database.ExternalIDMapping) error
+	IsExternalIDTombstoned(source, externalID string) (bool, error)
+	IsHashBlocked(hash string) (bool, error)
+	SaveLibraryFingerprint(path string, size int64, modTime time.Time, crc32 uint32) error
+	GetPendingDeferredITunesUpdates() ([]database.DeferredITunesUpdate, error)
+	MarkDeferredITunesUpdateApplied(id int) error
+}
+
+// importerCheckpointStore is the resume surface. internal/operations deliberately
+// declares these one method at a time so each helper takes only what it uses;
+// this groups the four the import pipeline reaches via operations.SaveParams,
+// LoadCheckpoint, SaveCheckpoint and ClearState. PathReconciler and PathRepairer
+// carry their own OperationStateDeleter rather than sharing this.
+type importerCheckpointStore interface {
+	operations.OperationStateWriter
+	operations.OperationStateReader
+	operations.OperationStateDeleter
+	operations.OperationParamsWriter
+}
+
+// importerStore is everything the import pipeline needs, and nothing else.
+type importerStore interface {
+	bookLookup
+	bookWriter
+	contributorWriter
+	itunesImportState
+	importerCheckpointStore
+}
+
 // Importer runs the iTunes import pipeline and incremental sync.
 type Importer struct {
-	store            Store
+	store            importerStore
 	activityFn       func(database.ActivityEntry)
 	eventBus         plugin.EventPublisher // may be nil; replaces OnBookCreated
 	cfg              Config

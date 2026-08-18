@@ -1,5 +1,5 @@
 # file: .interface-width-baseline
-# version: 1.2.0
+# version: 1.3.0
 # guid: 2b8e4f16-9d07-4c3a-b512-6a94ef7d0c38
 # last-edited: 2026-08-18
 #
@@ -8,14 +8,25 @@
 # this number being lowered in the same PR. Both directions are deliberate --
 # a baseline nobody lowers is a baseline that stops meaning anything.
 #
-# Why a count and not a per-file list: measured 2026-08-18, the count is stable
-# across checkouts and caches (the pre-sweep count read 28 from the repo root, 28
-# from inside a worktree, and 28 from an isolated clone) while the reported PATHS
-# are not -- golangci-lint's
-# result cache is keyed by file content, so an unchanged file replays whichever
-# path was recorded first, which for this repo meant paths pointing into sibling
-# worktrees. A per-file baseline would have been built on the unstable half of
-# the output.
+# Why a count and not a per-file list: golangci-lint's result cache is keyed by
+# file content, so an unchanged file replays whichever PATH was recorded first,
+# which for this repo meant paths pointing into sibling worktrees. A per-file
+# baseline would have been built on the unstable half of the output.
+#
+# CORRECTION 2026-08-18: this note used to add that the count itself was stable
+# across checkouts and caches, citing 28 from the repo root, 28 from inside a
+# worktree and 28 from an isolated clone. That measurement predated the first
+# //nolint:interfacebloat override, and the stability did not survive it. A
+# replayed path breaks BOTH things that read it -- suppression, which re-reads
+# the source at that position, and .golangci.yml's `\.worktrees/` exclusion. So
+# the count moved in both directions: 6 instead of 4 from a worktree whose
+# sibling had been deleted, and 0 instead of 4 from the repo root with a sibling
+# present. The 0 is the one to fear, because this gate then advises lowering the
+# baseline to it. scripts/check-interface-width.sh scopes GOLANGCI_LINT_CACHE per
+# worktree so neither is reachable; see that file and PR #2564.
+#
+# The count is still the right thing to ratchet on -- but because the paths are
+# unstable, not because the count was ever immune.
 #
 # Two ways to go over, both of which leave a reviewable trace:
 #   1. Per interface -- `//nolint:interfacebloat // <reason>`. nolintlint is
@@ -30,8 +41,18 @@
 # declaration of audiobookStore under another name, whose own direct-call set
 # was the single method GetBookByID.
 #
-# The four held here are documented in
-# docs/audits/2026-08-18-interface-width-shapes.md section 6 -- all four are
-# genuinely wide rather than badly grouped, so this number is expected to hold
-# until the services behind them are split, not to keep ticking down.
-4
+# Lowered to 3 by narrowing itunesservice.Store from 17 database.* embeds to the
+# seven interfaces its consumers were measured to need. That one came down only
+# after its six subsystem leaves did (#2560, #2561, #2563): the aggregate was
+# wide because each subsystem held it rather than its own slice, so it could not
+# be argued down on its own terms.
+#
+# The three held here are documented in
+# docs/audits/2026-08-18-interface-width-shapes.md section 6 -- audiobookStore
+# (11), database.Store (40) and maintenance.JobStore (12). Each is genuinely wide
+# rather than badly grouped: audiobookStore needs the service behind it split,
+# database.Store is the union type and the plan is to make it unreachable rather
+# than smaller, and JobStore's width was the deliberate outcome of the #2534
+# arbitration. So this number is expected to hold until those decisions are
+# taken, not to keep ticking down.
+3
