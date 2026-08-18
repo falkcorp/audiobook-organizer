@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
-<!-- last-edited: 2026-08-17 -->
+<!-- last-edited: 2026-08-18 -->
 
 # Executive Summary: August 2026 Monthly Roundup
 
-**Period covered:** 2026-08-01 through 2026-08-17 (**month in progress** — this is
+**Period covered:** 2026-08-01 through 2026-08-18 (**month in progress** — this is
 updated as work lands, not a closed record).
 **Individual write-ups this consolidates:** the seven dated summaries in this directory
 from 2026-08-04 to 2026-08-09, linked inline below.
@@ -277,6 +277,51 @@ now has to say so where a reviewer will see it.
 Worth recording honestly: an earlier framing of this work claimed it would delete a large
 piece of test scaffolding. **It does not,** and that was corrected before the work shipped
 rather than discovered afterward.
+
+---
+
+## 8. August 18: breaking up the parts lists
+
+**What it was.** Inside the program, whenever one piece of code needs to ask the
+database for something, it first declares a list of what it intends to use — a
+parts list. Done well, that list is short and specific: "I read books and I write
+book files," four or five entries. Done badly, it says "give me everything," and
+over time a great many of them had come to say exactly that. The worst offender
+declared access to **182 different database operations** in a single line.
+
+**Why it mattered.** Not because anything was broken today — nothing user-visible
+was. It mattered because those lists are the only honest record of what a piece of
+code can reach, and once one says "everything," it stops being a record at all. A
+new change can quietly acquire the ability to modify anything in the library
+without anyone deciding it should, and a reviewer looking at the file has no way to
+tell what it actually touches. Several of this month's genuine bugs — metadata
+being silently overwritten, files being repointed across the wrong books — are the
+kind that hide comfortably behind a parts list nobody can read.
+
+**The fix.** Nine changes, merged over one night, cut the number of oversized lists
+from **28 to 5**. Most were split into small named groups, so the same code keeps
+working unchanged while a reader can finally see what it uses. Three findings from
+doing the work are worth recording:
+
+- **One of the biggest was entirely dead.** The 182-entry list, and three others
+  beside it, were referenced by nothing at all — left behind when the code they
+  described moved elsewhere months ago. The automated checker had been faithfully
+  reporting them as things to tidy up; the honest fix was to delete them.
+- **The width spreads through function arguments, not declarations.** One group of
+  seven small helper functions had each been written to accept the entire database
+  rather than the single operation it used. That one habit was forcing width onto
+  everything that called them; fixing the seven signatures was what made the
+  largest remaining split possible at all.
+- **Five were deliberately left alone, and that is written down.** They are not
+  badly organised — they are genuinely large, and rearranging them would produce a
+  tidier-looking declaration in front of the same sprawl. One of them fronts a
+  component that uses **44 distinct database operations**; the finding there is
+  that the component is too big, and no amount of tidying its parts list will
+  change that.
+
+Finally, a guard was added so this cannot quietly come back: an automatic check now
+fails any future change that increases the count past 5, with a documented way to
+override it deliberately when there is a real reason.
 
 ---
 
