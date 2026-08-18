@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # file: scripts/check-interface-width.sh
-# version: 1.3.0
+# version: 1.4.0
 # guid: 5f1c07a3-84be-4d29-9e60-3b7a2d5c81ef
 # last-edited: 2026-08-18
 #
@@ -8,7 +8,43 @@
 # .interface-width-baseline for why this counts rather than listing files.
 set -euo pipefail
 
-cd "$(git rev-parse --show-toplevel)"
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+# Scope the result cache to THIS checkout.
+#
+# golangci-lint's cache is keyed by file CONTENT, and every git worktree of this
+# repo declares the same module path with byte-identical files. A shared cache
+# therefore replays whichever PATH was recorded first, and a finding's path is
+# not cosmetic: `//nolint` suppression is resolved by re-reading the source
+# there, and .golangci.yml drops anything matching `\.worktrees/`. So a shared
+# cache corrupts the count in BOTH directions, and both were measured on
+# 2026-08-18 against a true count of 4:
+#
+#   overcount 6 -- run from .worktrees/pathrepair, BookReader and ServerDeps
+#     attributed to ../absplit/ which had been deleted. No file to read, so their
+#     explained //nolint went unseen and both leaked into the count.
+#
+#   undercount 0 -- run from the repo root while .worktrees/widthgate existed.
+#     All four findings replayed with .worktrees/ paths, where the exclusion
+#     swallowed them. The gate then reported "went DOWN (4 -> 0)" and advised
+#     setting the baseline to 0, which would have disabled it permanently.
+#
+# The undercount is the dangerous one: it is a silent pass whose remediation text
+# argues for making the silence permanent. Package loading is not the culprit and
+# cannot be -- each sibling worktree has its own go.mod, so `go list ./...` from
+# the root returns 0 packages under `.worktrees/`. Only cached POSITIONS cross
+# the boundary, so isolating the cache closes both directions at the source.
+cache_home=${XDG_CACHE_HOME:-$HOME/.cache}
+if command -v shasum >/dev/null 2>&1; then
+  cache_key=$(printf '%s' "$root" | shasum -a 256 | cut -d' ' -f1)
+elif command -v sha256sum >/dev/null 2>&1; then
+  cache_key=$(printf '%s' "$root" | sha256sum | cut -d' ' -f1)
+else
+  echo "FAIL: neither shasum nor sha256sum found; cannot scope the lint cache" >&2
+  exit 2
+fi
+export GOLANGCI_LINT_CACHE="$cache_home/golangci-lint-width/${cache_key:0:16}"
 BASELINE_FILE=.interface-width-baseline
 baseline=$(grep -vE '^\s*(#|$)' "$BASELINE_FILE" | head -1 | tr -d '[:space:]')
 

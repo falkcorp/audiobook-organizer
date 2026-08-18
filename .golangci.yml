@@ -1,5 +1,5 @@
 # file: .golangci.yml
-# version: 1.3.0
+# version: 1.4.0
 # guid: 8d2a1f47-6c93-4b0e-a15d-7f3e28c9b604
 # last-edited: 2026-08-18
 
@@ -154,18 +154,35 @@ linters:
       # caches, the paths are not.
       #
       # CORRECTION 2026-08-18: "it does not change the number" was true when
-      # written and is no longer. It held because no //nolint:interfacebloat
-      # override existed yet. Suppression is resolved by RE-READING the source at
-      # the reported position, so once a declaration carries a //nolint, a
-      # replayed path into a checkout that is gone means the directive is never
-      # read and the finding it suppressed leaks into the count. Measured from
-      # .worktrees/pathrepair: 6 findings vs CI's 4, the two extra being
-      # BookReader and ServerDeps, both attributed to a ../absplit/ that no
-      # longer existed. The exclusion below also cannot help there -- it only
-      # matches from the repo root, and check-interface-width.sh cds to the
-      # worktree root, where a sibling renders as `../name/`. The gate now
-      # detects unreadable paths itself and exits 2 rather than reporting a
-      # number; see scripts/check-interface-width.sh.
+      # written and is now definitively false, in BOTH directions. It held only
+      # while no declaration carried a //nolint:interfacebloat. Two measurements,
+      # against a true count of 4:
+      #
+      #   overcount 6 -- from .worktrees/pathrepair. BookReader and ServerDeps
+      #     were attributed to ../absplit/, a worktree that had been deleted.
+      #     Suppression is resolved by RE-READING the source at the reported
+      #     position, so with no file to read their explained //nolint went
+      #     unseen and both leaked into the count.
+      #
+      #   undercount 0 -- from the repo root while .worktrees/widthgate existed.
+      #     All four findings replayed with .worktrees/ paths, where THIS
+      #     exclusion swallowed them. The gate reported "went DOWN (4 -> 0)" and
+      #     advised setting the baseline to 0, which would have disabled it for
+      #     good. A silent pass whose remediation text argues for permanence is
+      #     the worse of the two failures.
+      #
+      # scripts/check-interface-width.sh now scopes GOLANGCI_LINT_CACHE to the
+      # worktree it runs in, so cached positions can no longer cross checkouts
+      # and neither direction is reachable for that gate. It also exits 2 if any
+      # reported path does not resolve, rather than reporting a number.
+      #
+      # The exclusion below is kept, but note what it is NOT doing: package
+      # loading never descends here, because each worktree has its own go.mod and
+      # `go list ./...` from the root returns 0 packages under `.worktrees/`. It
+      # only ever matches cache-replayed positions. Whether golangci-lint's own
+      # loader agrees with `go list` is unverified -- that discriminator, and any
+      # decision to delete this line, belongs to a PR that owns the go-lint job's
+      # counts, not to the width gate.
       - \.worktrees/
     rules:
       # nolintlint is enabled to make WIDTH overrides auditable — an
