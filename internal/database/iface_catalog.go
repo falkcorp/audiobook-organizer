@@ -1,5 +1,5 @@
 // file: internal/database/iface_catalog.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 76cf7dcf-546c-424d-8d2b-26c8a4354506
 // last-edited: 2026-08-18
 
@@ -54,15 +54,34 @@ type NarratorStore interface {
 	GetNarratorsByBookIDs(ctx context.Context, bookIDs []string) (map[string][]Narrator, error)
 }
 
-// BookVersionStore covers version CRUD, lifecycle, and lookups.
-type BookVersionStore interface {
-	CreateBookVersion(v *BookVersion) (*BookVersion, error)
+// BookVersionReader looks up book versions by id, book, or torrent hash.
+type BookVersionReader interface {
 	GetBookVersion(id string) (*BookVersion, error)
 	GetBookVersionsByBookID(bookID string) ([]BookVersion, error)
 	GetActiveVersionForBook(bookID string) (*BookVersion, error)
+	GetBookVersionByTorrentHash(hash string) (*BookVersion, error)
+}
+
+// BookVersionWriter creates, updates and deletes book versions.
+type BookVersionWriter interface {
+	CreateBookVersion(v *BookVersion) (*BookVersion, error)
 	UpdateBookVersion(v *BookVersion) error
 	DeleteBookVersion(id string) error
-	GetBookVersionByTorrentHash(hash string) (*BookVersion, error)
+}
+
+// BookVersionDispositionReader lists versions by trash/purge disposition.
+type BookVersionDispositionReader interface {
 	ListTrashedBookVersions() ([]BookVersion, error)
 	ListPurgedBookVersions() ([]BookVersion, error)
+}
+
+// BookVersionStore covers version CRUD, lifecycle, and lookups.
+//
+// Split into the 3 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it.
+type BookVersionStore interface {
+	BookVersionReader
+	BookVersionWriter
+	BookVersionDispositionReader
 }

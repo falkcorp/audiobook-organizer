@@ -1,5 +1,5 @@
 // file: internal/database/iface_auth.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8be16e9f-22a9-45ca-a13c-1cca96721f90
 // last-edited: 2026-08-18
 
@@ -15,13 +15,22 @@ import (
 // declarations in one file. A file named `misc` is where wide interfaces go to
 // avoid review: BookFileStore reached 27 methods while living there.
 
-// APIKeyStore covers APIKey CRUD and revocation.
-type APIKeyStore interface {
-	CreateAPIKey(key *APIKey) (*APIKey, error)
+// APIKeyReader looks up and lists API keys.
+type APIKeyReader interface {
 	GetAPIKey(id string) (*APIKey, error)
 	GetAPIKeyByHash(hash string) (*APIKey, error)
 	ListAPIKeysForUser(userID string) ([]APIKey, error)
 	ListAllAPIKeys() ([]APIKey, error)
+}
+
+// APIKeyWriter issues new API keys.
+type APIKeyWriter interface {
+	CreateAPIKey(key *APIKey) (*APIKey, error)
+}
+
+// APIKeyLifecycleStore revokes keys and adjusts status/expiry, including the
+// rotation grace window where an old key keeps working until a deadline.
+type APIKeyLifecycleStore interface {
 	RevokeAPIKey(id string) error
 	SetAPIKeyStatus(id, status string, at time.Time) error
 	// SetAPIKeyExpiry updates only the ExpiresAt field on an existing key,
@@ -29,7 +38,23 @@ type APIKeyStore interface {
 	// old key must keep working until `at` rather than being revoked
 	// immediately (SEC-1/PROC-6).
 	SetAPIKeyExpiry(id string, at time.Time) error
+}
+
+// APIKeyUsageRecorder records last-used telemetry for a key.
+type APIKeyUsageRecorder interface {
 	TouchAPIKeyLastUsed(id string, at time.Time, ip string) error
+}
+
+// APIKeyStore covers APIKey CRUD and revocation.
+//
+// Split into the 4 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it.
+type APIKeyStore interface {
+	APIKeyReader
+	APIKeyWriter
+	APIKeyLifecycleStore
+	APIKeyUsageRecorder
 }
 
 // RoleStore covers Role CRUD.
