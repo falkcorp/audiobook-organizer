@@ -43,8 +43,8 @@ import (
 // Write errors from the secondary backend are logged but not returned to the
 // caller — the primary backend's result is authoritative.
 type DualWriteActivityStore struct {
-	nuts          ActivityStorer
-	pebble        ActivityStorer
+	nuts           ActivityStorer
+	pebble         ActivityStorer
 	ReadFromPebble bool
 }
 

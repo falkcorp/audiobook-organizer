@@ -17,19 +17,40 @@ type ITunesStateStore interface {
 	GetDeferredITunesUpdatesByBookID(bookID string) ([]DeferredITunesUpdate, error)
 }
 
-// ExternalIDStore covers ExternalIDMapping CRUD + tombstones.
-type ExternalIDStore interface {
-	CreateExternalIDMapping(mapping *ExternalIDMapping) error
+// ExternalIDReader reads external ID mappings.
+type ExternalIDReader interface {
 	GetBookByExternalID(source, externalID string) (string, error)
 	GetExternalIDsForBook(bookID string) ([]ExternalIDMapping, error)
+	GetRemovedExternalIDs(source string) ([]ExternalIDMapping, error)
+}
+
+// ExternalIDWriter creates and annotates external ID mappings.
+type ExternalIDWriter interface {
+	CreateExternalIDMapping(mapping *ExternalIDMapping) error
+	BulkCreateExternalIDMappings(mappings []ExternalIDMapping) error
+	SetExternalIDProvenance(source, externalID, provenance string) error
+	MarkExternalIDRemoved(source, externalID string) error
+}
+
+// ExternalIDLifecycle covers tombstoning and reassignment.
+type ExternalIDLifecycle interface {
 	IsExternalIDTombstoned(source, externalID string) (bool, error)
 	TombstoneExternalID(source, externalID string) error
 	ReassignExternalIDs(oldBookID, newBookID string) error
 	ReassignExternalID(source, externalID, newBookID string) error
-	BulkCreateExternalIDMappings(mappings []ExternalIDMapping) error
-	MarkExternalIDRemoved(source, externalID string) error
-	SetExternalIDProvenance(source, externalID, provenance string) error
-	GetRemovedExternalIDs(source string) ([]ExternalIDMapping, error)
+}
+
+// ExternalIDStore covers ExternalIDMapping CRUD + tombstones.
+//
+// Split into the 3 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it, because every implementation -- PebbleStore (496 methods)
+// and database.MockStore (399) among them -- fails to compile on a dropped or
+// re-signatured method.
+type ExternalIDStore interface {
+	ExternalIDReader
+	ExternalIDWriter
+	ExternalIDLifecycle
 }
 
 // PathHistoryStore covers file rename/move history.

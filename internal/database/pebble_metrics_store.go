@@ -89,7 +89,7 @@ func pmetIdxKey(cacheName string) []byte {
 // WHY: Pebble has no built-in per-key TTL; we embed expiry in the value so
 // SweepExpiredMetrics can skip (or delete) entries without re-parsing timestamps.
 type pmetValue struct {
-	ExpiresAt int64            `json:"expires_at"` // Unix seconds
+	ExpiresAt int64              `json:"expires_at"` // Unix seconds
 	Snapshot  CacheStatsSnapshot `json:"snapshot"`
 }
 

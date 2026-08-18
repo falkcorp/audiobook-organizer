@@ -310,10 +310,10 @@ func encodeBool(b bool) []byte {
 
 // titleSortIndex indexes Book.Title for sorted iteration, with a fallback so
 // every book has a key (even those scanned without enrichment). Order:
-//   1. Title (lowercased, trimmed) if non-empty
-//   2. OriginalFilename (lowercased) if Title empty
-//   3. "~" sentinel — sorts after all printable ASCII so titleless+filename-less
-//      books cluster at the end of asc iteration.
+//  1. Title (lowercased, trimmed) if non-empty
+//  2. OriginalFilename (lowercased) if Title empty
+//  3. "~" sentinel — sorts after all printable ASCII so titleless+filename-less
+//     books cluster at the end of asc iteration.
 //
 // Without this fallback, books with empty Title would be dropped from the
 // title index entirely, vanishing from the library list when sort_by=title.

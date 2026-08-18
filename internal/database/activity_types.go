@@ -59,13 +59,13 @@ type CompactResult struct {
 
 // DigestItem represents a single compacted entry within a daily digest.
 type DigestItem struct {
-	Type        string    `json:"type"`
-	Tier        string    `json:"tier,omitempty"`
-	Book        string    `json:"book,omitempty"`
-	BookID      string    `json:"book_id,omitempty"`
-	OperationID string    `json:"operation_id,omitempty"`
-	Summary     string    `json:"summary"`
-	Details     string    `json:"details,omitempty"`
+	Type        string `json:"type"`
+	Tier        string `json:"tier,omitempty"`
+	Book        string `json:"book,omitempty"`
+	BookID      string `json:"book_id,omitempty"`
+	OperationID string `json:"operation_id,omitempty"`
+	Summary     string `json:"summary"`
+	Details     string `json:"details,omitempty"`
 	// Timestamp is the original event time. Zero for digests compacted before
 	// 2026-05-20 (when this field was added); omitempty hides it from old JSON.
 	Timestamp time.Time `json:"timestamp,omitempty"`
@@ -76,9 +76,9 @@ type DigestItem struct {
 
 // DigestDetails is the JSON structure stored in a daily digest row's details column.
 type DigestDetails struct {
-	Date          string                    `json:"date"`
-	OriginalCount int                       `json:"original_count"`
-	Counts        map[string]int            `json:"counts"`
+	Date          string         `json:"date"`
+	OriginalCount int            `json:"original_count"`
+	Counts        map[string]int `json:"counts"`
 	// TagCounts aggregates entry counts grouped by tag namespace → tag value.
 	// Outer key is a namespace like "action" or "source"; inner key is the
 	// tag value (e.g. "metadata-apply", "scan"). Used by the frontend as a

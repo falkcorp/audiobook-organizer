@@ -53,9 +53,9 @@ func mkBook(t *testing.T, s *PebbleStore, title string, seriesID int, primary, t
 func TestSeriesBookRefCounts_CountsTrashedAndNonPrimary(t *testing.T) {
 	store := seedRefStore(t, t.TempDir())
 
-	const onlyTrashed = 900   // every book in the trash
-	const onlyNonPrim = 901   // every book a secondary version
-	const healthy = 902       // an ordinary series
+	const onlyTrashed = 900 // every book in the trash
+	const onlyNonPrim = 901 // every book a secondary version
+	const healthy = 902     // an ordinary series
 	mkBook(t, store, "trashed-a", onlyTrashed, true, true)
 	mkBook(t, store, "trashed-b", onlyTrashed, true, true)
 	mkBook(t, store, "secondary", onlyNonPrim, false, false)

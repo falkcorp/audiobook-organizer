@@ -10,6 +10,32 @@ import (
 	"time"
 )
 
+// ActivityWriter appends activity records.
+type ActivityWriter interface {
+	Record(ActivityEntry) (int64, error)
+}
+
+// ActivityReader queries and summarizes activity.
+type ActivityReader interface {
+	Query(context.Context, ActivityFilter) ([]ActivityEntry, int, error)
+	Summarize(ctx context.Context, olderThan time.Time, tier string) (int, error)
+	GetDistinctSources(context.Context, ActivityFilter) ([]SourceCount, error)
+}
+
+// ActivityRetention covers pruning, compaction and migration.
+type ActivityRetention interface {
+	Prune(olderThan time.Time, tier string) (int, error)
+	WipeAllActivity() (int64, error)
+	CompactByDay(ctx context.Context, olderThan time.Time) (CompactResult, error)
+	RecompactDigests(ctx context.Context) (RecompactResult, error)
+	MigrateSystemActivityLogs() (int, error)
+}
+
+// ActivityLifecycle covers store teardown.
+type ActivityLifecycle interface {
+	Close() error
+}
+
 // ActivityStorer is the minimal interface required by activity.Service and
 // activity.Writer. PebbleActivityStore is the production implementation
 // (NutsActivityStore retired as of TASK-22, retained unwired pending removal).
@@ -23,17 +49,17 @@ import (
 // cancellable path is the only path. The remaining methods are intentionally
 // left context-free: they are maintenance/write operations that are not driven
 // by an abandonable HTTP request.
+//
+// Split into the 4 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it, because every implementation -- PebbleStore (496 methods)
+// and database.MockStore (399) among them -- fails to compile on a dropped or
+// re-signatured method.
 type ActivityStorer interface {
-	Record(ActivityEntry) (int64, error)
-	Query(context.Context, ActivityFilter) ([]ActivityEntry, int, error)
-	Summarize(ctx context.Context, olderThan time.Time, tier string) (int, error)
-	Prune(olderThan time.Time, tier string) (int, error)
-	GetDistinctSources(context.Context, ActivityFilter) ([]SourceCount, error)
-	WipeAllActivity() (int64, error)
-	CompactByDay(ctx context.Context, olderThan time.Time) (CompactResult, error)
-	RecompactDigests(ctx context.Context) (RecompactResult, error)
-	MigrateSystemActivityLogs() (int, error)
-	Close() error
+	ActivityWriter
+	ActivityReader
+	ActivityRetention
+	ActivityLifecycle
 }
 
 // MetricsStorer is the minimal interface required by server cache handlers.

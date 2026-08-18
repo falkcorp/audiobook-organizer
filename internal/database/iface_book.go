@@ -173,23 +173,42 @@ type BookReader interface { //nolint:interfacebloat // transitional composition 
 	BookITunesReader
 }
 
-// BookWriter is the write-only slice of Store for callers that only
-// mutate books.
-type BookWriter interface {
+// BookMutator creates, updates and deletes books.
+type BookMutator interface {
 	CreateBook(book *Book) (*Book, error)
 	UpdateBook(id string, book *Book) (*Book, error)
 	UpdateBookRating(id string, req UpdateBookRatingRequest) error
 	DeleteBook(id string) error
+}
+
+// BookSyncMarker records that a book has been written out or synced.
+type BookSyncMarker interface {
 	SetLastWrittenAt(id string, t time.Time) error
 	MarkITunesSynced(bookIDs []string) (int64, error)
+}
+
+// BookVersionMutator manipulates a book's version history.
+type BookVersionMutator interface {
 	RevertBookToVersion(id string, ts time.Time) (*Book, error)
 	PruneBookSnapshots(id string, keepCount int) (int, error)
+}
+
+// BookTombstoneWriter manages tombstones for deleted books.
+type BookTombstoneWriter interface {
 	CreateBookTombstone(book *Book) error
 	DeleteBookTombstone(id string) error
+}
+
+// BookScanFailStore tracks consecutive scan failures per book.
+type BookScanFailStore interface {
 	// Scan-fail counter for auto-quarantine (keyed on sha256[:8] of path).
 	GetScanFailCount(pathHash string) (int, error)
 	IncrScanFailCount(pathHash string) (int, error)
 	ResetScanFailCount(pathHash string) error
+}
+
+// BookAggregateWriter performs merges and aggregate recomputation.
+type BookAggregateWriter interface {
 	// MergeChapterBooks absorbs srcIDs into primaryID: moves all book_files to
 	// primaryID, marks source books as non-primary (is_primary_version=0,
 	// merged_into_book_id=primaryID), and updates the primary book's duration
@@ -207,6 +226,23 @@ type BookWriter interface {
 	// with a less-complete sum. Idempotent; safe to call from BookFile
 	// create/update/delete paths as a best-effort hook.
 	RecomputeBookAggregates(bookID string) error
+}
+
+// BookWriter is the write-only slice of Store for callers that only
+// mutate books.
+//
+// Split into the 6 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it, because every implementation -- PebbleStore (496 methods)
+// and database.MockStore (399) among them -- fails to compile on a dropped or
+// re-signatured method.
+type BookWriter interface {
+	BookMutator
+	BookSyncMarker
+	BookVersionMutator
+	BookTombstoneWriter
+	BookScanFailStore
+	BookAggregateWriter
 }
 
 // BookStore combines BookReader and BookWriter for callers that need both.

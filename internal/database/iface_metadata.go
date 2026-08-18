@@ -82,19 +82,40 @@ type MetadataCacheStore interface {
 // declarations in one file. A file named `misc` is where wide interfaces go to
 // avoid review: BookFileStore reached 27 methods while living there.
 
-// MetadataStore covers MetadataFieldState, change history, and
-// alternative titles.
-type MetadataStore interface {
+// MetadataFieldStateStore tracks per-field metadata state.
+type MetadataFieldStateStore interface {
 	GetMetadataFieldStates(bookID string) ([]MetadataFieldState, error)
 	UpsertMetadataFieldState(state *MetadataFieldState) error
 	DeleteMetadataFieldState(bookID, field string) error
+}
+
+// MetadataChangeStore records and reads metadata change history.
+type MetadataChangeStore interface {
 	RecordMetadataChange(record *MetadataChangeRecord) error
 	GetMetadataChangeHistory(bookID string, field string, limit int) ([]MetadataChangeRecord, error)
 	GetBookChangeHistory(bookID string, limit int) ([]MetadataChangeRecord, error)
+}
+
+// AlternativeTitleStore covers alternative titles for a book.
+type AlternativeTitleStore interface {
 	GetBookAlternativeTitles(bookID string) ([]BookAlternativeTitle, error)
 	AddBookAlternativeTitle(bookID, title, source, language string) error
 	RemoveBookAlternativeTitle(bookID, title string) error
 	SetBookAlternativeTitles(bookID string, titles []BookAlternativeTitle) error
+}
+
+// MetadataStore covers MetadataFieldState, change history, and
+// alternative titles.
+//
+// Split into the 3 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it, because every implementation -- PebbleStore (496 methods)
+// and database.MockStore (399) among them -- fails to compile on a dropped or
+// re-signatured method.
+type MetadataStore interface {
+	MetadataFieldStateStore
+	MetadataChangeStore
+	AlternativeTitleStore
 }
 
 // RejectedMetadataStore records candidates that were rejected (user action,

@@ -24,11 +24,11 @@ const statsTranscribeKey = "stats:transcribe"
 // cumulative across the run identified by RunOpID. Persisted as JSON under
 // statsTranscribeKey. A monitor reads it via GET /api/v1/maintenance/transcribe-stats.
 type TranscribeStats struct {
-	RunOpID    string    `json:"run_op_id"`     // op that produced these counters
-	StartedAt  time.Time `json:"started_at"`    // when the run began
-	UpdatedAt  time.Time `json:"updated_at"`    // last counter write
-	Done       bool      `json:"done"`          // run finished (success or error)
-	TotalBooks int       `json:"total_books"`   // library size at run start
+	RunOpID    string    `json:"run_op_id"`   // op that produced these counters
+	StartedAt  time.Time `json:"started_at"`  // when the run began
+	UpdatedAt  time.Time `json:"updated_at"`  // last counter write
+	Done       bool      `json:"done"`        // run finished (success or error)
+	TotalBooks int       `json:"total_books"` // library size at run start
 
 	// Per-outcome cumulative counts. Attempted = sum of the outcome buckets
 	// below; SkippedExisting is books skipped because they already had a

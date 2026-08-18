@@ -98,9 +98,9 @@ const (
 // mu guards every field AND serialises the publish, which is what closes the
 // window — see the ordering argument above.
 type memPendingBuffer struct {
-	mu       sync.Mutex
-	state    memPendingState
-	ops      []memPendingOp
+	mu    sync.Mutex
+	state memPendingState
+	ops   []memPendingOp
 	// overflow distinguishes the two reasons a warmup gets abandoned: buffer
 	// overflow (a fault — the snapshot provably lacks writes) versus Reset
 	// superseding the snapshot (routine). publishWarmMemStore logs accordingly.

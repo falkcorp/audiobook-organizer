@@ -164,8 +164,8 @@ func enrichLegacyLogTags(message, source, level string) []string {
 			addTag("action:organizer")
 		case "server_log":
 			addTag("action:server")
-		// "system_log" fallback: don't add a tag — mirrors the pre-existing
-		// behaviour where unknown messages had no action: tag at all.
+			// "system_log" fallback: don't add a tag — mirrors the pre-existing
+			// behaviour where unknown messages had no action: tag at all.
 		}
 	}
 
