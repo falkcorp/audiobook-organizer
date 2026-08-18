@@ -1,7 +1,7 @@
 // file: internal/sweep/sweeper.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-4789-abcd-ef2345678901
-// last-edited: 2026-07-16
+// last-edited: 2026-08-18
 
 package sweep
 
@@ -21,10 +21,18 @@ type SweeperResult struct {
 	Errors            []string `json:"errors,omitempty"`
 }
 
+// tombstoneSweeper is the three-method slice SweepTombstones needs.
+// Was database.BookStore (51 methods).
+type tombstoneSweeper interface {
+	ListBookTombstones(limit int) ([]database.Book, error)
+	GetBookByID(id string) (*database.Book, error)
+	DeleteBookTombstone(id string) error
+}
+
 // SweepTombstones cleans up tombstone records where:
 // - The original book record is gone (deleted successfully)
 // - The file no longer exists on disk (deleted or moved)
-func SweepTombstones(store database.BookStore) (*SweeperResult, error) {
+func SweepTombstones(store tombstoneSweeper) (*SweeperResult, error) {
 	result := &SweeperResult{
 		Errors: []string{},
 	}
@@ -73,10 +81,16 @@ func SweepTombstones(store database.BookStore) (*SweeperResult, error) {
 	return result, nil
 }
 
+// fileAuditor is the one method AuditFileConsistency calls. It previously
+// declared database.BookStore — 51 methods for a single call.
+type fileAuditor interface {
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+}
+
 // AuditFileConsistency checks all books in the database and reports:
 // - Books pointing to files that don't exist
 // It does NOT fix anything — just reports.
-func AuditFileConsistency(store database.BookStore) (*SweeperResult, error) {
+func AuditFileConsistency(store fileAuditor) (*SweeperResult, error) {
 	result := &SweeperResult{
 		MissingFiles: []string{},
 		Errors:       []string{},
