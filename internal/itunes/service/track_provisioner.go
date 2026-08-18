@@ -1,7 +1,7 @@
 // file: internal/itunes/service/track_provisioner.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 8e768742-5ace-4e4b-8495-9550ed4620b5
-// last-edited: 2026-07-03
+// last-edited: 2026-08-18
 //
 // TrackProvisioner generates ITL tracks for books that weren't imported
 // from iTunes (e.g. books added via scan or manual upload). For each
@@ -27,14 +27,16 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 )
 
-// provisionerStore is the narrow slice of the Service's Store that
-// TrackProvisioner needs. AuthorReader lets us resolve author name for
-// the ITL "Artist" field; BookFileStore lets us update the PID + path;
-// ExternalIDStore is where the generated PID mapping lives.
+// provisionerStore is what the track provisioner reads and writes.
+//
+// Measured with an empty-interface compiler probe: 5 methods. Previously
+// database.AuthorReader + BookFileStore + ExternalIDStore, 51 transitively.
 type provisionerStore interface {
-	database.AuthorReader
-	database.BookFileStore
-	database.ExternalIDStore
+	GetAuthorByID(id int) (*database.Author, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	UpsertBookFile(file *database.BookFile) error
+	CreateExternalIDMapping(m *database.ExternalIDMapping) error
+	SetExternalIDProvenance(source, externalID, provenance string) error
 }
 
 // TrackProvisioner provisions ITL tracks for non-iTunes books.
