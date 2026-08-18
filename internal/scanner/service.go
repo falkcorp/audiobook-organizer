@@ -1,7 +1,7 @@
 // file: internal/scanner/service.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-17
+// last-edited: 2026-08-18
 package scanner
 
 import (
@@ -21,12 +21,16 @@ import (
 )
 
 // scanServiceStore is the narrow slice of database.Store this service uses.
+// scanServiceStore is what this package actually calls, measured by emptying the
+// interface and reading the compiler's enumeration: 5 methods. It was a
+// pure pass-through of database.* embeds — 93 methods, none of them declared
+// here and almost none of them used.
 type scanServiceStore interface {
-	database.OperationStore
-	database.BookReader
-	database.BookWriter
-	database.ImportPathStore
-	database.MaintenanceStore
+	GetAllImportPaths() ([]database.ImportPath, error)
+	UpdateImportPath(id int, importPath *database.ImportPath) error
+	GetScanCacheMap() (map[string]database.ScanCacheEntry, error)
+	GetDirtyBookFolders() ([]string, error)
+	CountBooksByPathPrefix(prefix string) (int, error)
 }
 
 // ScanService orchestrates multi-folder audiobook scanning.

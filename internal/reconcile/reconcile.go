@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-14
+// last-edited: 2026-08-18
 
 package reconcile
 
@@ -28,11 +28,20 @@ import (
 )
 
 // Store is the database dependency for reconcile operations.
+// Store is what this package actually calls, measured by emptying the
+// interface and reading the compiler's enumeration: 9 methods. It was a
+// pure pass-through of database.* embeds — 115 methods, none of them declared
+// here and almost none of them used.
 type Store interface {
-	database.BookStore
-	database.BookFileStore
-	database.ImportPathStore
-	database.OperationStore
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetBookByID(id string) (*database.Book, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	GetAllImportPaths() ([]database.ImportPath, error)
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	DeleteBook(id string) error
+	CreateOperationChange(change *database.OperationChange) error
+	UpdateOperationResultData(id string, resultData string) error
 }
 
 // ReconcileMatch represents a potential match between a broken DB record and an untracked file.
@@ -1258,7 +1267,6 @@ func MergeBookMetadata(dst, src *database.Book) []string {
 
 	return merged
 }
-
 
 // loadAllBooksCore enumerates the whole library in ONE store call (limit 0 =
 // unbounded on both store paths) instead of offset pages. Offset paging reads

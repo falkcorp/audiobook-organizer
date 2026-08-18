@@ -1,7 +1,7 @@
 // file: internal/activity/changelog.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 93167949-a587-41e9-8ef9-92d03f86aea6
-// last-edited: 2026-07-13
+// last-edited: 2026-08-18
 
 package activity
 
@@ -15,10 +15,14 @@ import (
 )
 
 // changelogStore is the narrow slice of database.Store this service uses.
+// changelogStore is what this package actually calls, measured by emptying the
+// interface and reading the compiler's enumeration: 3 methods. It was a
+// pure pass-through of database.* embeds — 42 methods, none of them declared
+// here and almost none of them used.
 type changelogStore interface {
-	database.MetadataStore
-	database.OperationStore
-	database.PathHistoryStore
+	GetBookChanges(bookID string) ([]*database.OperationChange, error)
+	GetBookChangeHistory(bookID string, limit int) ([]database.MetadataChangeRecord, error)
+	GetBookPathHistory(bookID string) ([]database.BookPathChange, error)
 }
 
 // ChangeLogEntry represents a single entry in a book's changelog timeline.

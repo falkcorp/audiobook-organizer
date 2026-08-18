@@ -1,7 +1,7 @@
 // file: internal/sysinfo/service.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: h8i9j0k1-l2m3-n4o5-p6q7-r8s9t0u1v2w3
-// last-edited: 2026-05-20
+// last-edited: 2026-08-18
 
 package sysinfo
 
@@ -16,10 +16,15 @@ import (
 )
 
 // SystemServiceStore is the narrow slice of database.Store this service uses.
+// SystemServiceStore is what this package actually calls, measured by emptying the
+// interface and reading the compiler's enumeration: 4 methods. It was a
+// pure pass-through of database.* embeds — 45 methods, none of them declared
+// here and almost none of them used.
 type SystemServiceStore interface {
-	database.ImportPathStore
-	database.OperationStore
-	database.StatsStore
+	GetAllImportPaths() ([]database.ImportPath, error)
+	GetDashboardStats() (*database.DashboardStats, error)
+	GetOperationLogs(operationID string) ([]database.OperationLog, error)
+	GetRecentOperations(limit int) ([]database.Operation, error)
 }
 
 // LibrarySizesFn computes library and import-path disk usage.
