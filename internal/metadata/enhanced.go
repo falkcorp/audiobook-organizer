@@ -1,5 +1,5 @@
 // file: internal/metadata/enhanced.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
 // last-edited: 2026-08-18
 
@@ -191,12 +191,16 @@ func ValidateMetadata(updates map[string]interface{}, rules map[string]Validatio
 // handlers/metadata's MetadataStore, which already embeds database.BookStore
 // and declares these methods. No internal/database interface, mock, or
 // generated file changes — this is a call-signature widening only.
+// batchUpdateStore is what this package actually calls, measured by emptying the
+// interface and reading the compiler's enumeration: 7 methods. It was a
+// pure pass-through of database.* embeds — 56 methods, none declared here.
 type batchUpdateStore interface {
-	database.BookStore
-	GetAuthorByName(name string) (*database.Author, error)
+	GetBookByID(id string) (*database.Book, error)
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
 	CreateAuthor(name string) (*database.Author, error)
-	GetSeriesByName(name string, authorID *int) (*database.Series, error)
+	GetAuthorByName(name string) (*database.Author, error)
 	CreateSeries(name string, authorID *int) (*database.Series, error)
+	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 	RecordMetadataChange(record *database.MetadataChangeRecord) error
 }
 
