@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-08-16
+// last-edited: 2026-08-18
 
 package organizer
 
@@ -28,16 +28,87 @@ import (
 
 // Store is the narrow slice of database.Store required by this package.
 // Using sub-interfaces reduces coupling and makes the service testable with a mock.
+// OrganizerBookReader reads the book rows the rename/organize passes work from.
+type OrganizerBookReader interface {
+	GetBookByID(id string) (*database.Book, error)
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+}
+
+// OrganizerBookWriter persists book rows after a move, and flags a book for
+// rescan when its files changed underneath it.
+type OrganizerBookWriter interface {
+	CreateBook(book *database.Book) (*database.Book, error)
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	MarkNeedsRescan(bookID string) error
+}
+
+// OrganizerBookFileStore is the per-file half: the organizer repoints file rows
+// at their new paths as it moves them.
+type OrganizerBookFileStore interface {
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	CreateBookFile(file *database.BookFile) error
+	UpdateBookFile(id string, file *database.BookFile) error
+}
+
+// OrganizerContributorStore reads the author/narrator/tag associations that the
+// path templates interpolate, and re-links authors after a merge.
+type OrganizerContributorStore interface {
+	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
+	SetBookAuthors(bookID string, authors []database.BookAuthor) error
+	GetBookNarrators(bookID string) ([]database.BookNarrator, error)
+	GetNarratorByID(id int) (*database.Narrator, error)
+	GetBookTags(bookID string) ([]string, error)
+}
+
+// OrganizerAuditWriter records what an organize run did: the per-change rows,
+// the path history a move can be undone from, and the operation's own params
+// and state.
+//
+// SaveOperationParams and DeleteOperationState are declared here rather than
+// embedding operations.OperationParamsWriter / operations.OperationStateDeleter
+// so this package does not import internal/operations for two signatures. The
+// methods satisfy those interfaces structurally, which is what the calls to
+// operations.SaveParams and operations.ClearState need.
+type OrganizerAuditWriter interface {
+	CreateOperationChange(change *database.OperationChange) error
+	RecordPathChange(change *database.BookPathChange) error
+	SaveOperationParams(opID string, params []byte) error
+	DeleteOperationState(opID string) error
+}
+
+// Store is what the organizer service needs from the database: the set of
+// methods this package actually calls, established by emptying the interface and
+// letting the compiler enumerate every unresolved call, so it is exhaustive
+// rather than estimated.
+//
+// Until 2026-08-18 this embedded nine whole database.* interfaces (BookStore,
+// BookFileStore, OperationStore, AuthorStore, SeriesStore, NarratorStore,
+// MaintenanceStore, TagStore, PathHistoryStore) -- a transitive surface of 179
+// distinct methods, of which the package called 16. Embedding a whole store
+// interface is the cheapest thing to write and the most expensive thing to own:
+// every method on it becomes reachable from here, and the next person to add a
+// call finds it already compiles.
+//
+// database.OperationStore (30 methods) was in that list for one reason: the
+// organizer passes its store to operations.SaveParams and operations.ClearState,
+// which declared it. Narrowing those two parameters (see internal/operations/
+// state.go) is what made this narrowing possible -- a wide parameter propagates
+// width to every caller and to every interface those callers declare.
+//
+// The compile-time assertion below is what proves the concrete store still
+// satisfies this. Narrowing an interface can only make it easier to satisfy, so
+// no implementation moves.
 type Store interface {
-	database.BookStore
-	database.BookFileStore
-	database.OperationStore
-	database.AuthorStore
-	database.SeriesStore
-	database.NarratorStore
-	database.MaintenanceStore
-	database.TagStore
-	database.PathHistoryStore
+	// The four lookups organizer.go's own OrganizerStore requires: rs.db is
+	// handed to org.SetStore, so Store must stay assignable to it.
+	OrganizerStore
+
+	OrganizerBookReader
+	OrganizerBookWriter
+	OrganizerBookFileStore
+	OrganizerContributorStore
+	OrganizerAuditWriter
 }
 
 // Compile-time proof that PebbleStore satisfies organizer.Store.
