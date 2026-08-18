@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.22.0
+// version: 2.23.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-08-11
+// last-edited: 2026-08-17
 
 package server
 
@@ -169,7 +169,10 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	if s.aiScanStore != nil {
 		v2ScanStore = s.aiScanStore
 	}
+	// enforcePerms mirrors s.perm(): when auth is disabled there is no permission
+	// set on the request context, so enforcing would 403 every trigger.
 	opsV2H := handlers.NewOperationsV2Handler(opsV2, opReg, opEventHub,
+		config.AppConfig.EnableAuth,
 		handlers.WithAIScanCancellation(v2Pipeline, v2ScanStore))
 
 	// Operations domain handler (scan/organize/optimize/transcode triggers,

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-06-03
+// last-edited: 2026-08-17
 
 // UOS-06: SSE event hub, /operations/timeline, single-op introspection,
 // cancel, trigger-op, and /op-defs endpoints.
@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -30,6 +31,9 @@ type OperationsRegistry interface {
 	Cancel(opID string) error
 	EnqueueOp(ctx context.Context, defID string, params any, opts ...opsregistry.EnqueueOption) (string, error)
 	ActiveDefs() []opsregistry.OperationDef
+	// Def looks up a single registered def. Used by TriggerOperationV2 to read
+	// the def's declared Permissions before enqueueing.
+	Def(id string) (opsregistry.OperationDef, bool)
 }
 
 // OperationsEventHub is the narrow interface OperationsV2Handler requires from
@@ -48,6 +52,16 @@ type OperationsV2Handler struct {
 	// AI-scan cancellation, optional. See WithAIScanCancellation.
 	scanCanceler ScanCanceler
 	scanLister   AIScanLister
+
+	// enforcePerms gates the per-def permission check in TriggerOperationV2. Set
+	// from config.AppConfig.EnableAuth at the wiring site and passed positionally
+	// to NewOperationsV2Handler — NOT read from global config here, matching
+	// NewAuthHandler's injected-flag convention.
+	//
+	// false must mean "do not enforce": auth.Can returns false for a caller with
+	// no permission set, so enforcing when auth is disabled would 403 every
+	// trigger in that deployment.
+	enforcePerms bool
 }
 
 // ScanCanceler is the narrow *aiscan.PipelineManager subset needed to cancel an
@@ -72,6 +86,11 @@ type AIScanLister interface {
 // call sites, 21 of them tests that model the store and registry and have no
 // opinion about AI scans. Widening the signature would edit all of them for a
 // concern none of them has.
+//
+// That trade is right for an OPTIONAL collaborator and wrong for a security
+// gate. enforcePerms is therefore positional, not an option: the cost of the
+// churn is paid once, and in exchange omitting it cannot compile. See
+// NewOperationsV2Handler.
 type OperationsV2Option func(*OperationsV2Handler)
 
 // WithAIScanCancellation supplies the collaborators CancelOperationV2 needs to
@@ -99,8 +118,21 @@ func WithAIScanCancellation(canceler ScanCanceler, lister AIScanLister) Operatio
 
 // NewOperationsV2Handler constructs an OperationsV2Handler. The opsStore may be
 // nil (the store does not implement OpsV2Store); the handlers guard for it.
-func NewOperationsV2Handler(opsStore database.OpsV2Store, registry OperationsRegistry, hub OperationsEventHub, opts ...OperationsV2Option) *OperationsV2Handler {
-	h := &OperationsV2Handler{opsStore: opsStore, registry: registry, hub: hub}
+//
+// enforcePerms is a REQUIRED positional parameter, deliberately not an
+// OperationsV2Option. Pass config.AppConfig.EnableAuth at the production wiring
+// site; tests that do not exercise authorization pass false.
+//
+// Why not an option: an option that is forgotten defaults to false and the
+// permission gate is silently inert — it would still return 202 on a request it
+// was added to reject. This file already carries one instance of that exact
+// failure (WithAIScanCancellation, "UNVERIFIED AT THE WIRING" above, tracked in
+// todo.d/20260816-ai-scan-cancel-wiring-unverified.md), where a dropped option
+// makes cancel answer 204 while the scan runs on. A positional parameter makes
+// omission a compile error instead, so the type checker verifies the wiring that
+// no test can reach.
+func NewOperationsV2Handler(opsStore database.OpsV2Store, registry OperationsRegistry, hub OperationsEventHub, enforcePerms bool, opts ...OperationsV2Option) *OperationsV2Handler {
+	h := &OperationsV2Handler{opsStore: opsStore, registry: registry, hub: hub, enforcePerms: enforcePerms}
 	for _, opt := range opts {
 		opt(h)
 	}
@@ -294,6 +326,38 @@ func (h *OperationsV2Handler) TriggerOperationV2(c *gin.Context) {
 	if err := c.ShouldBindJSON(&body); err != nil || body.DefID == "" {
 		httputil.RespondWithBadRequest(c, "body must include def_id")
 		return
+	}
+
+	// Enforce the def's declared Permissions.
+	//
+	// The route-level guard on POST /operations/v2 is a single blanket
+	// scan.trigger for EVERY op (wire_operations_routes.go), so without this the
+	// per-def Permissions field is written to op_definitions_v2 and never read —
+	// it reads like a gate and behaves like a comment. The seeded editor role
+	// holds scan.trigger but not settings.manage, so the 37 maintenance ops were
+	// reachable by a role the v1 maintenance route rejects.
+	//
+	// This lives in the handler and NOT in registry.EnqueueOp on purpose:
+	// EnqueueOp has ~20 non-HTTP callers (internal/scheduler/tasks.go alone
+	// enqueues 15 op types from context.Background(), plus internal/importer and
+	// the dedup/maintenance plugins). Those carry no user and no permission set,
+	// so a check down there would fail closed on every scheduled run.
+	//
+	// Semantics are AND: every permission the def declares must be held. All defs
+	// carry exactly one today, so this is untestable by behaviour — it is stated
+	// here so the first two-permission def is not a coin flip.
+	//
+	// An unknown def_id deliberately skips the check and falls through to
+	// EnqueueOp, preserving today's error response. Nothing runs either way.
+	if h.enforcePerms {
+		if def, ok := h.registry.Def(body.DefID); ok {
+			for _, p := range def.Permissions {
+				if !auth.Can(c.Request.Context(), p) {
+					httputil.RespondWithForbidden(c, "permission denied: "+string(p))
+					return
+				}
+			}
+		}
 	}
 
 	opID, err := h.registry.EnqueueOp(c.Request.Context(), body.DefID, body.Params)

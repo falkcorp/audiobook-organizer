@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-06-03
+// last-edited: 2026-08-17
 
 package handlers_test
 
@@ -47,7 +47,7 @@ func newOpsV2Ctx(method, path, body string, params gin.Params) (*gin.Context, *h
 
 func TestOperationsV2Handler_GetOperationTimeline_NilStore(t *testing.T) {
 	registry := handlersmocks.NewMockOperationsRegistry(t)
-	h := handlers.NewOperationsV2Handler(nil, registry, nil)
+	h := handlers.NewOperationsV2Handler(nil, registry, nil, false)
 
 	c, w := newOpsV2Ctx(http.MethodGet, "/operations/timeline", "", nil)
 	h.GetOperationTimeline(c)
@@ -67,7 +67,7 @@ func TestOperationsV2Handler_GetOperationTimeline_Success(t *testing.T) {
 		{ID: "library.scan", DisplayName: "Library Scan"},
 	})
 
-	h := handlers.NewOperationsV2Handler(store, registry, nil)
+	h := handlers.NewOperationsV2Handler(store, registry, nil, false)
 	c, w := newOpsV2Ctx(http.MethodGet, "/operations/timeline?since=15m", "", nil)
 	h.GetOperationTimeline(c)
 
@@ -76,7 +76,7 @@ func TestOperationsV2Handler_GetOperationTimeline_Success(t *testing.T) {
 }
 
 func TestOperationsV2Handler_GetOperationTimeline_BadSince(t *testing.T) {
-	h := handlers.NewOperationsV2Handler(nil, nil, nil)
+	h := handlers.NewOperationsV2Handler(nil, nil, nil, false)
 	c, w := newOpsV2Ctx(http.MethodGet, "/operations/timeline?since=notaduration", "", nil)
 	h.GetOperationTimeline(c)
 
@@ -86,7 +86,7 @@ func TestOperationsV2Handler_GetOperationTimeline_BadSince(t *testing.T) {
 // ── GetOperationV2 ────────────────────────────────────────────────────────
 
 func TestOperationsV2Handler_GetOperationV2_NilStore(t *testing.T) {
-	h := handlers.NewOperationsV2Handler(nil, nil, nil)
+	h := handlers.NewOperationsV2Handler(nil, nil, nil, false)
 	c, w := newOpsV2Ctx(http.MethodGet, "/operations/v2/op1", "", gin.Params{{Key: "id", Value: "op1"}})
 	h.GetOperationV2(c)
 
@@ -104,7 +104,7 @@ func TestOperationsV2Handler_GetOperationV2_Success(t *testing.T) {
 		{ID: "library.scan", DisplayName: "Library Scan"},
 	})
 
-	h := handlers.NewOperationsV2Handler(store, registry, nil)
+	h := handlers.NewOperationsV2Handler(store, registry, nil, false)
 	c, w := newOpsV2Ctx(http.MethodGet, "/operations/v2/op1", "", gin.Params{{Key: "id", Value: "op1"}})
 	h.GetOperationV2(c)
 
@@ -116,7 +116,7 @@ func TestOperationsV2Handler_GetOperationV2_NotFound(t *testing.T) {
 	store := databasemocks.NewMockOpsV2Store(t)
 	store.EXPECT().GetOperationV2("missing").Return(nil, nil)
 
-	h := handlers.NewOperationsV2Handler(store, nil, nil)
+	h := handlers.NewOperationsV2Handler(store, nil, nil, false)
 	c, w := newOpsV2Ctx(http.MethodGet, "/operations/v2/missing", "", gin.Params{{Key: "id", Value: "missing"}})
 	h.GetOperationV2(c)
 
@@ -126,7 +126,7 @@ func TestOperationsV2Handler_GetOperationV2_NotFound(t *testing.T) {
 // ── CancelOperationV2 ─────────────────────────────────────────────────────
 
 func TestOperationsV2Handler_CancelOperationV2_NilRegistry(t *testing.T) {
-	h := handlers.NewOperationsV2Handler(nil, nil, nil)
+	h := handlers.NewOperationsV2Handler(nil, nil, nil, false)
 	c, w := newOpsV2Ctx(http.MethodDelete, "/operations/v2/op1", "", gin.Params{{Key: "id", Value: "op1"}})
 	h.CancelOperationV2(c)
 
@@ -137,7 +137,7 @@ func TestOperationsV2Handler_CancelOperationV2_Success(t *testing.T) {
 	registry := handlersmocks.NewMockOperationsRegistry(t)
 	registry.EXPECT().Cancel("op1").Return(nil)
 
-	h := handlers.NewOperationsV2Handler(nil, registry, nil)
+	h := handlers.NewOperationsV2Handler(nil, registry, nil, false)
 	c, w := newOpsV2Ctx(http.MethodDelete, "/operations/v2/op1", "", gin.Params{{Key: "id", Value: "op1"}})
 	h.CancelOperationV2(c)
 
@@ -147,7 +147,7 @@ func TestOperationsV2Handler_CancelOperationV2_Success(t *testing.T) {
 // ── TriggerOperationV2 ────────────────────────────────────────────────────
 
 func TestOperationsV2Handler_TriggerOperationV2_NilRegistry(t *testing.T) {
-	h := handlers.NewOperationsV2Handler(nil, nil, nil)
+	h := handlers.NewOperationsV2Handler(nil, nil, nil, false)
 	c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2", `{"def_id":"library.scan"}`, nil)
 	h.TriggerOperationV2(c)
 
@@ -157,7 +157,7 @@ func TestOperationsV2Handler_TriggerOperationV2_NilRegistry(t *testing.T) {
 func TestOperationsV2Handler_TriggerOperationV2_MissingDefID(t *testing.T) {
 	registry := handlersmocks.NewMockOperationsRegistry(t)
 	// EnqueueOp must never be reached.
-	h := handlers.NewOperationsV2Handler(nil, registry, nil)
+	h := handlers.NewOperationsV2Handler(nil, registry, nil, false)
 	c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2", `{}`, nil)
 	h.TriggerOperationV2(c)
 
@@ -168,7 +168,7 @@ func TestOperationsV2Handler_TriggerOperationV2_Success(t *testing.T) {
 	registry := handlersmocks.NewMockOperationsRegistry(t)
 	registry.EXPECT().EnqueueOp(mock.Anything, "library.scan", mock.Anything).Return("op42", nil)
 
-	h := handlers.NewOperationsV2Handler(nil, registry, nil)
+	h := handlers.NewOperationsV2Handler(nil, registry, nil, false)
 	c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2", `{"def_id":"library.scan","params":{"foo":"bar"}}`, nil)
 	h.TriggerOperationV2(c)
 
@@ -179,7 +179,7 @@ func TestOperationsV2Handler_TriggerOperationV2_Success(t *testing.T) {
 // ── ListOpDefs ────────────────────────────────────────────────────────────
 
 func TestOperationsV2Handler_ListOpDefs_NilRegistry(t *testing.T) {
-	h := handlers.NewOperationsV2Handler(nil, nil, nil)
+	h := handlers.NewOperationsV2Handler(nil, nil, nil, false)
 	c, w := newOpsV2Ctx(http.MethodGet, "/op-defs", "", nil)
 	h.ListOpDefs(c)
 
@@ -193,7 +193,7 @@ func TestOperationsV2Handler_ListOpDefs_Success(t *testing.T) {
 		{ID: "library.scan", DisplayName: "Library Scan"},
 	})
 
-	h := handlers.NewOperationsV2Handler(nil, registry, nil)
+	h := handlers.NewOperationsV2Handler(nil, registry, nil, false)
 	c, w := newOpsV2Ctx(http.MethodGet, "/op-defs", "", nil)
 	h.ListOpDefs(c)
 
@@ -204,7 +204,7 @@ func TestOperationsV2Handler_ListOpDefs_Success(t *testing.T) {
 // ── GetOpDef ──────────────────────────────────────────────────────────────
 
 func TestOperationsV2Handler_GetOpDef_NilRegistry(t *testing.T) {
-	h := handlers.NewOperationsV2Handler(nil, nil, nil)
+	h := handlers.NewOperationsV2Handler(nil, nil, nil, false)
 	c, w := newOpsV2Ctx(http.MethodGet, "/op-defs/library.scan", "", gin.Params{{Key: "id", Value: "library.scan"}})
 	h.GetOpDef(c)
 
@@ -217,7 +217,7 @@ func TestOperationsV2Handler_GetOpDef_Found(t *testing.T) {
 		{ID: "library.scan", DisplayName: "Library Scan"},
 	})
 
-	h := handlers.NewOperationsV2Handler(nil, registry, nil)
+	h := handlers.NewOperationsV2Handler(nil, registry, nil, false)
 	c, w := newOpsV2Ctx(http.MethodGet, "/op-defs/library.scan", "", gin.Params{{Key: "id", Value: "library.scan"}})
 	h.GetOpDef(c)
 
@@ -231,7 +231,7 @@ func TestOperationsV2Handler_GetOpDef_NotFound(t *testing.T) {
 		{ID: "library.scan", DisplayName: "Library Scan"},
 	})
 
-	h := handlers.NewOperationsV2Handler(nil, registry, nil)
+	h := handlers.NewOperationsV2Handler(nil, registry, nil, false)
 	c, w := newOpsV2Ctx(http.MethodGet, "/op-defs/missing", "", gin.Params{{Key: "id", Value: "missing"}})
 	h.GetOpDef(c)
 
@@ -241,7 +241,7 @@ func TestOperationsV2Handler_GetOpDef_NotFound(t *testing.T) {
 // ── OperationsSSE ─────────────────────────────────────────────────────────
 
 func TestOperationsV2Handler_OperationsSSE_NilHub(t *testing.T) {
-	h := handlers.NewOperationsV2Handler(nil, nil, nil)
+	h := handlers.NewOperationsV2Handler(nil, nil, nil, false)
 	c, w := newOpsV2Ctx(http.MethodGet, "/operations/events", "", nil)
 	h.OperationsSSE(c)
 
@@ -256,7 +256,7 @@ func TestOperationsV2Handler_OperationsSSE_StreamThenDisconnect(t *testing.T) {
 	var roChan <-chan opsregistry.Event = ch
 	hub.EXPECT().Subscribe().Return(roChan, func() {})
 
-	h := handlers.NewOperationsV2Handler(nil, nil, hub)
+	h := handlers.NewOperationsV2Handler(nil, nil, hub, false)
 	// The channel is closed, so the SSE loop drains the one queued event then
 	// exits when the receive reports !ok (no need to cancel the request context).
 	c, w := newOpsV2Ctx(http.MethodGet, "/operations/events", "", nil)
@@ -298,7 +298,7 @@ func TestTriggerOperationV2_ParamsArriveDecodable(t *testing.T) {
 			return "op-1", nil
 		})
 
-	h := handlers.NewOperationsV2Handler(nil, registry, nil)
+	h := handlers.NewOperationsV2Handler(nil, registry, nil, false)
 	c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2",
 		`{"def_id":"library.organize","params":{"book_ids":["b1","b2"],"fetch_metadata_first":true}}`, nil)
 	h.TriggerOperationV2(c)
@@ -358,7 +358,7 @@ func TestCancelOperationV2_CancelsAnAIScanThroughThePipeline(t *testing.T) {
 	}}
 	registry := handlersmocks.NewMockOperationsRegistry(t)
 
-	h := handlers.NewOperationsV2Handler(nil, registry, nil,
+	h := handlers.NewOperationsV2Handler(nil, registry, nil, false,
 		handlers.WithAIScanCancellation(canceler, lister))
 	c, w := newOpsV2Ctx(http.MethodDelete, "/operations/v2/op-abc", "", nil)
 	c.Params = gin.Params{{Key: "id", Value: "op-abc"}}
@@ -379,7 +379,7 @@ func TestCancelOperationV2_FallsThroughToTheRegistryForAnOrdinaryOp(t *testing.T
 	registry := handlersmocks.NewMockOperationsRegistry(t)
 	registry.EXPECT().Cancel("op-xyz").Return(nil).Once()
 
-	h := handlers.NewOperationsV2Handler(nil, registry, nil,
+	h := handlers.NewOperationsV2Handler(nil, registry, nil, false,
 		handlers.WithAIScanCancellation(canceler, lister))
 	c, w := newOpsV2Ctx(http.MethodDelete, "/operations/v2/op-xyz", "", nil)
 	c.Params = gin.Params{{Key: "id", Value: "op-xyz"}}
