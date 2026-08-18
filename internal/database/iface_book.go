@@ -22,15 +22,22 @@ type UpdateBookRatingRequest struct {
 	ClearNotes   bool
 }
 
-// BookReader is the read-only slice of Store for callers that only
-// read books. See spec 2026-04-17-store-interface-segregation-design.md.
-type BookReader interface {
+// BookByIDReader fetches books by their primary identifiers.
+type BookByIDReader interface {
 	GetBookByID(id string) (*Book, error)
 	// GetBooksByIDs returns the full Book rows for ids, preserving input
 	// order and silently skipping IDs that do not resolve (mirrors
 	// GetBookByID's nil-on-not-found). Full fidelity: reads the complete
 	// book:<id> row — heavy fields (AcoustIDFingerprint etc.) intact.
 	GetBooksByIDs(ids []string) ([]Book, error)
+	// ListBookIDs returns just the IDs of all non-deleted books, without
+	// materializing Book structs. Saves ~50x memory vs GetAllBooksCore(0,0)
+	// when the caller only needs the ID set (e.g., diff'ing against another set).
+	ListBookIDs() ([]string, error)
+}
+
+// BookBulkReader reads the whole library in bulk shapes.
+type BookBulkReader interface {
 	// GetAllBooksCore is Core-typed (STOREFID W5a/W5z): the return type is
 	// BookCore, not Book, so the nine heavy fields (Description,
 	// VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments,
@@ -44,17 +51,30 @@ type BookReader interface {
 	// This is an O(1) seek vs GetAllBooksCore's O(offset) skip — use for search
 	// index backfill and other full-table cursor scans.
 	GetAllBooksFullFrom(afterID string, limit int) ([]Book, error)
-	// ListBookIDs returns just the IDs of all non-deleted books, without
-	// materializing Book structs. Saves ~50x memory vs GetAllBooksCore(0,0)
-	// when the caller only needs the ID set (e.g., diff'ing against another set).
-	ListBookIDs() ([]string, error)
 	GetAllBookSummaries(limit, offset int) ([]BookSummary, error)
+}
+
+// BookLookupReader resolves books by a natural key: path, hash, or external ID.
+type BookLookupReader interface {
 	GetBookByFilePath(path string) (*Book, error)
 	GetBookByITunesPersistentID(persistentID string) (*Book, error)
 	ListBooksByITunesPID(limit, offset int) ([]Book, error)
 	GetBookByFileHash(hash string) (*Book, error)
 	GetBookByOriginalHash(hash string) (*Book, error)
 	GetBookByOrganizedHash(hash string) (*Book, error)
+	// GetBookIDsByISBNASIN returns the distinct book IDs whose ISBN10, ISBN13,
+	// or ASIN match any of the supplied non-empty values.  It is a set-union:
+	// an ID is returned if it appears in any of the three index namespaces.
+	// Returns IDs only — callers load the full Book via GetBookByID when needed.
+	// Returns an empty slice (not nil, not error) when no match is found.
+	// Only valid after the book_isbn_index_v1_done flag is set; callers must
+	// gate on that flag themselves.
+	GetBookIDsByISBNASIN(isbn10, isbn13, asin string) ([]string, error)
+	GetBooksByMetadataSourceHash(hash string) ([]Book, error)
+}
+
+// BookDuplicateReader finds candidate duplicates.
+type BookDuplicateReader interface {
 	GetDuplicateBooks() ([][]Book, error)
 	// GetFolderDuplicatesCore is Core-typed (STOREFID W6): the return type is
 	// BookCore, not Book, so the nine heavy fields being absent is
@@ -66,6 +86,10 @@ type BookReader interface {
 	// GetFolderDuplicatesCore's doc comment.
 	GetDuplicateBooksByMetadataCore(threshold float64) ([][]BookCore, error)
 	GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]Book, error)
+}
+
+// BookRelationReader reads books via their relations to other entities.
+type BookRelationReader interface {
 	// GetBooksBySeriesIDCore is Core-typed (STOREFID W4): the return type is
 	// BookCore, not Book, so the nine heavy fields (Description,
 	// VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments,
@@ -84,32 +108,69 @@ type BookReader interface {
 	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetBooksByAuthorIDCore(authorID int) ([]BookCore, error)
 	GetBooksByVersionGroup(groupID string) ([]Book, error)
-	GetBooksByMetadataSourceHash(hash string) ([]Book, error)
-	// GetBookIDsByISBNASIN returns the distinct book IDs whose ISBN10, ISBN13,
-	// or ASIN match any of the supplied non-empty values.  It is a set-union:
-	// an ID is returned if it appears in any of the three index namespaces.
-	// Returns IDs only — callers load the full Book via GetBookByID when needed.
-	// Returns an empty slice (not nil, not error) when no match is found.
-	// Only valid after the book_isbn_index_v1_done flag is set; callers must
-	// gate on that flag themselves.
-	GetBookIDsByISBNASIN(isbn10, isbn13, asin string) ([]string, error)
+}
+
+// BookSearchReader covers search and facet enumeration.
+type BookSearchReader interface {
 	SearchBooks(query string, limit, offset int) ([]Book, error)
+	GetDistinctGenres() ([]string, error)
+	GetDistinctLanguages() ([]string, error)
+}
+
+// BookCountReader reports library counts.
+type BookCountReader interface {
 	CountPrimaryBooks() (int, error)
 	// CountAllBooks returns the total number of non-deleted books regardless of
 	// IsPrimaryVersion. Use this when iterating with GetAllBooksCore/PageBooks so
 	// progress denominators match what the iterator actually visits.
 	CountAllBooks() (int, error)
-	GetDistinctGenres() ([]string, error)
-	GetDistinctLanguages() ([]string, error)
-	ListSoftDeletedBooks(limit, offset int, olderThan *time.Time) ([]Book, error)
+	CountQuarantinedBooks() (int, error)
+}
+
+// BookSnapshotReader reads historical versions of a book.
+type BookSnapshotReader interface {
 	GetBookSnapshots(id string, limit int) ([]BookSnapshot, error)
 	GetBookAtVersion(id string, ts time.Time) (*Book, error)
+}
+
+// BookLifecycleReader reads books in non-active lifecycle states.
+type BookLifecycleReader interface {
+	ListSoftDeletedBooks(limit, offset int, olderThan *time.Time) ([]Book, error)
 	GetBookTombstone(id string) (*Book, error)
 	ListBookTombstones(limit int) ([]Book, error)
+	GetQuarantinedBooks(limit, offset int) ([]Book, error)
+}
+
+// BookITunesReader reads iTunes sync work queues.
+type BookITunesReader interface {
 	GetITunesDirtyBooks() ([]Book, error)
 	GetITunesPurgePendingBooks() ([]Book, error)
-	GetQuarantinedBooks(limit, offset int) ([]Book, error)
-	CountQuarantinedBooks() (int, error)
+}
+
+// BookReader is the read-only slice of Store for callers that only
+// read books. See spec 2026-04-17-store-interface-segregation-design.md.
+//
+// Split into the ten interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves.
+// The type checker proves that: every implementation -- PebbleStore (496
+// methods) and database.MockStore (399) among them -- fails to compile if a
+// method is dropped or re-signatured in the regrouping.
+//
+// Consumers should migrate to whichever of the ten they use; this composition
+// is the transitional shape, not the destination.
+type BookReader interface { //nolint:interfacebloat // transitional composition of the ten
+	// interfaces above, deleted once consumers migrate to the piece each uses. Was 35
+	// methods; this is 10 embeds and shrinks to 0 as migration proceeds.
+	BookByIDReader
+	BookBulkReader
+	BookLookupReader
+	BookDuplicateReader
+	BookRelationReader
+	BookSearchReader
+	BookCountReader
+	BookSnapshotReader
+	BookLifecycleReader
+	BookITunesReader
 }
 
 // BookWriter is the write-only slice of Store for callers that only
