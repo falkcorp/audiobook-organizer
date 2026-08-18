@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-18-interface-width-shapes.md -->
-<!-- version: 2.2.0 -->
+<!-- version: 2.3.0 -->
 <!-- guid: 7e5b0c92-41da-4f38-b6a7-92d3f1e08c54 -->
 <!-- last-edited: 2026-08-18 -->
 
@@ -88,7 +88,9 @@ The count is per-PR, because an aggregate figure hides which change earned it:
 | #2553 | 7 | `AudiobookService` (13), `abs.Store` (10) |
 | #2554 | 6 | `bookHandlerStore` (12) — **deleted, not split** |
 | #2556 | 5 | `organizer.Store` (9 entries / 179 transitive) |
-| this PR | **4** | `audiobookUpdateStore` (11) — **deleted, not split** |
+| #2559 | **4** | `audiobookUpdateStore` (11) — **deleted, not split** |
+| #2560, #2561, #2563 | 4 | six `itunes/service` subsystem leaves — count unchanged, ~560 transitive methods removed |
+| this PR | **3** | `itunes/service.Store` (17 → 7 entries) |
 
 Every count here was measured, not projected — `golangci-lint` run with a cleared
 cache, and the 5 confirmed against an isolated clone of `main`. The final 4 are
@@ -202,7 +204,7 @@ that only agrees with itself is not a census.
 `//nolint:interfacebloat` (`database.BookReader`, and one in
 `internal/plugins/maintenance/deps.go`) and are invisible to the reported number.
 
-## 6. Why the remaining four resist the split, and what happened to the fifth
+## 6. Why the remaining three resist the split, and what happened to the other two
 
 **Update 2026-08-18 (later):** this section originally described *five* survivors and
 parked all of them. One turned out not to be a survivor at all, and the numbers for
@@ -222,7 +224,7 @@ it: **they are not badly grouped, they are genuinely wide.**
 | Interface | Entries | Methods actually called | Why splitting does not help |
 |---|---|---|---|
 | `database.Store` | 40 | — | The union type itself. Phase 2's job is to make it unreachable, not smaller. |
-| `itunes/service.Store` | 17 | 24 | Seven assignability constraints, incl. `database.OperationStore`. |
+| ~~`itunes/service.Store`~~ | ~~17~~ | 24 | **Split in this PR — 7 entries.** It resisted only while its six subsystem leaves were wide; see below. |
 | `maintenance.JobStore` | 12 | — | Deliberate: chosen over per-job interfaces in the #2534 arbitration. |
 | `audiobookStore` | 11 | **~50** | See below. |
 
@@ -258,6 +260,27 @@ So this is recorded as a finding rather than started as a refactor, and filed in
 `todo.d/`. The gate keeps reporting all four, which is correct — they are real. The
 width ratchet's baseline is set to 4 so they cannot grow, and any future PR that
 adds a fifth has to say why.
+
+### What changed for `itunes/service.Store`
+
+It was listed above as resisting the split, with the reason given as "seven
+assignability constraints". That reason was real but it was not a property of
+`Store` — it was a property of the six subsystems that each held `Store` instead
+of the slice they used. `Store` had to be wide enough to satisfy all of them, so
+arguing about `Store` on its own terms could only ever fail.
+
+Narrowing the leaves first (#2560, #2561, #2563) left the aggregate's obligations
+narrow by construction, and re-probing then returned 24 direct calls and 10
+constraints where before it returned an unusable answer. The 24 all landed in
+**one file**, `importer.go`, which is what made `importerStore` a real surface
+rather than a bucket for leftovers — and moving that field off `Store` also moved
+the four `operations.*` constraints with it, which is how the result came in at 7
+entries rather than the 8 first drafted.
+
+The general form: **an aggregate cannot be narrowed before its consumers are.**
+Every attempt to score the aggregate directly measures the union of what its
+consumers declare, not what they use. This is the same lever as §2, applied one
+level up.
 
 ## 7. What narrowing looks like when the gate cannot see it
 
