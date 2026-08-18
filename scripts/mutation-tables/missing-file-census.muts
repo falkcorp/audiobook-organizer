@@ -1,0 +1,47 @@
+# Mutation table for the missing-file-audit identity-signal census.
+#
+# Format: NAME | FILE | PERL_EXPRESSION      (see scripts/mutation-matrix.sh)
+# Run:
+#   scripts/mutation-matrix.sh \
+#     --pkg ./internal/plugins/maintenance/ \
+#     --table scripts/mutation-tables/missing-file-census.muts
+#
+# This table is also the worked example for the format. Three things in it are
+# worth copying into any new table:
+#
+#   * A mutation per COUNTER, not per line of code. The question is "would a
+#     wrong number here be noticed", and each counter is a separate number.
+#   * Boundary mutations (`> 0` -> `>= 0`) as well as deletions. Deleting a
+#     counter tests that something asserts on it; moving its boundary tests that
+#     the fixture actually contains a row on each side of that boundary.
+#   * The ARM SWAP (M14). This is the mutation gremlins cannot generate and the
+#     one this whole census is most vulnerable to: it is a valid program that
+#     silently inverts every reported number.
+#
+# ⚠️ M07 is written as `decisive || true`, not `true`. Replacing the condition
+# outright leaves `decisive` assigned and never read, which is a Go compile
+# error -- the run then reports BUILD-FAIL rather than a result. A mutation must
+# still COMPILE to measure anything.
+
+M01 rows-not-incremented | internal/plugins/maintenance/missing_file_audit.go | s/\ts\.Rows\+\+\n/\t\/\/MUT\n/
+M02 filehash-not-decisive | internal/plugins/maintenance/missing_file_audit.go | s/\t\ts\.FileHash\+\+\n\t\tdecisive = true\n/\t\ts.FileHash++\n/
+M03 originalfilehash-not-counted | internal/plugins/maintenance/missing_file_audit.go | s/\t\ts\.OriginalFileHash\+\+\n/\t\t\/\/MUT\n/
+M04 postmetadatahash-not-counted | internal/plugins/maintenance/missing_file_audit.go | s/\t\ts\.PostMetadataHash\+\+\n/\t\t\/\/MUT\n/
+M05 postmetadatahash-not-decisive | internal/plugins/maintenance/missing_file_audit.go | s/\t\ts\.PostMetadataHash\+\+\n\t\tdecisive = true\n/\t\ts.PostMetadataHash++\n/
+M06 fingerprint-boundary-ge0 | internal/plugins/maintenance/missing_file_audit.go | s/f\.AcoustIDFingerprintDurationSec > 0/f.AcoustIDFingerprintDurationSec >= 0/
+M07 anydecisive-unconditional | internal/plugins/maintenance/missing_file_audit.go | s/\tif decisive \{/\tif decisive \x7c\x7c true {/
+M08 duration-not-counted | internal/plugins/maintenance/missing_file_audit.go | s/\t\ts\.Duration\+\+\n/\t\t\/\/MUT\n/
+M09 filesize-not-counted | internal/plugins/maintenance/missing_file_audit.go | s/\t\ts\.FileSize\+\+\n/\t\t\/\/MUT\n/
+M10 downloadhash-not-counted | internal/plugins/maintenance/missing_file_audit.go | s/\t\ts\.DownloadHash\+\+\n/\t\t\/\/MUT\n/
+M11 itunespid-not-counted | internal/plugins/maintenance/missing_file_audit.go | s/\t\ts\.ITunesPID\+\+\n/\t\t\/\/MUT\n/
+M12 transcribedtitle-not-counted | internal/plugins/maintenance/missing_file_audit.go | s/\t\ts\.TranscribedTitle\+\+\n/\t\t\/\/MUT\n/
+M13 introtranscribed-not-counted | internal/plugins/maintenance/missing_file_audit.go | s/\t\ts\.IntroTranscribed\+\+\n/\t\t\/\/MUT\n/
+M14 arms-swapped | internal/plugins/maintenance/missing_file_audit.go | s/report\.SignalsMissing\.tally/report.SignalsZZZ.tally/; s/report\.SignalsPresent\.tally/report.SignalsMissing.tally/; s/report\.SignalsZZZ\.tally/report.SignalsPresent.tally/
+M15 pct-guard-removed | internal/plugins/maintenance/missing_file_audit.go | s/\tif s\.Rows == 0 \{\n\t\treturn "n\/a"\n\t\}\n//
+M16 pct-wrong-scale | internal/plugins/maintenance/missing_file_audit.go | s/100\*float64\(n\)/float64(n)/
+M17 transcribedtitle-empty-counts | internal/plugins/maintenance/missing_file_audit.go | s/f\.TranscribedTitle != nil && \*f\.TranscribedTitle != ""/f.TranscribedTitle != nil/
+M18 filehash-condition-inverted | internal/plugins/maintenance/missing_file_audit.go | s/if f\.FileHash != ""/if f.FileHash == ""/
+M19 duration-boundary-ge0 | internal/plugins/maintenance/missing_file_audit.go | s/if f\.Duration > 0/if f.Duration >= 0/
+M20 filesize-boundary-ge0 | internal/plugins/maintenance/missing_file_audit.go | s/if f\.FileSize > 0/if f.FileSize >= 0/
+M21 present-arm-absorbs-unreadable | internal/plugins/maintenance/missing_file_audit.go | s;case filePresent:;default:;
+M22 missing-arm-not-tallied | internal/plugins/maintenance/missing_file_audit.go | s{\t\t\treport\.SignalsMissing\.tally\(items\[i\]\.file\)\n}{}
