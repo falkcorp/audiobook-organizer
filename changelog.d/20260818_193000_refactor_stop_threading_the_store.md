@@ -28,3 +28,18 @@ Where a store genuinely is needed, the parameter is now sized to measured usage:
 | `deluge.NotifyDelugeAfterUndo` | 44 | 2 |
 | `deluge.NotifyDelugeAfterVersionSwap` | 44 | 1 |
 | `deluge.NotifyDelugeAfterOrganize` | 9 | 1 |
+
+#### `OrganizeStore` was an alias to all 398 methods, on a stale justification
+
+`internal/server/handlers/organize.go` declared `type OrganizeStore = database.Store`
+with a comment explaining that `organizer.Organizer.SetStore` and
+`deluge.NotifyDelugeAfterOrganize` "both require the full `database.Store`
+interface, so a narrower subset would not satisfy those call sites."
+
+Neither requires it. `SetStore` takes `organizer.OrganizerStore` — four lookups.
+The deluge notifier needs one method. The comment was accurate when written and
+went stale when those two were narrowed; nothing re-checked it, so a 398-method
+alias outlived its reason by two refactors.
+
+`OrganizeStore` is now eleven methods: `organizer.OrganizerStore`,
+`logger.ActivityLogWriter`, and six direct calls.

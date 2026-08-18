@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
-// last-edited: 2026-06-02
+// last-edited: 2026-08-18
 
 // Package handlers — OrganizeHandler covers the rename-preview, rename-apply,
 // organize-preview, and single-book organize HTTP endpoints.
@@ -54,12 +54,27 @@ type OrganizeServicer interface {
 	CreateOrganizedVersion(org *organizer.Organizer, book *database.Book, newPath string, isDir bool, operationID string, log logger.Logger) (*database.Book, error)
 }
 
-// OrganizeStore is the database interface required by OrganizeHandler.
-// We use database.Store directly because organizer.Organizer.SetStore and
-// deluge.NotifyDelugeAfterOrganize both require the full database.Store
-// interface, so a narrower subset would not satisfy those call sites.
-// database is not internal/server, so there is no circular-import risk.
-type OrganizeStore = database.Store
+// OrganizeStore is what OrganizeHandler actually needs, measured by emptying it
+// and reading the compiler's enumeration: five direct calls plus three
+// already-narrow constraints.
+//
+// It was `= database.Store`, an alias to all 398 methods, justified by a comment
+// saying organizer.Organizer.SetStore and deluge.NotifyDelugeAfterOrganize "both
+// require the full database.Store interface, so a narrower subset would not
+// satisfy those call sites". Neither does: SetStore takes
+// organizer.OrganizerStore (four lookups) and the deluge notifier needs one
+// method. The justification was stale, not wrong when written.
+type OrganizeStore interface {
+	organizer.OrganizerStore
+	logger.ActivityLogWriter
+
+	GetBookByID(id string) (*database.Book, error)
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
+	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
+	CreateOperationChange(change *database.OperationChange) error
+}
 
 // OrganizeWriteBackEnqueuer is an alias for the shared WriteBackEnqueuer; kept
 // here so existing call sites that reference OrganizeWriteBackEnqueuer continue
