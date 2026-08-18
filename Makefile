@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.20.0
+# version: 2.21.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-08-17
+# last-edited: 2026-08-18
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -272,6 +272,27 @@ mutate-dry:
 		exit 1; \
 	}
 	@PKG=$(PKG) bash scripts/run-mutation.sh --dry-run
+
+## mutate-matrix: Run a HAND-AUTHORED mutation table against PKG.
+## Requires TABLE=scripts/mutation-tables/<name>.muts and PKG=./internal/....
+##
+## Complements `make mutate` rather than replacing it. gremlins generates
+## mutants from the syntax tree, which is the right tool for breadth but cannot
+## express a mutation that is semantically wrong while being syntactically
+## unremarkable — swapping the two arms of a census, for instance, is a valid
+## program that silently inverts every number the code reports. You write that
+## one in a line of a table; gremlins will never guess it.
+##
+## Cheap: no working-copy staging, so none of gremlins' disk hazards apply.
+## It edits files in place and restores them with `git checkout --`, which is
+## why it REFUSES to start on a dirty tree.
+mutate-matrix:
+	@if [ -z "$(PKG)" ] || [ -z "$(TABLE)" ]; then \
+		echo "PKG and TABLE are required, e.g."; \
+		echo "  make mutate-matrix PKG=./internal/plugins/maintenance/ TABLE=scripts/mutation-tables/missing-file-census.muts"; \
+		exit 2; \
+	fi
+	@bash scripts/mutation-matrix.sh --pkg $(PKG) --table $(TABLE) $(MUTATE_MATRIX_ARGS)
 
 ## mocks: Regenerate mockery-managed mocks from .mockery.yaml.
 ## Run this after editing an interface listed in .mockery.yaml.
