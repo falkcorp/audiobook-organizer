@@ -1,7 +1,7 @@
 <!-- file: CLAUDE.md -->
-<!-- version: 4.13.0 -->
+<!-- version: 4.14.0 -->
 <!-- guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f -->
-<!-- last-edited: 2026-08-10 -->
+<!-- last-edited: 2026-08-18 -->
 
 # CLAUDE.md
 
@@ -49,6 +49,36 @@ that apply to each shape of problem.
   `registry.RunItems`-based pattern) before writing a new sequential loop from
   scratch — several serial hotspots in the audit above are sequential duplicates of
   an already-correctly-parallelized twin elsewhere in the codebase.
+
+## Fix It Right (MANDATORY)
+
+Two rules on two different axes. Do not let the first one suppress the second.
+
+- **Scope — stay on target.** Act on what was asked. Don't batch-apply a targeted
+  instruction, don't fix adjacent things nobody mentioned, don't "clean up while
+  you're in there."
+- **Depth — fix it properly.** Within the work you were given, when you find a real
+  problem, apply the **correct** fix, not the smallest one. More refactoring and more
+  changed call sites are an acceptable price. Never pre-emptively discount a fix as
+  "cosmetic", "mechanical", "not worth the churn", or "we can do that later" —
+  surface it with its real cost and let the user decide.
+
+"Is this the same problem I was asked to fix?" decides whether to act.
+"Is this the smallest possible change?" never does.
+
+**The tell:** if you catch yourself explaining why the smaller change is good enough,
+stop and propose the larger one instead.
+
+**Worked example (2026-08-18).** Two callbacks threaded a database interface through
+their signature — `undo.OnFileMovedFunc` at 44 methods, `versions.NotifyDelugeFunc` at
+all 398 — so the implementation could reach a couple of methods. The minimal fix was to
+narrow the interfaces. The correct fix was to **remove the store parameter entirely**:
+the implementor already has a store and can close over it, so no interface is needed and
+the coupling is deleted rather than shrunk. Related: `handlers.OrganizeStore` was
+`= database.Store` (398 methods) on a comment claiming two call sites required the full
+interface. Both had been narrowed refactors earlier; nothing re-checked the comment, so a
+stale justification outlived its reason. **When a comment explains why something must
+stay wide, verify the claim before believing it.**
 
 ## Worktree Discipline (MANDATORY)
 
