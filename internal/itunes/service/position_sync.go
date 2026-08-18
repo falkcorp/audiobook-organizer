@@ -1,7 +1,7 @@
 // file: internal/itunes/service/position_sync.go
-// version: 2.1.1
+// version: 2.2.0
 // guid: 9f7a8b5c-0d6e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-07-18
+// last-edited: 2026-08-18
 //
 // Bidirectional sync between the app's per-user position/state
 // tracking (spec 3.6) and the iTunes Bookmark / Play Count fields
@@ -32,14 +32,27 @@ import (
 
 const adminUserID = "_local"
 
-// positionSyncStore is the narrow slice of the service's Store that
-// PositionSync needs. Carries the full (Book + File + UserPosition)
-// surface since the pull/push code paths both read books and positions
-// and write back to user_book_state.
+// positionSyncStore is what the iTunes position sync reads and writes.
+//
+// Measured with an empty-interface compiler probe: 8 direct calls, plus
+// readstatus.Store because this package forwards its store to
+// readstatus.RecomputeUserBookState and SetManualStatus. Embedding that
+// interface states the forwarding relationship instead of duplicating its
+// four methods here.
+//
+// Previously database.BookStore + BookFileStore + UserPositionStore, 86
+// methods transitively. Narrowing it needed readstatus to name its own
+// parameter interface first: until then this had to satisfy two whole
+// database surfaces to call a four-method function.
 type positionSyncStore interface {
-	database.BookStore
-	database.BookFileStore
-	database.UserPositionStore
+	readstatus.Store
+
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetBookByID(id string) (*database.Book, error)
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	GetUserPosition(userID, bookID string) (*database.UserPosition, error)
+	SetUserPosition(userID, bookID, segmentID string, positionSeconds float64) error
+	ListUserPositionsSince(userID string, t time.Time) ([]database.UserPosition, error)
 }
 
 // PositionSync runs the bidirectional bookmark/play-count sync between

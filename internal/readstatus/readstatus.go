@@ -1,6 +1,7 @@
 // file: internal/readstatus/readstatus.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 6e2f8a1d-4c5b-4f70-a9c7-2d8e0f1b9a57
+// last-edited: 2026-08-18
 //
 // RecomputeUserBookState derives a UserBookState from the current
 // UserPosition rows for a given (user, book), honoring the
@@ -34,14 +35,31 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
+// Store is what this package reads and writes to derive a read status.
+//
+// Measured with an empty-interface compiler probe: exactly these four, with no
+// assignability constraints. Both functions below previously declared an
+// ANONYMOUS composite of database.BookFileStore + database.UserPositionStore
+// inline in their signatures -- roughly 86 methods for these four.
+//
+// An anonymous interface in a parameter position is the worst shape for this:
+// it cannot be narrowed without editing every signature that repeats it, it
+// cannot carry a //nolint, and interfacebloat never reports it because it is
+// not a declaration. Naming it is what makes the width reviewable at all, and
+// it is why callers had to satisfy the full surfaces to call a four-method
+// function -- see internal/itunes/service/position_sync.go.
+type Store interface {
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	ListUserPositionsForBook(userID, bookID string) ([]database.UserPosition, error)
+	GetUserBookState(userID, bookID string) (*database.UserBookState, error)
+	SetUserBookState(state *database.UserBookState) error
+}
+
 // RecomputeUserBookState reads positions + segment durations and
 // updates user_book_state with fresh auto-computed fields. Returns
 // the new state (or a no-op unchanged state if there's nothing to
 // record — e.g. a user who's never touched this book).
-func RecomputeUserBookState(store interface {
-	database.BookFileStore
-	database.UserPositionStore
-}, userID, bookID string) (*database.UserBookState, error) {
+func RecomputeUserBookState(store Store, userID, bookID string) (*database.UserBookState, error) {
 	if store == nil || userID == "" || bookID == "" {
 		return nil, nil
 	}
@@ -134,10 +152,7 @@ func RecomputeUserBookState(store interface {
 // RecomputeUserBookState leaves it alone going forward. Passing
 // empty string reverts to auto — next Recompute call derives a
 // fresh status from positions.
-func SetManualStatus(store interface {
-	database.BookFileStore
-	database.UserPositionStore
-}, userID, bookID, status string) (*database.UserBookState, error) {
+func SetManualStatus(store Store, userID, bookID, status string) (*database.UserBookState, error) {
 	if store == nil {
 		return nil, nil
 	}

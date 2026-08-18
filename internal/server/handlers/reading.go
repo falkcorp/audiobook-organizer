@@ -1,7 +1,7 @@
 // file: internal/server/handlers/reading.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b8c9d0e1-f2a3-4567-bcde-567890123456
-// last-edited: 2026-06-02
+// last-edited: 2026-08-18
 
 package handlers
 
@@ -26,12 +26,21 @@ type PatchStatusRequest struct {
 }
 
 // ReadingStore is the narrow database interface ReadingHandler requires.
-// It must satisfy the implicit interface expected by readstatus.RecomputeUserBookState
-// and readstatus.SetManualStatus (interface{ database.BookFileStore; database.UserPositionStore })
-// plus ListUserBookStatesByStatus for the list-by-status endpoint.
+//
+// Measured with an empty-interface compiler probe: 4 direct calls, plus
+// readstatus.Store because the handler forwards its store to
+// readstatus.RecomputeUserBookState and SetManualStatus.
+//
+// It previously embedded database.BookFileStore + database.UserPositionStore
+// wholesale, with a comment explaining that this was to satisfy the ANONYMOUS
+// composite those two functions declared inline. Now that readstatus names its
+// parameter interface, the relationship is expressed by embedding it rather
+// than by restating two whole store surfaces and a comment.
 type ReadingStore interface {
-	database.BookFileStore
-	database.UserPositionStore
+	readstatus.Store
+
+	GetUserPosition(userID, bookID string) (*database.UserPosition, error)
+	SetUserPosition(userID, bookID, segmentID string, positionSeconds float64) error
 	ListUserBookStatesByStatus(userID, status string, limit, offset int) ([]database.UserBookState, error)
 }
 
