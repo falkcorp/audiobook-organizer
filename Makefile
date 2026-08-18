@@ -589,9 +589,21 @@ v: version
 # exactly one linter, and docs/audits/2026-08-11-silent-failure-error-discards.md
 # for the population it measures. Deliberately NOT wired into `make ci`: 922
 # findings is a backlog to burn down over waves 4-13, not a gate to fail on today.
-.PHONY: lint-errcheck lint-errcheck-full
+#
+# 2026-08-18: .golangci.yml now also carries interfacebloat + nolintlint (the
+# interface-width gate). Both targets below therefore pass --enable-only, which
+# OVERRIDES the config's enable list. Without it a bare `golangci-lint run`
+# reports errcheck+interfacebloat together and the attributability this file's
+# header exists to protect is gone. Do not drop the selector.
+.PHONY: lint-errcheck lint-errcheck-full lint-width lint-width-full
 lint-errcheck: ## Run the Wave 0 errcheck config (exclusions applied)
-	golangci-lint run ./...
+	golangci-lint run --enable-only errcheck ./...
 
 lint-errcheck-full: ## Same, with a count — use this to verify a new exclusion actually matched
-	@golangci-lint run ./... 2>&1 | tail -3
+	@golangci-lint run --enable-only errcheck ./... 2>&1 | tail -3
+
+lint-width: ## Interface-width gate (interfacebloat + nolintlint), same selector CI uses
+	golangci-lint run --enable-only interfacebloat,nolintlint ./...
+
+lint-width-full: ## Same, with a count — compare against .github/interface-width-baseline.json
+	@golangci-lint run --enable-only interfacebloat,nolintlint ./... 2>&1 | tail -3
