@@ -1,7 +1,7 @@
 // file: internal/itunes/service/path_repair.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 01ad6c79-5f3f-4ee1-a07a-1f4b3a8c0d12
-// last-edited: 2026-07-18
+// last-edited: 2026-08-18
 //
 // PathRepairer dumps the iTunes XML, finds tracks whose Location no
 // longer exists on disk, re-discovers the correct path via three tiers
@@ -77,15 +77,28 @@ type PathRepairConfig struct {
 	ReportDir string
 }
 
-// pathRepairerStore is the narrow slice of the service Store that
-// PathRepairer needs. Identical surface to pathReconcilerStore today,
-// declared separately so the two operations can evolve independently.
+// pathRepairerStore is what the iTunes path repairer reads and writes.
+//
+// Measured with an empty-interface compiler probe: 5 direct calls plus four
+// assignability constraints, every one of which is an interface this package
+// (or internal/operations) already declares narrowly. Composing from those
+// states which collaborator each dependency belongs to; tierAStore already
+// supplies GetBookByID and GetBookFiles, so they are not repeated here.
+//
+// Previously database.BookStore + BookFileStore + OperationStore +
+// ExternalIDStore + PathHistoryStore -- 121 methods transitively. It was left
+// wide by #2560 because persistRepairResult took a whole
+// database.OperationStore to make one call; narrowing that signature is what
+// unblocked this.
 type pathRepairerStore interface {
-	database.BookStore
-	database.BookFileStore
-	database.OperationStore
-	database.ExternalIDStore
-	database.PathHistoryStore
+	tierAStore
+	pidLookup
+	opResultWriter
+	operations.OperationStateDeleter
+
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	UpdateBookFile(id string, file *database.BookFile) error
+	RecordPathChange(change *database.BookPathChange) error
 }
 
 // PathRepairer is the operation worker.
@@ -571,9 +584,19 @@ func applyAction(dryRun bool) string {
 	return "enqueue"
 }
 
+// opResultWriter is the single write persistRepairResult makes.
+//
+// It previously took database.OperationStore -- 30 methods for this one call.
+// A parameter type is how width propagates: that one signature is what forced
+// pathRepairerStore to embed the whole OperationStore, which in turn is why it
+// could not be narrowed with the other subsystem stores in #2560.
+type opResultWriter interface {
+	UpdateOperationResultData(opID, data string) error
+}
+
 // persistRepairResult JSON-encodes the result and stores it on the
 // operation row so the API can fetch the report after the run.
-func persistRepairResult(store database.OperationStore, opID string, result iTunesPathRepairResult) error {
+func persistRepairResult(store opResultWriter, opID string, result iTunesPathRepairResult) error {
 	b, err := json.Marshal(result)
 	if err != nil {
 		return err
