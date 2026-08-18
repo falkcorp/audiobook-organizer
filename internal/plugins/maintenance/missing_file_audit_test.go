@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_audit_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c8e2a17-96d4-4b3f-a70e-1d92f4c6b085
-// last-edited: 2026-08-17
+// last-edited: 2026-08-18
 
 package maintenance
 
@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -217,6 +218,13 @@ func TestMissingPathRoot_GroupsByLibraryTree(t *testing.T) {
 // swapped, or folded into one counter, every assertion below moves — which is the
 // only reason this test can detect that class of mistake at all. A fixture where
 // both arms looked alike would pass just as happily with the arms crossed.
+//
+// 🔴 EVERY COUNTER IS ASSERTED, INCLUDING THE ONES THAT SHOULD BE ZERO. The first
+// version of this test populated six of the twelve counters and asserted on those
+// six. A mutation run (scripts/mutation-tables/missing-file-census.muts) deleted
+// each of the other six in turn and the suite stayed green every time — the lines
+// were covered, they just were not checked. A zero here is a real assertion: it is
+// what catches a counter that fires on a condition it should not.
 func TestMissingFileAudit_SignalCensusSeparatesMissingFromPresent(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name string) string {
@@ -227,14 +235,20 @@ func TestMissingFileAudit_SignalCensusSeparatesMissingFromPresent(t *testing.T) 
 		return p
 	}
 	gone := func(name string) string { return filepath.Join(dir, name) }
+	str := func(v string) *string { return &v }
 
 	fp := 120.0
+	transcribedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	rows := []database.BookFileCore{
-		// PRESENT arm — both hashes, no fingerprint.
+		// PRESENT arm — both hashes, no fingerprint, and the soft signals spread
+		// across the two rows so that a counter which double-counts is visible.
 		{ID: "p1", BookID: "b-present", FilePath: write("p1.m4b"),
-			FileHash: "h1", OriginalFileHash: "o1", Duration: 100, FileSize: 10},
+			FileHash: "h1", OriginalFileHash: "o1", Duration: 100, FileSize: 10,
+			PostMetadataHash: "pm1", DownloadHash: "dl1"},
 		{ID: "p2", BookID: "b-present", FilePath: write("p2.m4b"),
-			FileHash: "h2", OriginalFileHash: "o2", Duration: 200, FileSize: 20},
+			FileHash: "h2", OriginalFileHash: "o2", Duration: 200, FileSize: 20,
+			ITunesPersistentID: "pid2", TranscribedTitle: str("Chapter One"),
+			IntroTranscribedAt: &transcribedAt},
 
 		// MISSING arm — a different mix, so a swap cannot go unnoticed.
 		{ID: "m1", BookID: "b-missing", FilePath: gone("m1.m4b"), FileHash: "mh1"},
@@ -245,7 +259,27 @@ func TestMissingFileAudit_SignalCensusSeparatesMissingFromPresent(t *testing.T) 
 		// Carries NOTHING. This is the row that makes AnyDecisive a real measurement
 		// rather than a restatement of the row count.
 		{ID: "m4", BookID: "b-missing", FilePath: gone("m4.m4b")},
+		// Carries a post-metadata hash and NOTHING ELSE, which is what makes
+		// "a post-metadata hash is decisive" a testable claim: drop that one
+		// assignment and AnyDecisive falls to 3.
+		{ID: "m5", BookID: "b-missing", FilePath: gone("m5.m4b"), PostMetadataHash: "mpm5"},
+		// 🔴 A NON-NIL POINTER TO AN EMPTY STRING. A transcript row can exist with
+		// nothing in it, and "we have a title for this file" must mean the title is
+		// non-empty, not merely that the column was written. Testing only the nil
+		// case would leave the emptiness check unmeasured.
+		{ID: "m6", BookID: "b-missing", FilePath: gone("m6.m4b"), TranscribedTitle: str("")},
 	}
+
+	// 🔴 AN UNDETERMINED ROW BELONGS TO NEITHER ARM. The present arm is the baseline
+	// the missing arm is compared against, so a row we could not stat landing there
+	// would quietly make the control look better-provisioned than it is — and the
+	// gap between the arms is the entire argument for whether a repair is possible.
+	// Routing it by `default:` instead of `case filePresent:` is a one-word edit that
+	// nothing else in this package would notice.
+	rows = append(rows, database.BookFileCore{
+		ID: "u1", BookID: "b-unreadable", FilePath: "/tmp/cannot\x00stat.m4b",
+		FileHash: "uh1", Duration: 300, FileSize: 30,
+	})
 
 	rep := runAudit(t, rows, missingFileAuditParams{})
 
@@ -254,19 +288,35 @@ func TestMissingFileAudit_SignalCensusSeparatesMissingFromPresent(t *testing.T) 
 		got  int
 		want int
 	}{
-		{"missing.Rows", rep.SignalsMissing.Rows, 4},
+		{"missing.Rows", rep.SignalsMissing.Rows, 6},
 		{"missing.FileHash", rep.SignalsMissing.FileHash, 2},
 		{"missing.Fingerprint", rep.SignalsMissing.Fingerprint, 2},
+		{"missing.PostMetadataHash", rep.SignalsMissing.PostMetadataHash, 1},
 		{"missing.OriginalFileHash", rep.SignalsMissing.OriginalFileHash, 0},
 		{"missing.Duration", rep.SignalsMissing.Duration, 0},
-		// 3, not 4: m4 has no decisive signal. And 3, not 5: m3 has two and counts once.
-		{"missing.AnyDecisive", rep.SignalsMissing.AnyDecisive, 3},
+		// Zero because no missing row carries a size — and because `> 0` must not
+		// drift to `>= 0`, which would make all six qualify.
+		{"missing.FileSize", rep.SignalsMissing.FileSize, 0},
+		{"missing.DownloadHash", rep.SignalsMissing.DownloadHash, 0},
+		{"missing.ITunesPID", rep.SignalsMissing.ITunesPID, 0},
+		// m6 holds a pointer to "" — present in the column, empty in substance.
+		{"missing.TranscribedTitle", rep.SignalsMissing.TranscribedTitle, 0},
+		{"missing.IntroTranscribed", rep.SignalsMissing.IntroTranscribed, 0},
+		// 4, not 6: m4 and m6 have no decisive signal. Not 7: m3 has two, counts once.
+		// Falls to 3 if a post-metadata hash stops being treated as decisive.
+		{"missing.AnyDecisive", rep.SignalsMissing.AnyDecisive, 4},
 
 		{"present.Rows", rep.SignalsPresent.Rows, 2},
 		{"present.FileHash", rep.SignalsPresent.FileHash, 2},
 		{"present.OriginalFileHash", rep.SignalsPresent.OriginalFileHash, 2},
+		{"present.PostMetadataHash", rep.SignalsPresent.PostMetadataHash, 1},
 		{"present.Fingerprint", rep.SignalsPresent.Fingerprint, 0},
 		{"present.Duration", rep.SignalsPresent.Duration, 2},
+		{"present.FileSize", rep.SignalsPresent.FileSize, 2},
+		{"present.DownloadHash", rep.SignalsPresent.DownloadHash, 1},
+		{"present.ITunesPID", rep.SignalsPresent.ITunesPID, 1},
+		{"present.TranscribedTitle", rep.SignalsPresent.TranscribedTitle, 1},
+		{"present.IntroTranscribed", rep.SignalsPresent.IntroTranscribed, 1},
 		{"present.AnyDecisive", rep.SignalsPresent.AnyDecisive, 2},
 	} {
 		if tc.got != tc.want {
