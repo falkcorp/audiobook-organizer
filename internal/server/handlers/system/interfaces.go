@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/interfaces.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7a91ad40-5c96-4423-ad24-715acb791cf8
-// last-edited: 2026-07-07
+// last-edited: 2026-08-18
 
 // Narrow dependency interfaces for the system domain handlers (health, status,
 // announcements, storage, logs, activity-log, reset/factory-reset, config
@@ -20,6 +20,60 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// SystemStatsStore reads and invalidates the cached library-wide statistics.
+type SystemStatsStore interface {
+	CountAuthors() (int, error)      // StatsStore
+	CountSeries() (int, error)       // StatsStore
+	InvalidateLibraryStats() // StatsStore
+	// dashboard
+	GetDashboardStats() (*database.DashboardStats, error)        // StatsStore
+}
+
+// SystemBookStore reads books for the system dashboard and factory-reset paths.
+type SystemBookStore interface {
+	// health metrics
+	CountPrimaryBooks() (int, error) // BookStore
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)           // BookStore
+}
+
+// SystemAuthorStore reads authors and their book links.
+type SystemAuthorStore interface {
+	// announcements
+	GetAllAuthors() ([]database.Author, error) // AuthorStore
+	// GetBooksByAuthorIDWithRoleCore is Core-typed (STOREFID P3-W2b) — see
+	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error) // AuthorStore
+}
+
+// SystemAuditReader reads the recent-event feeds the dashboard renders: the system
+// activity log and the operation history.
+type SystemAuditReader interface {
+	// activity log
+	GetSystemActivityLogs(source string, limit int) ([]database.SystemActivityLog, error) // SystemActivityStore
+	GetRecentOperations(limit int) ([]database.Operation, error) // OperationStore
+}
+
+// SystemLifecycleStore resets the store — the factory-reset path.
+type SystemLifecycleStore interface {
+	// reset / factory-reset
+	Reset() error            // LifecycleStore
+}
+
+// SystemHashBlocklistStore manages the do-not-import hash blocklist.
+type SystemHashBlocklistStore interface {
+	// blocked hashes
+	GetAllBlockedHashes() ([]database.DoNotImport, error) // HashBlocklistStore
+	AddBlockedHash(hash, reason string) error             // HashBlocklistStore
+	RemoveBlockedHash(hash string) error                  // HashBlocklistStore
+}
+
+// SystemUserPreferenceStore reads and writes per-user preferences.
+type SystemUserPreferenceStore interface {
+	// user preferences
+	GetUserPreference(key string) (*database.UserPreference, error) // UserPreferenceStore
+	SetUserPreference(key, value string) error                      // UserPreferenceStore
+}
+
 // SystemStore is the narrow database.Store subset the system handlers require.
 // The concrete database.Store implementations satisfy it. Methods are listed
 // individually (rather than embedding the composed sub-interfaces) because the
@@ -36,40 +90,21 @@ import (
 // factoryReset passes the store opaquely to config.SaveConfigToDatabase, whose
 // param is a database.SettingsStore — structural satisfaction requires the full
 // SettingsStore method set, not a hand-list.
+//
+// Split into the 7 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it.
 type SystemStore interface {
+	SystemStatsStore
+	SystemBookStore
+	SystemAuthorStore
+	SystemAuditReader
+	SystemLifecycleStore
+	SystemHashBlocklistStore
+	SystemUserPreferenceStore
+
+	// Embedded interfaces carried through from the original declaration.
 	database.SettingsStore // factoryReset -> config.SaveConfigToDatabase
-
-	// health metrics
-	CountPrimaryBooks() (int, error) // BookStore
-	CountAuthors() (int, error)      // StatsStore
-	CountSeries() (int, error)       // StatsStore
-
-	// announcements
-	GetAllAuthors() ([]database.Author, error) // AuthorStore
-	// GetBooksByAuthorIDWithRoleCore is Core-typed (STOREFID P3-W2b) — see
-	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error) // AuthorStore
-	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)           // BookStore
-
-	// activity log
-	GetSystemActivityLogs(source string, limit int) ([]database.SystemActivityLog, error) // SystemActivityStore
-
-	// reset / factory-reset
-	Reset() error            // LifecycleStore
-	InvalidateLibraryStats() // StatsStore
-
-	// dashboard
-	GetDashboardStats() (*database.DashboardStats, error)        // StatsStore
-	GetRecentOperations(limit int) ([]database.Operation, error) // OperationStore
-
-	// blocked hashes
-	GetAllBlockedHashes() ([]database.DoNotImport, error) // HashBlocklistStore
-	AddBlockedHash(hash, reason string) error             // HashBlocklistStore
-	RemoveBlockedHash(hash string) error                  // HashBlocklistStore
-
-	// user preferences
-	GetUserPreference(key string) (*database.UserPreference, error) // UserPreferenceStore
-	SetUserPreference(key, value string) error                      // UserPreferenceStore
 }
 
 // SystemService is the narrow *sysinfo.SystemService subset used by

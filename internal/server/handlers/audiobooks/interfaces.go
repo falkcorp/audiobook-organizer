@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/interfaces.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 110386de-3e07-4ef3-b0e0-2e717a249e91
-// last-edited: 2026-08-14
+// last-edited: 2026-08-18
 
 // Narrow dependency interfaces for the audiobooks-domain HTTP handlers (the
 // main library list / CRUD domain: list, count, facets, soft-delete /
@@ -40,6 +40,60 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
+// AudiobookBookStore reads and updates the book row.
+type AudiobookBookStore interface {
+	GetBookByID(id string) (*database.Book, error)
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+}
+
+// AudiobookFileStore covers the book's files.
+type AudiobookFileStore interface {
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
+	UpdateBookFile(id string, file *database.BookFile) error
+	UpsertBookFile(file *database.BookFile) error
+}
+
+// AudiobookHistoryStore covers change and path history.
+type AudiobookHistoryStore interface {
+	RecordMetadataChange(record *database.MetadataChangeRecord) error
+	GetBookChangeHistory(bookID string, limit int) ([]database.MetadataChangeRecord, error)
+	GetMetadataChangeHistory(bookID, field string, limit int) ([]database.MetadataChangeRecord, error)
+	GetBookPathHistory(bookID string) ([]database.BookPathChange, error)
+	GetBookChanges(bookID string) ([]*database.OperationChange, error)
+}
+
+// AudiobookTitleStore covers alternative titles.
+type AudiobookTitleStore interface {
+	GetBookAlternativeTitles(bookID string) ([]database.BookAlternativeTitle, error)
+	AddBookAlternativeTitle(bookID, title, source, language string) error
+	RemoveBookAlternativeTitle(bookID, title string) error
+}
+
+// AudiobookTagStore reads detailed tags.
+type AudiobookTagStore interface {
+	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
+}
+
+// AudiobookFacetStore reads library-wide facets.
+type AudiobookFacetStore interface {
+	GetDistinctGenres() ([]string, error)
+	GetDistinctLanguages() ([]string, error)
+}
+
+// AudiobookCreditStore reads authors and narrators.
+type AudiobookCreditStore interface {
+	GetAuthorByID(id int) (*database.Author, error)
+	GetNarratorByID(id int) (*database.Narrator, error)
+	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
+	GetBookNarrators(bookID string) ([]database.BookNarrator, error)
+}
+
+// AudiobookSyncStore records write-out timestamps.
+type AudiobookSyncStore interface {
+	SetLastWrittenAt(bookID string, t time.Time) error
+}
+
 // AudiobooksStore is the narrow database.Store subset the audiobooks handlers
 // require for direct store access (i.e. the calls the handlers made through
 // s.Store() that are part of the stable database.Store contract). The concrete
@@ -54,29 +108,19 @@ import (
 // Those are intentionally NOT listed here — they resolve against the dynamic
 // type of the value the provider returns (s.Store(), the concrete store), so
 // they keep working as long as getStore returns the un-stripped store.
+//
+// Split into the 8 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it.
 type AudiobooksStore interface {
-	GetBookByID(id string) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
-	GetBookFiles(bookID string) ([]database.BookFile, error)
-	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
-	UpdateBookFile(id string, file *database.BookFile) error
-	UpsertBookFile(file *database.BookFile) error
-	RecordMetadataChange(record *database.MetadataChangeRecord) error
-	GetBookChangeHistory(bookID string, limit int) ([]database.MetadataChangeRecord, error)
-	GetMetadataChangeHistory(bookID, field string, limit int) ([]database.MetadataChangeRecord, error)
-	GetBookPathHistory(bookID string) ([]database.BookPathChange, error)
-	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
-	GetBookAlternativeTitles(bookID string) ([]database.BookAlternativeTitle, error)
-	AddBookAlternativeTitle(bookID, title, source, language string) error
-	RemoveBookAlternativeTitle(bookID, title string) error
-	GetBookChanges(bookID string) ([]*database.OperationChange, error)
-	GetDistinctGenres() ([]string, error)
-	GetDistinctLanguages() ([]string, error)
-	GetAuthorByID(id int) (*database.Author, error)
-	GetNarratorByID(id int) (*database.Narrator, error)
-	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
-	GetBookNarrators(bookID string) ([]database.BookNarrator, error)
-	SetLastWrittenAt(bookID string, t time.Time) error
+	AudiobookBookStore
+	AudiobookFileStore
+	AudiobookHistoryStore
+	AudiobookTitleStore
+	AudiobookTagStore
+	AudiobookFacetStore
+	AudiobookCreditStore
+	AudiobookSyncStore
 }
 
 // AudiobookService is the narrow *audiobookspkg.AudiobookService subset the
