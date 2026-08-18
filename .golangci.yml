@@ -1,7 +1,7 @@
 # file: .golangci.yml
-# version: 1.0.0
+# version: 1.1.0
 # guid: 8d2a1f47-6c93-4b0e-a15d-7f3e28c9b604
-# last-edited: 2026-08-11
+# last-edited: 2026-08-18
 
 # Wave 0 of the silent-failure sweep.
 # See docs/audits/2026-08-11-silent-failure-error-discards.md
@@ -45,8 +45,29 @@ linters:
   default: none
   enable:
     - errcheck
+    # Interface width gate. NOT run by the same CI step as errcheck: the width
+    # job invokes `--enable-only interfacebloat,nolintlint`, which overrides
+    # this list, so errcheck's 926-finding backlog cannot fail the width gate
+    # and the width gate cannot inflate errcheck's number. Both live here so
+    # there is ONE Go lint config, per the 2026-08-18 decision.
+    - interfacebloat
+    # nolintlint is what makes the width override auditable: an
+    # //nolint:interfacebloat must name the linter AND state a reason.
+    - nolintlint
 
   settings:
+    interfacebloat:
+      # 8 declared entries. NOTE: interfacebloat counts DECLARED ENTRIES, where
+      # an embedded interface counts as 1 — verified, `database.Store` has 40
+      # embeds and is reported as 40, not its transitive 398. Transitive width
+      # is tools/structwidth's job, not this linter's.
+      max: 8
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+
     errcheck:
       # See "WHY check-blank IS ON" above. Do not turn this off.
       check-blank: true
@@ -116,6 +137,18 @@ linters:
     generated: lax
     paths:
       - web/
+    rules:
+      # nolintlint is enabled to make WIDTH overrides auditable — an
+      # //nolint:interfacebloat must name the linter and say why. It is NOT a
+      # retroactive campaign against the 110 pre-existing unexplained
+      # //nolint:errcheck / :gosec directives, which belong to Wave 0's backlog
+      # (docs/audits/2026-08-11-silent-failure-error-discards.md). Excluding them
+      # by text keeps this gate green on day one instead of arriving with 113
+      # findings, which is how a linter gets switched off by whoever sees it next.
+      # Delete this rule when Wave 0 closes.
+      - linters:
+          - nolintlint
+        text: "nolint:(errcheck|gosec)"
 
 issues:
   # Report every finding. Defaults cap at 50/linter and 3/identical, which
