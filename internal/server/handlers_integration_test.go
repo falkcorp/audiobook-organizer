@@ -1,7 +1,7 @@
 // file: internal/server/handlers_integration_test.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-07-16
+// last-edited: 2026-08-17
 
 package server
 
@@ -96,7 +96,7 @@ func newSystemHandler(s *Server) *system.Handler {
 	// Mirrors wireHandlers: OperationLogsProvider is the v2 handler now. The
 	// legacy one fell back to the `operations` table, which never leaves pending.
 	var opLogs system.OperationLogsProvider = handlers.NewOperationsV2Handler(
-		database.GetOpsV2(s.Store()), nil, nil)
+		database.GetOpsV2(s.Store()), nil, nil, false)
 	return system.New(
 		func() system.SystemStore { return s.Store() },
 		sysSvc,

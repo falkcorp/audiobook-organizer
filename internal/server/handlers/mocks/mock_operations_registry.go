@@ -135,6 +135,66 @@ func (_c *MockOperationsRegistry_Cancel_Call) RunAndReturn(run func(opID string)
 	return _c
 }
 
+// Def provides a mock function for the type MockOperationsRegistry
+func (_mock *MockOperationsRegistry) Def(id string) (registry.OperationDef, bool) {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Def")
+	}
+
+	var r0 registry.OperationDef
+	var r1 bool
+	if returnFunc, ok := ret.Get(0).(func(string) (registry.OperationDef, bool)); ok {
+		return returnFunc(id)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) registry.OperationDef); ok {
+		r0 = returnFunc(id)
+	} else {
+		r0 = ret.Get(0).(registry.OperationDef)
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) bool); ok {
+		r1 = returnFunc(id)
+	} else {
+		r1 = ret.Get(1).(bool)
+	}
+	return r0, r1
+}
+
+// MockOperationsRegistry_Def_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Def'
+type MockOperationsRegistry_Def_Call struct {
+	*mock.Call
+}
+
+// Def is a helper method to define mock.On call
+//   - id string
+func (_e *MockOperationsRegistry_Expecter) Def(id any) *MockOperationsRegistry_Def_Call {
+	return &MockOperationsRegistry_Def_Call{Call: _e.mock.On("Def", id)}
+}
+
+func (_c *MockOperationsRegistry_Def_Call) Run(run func(id string)) *MockOperationsRegistry_Def_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockOperationsRegistry_Def_Call) Return(operationDef registry.OperationDef, b bool) *MockOperationsRegistry_Def_Call {
+	_c.Call.Return(operationDef, b)
+	return _c
+}
+
+func (_c *MockOperationsRegistry_Def_Call) RunAndReturn(run func(id string) (registry.OperationDef, bool)) *MockOperationsRegistry_Def_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // EnqueueOp provides a mock function for the type MockOperationsRegistry
 func (_mock *MockOperationsRegistry) EnqueueOp(ctx context.Context, defID string, params any, opts ...registry.EnqueueOption) (string, error) {
 	var tmpRet mock.Arguments
