@@ -105,136 +105,146 @@ type OpErrorV2Row struct {
 	OccurredAt  time.Time
 }
 
-// OpsV2Store covers the UOS v2 schema surface used by the registry.
-// Only implemented by SQLiteStore; PebbleStore returns ErrNotSupported.
-type OpsV2Store interface {
+// OpDefV2Store persists the registered OperationDefs.
+type OpDefV2Store interface {
 	// UpsertOpDefinitionV2 inserts or replaces a definition row.
 	UpsertOpDefinitionV2(row OpDefinitionV2Row) error
-
 	// DeleteOrphanOpDefsV2 removes rows not in the keepIDs set.
 	DeleteOrphanOpDefsV2(keepIDs []string) error
+}
 
+// OpV2LifecycleStore creates a v2 operation and moves it through its statuses.
+type OpV2LifecycleStore interface {
 	// InsertOperationV2 inserts a new queued run.
 	InsertOperationV2(row OperationV2Row) error
-
-	// ListQueuedOperationsV2 returns queued ops ordered by priority DESC, queued_at ASC.
-	ListQueuedOperationsV2() ([]OperationV2Row, error)
-
-	// ListActiveOperationsV2 returns ops with status 'queued' or 'running'.
-	ListActiveOperationsV2() ([]OperationV2Row, error)
-
 	// GetOperationV2 returns a single run by id.
 	GetOperationV2(id string) (*OperationV2Row, error)
-
 	// UpdateOperationV2Status sets the status (and optional timestamps).
 	// startedAt / completedAt are set when non-nil.
 	UpdateOperationV2Status(id, status string, startedAt, completedAt *time.Time, errMsg *string) error
-
 	// SetOperationV2StatusIfQueued atomically sets status=canceled only if status was queued.
 	// Returns true if the row was updated.
 	SetOperationV2StatusIfQueued(id, newStatus string) (bool, error)
-
-	// CountRunningByPluginV2 returns the number of running ops for a plugin.
-	CountRunningByPluginV2(plugin string) (int, error)
-
-	// IncrementResumeCountV2 atomically increments resume_count for the given op.
-	IncrementResumeCountV2(id string) error
-
-	// InsertOpStrikeV2 appends a row to op_strikes_v2.
-	InsertOpStrikeV2(row OpStrikeV2Row) error
-
-	// GetOpStateV2 returns the state blob for an op, or nil if none.
-	GetOpStateV2(opID string) (*OpStateV2Row, error)
-
-	// DeleteOpStateV2 removes the state blob for an op (used by ResumeRequeue).
-	DeleteOpStateV2(opID string) error
-
-	// UpdateOpProgressV2 updates the progress columns and last_progress_at.
-	UpdateOpProgressV2(id string, current, total int, message string) error
-
-	// UpdateOpPhaseV2 sets (or clears) current_phase on an operation.
-	UpdateOpPhaseV2(id string, phase *string) error
-
-	// UpdateOpCheckpointV2 sets last_checkpoint_at and updates high_water_progress
-	// to MAX(old, newHWM).
-	UpdateOpCheckpointV2(id string, newHWM int) error
-
-	// AppendOpLogsV2 bulk-inserts log rows into op_logs_v2.
-	AppendOpLogsV2(rows []OpLogV2Row) error
-
-	// InsertOpErrorV2 inserts a single row into op_errors_v2.
-	InsertOpErrorV2(row OpErrorV2Row) error
-
-	// UpsertOpStateV2 inserts or replaces a checkpoint row in op_state_v2.
-	UpsertOpStateV2(row OpStateV2Row) error
-
 	// UpdateOperationV2Params replaces the params blob on an operation row.
 	// Used by resumeRestart to inject checkpoint state before re-dispatch.
 	UpdateOperationV2Params(id string, params []byte) error
+	// IncrementResumeCountV2 atomically increments resume_count for the given op.
+	IncrementResumeCountV2(id string) error
+}
 
+// OpV2QueueStore covers queue and scheduling reads.
+type OpV2QueueStore interface {
+	// ListQueuedOperationsV2 returns queued ops ordered by priority DESC, queued_at ASC.
+	ListQueuedOperationsV2() ([]OperationV2Row, error)
+	// ListActiveOperationsV2 returns ops with status 'queued' or 'running'.
+	ListActiveOperationsV2() ([]OperationV2Row, error)
 	// ListOperationsV2Since returns all operations whose queued_at timestamp is
 	// at or after the given time, ordered by started_at DESC NULLS LAST,
 	// queued_at DESC. At most limit rows are returned (0 = use a safe default).
 	ListOperationsV2Since(since time.Time, limit int) ([]OperationV2Row, error)
-
-	// GetOpLogsV2 returns the last limit log lines for the given operation ID,
-	// ordered by created_at ASC. A limit ≤ 0 returns all rows.
-	GetOpLogsV2(opID string, limit int) ([]OpLogV2Row, error)
-
-	// --- UOS dependency-scheduling (Task 2) ---
-
-	// GetDepRev returns the current dependency-revision counter for sub.
-	// Returns 0, nil if no counter exists yet (first call before any bump).
-	GetDepRev(sub OpSubject) (uint64, error)
-
-	// BumpDepRev atomically increments the dep_rev counter for sub and returns
-	// the new value.  The first call on a never-seen subject transitions 0→1.
-	BumpDepRev(sub OpSubject) (uint64, error)
-
-	// RecordOpCompletion stores a completion record for opType on sub at the
-	// given depRev.  fileID is empty for book-level completions; non-empty for
-	// per-file completions.
-	RecordOpCompletion(sub OpSubject, opType, fileID string, depRev uint64) error
-
-	// GetOpCompletion retrieves the stored depRev for a book-level completion
-	// (fileID == "").  Returns (rev, true, nil) when found, (0, false, nil)
-	// when absent.
-	GetOpCompletion(sub OpSubject, opType string) (rev uint64, ok bool, err error)
-
-	// ListFileCompletions returns a map of fileID→depRev for all per-file
-	// completion records for opType on sub.
-	ListFileCompletions(sub OpSubject, opType string) (map[string]uint64, error)
-
-	// ListWaitingDepsOps returns all OperationV2Row entries whose Status is
-	// "waiting_deps".  Used by the dependency evaluator to re-check parked ops.
-	ListWaitingDepsOps() ([]OperationV2Row, error)
-
+	// CountRunningByPluginV2 returns the number of running ops for a plugin.
+	CountRunningByPluginV2(plugin string) (int, error)
 	// PromoteToQueued atomically transitions an operation from "waiting_deps"
 	// to "queued", writing both the row JSON and the opv2:q: queue-index key
 	// (identical encoding to InsertOperationV2 for a queued op) so that
 	// ListQueuedOperationsV2 can discover the promoted op.
 	// Returns an error if the op does not exist or its status is not "waiting_deps".
 	PromoteToQueued(id string) error
+	// ListWaitingDepsOps returns all OperationV2Row entries whose Status is
+	// "waiting_deps".  Used by the dependency evaluator to re-check parked ops.
+	ListWaitingDepsOps() ([]OperationV2Row, error)
+}
 
-	// --- M3 batch bucket (journaled pending subjects) ---
-	//
-	// Keyspace: op:batch:<opType>:<subjectType>:<subjectID> → JSON(BatchBucketEntry)
-	// This journal lets the registry survive a crash mid-window without dropping subjects.
-	// Entries are removed by ClearBatchBucket once they have been dispatched.
+// OpV2StateStore persists resumable state and checkpoints.
+type OpV2StateStore interface {
+	// GetOpStateV2 returns the state blob for an op, or nil if none.
+	GetOpStateV2(opID string) (*OpStateV2Row, error)
+	// DeleteOpStateV2 removes the state blob for an op (used by ResumeRequeue).
+	DeleteOpStateV2(opID string) error
+	// UpsertOpStateV2 inserts or replaces a checkpoint row in op_state_v2.
+	UpsertOpStateV2(row OpStateV2Row) error
+	// UpdateOpCheckpointV2 sets last_checkpoint_at and updates high_water_progress
+	// to MAX(old, newHWM).
+	UpdateOpCheckpointV2(id string, newHWM int) error
+}
 
+// OpV2ObservabilityStore covers progress, phase, logs, errors and strikes.
+type OpV2ObservabilityStore interface {
+	// UpdateOpProgressV2 updates the progress columns and last_progress_at.
+	UpdateOpProgressV2(id string, current, total int, message string) error
+	// UpdateOpPhaseV2 sets (or clears) current_phase on an operation.
+	UpdateOpPhaseV2(id string, phase *string) error
+	// AppendOpLogsV2 bulk-inserts log rows into op_logs_v2.
+	AppendOpLogsV2(rows []OpLogV2Row) error
+	// GetOpLogsV2 returns the last limit log lines for the given operation ID,
+	// ordered by created_at ASC. A limit ≤ 0 returns all rows.
+	GetOpLogsV2(opID string, limit int) ([]OpLogV2Row, error)
+	// InsertOpErrorV2 inserts a single row into op_errors_v2.
+	InsertOpErrorV2(row OpErrorV2Row) error
+	// InsertOpStrikeV2 appends a row to op_strikes_v2.
+	InsertOpStrikeV2(row OpStrikeV2Row) error
+}
+
+// OpV2DepStore covers the dependency revision counter.
+type OpV2DepStore interface {
+	// GetDepRev returns the current dependency-revision counter for sub.
+	// Returns 0, nil if no counter exists yet (first call before any bump).
+	GetDepRev(sub OpSubject) (uint64, error)
+	// BumpDepRev atomically increments the dep_rev counter for sub and returns
+	// the new value.  The first call on a never-seen subject transitions 0→1.
+	BumpDepRev(sub OpSubject) (uint64, error)
+}
+
+// OpV2CompletionStore records per-item completion so reruns can skip work.
+type OpV2CompletionStore interface {
+	// RecordOpCompletion stores a completion record for opType on sub at the
+	// given depRev.  fileID is empty for book-level completions; non-empty for
+	// per-file completions.
+	RecordOpCompletion(sub OpSubject, opType, fileID string, depRev uint64) error
+	// GetOpCompletion retrieves the stored depRev for a book-level completion
+	// (fileID == "").  Returns (rev, true, nil) when found, (0, false, nil)
+	// when absent.
+	GetOpCompletion(sub OpSubject, opType string) (rev uint64, ok bool, err error)
+	// ListFileCompletions returns a map of fileID→depRev for all per-file
+	// completion records for opType on sub.
+	ListFileCompletions(sub OpSubject, opType string) (map[string]uint64, error)
+}
+
+// OpV2BatchStore covers the batch bucket used to coalesce work.
+type OpV2BatchStore interface {
 	// AddToBatchBucket adds a subject to the persistent pending bucket for opType.
 	// Idempotent: if an entry already exists for this (opType, subjectType, subjectID)
 	// triple, the call is a no-op (the existing AddedAt timestamp is preserved so
 	// MaxWait is anchored to the first arrival).
 	AddToBatchBucket(opType string, sub OpSubject) error
-
 	// ListBatchBucket returns all pending subjects for opType.
 	// Returns an empty slice (not an error) when no bucket exists.
 	ListBatchBucket(opType string) ([]BatchBucketEntry, error)
-
 	// ClearBatchBucket removes the given subjects from the bucket for opType.
 	// Subjects not present in the bucket are silently skipped.
 	ClearBatchBucket(opType string, subs []OpSubject) error
+}
+
+// OpsV2Store covers the UOS v2 schema surface used by the registry.
+// Only implemented by SQLiteStore; PebbleStore returns ErrNotSupported.
+//
+// Split into the 8 interfaces above on 2026-08-18. This name is retained
+// as their composition so the method set is byte-identical and no consumer moves;
+// the type checker proves it, because every implementation -- PebbleStore (496
+// methods) and database.MockStore (399) among them -- fails to compile if a method
+// is dropped or re-signatured in the regrouping.
+//
+// Consumers should migrate to whichever pieces they use; this composition is the
+// transitional shape, not the destination.
+type OpsV2Store interface {
+	OpDefV2Store
+	OpV2LifecycleStore
+	OpV2QueueStore
+	OpV2StateStore
+	OpV2ObservabilityStore
+	OpV2DepStore
+	OpV2CompletionStore
+	OpV2BatchStore
 }
 
 // BatchBucketEntry is a single pending subject in a batchable op's journal.
