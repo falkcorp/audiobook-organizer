@@ -36,7 +36,13 @@ jobs:
     # `conclusion=cancelled` that reads on the PR as a test failure (#2311,
     # #2315, #2319 at exactly 20m16s). The cap is only settable upstream: this
     # workflow exposes no timeout input.
-    uses: falkcorp/github-common/.github/workflows/reusable-ci-minimal.yml@85a290960317dca5e50c0c18107f5e3d663658aa # main 2026-08-12 (raises Go Tests cap above its own go test -timeout)
+    #
+    # Pin bumped again 2026-08-18 to pick up falkcorp/github-common#347, which
+    # adds the `go-lint` and `super-linter` jobs enabled below. Before it,
+    # golangci-lint ran in ZERO workflows in this repo -- .golangci.yml existed
+    # and had never once executed in CI (`make ci` runs staticcheck, not
+    # golangci-lint).
+    uses: falkcorp/github-common/.github/workflows/reusable-ci-minimal.yml@828afb50d0d18c426c72a6ed1060123677bee674 # main 2026-08-18 (adds go-lint + advisory super-linter jobs)
     with:
       go-version: '1.26'
       go-experiment: 'jsonv2'
@@ -44,7 +50,86 @@ jobs:
       system-packages: 'libtag1-dev'
       frontend-working-dir: 'web'
       run-frontend: true
+      go-lint: true
+      # --enable-only OVERRIDES .golangci.yml's enable list, and it is load-bearing,
+      # not a tidiness flag. That config also enables errcheck, which currently has
+      # 927 open findings held as Wave 0's backlog (see the header in .golangci.yml
+      # and docs/audits/2026-08-11-silent-failure-error-discards.md). A bare
+      # `golangci-lint run ./...` would exit non-zero on those 927 -- this job would
+      # be red on day one and switched off by whoever saw it next.
+      #
+      # interfacebloat is deliberately NOT in this selector even though it is the
+      # linter this whole effort is about. golangci-lint exits non-zero on ANY
+      # finding, and the tree legitimately holds 5 (see .interface-width-baseline),
+      # so listing it here reproduces the exact errcheck failure described above:
+      # permanently red, for findings that are known and accepted. It runs in the
+      # interface-width job below instead, which compares against the baseline and
+      # is what actually enforces the ratchet. Measured 2026-08-18 on this tree:
+      # nolintlint 0 issues (exit 0), interfacebloat 5 (exit 1).
+      #
+      # When Wave 0 closes, add errcheck here rather than removing the selector.
+      golangci-lint-args: '--enable-only nolintlint'
+      # Advisory only: reports, never blocks. See super-linter-pr.env.
+      super-linter: true
     secrets: inherit
+
+  # Project-specific: the interface-width ratchet.
+  #
+  # This is a separate job rather than a golangci-lint selector because the two
+  # answer different questions. golangci-lint asks "are there any findings"; the
+  # ratchet asks "did the number change". The tree holds 5 accepted findings, so
+  # only the second question can be a gate. See .interface-width-baseline for why
+  # the baseline is a count rather than a per-file list, and
+  # docs/audits/2026-08-18-interface-width-shapes.md for what the 5 are.
+  #
+  # Fails in BOTH directions: up (a new wide interface) and down (the count
+  # dropped and nobody lowered the baseline, which would silently re-open room
+  # for a wide interface later). Mutation-verified 3/3 on 2026-08-18.
+  interface-width:
+    name: Interface Width Ratchet
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOEXPERIMENT: jsonv2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+
+      - name: Set up Go (no built-in cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26'
+          cache: false
+
+      - name: Restore Go cache (manual)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.26-
+            ${{ runner.os }}-go-
+
+      - name: Install system packages
+        run: sudo apt-get update && sudo apt-get install -y libtag1-dev
+
+      # Installed with `go install` rather than golangci-lint-action, matching
+      # the mockery pin in the job below: the action wraps `golangci-lint run`
+      # and this job needs the binary on PATH for the ratchet script to invoke,
+      # not another runner of it. Pinned to the version the baseline was measured
+      # with -- a version bump can change the finding count on its own, which
+      # would trip the ratchet and look like a code change.
+      - name: Install golangci-lint
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Check interface width against baseline
+        run: bash scripts/check-interface-width.sh
 
   # Project-specific: verify mockery mocks are not stale
   mocks-check:
