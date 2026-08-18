@@ -84,7 +84,18 @@ jobs:
   #
   # Fails in BOTH directions: up (a new wide interface) and down (the count
   # dropped and nobody lowered the baseline, which would silently re-open room
-  # for a wide interface later). Mutation-verified 3/3 on 2026-08-18.
+  # for a wide interface later). Mutation-verified 3/3 on 2026-08-18 against a
+  # fresh clone of main.
+  #
+  # ⚠️ THIS JOB REPORTS BUT DOES NOT BLOCK. Read 2026-08-18, main's required
+  # checks are exactly: "Minimal CI / Minimal CI Summary", "Require changelog
+  # fragment", "TODO Fragment Headers". This job is none of them, and unlike
+  # go-lint -- which reaches the required summary because reusable-ci-minimal
+  # aggregates it -- a repo-level job has nothing to roll up into. Until someone
+  # adds "Interface Width Ratchet" to the required-checks list, a PR that widens
+  # an interface goes red here and merges anyway. That is a branch-protection
+  # change, i.e. a human action, not something to work around by moving this
+  # check into an unrelated job that happens to be required.
   interface-width:
     name: Interface Width Ratchet
     runs-on: ubuntu-latest
