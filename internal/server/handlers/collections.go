@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e81c47a-95d2-4b06-a1f8-6c025d9b7413
-// last-edited: 2026-08-16
+// last-edited: 2026-08-18
 
 package handlers
 
@@ -80,17 +80,11 @@ type CollectionStore interface {
 	DeleteCollection(id string) error
 }
 
-// CollectionEvalStore is what the query evaluator needs of the store.
-//
-// Declared here rather than imported because internal/playlist keeps its
-// equivalent unexported (playlistEvalStore). Go's structural typing means a
-// value satisfying this satisfies that, so restating the method set costs
-// nothing and avoids exporting an interface for one caller. The two must stay
-// in step: a drift shows up as a compile error at the EvaluateSmartPlaylist
-// call, not as a runtime surprise.
+// CollectionEvalStore is only what playlist.EvaluateSmartPlaylist needs — it makes no calls of its own, measured by emptying the interface and reading the
+// compiler's enumeration. It was 43 methods of database.* embeds.
 type CollectionEvalStore interface {
-	database.BookReader
-	database.UserPositionStore
+	GetBookByID(id string) (*database.Book, error)
+	GetUserBookState(userID, bookID string) (*database.UserBookState, error)
 }
 
 // CollectionHandler serves the native collection routes.

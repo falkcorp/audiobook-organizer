@@ -1,7 +1,7 @@
 // file: internal/playlist/evaluator.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9c2d5f1e-6b4a-4a70-b8c5-3d7e0f1b9a68
-// last-edited: 2026-07-10
+// last-edited: 2026-08-18
 //
 // Smart playlist query evaluator (spec 3.4 task 2).
 //
@@ -52,14 +52,19 @@ const defaultEvalPageSize = 10000
 // Callers can retry once the server has finished its startup phase.
 var ErrSearchIndexUnavailable = errors.New("search index not yet available")
 
-// playlistEvalStore is the narrow slice of database.Store that the
-// playlist evaluator actually needs: BookReader for sort enrichment
-// (GetBookByID) and UserPositionStore for per-user filter lookups
-// (GetUserBookState). Declared as a file-local composite so the
-// entry point's dependency surface is inspectable in one place.
+// playlistEvalStore is the two methods its own doc comment already named, measured by emptying the interface and reading the
+// compiler's enumeration. It was 43 methods of database.* embeds.
+type bookLookup interface {
+	GetBookByID(id string) (*database.Book, error)
+}
+
+type userStateReader interface {
+	GetUserBookState(userID, bookID string) (*database.UserBookState, error)
+}
+
 type playlistEvalStore interface {
-	database.BookReader
-	database.UserPositionStore
+	bookLookup
+	userStateReader
 }
 
 // EvaluateSmartPlaylist parses the playlist query, runs it against
@@ -127,7 +132,7 @@ func EvaluateSmartPlaylist(
 // search.MatchPerUserFilters — the single exported source of truth
 // shared with searchWithBleve (INIT-4 T2).
 func applyPerUserFilters(
-	store database.UserPositionStore,
+	store userStateReader,
 	ids []string,
 	filters []search.PerUserFilter,
 	userID string,
@@ -149,7 +154,7 @@ func applyPerUserFilters(
 // When SortJSON is empty or invalid, ids are sorted by ID string for
 // deterministic output (ULIDs sort in insertion order). Unknown fields
 // are skipped so a partly-broken sort spec still produces a stable result.
-func sortBookIDs(store database.BookReader, ids []string, sortJSON string) ([]string, error) {
+func sortBookIDs(store bookLookup, ids []string, sortJSON string) ([]string, error) {
 	if len(ids) < 2 {
 		return ids, nil
 	}

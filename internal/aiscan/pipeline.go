@@ -1,7 +1,7 @@
 // file: internal/aiscan/pipeline.go
-// version: 3.2.0
+// version: 3.3.0
 // guid: b8c4d0e2-5f6a-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-07-05
+// last-edited: 2026-08-18
 
 package aiscan
 
@@ -20,9 +20,17 @@ import (
 )
 
 // Store is the narrow slice of database.Store this service uses.
+// Store is what this package actually calls, measured by emptying the
+// interface and reading the compiler's enumeration: 7 methods. It was a
+// pure pass-through of database.* embeds — 43 methods, none declared here.
 type Store interface {
-	database.AuthorReader
-	database.OperationStore
+	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
+	UpdateOperationStatus(id, status string, progress, total int, message string) error
+	UpdateOperationError(id, errorMessage string) error
+	GetAllAuthors() ([]database.Author, error)
+	GetAuthorByID(id int) (*database.Author, error)
+	GetAllAuthorBookCounts() (map[int]int, error)
+	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
 }
 
 // PipelineManager coordinates the multi-pass AI author dedup pipeline.

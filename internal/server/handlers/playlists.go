@@ -1,7 +1,7 @@
 // file: internal/server/handlers/playlists.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: a7b8c9d0-e1f2-3456-abcd-456789012345
-// last-edited: 2026-06-02
+// last-edited: 2026-08-18
 
 package handlers
 
@@ -57,14 +57,18 @@ type PlaylistReorderReq struct {
 // Narrow interface
 // -----------------------------------------------------------------------
 
-// PlaylistStore is the narrow database interface PlaylistHandler requires.
-// It embeds database.UserPlaylistStore for CRUD, and additionally includes
-// the methods needed by playlist.EvaluateSmartPlaylist internally.
+// PlaylistStore is five direct calls plus two for the evaluator, measured by emptying the interface and reading the
+// compiler's enumeration. It was 52 methods of database.* embeds.
 type PlaylistStore interface {
-	database.UserPlaylistStore
-	// Methods needed by playlist.EvaluateSmartPlaylist (satisfies playlist.playlistEvalStore):
-	database.BookReader
-	database.UserPositionStore
+	GetUserPlaylist(id string) (*database.UserPlaylist, error)
+	ListUserPlaylistsForUser(userID, playlistType string, limit, offset int) ([]database.UserPlaylist, int, error)
+	CreateUserPlaylist(pl *database.UserPlaylist) (*database.UserPlaylist, error)
+	UpdateUserPlaylist(pl *database.UserPlaylist) error
+	DeleteUserPlaylist(id string) error
+
+	// Carried so this value satisfies playlist.EvaluateSmartPlaylist.
+	GetBookByID(id string) (*database.Book, error)
+	GetUserBookState(userID, bookID string) (*database.UserBookState, error)
 }
 
 // -----------------------------------------------------------------------
