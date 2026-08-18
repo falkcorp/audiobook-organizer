@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-06-09
+// last-edited: 2026-08-18
 
 package handlers
 
@@ -28,20 +28,44 @@ type AuthUserResponse struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// AuthStore is the narrow database interface AuthHandler requires.
-// Only the methods actually called by the handler are listed here.
-type AuthStore interface {
-	CountUsers() (int, error)
-	CreateSession(userID, ip, userAgent string, ttl time.Duration) (*database.Session, error)
-	CreateUser(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*database.User, error)
-	GetRoleByID(id string) (*database.Role, error)
-	GetRoleByName(name string) (*database.Role, error)
-	GetSession(id string) (*database.Session, error)
+// AuthUserReader looks up users and counts them for the first-run check.
+type AuthUserReader interface {
 	GetUserByID(id string) (*database.User, error)
 	GetUserByUsername(username string) (*database.User, error)
+	CountUsers() (int, error)
+}
+
+// AuthUserWriter creates and updates users.
+type AuthUserWriter interface {
+	CreateUser(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*database.User, error)
+	UpdateUser(user *database.User) error
+}
+
+// AuthSessionStore issues, reads, lists and revokes sessions.
+type AuthSessionStore interface {
+	CreateSession(userID, ip, userAgent string, ttl time.Duration) (*database.Session, error)
+	GetSession(id string) (*database.Session, error)
 	ListUserSessions(userID string) ([]database.Session, error)
 	RevokeSession(id string) error
-	UpdateUser(user *database.User) error
+}
+
+// AuthRoleReader resolves roles by id or name.
+type AuthRoleReader interface {
+	GetRoleByID(id string) (*database.Role, error)
+	GetRoleByName(name string) (*database.Role, error)
+}
+
+// AuthStore is the narrow database interface AuthHandler requires.
+// Only the methods actually called by the handler are listed here.
+//
+// Split into the 4 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it.
+type AuthStore interface {
+	AuthUserReader
+	AuthUserWriter
+	AuthSessionStore
+	AuthRoleReader
 }
 
 const (

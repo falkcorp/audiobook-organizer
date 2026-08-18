@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
-// last-edited: 2026-07-03
+// last-edited: 2026-08-18
 
 package handlers
 
@@ -18,22 +18,57 @@ import (
 	ulid "github.com/oklog/ulid/v2"
 )
 
+// VersionBookReader reads a book and its version-group siblings.
+type VersionBookReader interface {
+	GetBookByID(id string) (*database.Book, error)
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+}
+
+// VersionBookWriter creates and updates books when splitting or merging groups.
+type VersionBookWriter interface {
+	CreateBook(book *database.Book) (*database.Book, error)
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+}
+
+// VersionBookFileStore reads book files and moves them between books.
+type VersionBookFileStore interface {
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
+}
+
+// VersionBookAuthorStore reads and replaces a book's author links.
+type VersionBookAuthorStore interface {
+	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
+	SetBookAuthors(bookID string, authors []database.BookAuthor) error
+}
+
+// VersionExternalIDStore reads and creates external ID mappings.
+type VersionExternalIDStore interface {
+	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
+	CreateExternalIDMapping(mapping *database.ExternalIDMapping) error
+}
+
+// VersionRawKVDeleter deletes a raw key. The narrowest and most dangerous piece
+// here, which is exactly why it is its own declaration.
+type VersionRawKVDeleter interface {
+	DeleteRaw(key string) error
+}
+
 // VersionsStore is the narrow database interface VersionsHandler requires.
 // It lists only the database.Store methods the version-grouping handlers
 // actually call, including the external-ID methods used by
 // reassignExternalIDsForFiles.
+//
+// Split into the 6 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it.
 type VersionsStore interface {
-	GetBookByID(id string) (*database.Book, error)
-	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
-	CreateBook(book *database.Book) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
-	GetBookFiles(bookID string) ([]database.BookFile, error)
-	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
-	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
-	SetBookAuthors(bookID string, authors []database.BookAuthor) error
-	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
-	CreateExternalIDMapping(mapping *database.ExternalIDMapping) error
-	DeleteRaw(key string) error
+	VersionBookReader
+	VersionBookWriter
+	VersionBookFileStore
+	VersionBookAuthorStore
+	VersionExternalIDStore
+	VersionRawKVDeleter
 }
 
 // VersionsHandler handles audiobook version-group endpoints: listing, linking,
