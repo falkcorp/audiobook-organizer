@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/store_slices.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d3b6f14-2a97-4e51-b0c8-5f7e91d24a63
-// last-edited: 2026-08-17
+// last-edited: 2026-08-18
 
 package maintenance
 
@@ -78,37 +78,84 @@ type regroupSnapshotReader interface {
 	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
 }
 
-// fsRegroupStore is the widest slice in this file at 11 methods — the
-// filesystem regroup apply path genuinely moves files between books, creates and
-// deletes rows, and reassigns external IDs. 11 of 398 is still the point: the
-// declaration now states that this helper may delete a book, which is worth
-// knowing at a glance.
-type fsRegroupStore interface {
-	CreateBookFile(file *database.BookFile) error
-	DeleteBook(id string) error
+// The two regroup apply paths -- filesystem and iTunes -- are explicitly twins,
+// and nine of their methods are the same nine. Those are declared once below and
+// embedded by both, so the shared vocabulary is visible in the type rather than
+// duplicated as two parallel lists that can drift apart silently.
+
+// regroupBookReader reads the book and its files. Shared by both regroup paths.
+type regroupBookReader interface {
 	GetBookByID(id string) (*database.Book, error)
-	GetBookFileByPath(filePath string) (*database.BookFile, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
-	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
-	ReassignExternalIDs(oldBookID, newBookID string) error
-	RecomputeBookAggregates(bookID string) error
+}
+
+// regroupBookMutator updates, deletes and re-aggregates a book. Shared by both
+// regroup paths. Worth reading twice: this is the half that can delete a book.
+type regroupBookMutator interface {
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	DeleteBook(id string) error
+	RecomputeBookAggregates(bookID string) error
+}
+
+// regroupFileMover moves book_file rows between books. Shared by both paths.
+type regroupFileMover interface {
+	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
+}
+
+// fsRegroupFileStore is the filesystem path's own file surface: it creates and
+// updates book_file rows and resolves them by path. The iTunes twin has no
+// equivalent -- it creates books, not files.
+type fsRegroupFileStore interface {
+	CreateBookFile(file *database.BookFile) error
 	UpdateBookFile(id string, file *database.BookFile) error
+	GetBookFileByPath(filePath string) (*database.BookFile, error)
+}
+
+// fsExternalIDReassigner moves every external ID from one book to another in a
+// single call. The iTunes twin reassigns one at a time; that difference is the
+// reason these are two declarations rather than one shared embed.
+type fsExternalIDReassigner interface {
+	ReassignExternalIDs(oldBookID, newBookID string) error
+}
+
+// fsRegroupStore is the filesystem regroup apply path: it genuinely moves files
+// between books, creates and deletes rows, and reassigns external IDs.
+//
+// Split into the five interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves;
+// the type checker proves it.
+type fsRegroupStore interface {
+	regroupBookReader
+	regroupBookMutator
+	regroupFileMover
+	fsRegroupFileStore
+	fsExternalIDReassigner
+}
+
+// itunesBookCreator creates a book row. The iTunes regroup path creates books
+// where the filesystem path creates book files.
+type itunesBookCreator interface {
+	CreateBook(book *database.Book) (*database.Book, error)
+}
+
+// itunesExternalIDReassigner repoints a single external ID at a new book.
+type itunesExternalIDReassigner interface {
+	ReassignExternalID(source, externalID, newBookID string) error
 }
 
 // itunesRegroupStore is the iTunes-side twin of fsRegroupStore. It creates books
 // rather than book files, and reassigns one external ID at a time.
+//
+// Split into the five interfaces above on 2026-08-18 -- three of them shared
+// with fsRegroupStore. This name is retained as their composition so the method
+// set is byte-identical and no consumer moves; the type checker proves it.
 type itunesRegroupStore interface {
-	CreateBook(book *database.Book) (*database.Book, error)
-	DeleteBook(id string) error
-	GetBookByID(id string) (*database.Book, error)
-	GetBookFiles(bookID string) ([]database.BookFile, error)
-	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
-	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
-	ReassignExternalID(source, externalID, newBookID string) error
-	RecomputeBookAggregates(bookID string) error
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	regroupBookReader
+	regroupBookMutator
+	regroupFileMover
+	itunesBookCreator
+	itunesExternalIDReassigner
 }
 
 // bookFileBulkDeleter deletes book_file rows by ID and can do nothing else.

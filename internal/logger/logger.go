@@ -1,7 +1,7 @@
 // file: internal/logger/logger.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f47ac10b-58cc-4372-a567-0e02b2c3d479
-// last-edited: 2026-06-17
+// last-edited: 2026-08-18
 
 package logger
 
@@ -68,28 +68,52 @@ type Change struct {
 	Summary    string // human-readable
 }
 
-// Logger is the central interface for logging, progress, and change tracking.
-type Logger interface {
+// LevelLogger is the leveled logging surface. Most consumers want only this.
+type LevelLogger interface {
 	Trace(msg string, args ...any)
 	Debug(msg string, args ...any)
 	Info(msg string, args ...any)
 	Warn(msg string, args ...any)
 	Error(msg string, args ...any)
+}
 
+// ProgressReporter reports operation progress. No-op on StandardLogger.
+type ProgressReporter interface {
 	// Progress reporting (operations only; no-op on StandardLogger)
 	UpdateProgress(current, total int, message string)
+}
 
+// ChangeRecorder accumulates and reports per-operation change counters.
+type ChangeRecorder interface {
 	// Change tracking
 	RecordChange(change Change)
-
 	// Get accumulated change counters (e.g., {"book_create": 150})
 	ChangeCounters() map[string]int
+}
 
+// CancellationReporter exposes whether the surrounding operation was canceled.
+type CancellationReporter interface {
 	// Operation awareness
 	IsCanceled() bool
+}
 
+// SubLoggerFactory derives a child logger scoped to a subsystem.
+type SubLoggerFactory interface {
 	// Create child logger with subsystem prefix
 	With(subsystem string) Logger
+}
+
+// Logger is the central interface for logging, progress, and change tracking.
+//
+// Split into the 5 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it.
+type Logger interface {
+	LevelLogger
+	ProgressReporter
+	ChangeRecorder
+	CancellationReporter
+	SubLoggerFactory
 }
 
 // Compile-time assertions that both concrete types fully implement Logger.

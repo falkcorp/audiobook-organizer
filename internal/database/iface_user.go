@@ -1,5 +1,5 @@
 // file: internal/database/iface_user.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ca96abf5-5353-428c-aa7f-903b91a481e8
 
 package database
@@ -53,9 +53,8 @@ type UserPreferenceStore interface {
 	GetAllPreferencesForUser(userID string) ([]UserPreferenceKV, error)
 }
 
-// UserPlaylistStore covers smart + static user playlists (spec 3.4).
-type UserPlaylistStore interface {
-	CreateUserPlaylist(pl *UserPlaylist) (*UserPlaylist, error)
+// UserPlaylistReader looks up and lists playlists.
+type UserPlaylistReader interface {
 	GetUserPlaylist(id string) (*UserPlaylist, error)
 	GetUserPlaylistByName(name string) (*UserPlaylist, error)
 	GetUserPlaylistByITunesPID(pid string) (*UserPlaylist, error)
@@ -64,9 +63,24 @@ type UserPlaylistStore interface {
 	// the API to scope list results per user (prevents cross-user disclosure).
 	// An empty userID matches playlists with an empty CreatedByUserID.
 	ListUserPlaylistsForUser(userID, playlistType string, limit, offset int) ([]UserPlaylist, int, error)
+	ListDirtyUserPlaylists() ([]UserPlaylist, error)
+}
+
+// UserPlaylistWriter creates, updates and deletes playlists.
+type UserPlaylistWriter interface {
+	CreateUserPlaylist(pl *UserPlaylist) (*UserPlaylist, error)
 	UpdateUserPlaylist(pl *UserPlaylist) error
 	DeleteUserPlaylist(id string) error
-	ListDirtyUserPlaylists() ([]UserPlaylist, error)
+}
+
+// UserPlaylistStore covers smart + static user playlists (spec 3.4).
+//
+// Split into the 2 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it.
+type UserPlaylistStore interface {
+	UserPlaylistReader
+	UserPlaylistWriter
 }
 
 // PlaylistStore covers the legacy series-playlist auto-generator.
