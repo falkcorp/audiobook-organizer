@@ -1,5 +1,5 @@
 // file: internal/database/iface_metadata.go
-// version: 1.0.0
+// version: 1.1.0
 //
 // METADATA-CACHED-MATCHER: storage surface for the per-book
 // metadata-candidate cache. Cache lives under PebbleDB key prefix
@@ -76,4 +76,43 @@ type MetadataCacheStore interface {
 	// ListMetadataCacheKeys returns one summary per cached entry,
 	// ordered by FetchedAt descending. Caller paginates.
 	ListMetadataCacheKeys() ([]MetadataCacheSummary, error)
+}
+
+// Split out of iface_misc.go on 2026-08-18, which held 27 interface
+// declarations in one file. A file named `misc` is where wide interfaces go to
+// avoid review: BookFileStore reached 27 methods while living there.
+
+// MetadataStore covers MetadataFieldState, change history, and
+// alternative titles.
+type MetadataStore interface {
+	GetMetadataFieldStates(bookID string) ([]MetadataFieldState, error)
+	UpsertMetadataFieldState(state *MetadataFieldState) error
+	DeleteMetadataFieldState(bookID, field string) error
+	RecordMetadataChange(record *MetadataChangeRecord) error
+	GetMetadataChangeHistory(bookID string, field string, limit int) ([]MetadataChangeRecord, error)
+	GetBookChangeHistory(bookID string, limit int) ([]MetadataChangeRecord, error)
+	GetBookAlternativeTitles(bookID string) ([]BookAlternativeTitle, error)
+	AddBookAlternativeTitle(bookID, title, source, language string) error
+	RemoveBookAlternativeTitle(bookID, title string) error
+	SetBookAlternativeTitles(bookID string, titles []BookAlternativeTitle) error
+}
+
+// RejectedMetadataStore records candidates that were rejected (user action,
+// below-threshold, duration mismatch, wrong language) so auditing is possible.
+type RejectedMetadataStore interface {
+	AddMetadataRejection(r MetadataRejection) error
+	GetMetadataRejections(bookID string) ([]MetadataRejection, error)
+	DeleteMetadataRejections(bookID string) error
+}
+
+// AIJobsStore is the subset of Store used by internal/ai/aijobs.
+type AIJobsStore interface {
+	CreateAIJob(job AIJob, payloadJSON []byte) error
+	GetAIJob(id string) (AIJob, error)
+	GetAIJobByBatchID(batchID string) (AIJob, error)
+	GetAIJobPayload(id string) ([]byte, error)
+	MarkAIJobSubmitted(id, batchID string) error
+	MarkAIJobCompleted(id, status string, successCount, errorCount int, rowErrors []AIJobRowError) error
+	MarkAIJobFailed(id, errMsg string) error
+	ListAIJobs(typeFilter, statusFilter string, limit, offset int) ([]AIJob, error)
 }
