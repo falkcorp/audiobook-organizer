@@ -123,16 +123,15 @@ type AudiobooksStore interface {
 	AudiobookSyncStore
 }
 
-// AudiobookService is the narrow *audiobookspkg.AudiobookService subset the
-// moved handlers use. The four list-pipeline-only methods (GetAudiobooks,
-// FetchBookFilesForBooks, EnrichAudiobooksWithNamesAndFiles,
-// CountAudiobooksFiltered) are NOT here: they are only called by
-// buildAudiobookListResponse, which stays in package server (the relocated
-// audiobooks_helpers.go calls the concrete service) and is reached from the
-// listAudiobooks handler via the injected buildListResponse closure.
-type AudiobookService interface {
+// AudiobookReader AudiobookReader is the plain read side: fetch one book, its tag comparison view, and the library count.
+type AudiobookReader interface {
 	GetAudiobook(ctx context.Context, id string) (*database.Book, error)
 	GetAudiobookTags(ctx context.Context, id, compareID, snapshotTS string) (map[string]any, error)
+	CountAudiobooks(ctx context.Context) (int, error)
+}
+
+// AudiobookTrashService AudiobookTrashService is the soft-delete lifecycle: list and count what is in the trash, restore one, delete one, and purge.
+type AudiobookTrashService interface {
 	GetSoftDeletedBooks(ctx context.Context, limit, offset int, olderThanDays *int) ([]database.Book, error)
 	// CountSoftDeletedBooks is the exact trash size. It replaced a
 	// fetch-10,000-and-len() whose count saturated and whose error was
@@ -140,13 +139,38 @@ type AudiobookService interface {
 	CountSoftDeletedBooks(ctx context.Context, olderThanDays *int) (int, error)
 	PurgeSoftDeletedBooks(ctx context.Context, deleteFiles bool, olderThanDays *int) (*audiobookspkg.PurgeResult, error)
 	RestoreAudiobook(ctx context.Context, id string) (*database.Book, error)
-	CountAudiobooks(ctx context.Context) (int, error)
 	DeleteAudiobook(ctx context.Context, id string, opts *audiobookspkg.DeleteAudiobookOptions) (map[string]any, error)
-	EnrichAudiobooksWithNames(books []database.Book) []audiobookspkg.AudiobookDetail
+}
+
+// AudiobookUserTagService AudiobookUserTagService is the user-tag surface: enumerate, read per book, and batch add/remove.
+type AudiobookUserTagService interface {
 	ListAllUserTags() ([]database.TagWithCount, error)
 	GetBookUserTags(bookID string) ([]string, error)
 	BatchUpdateUserTags(bookIDs, addTags, removeTags []string) (int, error)
+}
+
+// AudiobookViewDecorator AudiobookViewDecorator turns raw book rows into the detail shape the list endpoints return, and drops the caches that shape is built from.
+type AudiobookViewDecorator interface {
+	EnrichAudiobooksWithNames(books []database.Book) []audiobookspkg.AudiobookDetail
 	InvalidateBookCaches()
+}
+
+// AudiobookService is the narrow *audiobookspkg.AudiobookService subset the
+// moved handlers use. The four list-pipeline-only methods (GetAudiobooks,
+// FetchBookFilesForBooks, EnrichAudiobooksWithNamesAndFiles,
+// CountAudiobooksFiltered) are NOT here: they are only called by
+// buildAudiobookListResponse, which stays in package server (the relocated
+// audiobooks_helpers.go calls the concrete service) and is reached from the
+// listAudiobooks handler via the injected buildListResponse closure.
+//
+// Split into the 4 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it.
+type AudiobookService interface {
+	AudiobookReader
+	AudiobookTrashService
+	AudiobookUserTagService
+	AudiobookViewDecorator
 }
 
 // AudiobookUpdater is the narrow *audiobookspkg.AudiobookUpdateService subset
