@@ -1,0 +1,33 @@
+# file: pyproject.toml
+# version: 1.0.0
+# guid: 4d8f1a63-2c95-4e07-b3a8-6f52d90c7e14
+# last-edited: 2026-08-18
+
+# Black's configuration lives here and ONLY here. It used to live in
+# .python-black, a name black does not look for: `black .` at the repo root
+# silently used defaults (line-length 88, not the 100 configured here) while
+# Super Linter, which was passed the file explicitly, used 100. Two different
+# formatters depending on how you invoked it.
+#
+# Ruff keeps its own ruff.toml: ruff's precedence is .ruff.toml > ruff.toml >
+# pyproject.toml, so ruff.toml still wins and nothing moves.
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311', 'py312']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''

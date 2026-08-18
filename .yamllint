@@ -1,8 +1,41 @@
+# file: .yamllint
+# version: 2.0.0
+# guid: a2b3c4d5-e6f7-89ab-cdef-0123456789ab
+
+# Consolidated 2026-08-18. This repo had TWO yamllint configs that disagreed:
+# .yamllint (line-length 80, document-start left at yamllint's default of
+# "required") which bare `yamllint` auto-discovered, and .yaml-lint.yml
+# (line-length 120, document-start disabled) which pre-commit and Super Linter
+# were explicitly pointed at. Running the tool by hand gave different results
+# from CI. This file is the pre-commit content — the one actually in force —
+# under the name yamllint auto-discovers.
+#
+# document-start is the sharpest case and the reason `disable` below is correct
+# rather than merely convenient. Measured on this repo: under the orphan config
+# yamllint reported a missing-document-start error for 19 of 19 files in
+# .github/workflows/, because 0 of 19 begin with `---`. The repo's actual and
+# consistent convention is no leading `---`, so a config demanding one flags
+# every file it sees and teaches everyone to ignore yamllint output. Keeping the
+# rule disabled matches what the repo does; requiring it would be a 19-file
+# reformat nobody asked for. Enable it only alongside that reformat.
+
 extends: default
+
 rules:
   line-length:
-    max: 80
+    max: 120
     level: warning
+
   indentation:
     spaces: 2
-    indent-sequences: consistent
+    indent-sequences: true
+    check-multi-line-strings: false
+
+  truthy:
+    allowed-values: ['true', 'false', 'on', 'off']
+
+  comments:
+    min-spaces-from-content: 1
+
+  document-start: disable
+  document-end: disable

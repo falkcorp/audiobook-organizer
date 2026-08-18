@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-08-18-ci-lint-wiring-audit.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 2f6b8d43-9c15-4e70-a8b2-51d037e9c4a8 -->
 <!-- last-edited: 2026-08-18 -->
 
@@ -55,6 +55,14 @@ So super-linter has never bitched at anyone on this repo, and there is nothing t
 it has to be added.
 
 ## The config pointers are broken independently of all the above
+
+> **RESOLVED 2026-08-18 in this branch.** The tables below record what was *found*, not current
+> state. All configs now live at the repo root under the names their tools auto-discover,
+> `LINTER_RULES_PATH=.`, and every `*_CONFIG_FILE` is a bare filename that resolves — verified
+> at 0 dangling pointers. `.github/linters/` is deprecated. Fixing this also surfaced two
+> manual-vs-CI divergences that the path bug had been hiding: two disagreeing yamllint configs
+> (including `document-start`, which flagged 19 of 19 workflow files under the auto-discovered
+> one) and a black config in a filename black never reads.
 
 `.github/linters/super-linter-pr.env` — 4 of its 8 `*_CONFIG_FILE` entries point at files that do
 not exist:
