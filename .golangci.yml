@@ -1,5 +1,5 @@
 # file: .golangci.yml
-# version: 1.2.0
+# version: 1.3.0
 # guid: 8d2a1f47-6c93-4b0e-a15d-7f3e28c9b604
 # last-edited: 2026-08-18
 
@@ -151,8 +151,21 @@ linters:
       #
       # Consequence, and the reason the width gate ratchets on the COUNT rather
       # than on a per-file baseline: the count is stable across checkouts and
-      # caches, the paths are not. Excluding `.worktrees/` makes local runs
-      # deterministic; it does not change the number.
+      # caches, the paths are not.
+      #
+      # CORRECTION 2026-08-18: "it does not change the number" was true when
+      # written and is no longer. It held because no //nolint:interfacebloat
+      # override existed yet. Suppression is resolved by RE-READING the source at
+      # the reported position, so once a declaration carries a //nolint, a
+      # replayed path into a checkout that is gone means the directive is never
+      # read and the finding it suppressed leaks into the count. Measured from
+      # .worktrees/pathrepair: 6 findings vs CI's 4, the two extra being
+      # BookReader and ServerDeps, both attributed to a ../absplit/ that no
+      # longer existed. The exclusion below also cannot help there -- it only
+      # matches from the repo root, and check-interface-width.sh cds to the
+      # worktree root, where a sibling renders as `../name/`. The gate now
+      # detects unreadable paths itself and exits 2 rather than reporting a
+      # number; see scripts/check-interface-width.sh.
       - \.worktrees/
     rules:
       # nolintlint is enabled to make WIDTH overrides auditable — an

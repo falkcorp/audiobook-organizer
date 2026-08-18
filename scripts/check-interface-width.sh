@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # file: scripts/check-interface-width.sh
-# version: 1.2.0
+# version: 1.3.0
 # guid: 5f1c07a3-84be-4d29-9e60-3b7a2d5c81ef
 # last-edited: 2026-08-18
 #
@@ -56,6 +56,49 @@ is v2 format, and a v1 binary earlier on PATH exits 3 without linting anything.
 MSG
   exit 2
 fi
+# A finding's PATH is load-bearing, not cosmetic: golangci-lint resolves
+# `//nolint` suppression by re-reading the source at the position it reported. If
+# that path does not exist, no directive is found and the finding it was
+# suppressing leaks into the count.
+#
+# That is reachable here. The result cache is keyed by file CONTENT, and every
+# git worktree of this repo declares the same module path with byte-identical
+# files, so an unchanged file replays whichever path was recorded first --
+# including a path into a worktree that has since been deleted. Measured
+# 2026-08-18 from .worktrees/pathrepair: 6 findings, two of them (BookReader,
+# ServerDeps) attributed to ../absplit/... which was not on disk at all. Both
+# carry an explained //nolint at exactly the reported line in the live tree.
+# `golangci-lint cache clean` restored the true count of 4, matching CI.
+#
+# .golangci.yml excludes `\.worktrees/`, and its comment concludes that
+# cross-worktree attribution "does not change the number". That held when it was
+# written, before any //nolint:interfacebloat override existed -- suppressed
+# findings are precisely the ones it does not hold for. The exclusion also only
+# matches when the run starts at the repo root; line 11 cds to the worktree root,
+# so a sibling renders as `../name/` and the pattern cannot fire.
+#
+# A poisoned cache is wrong in BOTH directions -- it inflates the count here, and
+# nothing stops it from replaying a path whose line happens to carry an unrelated
+# nolint and hiding a real finding. Neither number is a measurement, so refuse to
+# report one.
+stale=$(printf '%s\n' "$output" | grep -E '\(interfacebloat\)$' \
+  | sed -E 's/^([^:]+):[0-9]+:[0-9]+:.*/\1/' | sort -u \
+  | while IFS= read -r f; do [[ -n "$f" && -f "$f" ]] || printf '%s\n' "$f"; done)
+if [[ -n "$stale" ]]; then
+  printf '%s\n' "$stale" | sed 's/^/  /' >&2
+  cat >&2 <<MSG
+
+FAIL: the paths above were reported by golangci-lint but do not exist on disk, so
+its result cache is replaying stale entries from another checkout of this module.
+Any //nolint on those declarations went unread, so this count is not a
+measurement in either direction.
+
+  golangci-lint cache clean
+
+MSG
+  exit 2
+fi
+
 actual=$(printf '%s\n' "$output" | grep -cE '\(interfacebloat\)$' || true)
 
 echo "interface-width: baseline=$baseline actual=$actual"
