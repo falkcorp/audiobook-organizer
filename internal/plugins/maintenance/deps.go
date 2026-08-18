@@ -17,58 +17,98 @@ import (
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
-// ServerDeps is the narrow interface that *server.Server satisfies implicitly.
-// All operations are expressed as methods so there is no import cycle.
-type ServerDeps interface {
+// StoreProvider exposes the database handle.
+type StoreProvider interface {
 	Store() database.Store
+}
 
-	// ----- delegated run helpers -----
-
+// MetadataRunners runs the metadata enrichment and write-back operations.
+type MetadataRunners interface {
 	// RunIsbnEnrichment delegates to server.runIsbnEnrichment (idempotent).
 	RunIsbnEnrichment(ctx context.Context, progress operations.ProgressReporter, opID string) error
 	// RunMetadataRefreshScan delegates to server.runMetadataRefreshScan (read-only).
 	RunMetadataRefreshScan(ctx context.Context, progress operations.ProgressReporter) error
 	// RunBulkWriteBack delegates to server.runBulkWriteBack (resumable via startIdx).
 	RunBulkWriteBack(ctx context.Context, opID string, bookIDs []string, doRename bool, startIdx int, progress operations.ProgressReporter) error
-	// RunAutoPurgeSoftDeleted delegates to server.runAutoPurgeSoftDeleted.
-	RunAutoPurgeSoftDeleted(opID string)
-	// ExecuteSeriesPrune delegates to server.executeSeriesPrune.
-	ExecuteSeriesPrune(ctx context.Context, store database.Store, progress operations.ProgressReporter, opID string) error
-	// ExecuteSeriesNormalizeCore delegates to server.executeSeriesNormalizeCore.
-	// Returns slice of affected series IDs and any error.
-	ExecuteSeriesNormalizeCore(ctx context.Context, store database.Store, enqueueWB func(string)) ([]string, error)
-
-	// ----- one-shot startup ops -----
-
 	// BackfillExternalIDs, RemuxMalformedM4BFiles, and TranscodeMalformedM4BFiles
 	// take a progress callback (processed, total int, msg string) — total may
 	// be 0 when unknown ahead of a paginated pass — and return the impl's
 	// error so a fatal setup failure or persistence error can fail the op
 	// instead of being silently swallowed (C2/H7). progress may be nil.
 	BackfillExternalIDs(progress func(processed, total int, msg string)) error
+	// MetadataUpgradeRun runs the metadata upgrade scan up to limit books.
+	// progress may be nil; when non-nil it is updated every 25 books checked
+	// (M7, 2026-07 error-correction sweep — this is a 120-minute,
+	// network-bound op that previously reported nothing between start and
+	// result).
+	MetadataUpgradeRun(ctx context.Context, limit int, progress operations.ProgressReporter) (checked, upgraded, skipped, errs int, err error)
+}
+
+// SeriesRunners runs the series maintenance operations.
+type SeriesRunners interface {
+	// ExecuteSeriesPrune delegates to server.executeSeriesPrune.
+	ExecuteSeriesPrune(ctx context.Context, store database.Store, progress operations.ProgressReporter, opID string) error
+	// ExecuteSeriesNormalizeCore delegates to server.executeSeriesNormalizeCore.
+	// Returns slice of affected series IDs and any error.
+	ExecuteSeriesNormalizeCore(ctx context.Context, store database.Store, enqueueWB func(string)) ([]string, error)
+}
+
+// MediaFileRunners runs the audio-container repair operations.
+type MediaFileRunners interface {
 	// StripMovementAtoms, RemuxMalformedM4BFiles, and TranscodeMalformedM4BFiles
 	// take ctx so their per-file library walks stop early on cancellation
 	// (SYS-1); pass the op's run context.
 	StripMovementAtoms(ctx context.Context)
 	RemuxMalformedM4BFiles(ctx context.Context, progress func(processed, total int, msg string)) error
 	TranscodeMalformedM4BFiles(ctx context.Context, progress func(processed, total int, msg string)) error
+}
 
-	// ----- store helpers called by ops -----
-
+// CleanupRunners runs the retention and reclamation operations.
+type CleanupRunners interface {
+	// RunAutoPurgeSoftDeleted delegates to server.runAutoPurgeSoftDeleted.
+	RunAutoPurgeSoftDeleted(opID string)
 	CleanupOrphanedTempFiles(rootDir string, opID string) int
 	CleanupTrashedVersions() int
 	SweepArchivedBooks() int
+	// PruneOldLogs prunes operation logs older than retentionDays.
+	PruneOldLogs(retentionDays int) error
+}
 
-	// ----- accessors for optional components -----
-
+// ActivityLogOps covers the activity log.
+type ActivityLogOps interface {
 	// ActivityFlushOp flushes the activity log for the given operation.
 	ActivityFlushOp(opID string)
+	// CompactActivityLog runs the activity log compact+summarize+prune cycle.
+	CompactActivityLog(ctx context.Context,
+		compactionDays, changeDays, debugDays int,
+	) (compacted int, summarized int, pruned int, err error)
+}
+
+// WriteBackOps covers the iTunes write-back queue.
+type WriteBackOps interface {
 	// EnqueueWriteBack enqueues a book for write-back via the batcher (no-op if nil).
 	EnqueueWriteBack(bookID string)
 	// PollBatch polls OpenAI for completed batch jobs; returns processed count.
 	PollBatch(ctx context.Context) (int, error)
+}
+
+// DedupRunners runs the dedup review and triage operations.
+type DedupRunners interface {
 	// DedupLLMReview runs the LLM review of ambiguous dedup candidates.
 	DedupLLMReview(ctx context.Context) error
+	// DedupTriageExactPending scans all pending book dedup candidates,
+	// classifies each into one of five populations (genuine / stub / fragment /
+	// title_leak / unknown), and returns a TriageReport. When apply is false
+	// (dry-run, the default), no candidates are modified. When apply is true,
+	// every candidate whose class is IsPurgeable (stub, title_leak) is
+	// dismissed via UpdateCandidateStatus(id, "dismissed") — genuine, fragment,
+	// and unknown candidates are never touched. Returns an error if the
+	// embedding store is not initialised.
+	DedupTriageExactPending(ctx context.Context, apply bool) (*TriageReport, error)
+}
+
+// CacheInvalidator drops cached aggregates so they recompute.
+type CacheInvalidator interface {
 	// InvalidateDedupCache invalidates the author-duplicates dedup cache.
 	InvalidateDedupCache()
 	// InvalidateAuthorsCache invalidates the cached author list.
@@ -85,12 +125,10 @@ type ServerDeps interface {
 	// 24-hour TTL and is warmed at startup, so without this the op's result is
 	// invisible on /api/v1/series for up to a day and reads as a no-op.
 	InvalidateSeriesCache()
-	// MetadataUpgradeRun runs the metadata upgrade scan up to limit books.
-	// progress may be nil; when non-nil it is updated every 25 books checked
-	// (M7, 2026-07 error-correction sweep — this is a 120-minute,
-	// network-bound op that previously reported nothing between start and
-	// result).
-	MetadataUpgradeRun(ctx context.Context, limit int, progress operations.ProgressReporter) (checked, upgraded, skipped, errs int, err error)
+}
+
+// TranscriptionRunners covers transcription candidate search and apply.
+type TranscriptionRunners interface {
 	// SearchTranscriptionCandidate finds the top-scoring metadata candidate for
 	// bookID using transTitle as the query. The returned score may exceed 1.0
 	// (uncapped scale with transcription boosts applied). Returns found=false
@@ -113,34 +151,27 @@ type ServerDeps interface {
 		candTitle string,
 		candAuthor string,
 	) error
+}
+
+// StoreOptimizer compacts the auxiliary stores.
+type StoreOptimizer interface {
 	// OptimizeAIScanStore optimizes the AI scan store (no-op if nil).
 	OptimizeAIScanStore() error
 	// OptimizeOLStore optimizes the OpenLibrary cache store (no-op if nil).
 	OptimizeOLStore() error
-	// PruneOldLogs prunes operation logs older than retentionDays.
-	PruneOldLogs(retentionDays int) error
-	// CompactActivityLog runs the activity log compact+summarize+prune cycle.
-	CompactActivityLog(ctx context.Context,
-		compactionDays, changeDays, debugDays int,
-	) (compacted int, summarized int, pruned int, err error)
+}
 
-	// DedupTriageExactPending scans all pending book dedup candidates,
-	// classifies each into one of five populations (genuine / stub / fragment /
-	// title_leak / unknown), and returns a TriageReport. When apply is false
-	// (dry-run, the default), no candidates are modified. When apply is true,
-	// every candidate whose class is IsPurgeable (stub, title_leak) is
-	// dismissed via UpdateCandidateStatus(id, "dismissed") — genuine, fragment,
-	// and unknown candidates are never touched. Returns an error if the
-	// embedding store is not initialised.
-	DedupTriageExactPending(ctx context.Context, apply bool) (*TriageReport, error)
-
-	// ----- feature flags -----
-
+// CapabilityProbes reports which optional subsystems are wired.
+type CapabilityProbes interface {
 	HasDedupEngine() bool
 	HasMetadataFetchService() bool
 	HasISBNEnrichment() bool
 	HasAIParsing() bool
 	HasBatchPoller() bool
+}
+
+// RuntimeConfig exposes the retention and path settings the jobs read.
+type RuntimeConfig interface {
 	RootDir() string
 	LogRetentionDays() int
 	PurgeSoftDeletedAfterDays() int
@@ -148,17 +179,50 @@ type ServerDeps interface {
 	ActivityLogRetentionChangeDays() int
 	ActivityLogRetentionDebugDays() int
 	BackupRetentionDays() int
+}
 
-	// ----- operation orchestration (used by library.optimize) -----
-
+// OpEnqueuer enqueues and awaits other operations.
+type OpEnqueuer interface {
 	// EnqueueOp enqueues a child operation by defID with optional params.
 	// Returns the operation ID of the newly enqueued (or deduped existing) run.
 	EnqueueOp(ctx context.Context, defID string, params any) (string, error)
-
 	// WaitForOp blocks until the operation with the given ID reaches a terminal
 	// state (completed, failed, canceled, dropped) or ctx is done.
 	// Returns nil on success, non-nil on failure or context cancellation.
 	WaitForOp(ctx context.Context, opID string) error
+}
+
+// ServerDeps is the narrow interface that *server.Server satisfies implicitly.
+// All operations are expressed as methods so there is no import cycle.
+//
+// Split into the 14 interfaces above on 2026-08-18. At 43 methods this was the
+// widest interface in the repository -- wider than anything in internal/database,
+// which is where the debt was assumed to live.
+//
+// The name is retained as their composition so the method set is byte-identical:
+// *server.Server still satisfies it implicitly, and the test fakes asserting
+// `var _ ServerDeps = ...` (title_backfill_test.go, backfill_ops_test.go) compile
+// unchanged. The type checker is what proves that.
+//
+// The payoff is in plugin_test.go, which skips three tests with "requires full
+// ServerDeps stub": an op needing only CapabilityProbes and RuntimeConfig can now
+// take those two rather than stubbing all 43.
+type ServerDeps interface { //nolint:interfacebloat // transitional composition of the
+	// 14 interfaces above, deleted once each op takes only the pieces it uses.
+	StoreProvider
+	MetadataRunners
+	SeriesRunners
+	MediaFileRunners
+	CleanupRunners
+	ActivityLogOps
+	WriteBackOps
+	DedupRunners
+	CacheInvalidator
+	TranscriptionRunners
+	StoreOptimizer
+	CapabilityProbes
+	RuntimeConfig
+	OpEnqueuer
 }
 
 // ----- reporter adapter -----
