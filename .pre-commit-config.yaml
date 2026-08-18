@@ -4,7 +4,7 @@
 
 # Pre-commit hooks configuration for comprehensive code quality checks
 # This configuration uses official pre-commit.com hooks and integrates with
-# our existing linter configurations in .github/linters/
+# our existing linter configurations at the repo root
 
 repos:
   # Pre-commit built-in hooks
@@ -184,9 +184,9 @@ repos:
     rev: v0.14.3
     hooks:
       - id: ruff-check
-        args: [--config=.github/linters/ruff.toml, --fix]
+        args: [--config=ruff.toml, --fix]
       - id: ruff-format
-        args: [--config=.github/linters/ruff.toml]
+        args: [--config=ruff.toml]
 
   # Pyupgrade for modernizing Python code (Dict->dict, List->list, etc.)
   - repo: https://github.com/asottile/pyupgrade
@@ -222,7 +222,7 @@ repos:
       - id: prettier
         types_or: [javascript, jsx, ts, tsx, json, css, scss, yaml, markdown]
         exclude_types: [python]
-        args: [--config=.github/linters/.prettierrc.json]
+        args: [--config=.prettierrc]
 
   # Rust formatting and linting - DISABLED: no root Cargo.toml in this repo
   # - repo: https://github.com/doublify/pre-commit-rust
@@ -253,7 +253,6 @@ repos:
     rev: v1.37.1
     hooks:
       - id: yamllint
-        args: [--config-file=.yaml-lint.yml]
 
   # Markdown formatting and linting
   - repo: https://github.com/igorshubovych/markdownlint-cli

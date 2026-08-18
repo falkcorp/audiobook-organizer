@@ -93,7 +93,6 @@ sync:
     - '.github/workflows/unified-automation.yml'
     - '.github/instructions/'
     - '.github/prompts/'
-    - '.github/linters/'
     - '.github/dependabot.yml'
     - '.github/copilot-instructions.md'
     - '.pre-commit-config.yaml'
@@ -108,8 +107,8 @@ sync:
   # Files to explicitly exclude from sync (repo-specific configs)
   exclude_files:
     - '.github/workflow-config.yaml' # Each repo has its own config
-    - '.github/linters/super-linter-ci.env' # Repo-specific linter config
-    - '.github/linters/.eslintrc.yml' # Repo-specific ESLint config
+    - 'super-linter-ci.env' # Repo-specific linter config
+    - 'web/eslint.config.mjs' # Repo-specific ESLint config (flat config lives in web/)
     - '.github/unified-automation-config.json' # Repo-specific automation config
     - 'go.mod' # Language-specific dependency files
     - 'go.sum' # Language-specific dependency files
