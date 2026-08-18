@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
 // last-edited: 2026-08-18
 
@@ -54,9 +54,20 @@ type MetadataEntityResolver interface {
 	CreateSeries(name string, authorID *int) (*database.Series, error)
 }
 
-// MetadataChangeRecorder appends to the metadata change history.
-type MetadataChangeRecorder interface {
+// MetadataAuditWriter writes the bookkeeping rows that accompany a metadata
+// apply — the change-history entry and the legacy supervisor operation row.
+// Neither touches the book itself; both exist so an apply leaves a trail.
+//
+// These were two single-method interfaces until 2026-08-18. They were merged
+// because MetadataStore then declared 8 entries, which is exactly
+// interfacebloat's limit: the next method added to this handler's surface would
+// have failed the width gate on a one-line change and forced the author to
+// restructure someone else's grouping. Six groups plus the carried embed leaves
+// one slot of headroom.
+type MetadataAuditWriter interface {
 	RecordMetadataChange(record *database.MetadataChangeRecord) error
+	// Legacy supervisor op row (batchWriteBackAudiobooks).
+	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
 }
 
 // MetadataRejectionStore records and reads per-book metadata rejections.
@@ -87,12 +98,6 @@ type MetadataBookQueryStore interface {
 	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
 }
 
-// MetadataOperationCreator creates the legacy supervisor operation row.
-type MetadataOperationCreator interface {
-	// Legacy supervisor op row (batchWriteBackAudiobooks).
-	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
-}
-
 // BookRatingWriter writes a book rating.
 type BookRatingWriter interface {
 	// Rating PATCH (handleUpdateBookRating).
@@ -110,16 +115,15 @@ type BookRatingWriter interface {
 // duplicates / system / audiobooks handler getStore seam). The concrete
 // database.Store implementations satisfy it.
 //
-// Split into the 7 interfaces above on 2026-08-18. This name is retained as
+// Split into the 6 interfaces above on 2026-08-18. This name is retained as
 // their composition so the method set is byte-identical and no consumer moves; the
 // type checker proves it.
 type MetadataStore interface {
 	MetadataEntityResolver
-	MetadataChangeRecorder
+	MetadataAuditWriter
 	MetadataRejectionStore
 	BookSnapshotStore
 	MetadataBookQueryStore
-	MetadataOperationCreator
 	BookRatingWriter
 
 	// Embedded interfaces carried through from the original declaration.
