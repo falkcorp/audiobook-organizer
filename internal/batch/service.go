@@ -1,6 +1,7 @@
 // file: internal/batch/service.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
+// last-edited: 2026-08-18
 
 package batch
 
@@ -11,12 +12,21 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// BatchService handles bulk operations on audiobooks.
-type BatchService struct {
-	db database.BookStore
+// batchBookStore is the three-method slice of the book store that batch
+// operations need. Was database.BookStore (51 methods) — the other 48 were
+// carried by every caller purely to satisfy the parameter.
+type batchBookStore interface {
+	GetBookByID(id string) (*database.Book, error)
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	DeleteBook(id string) error
 }
 
-func NewBatchService(db database.BookStore) *BatchService {
+// BatchService handles bulk operations on audiobooks.
+type BatchService struct {
+	db batchBookStore
+}
+
+func NewBatchService(db batchBookStore) *BatchService {
 	return &BatchService{db: db}
 }
 

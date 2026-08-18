@@ -1,7 +1,7 @@
 // file: internal/metadata/enhanced.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
-// last-edited: 2026-08-15
+// last-edited: 2026-08-18
 
 package metadata
 
@@ -809,6 +809,13 @@ func ExportMetadata(books []database.BookCore) (map[string]interface{}, error) {
 	return result, nil
 }
 
+// importMetadataStore is the single method ImportMetadata calls. It previously
+// took database.BookStore (51 methods), which is the reason several consumer
+// interfaces in other packages embed database.BookStore at all.
+type importMetadataStore interface {
+	CreateBook(book *database.Book) (*database.Book, error)
+}
+
 // ImportMetadata imports book metadata from a structured format.
 //
 // Parallelized via registry.RunItems (CONC-13): each worker processes one
@@ -824,7 +831,7 @@ func ExportMetadata(books []database.BookCore) (map[string]interface{}, error) {
 // via memSync, which serializes on hashicorp/go-memdb's Txn(true) exclusive
 // writer lock — concurrent CreateBook calls cannot race or corrupt state at
 // this concurrency.
-func ImportMetadata(data map[string]interface{}, store database.BookStore, validate bool) (int, []error) {
+func ImportMetadata(data map[string]interface{}, store importMetadataStore, validate bool) (int, []error) {
 	booksData, ok := data["books"].([]interface{})
 	if !ok {
 		return 0, []error{fmt.Errorf("invalid data format: books field missing or invalid")}

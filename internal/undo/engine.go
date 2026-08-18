@@ -1,6 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
+// last-edited: 2026-08-18
 //
 // Undo engine (spec 3.2 task 3). Reverses the destructive changes
 // recorded by a prior operation by walking its operation_changes
@@ -167,10 +168,17 @@ func revertFileMove(change *database.OperationChange) error {
 	return os.Rename(change.NewValue, change.OldValue)
 }
 
+// metadataReverter is the two-method slice of the book store that reverting a
+// metadata change needs. Was database.BookStore (51 methods).
+type metadataReverter interface {
+	GetBookByID(id string) (*database.Book, error)
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+}
+
 // revertMetadataUpdate restores a book field from the change's
 // OldValue. OldValue is either a plain string (for single-field
 // changes) or a JSON object (for multi-field snapshots).
-func revertMetadataUpdate(store database.BookStore, change *database.OperationChange) error {
+func revertMetadataUpdate(store metadataReverter, change *database.OperationChange) error {
 	if change.BookID == "" {
 		return fmt.Errorf("no book_id on metadata change %s", change.ID)
 	}

@@ -1,7 +1,7 @@
 // file: cmd/seed.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 7d2e9a4f-1b85-4c63-9f0a-3e8d7b2c1f56
-// last-edited: 2026-07-16
+// last-edited: 2026-08-18
 //
 // `seed` populates a fresh database with synthetic books for local
 // development. Use it after `make build` so a dev can hit `make run`
@@ -243,7 +243,15 @@ func upsertSeries(store database.SeriesStore, name string, authorID *int) (*data
 	return store.CreateSeries(name, authorID)
 }
 
-func purgeSeedBooks(store database.BookStore) (int, error) {
+// purgeStore is what purgeSeedBooks actually needs. It previously took
+// database.BookStore (51 methods) to call two of them; the wide parameter
+// forced every value passed here to carry the whole book surface.
+type purgeStore interface {
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	DeleteBook(id string) error
+}
+
+func purgeSeedBooks(store purgeStore) (int, error) {
 	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return 0, err
