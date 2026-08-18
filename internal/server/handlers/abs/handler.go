@@ -36,22 +36,40 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
+// ABSUserStore ABSUserStore reads and updates the user rows the ABS auth flow touches.
+type ABSUserStore interface {
+	GetUserByID(id string) (*database.User, error)
+	GetUserByUsername(username string) (*database.User, error)
+	UpdateUser(user *database.User) error
+}
+
+// ABSSessionReader ABSSessionReader looks up Audiobookshelf sessions -- by id, by refresh-token hash, or all of a user's.
+type ABSSessionReader interface {
+	GetABSSession(id string) (*database.ABSSession, error)
+	GetABSSessionByRefreshHash(hash string) (*database.ABSSession, error)
+	ListABSSessionsForUser(userID string) ([]database.ABSSession, error)
+}
+
+// ABSSessionWriter ABSSessionWriter creates, updates and revokes Audiobookshelf sessions. Revocation is on the write side because it mutates the row rather than deleting it.
+type ABSSessionWriter interface {
+	CreateABSSession(session *database.ABSSession) error
+	UpdateABSSession(session *database.ABSSession) error
+	RevokeABSSession(id string) error
+	RevokeAllABSSessionsForUser(userID string) (int, error)
+}
+
 // Store is the narrow slice of the database the ABS auth surface needs.
 //
 // Declared here rather than added to database.Store so no shared interface file has
 // to change; *database.PebbleStore satisfies it via pebble_store_abssession.go.
+//
+// Split into the 3 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it.
 type Store interface {
-	GetUserByID(id string) (*database.User, error)
-	GetUserByUsername(username string) (*database.User, error)
-	UpdateUser(user *database.User) error
-
-	CreateABSSession(session *database.ABSSession) error
-	GetABSSession(id string) (*database.ABSSession, error)
-	GetABSSessionByRefreshHash(hash string) (*database.ABSSession, error)
-	UpdateABSSession(session *database.ABSSession) error
-	ListABSSessionsForUser(userID string) ([]database.ABSSession, error)
-	RevokeABSSession(id string) error
-	RevokeAllABSSessionsForUser(userID string) (int, error)
+	ABSUserStore
+	ABSSessionReader
+	ABSSessionWriter
 }
 
 // UserDataProvider supplies the user-scoped payload that Phase 6 owns.
