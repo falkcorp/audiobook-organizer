@@ -1,7 +1,7 @@
 // file: internal/deluge/integration.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e5f6a7b8-c9d0-1234-ef01-345678901234
-// last-edited: 2026-07-03
+// last-edited: 2026-08-18
 //
 // Deluge integration for library centralization.
 //
@@ -124,6 +124,12 @@ func NotifyDelugeMoveStorage(torrentHash, newPath string) {
 	}
 }
 
+// organizeNotifyStore is the one method NotifyDelugeAfterOrganize calls. The
+// parameter previously embedded database.BookVersionStore, 9 methods.
+type organizeNotifyStore interface {
+	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
+}
+
 // NotifyDelugeAfterOrganize tells Deluge to follow a book that was
 // just moved into the library by the organize pipeline.
 //
@@ -135,9 +141,7 @@ func NotifyDelugeMoveStorage(torrentHash, newPath string) {
 //
 // Best-effort: errors are logged but do not bubble up — the organize
 // operation already succeeded.
-func NotifyDelugeAfterOrganize(store interface {
-	database.BookVersionStore
-}, bookID, newPath string) {
+func NotifyDelugeAfterOrganize(store organizeNotifyStore, bookID, newPath string) {
 	versions, err := store.GetBookVersionsByBookID(bookID)
 	if err != nil {
 		slog.Warn("deluge-organize failed to load versions for book", "bookID", bookID, "err", err)
@@ -150,6 +154,12 @@ func NotifyDelugeAfterOrganize(store interface {
 	}
 }
 
+// undoNotifyStore is the two methods NotifyDelugeAfterUndo calls; was 44.
+type undoNotifyStore interface {
+	GetBookByID(id string) (*database.Book, error)
+	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
+}
+
 // NotifyDelugeAfterUndo checks whether the reverted operation moved
 // Deluge-sourced files and updates the torrent storage path.
 //
@@ -157,10 +167,7 @@ func NotifyDelugeAfterOrganize(store interface {
 // before the organize operation ran). This is the destination Deluge needs
 // to know about — NOT book.FilePath, which may not yet be updated in the DB
 // at the point this is called from the undo engine.
-func NotifyDelugeAfterUndo(store interface {
-	database.BookReader
-	database.BookVersionStore
-}, bookID, oldFilePath string) {
+func NotifyDelugeAfterUndo(store undoNotifyStore, bookID, oldFilePath string) {
 	if oldFilePath == "" {
 		return
 	}
@@ -176,12 +183,14 @@ func NotifyDelugeAfterUndo(store interface {
 	}
 }
 
+// swapNotifyStore is the one method NotifyDelugeAfterVersionSwap calls; was 44.
+type swapNotifyStore interface {
+	GetBookByID(id string) (*database.Book, error)
+}
+
 // NotifyDelugeAfterVersionSwap checks whether the swapped versions
 // have torrent hashes and updates Deluge accordingly.
-func NotifyDelugeAfterVersionSwap(store interface {
-	database.BookReader
-	database.BookVersionStore
-}, fromVer, toVer *database.BookVersion, bookFilePath string) {
+func NotifyDelugeAfterVersionSwap(store swapNotifyStore, fromVer, toVer *database.BookVersion, bookFilePath string) {
 	if toVer != nil && toVer.TorrentHash != "" {
 		NotifyDelugeMoveStorage(toVer.TorrentHash, bookFilePath)
 	}
