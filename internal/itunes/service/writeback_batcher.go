@@ -1,7 +1,7 @@
 // file: internal/itunes/service/writeback_batcher.go
-// version: 5.4.1
+// version: 5.5.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e90
-// last-edited: 2026-07-18
+// last-edited: 2026-08-18
 //
 // Combined write-back batcher: handles location updates, track additions,
 // and track removals in a single ITL read-modify-write cycle.
@@ -68,16 +68,18 @@ type WriteBackBatcherConfig struct {
 	LibraryWritePath    string
 }
 
-// WriteBackStore is the narrow slice of database.Store the batcher needs.
-// Defined here (not in internal/database) so the batcher stays package-
-// portable: when the concrete type moves to internal/itunes/service/ in
-// Phase 2 M1 it drags its deps along without re-importing internal/database
-// via the service-level Store composite.
+// WriteBackStore is what the ITL write-back batcher reads and marks.
+//
+// Measured with an empty-interface compiler probe: exactly these five. The
+// previous form embedded database.BookStore, AuthorReader, BookFileStore and
+// ExternalIDStore -- 102 methods transitively -- with the five it used named in
+// trailing comments. The comments were right; they just were not enforceable.
 type WriteBackStore interface {
-	database.BookStore       // GetBookByID, MarkITunesSynced
-	database.AuthorReader    // GetAuthorByID
-	database.BookFileStore   // GetBookFiles
-	database.ExternalIDStore // MarkExternalIDRemoved
+	GetBookByID(id string) (*database.Book, error)
+	MarkITunesSynced(bookIDs []string) (int64, error)
+	GetAuthorByID(id int) (*database.Author, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	MarkExternalIDRemoved(source, externalID string) error
 }
 
 // WriteBackBatcher collects ITL operations and flushes them in a single batch

@@ -1,6 +1,7 @@
 // file: internal/itunes/service/playlist_sync.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 1e9f0a8b-2c3d-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-08-18
 //
 // iTunes playlist sync (spec 3.4 tasks 5-6).
 //
@@ -29,10 +30,15 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 )
 
-// playlistSyncStore is the narrow slice of the service's Store that
-// PlaylistSync needs.
+// playlistSyncStore is the playlist half of the iTunes sync.
+//
+// Measured with an empty-interface compiler probe: 4 methods. Previously
+// database.UserPlaylistStore wholesale, 9 transitively.
 type playlistSyncStore interface {
-	database.UserPlaylistStore
+	GetUserPlaylistByITunesPID(pid string) (*database.UserPlaylist, error)
+	ListDirtyUserPlaylists() ([]database.UserPlaylist, error)
+	CreateUserPlaylist(p *database.UserPlaylist) (*database.UserPlaylist, error)
+	UpdateUserPlaylist(p *database.UserPlaylist) error
 }
 
 // PlaylistSync owns the two-way iTunes-playlist sync paths (import

@@ -1,7 +1,7 @@
 // file: internal/itunes/service/path_reconcile.go
-// version: 2.4.1
+// version: 2.5.0
 // guid: 9e3b7a1d-4c2f-4a60-b8d5-2f1e8c0d9a47
-// last-edited: 2026-07-16
+// last-edited: 2026-08-18
 //
 // One-time (repeatable) backfill that walks every book with an
 // iTunes persistent ID, recomputes book_files.ITunesPath from the
@@ -26,12 +26,15 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
-// pathReconcilerStore is the narrow slice of the service's Store that
-// PathReconciler needs.
+// pathReconcilerStore is what the path reconciler reads and rewrites.
+//
+// Measured with an empty-interface compiler probe: 4 methods. Previously
+// database.BookStore + BookFileStore + OperationStore, 108 transitively.
 type pathReconcilerStore interface {
-	database.BookStore
-	database.BookFileStore
-	database.OperationStore
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	UpdateBookFile(bookID string, file *database.BookFile) error
+	DeleteOperationState(opID string) error
 }
 
 // PathReconciler walks iTunes-tracked books, recomputes their
