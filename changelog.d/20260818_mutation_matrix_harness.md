@@ -40,6 +40,20 @@ The score's denominator is killed+survived; not-applied and build-fail are
 excluded deliberately, since counting them would let a broken table inflate the
 number this exists to protect.
 
+There is a fifth failure mode no guard can prevent, only make visible: a flaky
+suite. The baseline is checked once, so an intermittently-failing test can score
+a mutation as killed without the mutation being detected at all. The remedy is
+the third column — **every killed line records which test caught it**, so you
+can check a mutation was caught by the test you expected rather than by
+unrelated noise. This is not theoretical: during development a mutation to the
+missing-file census was reported killed by `TestChaptersBackfill_...` *and* the
+census test, which is how the flake was spotted at all.
+
+Results are emitted incrementally, so the run ends with an explicit
+`# END OF RUN` marker. A file without it did not finish, and its totals are
+partial — a distinction a reader skimming to the last result line cannot
+otherwise make.
+
 Ships with `scripts/mutation-tables/missing-file-census.muts` as the worked
 example — 22 mutations over the missing-file identity-signal census, which on
 its first run killed 11 and left 10 survivors, every one of them a counter that
