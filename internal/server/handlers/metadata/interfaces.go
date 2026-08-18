@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
-// last-edited: 2026-08-16
+// last-edited: 2026-08-18
 
 // Narrow dependency interfaces for the metadata-domain HTTP handlers (the 19
 // per-book + library metadata endpoints extracted from the server package's
@@ -42,6 +42,63 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
+// MetadataEntityResolver resolves author and series names to rows, creating them if absent.
+type MetadataEntityResolver interface {
+	// Author/series resolution (bulkFetchMetadata + metadata.BatchUpdateMetadata's
+	// author/series name → ID resolution, INIT-3-T4). The series/history methods
+	// were added so this type satisfies metadata.BatchUpdateMetadata's widened
+	// store parameter without a cast (the doc above notes it is passed straight in).
+	GetAuthorByName(name string) (*database.Author, error)
+	CreateAuthor(name string) (*database.Author, error)
+	GetSeriesByName(name string, authorID *int) (*database.Series, error)
+	CreateSeries(name string, authorID *int) (*database.Series, error)
+}
+
+// MetadataChangeRecorder appends to the metadata change history.
+type MetadataChangeRecorder interface {
+	RecordMetadataChange(record *database.MetadataChangeRecord) error
+}
+
+// MetadataRejectionStore records and reads per-book metadata rejections.
+type MetadataRejectionStore interface {
+	// Metadata rejections (markAudiobookNoMatch / handleGetMetadataRejections).
+	AddMetadataRejection(r database.MetadataRejection) error
+	GetMetadataRejections(bookID string) ([]database.MetadataRejection, error)
+}
+
+// BookSnapshotStore manages copy-on-write book snapshots: revert, list, prune.
+type BookSnapshotStore interface {
+	// Copy-on-write snapshots (revert / list / prune CoW versions).
+	RevertBookToVersion(id string, ts time.Time) (*database.Book, error)
+	GetBookSnapshots(id string, limit int) ([]database.BookSnapshot, error)
+	PruneBookSnapshots(id string, keepCount int) (int, error)
+}
+
+// MetadataBookQueryStore reads books by author or series for bulk write-back.
+// Both are already reachable via the embedded database.BookStore; they are
+// redeclared to document what this handler touches.
+type MetadataBookQueryStore interface {
+	// Filtered book queries (handleBulkWriteBack).
+	// GetBooksByAuthorIDCore / GetBooksBySeriesIDCore are Core-typed
+	// (STOREFID P3-W2 / W4) — already required via the embedded
+	// database.BookStore above; redeclared here purely for the "what this
+	// handler touches" documentation grouping.
+	GetBooksByAuthorIDCore(authorID int) ([]database.BookCore, error)
+	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
+}
+
+// MetadataOperationCreator creates the legacy supervisor operation row.
+type MetadataOperationCreator interface {
+	// Legacy supervisor op row (batchWriteBackAudiobooks).
+	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
+}
+
+// BookRatingWriter writes a book rating.
+type BookRatingWriter interface {
+	// Rating PATCH (handleUpdateBookRating).
+	UpdateBookRating(id string, req database.UpdateBookRatingRequest) error
+}
+
 // MetadataStore is the narrow database.Store subset the metadata handlers
 // require. It embeds database.BookStore (BookReader + BookWriter) so the
 // handler can pass the live store directly to metadata.BatchUpdateMetadata /
@@ -52,41 +109,66 @@ import (
 // test that swaps server.store post-wire is still observed (mirrors the dedup /
 // duplicates / system / audiobooks handler getStore seam). The concrete
 // database.Store implementations satisfy it.
+//
+// Split into the 7 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it.
 type MetadataStore interface {
+	MetadataEntityResolver
+	MetadataChangeRecorder
+	MetadataRejectionStore
+	BookSnapshotStore
+	MetadataBookQueryStore
+	MetadataOperationCreator
+	BookRatingWriter
+
+	// Embedded interfaces carried through from the original declaration.
 	database.BookStore
+}
 
-	// Author/series resolution (bulkFetchMetadata + metadata.BatchUpdateMetadata's
-	// author/series name → ID resolution, INIT-3-T4). The series/history methods
-	// were added so this type satisfies metadata.BatchUpdateMetadata's widened
-	// store parameter without a cast (the doc above notes it is passed straight in).
-	GetAuthorByName(name string) (*database.Author, error)
-	CreateAuthor(name string) (*database.Author, error)
-	GetSeriesByName(name string, authorID *int) (*database.Series, error)
-	CreateSeries(name string, authorID *int) (*database.Series, error)
-	RecordMetadataChange(record *database.MetadataChangeRecord) error
+// MetadataFetcher fetches and searches metadata for a book.
+type MetadataFetcher interface {
+	FetchMetadataForBook(ctx context.Context, id string) (*metafetch.FetchMetadataResponse, error)
+	FetchAndCache(ctx context.Context, bookID, query, author, narrator, series string, opts metafetch.SearchOptions) (*metafetch.MetadataCandidateCache, error)
+	SearchMetadataForBookWithOptions(id, query, author, narrator, series string, opts metafetch.SearchOptions) (*metafetch.SearchMetadataResponse, error)
+}
 
-	// Metadata rejections (markAudiobookNoMatch / handleGetMetadataRejections).
-	AddMetadataRejection(r database.MetadataRejection) error
-	GetMetadataRejections(bookID string) ([]database.MetadataRejection, error)
+// MetadataCandidateCacheStore reads and invalidates the cached candidate set.
+type MetadataCandidateCacheStore interface {
+	InvalidateCachedCandidates(bookID string) error
+	GetCachedCandidates(bookID string) (*metafetch.MetadataCandidateCache, bool, error)
+}
 
-	// Copy-on-write snapshots (revert / list / prune CoW versions).
-	RevertBookToVersion(id string, ts time.Time) (*database.Book, error)
-	GetBookSnapshots(id string, limit int) ([]database.BookSnapshot, error)
-	PruneBookSnapshots(id string, keepCount int) (int, error)
+// MetadataApplier applies a chosen candidate to a book, on disk and in tags.
+type MetadataApplier interface {
+	ApplyMetadataCandidate(id string, candidate metafetch.MetadataCandidate, fields []string) (*metafetch.FetchMetadataResponse, error)
+	ApplyMetadataFileIO(id string) error
+	RunApplyPipelineRenameOnly(id string, book *database.Book) error
+	ApplyMetadataSystemTags(bookID, sourceName, language string)
+}
 
-	// Filtered book queries (handleBulkWriteBack).
-	// GetBooksByAuthorIDCore / GetBooksBySeriesIDCore are Core-typed
-	// (STOREFID P3-W2 / W4) — already required via the embedded
-	// database.BookStore above; redeclared here purely for the "what this
-	// handler touches" documentation grouping.
-	GetBooksByAuthorIDCore(authorID int) ([]database.BookCore, error)
-	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
+// CoverDownloader fetches cover art in the background. Inline it was ~4s of a
+// measured 6.44s apply request.
+type CoverDownloader interface {
+	// DownloadPendingCover fetches the candidate's cover art and repoints the
+	// book at the local copy. Runs in the background: it was ~4s of a measured
+	// 6.44s apply request when it ran inline.
+	DownloadPendingCover(bookID, coverURL string)
+}
 
-	// Legacy supervisor op row (batchWriteBackAudiobooks).
-	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
+// MetadataWriteBacker writes metadata back to the files on disk.
+type MetadataWriteBacker interface {
+	WriteBackMetadataForBook(id string, segmentFilter ...[]string) (int, error)
+}
 
-	// Rating PATCH (handleUpdateBookRating).
-	UpdateBookRating(id string, req database.UpdateBookRatingRequest) error
+// MetadataMatchMarker marks a book as having no acceptable match.
+type MetadataMatchMarker interface {
+	MarkNoMatch(id string) error
+}
+
+// MetadataHistoryRecorder records applied metadata in the change history.
+type MetadataHistoryRecorder interface {
+	RecordChangeHistory(book *database.Book, meta metadata.BookMetadata, sourceName string)
 }
 
 // MetadataFetchService is the narrow *metafetch.Service subset the metadata
@@ -98,24 +180,18 @@ type MetadataStore interface {
 // WriteBackMetadataForBook keeps the variadic segment filter so the single call
 // (writeBackAudiobookMetadata) can invoke it both with and without a segment
 // list, matching the original.
+//
+// Split into the 7 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it.
 type MetadataFetchService interface {
-	FetchMetadataForBook(ctx context.Context, id string) (*metafetch.FetchMetadataResponse, error)
-	InvalidateCachedCandidates(bookID string) error
-	GetCachedCandidates(bookID string) (*metafetch.MetadataCandidateCache, bool, error)
-	FetchAndCache(ctx context.Context, bookID, query, author, narrator, series string, opts metafetch.SearchOptions) (*metafetch.MetadataCandidateCache, error)
-	SearchMetadataForBookWithOptions(id, query, author, narrator, series string, opts metafetch.SearchOptions) (*metafetch.SearchMetadataResponse, error)
-	ApplyMetadataCandidate(id string, candidate metafetch.MetadataCandidate, fields []string) (*metafetch.FetchMetadataResponse, error)
-	ApplyMetadataFileIO(id string) error
-
-	// DownloadPendingCover fetches the candidate's cover art and repoints the
-	// book at the local copy. Runs in the background: it was ~4s of a measured
-	// 6.44s apply request when it ran inline.
-	DownloadPendingCover(bookID, coverURL string)
-	WriteBackMetadataForBook(id string, segmentFilter ...[]string) (int, error)
-	MarkNoMatch(id string) error
-	RunApplyPipelineRenameOnly(id string, book *database.Book) error
-	RecordChangeHistory(book *database.Book, meta metadata.BookMetadata, sourceName string)
-	ApplyMetadataSystemTags(bookID, sourceName, language string)
+	MetadataFetcher
+	MetadataCandidateCacheStore
+	MetadataApplier
+	CoverDownloader
+	MetadataWriteBacker
+	MetadataMatchMarker
+	MetadataHistoryRecorder
 }
 
 // WriteBackEnqueuer is the narrow *itunesservice.WriteBackBatcher subset used by
