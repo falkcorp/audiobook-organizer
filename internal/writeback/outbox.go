@@ -1,7 +1,7 @@
 // file: internal/writeback/outbox.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c3d4e2f-6a7b-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-07-07
+// last-edited: 2026-08-18
 //
 // Durable outbox for the ITL write-back queue (backlog 4.3).
 //
@@ -23,22 +23,26 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
+// outboxStore is what this package actually calls, measured by emptying the
+// interface and reading the compiler's enumeration: 3 methods. It was an
+// inline anonymous interface of database.* embeds — 41 methods — repeated
+// at 2 parameters, invisible to any line-oriented tool.
+type outboxStore interface {
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetUserPreferenceForUser(userID, key string) (*database.UserPreferenceKV, error)
+	SetUserPreferenceForUser(userID, key, value string) error
+}
+
 const outboxPrefix = "outbox:writeback:"
 
 // WriteBackOutbox persists pending ITL write-back book IDs to the
 // store so they survive server restarts.
 type WriteBackOutbox struct {
-	store interface {
-		database.BookReader
-		database.UserPreferenceStore
-	}
+	store outboxStore
 }
 
 // NewWriteBackOutbox creates an outbox backed by the given store.
-func NewWriteBackOutbox(store interface {
-	database.BookReader
-	database.UserPreferenceStore
-}) *WriteBackOutbox {
+func NewWriteBackOutbox(store outboxStore) *WriteBackOutbox {
 	return &WriteBackOutbox{store: store}
 }
 
