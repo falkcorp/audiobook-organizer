@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_job_op_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d6fc8245-22c3-4636-a194-c57f613cf3af
-// last-edited: 2026-08-17
+// last-edited: 2026-08-18
 
 package server
 
@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -105,4 +106,65 @@ func TestMaintenanceOpIDIsRegistrable(t *testing.T) {
 		require.NotContains(t, id, ":", "op id %q contains ':', which RegisterOp rejects", id)
 		require.Equal(t, "maintenance."+job.ID(), id)
 	}
+}
+
+// --- Permissions -----------------------------------------------------------
+//
+// Until #2536, OperationDef.Permissions was persisted and read by nothing, so
+// the value registered here did not matter. It matters now: TriggerOperationV2
+// enforces it. These tests cover the two halves of the rule.
+
+// TestBulkFetchMetadataOpRequiresEditMetadata is the mutation-sensitive one, and
+// the reason it hardcodes the expected permission instead of deriving it from
+// the job: a test that asks the job what it wants and compares that to what the
+// def declares mirrors the production logic exactly, so it passes even when both
+// are wrong. Writing library.edit_metadata out in full is what makes this able
+// to fail.
+//
+// bulkFetchMetadataJob is the only job implementing PermissionAware
+// (bulk_fetch_metadata.go:43). Before this change its def declared
+// settings.manage, so a caller holding exactly the permission the job asks for
+// was refused.
+func TestBulkFetchMetadataOpRequiresEditMetadata(t *testing.T) {
+	reg := maintReg(t)
+	require.NoError(t, (&Server{}).RegisterMaintenanceJobOps(reg))
+
+	def, ok := reg.Def("maintenance.bulk-fetch-metadata")
+	require.True(t, ok, "bulk-fetch-metadata has no OperationDef")
+	require.Equal(t, []auth.Permission{auth.PermLibraryEditMetadata}, def.Permissions)
+	require.NotContains(t, def.Permissions, auth.PermSettingsManage,
+		"settings.manage must no longer be what this job requires")
+}
+
+// TestMaintenanceOpPermissionsMatchTheV1Rule covers the other half: every job
+// that does NOT implement PermissionAware keeps settings.manage. The v1
+// dispatcher applies exactly this rule (maintenance_dispatcher.go:91-96), and
+// phase 1 deletes that route, so any divergence here silently changes who can
+// run what at the moment the route goes.
+//
+// Both branches are asserted non-vacuous: if no job implemented PermissionAware,
+// the interesting half of this test would assert nothing at all.
+func TestMaintenanceOpPermissionsMatchTheV1Rule(t *testing.T) {
+	reg := maintReg(t)
+	require.NoError(t, (&Server{}).RegisterMaintenanceJobOps(reg))
+
+	var aware, plain int
+	for _, job := range maintenance.All() {
+		def, ok := reg.Def("maintenance." + job.ID())
+		require.Truef(t, ok, "job %q has no def", job.ID())
+		require.Lenf(t, def.Permissions, 1, "job %q should declare exactly one permission", job.ID())
+
+		if pa, isAware := job.(maintenance.PermissionAware); isAware && pa.Permission() != "" {
+			aware++
+			require.Equalf(t, auth.Permission(pa.Permission()), def.Permissions[0],
+				"job %q implements PermissionAware but its def declares something else", job.ID())
+			continue
+		}
+		plain++
+		require.Equalf(t, auth.PermSettingsManage, def.Permissions[0],
+			"job %q does not implement PermissionAware and must default to settings.manage", job.ID())
+	}
+
+	require.Positive(t, aware, "no job implements PermissionAware — the PermissionAware branch asserted nothing")
+	require.Positive(t, plain, "every job implements PermissionAware — the default branch asserted nothing")
 }

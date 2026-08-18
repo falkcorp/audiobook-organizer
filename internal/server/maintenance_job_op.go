@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_job_op.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 7f3a9c21-4b8e-4d56-a123-0e5f6c7d8e9f
-// last-edited: 2026-08-17
+// last-edited: 2026-08-18
 
 package server
 
@@ -48,10 +48,18 @@ func maintenanceOpID(jobID string) string { return "maintenance." + jobID }
 // ResumeDrop, so such a row took the drop path before this change too. The
 // observable difference across the deploy is one extra warning line.
 //
-// Permissions stay hardcoded to settings.manage rather than consulting the
-// PermissionAware interface. The bridge did the same, and per-job access control
-// is enforced separately by the dispatcher; wiring PermissionAware into the
-// OperationDef would be a behaviour change and belongs in its own PR.
+// Permissions come from the job's own PermissionAware implementation where it has
+// one, defaulting to settings.manage otherwise -- the same rule the v1 dispatcher
+// applies at maintenance_dispatcher.go:91-96.
+//
+// This used to be hardcoded to settings.manage, which was correct only for as
+// long as the dispatcher was the enforcing path. #2536 made the v2 trigger route
+// enforce OperationDef.Permissions, so the hardcoded value became the operative
+// one, and bulkFetchMetadataJob -- the single job that implements
+// PermissionAware -- was reachable only by settings.manage despite asking for
+// library.edit_metadata. That is stricter than intended, not laxer, but it is
+// still the wrong permission, and it diverges from the v1 route that phase 1
+// deletes.
 func (s *Server) RegisterMaintenanceJobOps(reg *opsregistry.Registry) error {
 	for _, job := range maintenance.All() {
 		if err := s.registerMaintenanceJobOp(reg, job); err != nil {
@@ -66,6 +74,15 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 	policy := job.Policy()
 	jobID := job.ID()
 
+	// A job that implements PermissionAware and returns a non-empty permission
+	// requires that one; everything else defaults to settings.manage. Kept
+	// deliberately identical to the v1 dispatcher's rule so retiring the v1 route
+	// (phase 1, step 2) cannot change who can run what.
+	required := auth.PermSettingsManage
+	if pa, ok := job.(maintenance.PermissionAware); ok && pa.Permission() != "" {
+		required = auth.Permission(pa.Permission())
+	}
+
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              maintenanceOpID(jobID),
 		Liveness:        policy.Liveness,
@@ -78,7 +95,7 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 		Timeout:         policy.Timeout,
 		ResumePolicy:    policy.ResumePolicy,
 		ConcurrencyKey:  policy.ConcurrencyKey,
-		Permissions:     []auth.Permission{auth.PermSettingsManage},
+		Permissions:     []auth.Permission{required},
 		Capabilities:    policy.Capabilities,
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p maintenanceJobOpParams

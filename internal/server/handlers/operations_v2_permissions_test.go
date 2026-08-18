@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2_permissions_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 61966351-b637-469e-8483-4e3819bf56f6
-// last-edited: 2026-08-17
+// last-edited: 2026-08-18
 
 // Covers TriggerOperationV2's per-def permission gate.
 //
@@ -127,24 +127,52 @@ func TestTriggerOperationV2_UnknownDefFallsThroughUnchanged(t *testing.T) {
 	assert.Equal(t, http.StatusAccepted, w.Code)
 }
 
-// bulk-fetch-metadata is the one job implementing PermissionAware, requiring
-// library.edit_metadata rather than settings.manage. Its OperationDef still
-// declares settings.manage (behaviour-preserved from the bridge), so this pins
-// the CURRENT state: threading PermissionAware into the def is a separate change
-// and this test is what will fail when someone makes it.
-func TestTriggerOperationV2_BulkFetchMetadataStillDeclaresSettingsManage(t *testing.T) {
+// A def declaring a permission other than settings.manage is enforced the same
+// way. bulk-fetch-metadata is the real instance: it is the one job implementing
+// PermissionAware, and as of the PermissionAware threading its def declares
+// library.edit_metadata rather than settings.manage.
+//
+// This test only proves the HANDLER honours whatever the def declares -- it
+// builds the def as a literal behind a mock registry, so nothing here reaches
+// registerMaintenanceJobOp. What the def is actually registered with is pinned
+// by TestBulkFetchMetadataOpRequiresEditMetadata in internal/server, which
+// exercises the real registration path. Both are needed: this one would keep
+// passing if the registration regressed.
+func TestTriggerOperationV2_EnforcesANonDefaultPermission(t *testing.T) {
 	registry := handlersmocks.NewMockOperationsRegistry(t)
 	registry.EXPECT().Def("maintenance.bulk-fetch-metadata").Return(opsregistry.OperationDef{
 		ID:          "maintenance.bulk-fetch-metadata",
-		Permissions: []auth.Permission{auth.PermSettingsManage},
+		Permissions: []auth.Permission{auth.PermLibraryEditMetadata},
 	}, true)
+	registry.EXPECT().EnqueueOp(mock.Anything, "maintenance.bulk-fetch-metadata", mock.Anything).Return("op10", nil)
 
 	h := handlers.NewOperationsV2Handler(nil, registry, nil, true)
 	c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2", `{"def_id":"maintenance.bulk-fetch-metadata"}`, nil)
-	// Holds exactly what the job's own PermissionAware asks for — and is still
-	// refused, because the def was registered with settings.manage.
+	// Holds exactly what the def asks for, and nothing else beyond the route guard.
 	withCallerPerms(c, auth.PermScanTrigger, auth.PermLibraryEditMetadata)
 	h.TriggerOperationV2(c)
 
+	assert.Equal(t, http.StatusAccepted, w.Code)
+	assert.Contains(t, w.Body.String(), "op10")
+}
+
+// The mirror image: settings.manage does NOT unlock a def that asks for
+// library.edit_metadata. Without this, the test above would pass for a handler
+// that had simply stopped checking.
+func TestTriggerOperationV2_SettingsManageDoesNotUnlockEditMetadata(t *testing.T) {
+	registry := handlersmocks.NewMockOperationsRegistry(t)
+	registry.EXPECT().Def("maintenance.bulk-fetch-metadata").Return(opsregistry.OperationDef{
+		ID:          "maintenance.bulk-fetch-metadata",
+		Permissions: []auth.Permission{auth.PermLibraryEditMetadata},
+	}, true)
+	// No EnqueueOp expectation: reaching it is the failure.
+
+	h := handlers.NewOperationsV2Handler(nil, registry, nil, true)
+	c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2", `{"def_id":"maintenance.bulk-fetch-metadata"}`, nil)
+	withCallerPerms(c, auth.PermScanTrigger, auth.PermSettingsManage)
+	h.TriggerOperationV2(c)
+
 	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), string(auth.PermLibraryEditMetadata))
+	registry.AssertNotCalled(t, "EnqueueOp", mock.Anything, mock.Anything, mock.Anything)
 }
