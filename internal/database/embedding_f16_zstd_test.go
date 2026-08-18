@@ -205,10 +205,12 @@ func randomUnitVector(rng *rand.Rand, dims int) []float32 {
 // blobs) for random unit vectors, and log the actual ratio for human inspection.
 //
 // The ≥3× target from the spec is achievable in production because:
-//   (a) Real OpenAI embeddings have much lower entropy than uniform random data.
-//   (b) Zstd at its default level exploits inter-vector patterns when processing
-//       many embeddings sequentially (it maintains an encoder state across calls
-//       via the package-level singleton encoder, which acts as a sliding dictionary).
+//
+//	(a) Real OpenAI embeddings have much lower entropy than uniform random data.
+//	(b) Zstd at its default level exploits inter-vector patterns when processing
+//	    many embeddings sequentially (it maintains an encoder state across calls
+//	    via the package-level singleton encoder, which acts as a sliding dictionary).
+//
 // These facts are demonstrated by the real corpus metrics logged in the PR description.
 func TestEncodeDecodeV1_CompressionRatio(t *testing.T) {
 	const dims = 3072

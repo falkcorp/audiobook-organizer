@@ -199,14 +199,15 @@ func TestStripBookFileForMemdb_AlreadyEmpty(t *testing.T) {
 // even when AcoustIDSeg0 is empty (stripped by stripBookFileForMemdb).
 //
 // This is the regression test for the fingerprint_status badge path:
-//   GetBookFilesForIDsCore → ComputeFingerprintFields → GetAcoustIDSeg0()
+//
+//	GetBookFilesForIDsCore → ComputeFingerprintFields → GetAcoustIDSeg0()
 //
 // Without this fallback, stripping Seg0 from memdb would make every book
 // appear as "fingerprint_status: none" on the /api/v1/audiobooks list.
 func TestGetAcoustIDSeg0_MemdbFallback(t *testing.T) {
 	tests := []struct {
-		name     string
-		bf       *BookFile
+		name         string
+		bf           *BookFile
 		wantNonEmpty bool
 	}{
 		{
@@ -289,7 +290,7 @@ func TestStripBookFileForMemdb_SegStripAndFallback(t *testing.T) {
 	// GetAcoustIDSeg0() on the stripped row must return non-empty
 	// (falls back to DurationSec), preserving the fingerprint_status badge.
 	if got := stripped.GetAcoustIDSeg0(); got == "" {
-		t.Errorf("GetAcoustIDSeg0() on stripped memdb row returned empty; "+
+		t.Errorf("GetAcoustIDSeg0() on stripped memdb row returned empty; " +
 			"fingerprint_status badge would be broken (fable5 T019 regression)")
 	}
 }
@@ -311,16 +312,16 @@ func TestStrippedBookSizeRegressionAssertion(t *testing.T) {
 	fileSize := int64(1234567890)
 
 	strippedBook := &Book{
-		ID:           "book-12345",
-		Title:        title,
-		AuthorID:     &authorID,
-		SeriesID:     &seriesID,
-		FilePath:     "/mnt/audiobooks/tolkien/the-hobbit/",
-		Language:     &language,
-		ISBN10:       &isbn10,
-		ASIN:         &asin,
-		Duration:     &duration,
-		FileSize:     &fileSize,
+		ID:       "book-12345",
+		Title:    title,
+		AuthorID: &authorID,
+		SeriesID: &seriesID,
+		FilePath: "/mnt/audiobooks/tolkien/the-hobbit/",
+		Language: &language,
+		ISBN10:   &isbn10,
+		ASIN:     &asin,
+		Duration: &duration,
+		FileSize: &fileSize,
 		// Heavy fields are stripped (nil in memdb):
 		// Description, VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments
 		// Author and Series pointers are nil at warm time (hydrated separately)

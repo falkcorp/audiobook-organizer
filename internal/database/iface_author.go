@@ -7,14 +7,26 @@ package database
 
 import "context"
 
-// AuthorReader is the read-only author slice (authors + aliases + book-author joins).
-type AuthorReader interface {
+// AuthorLookupReader resolves authors by identifier or name.
+type AuthorLookupReader interface {
 	GetAllAuthors() ([]Author, error)
 	GetAuthorByID(id int) (*Author, error)
 	GetAuthorByName(name string) (*Author, error)
+	// GetAuthorsByIDs returns a map from authorID → *Author for the given IDs.
+	// Missing IDs are absent from the map. Returns empty map (not nil) for empty input.
+	GetAuthorsByIDs(ids []int) (map[int]*Author, error)
+	GetAuthorTombstone(oldID int) (int, error)
+}
+
+// AuthorAliasReader reads author aliases.
+type AuthorAliasReader interface {
 	GetAuthorAliases(authorID int) ([]AuthorAlias, error)
 	GetAllAuthorAliases() ([]AuthorAlias, error)
 	FindAuthorByAlias(aliasName string) (*Author, error)
+}
+
+// AuthorBookReader reads the author-book relationship.
+type AuthorBookReader interface {
 	GetBookAuthors(bookID string) ([]BookAuthor, error)
 	// GetBooksByAuthorIDWithRoleCore is Core-typed (STOREFID P3-W2b): the
 	// return type is BookCore, not Book, so the nine heavy fields
@@ -23,15 +35,29 @@ type AuthorReader interface {
 	// compiler-enforced rather than silently nil'd. See
 	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, error)
-	GetAllAuthorBookCounts() (map[int]int, error)
-	GetAllAuthorFileCounts() (map[int]int, error)
-	GetAuthorTombstone(oldID int) (int, error)
 	// GetAuthorsByBookIDs returns a map from bookID → []Author for all given book IDs.
 	// Returns an empty map (not nil) if bookIDs is empty.
 	GetAuthorsByBookIDs(ctx context.Context, bookIDs []string) (map[string][]Author, error)
-	// GetAuthorsByIDs returns a map from authorID → *Author for the given IDs.
-	// Missing IDs are absent from the map. Returns empty map (not nil) for empty input.
-	GetAuthorsByIDs(ids []int) (map[int]*Author, error)
+}
+
+// AuthorCountReader reports per-author aggregates.
+type AuthorCountReader interface {
+	GetAllAuthorBookCounts() (map[int]int, error)
+	GetAllAuthorFileCounts() (map[int]int, error)
+}
+
+// AuthorReader is the read-only author slice (authors + aliases + book-author joins).
+//
+// Split into the 4 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it, because every implementation -- PebbleStore (496 methods)
+// and database.MockStore (399) among them -- fails to compile on a dropped or
+// re-signatured method.
+type AuthorReader interface {
+	AuthorLookupReader
+	AuthorAliasReader
+	AuthorBookReader
+	AuthorCountReader
 }
 
 // AuthorWriter is the write-only author slice.

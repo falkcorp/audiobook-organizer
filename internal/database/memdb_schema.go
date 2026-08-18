@@ -8,16 +8,16 @@ import "github.com/hashicorp/go-memdb"
 
 // Table names for the in-memory query store.
 const (
-	memTableBooks            = "books"
-	memTableAuthors          = "authors"
-	memTableSeries           = "series"
-	memTableBookFiles        = "book_files"
-	memTableNarrators        = "narrators"
-	memTableBookAuthors      = "book_authors"
-	memTableBookNarrators    = "book_narrators"
-	memTableImportPaths      = "import_paths"
-	memTableAuthorAliases    = "author_aliases"
-	memTableBlockedHashes    = "blocked_hashes"
+	memTableBooks         = "books"
+	memTableAuthors       = "authors"
+	memTableSeries        = "series"
+	memTableBookFiles     = "book_files"
+	memTableNarrators     = "narrators"
+	memTableBookAuthors   = "book_authors"
+	memTableBookNarrators = "book_narrators"
+	memTableImportPaths   = "import_paths"
+	memTableAuthorAliases = "author_aliases"
+	memTableBlockedHashes = "blocked_hashes"
 )
 
 // Index names.
@@ -420,7 +420,6 @@ func baseMemdbSchema() *memdb.DBSchema {
 					},
 				},
 			},
-
 		},
 	}
 }

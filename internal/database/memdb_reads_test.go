@@ -13,9 +13,9 @@ import (
 )
 
 // Local ptr helpers — names suffixed _mem to avoid conflict with poc_chai_test.go.
-func ptrBool_mem(b bool) *bool      { return &b }
-func ptrInt_mem(i int) *int         { return &i }
-func ptrInt64_mem(i int64) *int64   { return &i } //nolint:unused // kept for future tests
+func ptrBool_mem(b bool) *bool       { return &b }
+func ptrInt_mem(i int) *int          { return &i }
+func ptrInt64_mem(i int64) *int64    { return &i } //nolint:unused // kept for future tests
 func ptrString_mem(s string) *string { return &s } //nolint:unused // kept for future tests
 
 // seed inserts the given objects into the appropriate memdb tables.
@@ -124,8 +124,8 @@ func TestMemStore_GetAllSeriesFileCounts(t *testing.T) {
 		{ID: "f2", BookID: "b1", Missing: false},
 		{ID: "f3", BookID: "b2", Missing: false},
 		{ID: "f4", BookID: "b3", Missing: false},
-		{ID: "f5", BookID: "b3", Missing: true}, // missing — skipped
-		{ID: "f6", BookID: "b4", Missing: false}, // non-primary book — skipped
+		{ID: "f5", BookID: "b3", Missing: true},      // missing — skipped
+		{ID: "f6", BookID: "b4", Missing: false},     // non-primary book — skipped
 		{ID: "f7", BookID: "orphan", Missing: false}, // unknown book — skipped
 	}
 	seedMemStore(t, m, books, files, nil, nil)

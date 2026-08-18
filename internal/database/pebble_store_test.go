@@ -1288,10 +1288,10 @@ func TestGetAllSeriesBookCounts_Pebble(t *testing.T) {
 	for i := 1; i <= 5; i++ {
 		isPrimary := i <= 3 // Only first 3 are primary
 		book := &Book{
-			Title:           fmt.Sprintf("Series 1 Book %d", i),
-			AuthorID:        &author.ID,
-			SeriesID:        &series1.ID,
-			FilePath:        fmt.Sprintf("/test/path/s1b%d.mp3", i),
+			Title:            fmt.Sprintf("Series 1 Book %d", i),
+			AuthorID:         &author.ID,
+			SeriesID:         &series1.ID,
+			FilePath:         fmt.Sprintf("/test/path/s1b%d.mp3", i),
 			IsPrimaryVersion: &isPrimary,
 		}
 		_, err := store.CreateBook(book)
@@ -1302,10 +1302,10 @@ func TestGetAllSeriesBookCounts_Pebble(t *testing.T) {
 	for i := 1; i <= 3; i++ {
 		isPrimary := true
 		book := &Book{
-			Title:           fmt.Sprintf("Series 2 Book %d", i),
-			AuthorID:        &author.ID,
-			SeriesID:        &series2.ID,
-			FilePath:        fmt.Sprintf("/test/path/s2b%d.mp3", i),
+			Title:            fmt.Sprintf("Series 2 Book %d", i),
+			AuthorID:         &author.ID,
+			SeriesID:         &series2.ID,
+			FilePath:         fmt.Sprintf("/test/path/s2b%d.mp3", i),
 			IsPrimaryVersion: &isPrimary,
 		}
 		_, err := store.CreateBook(book)
@@ -1316,10 +1316,10 @@ func TestGetAllSeriesBookCounts_Pebble(t *testing.T) {
 	for i := 1; i <= 2; i++ {
 		isPrimary := true
 		book := &Book{
-			Title:           fmt.Sprintf("Series 3 Book %d", i),
-			AuthorID:        &author.ID,
-			SeriesID:        &series3.ID,
-			FilePath:        fmt.Sprintf("/test/path/s3b%d.mp3", i),
+			Title:            fmt.Sprintf("Series 3 Book %d", i),
+			AuthorID:         &author.ID,
+			SeriesID:         &series3.ID,
+			FilePath:         fmt.Sprintf("/test/path/s3b%d.mp3", i),
 			IsPrimaryVersion: &isPrimary,
 		}
 		_, err := store.CreateBook(book)
@@ -1371,4 +1371,3 @@ func BenchmarkGetAllSeriesBookCounts_Pebble(b *testing.B) {
 		_, _ = pstore.GetAllSeriesBookCounts_Pebble()
 	}
 }
-

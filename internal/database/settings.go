@@ -272,10 +272,6 @@ func (s *PebbleStore) DeleteSetting(key string) error {
 
 // SQLite implementation
 
-
-
-
-
 // Helper functions to get decrypted setting value from stores
 func GetDecryptedSetting(store Store, key string) (string, error) {
 	setting, err := store.GetSetting(key)

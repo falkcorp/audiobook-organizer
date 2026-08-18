@@ -196,4 +196,3 @@ func TestGetMigrationHistory(t *testing.T) {
 		}
 	})
 }
-

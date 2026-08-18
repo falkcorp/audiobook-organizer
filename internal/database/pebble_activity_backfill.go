@@ -35,8 +35,8 @@ const ActivityPebbleBackfillKey = "system:backfill:activity_pebble_v1_done"
 
 // ActivityBackfillResult holds the outcome of a NutsDB → Pebble backfill run.
 type ActivityBackfillResult struct {
-	TiersProcessed int `json:"tiers_processed"`
-	EntriesCopied  int `json:"entries_copied"`
+	TiersProcessed int  `json:"tiers_processed"`
+	EntriesCopied  int  `json:"entries_copied"`
 	DryRun         bool `json:"dry_run"`
 	AlreadyDone    bool `json:"already_done"`
 }
