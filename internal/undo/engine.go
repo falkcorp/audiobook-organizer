@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-08-18
 //
@@ -41,10 +41,21 @@ type UndoResult struct {
 // store: the database store
 // bookID: the ID of the book being reverted
 // oldFilePath: the path the file was restored to (original location before organize)
-type OnFileMovedFunc func(store interface {
-	database.BookReader
-	database.BookVersionStore
-}, bookID, oldFilePath string)
+// OnFileMovedFunc is notified after a file_move or organize_rename revert.
+// It takes no store: the implementor closes over whatever it needs, so this
+// package neither names nor propagates a database interface.
+type OnFileMovedFunc func(bookID, oldFilePath string)
+
+// undoStore is what the undo walk needs: the operation-change log, the two
+// book fields it rewrites, and enough to hand to the file-moved callback. The
+// parameter previously embedded database.BookStore + BookVersionStore +
+// OperationStore — 90 methods.
+type undoStore interface {
+	GetBookByID(id string) (*database.Book, error)
+	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
+	CreateOperationChange(change *database.OperationChange) error
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+}
 
 // RunUndoOperation loads the changes for targetOpID, walks them in
 // reverse order, and applies the inverse of each change. Progress
@@ -54,11 +65,7 @@ type OnFileMovedFunc func(store interface {
 // organize_rename change is successfully reverted. Pass nil if no
 // callback is needed.
 func RunUndoOperation(
-	store interface {
-		database.BookStore
-		database.BookVersionStore
-		database.OperationStore
-	},
+	store undoStore,
 	targetOpID string,
 	progress func(step string, pct int),
 	onFileMoved OnFileMovedFunc,
@@ -114,11 +121,7 @@ func RunUndoOperation(
 
 // revertChange applies the inverse of a single operation change.
 func revertChange(
-	store interface {
-		database.BookStore
-		database.BookVersionStore
-		database.OperationStore
-	},
+	store undoStore,
 	change *database.OperationChange,
 	onFileMoved OnFileMovedFunc,
 ) error {
@@ -128,7 +131,7 @@ func revertChange(
 			return err
 		}
 		if onFileMoved != nil {
-			onFileMoved(store, change.BookID, change.OldValue)
+			onFileMoved(change.BookID, change.OldValue)
 		}
 		return nil
 	case "metadata_update", "db_update":
@@ -280,9 +283,16 @@ type UndoConflictItem struct {
 	Reason     string `json:"reason"`
 }
 
+// conflictChecker is the two-method slice the preflight conflict scan needs.
+// Both entry points previously took database.Store — all 398 methods.
+type conflictChecker interface {
+	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
+	GetBookByID(id string) (*database.Book, error)
+}
+
 // PreflightUndoConflicts scans the operation's changes and reports
 // which ones can be safely undone vs which have conflicts.
-func PreflightUndoConflicts(store database.Store, operationID string) (*UndoConflictReport, error) {
+func PreflightUndoConflicts(store conflictChecker, operationID string) (*UndoConflictReport, error) {
 	changes, err := store.GetOperationChanges(operationID)
 	if err != nil {
 		return nil, fmt.Errorf("load changes: %w", err)
@@ -339,7 +349,7 @@ func PreflightUndoConflicts(store database.Store, operationID string) (*UndoConf
 	return report, nil
 }
 
-func checkFileMoveConflict(store database.Store, c *database.OperationChange) *UndoConflictItem {
+func checkFileMoveConflict(store conflictChecker, c *database.OperationChange) *UndoConflictItem {
 	if c.NewValue == "" {
 		return nil
 	}

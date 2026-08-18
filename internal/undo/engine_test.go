@@ -150,10 +150,7 @@ func TestRunUndoOperation_CallsOnFileMovedCallback(t *testing.T) {
 	var callbackBookID string
 	var callbackPath string
 
-	callback := func(store interface {
-		database.BookReader
-		database.BookVersionStore
-	}, bookID, oldFilePath string) {
+	callback := func(bookID, oldFilePath string) {
 		callbackCalled = true
 		callbackBookID = bookID
 		callbackPath = oldFilePath

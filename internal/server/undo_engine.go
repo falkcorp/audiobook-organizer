@@ -1,7 +1,7 @@
 // file: internal/server/undo_engine.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0b8c9d6e-1f7a-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-05-11
+// last-edited: 2026-08-18
 //
 // Backward-compatibility wrapper for the undo engine, now in internal/undo.
 // This file re-exports the public API from internal/undo with server-specific
@@ -42,7 +42,9 @@ func RunUndoOperation(
 		store,
 		targetOpID,
 		progress,
-		deluge.NotifyDelugeAfterUndo,
+		func(bookID, oldFilePath string) {
+			deluge.NotifyDelugeAfterUndo(store, bookID, oldFilePath)
+		},
 	)
 }
 

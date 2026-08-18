@@ -1,7 +1,7 @@
 // file: internal/server/deluge_integration.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 1c9d0e8f-2a3b-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-07-13
+// last-edited: 2026-08-18
 //
 // Deluge integration — HTTP handlers and thin shims.
 //
@@ -42,23 +42,22 @@ func NotifyDelugeMoveStorage(torrentHash, newPath string) {
 
 // NotifyDelugeAfterOrganize re-exports deluge.NotifyDelugeAfterOrganize.
 func NotifyDelugeAfterOrganize(store interface {
-	database.BookVersionStore
+	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
 }, bookID, newPath string) {
 	deluge.NotifyDelugeAfterOrganize(store, bookID, newPath)
 }
 
 // NotifyDelugeAfterUndo re-exports deluge.NotifyDelugeAfterUndo.
 func NotifyDelugeAfterUndo(store interface {
-	database.BookReader
-	database.BookVersionStore
+	GetBookByID(id string) (*database.Book, error)
+	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
 }, bookID, oldFilePath string) {
 	deluge.NotifyDelugeAfterUndo(store, bookID, oldFilePath)
 }
 
 // NotifyDelugeAfterVersionSwap re-exports deluge.NotifyDelugeAfterVersionSwap.
 func NotifyDelugeAfterVersionSwap(store interface {
-	database.BookReader
-	database.BookVersionStore
+	GetBookByID(id string) (*database.Book, error)
 }, fromVer, toVer *database.BookVersion, bookFilePath string) {
 	deluge.NotifyDelugeAfterVersionSwap(store, fromVer, toVer, bookFilePath)
 }

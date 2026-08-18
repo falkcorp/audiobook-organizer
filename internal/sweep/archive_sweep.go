@@ -1,7 +1,7 @@
 // file: internal/sweep/archive_sweep.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a9f8e7d6-c5b4-3a21-9087-654321fedcba
-// last-edited: 2026-07-07
+// last-edited: 2026-08-18
 //
 // Archive sweep for soft-deleted books (backlog 7.10).
 //
@@ -22,12 +22,18 @@ import (
 
 const archiveRetentionDays = 30
 
+// archiveSweepStore is the three-method slice the archive sweep needs. It
+// previously took an inline interface embedding database.BookStore and
+// database.BookFileStore — 78 methods.
+type archiveSweepStore interface {
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	DeleteBook(id string) error
+}
+
 // SweepArchivedBooks removes soft-deleted books past the retention
 // window. Returns the count of books cleaned up.
-func SweepArchivedBooks(store interface {
-	database.BookStore
-	database.BookFileStore
-}) int {
+func SweepArchivedBooks(store archiveSweepStore) int {
 	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		slog.Warn("archive sweep list books", "err", err)

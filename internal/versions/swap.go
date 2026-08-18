@@ -1,6 +1,7 @@
 // file: internal/versions/swap.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 6c3d5a2e-8b4c-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-08-18
 //
 // Primary-version swap tracked operation (spec 3.1 task 3).
 //
@@ -33,7 +34,9 @@ type VersionSwapParams struct {
 
 // NotifyDelugeFunc is a callback for notifying Deluge after a version swap.
 // The caller provides this from the server package where NotifyDelugeAfterVersionSwap lives.
-type NotifyDelugeFunc func(store database.Store, fromVer, toVer *database.BookVersion, bookFilePath string)
+// NotifyDelugeFunc is notified after a version swap. It takes no store — the
+// implementor closes over its own — so this package does not propagate one.
+type NotifyDelugeFunc func(fromVer, toVer *database.BookVersion, bookFilePath string)
 
 // RunVersionSwap executes the primary-swap operation. It's designed
 // to be called from both fresh requests and resume-on-restart.
@@ -163,7 +166,7 @@ func RunVersionSwap(
 
 	// ── Step 5: Notify Deluge + enqueue writeback ──────────────
 	if notifyDeluge != nil {
-		notifyDeluge(store, fromVer, toVer, book.FilePath)
+		notifyDeluge(fromVer, toVer, book.FilePath)
 	}
 	if onWriteBack != nil {
 		onWriteBack(params.BookID)
