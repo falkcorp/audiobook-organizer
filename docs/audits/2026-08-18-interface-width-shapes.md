@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-18-interface-width-shapes.md -->
-<!-- version: 2.1.0 -->
+<!-- version: 2.2.0 -->
 <!-- guid: 7e5b0c92-41da-4f38-b6a7-92d3f1e08c54 -->
 <!-- last-edited: 2026-08-18 -->
 
@@ -87,13 +87,14 @@ The count is per-PR, because an aggregate figure hides which change earned it:
 | #2542, #2545, #2546, #2547, #2549, #2550 | 9 | the flat-list splits |
 | #2553 | 7 | `AudiobookService` (13), `abs.Store` (10) |
 | #2554 | 6 | `bookHandlerStore` (12) — **deleted, not split** |
-| #2556 | **5** | `organizer.Store` (9 entries / 179 transitive) |
+| #2556 | 5 | `organizer.Store` (9 entries / 179 transitive) |
+| this PR | **4** | `audiobookUpdateStore` (11) — **deleted, not split** |
 
-The final 5 were measured, not projected: `main` plus both pending branches
-merged into a scratch tree, `golangci-lint` run with a cleared cache. They are
-`database.Store` (40), `itunes/service.Store` (17), `maintenance.JobStore` (12),
-and the `audiobookStore`/`audiobookUpdateStore` twins (11 each) — see §6 for why
-none of them yields to the same move.
+Every count here was measured, not projected — `golangci-lint` run with a cleared
+cache, and the 5 confirmed against an isolated clone of `main`. The final 4 are
+`database.Store` (40), `itunes/service.Store` (17), `maintenance.JobStore` (12)
+and `audiobookStore` (11) — see §6 for why none of them yields to the same move,
+and §7 for the two narrowings in this pass that the gate cannot see at all.
 
 ## 1. The width gate cannot see transitive width
 
@@ -201,9 +202,20 @@ that only agrees with itself is not a census.
 `//nolint:interfacebloat` (`database.BookReader`, and one in
 `internal/plugins/maintenance/deps.go`) and are invisible to the reported number.
 
-## 6. Why the remaining five are parked, not skipped
+## 6. Why the remaining four resist the split, and what happened to the fifth
 
-All five survivors resist the split-then-compose move for the same reason, and it
+**Update 2026-08-18 (later):** this section originally described *five* survivors and
+parked all of them. One turned out not to be a survivor at all, and the numbers for
+`audiobookStore` were understated. Both corrections are below.
+
+`audiobookUpdateStore` was **deleted, not split.** Probed in isolation, its own
+direct-call set was a single method (`GetBookByID`), and
+`NewAudiobookUpdateService` forwards its `db` straight into `NewAudiobookService`
+— so the declaration only ever restated `audiobookStore` under a second name. Same
+shape as `bookHandlerStore` in #2554: the cheapest real win on the board was a
+deletion, and calling it a "twin" in the table below had obscured that. Count 5 → 4.
+
+The remaining four resist the split-then-compose move for the same reason, and it
 is worth stating plainly so the next person does not spend a night rediscovering
 it: **they are not badly grouped, they are genuinely wide.**
 
@@ -212,22 +224,55 @@ it: **they are not badly grouped, they are genuinely wide.**
 | `database.Store` | 40 | — | The union type itself. Phase 2's job is to make it unreachable, not smaller. |
 | `itunes/service.Store` | 17 | 24 | Seven assignability constraints, incl. `database.OperationStore`. |
 | `maintenance.JobStore` | 12 | — | Deliberate: chosen over per-job interfaces in the #2534 arbitration. |
-| `audiobookStore` | 11 | **44** | See below. |
-| `audiobookUpdateStore` | 11 | — | Twin of the above. |
+| `audiobookStore` | 11 | **~50** | See below. |
 
 `audiobookStore` is the instructive one. It declares 11 entries — ten embeds and a
-method — and the service calls **44 distinct store methods** through it. Writing
-those 44 honestly, as named groups, needs six or seven groups of five to eight
-methods each. That is *worse* on the gate than the ten embeds currently hiding
-them, and no more honest to read.
+method — and the service needs **~50 distinct store methods** through it: 44 direct
+calls, plus `RecordMetadataChange` and five author/series alias-and-count methods
+that arrive through assignability constraints rather than call sites. (The earlier
+figure of 44 counted only the direct calls; the constraint-derived six are just as
+required, and a probe reports the two classes separately — see §5.)
 
-That is not an argument for leaving it alone. It is the measurement telling us the
-problem is in the wrong place: **a service with 44 distinct store dependencies is
-too big, and no arrangement of its interface will fix that.** Splitting the
-*service* would shrink the interface as a side effect. Splitting the interface
-first would produce a tidier declaration in front of the same 44 dependencies.
+At the seven-methods-per-group ceiling that keeps every group clear of the limit,
+~50 methods need **eight groups** — landing *exactly* on the linter's limit of 8,
+which §4 identifies as a latent failure. So a flat regrouping buys a real cut in
+transitive width but no headroom at all.
 
-So this is recorded as a finding rather than started as a refactor. The gate keeps
-reporting all five, which is correct — they are real. The width ratchet's baseline
-is set to 5 so they cannot grow, and any future PR that adds a sixth has to say
-why.
+The tempting escape is a nested tier: three mid-level composites over eight leaves
+scores the top-level interface at 3. That was considered and rejected. It carries
+all ~50 methods while reporting 3, which is precisely the wide-embed style with
+better names that §1 argues against, and the mid tier exists only to move the
+number. Designing to the metric is not the same as narrowing.
+
+That is not an argument for leaving `audiobookStore` alone. It is the measurement
+telling us the problem is in the wrong place: **a service with ~50 distinct store
+dependencies is too big, and no arrangement of its interface will fix that.** The
+probe bucketed the direct calls by file — `service_single.go` 23,
+`service_mutation.go` 20, `service_query.go` 15, `service_tags.go` 10,
+`service_filtering.go` 8, `helpers.go` 5 — which is six real consumers sharing one
+`store` field. Splitting *those* dissolves the interface as a side effect;
+splitting the interface first produces a tidier declaration in front of the same
+~50 dependencies.
+
+So this is recorded as a finding rather than started as a refactor, and filed in
+`todo.d/`. The gate keeps reporting all four, which is correct — they are real. The
+width ratchet's baseline is set to 4 so they cannot grow, and any future PR that
+adds a fifth has to say why.
+
+## 7. What narrowing looks like when the gate cannot see it
+
+The same pass narrowed two interfaces that were never findings and never will be,
+because both declare two entries:
+
+| Interface | Declared | Measured need |
+|---|---|---|
+| `metadataStateStore` (`internal/audiobooks/helpers.go`) | `database.MetadataStore` + `database.UserPreferenceStore` | **1 method** — `RecordMetadataChange` |
+| `authorSeriesStore` (`internal/audiobooks/author_series.go`) | `database.AuthorReader` + `database.SeriesReader` | **9 methods** |
+
+Two entries each, so `interfacebloat` scored them perfect both before and after.
+This is §1 and §2 in one place: the gate counts declared entries, and the width
+that actually propagates lives in the *parameter type*. The first went from two
+full store surfaces to one method; the second listed its 9 flat would have tripped
+the linter, so they are grouped by the two entities the service reads.
+
+Neither change moved the count. Both are the point.

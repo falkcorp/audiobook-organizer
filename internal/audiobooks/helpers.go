@@ -1,7 +1,7 @@
 // file: internal/audiobooks/helpers.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234560010
-// last-edited: 2026-08-11
+// last-edited: 2026-08-18
 //
 // Private utilities needed by the audiobooks service package. These mirror
 // equivalent helpers from internal/server/ but are standalone so that the
@@ -193,9 +193,13 @@ func (svc *AudiobookService) saveMetadataState(bookID string, state map[string]m
 // --- metadata state change recorder ----------------------------------------
 
 // metadataStateStore is the narrow interface needed for recording metadata changes.
+//
+// Measured with an empty-interface compiler probe: metadataStateSvc calls
+// exactly one store method. It previously embedded database.MetadataStore and
+// database.UserPreferenceStore, which forced every caller to carry both full
+// surfaces to reach this single write.
 type metadataStateStore interface {
-	database.MetadataStore
-	database.UserPreferenceStore
+	RecordMetadataChange(record *database.MetadataChangeRecord) error
 }
 
 // metadataStateSvc records metadata change history. It is an internal helper

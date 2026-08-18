@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-08-11
+// last-edited: 2026-08-18
 
 // Package audiobooks provides the core business logic for managing audiobooks,
 // including CRUD operations, metadata management, search, deduplication, and
@@ -52,8 +52,8 @@ type audiobookStore interface {
 	// Needed by isProtectedPath to compare absolute paths against
 	// configured import roots (SERVER-GLOBAL-STORE-AUDIT phase 6).
 	// Single method inline rather than database.ImportPathStore so
-	// the narrower audiobookUpdateStore adapter doesn't have to
-	// implement the full ImportPath CRUD surface.
+	// implementors don't have to provide the full ImportPath CRUD
+	// surface for the one lookup this package makes.
 	GetAllImportPaths() ([]database.ImportPath, error)
 }
 
