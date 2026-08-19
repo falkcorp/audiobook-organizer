@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-08-18-interface-width-shapes.md -->
-<!-- version: 2.3.0 -->
+<!-- version: 2.4.0 -->
 <!-- guid: 7e5b0c92-41da-4f38-b6a7-92d3f1e08c54 -->
 <!-- last-edited: 2026-08-18 -->
 
@@ -95,7 +95,8 @@ The count is per-PR, because an aggregate figure hides which change earned it:
 Every count here was measured, not projected — `golangci-lint` run with a cleared
 cache, and the 5 confirmed against an isolated clone of `main`. The final 4 are
 `database.Store` (40), `itunes/service.Store` (17), `maintenance.JobStore` (12)
-and `audiobookStore` (11) — see §6 for why none of them yields to the same move,
+and `audiobookStore` (11) — see §6 for why they resisted the same move, and for the
+correction that took `audiobookStore` to 8 entries after all,
 and §7 for the two narrowings in this pass that the gate cannot see at all.
 
 ## 1. The width gate cannot see transitive width
@@ -226,7 +227,7 @@ it: **they are not badly grouped, they are genuinely wide.**
 | `database.Store` | 40 | — | The union type itself. Phase 2's job is to make it unreachable, not smaller. |
 | ~~`itunes/service.Store`~~ | ~~17~~ | 24 | **Split in this PR — 7 entries.** It resisted only while its six subsystem leaves were wide; see below. |
 | `maintenance.JobStore` | 12 | — | Deliberate: chosen over per-job interfaces in the #2534 arbitration. |
-| `audiobookStore` | 11 | **~50** | See below. |
+| ~~`audiobookStore`~~ | ~~11~~ | **~50** | **Narrowed to 8 entries — see the correction below.** The "irreducible" verdict in the prose that follows assumed all ~50 methods had to be inlined; embedding `authorSeriesStore` by name spends one entry for nine of them. |
 
 `audiobookStore` is the instructive one. It declares 11 entries — ten embeds and a
 method — and the service needs **~50 distinct store methods** through it: 44 direct
@@ -260,6 +261,48 @@ So this is recorded as a finding rather than started as a refactor, and filed in
 `todo.d/`. The gate keeps reporting all four, which is correct — they are real. The
 width ratchet's baseline is set to 4 so they cannot grow, and any future PR that
 adds a fifth has to say why.
+
+### Correction: `audiobookStore` did not need the service split
+
+Everything above about `audiobookStore` — that eight groups land *exactly* on the
+limit, that a flat regrouping buys "no headroom at all", that "no arrangement of
+its interface will fix that" — rested on one unstated assumption, and the
+assumption was false. It was narrowed to **eight entries** with no service change.
+
+The assumption: that all ~50 methods have to be **inlined as method lines**. Under
+that reading the arithmetic is right — ~50 methods at seven per group is eight
+groups, dead on the limit. But three of the ~50 arrive through *forwarding
+constraints*, not call sites, and the largest of those is `authorSeriesStore`,
+which already exists and already carries nine of them. Embedding it **by name**
+spends one entry for nine methods. That leaves **41** methods for seven groups —
+roughly six each, against a ceiling of eight. Comfortable, not knife-edge.
+
+This is §1's rule read forwards instead of backwards. §1 warns that counting
+entries lets a wide interface hide behind embeds. The same arithmetic says an
+embed is the cheapest way to carry methods you genuinely need — and here it is
+*also* the more truthful declaration, because the service never calls those nine
+methods itself. It hands its store to `resolveAuthorAndSeriesNames`, and the embed
+names that fact where a domain-bucketed copy of the nine method lines would have
+hidden it.
+
+Nor is this the nested tier rejected two paragraphs above. That one proposed
+inventing three mid-level composites whose only job was to hold eight leaves and
+report 3 — new names, no new information. This embeds one pre-existing,
+independently-consumed interface at the exact point the requirement enters. The
+distinction is whether the grouping tells you something that was true before you
+needed a smaller number.
+
+**What stands:** the finding that a service with ~50 distinct store dependencies is
+too big. That is still true and still filed in `todo.d/`; the per-file buckets
+above are still the map for it. What does not stand is treating it as a
+*precondition* for narrowing the interface. Transitive width went 172 → 50 and the
+gate went 2 → 1 without touching a single function body.
+
+**The transferable error:** the section reached "irreducible" from an arithmetic
+result, and the arithmetic was sound. It was the input that was wrong, and nothing
+re-derived the input because the conclusion read as a measurement. A count that
+concludes "this cannot be done" deserves the same hand-verification as a count that
+concludes anything else.
 
 ### What changed for `itunes/service.Store`
 

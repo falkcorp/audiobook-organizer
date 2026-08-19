@@ -1,5 +1,5 @@
 # file: .interface-width-baseline
-# version: 1.4.0
+# version: 1.5.0
 # guid: 2b8e4f16-9d07-4c3a-b512-6a94ef7d0c38
 # last-edited: 2026-08-18
 #
@@ -57,11 +57,26 @@
 # and that choice stands; what changed is that the shared store no longer carries
 # 135 methods nobody calls.
 #
-# The two held here are documented in
-# docs/audits/2026-08-18-interface-width-shapes.md section 6 -- audiobookStore
-# (11) and database.Store (40). Both are genuinely wide rather than badly
-# grouped: audiobookStore needs the service behind it split, and database.Store
-# is the union type, where the plan is to make it unreachable rather than
-# smaller. So this number is expected to hold until those two are taken, not to
-# keep ticking down.
-2
+# Lowered to 1 by narrowing audiobookStore from ten database.* embeds (172
+# transitive methods) to the 50 the service was measured to use, in eight
+# entries.
+#
+# This file used to say that item was not reachable: "Both are genuinely wide
+# rather than badly grouped: audiobookStore needs the service behind it split."
+# That was wrong, and wrong in a specific way worth recording, because the same
+# arithmetic error would have justified the same conclusion again. The 50
+# methods do not fit in eight groups if you inline the methods of the three
+# interfaces the store is FORWARDED to -- that needs nine, so the declaration
+# looked irreducible without restructuring AudiobookService. But interfacebloat
+# counts declared entries, so authorSeriesStore enters as ONE entry carrying
+# nine methods when it is embedded by name instead. That leaves 41 methods for
+# seven groups, which is comfortable rather than knife-edge. Embedding it is
+# also the more honest declaration: the service does not call those nine methods
+# itself, it hands the store to resolveAuthorAndSeriesNames, and the embed says
+# exactly that.
+#
+# So the remaining 1 is database.Store (40), the union type, where the plan is
+# to make it unreachable rather than smaller -- see
+# docs/plans/2026-08-18-decouple-database-layer.md phases 3 and 4. This number
+# is expected to hold until that is taken.
+1

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-08-18
 
@@ -28,33 +28,124 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
 
-// audiobookStore is the narrow slice of database.Store that
-// AudiobookService actually needs — both for its own method calls
-// and for the helpers it forwards the store to (asExternalIDStore,
-// NewMetadataStateService). Declared as a named composite so the
-// service's dependency surface is inspectable in one place.
-type audiobookStore interface {
-	database.BookStore
-	database.AuthorStore
-	database.SeriesStore
-	database.NarratorStore
-	database.BookFileStore
-	database.HashBlocklistStore
-	database.TagStore
-	// Transitively required — audiobook_service forwards svc.store to
-	// NewMetadataStateService for change history tracking and to
-	// asExternalIDStore for tombstone cleanup.
-	database.MetadataStore
-	database.UserPreferenceStore
-	// Per-user filter pass on the listing endpoint reads UserBookState
-	// to evaluate read_status / progress_pct / last_played.
-	database.UserPositionStore
-	// Needed by isProtectedPath to compare absolute paths against
-	// configured import roots (SERVER-GLOBAL-STORE-AUDIT phase 6).
-	// Single method inline rather than database.ImportPathStore so
-	// implementors don't have to provide the full ImportPath CRUD
-	// surface for the one lookup this package makes.
+// The seven interfaces below are the measured dependency surface of
+// AudiobookService, grouped by the entity each one reads or writes. Every
+// method was enumerated with an empty-interface compiler probe run under
+// -gcflags=-e: emptying audiobookStore makes the compiler list each reached
+// method by name, plus each function the store is forwarded to that it no
+// longer satisfies. 44 direct calls and 3 forwarding constraints; the union
+// below is exactly that set and nothing else.
+//
+// They are declared as groups rather than one flat list because interfacebloat
+// counts DECLARED ENTRIES, not transitive methods — a flat list of 50 would be
+// a 50-entry declaration and score far worse than the 10 database.* embeds it
+// replaced. Each group is independently under the limit as well, so the width
+// is genuinely gone rather than pushed down a level.
+
+// bookReader is the read side of the book entity: lookups, listings, and the
+// legacy Store.SearchBooks fallback used when the Bleve index is not wired.
+type bookReader interface {
+	GetBookByID(id string) (*database.Book, error)
+	GetBooksByIDs(ids []string) ([]database.Book, error)
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetAllBookSummaries(limit, offset int) ([]database.BookSummary, error)
+	GetBookAtVersion(id string, ts time.Time) (*database.Book, error)
+	CountPrimaryBooks() (int, error)
+	SearchBooks(query string, limit, offset int) ([]database.Book, error)
+}
+
+// bookWriter is the write side of the book entity, including the soft-delete
+// lifecycle (tombstone create/delete plus the soft-deleted listing).
+type bookWriter interface {
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	DeleteBook(id string) error
+	CreateBookTombstone(book *database.Book) error
+	DeleteBookTombstone(id string) error
+	ListSoftDeletedBooks(limit, offset int, olderThan *time.Time) ([]database.Book, error)
+}
+
+// contributorResolver is the get-or-create pass UpdateAudiobook runs when a
+// payload names an author, narrator, or series by string rather than by ID.
+// Each entity follows the same lookup-then-create shape, and the two Set*
+// calls rewrite the book's join rows once the IDs are resolved.
+type contributorResolver interface {
+	GetAuthorByName(name string) (*database.Author, error)
+	CreateAuthor(name string) (*database.Author, error)
+	SetBookAuthors(bookID string, authors []database.BookAuthor) error
+	GetNarratorByName(name string) (*database.Narrator, error)
+	CreateNarrator(name string) (*database.Narrator, error)
+	SetBookNarrators(bookID string, narrators []database.BookNarrator) error
+	GetSeriesByName(name string, authorID *int) (*database.Series, error)
+	CreateSeries(name string, authorID *int) (*database.Series, error)
+}
+
+// contributorHydrator is the batch side used when enriching a page of results:
+// the ByIDs calls resolve display names for a whole page in one hit rather than
+// per row, and the ByXIDCore calls back the author/series drill-down filters.
+type contributorHydrator interface {
+	GetAuthorsByIDs(ids []int) (map[int]*database.Author, error)
+	GetSeriesByIDs(ids []int) (map[int]*database.Series, error)
+	GetBooksByAuthorIDCore(authorID int) ([]database.BookCore, error)
+	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
+}
+
+// bookTagStore backs service_tags.go plus the tag filter in service_query.go
+// and service_filtering.go.
+type bookTagStore interface {
+	ListAllTags() ([]database.TagWithCount, error)
+	GetBookTags(bookID string) ([]string, error)
+	SetBookTags(bookID string, tags []string) error
+	AddBookTag(bookID, tag string) error
+	RemoveBookTag(bookID, tag string) error
+	GetBooksByTag(tag string) ([]string, error)
+}
+
+// bookFileStore covers everything the service asks about bytes on disk: the
+// file rows for a book, the two duplicate views, the delete path's hash
+// blocklist, and the import roots isProtectedPath compares against.
+//
+// GetAllImportPaths is also what satisfies importPathLister when the store is
+// forwarded to isProtectedPath.
+type bookFileStore interface {
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	GetDuplicateBooks() ([][]database.Book, error)
+	GetFolderDuplicatesCore() ([][]database.BookCore, error)
+	AddBlockedHash(hash, reason string) error
 	GetAllImportPaths() ([]database.ImportPath, error)
+}
+
+// perUserStateStore is the per-user and per-field state the listing endpoint
+// and UpdateAudiobook read: the read_status / progress_pct / last_played filter
+// pass, the manual-override field states, and the change-history record.
+//
+// RecordMetadataChange is also what satisfies metadataStateStore when the store
+// is forwarded to newMetadataStateSvc.
+type perUserStateStore interface {
+	GetUserPreference(key string) (*database.UserPreference, error)
+	GetUserBookState(userID, bookID string) (*database.UserBookState, error)
+	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
+	UpsertMetadataFieldState(state *database.MetadataFieldState) error
+	DeleteMetadataFieldState(bookID, field string) error
+	RecordMetadataChange(record *database.MetadataChangeRecord) error
+}
+
+// audiobookStore is the dependency surface of AudiobookService, declared as the
+// union of the groups above.
+//
+// It previously embedded ten database.* interfaces wholesale — 172 transitive
+// methods to reach the 50 measured here. authorSeriesStore is embedded by name
+// rather than inlined because that is the literal requirement: the service
+// forwards svc.store to resolveAuthorAndSeriesNames, which takes that type.
+type audiobookStore interface {
+	authorSeriesStore
+
+	bookReader
+	bookWriter
+	contributorResolver
+	contributorHydrator
+	bookTagStore
+	bookFileStore
+	perUserStateStore
 }
 
 // ITunesEnqueuer is the narrow surface AudiobookService uses to push
