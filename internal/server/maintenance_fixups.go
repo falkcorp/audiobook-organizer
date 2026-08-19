@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.10.0
+// version: 2.11.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-18
+// last-edited: 2026-08-19
 
 package server
 
@@ -42,6 +42,42 @@ type maintenanceSeriesStore interface {
 	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
 	UpdateSeriesName(id int, name string) error
 	DeleteSeries(id int) error
+}
+
+// prefixWiper is the pair of raw key-space operations the /maintenance/wipe
+// handlers need. Both are *database.PebbleStore-only capabilities that
+// database.Store does NOT declare -- compile-probed 2026-08-19 with
+// `var _ interface{...} = (database.Store)(nil)`, built with -gcflags=-e --
+// so a bare `store.(*database.PebbleStore)` assertion fails against any
+// decorator and these handlers silently take their fallback branch.
+//
+// Both halves have the SAME reachability, so this composite carries no hidden
+// weak member; contrast dedup's lshCandidateStore, where one method is on
+// database.Store and one is not and the pair therefore inherits the worse of
+// the two.
+//
+// Named rather than resolved with database.AsPebbleStore so nothing in this
+// package depends on the concrete type by name. That is what a later split of
+// PebbleStore needs first -- see
+// docs/plans/2026-08-19-split-the-pebblestore-surface.md.
+type prefixWiper interface {
+	WipeByPrefixes(prefixes []string) (int, error)
+	CountByPrefix(prefix string) (int, error)
+}
+
+// resolvePrefixWiper walks the decorator chain for prefixWiper, returning nil
+// for a genuinely non-Pebble backend (SQLite, a test double) so each caller
+// keeps its existing fallback.
+//
+// A named function rather than an inline assertion for the same reason
+// resolveWarmupWaiter and resolveLSHCandidateStore are: a guard that cannot
+// reach the production call site does not guard it, and a test can only
+// exercise what it can name.
+func resolvePrefixWiper(s any) prefixWiper {
+	if c, ok := database.AsCapability[prefixWiper](s); ok {
+		return c
+	}
+	return nil
 }
 
 type maintenanceStore interface {
@@ -257,19 +293,20 @@ func dryRunLabel(dryRun bool) string {
 // wipeBookFiles deletes all book_file rows using the appropriate store backend.
 // The wipe* helpers below take their store from Server.Store() at REQUEST time,
 // which in production is the Bleve search-index decorator, not the bare
-// *PebbleStore. They must resolve the concrete store via database.AsPebbleStore —
-// a bare `store.(*database.PebbleStore)` assertion fails against the decorator and
-// silently sends each of these down its non-Pebble path: an "unsupported store
-// type" error for wipeSegments/wipeBooks/wipeAuthors/wipeSeries/wipeExternalIDs,
-// and for wipeBookFiles a slower interface loop that self-reports an approximate
-// count and misses the secondary-index prefixes. See database.AsPebbleStore.
+// *PebbleStore. They must therefore resolve THROUGH the decorator chain, which
+// is what resolvePrefixWiper does — a bare `store.(*database.PebbleStore)`
+// assertion fails against the decorator and silently sends each of these down
+// its non-Pebble path: an "unsupported store type" error for
+// wipeSegments/wipeBooks/wipeAuthors/wipeSeries/wipeExternalIDs, and for
+// wipeBookFiles a slower interface loop that self-reports an approximate count
+// and misses the secondary-index prefixes.
 func wipeBookFiles(store maintenanceStore, dryRun bool) (int64, error) {
 	if dryRun {
 		// Count only.
 		n, err := store.CountFiles()
 		return int64(n), err
 	}
-	if s := database.AsPebbleStore(store); s != nil {
+	if s := resolvePrefixWiper(store); s != nil {
 		n, err := s.WipeByPrefixes([]string{"book_file:"})
 		return int64(n), err
 	}
@@ -297,7 +334,7 @@ func wipeBookFiles(store maintenanceStore, dryRun bool) (int64, error) {
 
 // wipeSegments deletes all book_segment rows using the appropriate store backend.
 func wipeSegments(store maintenanceStore, dryRun bool) (int64, error) {
-	if s := database.AsPebbleStore(store); s != nil {
+	if s := resolvePrefixWiper(store); s != nil {
 		// Pebble segments use "bf:" (primary) and "bfs:" (secondary) prefixes.
 		if dryRun {
 			n, err := s.CountByPrefix("bf:")
@@ -315,7 +352,7 @@ func wipeBooks(store maintenanceStore, dryRun bool) (int64, error) {
 		n, err := store.CountPrimaryBooks()
 		return int64(n), err
 	}
-	if s := database.AsPebbleStore(store); s != nil {
+	if s := resolvePrefixWiper(store); s != nil {
 		// Book keys: "book:" prefix. Include secondary indexes.
 		n, err := s.WipeByPrefixes([]string{"book:"})
 		return int64(n), err
@@ -329,7 +366,7 @@ func wipeAuthors(store maintenanceStore, dryRun bool) (int64, error) {
 		n, err := store.CountAuthors()
 		return int64(n), err
 	}
-	if s := database.AsPebbleStore(store); s != nil {
+	if s := resolvePrefixWiper(store); s != nil {
 		n, err := s.WipeByPrefixes([]string{"author:"})
 		return int64(n), err
 	}
@@ -342,7 +379,7 @@ func wipeSeries(store maintenanceStore, dryRun bool) (int64, error) {
 		n, err := store.CountSeries()
 		return int64(n), err
 	}
-	if s := database.AsPebbleStore(store); s != nil {
+	if s := resolvePrefixWiper(store); s != nil {
 		n, err := s.WipeByPrefixes([]string{"series:"})
 		return int64(n), err
 	}
@@ -351,7 +388,7 @@ func wipeSeries(store maintenanceStore, dryRun bool) (int64, error) {
 
 // wipeExternalIDs deletes all external_id_map rows using the appropriate store backend.
 func wipeExternalIDs(store maintenanceStore, dryRun bool) (int64, error) {
-	if s := database.AsPebbleStore(store); s != nil {
+	if s := resolvePrefixWiper(store); s != nil {
 		if dryRun {
 			n, err := s.CountByPrefix("ext_id:")
 			return int64(n), err
