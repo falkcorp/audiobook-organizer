@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/plugin.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: d1e2f3a4-b5c6-7890-abcd-ef1234567890
-// last-edited: 2026-07-17
+// last-edited: 2026-08-19
 
 // Package dedup is the UOS plugin for deduplication operations.
 // It wraps the internal dedup.Engine and registers OperationDefs through
@@ -18,7 +18,7 @@ import (
 // the Run functions can call engine methods without importing internal packages.
 type Plugin struct {
 	engine         *dedupengine.Engine
-	store          database.Store
+	store          pluginStore
 	embeddingStore *database.EmbeddingStore
 	registry       sdk.Registry                        // set in Register; used by ops that enqueue follow-on work
 	toolRegistry   interface{ Available(string) bool } // optional; guards ops that require external binaries
@@ -33,7 +33,7 @@ func (p *Plugin) SetToolRegistry(r interface{ Available(string) bool }) {
 
 // New constructs a dedup Plugin. engine and embeddingStore may be nil if embedding is disabled;
 // the embed-scan op will return a descriptive error when run.
-func New(engine *dedupengine.Engine, store database.Store, embeddingStore *database.EmbeddingStore) *Plugin {
+func New(engine *dedupengine.Engine, store pluginStore, embeddingStore *database.EmbeddingStore) *Plugin {
 	return &Plugin{engine: engine, store: store, embeddingStore: embeddingStore}
 }
 
@@ -91,4 +91,22 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		}
 	}
 	return nil
+}
+
+// pluginStore is what this plugin reads and writes, measured with an
+// empty-interface compiler probe under -gcflags=-e: eight methods plus two
+// forwarding constraints, both embedded by name. It was pluginStore -- 398
+// methods -- until 2026-08-19.
+type pluginStore interface {
+	// config.NewUpdateService.
+	database.SettingsStore
+	// dedupengine.DetectSplitBookCandidates.
+	dedupengine.Store
+
+	GetBookByID(id string) (*database.Book, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetAllBookFilesCore() ([]database.BookFileCore, error)
+	GetAllAuthors() ([]database.Author, error)
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
 }

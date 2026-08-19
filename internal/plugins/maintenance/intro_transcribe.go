@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.20.0
+// version: 3.21.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-08-19
 
@@ -436,7 +436,7 @@ func chunkIDs(ids []string, size int) [][]string {
 // Errors are logged and treated as non-fatal so one bad page never aborts the run.
 func (p *Plugin) processTranscribePage(
 	ctx context.Context,
-	store database.Store,
+	store transcribePageStore,
 	log interface {
 		Info(string, ...any)
 		Warn(string, ...any)
@@ -874,7 +874,7 @@ var audioExtSet = map[string]bool{
 
 // firstAudioFile returns the path, cache key, and BookFile ID for the first
 // (lowest track number) audio file of book. Delegates to nthAudioFile(0).
-func firstAudioFile(store database.Store, book database.Book) (path, cacheKey, bookFileID string, err error) {
+func firstAudioFile(store bookFileLister, book database.Book) (path, cacheKey, bookFileID string, err error) {
 	return nthAudioFile(store, book, 0)
 }
 

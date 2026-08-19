@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_unlinked.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c17b493a-8d02-4f65-b9e1-604a8f2371cd
 // last-edited: 2026-08-19
 
@@ -303,7 +303,7 @@ func readDirNames(dir string) (names []string, subdirs int) {
 // regroup series-guard just as inert as before. It is passed through
 // NormalizeDurationSec because ~1.9% of historical rows stored milliseconds, and
 // a 1000x-inflated value would read as book-length to that guard.
-func relinkOne(store database.Store, f linkintegrity.Finding) (int, error) {
+func relinkOne(store folderLinker, f linkintegrity.Finding) (int, error) {
 	b, err := store.GetBookByID(f.BookID)
 	if err != nil {
 		return 0, fmt.Errorf("refetch book: %w", err)
