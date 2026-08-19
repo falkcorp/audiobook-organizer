@@ -1,6 +1,6 @@
 // file: internal/activity/register.go
-// version: 1.3.0
-// last-edited: 2026-07-03
+// version: 1.4.0
+// last-edited: 2026-08-19
 // guid: c4d5e6f7-a8b9-0009-2345-000000000009
 
 // Package activity — service registry wiring for the activity log.
@@ -33,9 +33,15 @@ func init() {
 		Needs:  []string{serviceregistry.KeyStore},
 		Groups: []string{serviceregistry.KeyActivity},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
-			ps, ok := store.(*database.PebbleStore)
-			if !ok {
+			store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
+			// AsPebbleStore, not a bare assertion: the server decorates the
+			// store with indexedStore during Start(), and a bare
+			// store.(*database.PebbleStore) fails through that decorator --
+			// silently taking the "non-Pebble backend" branch below, which
+			// looks like a supported configuration rather than a bug. See
+			// database/store_capability.go.
+			ps := database.AsPebbleStore(store)
+			if ps == nil {
 				// Non-Pebble backend (test double, SQLite) — return nil pointer;
 				// the activitystore Build checks for nil and falls back to NutsDB-only.
 				return (*database.PebbleActivityStore)(nil), nil

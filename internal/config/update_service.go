@@ -1,7 +1,7 @@
 // file: internal/config/update_service.go
-// version: 3.11.0
+// version: 3.12.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
-// last-edited: 2026-07-16
+// last-edited: 2026-08-19
 
 package config
 
@@ -17,11 +17,11 @@ import (
 
 // UpdateService handles applying and persisting config changes.
 type UpdateService struct {
-	DB database.Store
+	DB database.SettingsStore
 }
 
 // NewUpdateService creates a new UpdateService.
-func NewUpdateService(db database.Store) *UpdateService {
+func NewUpdateService(db database.SettingsStore) *UpdateService {
 	return &UpdateService{DB: db}
 }
 

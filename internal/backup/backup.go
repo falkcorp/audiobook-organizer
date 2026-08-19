@@ -1,7 +1,7 @@
 // file: internal/backup/backup.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
-// last-edited: 2026-08-11
+// last-edited: 2026-08-19
 
 package backup
 
@@ -18,7 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
 )
 
@@ -581,7 +580,10 @@ func ScheduleBackup(interval time.Duration, config BackupConfig) error {
 //
 // Signature takes an explicit database.Store (SERVER-GLOBAL-STORE-AUDIT
 // phase 2). Pass nil to exercise the "database not initialized" path.
-func BackupDatabase(store database.Store, config BackupConfig) (*BackupInfo, error) {
+// The store parameter is `any` because this stub only nil-checks it. It took
+// database.Store -- 398 methods -- to call none of them. Give it the interface
+// it actually needs if the real implementation lands.
+func BackupDatabase(store any, config BackupConfig) (*BackupInfo, error) {
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
