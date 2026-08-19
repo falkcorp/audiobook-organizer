@@ -1,7 +1,7 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
-// last-edited: 2026-07-18
+// last-edited: 2026-08-19
 
 // extra_ops registers OperationDefs for 13 scheduler tasks that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  Each def

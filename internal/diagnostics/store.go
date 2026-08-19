@@ -1,5 +1,5 @@
 // file: internal/diagnostics/store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2a8c4f61-5b07-4d39-8e15-9c0b6a3e7d21
 // last-edited: 2026-08-19
 

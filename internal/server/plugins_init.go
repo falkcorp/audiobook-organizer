@@ -1,7 +1,7 @@
 // file: internal/server/plugins_init.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: a2b3c4d5-e6f7-8a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-05-19
+// last-edited: 2026-08-19
 
 package server
 
