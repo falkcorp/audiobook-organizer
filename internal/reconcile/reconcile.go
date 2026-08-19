@@ -27,21 +27,37 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Store is the database dependency for reconcile operations.
-// Store is what this package actually calls, measured by emptying the
-// interface and reading the compiler's enumeration: 9 methods. It was a
-// pure pass-through of database.* embeds — 115 methods, none of them declared
-// here and almost none of them used.
-type Store interface {
+// The reconcile package's database surface, grouped by what each part is for.
+// Store was a pass-through of four database.* embeds — 115 methods — until
+// 2026-08-18; it is now these nine, kept as a composition so the declaration
+// stays narrow.
+type bookReader interface {
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetBookByID(id string) (*database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
-	GetAllImportPaths() ([]database.ImportPath, error)
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+}
+
+type bookWriter interface {
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
 	DeleteBook(id string) error
+}
+
+type importPathReader interface {
+	GetAllImportPaths() ([]database.ImportPath, error)
+}
+
+type operationRecorder interface {
 	CreateOperationChange(change *database.OperationChange) error
 	UpdateOperationResultData(id string, resultData string) error
+}
+
+// Store is the database dependency for reconcile operations.
+type Store interface {
+	bookReader
+	bookWriter
+	importPathReader
+	operationRecorder
 }
 
 // ReconcileMatch represents a potential match between a broken DB record and an untracked file.

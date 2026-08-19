@@ -75,13 +75,6 @@ type MetadataRejectionStore interface {
 	// Metadata rejections (markAudiobookNoMatch / handleGetMetadataRejections).
 	AddMetadataRejection(r database.MetadataRejection) error
 	GetMetadataRejections(bookID string) ([]database.MetadataRejection, error)
-
-	// Required so this value satisfies metadata.batchUpdateStore and
-	// metadata.importMetadataStore, which handler.go passes it to.
-	CreateBook(book *database.Book) (*database.Book, error)
-	CreateSeries(name string, authorID *int) (*database.Series, error)
-	GetSeriesByName(name string, authorID *int) (*database.Series, error)
-	RecordMetadataChange(record *database.MetadataChangeRecord) error
 }
 
 // BookSnapshotStore manages copy-on-write book snapshots: revert, list, prune.
@@ -111,46 +104,31 @@ type BookRatingWriter interface {
 	UpdateBookRating(id string, req database.UpdateBookRatingRequest) error
 }
 
-// MetadataStore is the narrow database.Store subset the metadata handlers
-// require. It embeds database.BookStore (BookReader + BookWriter) so the
-// handler can pass the live store directly to metadata.BatchUpdateMetadata /
-// metadata.ImportMetadata (both take database.BookStore) without a widening
-// cast, and adds the handful of non-book methods the handlers touch.
+// MetadataBookStore is the book surface these handlers touch. It replaces the
+// database.BookStore embed the composition carried until 2026-08-18 — 51 methods
+// for these four, three called directly and CreateBook required so this value
+// satisfies metadata.importMetadataStore.
+type MetadataBookStore interface {
+	GetBookByID(id string) (*database.Book, error)
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	CreateBook(book *database.Book) (*database.Book, error)
+}
+
+// MetadataStore is the database subset the metadata handlers require, kept as a
+// composition of the focused interfaces above so the declaration stays narrow and
+// each group says what it is for.
 //
 // Resolved lazily through a provider closure (getStore) so a router-integration
-// test that swaps server.store post-wire is still observed (mirrors the dedup /
-// duplicates / system / audiobooks handler getStore seam). The concrete
-// database.Store implementations satisfy it.
-//
-// Split into the 6 interfaces above on 2026-08-18. This name is retained as
-// their composition so the method set is byte-identical and no consumer moves; the
-// type checker proves it.
-// MetadataStore is what this package actually calls, measured by emptying the
-// interface and reading the compiler's enumeration: 14 direct calls plus four
-// carried for two downstream constraints. It was a
-// pure pass-through of database.* embeds — 59 methods, none declared here.
+// test that swaps server.store post-wire is still observed.
 type MetadataStore interface {
-	GetBookByID(id string) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
-	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
-	GetBooksByAuthorIDCore(authorID int) ([]database.BookCore, error)
-	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
-	CreateAuthor(name string) (*database.Author, error)
-	GetAuthorByName(name string) (*database.Author, error)
-	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
-	UpdateBookRating(id string, req database.UpdateBookRatingRequest) error
-	GetBookSnapshots(id string, limit int) ([]database.BookSnapshot, error)
-	PruneBookSnapshots(id string, keepCount int) (int, error)
-	RevertBookToVersion(id string, ts time.Time) (*database.Book, error)
-	AddMetadataRejection(r database.MetadataRejection) error
-	GetMetadataRejections(bookID string) ([]database.MetadataRejection, error)
-
-	// Required so this value satisfies metadata.batchUpdateStore and
-	// metadata.importMetadataStore, which handler.go passes it to.
-	CreateBook(book *database.Book) (*database.Book, error)
-	CreateSeries(name string, authorID *int) (*database.Series, error)
-	GetSeriesByName(name string, authorID *int) (*database.Series, error)
-	RecordMetadataChange(record *database.MetadataChangeRecord) error
+	MetadataEntityResolver
+	MetadataAuditWriter
+	MetadataRejectionStore
+	BookSnapshotStore
+	MetadataBookQueryStore
+	BookRatingWriter
+	MetadataBookStore
 }
 
 // MetadataFetcher fetches and searches metadata for a book.
