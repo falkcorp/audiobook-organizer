@@ -37,7 +37,7 @@ func (s *Server) handleListPendingFileOps(c *gin.Context) {
 
 	jobs := pool.PendingJobs()
 	out := make([]pendingFileOp, 0, len(jobs))
-	store := s.Store()
+	store := s.Ops()
 	for _, j := range jobs {
 		op := pendingFileOp{
 			BookID:    j.BookID,

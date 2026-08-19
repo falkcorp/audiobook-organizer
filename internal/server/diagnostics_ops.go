@@ -49,7 +49,7 @@ func (s *Server) RegisterDiagnosticsExportOp(reg *opsregistry.Registry) error {
 					return fmt.Errorf("diagnostics.export: decode params: %w", err)
 				}
 			}
-			store := s.Store()
+			store := s.storeForWiring()
 			ds := s.diagnosticsService
 			if ds == nil {
 				ds = diagnostics.NewService(store, nil, config.AppConfig.ITunes.LibraryReadPath)

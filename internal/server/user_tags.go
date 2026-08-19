@@ -34,7 +34,7 @@ func (s *Server) setupUserTagRoutes(protected *gin.RouterGroup) {
 
 // setBookUserTags replaces all user-defined tags on a book.
 func (s *Server) setBookUserTags(c *gin.Context) {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -76,7 +76,7 @@ func (s *Server) setBookUserTags(c *gin.Context) {
 
 // addBookUserTag adds a single user-defined tag to a book.
 func (s *Server) addBookUserTag(c *gin.Context) {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -111,7 +111,7 @@ func (s *Server) addBookUserTag(c *gin.Context) {
 
 // removeBookUserTag removes a single user-defined tag from a book.
 func (s *Server) removeBookUserTag(c *gin.Context) {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return

@@ -104,7 +104,7 @@ func (s *Server) handleWipe(c *gin.Context) {
 		return
 	}
 
-	store := s.Store()
+	store := s.storeForWiring()
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -443,7 +443,7 @@ func (s *Server) handleGetComposerScanResults(c *gin.Context) {
 		return
 	}
 
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -518,7 +518,7 @@ func (s *Server) handleGetMissingFileRepairResults(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "operation id required")
 		return
 	}
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -589,7 +589,7 @@ func (s *Server) handleGetMissingFileRepairResults(c *gin.Context) {
 }
 
 func (s *Server) handleGetBookFileHashStats(c *gin.Context) {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -605,7 +605,7 @@ func (s *Server) handleGetBookFileHashStats(c *gin.Context) {
 }
 
 func (s *Server) handleGetBookMetadataHashStats(c *gin.Context) {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -621,7 +621,7 @@ func (s *Server) handleGetBookMetadataHashStats(c *gin.Context) {
 // handleGetAcoustIDStats returns AcoustID fingerprint coverage stats.
 // GET /api/v1/maintenance/acoustid-stats
 func (s *Server) handleGetAcoustIDStats(c *gin.Context) {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return

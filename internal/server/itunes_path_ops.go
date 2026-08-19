@@ -37,7 +37,7 @@ type itunesPathRepairOpParams struct {
 // POST /api/v1/operations/itunes-path-reconcile.
 // It creates a v1 op record for polling compatibility, then enqueues via v2.
 func (s *Server) handleITunesPathReconcile(c *gin.Context) {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -62,7 +62,7 @@ func (s *Server) handleITunesPathReconcile(c *gin.Context) {
 // POST /api/v1/operations/itunes-path-repair.
 // Reads ?apply=true|1 to switch from dry-run (default) to apply mode.
 func (s *Server) handleITunesPathRepair(c *gin.Context) {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return

@@ -640,7 +640,7 @@ func (h *DiagnosticsHandler) GetDBHealth(c *gin.Context) {
 	//
 	// resolveKeyCounter, not a bare assertion and no longer the concrete type.
 	// Traced 2026-08-19: this handler is built in wireHandlers, which runs
-	// setupRoutes -> NewServer, so the s.Store() it captured is the BARE store
+	// setupRoutes -> NewServer, so the s.Ops() it captured is the BARE store
 	// and the bare form was NOT failing here. Construction time is what decides
 	// this, not the fact that GetDBHealth itself runs at request time. The
 	// failure mode is invisible either way: a nil here just drops resp.Pebble

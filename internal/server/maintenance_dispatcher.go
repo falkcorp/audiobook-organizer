@@ -152,7 +152,7 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 
 	opID := ulid.Make().String()
 	opType := "maintenance:" + jobID
-	store := s.Store()
+	store := s.Ops()
 
 	// Create the operation record first so it appears in active operations / activity bell.
 	if _, err := store.CreateOperation(opID, opType, nil); err != nil {

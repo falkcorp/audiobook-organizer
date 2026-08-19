@@ -23,7 +23,7 @@ func (s *Server) handleTrashVersion(c *gin.Context) {
 	bookID := c.Param("id")
 	versionID := c.Param("vid")
 
-	ver, err := s.Store().GetBookVersion(versionID)
+	ver, err := s.Ops().GetBookVersion(versionID)
 	if err != nil || ver == nil {
 		httputil.RespondWithNotFound(c, "version", "")
 		return
@@ -36,13 +36,13 @@ func (s *Server) handleTrashVersion(c *gin.Context) {
 	wasActive := ver.Status == database.BookVersionStatusActive
 
 	ver.Status = database.BookVersionStatusTrash
-	if err := s.Store().UpdateBookVersion(ver); err != nil {
+	if err := s.Ops().UpdateBookVersion(ver); err != nil {
 		httputil.InternalError(c, "trash version", err)
 		return
 	}
 
 	if wasActive {
-		if err := versions.AutoPromoteAlt(s.Store(), bookID); err != nil {
+		if err := versions.AutoPromoteAlt(s.storeForWiring(), bookID); err != nil {
 			slog.Warn("auto-promote after trash", "err", err)
 		}
 	}
@@ -58,7 +58,7 @@ func (s *Server) handleRestoreVersion(c *gin.Context) {
 	bookID := c.Param("id")
 	versionID := c.Param("vid")
 
-	ver, err := s.Store().GetBookVersion(versionID)
+	ver, err := s.Ops().GetBookVersion(versionID)
 	if err != nil || ver == nil {
 		httputil.RespondWithNotFound(c, "version", "")
 		return
@@ -73,7 +73,7 @@ func (s *Server) handleRestoreVersion(c *gin.Context) {
 	}
 
 	ver.Status = database.BookVersionStatusAlt
-	if err := s.Store().UpdateBookVersion(ver); err != nil {
+	if err := s.Ops().UpdateBookVersion(ver); err != nil {
 		httputil.InternalError(c, "restore version", err)
 		return
 	}
@@ -89,7 +89,7 @@ func (s *Server) handlePurgeVersion(c *gin.Context) {
 	bookID := c.Param("id")
 	versionID := c.Param("vid")
 
-	ver, err := s.Store().GetBookVersion(versionID)
+	ver, err := s.Ops().GetBookVersion(versionID)
 	if err != nil || ver == nil {
 		httputil.RespondWithNotFound(c, "version", "")
 		return
@@ -99,7 +99,7 @@ func (s *Server) handlePurgeVersion(c *gin.Context) {
 		return
 	}
 
-	if err := versions.PurgeVersion(s.Store(), ver); err != nil {
+	if err := versions.PurgeVersion(s.Ops(), ver); err != nil {
 		httputil.InternalError(c, "purge version", err)
 		return
 	}
@@ -114,7 +114,7 @@ func (s *Server) handlePurgeVersion(c *gin.Context) {
 func (s *Server) handleHardDeleteVersion(c *gin.Context) {
 	versionID := c.Param("vid")
 
-	ver, err := s.Store().GetBookVersion(versionID)
+	ver, err := s.Ops().GetBookVersion(versionID)
 	if err != nil || ver == nil {
 		httputil.RespondWithNotFound(c, "version", "")
 		return
@@ -124,7 +124,7 @@ func (s *Server) handleHardDeleteVersion(c *gin.Context) {
 		return
 	}
 
-	if err := s.Store().DeleteBookVersion(ver.ID); err != nil {
+	if err := s.Ops().DeleteBookVersion(ver.ID); err != nil {
 		httputil.InternalError(c, "hard delete version", err)
 		return
 	}

@@ -72,7 +72,7 @@ func (s *Server) rebuildITLHandler(c *gin.Context) {
 		return
 	}
 
-	store := s.Store()
+	store := s.storeForWiring()
 	ops, preview, err := itunes.ComputeITLDiff(store, itlPath, itlPathMappings())
 	if err != nil {
 		httputil.RespondWithInternalError(c, fmt.Sprintf("diff failed: %v", err))
@@ -141,7 +141,7 @@ func (s *Server) rebuildITLFullHandler(c *gin.Context) {
 	}
 
 	dryRun := c.Query("dry_run") == "true"
-	store := s.Store()
+	store := s.storeForWiring()
 
 	if dryRun {
 		// Parse just to count tracks and books — don't apply.
@@ -199,7 +199,7 @@ func (s *Server) exportITLPartialHandler(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&body) // empty body = all books
 
-	data, err := itunes.BuildExportITL(s.Store(), itlPath, body.BookIDs, itlPathMappings())
+	data, err := itunes.BuildExportITL(s.storeForWiring(), itlPath, body.BookIDs, itlPathMappings())
 	if err != nil {
 		httputil.RespondWithInternalError(c, fmt.Sprintf("build export ITL: %v", err))
 		return

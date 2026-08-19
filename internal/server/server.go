@@ -327,8 +327,28 @@ type ServerConfig struct {
 	ExternalURL string
 }
 
-// Store returns the database.Store dependency the server was constructed with.
-func (s *Server) Store() database.Store {
+// Ops returns the narrow view of the store: the 88 methods internal/server
+// actually invokes, out of database.Store's 398. This is the accessor ordinary
+// code should use.
+//
+// See server_ops_store.go for the measurement and for why narrowing this alone
+// does not narrow the wiring sites.
+func (s *Server) Ops() ServerOpsStore {
+	return s.store
+}
+
+// storeForWiring returns the FULL store, and is deliberately unexported and
+// deliberately ugly to type.
+//
+// It exists for one job: handing a store to a callee that declares its own
+// narrow interface (dedup.Store, maintenance.JobStore, and 88 others). The union
+// of what those callees require is 268 methods, so this role genuinely needs a
+// wide value and no amount of trimming changes that. Keeping it separate from
+// Ops is what lets the other 216 call sites see only 88.
+//
+// If you are reaching for this to CALL a method, you want Ops instead -- and if
+// Ops lacks the method, add it there rather than widening the call site.
+func (s *Server) storeForWiring() database.Store {
 	return s.store
 }
 
@@ -350,7 +370,7 @@ const listTTL = 10 * time.Minute
 // libraryGeneration resolves the store's book-mutation counter, which scopes
 // every library-list cache key.
 //
-// Resolved from s.Store() on each call rather than snapshotted at
+// Resolved from s.Ops() on each call rather than snapshotted at
 // construction: the store is wrapped by indexedStore once the search index
 // opens (after NewServer), and integration tests swap it post-wire. Resolving
 // live means this and the audiobooks handler always agree, because both walk
@@ -364,7 +384,7 @@ const listTTL = 10 * time.Minute
 // silent fallback would pin every key at generation 0 and quietly reinstate
 // the staleness bug.
 func (s *Server) libraryGeneration() *cache.Generation {
-	gen, resolved := database.LibraryGenerationOf(s.Store())
+	gen, resolved := database.LibraryGenerationOf(s.Ops())
 	if !resolved {
 		s.libGenWarnOnce.Do(func() {
 			// CodeQL flags this line as go/clear-text-logging (high), reporting
@@ -388,7 +408,7 @@ func (s *Server) libraryGeneration() *cache.Generation {
 			// care rather than suppressed into silence. Behaviour is identical:
 			// reflect.TypeOf(x).String() and %T produce the same text.
 			storeType := "<nil>"
-			if st := s.Store(); st != nil {
+			if st := s.Ops(); st != nil {
 				storeType = reflect.TypeOf(st).String()
 			}
 			slog.Warn("library list cache: store exposes no library generation counter, "+
@@ -415,8 +435,8 @@ func (s *Server) publishEvent(ctx context.Context, event plugin.Event) {
 }
 
 // NewServer constructs a Server with an explicit Store dependency.
-// s.Store() is still assigned at startup for code that hasn't
-// been migrated to use s.Store() yet (see DI migration plan 4.4).
+// s.Ops() is still assigned at startup for code that hasn't
+// been migrated to use s.Ops() yet (see DI migration plan 4.4).
 func NewServer(store database.Store) *Server {
 	// Set Gin to release mode (production) unless debug flag is set.
 	// In release mode, Gin suppresses route-registration logging and uses optimized
@@ -905,7 +925,7 @@ func NewServer(store database.Store) *Server {
 			return
 		}
 		org := organizer.NewOrganizer(&config.AppConfig)
-		org.SetStore(server.Store())
+		org.SetStore(server.storeForWiring())
 		organized := 0
 		// Counted, not just skipped. "Auto-organize complete: 0 organized" told
 		// an operator nothing about WHY zero — on 2026-08-11 it hid 588
@@ -1162,13 +1182,13 @@ type seriesPrunePreviewResult struct {
 // entry dirty. Called from dedup handlers (dismiss, scan upsert) so the count
 // is recomputed on the next menu open rather than staying stale.
 func (s *Server) markDuplicatesFlaggedDirty(reason string) {
-	if s.Store() == nil {
+	if s.Ops() == nil {
 		return
 	}
 	type quickQueryDirtier interface {
 		MarkQuickQueryDirty(id, reason string)
 	}
-	if qd, ok := database.AsCapability[quickQueryDirtier](s.Store()); ok {
+	if qd, ok := database.AsCapability[quickQueryDirtier](s.Ops()); ok {
 		qd.MarkQuickQueryDirty("duplicates_flagged", reason)
 	}
 }

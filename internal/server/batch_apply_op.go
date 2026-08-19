@@ -112,7 +112,7 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// rather than delegating it.
 			runOne := func(ctx context.Context, id string) error {
 				out := applyCachedCandidateForBook(
-					svc, s.Store(), itunes, id, p.WriteBack, writeBackPathLocks.lock)
+					svc, s.Ops(), itunes, id, p.WriteBack, writeBackPathLocks.lock)
 
 				if !out.Applied {
 					switch out.Reason {

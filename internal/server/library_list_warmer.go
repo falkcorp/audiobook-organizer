@@ -151,7 +151,7 @@ type memReadyChecker interface {
 // falls back to the first user in ListUsers. Returns "" if nothing
 // is available — caller should skip per-user warm-up in that case.
 func (s *Server) resolveDefaultUserID() string {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		return ""
 	}
@@ -178,10 +178,10 @@ func (s *Server) warmAudiobookListCache() {
 	// AsCapability does that -- this file used to hand-roll the same walk with
 	// its own storeUnwrapper type and a bound of 8, half the shared
 	// maxUnwrapDepth of 16.
-	checker, ok := database.AsCapability[memReadyChecker](s.Store())
+	checker, ok := database.AsCapability[memReadyChecker](s.Ops())
 	if !ok {
 		slog.Warn("library list warm-up: store doesn't expose IsMemReady, skipping",
-			"store_type", typeName(s.Store()))
+			"store_type", typeName(s.Ops()))
 		return
 	}
 

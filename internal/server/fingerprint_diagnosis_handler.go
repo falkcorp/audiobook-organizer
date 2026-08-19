@@ -36,7 +36,7 @@ type fingerprintFailuresResponse struct {
 //	?limit=<n>         – page size, default 50
 //	?offset=<n>        – page offset, default 0
 func (s *Server) getFingerprintFailures(c *gin.Context) {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "store not ready"})
 		return

@@ -97,7 +97,7 @@ func TestSpawnContributorWarm_WarmsAnywayWhenTheStoreLacksTheCapability(t *testi
 // Server.store is a plain unsynchronised field (server.go:331 returns it with no
 // lock). Server.Start overwrites it with the Bleve indexedStore wrapper, while
 // this goroutine is spawned earlier, at route-wiring time inside NewServer. So a
-// goroutine body that reads s.Store() is an unsynchronised read racing that
+// goroutine body that reads s.Ops() is an unsynchronised read racing that
 // write. Whether the warm waited at all was decided by scheduling: the old bare
 // store.(*database.PebbleStore) assertion succeeded against the bare store and
 // failed against the wrapper.
@@ -114,7 +114,7 @@ func TestSpawnContributorWarm_DoesNotReadTheServerStoreFromTheGoroutine(t *testi
 	s := &Server{store: &database.MockStore{}}
 
 	done := make(chan struct{})
-	spawnContributorWarm(s.Store(), func(context.Context) { close(done) })
+	spawnContributorWarm(s.Ops(), func(context.Context) { close(done) })
 
 	// Mirrors what Server.Start does to this field.
 	s.store = &database.MockStore{}

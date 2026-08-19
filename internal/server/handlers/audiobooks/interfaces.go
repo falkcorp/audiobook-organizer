@@ -96,7 +96,7 @@ type AudiobookSyncStore interface {
 
 // AudiobooksStore is the narrow database.Store subset the audiobooks handlers
 // require for direct store access (i.e. the calls the handlers made through
-// s.Store() that are part of the stable database.Store contract). The concrete
+// s.Ops() that are part of the stable database.Store contract). The concrete
 // database.Store implementations satisfy it. Resolved lazily through a provider
 // closure (getStore) so a router-integration test that swaps server.store
 // post-wire is still observed (mirrors the dedup / duplicates / system handler
@@ -106,7 +106,7 @@ type AudiobookSyncStore interface {
 // methods via inline type assertions (ListBooksWithFileErrors,
 // GetAllBookIDsForQuickQuery, GetBookFilesForIDsCore, Unwrap, InvalidateLibraryStats).
 // Those are intentionally NOT listed here — they resolve against the dynamic
-// type of the value the provider returns (s.Store(), the concrete store), so
+// type of the value the provider returns (s.Ops(), the concrete store), so
 // they keep working as long as getStore returns the un-stripped store.
 //
 // Split into the 8 interfaces above on 2026-08-18. This name is retained as
@@ -216,7 +216,7 @@ type ChangelogService interface {
 }
 
 // ExternalIDStore is the narrow external-ID lookup used by getAudiobookExternalIDs.
-// The server-side asExternalIDStore(s.Store()) adapter produces a value that
+// The server-side asExternalIDStore(s.Ops()) adapter produces a value that
 // satisfies this (it returns nil when the store doesn't implement external IDs).
 // Reached through the injected getExternalIDStore closure so this package does
 // not depend on the server-package adapter.

@@ -22,7 +22,7 @@ import (
 // GET /api/v1/audiobooks/:id/similar
 func (s *Server) handleSimilarBooks(c *gin.Context) {
 	bookID := c.Param("id")
-	book, err := s.Store().GetBookByID(bookID)
+	book, err := s.Ops().GetBookByID(bookID)
 	if err != nil || book == nil {
 		httputil.RespondWithNotFound(c, "book", "")
 		return
@@ -37,13 +37,13 @@ func (s *Server) handleSimilarBooks(c *gin.Context) {
 	// Build a query from the book's author and series.
 	var queryParts []string
 	if book.AuthorID != nil {
-		author, _ := s.Store().GetAuthorByID(*book.AuthorID)
+		author, _ := s.Ops().GetAuthorByID(*book.AuthorID)
 		if author != nil && author.Name != "" {
 			queryParts = append(queryParts, "author:"+search.QuoteIfNeeded(author.Name))
 		}
 	}
 	if book.SeriesID != nil {
-		series, _ := s.Store().GetSeriesByID(*book.SeriesID)
+		series, _ := s.Ops().GetSeriesByID(*book.SeriesID)
 		if series != nil && series.Name != "" {
 			queryParts = append(queryParts, "series:"+search.QuoteIfNeeded(series.Name))
 		}
@@ -89,7 +89,7 @@ func (s *Server) handleSimilarBooks(c *gin.Context) {
 		if h.BookID == bookID {
 			continue
 		}
-		b, _ := s.Store().GetBookByID(h.BookID)
+		b, _ := s.Ops().GetBookByID(h.BookID)
 		if b != nil {
 			similar = append(similar, *b)
 		}

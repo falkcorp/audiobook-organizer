@@ -59,7 +59,7 @@ func (s *Server) RegisterMaintenanceWindowOp(reg *opsregistry.Registry) error {
 			ignoreWindow := p.IgnoreWindow
 			ts := s.scheduler
 
-			store := s.Store()
+			store := s.Ops()
 			if store == nil {
 				return fmt.Errorf("maintenance.window: database not initialized")
 			}

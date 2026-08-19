@@ -65,7 +65,7 @@ func (s *Server) RegisterBookDedupScanOp(reg *opsregistry.Registry) error {
 			if err := json.Unmarshal(rawParams, &p); err != nil {
 				return fmt.Errorf("dedup.book-scan: decode params: %w", err)
 			}
-			store := s.Store()
+			store := s.storeForWiring()
 			if store == nil {
 				return fmt.Errorf("dedup.book-scan: database not initialized")
 			}
@@ -132,7 +132,7 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 			if err := json.Unmarshal(rawParams, &p); err != nil {
 				return fmt.Errorf("dedup.book-merge: decode params: %w", err)
 			}
-			store := s.Store()
+			store := s.storeForWiring()
 			if store == nil {
 				return fmt.Errorf("dedup.book-merge: database not initialized")
 			}
@@ -271,7 +271,7 @@ func (s *Server) RegisterAuthorDedupScanOp(reg *opsregistry.Registry) error {
 			if err := json.Unmarshal(rawParams, &p); err != nil {
 				return fmt.Errorf("dedup.author-scan: decode params: %w", err)
 			}
-			store := s.Store()
+			store := s.storeForWiring()
 			if store == nil {
 				return fmt.Errorf("dedup.author-scan: database not initialized")
 			}
@@ -370,7 +370,7 @@ func (s *Server) RegisterSeriesDedupScanOp(reg *opsregistry.Registry) error {
 			if err := json.Unmarshal(rawParams, &p); err != nil {
 				return fmt.Errorf("dedup.series-scan: decode params: %w", err)
 			}
-			store := s.Store()
+			store := s.storeForWiring()
 			if store == nil {
 				return fmt.Errorf("dedup.series-scan: database not initialized")
 			}
@@ -442,7 +442,7 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 			if err := json.Unmarshal(rawParams, &p); err != nil {
 				return fmt.Errorf("dedup.series-dedup: decode params: %w", err)
 			}
-			store := s.Store()
+			store := s.storeForWiring()
 			if store == nil {
 				return fmt.Errorf("dedup.series-dedup: database not initialized")
 			}
@@ -503,7 +503,7 @@ func (s *Server) RegisterSeriesPruneOp(reg *opsregistry.Registry) error {
 			if err := json.Unmarshal(rawParams, &p); err != nil {
 				return fmt.Errorf("dedup.series-prune: decode params: %w", err)
 			}
-			store := s.Store()
+			store := s.storeForWiring()
 			if store == nil {
 				return fmt.Errorf("dedup.series-prune: database not initialized")
 			}
@@ -563,7 +563,7 @@ func (s *Server) RegisterSeriesMergeOp(reg *opsregistry.Registry) error {
 			if err := json.Unmarshal(rawParams, &p); err != nil {
 				return fmt.Errorf("dedup.series-merge: decode params: %w", err)
 			}
-			store := s.Store()
+			store := s.storeForWiring()
 			if store == nil {
 				return fmt.Errorf("dedup.series-merge: database not initialized")
 			}
@@ -629,7 +629,7 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 			if err := json.Unmarshal(rawParams, &p); err != nil {
 				return fmt.Errorf("dedup.series-normalize: decode params: %w", err)
 			}
-			store := s.Store()
+			store := s.storeForWiring()
 			if store == nil {
 				return fmt.Errorf("dedup.series-normalize: database not initialized")
 			}

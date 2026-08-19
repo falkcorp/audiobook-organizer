@@ -154,7 +154,7 @@ func TestWipeFixupsReachPebbleThroughDecorator(t *testing.T) {
 // this file exists to prevent, and the first one caught in production by its own
 // log line rather than by a failing job.
 //
-// server_lifecycle.go used a bare `s.Store().(vgBackfiller)` type assertion.
+// server_lifecycle.go used a bare `s.Ops().(vgBackfiller)` type assertion.
 // BackfillVersionGroupIndex is a *PebbleStore method that deliberately lives
 // outside database.Store, so it is not promoted through the embedded interface
 // and the assertion missed on every boot where the Bleve index opened — i.e.
@@ -229,7 +229,7 @@ func TestIndexedStoreExposesVersionGroupBackfill(t *testing.T) {
 // TestWarmupWaiterResolvesThroughDecorator is the FOURTH instance of the bug
 // this file exists to prevent.
 //
-// wire_abs_routes.go used a bare `s.Store().(*database.PebbleStore)` to reach
+// wire_abs_routes.go used a bare `s.Ops().(*database.PebbleStore)` to reach
 // WaitForWarmup before building the ABS contributor cache. WaitForWarmup is a
 // *PebbleStore method, so the assertion misses whenever the Bleve indexedStore
 // decorator is installed — and the fallback is to skip the wait entirely and

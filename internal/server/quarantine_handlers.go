@@ -13,7 +13,7 @@ import (
 // quarantineBook handles POST /api/v1/audiobooks/:id/quarantine
 func (s *Server) quarantineBook(c *gin.Context) {
 	id := c.Param("id")
-	if s.Store() == nil {
+	if s.Ops() == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
 	}
@@ -42,7 +42,7 @@ func (s *Server) quarantineBook(c *gin.Context) {
 // unquarantineBook handles DELETE /api/v1/audiobooks/:id/quarantine
 func (s *Server) unquarantineBook(c *gin.Context) {
 	id := c.Param("id")
-	if s.Store() == nil {
+	if s.Ops() == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
 	}
@@ -59,12 +59,12 @@ func (s *Server) unquarantineBook(c *gin.Context) {
 
 // listQuarantinedBooks handles GET /api/v1/audiobooks/quarantined
 func (s *Server) listQuarantinedBooks(c *gin.Context) {
-	if s.Store() == nil {
+	if s.Ops() == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
 	}
 	params := httputil.ParsePaginationParams(c)
-	books, err := s.Store().GetQuarantinedBooks(params.Limit, params.Offset)
+	books, err := s.Ops().GetQuarantinedBooks(params.Limit, params.Offset)
 	if err != nil {
 		httputil.InternalError(c, "list quarantined books failed", err)
 		return
@@ -72,7 +72,7 @@ func (s *Server) listQuarantinedBooks(c *gin.Context) {
 	if books == nil {
 		books = []database.Book{}
 	}
-	total, _ := s.Store().CountQuarantinedBooks()
+	total, _ := s.Ops().CountQuarantinedBooks()
 	httputil.RespondWithOK(c, struct {
 		Books []database.Book `json:"books"`
 		Total int             `json:"total"`

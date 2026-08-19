@@ -99,7 +99,7 @@ func (s *Server) RegisterFolderAutoScanOp(reg *opsregistry.Registry) error {
 					// both.
 					var failed, lookupErrors, notInDB int
 					for _, b := range books {
-						dbBook, err := s.Store().GetBookByFilePath(b.FilePath)
+						dbBook, err := s.Ops().GetBookByFilePath(b.FilePath)
 						if err != nil {
 							lookupErrors++
 							if lookupErrors <= 10 {
@@ -132,7 +132,7 @@ func (s *Server) RegisterFolderAutoScanOp(reg *opsregistry.Registry) error {
 						if newPath != dbBook.FilePath {
 							dbBook.FilePath = newPath
 							scanner.ApplyOrganizedFileMetadata(dbBook, newPath)
-							if _, err := s.Store().UpdateBook(dbBook.ID, dbBook); err != nil {
+							if _, err := s.Ops().UpdateBook(dbBook.ID, dbBook); err != nil {
 								_ = progress.Log("warn", fmt.Sprintf("Failed to update path for %s: %v", dbBook.Title, err), nil)
 							} else {
 								organized++
@@ -150,7 +150,7 @@ func (s *Server) RegisterFolderAutoScanOp(reg *opsregistry.Registry) error {
 			if s.dedupEngine != nil && len(books) > 0 {
 				go func() {
 					for _, b := range books {
-						dbBook, err := s.Store().GetBookByFilePath(b.FilePath)
+						dbBook, err := s.Ops().GetBookByFilePath(b.FilePath)
 						if err != nil || dbBook == nil {
 							continue
 						}
@@ -163,14 +163,14 @@ func (s *Server) RegisterFolderAutoScanOp(reg *opsregistry.Registry) error {
 
 			// Update book count and last-scan timestamp for this import path.
 			if p.FolderID != 0 {
-				folder, err := s.Store().GetImportPathByID(p.FolderID)
+				folder, err := s.Ops().GetImportPathByID(p.FolderID)
 				if err != nil || folder == nil {
 					_ = progress.Log("warn", fmt.Sprintf("Could not reload import path %d for update: %v", p.FolderID, err), nil)
 				} else {
 					folder.BookCount = len(books)
 					now := time.Now()
 					folder.LastScan = &now
-					if err := s.Store().UpdateImportPath(folder.ID, folder); err != nil {
+					if err := s.Ops().UpdateImportPath(folder.ID, folder); err != nil {
 						_ = progress.Log("warn", fmt.Sprintf("Failed to update book count: %v", err), nil)
 					}
 				}
@@ -183,8 +183,8 @@ func (s *Server) RegisterFolderAutoScanOp(reg *opsregistry.Registry) error {
 			// v1 row sticks in "queued" forever even though the work
 			// is done.
 			summary := fmt.Sprintf("Auto-scan completed (%d books found)", len(books))
-			if p.LegacyOpID != "" && s.Store() != nil {
-				_ = s.Store().UpdateOperationStatus(p.LegacyOpID, "completed", len(books), len(books), summary)
+			if p.LegacyOpID != "" && s.Ops() != nil {
+				_ = s.Ops().UpdateOperationStatus(p.LegacyOpID, "completed", len(books), len(books), summary)
 			}
 			_ = progress.Log("info", fmt.Sprintf("Auto-scan completed. Total books: %d", len(books)), nil)
 			if s.activityWriter != nil && p.LegacyOpID != "" {

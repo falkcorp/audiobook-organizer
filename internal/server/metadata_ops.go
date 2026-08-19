@@ -528,7 +528,7 @@ func (s *Server) resolveFilterToBookIDs(ctx context.Context, f operations.Filter
 		ids = append(ids, b.ID)
 	}
 	if f.OnlyUnmatched {
-		matched := metabatch.LatestMatchedBookIDs(s.Store())
+		matched := metabatch.LatestMatchedBookIDs(s.Ops())
 		filtered := ids[:0]
 		for _, id := range ids {
 			if !matched[id] {
@@ -565,7 +565,7 @@ func (s *Server) RegisterBulkMetadataFetchOp(reg *opsregistry.Registry) error {
 					return fmt.Errorf("bulk_metadata_fetch: decode params: %w", err)
 				}
 			}
-			store := s.Store()
+			store := s.storeForWiring()
 			if store == nil {
 				return fmt.Errorf("bulk_metadata_fetch: database not initialized")
 			}
@@ -846,7 +846,7 @@ func (s *Server) runBulkWriteBack(
 ) error {
 	workers := writeBackWorkers()
 
-	store := s.Store()
+	store := s.storeForWiring()
 	mfs := s.metadataFetchService
 	total := len(bookIDs)
 
@@ -1039,7 +1039,7 @@ func (s *Server) runIsbnEnrichment(ctx context.Context, progress operations.Prog
 // runMetadataRefreshScan reports books with incomplete metadata. Read-only,
 // safe to re-run on restart with no state.
 func (s *Server) runMetadataRefreshScan(ctx context.Context, progress operations.ProgressReporter) error {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

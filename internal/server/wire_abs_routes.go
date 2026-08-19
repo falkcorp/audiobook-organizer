@@ -379,13 +379,13 @@ func (s *Server) wireABSRoutes() {
 		}
 	}
 
-	absStore, ok := s.Store().(abshandler.Store)
+	absStore, ok := s.Ops().(abshandler.Store)
 	if !ok {
 		slog.Error("abs: refusing to start — the configured store does not implement the ABS session keyspace " +
 			"(PebbleDB is the only supported backend)")
 		os.Exit(1)
 	}
-	identityStore, ok := s.Store().(servermiddleware.ABSIdentityStore)
+	identityStore, ok := s.Ops().(servermiddleware.ABSIdentityStore)
 	if !ok {
 		slog.Error("abs: refusing to start — the configured store cannot resolve ABS identities")
 		os.Exit(1)
@@ -399,14 +399,14 @@ func (s *Server) wireABSRoutes() {
 	// FAIL CLOSED on the two that gate the surface: without them the browse + playback
 	// routes would not be registered at all, so /api/libraries would answer a JSON 404
 	// while the startup log claimed the ABS API was up. Exiting is the honest outcome.
-	libraryStore, ok := s.Store().(abshandler.LibraryStore)
+	libraryStore, ok := s.Ops().(abshandler.LibraryStore)
 	if !ok {
 		slog.Error("abs: refusing to start — the configured store cannot serve the library browse surface " +
 			"(PebbleDB is the only supported backend)")
 		os.Exit(1)
 	}
-	syncIdentity := database.AsSyncIdentityStore(s.Store())
-	syncFiles := database.AsSyncFileStore(s.Store())
+	syncIdentity := database.AsSyncIdentityStore(s.Ops())
+	syncFiles := database.AsSyncFileStore(s.Ops())
 	if syncIdentity == nil || syncFiles == nil {
 		slog.Error("abs: refusing to start — the configured store lacks the sync_item/sync_file keyspaces. " +
 			"Every client-visible id (libraryItemId, ino) must come from them: a raw Book ULID is 26 chars and " +
@@ -424,14 +424,14 @@ func (s *Server) wireABSRoutes() {
 	// practice because PebbleDB (the only supported backend) satisfies both
 	// capabilities asserted here, as well as the sync-identity and library ones
 	// already asserted above.
-	progressList, ok := s.Store().(abshandler.ProgressListStore)
+	progressList, ok := s.Ops().(abshandler.ProgressListStore)
 	if !ok {
 		slog.Error("abs: refusing to start — the configured store cannot enumerate a user's listening positions, " +
 			"so /api/me could only ever report an EMPTY mediaProgress list. Clients DELETE local progress rows " +
 			"absent from that list, so serving it would destroy the owner's place in every book.")
 		os.Exit(1)
 	}
-	bookmarkStore := database.AsBookmarkStore(s.Store())
+	bookmarkStore := database.AsBookmarkStore(s.Ops())
 	if bookmarkStore == nil {
 		slog.Error("abs: refusing to start — the configured store lacks the named-bookmark keyspace, so /api/me " +
 			"could only ever report an EMPTY bookmarks list.")
@@ -466,10 +466,10 @@ func (s *Server) wireABSRoutes() {
 		// Chapters and Progress are OPTIONAL by design: without chapters the mapper
 		// synthesizes one per track (what real ABS does for a multi-file book anyway),
 		// and without progress a session still plays, it just starts at 0.
-		Chapters:    asChapterStore(s.Store()),
-		Playlists:   asPlaylistStore(s.Store()),
-		Collections: asCollectionStore(s.Store()),
-		Progress:    asProgressStore(s.Store()),
+		Chapters:    asChapterStore(s.Ops()),
+		Playlists:   asPlaylistStore(s.Ops()),
+		Collections: asCollectionStore(s.Ops()),
+		Progress:    asProgressStore(s.Ops()),
 		// Phase 6 write half. Already asserted non-nil above (bookmarkStore), so
 		// the CRUD routes always register on the supported backend.
 		Bookmarks:   bookmarkStore,
@@ -494,7 +494,7 @@ func (s *Server) wireABSRoutes() {
 	// The store is passed as an ARGUMENT, so it is read here, synchronously, and
 	// cannot be read inside the goroutine. See spawnContributorWarm for why that
 	// is a parameter rather than a closure capture.
-	spawnContributorWarm(s.Store(), handler.WarmContributors)
+	spawnContributorWarm(s.Ops(), handler.WarmContributors)
 
 	// Own group so the ABS surface carries its own body limit, distinct from /api/v1.
 	// Rate limiting for /login and /auth/refresh is enforced inside the handler (per
@@ -536,7 +536,7 @@ func (s *Server) wireABSRoutes() {
 			"/public/session would answer 404. This should be unreachable: the store assertions above exit on failure.")
 		os.Exit(1)
 	}
-	if asProgressStore(s.Store()) == nil {
+	if asProgressStore(s.Ops()) == nil {
 		slog.Warn("abs: no listening-progress store is wired — every play session will report currentTime 0. " +
 			"AudioBooth takes max() on position at session start while ignoring timestamps, so a 0 there silently " +
 			"rewinds the listener to the start of the book.")
@@ -694,7 +694,7 @@ func asCollectionStore(s any) abshandler.CollectionStore {
 //
 // s.store is a plain field that Server.Start later overwrites with the Bleve
 // indexedStore wrapper (server_lifecycle.go). This goroutine is spawned at
-// route-wiring time, from NewServer, BEFORE Start runs. So reading s.Store()
+// route-wiring time, from NewServer, BEFORE Start runs. So reading s.Ops()
 // from the goroutine body is an unsynchronized read racing that write, and the
 // two outcomes used to disagree: the old bare store.(*database.PebbleStore)
 // assertion succeeded against the bare store and failed against the wrapper, so
@@ -738,7 +738,7 @@ type warmupWaiter interface {
 // This is a named function rather than an inline assertion for the same reason
 // resolveVGBackfiller is: a guard that cannot reach the production call site does
 // not guard it. TestWarmupWaiterResolvesThroughDecorator calls THIS, so reverting
-// it to a bare `s.Store().(*database.PebbleStore)` turns that test red.
+// it to a bare `s.Ops().(*database.PebbleStore)` turns that test red.
 //
 // The bare form was live until 2026-08-19 and its failure mode is the one the
 // comment at the call site describes: skip the wait, build the contributor cache

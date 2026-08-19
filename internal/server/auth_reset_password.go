@@ -46,12 +46,12 @@ import (
 // users.manage. This endpoint deliberately does NOT duplicate that — it exists
 // for the case where the user should choose their own password.
 func (s *Server) handleResetPassword(c *gin.Context) {
-	if s.Store() == nil {
+	if s.Ops() == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
 	}
 	id := c.Param("id")
-	user, err := s.Store().GetUserByID(id)
+	user, err := s.Ops().GetUserByID(id)
 	if err != nil || user == nil {
 		httputil.RespondWithNotFound(c, "user", id)
 		return

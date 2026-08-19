@@ -29,7 +29,7 @@ func (s *Server) handleImportCollisionPreview(c *gin.Context) {
 
 	// Delegate to importer package for collision detection.
 	result := importer.CheckImportCollisions(
-		s.Store(),
+		s.storeForWiring(),
 		&importer.CollisionPreviewRequest{
 			FilePath:    req.FilePath,
 			TorrentHash: req.TorrentHash,

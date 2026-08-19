@@ -30,7 +30,7 @@ func (s *Server) cleanupMergedHandler(c *gin.Context) {
 		return
 	}
 
-	store := s.Store()
+	store := s.storeForWiring()
 	ops, preview, err := itunes.ComputeMergedTrackCleanup(store, itlPath)
 	if err != nil {
 		httputil.RespondWithInternalError(c, fmt.Sprintf("cleanup-merged diff failed: %v", err))

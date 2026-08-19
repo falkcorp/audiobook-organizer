@@ -115,11 +115,11 @@ func (s *Server) CleanupOrphanedTempFiles(rootDir string, opID string) int {
 }
 
 func (s *Server) CleanupTrashedVersions() int {
-	return CleanupTrashedVersions(s.Store())
+	return CleanupTrashedVersions(s.storeForWiring())
 }
 
 func (s *Server) SweepArchivedBooks() int {
-	return sweep.SweepArchivedBooks(s.Store())
+	return sweep.SweepArchivedBooks(s.Ops())
 }
 
 // ---- optional component accessors ----
@@ -184,7 +184,7 @@ func (s *Server) MetadataUpgradeRun(ctx context.Context, limit int, progress ope
 	if s.metadataFetchService == nil {
 		return 0, 0, 0, 0, fmt.Errorf("metadata fetch service not initialized")
 	}
-	svc := NewMetadataUpgradeService(s.Store(), s.metadataFetchService)
+	svc := NewMetadataUpgradeService(s.storeForWiring(), s.metadataFetchService)
 	result, err := svc.RunUpgrade(ctx, limit, progress)
 	if err != nil {
 		return 0, 0, 0, 0, err
@@ -208,7 +208,7 @@ func (s *Server) OptimizeOLStore() error {
 
 func (s *Server) PruneOldLogs(retentionDays int) error {
 	retLog := logger.New("purge_old_logs")
-	_, err := logger.PruneOldLogs(s.Store(), retentionDays, retLog)
+	_, err := logger.PruneOldLogs(s.storeForWiring(), retentionDays, retLog)
 	return err
 }
 
@@ -350,7 +350,7 @@ func (s *Server) DedupTriageExactPending(ctx context.Context, apply bool) (*main
 		if b, ok := bookCache[id]; ok {
 			return b
 		}
-		b, gerr := s.Store().GetBookByID(id)
+		b, gerr := s.Ops().GetBookByID(id)
 		if gerr != nil {
 			lookupErrs++
 			if firstLookupErr == nil {
@@ -536,7 +536,7 @@ func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTit
 	// SourceHash guard: recompute the cache row's search-input hash over the
 	// book's CURRENT fields and refuse if it drifted since the write. A missing
 	// store or book is anomalous at apply time — fail closed (skip + log).
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
@@ -610,7 +610,7 @@ var transcriptionApplyFields = []string{"title", "author"}
 // intervals until the operation reaches a terminal state or ctx is canceled.
 // Terminal states: completed, failed, canceled, interrupted_dropped, interrupted_quiesced.
 func (s *Server) WaitForOp(ctx context.Context, opID string) error {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

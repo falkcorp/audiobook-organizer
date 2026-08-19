@@ -34,7 +34,7 @@
 //     (enrichedBookResponse) is server-private (the Phase-3 ai pattern).
 //   - getFieldStates — wraps *MetadataStateService.LoadMetadataState, whose
 //     return type (map[string]metadataFieldState) is metafetch-private.
-//   - getExternalIDStore — wraps asExternalIDStore(s.Store()) (server adapter).
+//   - getExternalIDStore — wraps asExternalIDStore(s.Ops()) (server adapter).
 //   - publishEvent — wraps *Server.publishEvent (shared plugin event bus).
 //
 // As a result package audiobookshandler never imports package server.
@@ -140,7 +140,7 @@ type Handler struct {
 	// type (map[string]metadataFieldState) is metafetch-private, surfaced as any.
 	getFieldStates func(id string) (any, error)
 
-	// getExternalIDStore wraps asExternalIDStore(s.Store()) (the server adapter),
+	// getExternalIDStore wraps asExternalIDStore(s.Ops()) (the server adapter),
 	// returning nil when the store does not implement external IDs.
 	getExternalIDStore func() ExternalIDStore
 

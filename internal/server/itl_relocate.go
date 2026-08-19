@@ -51,7 +51,7 @@ func (s *Server) relocateITLHandler(c *gin.Context) {
 		return
 	}
 
-	store := s.Store()
+	store := s.storeForWiring()
 	ops, preview, err := itunes.ComputeRelocateOps(store, itlPath, itlPathMappings())
 	if err != nil {
 		httputil.RespondWithInternalError(c, fmt.Sprintf("relocate diff failed: %v", err))

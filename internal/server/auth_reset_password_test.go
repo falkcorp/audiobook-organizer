@@ -35,7 +35,7 @@ func TestResetPassword_ReturnsUsableToken(t *testing.T) {
 	s, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	user, err := s.Store().CreateUser("resetme", "resetme@example.com", "bcrypt", "hash", []string{"viewer"}, "active")
+	user, err := s.storeForWiring().CreateUser("resetme", "resetme@example.com", "bcrypt", "hash", []string{"viewer"}, "active")
 	require.NoError(t, err)
 
 	r := resetPasswordRouter(s)
@@ -64,7 +64,7 @@ func TestResetPassword_TokenRedeemsToASession(t *testing.T) {
 	s, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	user, err := s.Store().CreateUser("redeemer", "redeemer@example.com", "bcrypt", "hash", []string{"viewer"}, "active")
+	user, err := s.storeForWiring().CreateUser("redeemer", "redeemer@example.com", "bcrypt", "hash", []string{"viewer"}, "active")
 	require.NoError(t, err)
 
 	r := resetPasswordRouter(s)
@@ -101,7 +101,7 @@ func TestResetPassword_TokenIsSingleUse(t *testing.T) {
 	s, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	user, err := s.Store().CreateUser("onceonly", "onceonly@example.com", "bcrypt", "hash", []string{"viewer"}, "active")
+	user, err := s.storeForWiring().CreateUser("onceonly", "onceonly@example.com", "bcrypt", "hash", []string{"viewer"}, "active")
 	require.NoError(t, err)
 
 	r := resetPasswordRouter(s)
@@ -130,7 +130,7 @@ func TestResetPassword_InactiveUserCannotRedeem(t *testing.T) {
 	s, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	user, err := s.Store().CreateUser("disabled", "disabled@example.com", "bcrypt", "hash", []string{"viewer"}, "suspended")
+	user, err := s.storeForWiring().CreateUser("disabled", "disabled@example.com", "bcrypt", "hash", []string{"viewer"}, "suspended")
 	require.NoError(t, err)
 
 	r := resetPasswordRouter(s)

@@ -520,7 +520,7 @@ func TestCoverageDashboardStats(t *testing.T) {
 		createTestBookFmt(t, "Dashboard Book 2", "mp3")
 
 		// Invalidate the library stats cache so new books are counted
-		server.Store().InvalidateLibraryStats()
+		server.storeForWiring().InvalidateLibraryStats()
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard", nil)
 		w := httptest.NewRecorder()

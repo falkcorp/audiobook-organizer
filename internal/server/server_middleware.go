@@ -115,14 +115,14 @@ func securityHeadersMiddleware() gin.HandlerFunc {
 
 // isProtectedPath is now a method on *Server so it uses the server's
 // resolved store rather than the package-level GetGlobalStore
-// (SERVER-GLOBAL-STORE-AUDIT phase 3a). Nil-safe — if s.Store() is
+// (SERVER-GLOBAL-STORE-AUDIT phase 3a). Nil-safe — if s.Ops() is
 // nil, the import-path check is skipped (matches prior behaviour
 // when GetGlobalStore returned nil).
 func (s *Server) isProtectedPath(filePath string) bool {
 	absPath, _ := filepath.Abs(filePath)
 
 	// Check import paths
-	if store := s.Store(); store != nil {
+	if store := s.Ops(); store != nil {
 		importPaths, err := cachedImportPaths(store)
 		if err == nil {
 			for _, ip := range importPaths {

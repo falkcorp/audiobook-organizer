@@ -37,17 +37,17 @@ import (
 // under test (status/list/logs/result/changes) never reach them.
 func newOperationsHandler(s *Server) *operations.Handler {
 	return operations.New(
-		s.Store(),
+		s.storeForWiring(),
 		nil, // registry
 		nil, // scheduler
 		nil, // pipeline (ScanCanceler)
 		nil, // scanStore (AIScanLister)
 		s.collectStaleOperations,
 		func(id string) (*undo.UndoConflictReport, error) {
-			return undo.PreflightUndoConflicts(s.Store(), id)
+			return undo.PreflightUndoConflicts(s.storeForWiring(), id)
 		},
 		func(id string) error {
-			return NewRevertService(s.Store()).RevertOperation(id)
+			return NewRevertService(s.storeForWiring()).RevertOperation(id)
 		},
 	)
 }
@@ -60,7 +60,7 @@ func newOperationsHandler(s *Server) *operations.Handler {
 // (author/series books) endpoints.
 func newEntitiesHandler(s *Server) *entities.Handler {
 	return entities.New(
-		s.Store(),
+		s.storeForWiring(),
 		s.workService,
 		s.authorSeriesService,
 		s.opRegistry,
@@ -96,9 +96,9 @@ func newSystemHandler(s *Server) *system.Handler {
 	// Mirrors wireHandlers: OperationLogsProvider is the v2 handler now. The
 	// legacy one fell back to the `operations` table, which never leaves pending.
 	var opLogs system.OperationLogsProvider = handlers.NewOperationsV2Handler(
-		database.GetOpsV2(s.Store()), nil, nil, false)
+		database.GetOpsV2(s.Ops()), nil, nil, false)
 	return system.New(
-		func() system.SystemStore { return s.Store() },
+		func() system.SystemStore { return s.storeForWiring() },
 		sysSvc,
 		cfgUpd,
 		plugins,
@@ -153,7 +153,7 @@ func newAudiobooksHandler(s *Server) *audiobookshandler.Handler {
 		abChangelog = s.changelogService
 	}
 	return audiobookshandler.New(
-		s.Store(),
+		s.storeForWiring(),
 		abSvc,
 		abUpdater,
 		func() audiobookshandler.WriteBackEnqueuer {
@@ -176,7 +176,7 @@ func newAudiobooksHandler(s *Server) *audiobookshandler.Handler {
 		func(b *database.Book) any { return s.enrichBookForResponseSingle(b) },
 		func(id string) (any, error) { return s.metadataStateService.LoadMetadataState(id) },
 		func() audiobookshandler.ExternalIDStore {
-			eid := asExternalIDStore(s.Store())
+			eid := asExternalIDStore(s.Ops())
 			if eid == nil {
 				return nil
 			}

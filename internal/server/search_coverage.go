@@ -75,7 +75,7 @@ func (s *Server) reconcileSearchIndexCoverage() {
 	if s.searchIndex == nil {
 		return
 	}
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		return
 	}

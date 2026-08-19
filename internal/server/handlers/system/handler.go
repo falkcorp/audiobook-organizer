@@ -47,7 +47,7 @@ import (
 // Handler hosts the system-domain HTTP endpoints.
 type Handler struct {
 	// getStore resolves the database store lazily, at request time. The original
-	// handlers read s.Store() at call time (late binding), and a router
+	// handlers read s.Ops() at call time (late binding), and a router
 	// integration test (TestBlockedHashes_CRUD) swaps server.store AFTER wiring to
 	// inject a mock — so snapshotting the store at wire time would capture the
 	// pre-swap store and miss the mock's expectations. The provider closure

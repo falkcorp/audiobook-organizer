@@ -51,7 +51,7 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 		return
 	}
 
-	store := s.Store()
+	store := s.Ops()
 
 	// Resolve the target book IDs — from either explicit list or SelectionSpec.
 	candidateIDs := req.BookIDs
@@ -297,7 +297,7 @@ func (s *Server) handleGetOperationResults(c *gin.Context) {
 	limit := params.Limit
 	offset := params.Offset
 
-	store := s.Store()
+	store := s.Ops()
 
 	op, err := store.GetOperationByID(opID)
 	if err != nil || op == nil {
@@ -392,7 +392,7 @@ func (s *Server) handleGetOperationResults(c *gin.Context) {
 // plus a review backlog without overwhelming the dialog".
 func (s *Server) handleGetLatestMetadataFetch(c *gin.Context) {
 	const maxOps = 10
-	store := s.Store()
+	store := s.Ops()
 	// Scan more than maxOps from recent history because the filter
 	// (type + completed + non-empty results) can reject many rows.
 	// Use a large limit: GetRecentOperations loads all ops into memory anyway
@@ -493,7 +493,7 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 		return
 	}
 
-	store := s.Store()
+	store := s.Ops()
 	mfs := s.metadataFetchService
 
 	// Load all operation results for the given operation.
@@ -653,7 +653,7 @@ func (s *Server) handleRejectCandidates(c *gin.Context) {
 		return
 	}
 
-	store := s.Store()
+	store := s.Ops()
 
 	// For each book, update the stored result status to "rejected"
 	results, err := store.GetOperationResults(req.OperationID)
@@ -717,7 +717,7 @@ func (s *Server) handleUnrejectCandidates(c *gin.Context) {
 		return
 	}
 
-	store := s.Store()
+	store := s.Ops()
 
 	results, err := store.GetOperationResults(req.OperationID)
 	if err != nil {
@@ -768,7 +768,7 @@ func (s *Server) handleUnrejectCandidates(c *gin.Context) {
 // resumeInterruptedMetadataFetch checks for metadata_candidate_fetch operations
 // that were interrupted (status=running) and re-enqueues the remaining books.
 func (s *Server) resumeInterruptedMetadataFetch() {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		return
 	}
@@ -904,7 +904,7 @@ func latestMetadataResultsByBook(store metadataResultsReader) (map[string]databa
 //	                         (status=unfetched). Off by default to keep the
 //	                         payload focused on the review-relevant set.
 func (s *Server) handleListMetadataResults(c *gin.Context) {
-	store := s.Store()
+	store := s.Ops()
 
 	// Parse filters.
 	statusFilter := map[string]bool{}

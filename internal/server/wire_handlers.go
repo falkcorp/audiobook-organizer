@@ -32,8 +32,8 @@ import (
 // Called from Start() after the protected group is created.
 // Route registration is delegated to per-domain wire*Routes methods.
 func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFunc, protected *gin.RouterGroup, oauthH *handlers.OAuthHandler) {
-	authH := handlers.NewAuthHandler(s.Store(), config.AppConfig.EnableAuth)
-	apiKeyH := handlers.NewAPIKeyHandler(s.Store())
+	authH := handlers.NewAuthHandler(s.storeForWiring(), config.AppConfig.EnableAuth)
+	apiKeyH := handlers.NewAPIKeyHandler(s.storeForWiring())
 
 	s.wireAuthRoutes(api, authMiddleware, authH, apiKeyH, oauthH)
 
@@ -46,11 +46,11 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	}
 
 	// ── Instantiate Phase 2 handlers ─────────────────────────────────────────
-	cacheH := handlers.NewCacheHandler(s.metricsStore, s.Store())
-	activityH := handlers.NewActivityHandler(s.activityService, s.Store())
-	readingH := handlers.NewReadingHandler(s.Store())
-	userH := handlers.NewUserHandler(s.Store())
-	splitBookH := handlers.NewSplitBookHandler(s.opRegistry, splitBookCands, s.Store())
+	cacheH := handlers.NewCacheHandler(s.metricsStore, s.storeForWiring())
+	activityH := handlers.NewActivityHandler(s.activityService, s.storeForWiring())
+	readingH := handlers.NewReadingHandler(s.storeForWiring())
+	userH := handlers.NewUserHandler(s.storeForWiring())
+	splitBookH := handlers.NewSplitBookHandler(s.opRegistry, splitBookCands, s.storeForWiring())
 	// The metadata-cache handler needs the SAME file-I/O pool the single-book
 	// apply path uses (see wiring of metadatahandler below) — without it,
 	// applying from the Metadata Review screen updates only the database and
@@ -63,11 +63,11 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	if s.fileIOPool != nil {
 		mcFileIOPool = s.fileIOPool
 	}
-	metaCacheH := handlers.NewMetadataCacheHandler(s.Store(), s.metadataFetchService, s.writeBackBatcher, mcFileIOPool, s.opRegistry)
+	metaCacheH := handlers.NewMetadataCacheHandler(s.storeForWiring(), s.metadataFetchService, s.writeBackBatcher, mcFileIOPool, s.opRegistry)
 	organizeH := handlers.NewOrganizeHandler(
-		s.Store(),
-		NewRenameService(s.Store()),
-		NewOrganizePreviewService(s.Store()),
+		s.storeForWiring(),
+		NewRenameService(s.storeForWiring()),
+		NewOrganizePreviewService(s.storeForWiring()),
 		s.organizeService,
 		s.writeBackBatcher,
 		s.eventBus,
@@ -75,7 +75,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		config.AppConfig.AutoOrganize,
 	)
 	filesystemH := handlers.NewFilesystemHandler(
-		s.Store(),
+		s.storeForWiring(),
 		s.filesystemService,
 		s.importPathService,
 		s.importService,
@@ -84,14 +84,14 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		config.AppConfig.RootDir,
 		config.AppConfig.AutoOrganize,
 	)
-	playlistH := handlers.NewPlaylistHandlerWithGetter(s.Store(), s.SearchIndex)
+	playlistH := handlers.NewPlaylistHandlerWithGetter(s.storeForWiring(), s.SearchIndex)
 	// The store is passed twice on purpose: once as the narrow CollectionStore
 	// this handler writes through, once as the wider store the query evaluator
 	// reads books and per-user state from. Keeping them separate parameters means
 	// the handler's own dependency surface stays inspectable.
-	collectionH := handlers.NewCollectionHandler(s.Store(), s.Store(), s.SearchIndex)
+	collectionH := handlers.NewCollectionHandler(s.storeForWiring(), s.storeForWiring(), s.SearchIndex)
 	pluginsH := handlers.NewPluginsHandler(s.pluginRegistry, config.AppConfig.Plugins)
-	versionsH := handlers.NewVersionsHandler(s.Store())
+	versionsH := handlers.NewVersionsHandler(s.storeForWiring())
 
 	// Entities domain handler (authors/series/narrators/works). Guard typed-nil
 	// boxing for each interface-typed dep so the handler's nil checks (and the
@@ -127,7 +127,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		return out
 	}
 	entitiesH := entities.New(
-		s.Store(),
+		s.storeForWiring(),
 		entWorkSvc,
 		entAuthorSeriesSvc,
 		entOpReg,
@@ -154,7 +154,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	}
 
 	// Resolve the opsV2 store from the composite store (nil if unsupported).
-	opsV2 := database.GetOpsV2(s.Store())
+	opsV2 := database.GetOpsV2(s.Ops())
 
 	// AI-scan cancellation for DELETE /operations/v2/:id. Same typed-nil boxing
 	// guard as the operations-domain wiring below, and for the same reason: a nil
@@ -203,9 +203,9 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	}
 	// collectStale stays in package server (also called from server_lifecycle.go).
 	// preflightUndo / revert wrap server-private re-export helpers that consume a
-	// full database.Store opaquely; the controller closes over s.Store().
+	// full database.Store opaquely; the controller closes over s.Ops().
 	operationsH := operations.New(
-		s.Store(),
+		s.storeForWiring(),
 		opsOpReg,
 		// Lazy scheduler provider: s.scheduler is assigned in Start() (after this
 		// wire-time runs), so resolve it at request time. Guard inside the
@@ -221,10 +221,10 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		opsScanStore,
 		s.collectStaleOperations,
 		func(id string) (*undo.UndoConflictReport, error) {
-			return undo.PreflightUndoConflicts(s.Store(), id)
+			return undo.PreflightUndoConflicts(s.storeForWiring(), id)
 		},
 		func(id string) error {
-			return NewRevertService(s.Store()).RevertOperation(id)
+			return NewRevertService(s.storeForWiring()).RevertOperation(id)
 		},
 	)
 	// getSystemLogs (system handler) delegates its operation_id branch to
@@ -249,9 +249,9 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// pointer (factoryReset reaches its .Mu / .OLStore fields, which an interface
 	// cannot abstract); the handler nil-checks it directly. OperationLogsProvider is backed by
 	// the v2 handler (see below). The store is passed as a LAZY
-	// provider closure (not a snapshot): the original handlers read s.Store() at
+	// provider closure (not a snapshot): the original handlers read s.Ops() at
 	// request time, and a router-integration test swaps server.store post-wire to
-	// inject a mock — snapshotting would miss it. s.Store() returns the
+	// inject a mock — snapshotting would miss it. s.Ops() returns the
 	// database.Store interface, so a nil store stays a nil interface.
 	var sysSvc system.SystemService
 	if s.systemService != nil {
@@ -273,12 +273,12 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// this migration exists to remove.
 	var sysOpLogs system.OperationLogsProvider = opsV2H
 	systemH := system.New(
-		// Lazy store provider: resolve s.Store() at request time (late binding, as
+		// Lazy store provider: resolve s.Ops() at request time (late binding, as
 		// the original handlers did). A test swaps server.store post-wire, so a
-		// snapshot would miss it. s.Store() returns the database.Store interface,
+		// snapshot would miss it. s.Ops() returns the database.Store interface,
 		// so a nil store stays a nil interface and the handler's store==nil guards
 		// hold.
-		func() system.SystemStore { return s.Store() },
+		func() system.SystemStore { return s.storeForWiring() },
 		sysSvc,
 		sysConfigUpdate,
 		sysPlugins,
@@ -309,9 +309,9 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// s.mergeService and s.dedupEngine are all wired before setupRoutes
 	// (wireServerFromContainer) and never swapped post-wire, so snapshotting them
 	// here is safe. The store and the embedding store are passed as LAZY provider
-	// closures (not snapshots): the original handlers read s.Store() / s.embeddingStore
+	// closures (not snapshots): the original handlers read s.Ops() / s.embeddingStore
 	// at request time, and a router-integration test swaps server.store post-wire to
-	// inject a mock — snapshotting would miss it. s.Store() returns the
+	// inject a mock — snapshotting would miss it. s.Ops() returns the
 	// database.Store interface (a nil store stays a nil interface); s.embeddingStore
 	// is a concrete *database.EmbeddingStore (a nil pointer stays nil, no boxing).
 	// publishEvent / markDuplicatesFlaggedDirty are injected as funcs because the
@@ -329,7 +329,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		dedupEng = s.dedupEngine
 	}
 	dedupH := deduphandler.New(
-		s.Store(),
+		s.Ops(),
 		s.embeddingStore,
 		dedupOpReg,
 		dedupMergeSvc,
@@ -347,13 +347,13 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// s.audiobookService and s.metadataFetchService are all wired before
 	// setupRoutes and never swapped post-wire, so snapshotting them here is safe.
 	// The store is a LAZY provider closure (not a snapshot): the original handlers
-	// read s.Store() at request time and a router-integration test swaps
-	// server.store post-wire; s.Store() returns the database.Store interface so a
+	// read s.Ops() at request time and a router-integration test swaps
+	// server.store post-wire; s.Ops() returns the database.Store interface so a
 	// nil store stays a nil interface. s.dedupCache is the concrete
 	// *cache.Cache[gin.H] (the cache exception), passed as-is.
 	//
 	// The merge service is reached through getMergeService, which reproduces the
-	// original nil-fallback (s.mergeService when set, else merge.NewService(s.Store())).
+	// original nil-fallback (s.mergeService when set, else merge.NewService(s.Ops())).
 	// dismissDedupGroup / computeSeriesPrunePreview / seriesNormalizePreview wrap
 	// helpers that STAY in package server (server_middleware.go, server_title_helpers.go,
 	// duplicates_helpers.go) because they are shared with files that did not move;
@@ -375,7 +375,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		dupDedupEng = s.dedupEngine
 	}
 	duplicatesH := duplicates.New(
-		s.Store(),
+		s.Ops(),
 		s.dedupCache,
 		dupOpReg,
 		dupAudiobookSvc,
@@ -384,11 +384,11 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 			if s.mergeService != nil {
 				return s.mergeService
 			}
-			return merge.NewService(s.Store())
+			return merge.NewService(s.storeForWiring())
 		},
 		dupDedupEng,
 		func(groupKey string) {
-			store := s.Store()
+			store := s.storeForWiring()
 			if store == nil {
 				return
 			}
@@ -397,14 +397,14 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 			saveDismissedDedupGroups(store, dismissed)
 		},
 		func() (any, error) {
-			store := s.Store()
+			store := s.storeForWiring()
 			if store == nil {
 				return nil, nil
 			}
 			return computeSeriesPrunePreview(store)
 		},
 		func() any {
-			return buildSeriesNormalizePreview(s.Store())
+			return buildSeriesNormalizePreview(s.storeForWiring())
 		},
 	)
 
@@ -419,7 +419,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		itSvc = s.itunesSvc
 		itImporter = s.itunesSvc.Importer
 	}
-	itunesH := handlers.NewITunesHandler(itSvc, itImporter, opReg, s.Store())
+	itunesH := handlers.NewITunesHandler(itSvc, itImporter, opReg, s.storeForWiring())
 
 	// AI handlers. Guard each concrete dependency so a typed-nil pointer is not
 	// boxed into the handler's interface fields — that would defeat the
@@ -438,7 +438,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		aiUpdater = s.audiobookUpdateService
 	}
 	aiH := handlers.NewAIHandler(
-		s.Store(),
+		s.Ops(),
 		aiScanStore,
 		aiPipeline,
 		aiUpdater,
@@ -465,7 +465,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		diagMergeSvc = s.mergeService
 	}
 	diagH := handlers.NewDiagnosticsHandler(
-		s.Store(),
+		s.storeForWiring(),
 		diagSvc,
 		diagMergeSvc,
 		s.embeddingStore,
@@ -486,8 +486,8 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// `s.writeBackBatcher`/`s.metadataFetchService` checks) hold. All of these are
 	// wired before setupRoutes and never swapped post-wire, so snapshotting them
 	// here is safe. The store is a LAZY provider closure (not a snapshot): the
-	// original handlers read s.Store() at request time and a router-integration
-	// test swaps server.store post-wire; s.Store() returns the database.Store
+	// original handlers read s.Ops() at request time and a router-integration
+	// test swaps server.store post-wire; s.Ops() returns the database.Store
 	// interface (un-stripped) so the handlers' inline type assertions
 	// (Unwrap / ListBooksWithFileErrors / GetAllBookIDsForQuickQuery /
 	// GetBookFilesForIDsCore / InvalidateLibraryStats) still resolve against the
@@ -524,7 +524,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		abChangelog = s.changelogService
 	}
 	audiobooksH := audiobookshandler.New(
-		s.Store(),
+		s.storeForWiring(),
 		abSvc,
 		abUpdater,
 		// Lazy provider: server.writeBackBatcher is swapped post-wire by
@@ -550,7 +550,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		func(b *database.Book) any { return s.enrichBookForResponseSingle(b) },
 		func(id string) (any, error) { return s.metadataStateService.LoadMetadataState(id) },
 		func() audiobookshandler.ExternalIDStore {
-			eid := asExternalIDStore(s.Store())
+			eid := asExternalIDStore(s.Ops())
 			if eid == nil {
 				return nil
 			}
@@ -586,7 +586,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		mdFileIOPool = s.fileIOPool
 	}
 	metadataH := metadatahandler.New(
-		s.Store(),
+		s.storeForWiring(),
 		mdMetaFetch,
 		// Lazy provider: server.writeBackBatcher is swapped post-wire by
 		// integration tests and the original handlers read it at request time, so
@@ -616,14 +616,14 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	aiBackendsH := aibackendshandler.New(s.toolRegistry, s.ollamaDaemon)
 
 	// Review-queue handler (PR-A1). The store is the wide database.Store, which
-	// embeds database.ReviewStore. s.Store() returns the interface so a nil store
+	// embeds database.ReviewStore. s.Ops() returns the interface so a nil store
 	// stays a nil interface (the handler guards on store == nil). Apply handlers
 	// are registered later by producers (Track B2); none exist at A1.
 	// The global apply "big switch" (default OFF): when disabled, approving a hold
 	// records the decision but never executes its apply handler — everything stays
 	// visible in the review pane. Read at approve time so a config change takes effect
 	// without re-wiring.
-	reviewH := reviewhandler.New(s.Store(), func() bool { return config.AppConfig.ReviewApplyEnabled })
+	reviewH := reviewhandler.New(s.storeForWiring(), func() bool { return config.AppConfig.ReviewApplyEnabled })
 
 	// Register the regroup APPLY handlers (PR-B2) so approving a hold in the review
 	// UI performs the real action.
@@ -649,15 +649,15 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	//
 	// Guarded on a real store — with a nil store the review handler short-circuits
 	// before dispatch, so the closures would never run anyway.
-	if s.Store() != nil {
+	if s.Ops() != nil {
 		mergeSvc := s.mergeService
 		if mergeSvc == nil {
-			mergeSvc = merge.NewService(s.Store())
+			mergeSvc = merge.NewService(s.storeForWiring())
 		}
 		reviewH.RegisterApplyHandler(itunesservice.ActionCombine,
-			maintenanceplugin.ApplyMultidisc(s.Store(), mergeSvc))
+			maintenanceplugin.ApplyMultidisc(s.storeForWiring(), mergeSvc))
 		reviewH.RegisterApplyHandler(itunesservice.ActionVersionGroup,
-			maintenanceplugin.ApplyVersionGroup(s.Store()))
+			maintenanceplugin.ApplyVersionGroup(s.storeForWiring()))
 	}
 
 	// ── Register protected routes via per-domain methods ─────────────────────

@@ -58,7 +58,7 @@ func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) err
 				return nil
 			}
 
-			store := s.Store()
+			store := s.storeForWiring()
 			mfs := s.metadataFetchService
 			progress := registryProgressAdapter{r: reporter}
 			totalBooks := p.TotalBooks

@@ -45,7 +45,7 @@ const (
 // This goroutine owns its state exclusively (no shared mutable state with
 // other goroutines beyond the store), so no mutex is needed.
 func (s *Server) warnExpiringAPIKeys() {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		return
 	}

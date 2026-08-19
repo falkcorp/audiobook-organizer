@@ -16,7 +16,7 @@
 // that wrap server-private helpers, so package operations never imports package
 // server. preflightUndo wraps undo.PreflightUndoConflicts and revert wraps
 // audiobooks.NewRevertService(...).RevertOperation; both consume a full
-// database.Store opaquely, so the controller closes over s.Store() rather than
+// database.Store opaquely, so the controller closes over s.Ops() rather than
 // the handler enumerating "methods used".
 
 package operations
@@ -61,12 +61,12 @@ type Handler struct {
 	// controller passes s.collectStaleOperations.
 	collectStale func(timeout time.Duration) ([]database.Operation, error)
 
-	// preflightUndo wraps undo.PreflightUndoConflicts(s.Store(), id). The undo
+	// preflightUndo wraps undo.PreflightUndoConflicts(s.Ops(), id). The undo
 	// report type is an importable alias, but PreflightUndoConflicts consumes a
-	// full database.Store opaquely, so the controller closes over s.Store().
+	// full database.Store opaquely, so the controller closes over s.Ops().
 	preflightUndo func(id string) (*undo.UndoConflictReport, error)
 
-	// revert wraps audiobooks.NewRevertService(s.Store()).RevertOperation(id).
+	// revert wraps audiobooks.NewRevertService(s.Ops()).RevertOperation(id).
 	// Same opaque-store rationale as preflightUndo.
 	revert func(id string) error
 }

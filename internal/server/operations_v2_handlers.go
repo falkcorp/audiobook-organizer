@@ -191,7 +191,7 @@ func (s *Server) handleOperationsSSE(c *gin.Context) {
 // opsV2Store returns the OpsV2Store from the server's composite Store, or nil
 // if the store does not implement it.
 func (s *Server) opsV2Store() database.OpsV2Store {
-	return database.GetOpsV2(s.Store())
+	return database.GetOpsV2(s.Ops())
 }
 
 // displayNameFor looks up the human-readable display name for a def ID.

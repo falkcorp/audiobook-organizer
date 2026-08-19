@@ -80,10 +80,10 @@ func nonEmpty(s string) any {
 //
 // Runs in its own goroutine; safe to start before memdb warmup completes.
 func (s *Server) warmLibrarySizes() {
-	if s.Store() == nil {
+	if s.Ops() == nil {
 		return
 	}
-	folders, err := s.Store().GetAllImportPaths()
+	folders, err := s.Ops().GetAllImportPaths()
 	if err != nil {
 		slog.Info("library size warm-up skipped", "err", err)
 		return
