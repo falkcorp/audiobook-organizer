@@ -1,5 +1,5 @@
 # file: .mockery.yaml
-# version: 1.22.0
+# version: 1.23.0
 # guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 # last-edited: 2026-08-19
 
@@ -86,6 +86,42 @@ packages:
   # more stubs -- a large fixture for one batch-size assertion. A mock that is
   # only ever called by the test that sets it up asserts nothing.
   #
+  # lshCandidateStore is deliberately NOT here either. Its only call site sits
+  # ~4,000 lines into dedup/engine.go's unified-scoring pass, inside a nested
+  # per-book/per-file loop reached only after fingerprint and boilerplate
+  # filtering, so a mock cannot be driven without standing up that whole pass.
+  # It also feeds the Tier-0 collector path, which is BLOCKED pending a decision
+  # about running it against the production library -- so a test pinning its
+  # behaviour would be pinning behaviour that may yet be deleted.
+  #
+  # chapterStore is deliberately NOT here, and this one was added and then
+  # removed. Both behaviours a mock would pin -- the idempotency guard and the
+  # absent-capability warning -- are already covered in
+  # internal/scanner/chapter_persistence_test.go against a REAL Pebble store,
+  # which is stronger evidence than a mock: the idempotency test writes a
+  # sentinel chapter list and asserts it comes back untouched through the actual
+  # persistence layer.
+  #
+  # What that coverage was missing was not a mock. The idempotency test carried
+  # requireChapterTestFFprobe/requireChapterTestFixture guards it did not need --
+  # it returns at the `len(existingChapters) > 0` check, before any probe or file
+  # access -- and no workflow installs ffmpeg, so it SKIPPED on every CI run. The
+  # fix was deleting two lines from the test, not generating a mock.
+  #
+  # The lesson generalises: check whether a behaviour is already covered, and
+  # whether the covering test actually RUNS, before adding a double for it.
+  #
+  # These exclusions are judgement calls about test value, not claims that the
+  # code is untestable. If either call site is ever extracted into a function
+  # taking its store as a parameter -- the way spawnContributorWarm was -- the
+  # mock becomes cheap and should be added.
+  #
+  # keyCounter and chapterStore are NOT declared here: their packages already
+  # have blocks further up, and mockery rejects a duplicate package key outright
+  # (it does not silently merge or last-write-win). Their entries live in those
+  # blocks, each overriding the package-level mocks-subpackage config with an
+  # in-package _test.go file, because both interfaces are unexported.
+  #
   # These mocks are for CALL-SITE BEHAVIOUR tests only. They must never be used
   # to test resolveX: a mock satisfies its interface by construction, so it
   # would pass in precisely the case those tests exist to catch (the real store
@@ -99,6 +135,16 @@ packages:
           pkgname: server
           filename: mock_prefix_wiper_test.go
           structname: mockPrefixWiper
+      # warmupWaiter pins ORDER, not resolution: the contributor cache must not
+      # be built until WaitForWarmup returns, or it caches the author set of a
+      # half-published memdb and serves it for the whole TTL. Testable only
+      # because spawnContributorWarm takes the store as a parameter.
+      warmupWaiter:
+        config:
+          dir: internal/server
+          pkgname: server
+          filename: mock_warmup_waiter_test.go
+          structname: mockWarmupWaiter
   github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs:
     interfaces:
       aggregatesBackfillMarker:
@@ -129,6 +175,17 @@ packages:
       filename: "mock_{{.InterfaceName | snakecase}}.go"
       pkgname: handlersmocks
     interfaces:
+      # keyCounter is unexported, so it overrides the mocks-subpackage config
+      # above with an in-package _test.go file. It gates the Pebble section of
+      # the db-health payload: absent the capability the section is OMITTED and
+      # db-health still reports healthy. Note the asymmetry the mock makes
+      # visible -- a KeyCount() ERROR does not omit the section, it reports zeros.
+      keyCounter:
+        config:
+          dir: internal/server/handlers
+          pkgname: handlers
+          filename: mock_key_counter_test.go
+          structname: mockKeyCounter
       AuthStore:
       APIKeyHandlerStore:
       PluginRegistrar:

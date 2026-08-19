@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-08-19
 
@@ -491,30 +491,10 @@ func (s *Server) wireABSRoutes() {
 	// of a library that does not exist yet, and it would then be served for the
 	// whole TTL. A slow-but-correct warm beats a fast wrong one.
 	//
-	// The store is read HERE, synchronously, and NOT inside the goroutine.
-	// s.store is a plain field that Server.Start later overwrites with the Bleve
-	// indexedStore wrapper (server_lifecycle.go), and this goroutine is spawned
-	// at route-wiring time, from NewServer, before Start runs. Reading s.Store()
-	// from the goroutine body is therefore an unsynchronized read racing that
-	// write, and the two outcomes used to disagree: the old bare
-	// store.(*database.PebbleStore) assertion succeeded against the bare store
-	// and failed against the wrapper, so whether the warm waited at all was
-	// decided by scheduling. resolveWarmupWaiter alone would only make both
-	// outcomes correct; hoisting the read removes the race instead of tolerating
-	// it. Nothing writes s.store before NewServer returns, so this read needs no
-	// synchronization of its own.
-	//
-	// Not covered by -race today: wire_abs_routes_test.go reaches wireABSRoutes
-	// only with ABSAPIEnabled false, which returns before this point, so the
-	// detector's silence on the old code was absence of coverage rather than
-	// absence of a race.
-	warmStore := s.Store()
-	go func() {
-		if w, ok := resolveWarmupWaiter(warmStore); ok {
-			w.WaitForWarmup()
-		}
-		handler.WarmContributors(context.Background())
-	}()
+	// The store is passed as an ARGUMENT, so it is read here, synchronously, and
+	// cannot be read inside the goroutine. See spawnContributorWarm for why that
+	// is a parameter rather than a closure capture.
+	spawnContributorWarm(s.Store(), handler.WarmContributors)
 
 	// Own group so the ABS surface carries its own body limit, distinct from /api/v1.
 	// Rate limiting for /login and /auth/refresh is enforced inside the handler (per
@@ -705,6 +685,45 @@ func asCollectionStore(s any) abshandler.CollectionStore {
 		return cs
 	}
 	return nil
+}
+
+// spawnContributorWarm waits for the memdb warmup, then builds the contributor
+// cache, on a background goroutine.
+//
+// The store is a PARAMETER, and that is the entire reason this function exists.
+//
+// s.store is a plain field that Server.Start later overwrites with the Bleve
+// indexedStore wrapper (server_lifecycle.go). This goroutine is spawned at
+// route-wiring time, from NewServer, BEFORE Start runs. So reading s.Store()
+// from the goroutine body is an unsynchronized read racing that write, and the
+// two outcomes used to disagree: the old bare store.(*database.PebbleStore)
+// assertion succeeded against the bare store and failed against the wrapper, so
+// whether the warm waited at all was decided by scheduling. Losing that race
+// means building the cache against a half-published memdb and serving a view of
+// a library that does not exist for the whole TTL.
+//
+// resolveWarmupWaiter alone would only make both outcomes CORRECT; it leaves the
+// unsynchronized read in place. Hoisting the read out of the goroutine removes
+// the race -- but a hoist inside the caller is held in place by nothing except a
+// comment asking the next editor not to move one line. That is not a guarantee,
+// and the failure it protects against is silent.
+//
+// Passing the store as an argument makes it a language guarantee instead: Go
+// evaluates arguments in the CALLER, before the callee runs, so the goroutine
+// has no expression that could reach s.store however this is later edited.
+//
+// This also makes the ordering testable, which it previously was not. The old
+// shape could only be exercised through wireABSRoutes, which returns early
+// unless ABSAPIEnabled is set and calls os.Exit(1) on a misconfigured ABS
+// block -- so -race never entered this path at all, and the detector's silence
+// on the racy version was absence of coverage, not absence of a race.
+func spawnContributorWarm(store any, warm func(context.Context)) {
+	go func() {
+		if w, ok := resolveWarmupWaiter(store); ok {
+			w.WaitForWarmup()
+		}
+		warm(context.Background())
+	}()
 }
 
 // warmupWaiter is the one method the contributor-cache warm needs before it may
