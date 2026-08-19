@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-08-16
+// last-edited: 2026-08-18
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -24,10 +24,23 @@ import (
 // SchedulerDeps contains the external dependencies the TaskScheduler needs.
 // Pass this to NewTaskScheduler instead of a *Server pointer so the scheduler
 // package does not import the server package.
+// SchedulerStore is what the scheduler actually calls, measured by emptying the
+// interface and reading the compiler's enumeration: seven methods. The field was
+// func() database.Store — all 398.
+type SchedulerStore interface {
+	GetSetting(key string) (*database.Setting, error)
+	SetSetting(key, value, typ string, isSecret bool) error
+	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
+	GetOperationByID(id string) (*database.Operation, error)
+	UpdateOperationError(id, errorMessage string) error
+	GetOperationV2(id string) (*database.OperationV2Row, error)
+	ListActiveOperationsV2() ([]database.OperationV2Row, error)
+}
+
 type SchedulerDeps struct {
-	// Store returns the live database.Store. May return nil before the DB
-	// is fully initialised; callers must nil-check.
-	Store func() database.Store
+	// Store returns the live store. May return nil before the DB is fully
+	// initialised; callers must nil-check.
+	Store func() SchedulerStore
 
 	// OpRegistry is the UOS-02 operation registry used to enqueue background
 	// operations. Required; must not be nil when Start() is called.

@@ -29,8 +29,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // captureLogs swaps the default slog logger for one writing into a buffer, and
@@ -56,7 +54,7 @@ func startScheduler(t *testing.T, level slog.Level, defs ...TaskDefinition) stri
 		// Store must be non-nil: Start -> loadLastMaintenanceRun calls it
 		// unconditionally. Returning a nil Store is the supported "DB not ready"
 		// path and makes loadLastMaintenanceRun return early.
-		deps:    SchedulerDeps{Store: func() database.Store { return nil }},
+		deps:    SchedulerDeps{Store: func() SchedulerStore { return nil }},
 		tasks:   make(map[string]*TaskDefinition),
 		lastRun: make(map[string]time.Time),
 	}
