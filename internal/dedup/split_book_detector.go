@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_detector.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9c1f0a3e-b7d2-4e84-8c12-3fa8e1d6b9c0
-// last-edited: 2026-07-17
+// last-edited: 2026-08-19
 
 // Package dedup — split-book backfill detector.
 //
@@ -42,7 +42,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // SplitBookCandidate is one detected cluster of Books that look like
@@ -91,7 +90,7 @@ type splitBookSlim struct {
 // list of split-book clusters. No DB writes — purely analytical.
 // progress, if non-nil, is invoked with the running count of books loaded
 // (every page of 1000) so long scans stay observable up to the op timeout.
-func DetectSplitBookCandidates(ctx context.Context, store database.Store, progress func(loaded int)) ([]SplitBookCandidate, error) {
+func DetectSplitBookCandidates(ctx context.Context, store dedupStore, progress func(loaded int)) ([]SplitBookCandidate, error) {
 	all, err := loadSlimBooks(ctx, store, progress)
 	if err != nil {
 		return nil, err
@@ -107,7 +106,7 @@ func DetectSplitBookCandidates(ctx context.Context, store database.Store, progre
 // loadSlimBooks paginates through every book and projects to splitBookSlim.
 // progress, if non-nil, is called once per page with the total books loaded
 // so far (pages are 1000 books).
-func loadSlimBooks(ctx context.Context, store database.Store, progress func(loaded int)) ([]splitBookSlim, error) {
+func loadSlimBooks(ctx context.Context, store dedupStore, progress func(loaded int)) ([]splitBookSlim, error) {
 	const pageSize = 1000
 	var all []splitBookSlim
 	offset := 0

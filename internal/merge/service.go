@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-08-19
 
@@ -541,7 +541,7 @@ func (ms *Service) attachVirtualFile(b *database.Book, targetBookID string) int 
 
 // SoftDeleteBook marks a book as deleted using the MarkedForDeletion flag.
 // If UpdateBook fails, falls back to hard-delete via DeleteBook.
-func SoftDeleteBook(store mergeBookWriter, bookID string) error {
+func SoftDeleteBook(store BookWriter, bookID string) error {
 	current, err := store.GetBookByID(bookID)
 	if err != nil {
 		return fmt.Errorf("GetBookByID %s: %w", bookID, err)

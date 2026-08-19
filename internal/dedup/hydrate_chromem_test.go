@@ -1,7 +1,7 @@
 // file: internal/dedup/hydrate_chromem_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-07-08
+// last-edited: 2026-08-19
 
 package dedup
 
@@ -36,7 +36,7 @@ func (f *fakeVectorANNStore) FindSimilar(_ context.Context, _ string, _ []float3
 	return nil, nil
 }
 func (f *fakeVectorANNStore) CountByType(_ context.Context, _ string) (int, error) { return 0, nil }
-func (f *fakeVectorANNStore) Close() error                                        { return nil }
+func (f *fakeVectorANNStore) Close() error                                         { return nil }
 
 // TestHydrateChromem_SkipsStaleModelRows verifies the guard added after the
 // bge-m3 cutover: a row stamped with a different model than the currently

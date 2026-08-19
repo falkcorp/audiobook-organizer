@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_exact_guard_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4a1e6d3f-9c72-4a0b-8e35-1f6b2c7d9e40
-// last-edited: 2026-07-11
+// last-edited: 2026-08-19
 
 // Regression guard for DEDUP-INTRO-1 (residual): upsertExactCandidate is the
 // shared chokepoint for every exact-family emitter. It must reject pairs
@@ -136,7 +136,7 @@ func TestUpsertExactCandidateGateParityWithDrain(t *testing.T) {
 		name       string
 		a, b       *database.Book
 		files      map[string][]database.BookFile // bookID -> files, for part-vs-whole only
-		wantReason string                          // "" = kept by both chokepoint and drain
+		wantReason string                         // "" = kept by both chokepoint and drain
 	}
 
 	isbnA, isbnB := "9781111111111", "9782222222222"

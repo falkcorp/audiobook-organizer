@@ -1,7 +1,7 @@
 // file: internal/dedup/comma_split_corpus_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e7a2c95-8d10-4f68-b3c7-1a5e9d2f6b84
-// last-edited: 2026-08-14
+// last-edited: 2026-08-19
 
 package dedup
 
@@ -16,10 +16,10 @@ func TestSplitCompositeAuthorName_TitleClauseCorpus(t *testing.T) {
 	// Title clauses — the split must be REFUSED (nil or 1 part), leaving the
 	// composite visibly broken rather than laundering a fragment into a name.
 	refuse := []string{
-		"So Long, and Thanks for All the Fish",            // minted row 46595
-		"The Princess Bride, and the Farm Boy (DBY)",      // minted row 46989
+		"So Long, and Thanks for All the Fish",                         // minted row 46595
+		"The Princess Bride, and the Farm Boy (DBY)",                   // minted row 46989
 		"Steal Like an Artist: Be Creative, and Make Better Decisions", // row 47193's shape (subtitle punctuation)
-		"A Game of Thrones, A Clash of Kings, A Storm of Swords", // series list, 4+ word clauses
+		"A Game of Thrones, A Clash of Kings, A Storm of Swords",       // series list, 4+ word clauses
 	}
 	for _, name := range refuse {
 		if got := SplitCompositeAuthorName(name); len(got) > 1 {

@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_isbn_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a1f7c92-6d84-4e3b-9f21-8c0a4b6e2d75
-// last-edited: 2026-07-07
+// last-edited: 2026-08-19
 
 // Tests for CollectISBNASIN (scoring-path ISBN/ASIN collector): the indexed fast
 // path must emit a signal set identical to the O(N) GetAllBooksCore scan, and
@@ -23,10 +23,10 @@ import (
 // fakeISBNASINStore implements ISBNASINStore for collector tests: a fixed book
 // list for the O(N) scan path plus an ID→Book map for indexed hydration.
 type fakeISBNASINStore struct {
-	all           []database.BookCore // returned by GetAllBooksCore (already deletion-filtered)
-	byID          map[string]*database.Book
-	getAllCalls   int
-	getByIDCalls  int
+	all          []database.BookCore // returned by GetAllBooksCore (already deletion-filtered)
+	byID         map[string]*database.Book
+	getAllCalls  int
+	getByIDCalls int
 }
 
 func (f *fakeISBNASINStore) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
@@ -90,9 +90,9 @@ func sigKeys(sigs []unified.Signal) []string {
 // C, and ASIN with D; E matches nothing. All non-A books are the "others".
 func buildISBNFixture() (*fakeISBNASINStore, *database.Book, []string) {
 	others := []database.BookCore{
-		isbnCore("BOOK_B", "", "9780000000001", ""),      // ISBN13 match
-		isbnCore("BOOK_C", "0000000010", "", ""),         // ISBN10 match
-		isbnCore("BOOK_D", "", "", "B00ASIN0001"),        // ASIN match
+		isbnCore("BOOK_B", "", "9780000000001", ""),                      // ISBN13 match
+		isbnCore("BOOK_C", "0000000010", "", ""),                         // ISBN10 match
+		isbnCore("BOOK_D", "", "", "B00ASIN0001"),                        // ASIN match
 		isbnCore("BOOK_E", "9999999999", "9789999999999", "B00NOPE0000"), // no match
 	}
 	bookA := isbnFull("BOOK_A", "0000000010", "9780000000001", "B00ASIN0001")

@@ -1,7 +1,7 @@
 // file: internal/dedup/book_dedup.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-07-30
+// last-edited: 2026-08-19
 
 // Package dedup: book_dedup.go contains the extracted execution logic for the
 // "dedup.book-scan" and "dedup.book-merge" async operations.  The *Server
@@ -75,7 +75,7 @@ func coreGroupsToBookGroups(groups [][]database.BookCore) [][]database.Book {
 // progress may be nil; all calls are guarded.
 func ScanBookDuplicates(
 	_ context.Context,
-	store database.Store,
+	store dedupStore,
 	dismissed map[string]bool,
 	progress ProgressReporter,
 ) (BookScanResult, error) {
@@ -188,7 +188,7 @@ func ScanBookDuplicates(
 }
 
 func applyTranscriptionMetadataTiebreaker(
-	store database.Store,
+	store dedupStore,
 	groups [][]database.Book,
 ) ([][]database.Book, map[string]string, map[string]string) {
 	confidence := map[string]string{}
@@ -251,7 +251,7 @@ func transcriptionAgreement(a, b *database.Book) int {
 	return 1
 }
 
-func metadataPairSimilarity(store database.Store, a, b *database.Book) float64 {
+func metadataPairSimilarity(store dedupStore, a, b *database.Book) float64 {
 	aAuthor := bookAuthorName(store, a)
 	bAuthor := bookAuthorName(store, b)
 	return metaTitleAuthorSimilarity(
@@ -262,7 +262,7 @@ func metadataPairSimilarity(store database.Store, a, b *database.Book) float64 {
 	)
 }
 
-func bookAuthorName(store database.Store, book *database.Book) string {
+func bookAuthorName(store dedupStore, book *database.Book) string {
 	if book == nil || book.AuthorID == nil {
 		return ""
 	}
@@ -394,7 +394,7 @@ func TransferITunesMetadataFirstWin(keep, from *database.Book) {
 // ext-ID/ITL gap and is tracked as a follow-up.
 func MergeBooks(
 	_ context.Context,
-	store database.Store,
+	store dedupStore,
 	opID, keepID string,
 	mergeIDs []string,
 	progress ProgressReporter,

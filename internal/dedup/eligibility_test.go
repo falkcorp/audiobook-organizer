@@ -1,7 +1,7 @@
 // file: internal/dedup/eligibility_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f2a3b4c5-d6e7-4f8a-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-06-10
+// last-edited: 2026-08-19
 
 package dedup
 
@@ -34,96 +34,96 @@ func TestPairEligibility_TableDriven(t *testing.T) {
 	}{
 		// ── version_group_same ───────────────────────────────────────────────
 		{
-			name: "version_group_same: both in same non-empty group → suppressed",
-			a:    &database.Book{ID: "A1", Title: "Dune", VersionGroupID: strPtr("VG1")},
-			b:    &database.Book{ID: "B1", Title: "Dune", VersionGroupID: strPtr("VG1")},
-			wantOK: false,
+			name:            "version_group_same: both in same non-empty group → suppressed",
+			a:               &database.Book{ID: "A1", Title: "Dune", VersionGroupID: strPtr("VG1")},
+			b:               &database.Book{ID: "B1", Title: "Dune", VersionGroupID: strPtr("VG1")},
+			wantOK:          false,
 			wantSuppressors: []string{"version_group_same"},
 		},
 		{
-			name: "version_group_same: different groups → eligible",
-			a:    &database.Book{ID: "A2", Title: "Dune", VersionGroupID: strPtr("VG1")},
-			b:    &database.Book{ID: "B2", Title: "Dune", VersionGroupID: strPtr("VG2")},
+			name:   "version_group_same: different groups → eligible",
+			a:      &database.Book{ID: "A2", Title: "Dune", VersionGroupID: strPtr("VG1")},
+			b:      &database.Book{ID: "B2", Title: "Dune", VersionGroupID: strPtr("VG2")},
 			wantOK: true,
 		},
 		{
-			name: "version_group_same: one nil group → eligible",
-			a:    &database.Book{ID: "A3", Title: "Dune", VersionGroupID: strPtr("VG1")},
-			b:    &database.Book{ID: "B3", Title: "Dune"},
+			name:   "version_group_same: one nil group → eligible",
+			a:      &database.Book{ID: "A3", Title: "Dune", VersionGroupID: strPtr("VG1")},
+			b:      &database.Book{ID: "B3", Title: "Dune"},
 			wantOK: true,
 		},
 		{
-			name: "version_group_same: both empty string group → eligible (empty groups are ignored)",
-			a:    &database.Book{ID: "A4", Title: "Dune", VersionGroupID: strPtr("")},
-			b:    &database.Book{ID: "B4", Title: "Dune", VersionGroupID: strPtr("")},
+			name:   "version_group_same: both empty string group → eligible (empty groups are ignored)",
+			a:      &database.Book{ID: "A4", Title: "Dune", VersionGroupID: strPtr("")},
+			b:      &database.Book{ID: "B4", Title: "Dune", VersionGroupID: strPtr("")},
 			wantOK: true,
 		},
 		// ── series_volume_differs (structured SeriesSequence) ────────────────
 		{
-			name: "series_volume: distinct sequence numbers → suppressed",
-			a:    &database.Book{ID: "A5", Title: "Series Name 3", SeriesSequence: intPtr(3)},
-			b:    &database.Book{ID: "B5", Title: "Series Name 4", SeriesSequence: intPtr(4)},
-			wantOK: false,
+			name:            "series_volume: distinct sequence numbers → suppressed",
+			a:               &database.Book{ID: "A5", Title: "Series Name 3", SeriesSequence: intPtr(3)},
+			b:               &database.Book{ID: "B5", Title: "Series Name 4", SeriesSequence: intPtr(4)},
+			wantOK:          false,
 			wantSuppressors: []string{"series_volume_differs"},
 		},
 		{
-			name: "series_volume: same sequence number → eligible",
-			a:    &database.Book{ID: "A6", Title: "My Book", SeriesSequence: intPtr(1)},
-			b:    &database.Book{ID: "B6", Title: "My Book", SeriesSequence: intPtr(1)},
+			name:   "series_volume: same sequence number → eligible",
+			a:      &database.Book{ID: "A6", Title: "My Book", SeriesSequence: intPtr(1)},
+			b:      &database.Book{ID: "B6", Title: "My Book", SeriesSequence: intPtr(1)},
 			wantOK: true,
 		},
 		{
-			name: "series_volume: one has no sequence → eligible",
-			a:    &database.Book{ID: "A7", Title: "My Book", SeriesSequence: intPtr(3)},
-			b:    &database.Book{ID: "B7", Title: "My Book"},
+			name:   "series_volume: one has no sequence → eligible",
+			a:      &database.Book{ID: "A7", Title: "My Book", SeriesSequence: intPtr(3)},
+			b:      &database.Book{ID: "B7", Title: "My Book"},
 			wantOK: true,
 		},
 		// ── series_volume_differs (title-extracted "Book N" pattern) ─────────
 		{
-			name: "series_volume: title-extracted volume numbers differ → suppressed",
-			a:    &database.Book{ID: "A8", Title: "Reclaiming Honor Book 6"},
-			b:    &database.Book{ID: "B8", Title: "Reclaiming Honor Book 7"},
-			wantOK: false,
+			name:            "series_volume: title-extracted volume numbers differ → suppressed",
+			a:               &database.Book{ID: "A8", Title: "Reclaiming Honor Book 6"},
+			b:               &database.Book{ID: "B8", Title: "Reclaiming Honor Book 7"},
+			wantOK:          false,
 			wantSuppressors: []string{"series_volume_differs"},
 		},
 		{
-			name: "series_volume: same extracted volume → eligible",
-			a:    &database.Book{ID: "A9", Title: "Reclaiming Honor Book 6"},
-			b:    &database.Book{ID: "B9", Title: "Reclaiming Honor Book 6"},
+			name:   "series_volume: same extracted volume → eligible",
+			a:      &database.Book{ID: "A9", Title: "Reclaiming Honor Book 6"},
+			b:      &database.Book{ID: "B9", Title: "Reclaiming Honor Book 6"},
 			wantOK: true,
 		},
 		// ── series_volume_differs (digit-only difference fallback) ────────────
 		{
-			name: "series_volume: titles differ only in digits → suppressed",
-			a:    &database.Book{ID: "A10", Title: "Series Name 3"},
-			b:    &database.Book{ID: "B10", Title: "Series Name 4"},
-			wantOK: false,
+			name:            "series_volume: titles differ only in digits → suppressed",
+			a:               &database.Book{ID: "A10", Title: "Series Name 3"},
+			b:               &database.Book{ID: "B10", Title: "Series Name 4"},
+			wantOK:          false,
 			wantSuppressors: []string{"series_volume_differs"},
 		},
 		{
-			name: "series_volume: titles without digits → eligible (no digit guard)",
-			a:    &database.Book{ID: "A11", Title: "The Hobbit"},
-			b:    &database.Book{ID: "B11", Title: "The Hobbit"},
+			name:   "series_volume: titles without digits → eligible (no digit guard)",
+			a:      &database.Book{ID: "A11", Title: "The Hobbit"},
+			b:      &database.Book{ID: "B11", Title: "The Hobbit"},
 			wantOK: true,
 		},
 		// ── same_dir_multi_file ───────────────────────────────────────────────
 		{
-			name: "same_dir: both files in same directory → suppressed",
-			a:    &database.Book{ID: "A12", Title: "Chapter 1", FilePath: filepath.Join(dir1, "001.mp3")},
-			b:    &database.Book{ID: "B12", Title: "Chapter 2", FilePath: filepath.Join(dir1, "002.mp3")},
-			wantOK: false,
+			name:            "same_dir: both files in same directory → suppressed",
+			a:               &database.Book{ID: "A12", Title: "Chapter 1", FilePath: filepath.Join(dir1, "001.mp3")},
+			b:               &database.Book{ID: "B12", Title: "Chapter 2", FilePath: filepath.Join(dir1, "002.mp3")},
+			wantOK:          false,
 			wantSuppressors: []string{"same_dir_multi_file"},
 		},
 		{
-			name: "same_dir: different directories → eligible",
-			a:    &database.Book{ID: "A13", Title: "BookA", FilePath: filepath.Join(dir1, "book.mp3")},
-			b:    &database.Book{ID: "B13", Title: "BookB", FilePath: filepath.Join(dir2, "book.mp3")},
+			name:   "same_dir: different directories → eligible",
+			a:      &database.Book{ID: "A13", Title: "BookA", FilePath: filepath.Join(dir1, "book.mp3")},
+			b:      &database.Book{ID: "B13", Title: "BookB", FilePath: filepath.Join(dir2, "book.mp3")},
 			wantOK: true,
 		},
 		{
-			name: "same_dir: one has empty path → eligible",
-			a:    &database.Book{ID: "A14", Title: "BookA", FilePath: filepath.Join(dir1, "book.mp3")},
-			b:    &database.Book{ID: "B14", Title: "BookB"},
+			name:   "same_dir: one has empty path → eligible",
+			a:      &database.Book{ID: "A14", Title: "BookA", FilePath: filepath.Join(dir1, "book.mp3")},
+			b:      &database.Book{ID: "B14", Title: "BookB"},
 			wantOK: true,
 		},
 		// ── no suppressors at all ─────────────────────────────────────────────
