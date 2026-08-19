@@ -1,7 +1,7 @@
 // file: internal/dedup/lifecycle.go
-// version: 1.4.1
+// version: 1.6.0
 // guid: 3e4f5a6b-7c8d-9e0f-a1b2-c3d4e5f60718
-// last-edited: 2026-08-11
+// last-edited: 2026-08-19
 
 // Lifecycle methods on *dedup.Engine that the serviceregistry container
 // picks up via interface satisfaction. PostInit subscribes to lifecycle
@@ -163,7 +163,15 @@ func (de *Engine) PostInit(ctx context.Context, c *serviceregistry.Container) er
 	// *database.PebbleStore implements ISBNIndexStore (IsISBNIndexBuilt +
 	// GetBookIDsByISBNASIN). When the index has been built, checkExactISBN
 	// switches to the O(matches) path; otherwise it falls back to GetAllBooks.
-	if ps, ok := de.bookStore.(*database.PebbleStore); ok {
+	// AsPebbleStore, not a bare assertion. Traced 2026-08-19: de.bookStore is
+	// the BARE store -- the engine is built by serviceregistry Container.Build,
+	// which runs eagerly inside NewServer and resolves KeyStore to the value
+	// Override("store", resolvedStore) put there; that entry is never replaced
+	// with the wrapped store -- so the bare form was NOT failing here today.
+	// Hardening, not a bug fix. It is worth doing anyway because the fallback is
+	// silent: checkExactISBN would just keep using the O(n) GetAllBooks path
+	// forever instead of the O(matches) indexed one, with nothing logged.
+	if ps := database.AsPebbleStore(de.bookStore); ps != nil {
 		de.SetISBNIndexStore(ps)
 		slog.Info("[dedup] PostInit wired ISBNIndexStore (checkExactISBN will use indexed path when flag is set)")
 	}

@@ -1,7 +1,7 @@
 // file: internal/database/migrations.go
-// version: 1.42.0
+// version: 1.43.0
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
-// last-edited: 2026-08-18
+// last-edited: 2026-08-19
 
 package database
 
@@ -571,7 +571,10 @@ func migration006Up(store migrationStore) error {
 func migration007Up(store migrationStore) error {
 	slog.Info("- Renaming import paths to import paths")
 
-	if s, ok := store.(*PebbleStore); ok {
+	// Defensive rather than a live fix: RunMigrations is only ever called on a
+	// freshly built, undecorated store. Written as AsPebbleStore anyway so that
+	// stays true by construction if a caller ever passes a decorated one.
+	if s := AsPebbleStore(store); s != nil {
 		if err := s.migrateImportPathKeys(); err != nil {
 			return fmt.Errorf("failed to migrate Pebble import path keys: %w", err)
 		}

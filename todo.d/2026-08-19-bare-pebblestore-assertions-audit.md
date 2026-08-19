@@ -1,29 +1,40 @@
-- [ ] **Audit the 10 remaining bare `store.(*PebbleStore)` assertions in production code.**
-      `internal/database/store_capability.go` documents that a bare concrete
-      assertion fails through the Bleve `indexedStore` decorator, and records two
-      prod jobs silently degraded for weeks that way. `AsPebbleStore` is the fix.
-      Found 2026-08-19 while removing the interface-shaped twin of this bug (#2580,
-      11 sites) — the concrete shape was never swept.
+- [x] **Bare `store.(*PebbleStore)` assertions swept — all 10 production sites
+      converted (2026-08-19).** Zero remain outside `_test.go`, where they are
+      correct: those build a bare `*PebbleStore` locally and never see the
+      decorator. Found while removing the interface-shaped twin of this bug
+      (#2580, 11 sites) — the concrete shape had never been swept.
+      `internal/database/store_capability.go` documents the failure mode and
+      records two prod jobs silently degraded for weeks by it.
 
-      Each site needs one question answered: **does this value come from
-      `Server.Store()`?** Anything bound during `NewServer` holds the bare store and
-      is unaffected; anything resolved at request time, op-run time, or in a lazily
-      built service gets the wrapped store and is live.
+- [x] **Provenance traced for every other site (2026-08-19).** The question that
+      decides severity is **does this value come from `Server.Store()`?**
+      `serviceregistry.Container.Build` runs **eagerly inside `NewServer`**, and
+      `Override("store", resolvedStore)` seeds `KeyStore` with the **bare** store
+      and is never replaced — so "built by a service-registry factory" means bare,
+      lazily-built or not. `Start` installs the `indexedStore` wrapper afterwards
+      onto `s.store` only, which is what `Server.Store()` returns.
 
-      - `internal/server/wire_abs_routes.go:494` — **check first.** It asserts on
-        `s.Store()` directly, and on failure silently skips `ps.WaitForWarmup()`
-        before `WarmContributors`. The comment immediately above says building that
-        cache against a half-published memdb caches a library that does not exist
-        and serves it for the whole TTL. Launched from a goroutine at wire time, so
-        whether the decorator is installed yet is a race, not a constant.
-      - `internal/server/handlers/diagnostics.go:611` — request-time handler; on
-        failure the db-health endpoint silently omits its Pebble section.
-      - `internal/server/registry_wire.go:65,199,217` — likely wire-time/bare, verify.
-      - `internal/scanner/process_file.go:211`
-      - `internal/dedup/lifecycle.go:166`
-      - `internal/plugins/acoustid/reset_all.go:69`
-      - `internal/activity/register.go:37`
-      - `internal/database/migrations.go:574`
+      - `handlers/diagnostics.go` (`GetDBHealth`) — bare: the handler captures
+        `s.Store()` in `wireHandlers` → `setupRoutes` → `NewServer`. Its methods
+        running at request time does not change what it captured. Converted.
+      - `wire_abs_routes.go:494` — **racy**, and the one real defect. Wiring runs
+        inside `NewServer` like every other handler, but this site reads
+        `s.Store()` *inside a goroutine*, so the read happens whenever that
+        goroutine is scheduled — possibly after `Start` has written the wrapper.
+        Construction time vs. read time is the whole distinction.
+      - `scanner/process_file.go` — bare (`scanner.SetStore(resolvedStore)` in
+        `NewServer`, never re-set). Converted defensively.
+      - `dedup/lifecycle.go` — bare (`Get[dedup.Store](c, KeyStore)`). Defensive.
+      - `dedup/engine.go` Tier-0 LSH lookup — bare, same reason. Defensive (#2598).
+      - `database/migrations.go` — bare by construction. Defensive.
+      - `plugins/dedup/*`, `plugins/acoustid/lsh_backfill.go` — all assert narrow
+        interfaces that `database.Store` does not carry, but all hold the bare
+        store via the container. Left alone.
+      - `server/search_coverage.go`, `server/middleware/absauth.go`,
+        `operations/registry/legacy_op_status.go`,
+        `handlers/audiobooks/handler.go`, `handlers/audiobooks/handler_files.go` —
+        compile-probed: every asserted method **is** in `database.Store`, so these
+        resolve through the decorator regardless. Safe as written.
 
       Test-file assertions are out of scope: those build a bare `*PebbleStore`
       locally and never see the decorator.

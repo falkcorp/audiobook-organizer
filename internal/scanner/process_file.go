@@ -1,7 +1,7 @@
 // file: internal/scanner/process_file.go
-// version: 1.3.0
+// version: 1.5.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-30
+// last-edited: 2026-08-19
 
 // Package scanner provides file scanning and processing utilities for the
 // audiobook organizer. ProcessFile is the single-pass entry point that opens
@@ -208,8 +208,16 @@ func PersistChaptersForBook(ctx context.Context, bookFilePath string, scanLog lo
 		return nil
 	}
 
-	ps, ok := store.(*database.PebbleStore)
-	if !ok {
+	// AsPebbleStore, not a bare assertion. Traced 2026-08-19: this store is
+	// the BARE one -- server.NewServer calls scanner.SetStore(resolvedStore)
+	// before Start installs the Bleve indexedStore decorator, and nothing sets
+	// it again afterwards -- so the bare form was NOT failing here today. This
+	// is hardening, not a bug fix: the failure mode if that wiring ever changes
+	// is silent (a sampled warning that reads like an unsupported backend
+	// rather than a bug), and the cost of being right by construction is one
+	// function call.
+	ps := database.AsPebbleStore(store)
+	if ps == nil {
 		warnSampled(&chapterStoreAssertErrCount, scanLog,
 			"scanner.PersistChaptersForBook: store is %T, not *database.PebbleStore -- chapter extraction skipped for %s",
 			store, bookFilePath)

@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-19-untangling-the-wiring-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3c1f9a76-5e28-4d0b-9a41-6b2f70d5e8c4 -->
 <!-- last-edited: 2026-08-19 -->
 
@@ -47,25 +47,42 @@ Found and fixed while narrowing the connectors around them:
 | The activity log's fast storage was switched off | Use it |
 | A fingerprint reset ran one record at a time | Run in batches — roughly **100× faster** |
 | Three background services reported "unsupported backend" | Start normally |
-| A library warm-up step was skipped on startup | Run it |
+| A library warm-up step **sometimes** got skipped on startup | Always run it |
 
 None of these announced themselves. They are the reason this cleanup was worth doing
 rather than just tidy: the old shape let a feature disappear without a single error
 message.
 
+**A correction, since an earlier version of this page overstated one row.** The
+warm-up one is a *timing* problem, not a constant one: whether it got skipped
+depended on which of two things happened first during startup, so it worked
+sometimes and not others. That is worse to live with than a clean failure, but it
+is not the same as "never ran", and the first draft of this page said the wrong
+one. The other three rows are unchanged and were confirmed failures.
+
+While checking that, three further places that used the same fragile "is this
+exactly what I expect?" question turned out **not** to be failing at all — they are
+handed the unwrapped database and always were. They were tidied anyway, because the
+question is a trap wherever it appears and the failure is silent when it does fire,
+but nothing about them was broken. They are not counted above.
+
 ## Where things stand
 
-Of the places that used to plug into the 398-socket connector, **18 remain**, and they
-break down as:
+Of the places that used to plug into the 398-socket connector, **10 remain** — down
+from 18 when this page was first written, because the last chain through the
+maintenance jobs was finished the same day. They break down as:
 
-- **7 are deliberate and staying.** These are the front door of the program — the point
-  where the database is created and handed out. Something has to hold the whole thing.
+- **6 are deliberate and staying.** These are the front door of the program — the point
+  where the database is created and handed out, plus the wrapper layer itself, which by
+  definition has to hold the whole thing.
 - **3 are test helpers**, where a wide connector is the right answer: integration tests
   poke at whatever the scenario needs, and narrowing them would mean editing every test
   file each time a new one is written.
-- **8 are the next step**, all part of one remaining chain through the maintenance jobs.
+- **1 is deliberately untouched**: it feeds the missing-file repair work, which is a
+  separate open question and off-limits until that gets decided.
 
-The remaining work is to split the database object itself into pieces, so the giant
+**Narrowing the components is finished.** Nothing further can be reached that way. The
+remaining work is to split the database object itself into pieces, so the giant
 connector has nothing left to plug into and can be deleted outright.
 
 ## What this does not change
