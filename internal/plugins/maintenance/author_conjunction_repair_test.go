@@ -388,6 +388,13 @@ func TestAuthorConjunctionRepair_DryRunWritesNothing(t *testing.T) {
 			if len(w.renamedAuthors) != 0 {
 				t.Errorf("dry run renamed authors: %v", w.renamedAuthors)
 			}
+			// The op also rewrites the denormalized primary author via UpdateBook
+			// (author_conjunction_repair.go:357). conjRepairWrites declared a field
+			// for it but neither fake ever populated it and no test read it, so
+			// this was the one write the "assert on silence" test could not see.
+			if len(w.updatedBooks) != 0 {
+				t.Errorf("dry run updated books: %v", w.updatedBooks)
+			}
 			// It must still have done the READ work — a dry run that skips the
 			// scan reports "nothing to do" and looks identical to a clean table.
 			if w.getBookAuthorsN == 0 {
