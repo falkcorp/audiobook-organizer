@@ -39,8 +39,11 @@ type missingFileRepairParams struct {
 	// between the audit and this run, cannot delete the library in one pass.
 	MaxFlagged int `json:"max_flagged"`
 
-	// MaxDeletes is accepted and ignored so an old caller's params still parse;
-	// it never meant anything after deletion was removed.
+	// MaxDeletes is the pre-2026-08-19 name. It is still HONORED as a cap (not
+	// ignored) when MaxFlagged is unset, so an existing caller's params keep
+	// meaning what they meant. Note the consequence: an old caller passing
+	// max_deletes:500 now caps the REPORT at 500 rows, which reads as "only 500
+	// affected" -- pass max_flagged:0 to lift it.
 	MaxDeletes int `json:"max_deletes"`
 }
 
