@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-07-18
+// last-edited: 2026-08-19
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -49,7 +49,7 @@ import (
 func (s *Server) RegisterBookDedupScanOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "dedup.book-scan",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "Book Duplicate Scan",
 		Description:     "Scan all audiobooks for duplicates using hash, folder, and metadata-based matching.",
@@ -116,7 +116,7 @@ func (s *Server) RegisterBookDedupScanOp(reg *opsregistry.Registry) error {
 func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "dedup.book-merge",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "Book Merge",
 		Description:     "Merge a set of duplicate audiobooks, keeping one and deleting the others.",
@@ -255,7 +255,7 @@ func applyBookMergeReroute(ctx context.Context, store database.Store, ms *merge.
 func (s *Server) RegisterAuthorDedupScanOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "dedup.author-scan",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "Author Duplicate Scan",
 		Description:     "Scan all authors for duplicates using fuzzy name matching.",
@@ -354,7 +354,7 @@ func (s *Server) RegisterAuthorDedupScanOp(reg *opsregistry.Registry) error {
 func (s *Server) RegisterSeriesDedupScanOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "dedup.series-scan",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "Series Duplicate Scan",
 		Description:     "Scan all series for duplicates using exact and sub-series matching.",
@@ -426,7 +426,7 @@ func (s *Server) RegisterSeriesDedupScanOp(reg *opsregistry.Registry) error {
 func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "dedup.series-dedup",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "Series Deduplication",
 		Description:     "Merge all series with identical normalized names, reassigning their books.",
@@ -487,7 +487,7 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 func (s *Server) RegisterSeriesPruneOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "dedup.series-prune",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "Series Prune",
 		Description:     "Merge duplicate series and delete orphan series with no books.",
@@ -547,7 +547,7 @@ func (s *Server) RegisterSeriesPruneOp(reg *opsregistry.Registry) error {
 func (s *Server) RegisterSeriesMergeOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "dedup.series-merge",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "Series Merge",
 		Description:     "Merge multiple series into one, reassigning all books and optionally renaming.",
@@ -613,7 +613,7 @@ func (s *Server) RegisterSeriesMergeOp(reg *opsregistry.Registry) error {
 func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "dedup.series-normalize",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "Series Name Normalization",
 		Description:     "Strip contamination from series names, merge sub-series, and re-organize affected books.",

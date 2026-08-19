@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-08-15
+// last-edited: 2026-08-19
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -546,7 +546,7 @@ func (s *Server) resolveFilterToBookIDs(ctx context.Context, f operations.Filter
 func (s *Server) RegisterBulkMetadataFetchOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "library.bulk-metadata-fetch",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Bulk Metadata Fetch",
 		Description:     "Fetch and cache external metadata for a set of audiobooks. Nothing is written to book records — results appear in the per-book review UI.",

@@ -1,6 +1,7 @@
 // file: internal/server/itunes_ops.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4b7e9f2a-1c3d-4e5f-8a9b-0c1d2e3f4a5b
+// last-edited: 2026-08-19
 
 // itunes_ops registers v2 OperationDefs for iTunes import and sync.
 // Both ops use the hybrid migration pattern: a v1 op record is created
@@ -38,7 +39,7 @@ type itunesSyncOpParams struct {
 func (s *Server) RegisterITunesImportOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "itunes.import",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "itunes",
 		DisplayName:     "iTunes Import",
 		Description:     "Import audiobooks from an iTunes XML library file into the database.",
@@ -85,7 +86,7 @@ func (s *Server) RegisterITunesImportOp(reg *opsregistry.Registry) error {
 func (s *Server) RegisterITunesSyncOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "itunes.sync",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "itunes",
 		DisplayName:     "iTunes Sync",
 		Description:     "Sync the iTunes library XML into the database (incremental, fingerprint-gated).",

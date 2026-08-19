@@ -1,7 +1,7 @@
 // file: internal/server/undo_engine.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 0b8c9d6e-1f7a-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-08-18
+// last-edited: 2026-08-19
 //
 // Backward-compatibility wrapper for the undo engine, now in internal/undo.
 // This file re-exports the public API from internal/undo with server-specific
@@ -57,6 +57,6 @@ func RunUndoOperation(
 }
 
 // PreflightUndoConflicts is re-exported from the undo package.
-func PreflightUndoConflicts(store database.Store, operationID string) (*UndoConflictReport, error) {
+func PreflightUndoConflicts(store undoConflictChecker, operationID string) (*UndoConflictReport, error) {
 	return undo.PreflightUndoConflicts(store, operationID)
 }

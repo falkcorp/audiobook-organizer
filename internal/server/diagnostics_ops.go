@@ -1,7 +1,7 @@
 // file: internal/server/diagnostics_ops.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-08-11
+// last-edited: 2026-08-19
 
 // diagnostics_ops registers the diagnostics export OperationDef (v2 UOS).
 
@@ -30,7 +30,7 @@ type diagnosticsExportOpParams struct {
 func (s *Server) RegisterDiagnosticsExportOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "diagnostics.export",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "diagnostics",
 		DisplayName:     "Export Diagnostics",
 		Description:     "Generate a diagnostics ZIP export for analysis.",

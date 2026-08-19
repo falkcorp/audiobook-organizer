@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
-// last-edited: 2026-08-15
+// last-edited: 2026-08-19
 //
 // batch_apply_op registers the "metadata.batch-apply-cached" v2 OperationDef.
 // The HTTP handler BatchApplyFromCache enqueues this and returns the op id
@@ -59,7 +59,7 @@ type batchApplyOpParams struct {
 func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "metadata.batch-apply-cached",
-		Liveness: opsregistry.LivenessRunItems,
+		Liveness:        opsregistry.LivenessRunItems,
 		Plugin:          "metadata",
 		DisplayName:     "Apply Cached Metadata",
 		Description:     "Apply the highest-scored cached metadata candidate to each of a set of books, optionally writing tags back into the audio files.",

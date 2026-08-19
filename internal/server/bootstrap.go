@@ -1,7 +1,7 @@
 // file: internal/server/bootstrap.go
-// version: 1.13.1
+// version: 1.14.0
 // guid: 3e7c9a12-4f6b-4d8e-b5a1-2c8f0e3d9b47
-// last-edited: 2026-07-12
+// last-edited: 2026-08-19
 
 package server
 
@@ -56,7 +56,7 @@ const (
 // Its raw value is written to a 0600 file at ReadOnlyKeyPath(dataDir).
 // dataDir must be the already-cleaned application data directory (caller is
 // responsible for sanitising the value — mirrors ConsumeBootstrapToken).
-func InitStartupReadOnlyKey(store database.Store, dataDir string) error {
+func InitStartupReadOnlyKey(store startupKeyStore, dataDir string) error {
 	// Revoke any previously emitted startup read-only key so old tokens don't
 	// accumulate in the database.
 	if prev, err := store.GetSetting(readonlyKeyNameSetting); err == nil && prev != nil && prev.Value != "" {
@@ -398,7 +398,7 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 // findOrCreateAdminUser returns the first user with PermUsersManage, creating
 // one if none exists. Returns (user, generatedPassword, error); generatedPassword
 // is non-empty only when a new user was created.
-func findOrCreateAdminUser(store database.Store) (*database.User, string, error) {
+func findOrCreateAdminUser(store adminBootstrapStore) (*database.User, string, error) {
 	// (Removed the SQLite-RBAC-unsupported guard: PebbleDB is the only backend and
 	// always resolves roles, so the guard's sentinel check was permanently dead.)
 	users, err := store.ListUsers()

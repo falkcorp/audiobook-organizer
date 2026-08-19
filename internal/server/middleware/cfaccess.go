@@ -1,7 +1,7 @@
 // file: internal/server/middleware/cfaccess.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d1a4f92-3c07-4b56-9e28-6a0b5c2e7d41
-// last-edited: 2026-07-26
+// last-edited: 2026-08-19
 
 package middleware
 
@@ -10,7 +10,6 @@ import (
 	"log/slog"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 )
 
@@ -21,12 +20,12 @@ import (
 type CFAccessAuthenticator struct {
 	verifier *oauth.CFAccessVerifier
 	cfg      *oauth.Config
-	store    database.Store
+	store    cfAccessStore
 }
 
 // NewCFAccessAuthenticator wires the verifier, config, and store. Any nil → the
 // middleware becomes a no-op pass-through.
-func NewCFAccessAuthenticator(verifier *oauth.CFAccessVerifier, cfg *oauth.Config, store database.Store) *CFAccessAuthenticator {
+func NewCFAccessAuthenticator(verifier *oauth.CFAccessVerifier, cfg *oauth.Config, store cfAccessStore) *CFAccessAuthenticator {
 	return &CFAccessAuthenticator{verifier: verifier, cfg: cfg, store: store}
 }
 
@@ -76,4 +75,14 @@ func CloudflareAccessAuth(a *CFAccessAuthenticator) gin.HandlerFunc {
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}
+}
+
+// cfAccessStore is what this authenticator forwards its store into: the
+// identity resolution in oauth.Config.ResolveUser, and the role lookup behind
+// effectivePermissionsFor. Both already declare narrow interfaces, so both are
+// embedded BY NAME -- two entries, and this re-narrows on its own if either
+// does. It was database.Store -- 398 methods -- until 2026-08-19.
+type cfAccessStore interface {
+	oauth.UserStore
+	roleResolver
 }

@@ -1,7 +1,7 @@
 // file: internal/server/server_middleware.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6a093405-441a-4c14-a9c5-46326ea767c1
-// last-edited: 2026-07-01
+// last-edited: 2026-08-19
 
 package server
 
@@ -36,7 +36,7 @@ var (
 
 // cachedImportPaths returns store.GetAllImportPaths(), reusing the previous
 // result if it was fetched within importPathCacheTTL.
-func cachedImportPaths(store database.Store) ([]database.ImportPath, error) {
+func cachedImportPaths(store importPathLister) ([]database.ImportPath, error) {
 	importPathCacheMu.Lock()
 	defer importPathCacheMu.Unlock()
 	if time.Since(importPathCacheAt) < importPathCacheTTL {
@@ -163,7 +163,7 @@ func (s *Server) isProtectedPath(filePath string) bool {
 	return false
 }
 
-func loadDismissedDedupGroups(store database.Store) map[string]bool {
+func loadDismissedDedupGroups(store userPreferenceReader) map[string]bool {
 	dismissed := map[string]bool{}
 	pref, err := store.GetUserPreference("dedup_dismissed_groups")
 	if err != nil || pref == nil || pref.Value == nil || *pref.Value == "" {
@@ -179,7 +179,7 @@ func loadDismissedDedupGroups(store database.Store) map[string]bool {
 	return dismissed
 }
 
-func saveDismissedDedupGroups(store database.Store, dismissed map[string]bool) {
+func saveDismissedDedupGroups(store userPreferenceWriter, dismissed map[string]bool) {
 	keys := make([]string, 0, len(dismissed))
 	for k := range dismissed {
 		keys = append(keys, k)

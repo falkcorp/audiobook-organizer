@@ -1,7 +1,7 @@
 // file: internal/server/batch_save_op.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f2a1b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-08-15
+// last-edited: 2026-08-19
 //
 // batch_save_op registers the "metadata.batch-save" v2 OperationDef.
 // The HTTP handler batchWriteBackAudiobooks creates a v1 op record for
@@ -39,7 +39,7 @@ type batchSaveOpParams struct {
 func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "metadata.batch-save",
-		Liveness: opsregistry.LivenessRunItems,
+		Liveness:        opsregistry.LivenessRunItems,
 		Plugin:          "metadata",
 		DisplayName:     "Batch Save to Files",
 		Description:     "Write metadata from database back to audio file tags for a set of books, with optional re-organize.",

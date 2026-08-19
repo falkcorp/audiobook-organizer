@@ -1,5 +1,5 @@
 // file: internal/versions/store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e81b3d7-92c4-4a06-8f15-6b0d2a749c38
 // last-edited: 2026-08-19
 
@@ -38,7 +38,7 @@ type versionPurger interface {
 	GetBookByID(id string) (*database.Book, error)
 }
 
-type trashedVersionCleaner interface {
+type TrashedVersionCleaner interface {
 	versionPurger
 
 	ListTrashedBookVersions() ([]database.BookVersion, error)

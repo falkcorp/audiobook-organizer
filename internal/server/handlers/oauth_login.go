@@ -1,11 +1,13 @@
 // file: internal/server/handlers/oauth_login.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2e9c0b47-6a31-4d58-8f04-1b5a7c2e9d63
-// last-edited: 2026-08-02
+// last-edited: 2026-08-19
 
 package handlers
 
 import (
+	"time"
+
 	"errors"
 	"net/http"
 	"strings"
@@ -26,14 +28,14 @@ const oauthStateCookie = "oauth_state"
 // OAuthHandler serves the OAuth2/OIDC login endpoints. Providers are pre-built at wire
 // time (Google needs OIDC discovery), keyed by provider name.
 type OAuthHandler struct {
-	store     database.Store
+	store     oauthHandlerStore
 	cfg       *oauth.Config
 	codec     *oauth.StateCodec
 	providers map[string]oauth.Provider
 }
 
 // NewOAuthHandler constructs the handler. providers may be empty (all disabled).
-func NewOAuthHandler(store database.Store, cfg *oauth.Config, codec *oauth.StateCodec, providers map[string]oauth.Provider) *OAuthHandler {
+func NewOAuthHandler(store oauthHandlerStore, cfg *oauth.Config, codec *oauth.StateCodec, providers map[string]oauth.Provider) *OAuthHandler {
 	return &OAuthHandler{store: store, cfg: cfg, codec: codec, providers: providers}
 }
 
@@ -268,4 +270,13 @@ func sanitizeReturn(ret string) string {
 		return ""
 	}
 	return ret
+}
+
+// oauthHandlerStore is what the login flow needs: oauth.Config.ResolveUser
+// declares oauth.UserStore, and the handler itself creates the session. It was
+// database.Store -- 398 methods -- until 2026-08-19.
+type oauthHandlerStore interface {
+	oauth.UserStore
+
+	CreateSession(userID, ip, userAgent string, ttl time.Duration) (*database.Session, error)
 }

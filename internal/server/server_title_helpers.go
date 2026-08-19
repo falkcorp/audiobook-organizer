@@ -1,7 +1,7 @@
 // file: internal/server/server_title_helpers.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b4b0048c-d778-43c9-871e-21f9a9b6705d
-// last-edited: 2026-07-06
+// last-edited: 2026-08-19
 
 package server
 
@@ -13,7 +13,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-func computeSeriesPrunePreview(store database.Store) (*seriesPrunePreviewResult, error) {
+func computeSeriesPrunePreview(store seriesPruneReader) (*seriesPrunePreviewResult, error) {
 	allSeries, err := store.GetAllSeries()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get series: %w", err)

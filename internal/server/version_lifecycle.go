@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-05-01
+// last-edited: 2026-08-19
 //
 // Version lifecycle HTTP handlers. Core logic lives in internal/versions.
 
@@ -135,7 +135,7 @@ func (s *Server) handleHardDeleteVersion(c *gin.Context) {
 }
 
 // CleanupTrashedVersions delegates to versions.CleanupTrashedVersions.
-func CleanupTrashedVersions(store database.Store) (purged int) {
+func CleanupTrashedVersions(store trashedVersionCleaner) (purged int) {
 	return versions.CleanupTrashedVersions(store)
 }
 

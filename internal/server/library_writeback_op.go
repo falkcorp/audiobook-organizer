@@ -1,6 +1,7 @@
 // file: internal/server/library_writeback_op.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
+// last-edited: 2026-08-19
 
 package server
 
@@ -28,7 +29,7 @@ type bulkWriteBackOpParams struct {
 func (s *Server) RegisterBulkWriteBackOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "library.bulk-write-back",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Bulk Tag Write-back",
 		Description:     "Write metadata from the database back to audio file tags for a set of audiobooks.",
