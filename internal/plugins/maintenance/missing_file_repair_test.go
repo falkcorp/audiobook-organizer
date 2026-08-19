@@ -7,12 +7,15 @@ package maintenance
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
 // repairFixture reuses the audit fixture's shape — real files on disk, real
@@ -62,7 +65,7 @@ func planRepair(t *testing.T, rows []database.BookFileCore, params missingFileRe
 func TestMissingFileRepair_DeletesOnlyFromBooksThatKeepAFile(t *testing.T) {
 	plan := planRepair(t, repairFixture(t), missingFileRepairParams{})
 
-	got := append([]string(nil), plan.RowsToDelete...)
+	got := append([]string(nil), plan.RowsFlagged...)
 	sort.Strings(got)
 	if len(got) != 1 || got[0] != "f2" {
 		t.Fatalf("only f2 (dead row in a book that keeps f3) may be deleted; got %v", got)
@@ -89,10 +92,10 @@ func TestMissingFileRepair_DeletesOnlyFromBooksThatKeepAFile(t *testing.T) {
 // all gone turns a wrong index into a book with nothing at all.
 func TestMissingFileRepair_NeverEmptiesABook(t *testing.T) {
 	plan := planRepair(t, repairFixture(t), missingFileRepairParams{})
-	for _, id := range plan.RowsToDelete {
+	for _, id := range plan.RowsFlagged {
 		if id == "f4" || id == "f5" {
 			t.Fatalf("row %s belongs to a book with NO surviving file and must never be deleted; plan=%v",
-				id, plan.RowsToDelete)
+				id, plan.RowsFlagged)
 		}
 	}
 	if plan.BooksFullyBroken != 1 {
@@ -108,7 +111,7 @@ func TestMissingFileRepair_NeverEmptiesABook(t *testing.T) {
 // must protect its siblings too.
 func TestMissingFileRepair_UnreadableBlocksTheWholeBook(t *testing.T) {
 	plan := planRepair(t, repairFixture(t), missingFileRepairParams{})
-	for _, id := range plan.RowsToDelete {
+	for _, id := range plan.RowsFlagged {
 		if id == "f6" {
 			t.Fatal("f6 is a confirmed-missing row, but its book also has an un-stat-able path; " +
 				"the book must be skipped entirely rather than partially pruned")
@@ -136,9 +139,9 @@ func TestMissingFileRepair_MaxDeletesCaps(t *testing.T) {
 		})
 	}
 
-	plan := planRepair(t, rows, missingFileRepairParams{MaxDeletes: 4})
-	if len(plan.RowsToDelete) != 4 {
-		t.Fatalf("MaxDeletes=4 should cap the plan at 4 rows, got %d", len(plan.RowsToDelete))
+	plan := planRepair(t, rows, missingFileRepairParams{MaxFlagged: 4})
+	if len(plan.RowsFlagged) != 4 {
+		t.Fatalf("MaxDeletes=4 should cap the plan at 4 rows, got %d", len(plan.RowsFlagged))
 	}
 	if plan.CappedAt != 4 {
 		t.Fatalf("a truncated plan must report CappedAt so the run is known to be partial, got %d", plan.CappedAt)
@@ -154,43 +157,45 @@ func TestMissingFileRepair_ApplyIsOptIn(t *testing.T) {
 	}
 }
 
-// TestMissingFileRepair_ApplyDeletesExactlyThePlan checks the apply step executes
-// the reviewed plan and nothing beyond it.
-func TestMissingFileRepair_ApplyDeletesExactlyThePlan(t *testing.T) {
-	var deleted []string
+// TestMissingFileRepair_ApplyIsRejected locks in the 2026-08-19 decision that this
+// operation never deletes.
+//
+// It replaces two tests that asserted the delete path executed the plan exactly.
+// Those tests were correct about the code and wrong about the requirement: the
+// full-population audit found that rows the plan classified as safe to prune are
+// the only pointer to files present on disk under a different name.
+//
+// Asserting an ERROR rather than a silent no-op is the point. A parameter that
+// quietly stops doing what its name says is the silent-failure shape this codebase
+// works to remove, and any caller still passing apply is acting on a stale belief.
+func TestMissingFileRepair_ApplyIsRejected(t *testing.T) {
+	deleteCalled := false
 	store := &database.MockStore{
-		DeleteBookFilesByIDsFunc: func(ids []string) error {
-			deleted = append(deleted, ids...)
-			return nil
-		},
+		DeleteBookFilesByIDsFunc: func(_ []string) error { deleteCalled = true; return nil },
 	}
-	plan := repairPlan{RowsToDelete: []string{"a", "b", "c"}}
+	p := &Plugin{deps: fakeDeps{store: store}}
 
-	n, err := applyMissingFileRepair(context.Background(), store, plan, &fakeReporter{})
-	if err != nil {
-		t.Fatalf("applyMissingFileRepair: %v", err)
+	err := p.runMissingFileRepair(context.Background(), json.RawMessage(`{"apply": true}`), &fakeReporter{})
+	if err == nil {
+		t.Fatal("{\"apply\": true} must be rejected, not silently ignored")
 	}
-	if n != 3 {
-		t.Fatalf("expected 3 rows deleted, got %d", n)
+	if !strings.Contains(err.Error(), "never deletes") {
+		t.Fatalf("the error must say why, got: %v", err)
 	}
-	sort.Strings(deleted)
-	if len(deleted) != 3 || deleted[0] != "a" || deleted[1] != "b" || deleted[2] != "c" {
-		t.Fatalf("apply must delete exactly the planned IDs, got %v", deleted)
+	if deleteCalled {
+		t.Fatal("no delete may be issued under any params")
 	}
 }
 
-// TestMissingFileRepair_ApplyDeletesNothingForAnEmptyPlan guards the case where
-// the sweep finds nothing safe to do.
-func TestMissingFileRepair_ApplyDeletesNothingForAnEmptyPlan(t *testing.T) {
-	called := false
-	store := &database.MockStore{
-		DeleteBookFilesByIDsFunc: func(_ []string) error { called = true; return nil },
-	}
-	n, err := applyMissingFileRepair(context.Background(), store, repairPlan{}, &fakeReporter{})
-	if err != nil {
-		t.Fatalf("applyMissingFileRepair: %v", err)
-	}
-	if n != 0 || called {
-		t.Fatalf("an empty plan must issue no deletes at all (n=%d, called=%v)", n, called)
+// TestMissingFileRepairDef_DeclaresNoWriteCapability guards the removal at the
+// capability layer as well as the code layer. An op that cannot request
+// CapLibraryWrite cannot be walked back into deleting by a later edit without
+// someone explicitly re-adding the capability and being asked why.
+func TestMissingFileRepairDef_DeclaresNoWriteCapability(t *testing.T) {
+	def := (&Plugin{}).missingFileRepairDef()
+	for _, c := range def.Capabilities {
+		if c == sdk.CapLibraryWrite {
+			t.Fatal("missing-file-repair must not declare CapLibraryWrite; it reports, it does not write")
+		}
 	}
 }

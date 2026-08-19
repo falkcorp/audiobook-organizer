@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/store_slices.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8d3b6f14-2a97-4e51-b0c8-5f7e91d24a63
 // last-edited: 2026-08-19
 
@@ -158,13 +158,6 @@ type itunesRegroupStore interface {
 	itunesExternalIDReassigner
 }
 
-// bookFileBulkDeleter deletes book_file rows by ID and can do nothing else.
-// This is the destructive half of the missing-file repair, and the one-method
-// declaration is the point: it cannot touch a book row.
-type bookFileBulkDeleter interface {
-	DeleteBookFilesByIDs(ids []string) error
-}
-
 // orphanFileScanner reads every book file and every book — including
 // soft-deleted ones, which is what makes an orphan detectable — and writes
 // nothing.
@@ -217,7 +210,6 @@ var (
 	_ regroupSnapshotReader = (*database.PebbleStore)(nil)
 	_ fsRegroupStore        = (*database.PebbleStore)(nil)
 	_ itunesRegroupStore    = (*database.PebbleStore)(nil)
-	_ bookFileBulkDeleter   = (*database.PebbleStore)(nil)
 	_ orphanFileScanner     = (*database.PebbleStore)(nil)
 	_ bookFileTrackWriter   = (*database.PebbleStore)(nil)
 	_ versionGroupWriter    = (*database.PebbleStore)(nil)

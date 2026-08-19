@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_audit.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4e1c7a92-3b58-4d06-9f21-8c5a0e7b3d64
 // last-edited: 2026-08-17
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -98,6 +99,16 @@ type missingFileAuditParams struct {
 	// SampleLimit overrides how many example missing paths are reported (0 = the
 	// default).
 	SampleLimit int `json:"sample_limit"`
+
+	// Classify runs the shape pass over EVERY missing row, deriving each one's
+	// pre-incident flat path and asking the filesystem whether the bytes are
+	// there. Off by default because it doubles the stat load on a network mount.
+	//
+	// This is the only thing that can SIZE the recoverable population. The
+	// sample-based figures cannot: the sample is the first N missing rows in
+	// iteration order, so it is clustered by book, and widening a clustered
+	// sample gives a wider clustered sample, not a rate.
+	Classify bool `json:"classify"`
 }
 
 // missingFileSignals counts how many rows carry each stored identity signal.
@@ -227,13 +238,22 @@ type missingFileReport struct {
 	BooksIntact   int
 	MissingByRoot map[string]int
 	Sample        []string
+
+	// Classification is populated only when params.Classify is set. Its zero
+	// value is not "nothing recoverable" -- it is "not measured".
+	Classified     bool
+	Classification missingFileClassification
 }
 
 func (r missingFileReport) summary() string {
-	return fmt.Sprintf(
+	base := fmt.Sprintf(
 		"rows=%d missing=%d present=%d unreadable=%d | books=%d fully-broken=%d partially-broken=%d intact=%d",
 		r.TotalRows, r.Missing, r.Present, r.Unreadable,
 		r.BooksTotal, r.BooksAllGone, r.BooksPartial, r.BooksIntact)
+	if r.Classified {
+		base += " || " + r.Classification.summary()
+	}
+	return base
 }
 
 func (p *Plugin) missingFileAuditDef() sdk.OperationDef {
@@ -455,6 +475,27 @@ func auditMissingFiles(ctx context.Context, store bookFileCoreScanner, params mi
 		}
 	}
 
+	// Shape pass, opt-in. Runs over EVERY missing row rather than the sample,
+	// because the sample cannot answer "how many" -- it is the first N rows in
+	// iteration order and therefore clustered by book.
+	if params.Classify {
+		missingPaths := make([]string, 0, report.Missing)
+		for i := range items {
+			if results[i] == fileMissing {
+				missingPaths = append(missingPaths, items[i].file.FilePath)
+			}
+		}
+		cls, cerr := classifyMissingRows(ctx, missingPaths, sampleLimit, reporter)
+		if cerr != nil {
+			// A failed instrument check is not a partial result to be published
+			// with a caveat -- every verdict rests on the same stat call.
+			return missingFileReport{}, cerr
+		}
+		report.Classified = true
+		report.Classification = cls
+		log.Info("missing-file-audit: shape classification", "summary", cls.summary())
+	}
+
 	prog.Done("REPORT ONLY (nothing modified) — " + report.summary())
 	return report, nil
 }
@@ -475,4 +516,233 @@ func missingPathRoot(path string) string {
 		parts = parts[:rootDepth]
 	}
 	return string(filepath.Separator) + filepath.Join(parts...)
+}
+
+// ----- shape classification (opt-in) -----
+//
+// 🔴 WHY THIS EXISTS. The 2026-08-17 full-population audit established that a
+// recoverable population exists — 101 of 101 track-slash rows in its sample had
+// their bytes on disk under a different filename — but it could NOT size that
+// population, and no wider sample ever can. The audit collects its sample as the
+// first N missing rows in ITERATION ORDER, so it is clustered by book. Widening a
+// clustered sample yields a wider clustered sample, not a rate.
+//
+// Sizing it needs what this pass does: classify EVERY missing row, not a sample.
+//
+// The shape, from docs/audits/2026-08-17-missing-file-audit-full-population.md §2:
+// between 2026-03-03 (f29c3ce6) and 2026-08-15 (c54721c7) the shipped default of
+// segment_title_format was "{title} - {track}/{total_tracks}". The "/" in
+// "track 70 of 131" was never sanitized and became a PATH SEPARATOR, so a file
+// that should have been
+//
+//	.../Blue Ant 3 - Zero History/Zero History - 70.mp3
+//
+// was recorded as
+//
+//	.../Blue Ant 3 - Zero History/Zero History - 70/131.mp3
+//	                                             ^ phantom dir   ^ phantom file
+//
+// The disk was repaired; the rows were not. This pass re-derives the flat name and
+// asks the filesystem whether the bytes are there.
+
+// missingFileClassifyControls are deliberately bogus paths appended to the same
+// stat batch as the real candidates.
+//
+// 🔑 WITHOUT THESE THE PASS CANNOT BE TRUSTED. "every candidate resolved" is
+// equally consistent with a stat that always succeeds — a wrong mount, a stubbed
+// filesystem, a path-joining bug that lands on a directory that happens to exist.
+// A control that MUST come back absent is the only thing separating a measurement
+// from a number. The 2026-08-17 audit planted two for exactly this reason and this
+// pass keeps them. If a control resolves, the run FAILS rather than reporting.
+var missingFileClassifyControls = []string{
+	"/mnt/bigdata/books/audiobook-organizer/__CONTROL_MUST_BE_MISSING__.mp3",
+	"/mnt/bigdata/books/itunes/__CONTROL2_MUST_BE_MISSING__.m4b",
+}
+
+// trackSlashSuffix matches the "<stem> - <track>" directory left behind when the
+// track separator became a path separator.
+var trackSlashSuffix = regexp.MustCompile(`^(.*) - (\d{1,4})$`)
+
+// trackSlashLeaf matches the phantom leaf: the total-track count plus extension.
+var trackSlashLeaf = regexp.MustCompile(`^(\d{1,4})$`)
+
+// deriveTrackSlashCandidates returns the flat paths a track-slash row's bytes
+// would live at, most likely first, and whether the path matched the shape at all.
+//
+// Two candidates are returned because the padding is not knowable from the broken
+// path: the OLD format wrote the track unpadded into the directory name, while the
+// CURRENT default writes "{track:02d}". A row broken as "- 7/131.mp3" therefore has
+// its bytes at "- 07.mp3", but one broken as "- 70/131.mp3" has them at "- 70.mp3".
+// Testing both and reporting WHICH matched is honest; guessing one is not.
+func deriveTrackSlashCandidates(p string) (candidates []string, matched bool) {
+	leaf := filepath.Base(p)
+	ext := filepath.Ext(leaf)
+	if ext == "" {
+		return nil, false
+	}
+	if !trackSlashLeaf.MatchString(strings.TrimSuffix(leaf, ext)) {
+		return nil, false
+	}
+	parent := filepath.Dir(p)
+	m := trackSlashSuffix.FindStringSubmatch(filepath.Base(parent))
+	if m == nil {
+		return nil, false
+	}
+	stem, track := m[1], m[2]
+	bookDir := filepath.Dir(parent)
+
+	padded := track
+	if len(padded) == 1 {
+		padded = "0" + padded
+	}
+	out := []string{filepath.Join(bookDir, fmt.Sprintf("%s - %s%s", stem, padded, ext))}
+	if padded != track {
+		out = append(out, filepath.Join(bookDir, fmt.Sprintf("%s - %s%s", stem, track, ext)))
+	}
+	return out, true
+}
+
+// missingFileClassification is the per-shape tally over EVERY missing row.
+type missingFileClassification struct {
+	// Recoverable rows match the track-slash shape AND their derived flat file
+	// exists on disk. Deleting these destroys the only pointer to a present file.
+	Recoverable int
+	// ShapeNoBytes rows match the shape but no derived candidate exists. The shape
+	// explains the row; the bytes are still gone.
+	ShapeNoBytes int
+	// NoShape rows do not match the track-slash shape at all. They are not
+	// classified further here — this pass answers one question.
+	NoShape int
+
+	// RecoveredByPadded / RecoveredByUnpadded record WHICH candidate resolved, so
+	// the derivation can be checked rather than trusted.
+	RecoveredByPadded   int
+	RecoveredByUnpadded int
+
+	// ControlsPlanted / ControlsResolved verify the instrument. ControlsResolved
+	// must be 0; anything else invalidates the run.
+	ControlsPlanted  int
+	ControlsResolved int
+
+	SampleRecoverable  []string
+	SampleShapeNoBytes []string
+}
+
+func (c missingFileClassification) summary() string {
+	total := c.Recoverable + c.ShapeNoBytes + c.NoShape
+	pct := func(n int) string {
+		if total == 0 {
+			return "0%"
+		}
+		return fmt.Sprintf("%.2f%%", float64(n)*100/float64(total))
+	}
+	return fmt.Sprintf(
+		"classified=%d recoverable=%d (%s) shape-but-no-bytes=%d (%s) no-shape=%d (%s) | padded=%d unpadded=%d controls=%d/%d-resolved",
+		total, c.Recoverable, pct(c.Recoverable), c.ShapeNoBytes, pct(c.ShapeNoBytes),
+		c.NoShape, pct(c.NoShape), c.RecoveredByPadded, c.RecoveredByUnpadded,
+		c.ControlsPlanted, c.ControlsResolved)
+}
+
+// classifyCandidate is one unit of classification work.
+type classifyCandidate struct {
+	idx        int
+	origPath   string
+	candidates []string
+	isControl  bool
+}
+
+// classifyMissingRows stats the derived candidate for every missing row.
+//
+// Concurrency: the same bounded pool the sweep uses. Every item is one os.Stat
+// against the NAS, so the pool is sized for LATENCY, not cores — see
+// missingFileStatConcurrency. Results are written to a preallocated slice indexed
+// by position, never to a shared map, so no lock is needed.
+func classifyMissingRows(ctx context.Context, missingPaths []string, sampleLimit int, reporter sdk.Reporter) (missingFileClassification, error) {
+	var out missingFileClassification
+	log := reporter.Logger()
+
+	work := make([]classifyCandidate, 0, len(missingPaths)+len(missingFileClassifyControls))
+	for _, p := range missingPaths {
+		cands, matched := deriveTrackSlashCandidates(p)
+		if !matched {
+			out.NoShape++
+			continue
+		}
+		work = append(work, classifyCandidate{idx: len(work), origPath: p, candidates: cands})
+	}
+	for _, c := range missingFileClassifyControls {
+		work = append(work, classifyCandidate{idx: len(work), origPath: c, candidates: []string{c}, isControl: true})
+		out.ControlsPlanted++
+	}
+	if len(work) == 0 {
+		return out, nil
+	}
+
+	// resolved[i] is the index within work[i].candidates that existed, or -1.
+	resolved := make([]int, len(work))
+	for i := range resolved {
+		resolved[i] = -1
+	}
+
+	prog := sdk.NewProgress(reporter, len(work))
+	prog.Start(fmt.Sprintf("Classifying %d missing path(s) by shape…", len(work)))
+
+	err := registry.RunItems(ctx, reporter, work, func(_ context.Context, it classifyCandidate) error {
+		for ci, cand := range it.candidates {
+			if _, serr := os.Stat(cand); serr == nil {
+				resolved[it.idx] = ci
+				return nil
+			}
+		}
+		return nil
+	}, registry.RunItemsOptions{
+		Concurrency: missingFileStatConcurrency,
+		ErrMode:     registry.ErrModeCollect,
+		Label: func(i, t int) string {
+			return fmt.Sprintf("Classified %d/%d missing paths", i+1, t)
+		},
+	})
+	if err != nil {
+		return out, fmt.Errorf("classify sweep: %w", err)
+	}
+
+	for i, it := range work {
+		if it.isControl {
+			if resolved[i] >= 0 {
+				out.ControlsResolved++
+				log.Error("missing-file-classify: CONTROL PATH RESOLVED", "path", it.origPath)
+			}
+			continue
+		}
+		switch {
+		case resolved[i] == 0:
+			out.Recoverable++
+			out.RecoveredByPadded++
+			if len(out.SampleRecoverable) < sampleLimit {
+				out.SampleRecoverable = append(out.SampleRecoverable, it.origPath+"  ->  "+it.candidates[0])
+			}
+		case resolved[i] > 0:
+			out.Recoverable++
+			out.RecoveredByUnpadded++
+			if len(out.SampleRecoverable) < sampleLimit {
+				out.SampleRecoverable = append(out.SampleRecoverable, it.origPath+"  ->  "+it.candidates[resolved[i]])
+			}
+		default:
+			out.ShapeNoBytes++
+			if len(out.SampleShapeNoBytes) < sampleLimit {
+				out.SampleShapeNoBytes = append(out.SampleShapeNoBytes, it.origPath)
+			}
+		}
+	}
+
+	// 🔴 A resolved control means the filesystem answered yes to a path that cannot
+	// exist. Every "recoverable" verdict in this run rests on the same stat call, so
+	// the run is reported as FAILED rather than published with a caveat.
+	if out.ControlsResolved > 0 {
+		return out, fmt.Errorf(
+			"instrument check failed: %d of %d planted control paths resolved; "+
+				"every recoverable verdict in this run is untrustworthy",
+			out.ControlsResolved, out.ControlsPlanted)
+	}
+	return out, nil
 }

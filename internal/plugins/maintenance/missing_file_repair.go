@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_repair.go
-// version: 1.1.0
+// version: 2.0.0
 // guid: 50b5022c-9d86-467d-991e-2be9cddf4847
 // last-edited: 2026-08-17
 
@@ -19,12 +19,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
-// missingFileRepairDeleteBatch bounds one DeleteBookFilesByIDs call. The store
-// doc records that per-row DeleteBookFile pays a fixed cost of ~1.35s/row, so
-// batching is not a micro-optimisation here — at 552 rows the difference is
-// twelve minutes versus a moment.
-const missingFileRepairDeleteBatch = 200
-
 // missingFileRepairSampleLimit bounds how many example paths and book IDs are
 // carried in the report.
 const missingFileRepairSampleLimit = 60
@@ -40,13 +34,17 @@ type missingFileRepairParams struct {
 	// PathPrefix restricts the sweep to rows whose FilePath begins with it.
 	PathPrefix string `json:"path_prefix"`
 
-	// MaxDeletes caps how many rows a single run may delete. 0 uses the default
+	// MaxFlagged caps how many rows a single run may report. 0 uses the default
 	// below. It exists so a mistaken PathPrefix, or a mount that vanished
 	// between the audit and this run, cannot delete the library in one pass.
+	MaxFlagged int `json:"max_flagged"`
+
+	// MaxDeletes is accepted and ignored so an old caller's params still parse;
+	// it never meant anything after deletion was removed.
 	MaxDeletes int `json:"max_deletes"`
 }
 
-// missingFileRepairDefaultMax is the ceiling applied when MaxDeletes is unset.
+// missingFileRepairDefaultMax is the ceiling applied when MaxFlagged is unset.
 // The 2026-08-17 sample projected ~552 dead rows per 120 books; this is
 // deliberately generous enough for a real repair and far below "everything".
 const missingFileRepairDefaultMax = 20000
@@ -61,19 +59,19 @@ type repairPlan struct {
 	BooksSkippedUnreadable int // ≥1 row we could not stat → SKIPPED
 	BooksIntact            int
 
-	RowsToDelete []string // book_file IDs, only from repairable books
-	SamplePaths  []string
-	FullyBroken  []string // book IDs, for you to look at by hand
-	Unreadable   []string // paths that could not be stat'd
+	RowsFlagged []string // book_file IDs, only from repairable books
+	SamplePaths []string
+	FullyBroken []string // book IDs, for you to look at by hand
+	Unreadable  []string // paths that could not be stat'd
 
-	CappedAt int // >0 when MaxDeletes truncated the plan
+	CappedAt int // >0 when MaxFlagged truncated the plan
 }
 
 func (p repairPlan) summary() string {
 	return fmt.Sprintf(
-		"books=%d repairable=%d fully-broken(skipped)=%d unreadable(skipped)=%d intact=%d rows_to_delete=%d",
+		"books=%d repairable=%d fully-broken(skipped)=%d unreadable(skipped)=%d intact=%d rows_flagged=%d",
 		p.BooksExamined, p.BooksRepairable, p.BooksFullyBroken,
-		p.BooksSkippedUnreadable, p.BooksIntact, len(p.RowsToDelete))
+		p.BooksSkippedUnreadable, p.BooksIntact, len(p.RowsFlagged))
 }
 
 func (p *Plugin) missingFileRepairDef() sdk.OperationDef {
@@ -81,20 +79,24 @@ func (p *Plugin) missingFileRepairDef() sdk.OperationDef {
 		ID:          "maintenance.missing-file-repair",
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
-		DisplayName: "Missing file repair",
-		Description: "Deletes book_file rows whose bytes are gone, but ONLY for books that still " +
-			"have at least one surviving file. Books whose every row is dead are skipped and " +
-			"reported, never emptied — deleting their rows would turn a wrong index into a lost " +
-			"book. Books with any un-stat-able path are skipped too. DRY RUN by default: pass " +
-			"{\"apply\": true} to actually delete.",
+		DisplayName: "Missing file report",
+		Description: "REPORT ONLY — this operation never deletes anything. It stats every " +
+			"book_file row, groups the dead ones per book, and reports what needs a human " +
+			"decision. Deletion was removed on 2026-08-19 after the full-population audit " +
+			"found that rows this op classified as safe to prune are the only pointer to " +
+			"files that exist on disk under a different name. Passing {\"apply\": true} is " +
+			"an error, not a no-op.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.missing-file-repair",
 		Cancellable:     true,
 		Isolate:         false,
 		Timeout:         2 * time.Hour,
-		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
-		Run:             p.runMissingFileRepair,
+		// 🔴 CapLibraryWrite REMOVED 2026-08-19. This op reports; it does not write.
+		// Declaring the capability it no longer needs would leave the door open for
+		// a future edit to walk back through it without anyone re-deciding.
+		Capabilities: []sdk.Capability{sdk.CapLibraryRead},
+		Run:          p.runMissingFileRepair,
 	}
 }
 
@@ -111,17 +113,28 @@ func (p *Plugin) runMissingFileRepair(ctx context.Context, rawParams json.RawMes
 		}
 	}
 
+	// 🔴 Deletion was REMOVED from this op on 2026-08-19. Rejecting apply loudly
+	// rather than ignoring it: a parameter that silently stops doing what its name
+	// says is the exact shape of silent failure this codebase spends effort
+	// removing, and any caller still passing it is acting on a stale belief about
+	// what this op does.
+	if params.Apply {
+		return fmt.Errorf(
+			"{\"apply\": true} is no longer supported: this operation never deletes. " +
+				"The full-population audit (docs/audits/2026-08-17-missing-file-audit-full-population.md) " +
+				"found that rows this op classified as safe to prune are the only pointer to files that " +
+				"exist on disk under a different name -- deleting them orphans the bytes. " +
+				"Run it without params for the report, and see the classify pass on " +
+				"maintenance.missing-file-audit for which rows are recoverable")
+	}
+
 	plan, err := planMissingFileRepair(ctx, store, params, reporter)
 	if err != nil {
 		return err
 	}
 
 	log := reporter.Logger()
-	mode := "DRY RUN"
-	if params.Apply {
-		mode = "APPLY"
-	}
-	log.Info("missing-file-repair plan", "mode", mode, "summary", plan.summary(),
+	log.Info("missing-file-report plan", "summary", plan.summary(),
 		"sample_paths", plan.SamplePaths)
 	if len(plan.FullyBroken) > 0 {
 		log.Warn("missing-file-repair: books with NO surviving file were skipped — "+
@@ -133,21 +146,23 @@ func (p *Plugin) runMissingFileRepair(ctx context.Context, rawParams json.RawMes
 			"count", len(plan.Unreadable), "sample", plan.Unreadable)
 	}
 	if plan.CappedAt > 0 {
-		log.Warn("missing-file-repair: plan truncated by max_deletes",
+		log.Warn("missing-file-report: report truncated by max_flagged",
 			"cap", plan.CappedAt, "run_again_to_continue", true)
 	}
 
-	if !params.Apply {
-		log.Info("missing-file-repair: DRY RUN complete — nothing was deleted. "+
-			"Re-run with {\"apply\": true} to execute this exact plan.",
-			"rows_that_would_be_deleted", len(plan.RowsToDelete))
-		return nil
+	if len(plan.RowsFlagged) > 0 {
+		log.Warn("missing-file-report: rows are dead and their book still has a surviving file — "+
+			"THESE NEED YOUR DECISION, they are not deleted automatically",
+			"rows_flagged", len(plan.RowsFlagged),
+			"books_affected", plan.BooksRepairable,
+			"sample_paths", plan.SamplePaths)
 	}
 
-	deleted, err := applyMissingFileRepair(ctx, store, plan, reporter)
-	log.Info("missing-file-repair complete", "mode", mode, "rows_deleted", deleted,
-		"books_skipped_fully_broken", plan.BooksFullyBroken)
-	return err
+	log.Info("missing-file-report complete — REPORT ONLY, nothing was modified",
+		"rows_flagged_for_review", len(plan.RowsFlagged),
+		"books_fully_broken_needing_decision", plan.BooksFullyBroken,
+		"paths_unreadable", len(plan.Unreadable))
+	return nil
 }
 
 // planMissingFileRepair stats every candidate row and decides, per BOOK, what is
@@ -155,12 +170,17 @@ func (p *Plugin) runMissingFileRepair(ctx context.Context, rawParams json.RawMes
 // tests rather than inferred from side effects.
 func planMissingFileRepair(ctx context.Context, store bookFileCoreScanner, params missingFileRepairParams, reporter sdk.Reporter) (repairPlan, error) {
 	log := reporter.Logger()
-	maxDeletes := params.MaxDeletes
-	if maxDeletes <= 0 {
-		maxDeletes = missingFileRepairDefaultMax
+	maxFlagged := params.MaxFlagged
+	if maxFlagged <= 0 {
+		maxFlagged = params.MaxDeletes
 	}
-	log.Info("missing-file-repair start", "apply", params.Apply,
-		"path_prefix", params.PathPrefix, "max_deletes", maxDeletes)
+	if maxFlagged <= 0 {
+		maxFlagged = missingFileRepairDefaultMax
+	}
+	// No "apply" field: runMissingFileRepair rejects apply before reaching here,
+	// so logging it would only ever print false and imply the mode still exists.
+	log.Info("missing-file-repair start",
+		"path_prefix", params.PathPrefix, "max_flagged", maxFlagged)
 
 	files, err := store.GetAllBookFilesCore()
 	if err != nil {
@@ -258,11 +278,11 @@ func planMissingFileRepair(ctx context.Context, store bookFileCoreScanner, param
 		default:
 			plan.BooksRepairable++
 			for i, rowID := range st.deadIDs {
-				if len(plan.RowsToDelete) >= maxDeletes {
-					plan.CappedAt = maxDeletes
+				if len(plan.RowsFlagged) >= maxFlagged {
+					plan.CappedAt = maxFlagged
 					break
 				}
-				plan.RowsToDelete = append(plan.RowsToDelete, rowID)
+				plan.RowsFlagged = append(plan.RowsFlagged, rowID)
 				if len(plan.SamplePaths) < missingFileRepairSampleLimit {
 					plan.SamplePaths = append(plan.SamplePaths, st.deadPaths[i])
 				}
@@ -281,28 +301,14 @@ func planMissingFileRepair(ctx context.Context, store bookFileCoreScanner, param
 	return plan, nil
 }
 
-// applyMissingFileRepair executes a plan. Every deleted path is logged before the
-// delete, so the change is reconstructible from the operation log rather than
-// merely gone.
-func applyMissingFileRepair(ctx context.Context, store bookFileBulkDeleter, plan repairPlan, reporter sdk.Reporter) (int, error) {
-	log := reporter.Logger()
-	deleted := 0
-	for off := 0; off < len(plan.RowsToDelete); off += missingFileRepairDeleteBatch {
-		if err := ctx.Err(); err != nil {
-			return deleted, err
-		}
-		end := off + missingFileRepairDeleteBatch
-		if end > len(plan.RowsToDelete) {
-			end = len(plan.RowsToDelete)
-		}
-		batch := plan.RowsToDelete[off:end]
-		log.Info("missing-file-repair: deleting batch", "from", off, "to", end, "ids", batch)
-		if err := store.DeleteBookFilesByIDs(batch); err != nil {
-			return deleted, fmt.Errorf("delete rows [%d:%d]: %w", off, end, err)
-		}
-		deleted += len(batch)
-		_ = reporter.UpdateProgress(deleted, len(plan.RowsToDelete),
-			fmt.Sprintf("Deleted %d/%d dead rows", deleted, len(plan.RowsToDelete)))
-	}
-	return deleted, nil
-}
+// 🔴 applyMissingFileRepair WAS HERE AND HAS BEEN DELETED (2026-08-19).
+//
+// It batched plan.RowsFlagged into DeleteBookFilesByIDs. It is removed rather
+// than left unwired, because unwired delete code is one edit away from being
+// wired again by someone who has not read the audit. The whole point of this
+// change is that these rows must never be deleted automatically -- they are
+// surfaced for a human decision instead.
+//
+// If a repair is ever built, it must REPOINT (update file_path to the file that
+// exists) and not delete. See
+// docs/audits/2026-08-17-missing-file-audit-full-population.md.
