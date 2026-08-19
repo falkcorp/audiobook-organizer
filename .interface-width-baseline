@@ -1,5 +1,5 @@
 # file: .interface-width-baseline
-# version: 1.6.0
+# version: 1.7.0
 # guid: 2b8e4f16-9d07-4c3a-b512-6a94ef7d0c38
 # last-edited: 2026-08-19
 #
@@ -96,6 +96,29 @@
 #
 # A 0 baseline is now a hard gate: any new interface declaring more than 8
 # entries fails CI unless it carries an explained //nolint:interfacebloat.
+#
+# WHAT 0 DOES NOT MEAN, added 2026-08-19. It does not mean no interface exceeds
+# the threshold. It means no UNSUPPRESSED one does. The threshold is `max: 8`
+# (.golangci.yml), and two declarations are over it today, each carrying an
+# explained //nolint:interfacebloat:
+#
+#   BookReader  (internal/database/iface_book.go:161)      -- 10 entries
+#   ServerDeps  (internal/plugins/maintenance/deps.go:217) -- 14 entries
+#
+# Both are transitional compositions whose own comments say they are deleted as
+# consumers migrate to the pieces they use, and both are currently off-limits:
+# BookReader by the standing decision not to shrink it in place (consumers
+# migrate instead), ServerDeps because it lives in the hands-off missing-file
+# repair lane. Neither is an oversight.
+#
+# This is recorded because the omission actually misled someone: reading "0"
+# against an assumed threshold of 10, with no mention of suppressions, gives
+# "nothing is wide" -- and an ad-hoc counting script written to check that
+# reported TranscriptionRunners at 12 entries when it has 2, because it counted
+# each line of a multi-line parameter list as an entry. Two wrong instruments
+# nearly produced a fabricated finding. golangci-lint is the authority on
+# declared-entry counts; grep and hand-rolled parsers are not. If you want the
+# real list, read the nolint directives above, not a script.
 #
 # Verifying THIS zero mattered more than usual, because a false 0 from a
 # poisoned result cache is the documented failure mode above and its remediation
