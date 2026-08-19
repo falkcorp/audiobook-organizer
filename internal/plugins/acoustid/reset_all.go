@@ -66,9 +66,10 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 	// Fast path: PebbleStore exposes a batched bulk-clear that fsyncs once
 	// per ~2000 records instead of once per UpdateBookFile call — ~100×
 	// faster than the per-row fallback below.
-	// AsPebbleStore, not a bare assertion: the server installs the indexedStore
-	// decorator during Start(), and p.store therefore holds the WRAPPER in
-	// production. A bare p.store.(*database.PebbleStore) fails against it and
+	// resolveFingerprintResetter, which walks the decorator chain: the server
+	// installs the indexedStore decorator during Start(), and p.store therefore
+	// holds the WRAPPER in production. A bare p.store.(*database.PebbleStore)
+	// fails against it and
 	// silently takes the per-row fallback below -- ~100x slower, with no error
 	// and nothing in the logs to say the fast path was skipped. See
 	// database/store_capability.go, which documents two prod jobs degraded this

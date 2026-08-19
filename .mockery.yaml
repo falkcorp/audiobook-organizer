@@ -1,7 +1,7 @@
 # file: .mockery.yaml
-# version: 1.21.0
+# version: 1.22.0
 # guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-# last-edited: 2026-08-17
+# last-edited: 2026-08-19
 
 # Mockery configuration (v3)
 # NOTE: with-expecter is enabled by default in v3
@@ -75,6 +75,38 @@ packages:
           pkgname: ai
           filename: mock_metadata_llm_backend_test.go
           structname: mockMetadataLLMBackend
+  # The capability interfaces below are unexported, so each mock must live in
+  # its own package (an unexported type cannot be imported from a mocks
+  # subpackage) with a _test.go filename that keeps it out of the production
+  # build -- same arrangement as metadataLLMBackend above.
+  #
+  # fingerprintResetter is deliberately NOT here. Its only call site,
+  # runResetAll, also drops dedup candidates, wipes the LSH index and
+  # re-enqueues a rescan, so exercising it needs an sdk.Reporter and several
+  # more stubs -- a large fixture for one batch-size assertion. A mock that is
+  # only ever called by the test that sets it up asserts nothing.
+  #
+  # These mocks are for CALL-SITE BEHAVIOUR tests only. They must never be used
+  # to test resolveX: a mock satisfies its interface by construction, so it
+  # would pass in precisely the case those tests exist to catch (the real store
+  # failing to satisfy the capability through the indexedStore decorator). The
+  # resolution tests deliberately use real structs embedding database.Store.
+  github.com/falkcorp/audiobook-organizer/internal/server:
+    interfaces:
+      prefixWiper:
+        config:
+          dir: internal/server
+          pkgname: server
+          filename: mock_prefix_wiper_test.go
+          structname: mockPrefixWiper
+  github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs:
+    interfaces:
+      aggregatesBackfillMarker:
+        config:
+          dir: internal/maintenance/jobs
+          pkgname: jobs
+          filename: mock_aggregates_backfill_marker_test.go
+          structname: mockAggregatesBackfillMarker
   github.com/falkcorp/audiobook-organizer/internal/logger:
     config:
       dir: internal/logger/mocks
