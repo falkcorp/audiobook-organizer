@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.21.0
+// version: 3.22.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-08-18
+// last-edited: 2026-08-19
 
 package server
 
@@ -1799,6 +1799,6 @@ type vgBackfiller interface{ BackfillVersionGroupIndex() error }
 // it is a function rather than an inline assertion purely so
 // TestIndexedStoreExposesVersionGroupBackfill can execute the real resolution
 // path. A guard that cannot reach the production call site does not guard it.
-func resolveVGBackfiller(s database.Store) (vgBackfiller, bool) {
+func resolveVGBackfiller(s any) (vgBackfiller, bool) {
 	return database.AsCapability[vgBackfiller](s)
 }
