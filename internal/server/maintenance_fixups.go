@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-11
+// last-edited: 2026-08-18
 
 package server
 
@@ -21,16 +21,23 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// maintenanceStore is the narrow slice of database.Store that the
-// wipe-helper free functions accept.
+// maintenanceStore is what the maintenance fixups actually call, measured by
+// emptying it and reading the compiler's enumeration: eleven direct calls plus
+// GetAllSeries, carried so this value satisfies seriesMergeStore. It was seven
+// database.* embeds — 131 methods, none declared here.
 type maintenanceStore interface {
-	database.BookStore
-	database.AuthorStore
-	database.SeriesStore
-	database.BookFileStore
-	database.UserTagStore
-	database.ExternalIDStore
-	database.StatsStore
+	CountAuthors() (int, error)
+	CountFiles() (int, error)
+	CountPrimaryBooks() (int, error)
+	CountSeries() (int, error)
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetBookByID(id string) (*database.Book, error)
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	DeleteBookFilesForBook(bookID string) error
+	GetAllSeries() ([]database.Series, error)
+	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
+	UpdateSeriesName(id int, name string) error
+	DeleteSeries(id int) error
 }
 
 func (s *Server) handleWipe(c *gin.Context) {

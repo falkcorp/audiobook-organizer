@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/interfaces.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 37502068-5061-401b-841e-0b191567f0bf
-// last-edited: 2026-06-03
+// last-edited: 2026-08-18
 
 // Narrow dependency interfaces for the operations domain handlers (scan /
 // organize / optimize / transcode triggers, operation status / logs / result /
@@ -21,29 +21,40 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 )
 
-// OperationsStore is the narrow database.Store subset the operations handlers
-// require. The concrete database.Store implementations satisfy it.
+// OperationsStore is what this handler actually calls, measured by emptying it
+// and reading the compiler's enumeration: fourteen direct calls, plus three
+// methods for sweep.tombstoneSweeper and database.SettingsStore for
+// config.SaveConfigToDatabase.
 //
-// It embeds the composed sub-interfaces (rather than enumerating their methods)
-// for two reasons: (1) the optimizeDatabase / sweepTombstones / auditFileConsistency
-// handlers pass the store opaquely to sweep.SweepTombstones / AuditFileConsistency,
-// which demand a database.BookStore — structural satisfaction requires the full
-// BookStore method set, not a hand-list; and (2) setInternalFlag's SetSetting plus
-// the config.SaveConfigToDatabase calls (in updateTaskConfig /
-// updateMaintenanceWindowConfig) require the full database.SettingsStore.
-// GetOperationV2 / GetOpLogsV2 (from database.OpsV2Store) are listed individually
-// because only those two of OpsV2Store's ~10 methods are used.
+// It previously embedded database.BookStore with the note "structural
+// satisfaction requires the full" — true until #2566 narrowed the sweep/audit
+// parameters that demanded it. The constraint is now sweep.fileAuditor (one
+// method) and sweep.tombstoneSweeper (three).
+//
+// database.SettingsStore stays embedded rather than method-listed: it is four
+// methods, already the right size, and this is what using the domain pieces
+// looks like.
 type OperationsStore interface {
-	database.OperationStore // op CRUD, status, logs, changes, delete-by-status
-	database.BookStore      // GetAllBooks + sweep/audit BookStore satisfaction
-	database.AuthorStore    // optimizeDatabase compound-author split
-	database.NarratorStore  // optimizeDatabase compound-narrator split
-	database.SettingsStore  // setInternalFlag + config.SaveConfigToDatabase
+	database.SettingsStore
 
-	// v2 registry reads (subset of database.OpsV2Store). getOperationStatus
-	// reads GetOperationV2; getOperationLogs reads GetOpLogsV2.
-	GetOperationV2(id string) (*database.OperationV2Row, error)
-	GetOpLogsV2(opID string, limit int) ([]database.OpLogV2Row, error)
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetBookByID(id string) (*database.Book, error)
+	ListBookTombstones(limit int) ([]database.Book, error)
+	DeleteBookTombstone(id string) error
+
+	CreateAuthor(name string) (*database.Author, error)
+	GetAuthorByID(id int) (*database.Author, error)
+	GetAuthorByName(name string) (*database.Author, error)
+	SetBookAuthors(bookID string, authors []database.BookAuthor) error
+	CreateNarrator(name string) (*database.Narrator, error)
+	GetNarratorByName(name string) (*database.Narrator, error)
+	SetBookNarrators(bookID string, narrators []database.BookNarrator) error
+
+	GetOperationByID(id string) (*database.Operation, error)
+	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
+	GetRecentOperations(limit int) ([]database.Operation, error)
+	UpdateOperationStatus(id, status string, progress, total int, message string) error
+	DeleteOperationsByStatus(statuses []string) (int, error)
 }
 
 // OperationsRegistry is the narrow operations-registry subset the operations
