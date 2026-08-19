@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-07-01
+// last-edited: 2026-08-19
 //
 // Package metabatch contains pure service types and logic for the
 // metadata candidate batch fetch / apply pipeline. HTTP handlers live
@@ -78,7 +78,7 @@ type BatchApplyRequest struct {
 // LatestMatchedBookIDs returns the set of book IDs whose most-recent
 // metadata_candidate_fetch result has status "matched". Used to exclude
 // already-matched books when OnlyUnmatched is requested.
-func LatestMatchedBookIDs(store database.Store) map[string]bool {
+func LatestMatchedBookIDs(store operationResultReader) map[string]bool {
 	allOps, err := store.GetRecentOperations(5000)
 	if err != nil {
 		return nil
