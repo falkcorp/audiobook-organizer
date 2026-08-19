@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.133.0
+// version: 1.134.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-08-15
+// last-edited: 2026-08-19
 
 package database
 
@@ -2778,6 +2778,38 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	// EmbeddingStore dependency on PebbleStore.
 	embKey := []byte(embVecPfx + "book:" + id)
 	if err := batch.Delete(embKey, nil); err != nil {
+		batch.Close()
+		return err
+	}
+
+	// Delete every dedup candidate that references this book, via the
+	// "dedup:e:book:<id>:" entity index (O(k) in this book's own candidates).
+	//
+	// Same dangling-row class as the work/hash indexes above, and the direct
+	// cause of `dedup.breakdown-backfill` reporting skipped_no_book=2504 on a
+	// 2026-08-19 dry run: once the book row is gone the candidate can never be
+	// actioned (clicking Merge 500s "book not found") and can never be
+	// re-scored, because every producer iterates live books only. Of DeleteBook's
+	// 16 call sites exactly ONE cleaned up after itself — dedup.Engine's
+	// CleanupCandidatesAfterMerge — so archive sweep, reconcile, diagnostics,
+	// iTunes/FS regroup, batch and the audiobooks service all leaked. Doing it
+	// in the primitive covers every caller by construction, including the next
+	// one somebody adds.
+	//
+	// Deleted, not marked status="merged": on a hard delete nothing was merged,
+	// so that status would be a lie for most of these callers, and the merge
+	// audit trail lives in OperationChange ("book_delete" /
+	// "merged_into:<keepID>") rather than in the candidate row.
+	// CleanupCandidatesAfterMerge is still required and stays: merge.Service
+	// .MergeBooks *soft*-deletes, so its book row survives and its candidates
+	// must be transitioned rather than removed.
+	//
+	// Targets the same keyspace as EmbeddingStore.DeleteCandidate and shares its
+	// key list via deleteCandidateKeys; staged into this batch for atomicity
+	// with the rest of the book removal rather than wiring a separate
+	// EmbeddingStore dependency into PebbleStore — same reasoning as the
+	// embedding row above.
+	if err := deleteDedupCandidatesForBook(p.db, batch, id); err != nil {
 		batch.Close()
 		return err
 	}
