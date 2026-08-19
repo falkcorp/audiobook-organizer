@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.10.0
-// last-edited: 2026-08-12
+// version: 2.11.0
+// last-edited: 2026-08-19
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -1237,12 +1237,93 @@ func (s *EmbeddingStore) DeleteCandidate(id int64) error {
 
 	b := s.db.NewBatch()
 	defer b.Close()
+	deleteCandidateKeys(b, id, rec)
+	return b.Commit(candidateWriteOpts) // NoSync — see candidateWriteOpts (#19)
+}
+
+// deleteCandidateKeys stages the removal of every key that represents candidate
+// `id` into `b`: the record, the pair key, BOTH entity-index sides, and the
+// status index. The caller owns the batch and chooses its write options —
+// DeleteCandidate commits NoSync, while PebbleStore.DeleteBook folds these into
+// its own pebble.Sync batch.
+//
+// Factored out so the two callers cannot drift apart: a secondary index added
+// to the candidate keyspace is torn down by both, or by neither. Every dangling
+// -row bug recorded in DeleteBook's comments (work index, hash indexes,
+// signature sidecar) came from exactly that kind of drift — one writer gained an
+// index and the deleter never learned about it.
+func deleteCandidateKeys(b *pebble.Batch, id int64, rec candRec) {
 	_ = b.Delete(dedupRecKey(id), nil)
 	_ = b.Delete(dedupPairKey(rec.EntityType, rec.EntityAID, rec.EntityBID), nil)
 	_ = b.Delete(dedupEntityKey(rec.EntityType, rec.EntityAID, id), nil)
 	_ = b.Delete(dedupEntityKey(rec.EntityType, rec.EntityBID, id), nil)
 	_ = b.Delete(dedupStatusIdxKey(rec.Status, id), nil) // INIT-2 T4
-	return b.Commit(candidateWriteOpts)                  // NoSync — see candidateWriteOpts (#19)
+}
+
+// readCandRec loads and decodes one candidate record. Returns ok=false for both
+// "absent" and "corrupt", which teardown treats identically.
+func readCandRec(db *pebble.DB, id int64) (candRec, bool) {
+	val, closer, err := db.Get(dedupRecKey(id))
+	if err != nil {
+		return candRec{}, false
+	}
+	var rec candRec
+	unmarshalErr := json.Unmarshal(val, &rec)
+	closer.Close()
+	if unmarshalErr != nil {
+		return candRec{}, false
+	}
+	return rec, true
+}
+
+// deleteDedupCandidatesForBook stages the teardown of every dedup candidate that
+// references book `bookID` on either side into `b`, located through the
+// "dedup:e:book:<id>:" entity index — an O(k) prefix scan over that book's own
+// candidates, not a scan of the whole candidate keyspace.
+//
+// Deliberately NOT built on ListCandidatesForEntity: that reader tolerates a
+// missing or corrupt record by skipping the row, which is right for a read but
+// wrong for teardown. Skipping here would leave the entity-index entry we are
+// standing on in place, converting a candidate orphan into a stale *index*
+// orphan that no later pass revisits. Every branch below deletes the index entry
+// it found.
+func deleteDedupCandidatesForBook(db *pebble.DB, b *pebble.Batch, bookID string) error {
+	if bookID == "" {
+		return nil
+	}
+	prefix := []byte(dedupEntityPfx + "book:" + bookID + ":")
+	upper := prefixUpperBound(prefix)
+	iter, err := db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+	if err != nil {
+		return fmt.Errorf("dedup candidate cascade scan %s: %w", bookID, err)
+	}
+	defer iter.Close()
+
+	pfxLen := len(prefix)
+	for iter.First(); iter.Valid(); iter.Next() {
+		// iter.Key() is only valid until the next Next(); copy before staging.
+		key := append([]byte(nil), iter.Key()...)
+		id, parseErr := strconv.ParseInt(string(key[pfxLen:]), 16, 64)
+		if parseErr != nil {
+			// Unparseable index entry: it names no candidate we can reach, and
+			// it can never resolve. Drop it rather than leaving it behind.
+			_ = b.Delete(key, nil)
+			continue
+		}
+		rec, ok := readCandRec(db, id)
+		if !ok {
+			// Record absent or corrupt. Delete what we can still name: this
+			// index entry and the record key. The pair key, the far entity
+			// entry and the status entry are unrecoverable without the record —
+			// but they are also already unreachable from this book, and the
+			// far side's own DeleteBook will clear its index entry.
+			_ = b.Delete(key, nil)
+			_ = b.Delete(dedupRecKey(id), nil)
+			continue
+		}
+		deleteCandidateKeys(b, id, rec)
+	}
+	return iter.Error()
 }
 
 // MarkCandidatesAsMergedForEntity sets status="merged" on every candidate row
