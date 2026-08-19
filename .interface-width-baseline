@@ -1,5 +1,5 @@
 # file: .interface-width-baseline
-# version: 1.3.0
+# version: 1.4.0
 # guid: 2b8e4f16-9d07-4c3a-b512-6a94ef7d0c38
 # last-edited: 2026-08-18
 #
@@ -47,12 +47,21 @@
 # wide because each subsystem held it rather than its own slice, so it could not
 # be argued down on its own terms.
 #
-# The three held here are documented in
+# Lowered to 2 by narrowing maintenance.JobStore from twelve database.* embeds
+# to the 52 methods the jobs were measured to use, grouped into seven focused
+# interfaces. This file used to say the item was settled: "JobStore's width
+# was the deliberate outcome of the #2534 arbitration. So this number is expected
+# to hold until those decisions are taken." The decision was taken on 2026-08-18
+# -- the user reopened it once the consumer-first method had shown how cheap
+# narrowing actually is. #2534 chose a shared JobStore over per-job interfaces
+# and that choice stands; what changed is that the shared store no longer carries
+# 135 methods nobody calls.
+#
+# The two held here are documented in
 # docs/audits/2026-08-18-interface-width-shapes.md section 6 -- audiobookStore
-# (11), database.Store (40) and maintenance.JobStore (12). Each is genuinely wide
-# rather than badly grouped: audiobookStore needs the service behind it split,
-# database.Store is the union type and the plan is to make it unreachable rather
-# than smaller, and JobStore's width was the deliberate outcome of the #2534
-# arbitration. So this number is expected to hold until those decisions are
-# taken, not to keep ticking down.
-3
+# (11) and database.Store (40). Both are genuinely wide rather than badly
+# grouped: audiobookStore needs the service behind it split, and database.Store
+# is the union type, where the plan is to make it unreachable rather than
+# smaller. So this number is expected to hold until those two are taken, not to
+# keep ticking down.
+2
