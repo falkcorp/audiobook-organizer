@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.7.0
+// version: 5.8.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-08-18
+// last-edited: 2026-08-19
 
 package metafetch
 
@@ -668,4 +668,24 @@ func truncateActivity(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// isbnEnrichmentStore is what ISBNService reads and writes. Measured with an
+// empty-interface compiler probe: four methods. It was database.Store -- 398
+// methods -- until 2026-08-19.
+type isbnEnrichmentStore interface {
+	GetBookByID(id string) (*database.Book, error)
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetAuthorByID(id int) (*database.Author, error)
+}
+
+// bookFileLister and rejectedKeyScanner are the two one-method surfaces the
+// free functions in batch.go need. Each took database.Store.
+type bookFileLister interface {
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+}
+
+type rejectedKeyScanner interface {
+	ScanPrefix(prefix string) ([]database.KVPair, error)
 }

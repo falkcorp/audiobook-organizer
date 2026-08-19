@@ -1,7 +1,7 @@
 // file: internal/metafetch/isbn.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 34290bd0-745e-4509-ad2d-e237785bb7ef
-// last-edited: 2026-07-07
+// last-edited: 2026-08-19
 
 package metafetch
 
@@ -18,13 +18,13 @@ import (
 // ISBNService searches external metadata sources for ISBN (and ASIN)
 // when a book is missing those identifiers after a metadata fetch/apply.
 type ISBNService struct {
-	db      database.Store
+	db      isbnEnrichmentStore
 	sources []metadata.MetadataSource
 }
 
 // NewISBNService creates an enrichment service that will search the
 // given metadata sources for ISBN/ASIN data.
-func NewISBNService(db database.Store, sources []metadata.MetadataSource) *ISBNService {
+func NewISBNService(db isbnEnrichmentStore, sources []metadata.MetadataSource) *ISBNService {
 	return &ISBNService{db: db, sources: sources}
 }
 
