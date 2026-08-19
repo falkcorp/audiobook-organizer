@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-08-14
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -52,10 +52,10 @@ func (d fakeDeps) RunBulkWriteBack(_ context.Context, _ string, _ []string, _ bo
 	return nil
 }
 func (d fakeDeps) RunAutoPurgeSoftDeleted(_ string) {}
-func (d fakeDeps) ExecuteSeriesPrune(_ context.Context, _ database.Store, _ operations.ProgressReporter, _ string) error {
+func (d fakeDeps) ExecuteSeriesPrune(_ context.Context, _ operations.ProgressReporter, _ string) error {
 	return nil
 }
-func (d fakeDeps) ExecuteSeriesNormalizeCore(_ context.Context, _ database.Store, _ func(string)) ([]string, error) {
+func (d fakeDeps) ExecuteSeriesNormalizeCore(_ context.Context, _ func(string)) ([]string, error) {
 	return nil, nil
 }
 func (d fakeDeps) BackfillExternalIDs(_ func(int, int, string)) error { return nil }

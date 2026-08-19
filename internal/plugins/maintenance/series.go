@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f6a7b8c9-d0e1-2345-f012-567890123456
 // last-edited: 2026-08-19
 
@@ -38,14 +38,10 @@ func (p *Plugin) seriesNormalizeDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runSeriesNormalize(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	store := p.deps.Store()
-	if store == nil {
-		return fmt.Errorf("database not initialized")
-	}
 	enqueueWB := func(bookID string) {
 		p.deps.EnqueueWriteBack(bookID)
 	}
-	affected, err := p.deps.ExecuteSeriesNormalizeCore(ctx, store, enqueueWB)
+	affected, err := p.deps.ExecuteSeriesNormalizeCore(ctx, enqueueWB)
 	// Renaming a series changes the cached series list, which carries a 24-hour
 	// TTL. Without this the normalize lands in the store while /api/v1/series
 	// keeps serving the old names. Only invalidate when rows actually changed;
@@ -83,10 +79,6 @@ func (p *Plugin) seriesPruneDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runSeriesPrune(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	store := p.deps.Store()
-	if store == nil {
-		return fmt.Errorf("database not initialized")
-	}
 	opID := ctxOpID(ctx)
-	return p.deps.ExecuteSeriesPrune(ctx, store, newOpsAdapter(reporter), opID)
+	return p.deps.ExecuteSeriesPrune(ctx, newOpsAdapter(reporter), opID)
 }
