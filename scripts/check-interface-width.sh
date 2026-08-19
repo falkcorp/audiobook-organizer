@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # file: scripts/check-interface-width.sh
-# version: 1.4.0
+# version: 1.5.0
 # guid: 5f1c07a3-84be-4d29-9e60-3b7a2d5c81ef
-# last-edited: 2026-08-18
+# last-edited: 2026-08-19
 #
 # Ratchet on the number of `interfacebloat` findings. See
 # .interface-width-baseline for why this counts rather than listing files.
@@ -117,7 +117,23 @@ fi
 # nothing stops it from replaying a path whose line happens to carry an unrelated
 # nolint and hiding a real finding. Neither number is a measurement, so refuse to
 # report one.
-stale=$(printf '%s\n' "$output" | grep -E '\(interfacebloat\)$' \
+#
+# The `|| true` on the grep is load-bearing and its absence was a live bug until
+# 2026-08-19. grep exits 1 when it matches nothing, which is exactly what happens
+# on a CLEAN tree; under `set -euo pipefail` that aborted the whole script right
+# here, silently, with exit 1. Nothing downstream ever ran -- not the count, not
+# the comparison, not the "OK" line -- and exit 1 is indistinguishable from this
+# gate's own "width went UP/DOWN" failure, so a clean tree reported as a ratchet
+# violation with no message saying why.
+#
+# It survived because the zero case was unreachable: the baseline was >= 1 from
+# the day the gate was written, so this path had never once been exercised. The
+# comment at the golangci-lint invocation above already names this exact hazard
+# ("grep -c exits non-zero on a count of 0 ... would abort before the comparison
+# that is the whole job") and the count on line ~138 was guarded accordingly.
+# This site was simply missed. A guard applied to one of two identical call sites
+# is a reminder to check the other.
+stale=$({ printf '%s\n' "$output" | grep -E '\(interfacebloat\)$' || true; } \
   | sed -E 's/^([^:]+):[0-9]+:[0-9]+:.*/\1/' | sort -u \
   | while IFS= read -r f; do [[ -n "$f" && -f "$f" ]] || printf '%s\n' "$f"; done)
 if [[ -n "$stale" ]]; then
