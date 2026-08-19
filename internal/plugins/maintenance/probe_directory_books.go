@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/probe_directory_books.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f2a90d4-3c81-4e57-b0a6-9d47e1c85b23
 // last-edited: 2026-08-19
 
@@ -65,7 +65,6 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -557,7 +556,7 @@ func probeOne(ctx context.Context, ffprobePath, fullPath, name string) linkinteg
 // no per-file durations — this path writes the MEASURED duration onto each row.
 // That is the point of having probed: a zero-duration book_file row leaves the
 // regroup series guard just as inert as no row at all.
-func linkProbedFolder(store database.Store, c probeCandidate) (int, error) {
+func linkProbedFolder(store folderLinker, c probeCandidate) (int, error) {
 	// 🔴 THE VERDICT GATES THE WRITE, HERE, NOT ONLY AT THE CALL SITE.
 	// Phase 3 already skips anything not dispositioned Link, so reaching this
 	// function with a review verdict means a caller has a bug — and the blast

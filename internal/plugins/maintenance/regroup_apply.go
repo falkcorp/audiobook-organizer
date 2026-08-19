@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
-// last-edited: 2026-08-17
+// last-edited: 2026-08-19
 
 // Package maintenance — the APPLY path for the regroup review queue (PR-B2).
 //
@@ -86,7 +86,7 @@ type bookCombiner interface {
 // The returned func matches reviewhandler.ApplyFunc structurally (an unnamed func
 // type is assignable to the named type), so the wiring registers it directly without
 // this package importing the server handler.
-func ApplyMultidisc(store database.Store, combiner bookCombiner) func(context.Context, database.ReviewItem) error {
+func ApplyMultidisc(store multidiscApplier, combiner bookCombiner) func(context.Context, database.ReviewItem) error {
 	return func(ctx context.Context, item database.ReviewItem) error {
 		if err := ctx.Err(); err != nil {
 			return err

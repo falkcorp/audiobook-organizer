@@ -1,6 +1,6 @@
 // file: internal/plugins/dedup/register.go
-// version: 1.1.2
-// last-edited: 2026-06-23
+// version: 1.2.0
+// last-edited: 2026-08-19
 
 // Service registry registration for the dedup UOS plugin (W5/W7).
 //
@@ -35,7 +35,7 @@ func init() {
 			if engine == nil || embStore == nil {
 				return (*Plugin)(nil), nil
 			}
-			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
+			store := serviceregistry.Get[pluginStore](c, serviceregistry.KeyStore)
 			return New(engine, store, embStore), nil
 		},
 	})

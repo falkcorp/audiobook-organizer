@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/store_slices.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8d3b6f14-2a97-4e51-b0c8-5f7e91d24a63
 // last-edited: 2026-08-19
 
@@ -231,3 +231,30 @@ var (
 	_ orphanFileScanner  = (*database.MockStore)(nil)
 	_ reviewHoldStore    = (*database.MockStore)(nil)
 )
+
+// The five holdouts below took database.Store -- 398 methods -- until
+// 2026-08-19. Each composes slices already declared in this file rather than
+// introducing new ones.
+
+// folderLinker: linkProbedFolder and relinkOne both read a book and its files,
+// then create the missing book_file row.
+type folderLinker interface {
+	bookByIDReader
+	bookFileLister
+	bookFileCreator
+}
+
+// multidiscApplier: ApplyMultidisc forwards into applyDiscTrackNumbers and
+// presentMembers and calls nothing itself.
+type multidiscApplier interface {
+	bookFileTrackWriter
+	bookByIDReader
+}
+
+// transcribePageStore: processTranscribePage updates the book and reads its
+// files through firstAudioFile/nthAudioFile.
+type transcribePageStore interface {
+	bookFileLister
+
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+}

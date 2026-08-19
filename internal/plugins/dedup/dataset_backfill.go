@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/dataset_backfill.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2d6f8a13-7c40-4e92-8b15-9a3e5c7d2f64
 // last-edited: 2026-08-19
 
@@ -66,9 +66,9 @@ func (p *Plugin) datasetBackfillDef() sdk.OperationDef {
 
 // builderAdapter satisfies dataset.BuilderStore using the plugin's main store.
 // dataset.BuilderStore requires GetBook(id string) and GetBookFiles(id string).
-// database.Store exposes GetBookByID (not GetBook), so the adapter bridges the
+// pluginStore exposes GetBookByID (not GetBook), so the adapter bridges the
 // name mismatch while keeping the interface names canonical.
-type builderAdapter struct{ store database.Store }
+type builderAdapter struct{ store pluginStore }
 
 func (b builderAdapter) GetBook(id string) (*database.Book, error) {
 	return b.store.GetBookByID(id)
@@ -159,7 +159,7 @@ func (p *Plugin) runDatasetBackfill(ctx context.Context, rawParams json.RawMessa
 func runDatasetBackfillWith(
 	ctx context.Context,
 	embStore datasetBackfillEmbeddingStore,
-	mainStore database.Store,
+	mainStore pluginStore,
 	rawParams json.RawMessage,
 	reporter sdk.Reporter,
 ) error {
