@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-08-19
 
@@ -30,6 +30,28 @@ import (
 
 // Verify *Server implements maintenance.ServerDeps at compile time.
 var _ maintenanceplugin.ServerDeps = (*Server)(nil)
+
+// ---- store access (maintenance.StoreProvider) ----
+//
+// These replaced a single Store() accessor on the plugin side. They cannot be
+// named Store(): *Server already has one, returning the full database.Store for
+// the 216 call sites inside internal/server, and a type has exactly one method
+// per name. The plugin's accessors therefore carry the name of what they serve.
+//
+// Each returns s.store unchanged -- the narrowing is in the declared type, not
+// in the value, so no behaviour changes and no wrapper is allocated.
+
+// OpsStore implements maintenance.StoreProvider. It is the common path: the 39
+// methods the maintenance ops invoke directly.
+func (s *Server) OpsStore() maintenanceplugin.OpsStore { return s.store }
+
+// ReconcileStore implements maintenance.StoreProvider. It serves runITunesHeal,
+// which forwards the store into internal/reconcile.
+func (s *Server) ReconcileStore() maintenanceplugin.ReconcileStore { return s.store }
+
+// PlaylistStore implements maintenance.StoreProvider. It serves
+// runITunesPlaylistImport, which forwards the store into internal/itunes/service.
+func (s *Server) PlaylistStore() database.UserPlaylistStore { return s.store }
 
 // ---- delegated run helpers ----
 

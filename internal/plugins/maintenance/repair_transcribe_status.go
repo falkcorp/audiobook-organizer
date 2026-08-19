@@ -207,7 +207,7 @@ func (p *Plugin) repairTranscribeStatusDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runRepairTranscribeStatus(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

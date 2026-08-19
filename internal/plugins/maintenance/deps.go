@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-08-19
 
@@ -13,13 +13,152 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
-// StoreProvider exposes the database handle.
+// ----- store access -----
+//
+// These interfaces replaced a single `Store() database.Store` accessor on
+// 2026-08-19. That one method handed all 398 methods to 111 call sites in this
+// package, of which the ops actually need 53. Measured with go/packages at
+// full type resolution: the union required to keep a single accessor was 85,
+// and 46 of those 85 existed solely to serve TWO of the call sites, both of
+// which forward the store into another package. Segregating those two keeps
+// the common path at 53.
+//
+// The sub-interfaces are grouped by the entity each one touches, and each is
+// independently under the interfacebloat limit of 8 declared entries, so the
+// width is gone rather than pushed one level down.
+
+// opsBookReader reads books.
+type opsBookReader interface {
+	CountAllBooks() (int, error)
+	CountPrimaryBooks() (int, error)
+	GetAllBooksCore(limit int, offset int) ([]database.BookCore, error)
+	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
+	GetBookByID(id string) (*database.Book, error)
+	GetBookSnapshots(id string, limit int) ([]database.BookSnapshot, error)
+	ListBookIDs() ([]string, error)
+}
+
+// opsBookWriter creates, mutates and retires books.
+type opsBookWriter interface {
+	CreateBook(book *database.Book) (*database.Book, error)
+	DeleteBook(id string) error
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+	ListSoftDeletedBooks(limit int, offset int, olderThan *time.Time) ([]database.Book, error)
+	RecomputeBookAggregates(bookID string) error
+	ResolveTombstoneChains() (int, error)
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+}
+
+// opsFileAndPathReader reads book files and the configured import paths.
+type opsFileAndPathReader interface {
+	GetAllBookFilesCore() ([]database.BookFileCore, error)
+	GetAllImportPaths() ([]database.ImportPath, error)
+	GetBookFileByPath(filePath string) (*database.BookFile, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+}
+
+// opsBookFileWriter creates, moves and mutates book files.
+type opsBookFileWriter interface {
+	BatchUpsertBookFiles(files []*database.BookFile) error
+	CreateBookFile(file *database.BookFile) error
+	DeleteBookFile(id string) error
+	DeleteBookFilesByIDs(ids []string) error
+	MoveBookFilesToBook(fileIDs []string, sourceBookID string, targetBookID string) error
+	SetBookFileHash(id string, hash string) error
+	UpdateBookFile(id string, file *database.BookFile) error
+}
+
+// opsAuthorStore reads and mutates authors.
+type opsAuthorStore interface {
+	CreateAuthor(name string) (*database.Author, error)
+	DeleteAuthor(id int) error
+	GetAllAuthorBookCounts() (map[int]int, error)
+	GetAllAuthorFileCounts() (map[int]int, error)
+	GetAllAuthors() ([]database.Author, error)
+	GetAuthorByID(id int) (*database.Author, error)
+	GetAuthorByName(name string) (*database.Author, error)
+	UpdateAuthorName(id int, name string) error
+}
+
+// opsSeriesStore reads and mutates series.
+type opsSeriesStore interface {
+	CreateSeries(name string, authorID *int) (*database.Series, error)
+	DeleteSeries(id int) error
+	GetAllSeries() ([]database.Series, error)
+	GetAllSeriesBookCounts() (map[int]int, error)
+	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
+	GetSeriesByName(name string, authorID *int) (*database.Series, error)
+}
+
+// opsLinkStore reads and writes the joins hanging off a book: its authors and
+// its external-ID mappings. Grouped together because both live on the join row
+// rather than on either entity, so a regroup has to rewrite them as a pair.
+type opsLinkStore interface {
+	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
+	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
+	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
+	ReassignExternalID(source string, externalID string, newBookID string) error
+	ReassignExternalIDs(oldBookID string, newBookID string) error
+	SetBookAuthors(bookID string, authors []database.BookAuthor) error
+}
+
+// opsHousekeeping is the remainder that belongs to no single entity: the review
+// queue, metadata field state, operation records, playlist listing and the
+// compaction hook.
+type opsHousekeeping interface {
+	CreateOperationChange(change *database.OperationChange) error
+	DeleteReviewItem(id string) error
+	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
+	ListReviewItems(filter database.ReviewFilter) ([]database.ReviewItem, int, error)
+	ListUserPlaylists(playlistType string, limit int, offset int) ([]database.UserPlaylist, int, error)
+	Optimize() error
+	UpdateOperationResultData(id string, resultData string) error
+	UpsertReviewItem(item database.ReviewItem) (database.ReviewItem, error)
+}
+
+// OpsStore is the 53 methods the maintenance ops need -- what they call directly
+// plus what the package's own helpers require of a store handed to them. Exported
+// so *server.Server can name it as a return type.
+type OpsStore interface {
+	opsBookReader
+	opsBookWriter
+	opsFileAndPathReader
+	opsBookFileWriter
+	opsAuthorStore
+	opsSeriesStore
+	opsLinkStore
+	opsHousekeeping
+}
+
+// ReconcileStore is what reconcile.RunITunesHeal requires. It is spelled out
+// here rather than imported because reconcile's own requirement is unexported;
+// Go assigns interface to interface on method-set superset, so naming it is
+// unnecessary. dedup.Store is embedded BY NAME so this re-narrows on its own
+// when dedup narrows further.
+type ReconcileStore interface {
+	dedup.Store
+
+	GetBookByID(id string) (*database.Book, error)
+	GetBookFileByPID(itunesPID string) (*database.BookFile, error)
+	GetBookFileByPath(filePath string) (*database.BookFile, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+}
+
+// StoreProvider exposes the database handles the ops need. Store() used to hand
+// out all 398 methods; the two forwarding ops now take exactly what they pass on.
 type StoreProvider interface {
-	Store() database.Store
+	// OpsStore is the common path: 53 methods, used by 39 of the 41 sites.
+	OpsStore() OpsStore
+	// ReconcileStore serves runITunesHeal, which forwards into internal/reconcile.
+	ReconcileStore() ReconcileStore
+	// PlaylistStore serves runITunesPlaylistImport, which forwards into
+	// internal/itunes/service.
+	PlaylistStore() database.UserPlaylistStore
 }
 
 // MetadataRunners runs the metadata enrichment and write-back operations.

@@ -68,7 +68,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

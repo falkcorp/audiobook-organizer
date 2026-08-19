@@ -179,7 +179,7 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 		return err
 	}
 
-	importer := itunesservice.NewPlaylistImporter(p.deps.Store())
+	importer := itunesservice.NewPlaylistImporter(p.deps.PlaylistStore())
 
 	// ALWAYS dry-run first, even when applying. The criteria translator is
 	// currently producing empty queries (ITUNES-SMARTCRIT-PARSE): ParseSmartCriteria
@@ -228,7 +228,7 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 	// actually exist afterwards.
 	verified := -1
 	if !params.DryRun {
-		if _, total, lerr := p.deps.Store().ListUserPlaylists("smart", 1, 0); lerr == nil {
+		if _, total, lerr := p.deps.OpsStore().ListUserPlaylists("smart", 1, 0); lerr == nil {
 			verified = total
 		} else {
 			slog.Warn("itunes-playlist-import: verification re-read failed", "err", lerr)

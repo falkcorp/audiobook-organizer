@@ -140,7 +140,7 @@ func TestBookSigRecoveryAudit_MemdbNotFalseFlagged(t *testing.T) {
 	// row from GetAllBooks would see the stripped row and flag "ok" as damaged.
 	// The audit must read GetBookByID (Pebble-direct, intact) instead, so "ok"
 	// must NOT be flagged. This makes the test discriminate the read source.
-	strippedStore := p.deps.Store().(*database.MockStore)
+	strippedStore := p.deps.OpsStore().(*database.MockStore)
 	strippedStore.GetAllBooksFunc = func(limit, offset int) ([]database.Book, error) {
 		if offset > 0 {
 			return nil, nil

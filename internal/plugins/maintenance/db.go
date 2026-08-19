@@ -36,7 +36,7 @@ func (p *Plugin) dbOptimizeDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runDBOptimize(_ context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

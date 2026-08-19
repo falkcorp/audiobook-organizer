@@ -135,7 +135,7 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 		_ = reporter.Log(slog.LevelInfo, "APPLY MODE — restoring recoverable fields from book_ver: snapshots (owner-greenlit)")
 	}
 
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

@@ -106,7 +106,7 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

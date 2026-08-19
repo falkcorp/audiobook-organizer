@@ -118,7 +118,7 @@ func (p *Plugin) authorConjunctionRepairDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
@@ -286,7 +286,7 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 // them reports file_count=0 while carrying books. A merge that only rewrote
 // AuthorID would report success and change nothing.
 func (p *Plugin) mergeAuthorInto(ctx context.Context, from, into database.Author, dryRun bool, log *slog.Logger) (int, error) {
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 
 	books, err := store.GetBooksByAuthorIDWithRoleCore(from.ID)
 	if err != nil {

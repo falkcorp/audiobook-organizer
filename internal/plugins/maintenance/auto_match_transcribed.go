@@ -49,7 +49,7 @@ func (p *Plugin) autoMatchTranscribedDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

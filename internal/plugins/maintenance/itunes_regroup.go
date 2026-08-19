@@ -63,7 +63,7 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
