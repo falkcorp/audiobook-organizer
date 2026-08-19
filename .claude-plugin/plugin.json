@@ -8,7 +8,7 @@
   },
   "homepage": "https://github.com/jdfalk/audiobook-organizer",
   "repository": "https://github.com/jdfalk/audiobook-organizer",
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "keywords": ["go", "audiobook", "pebbledb", "pii-scanner", "documentation"],
   "mcpServers": "./.claude-plugin/mcp.json"
 }
