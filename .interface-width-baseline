@@ -76,8 +76,8 @@
 # exactly that.
 #
 # Lowered to 0 on 2026-08-19 by REGROUPING database.Store's 40 directly-embedded
-# sub-interfaces into six domain composites (CatalogStore, MediaStore,
-# AccountStore, EnrichmentStore, OperationsStore, PlatformStore). Store's method
+# sub-interfaces into six domain composites (catalogStore, mediaStore,
+# accountStore, enrichmentStore, operationsStore, platformStore). Store's method
 # set is byte-identical -- scripts/verify_interface_split.py reports
 # "Store 40 -> 40 IDENTICAL" -- and no consumer moved.
 #
@@ -101,7 +101,7 @@
 # poisoned result cache is the documented failure mode above and its remediation
 # text advises setting the baseline to exactly this. Three checks, all in the
 # gate's own scoped cache directory: cold-cache run returns 0; a positive
-# control that re-widens CatalogStore to 12 entries is still DETECTED, so the
+# control that re-widens catalogStore to 12 entries is still DETECTED, so the
 # linter is live rather than inert; and the count is 0 again after reverting the
 # control. An instrument that cannot find a planted finding is not reporting a
 # clean tree.
