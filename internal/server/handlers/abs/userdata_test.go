@@ -329,17 +329,6 @@ func udBool(t *testing.T, row map[string]json.Number, key string) bool {
 	return v == "true"
 }
 
-func udRowByItem(t *testing.T, rows []map[string]json.Number, libraryItemID string) map[string]json.Number {
-	t.Helper()
-	for _, r := range rows {
-		if udStr(t, r, "libraryItemId") == libraryItemID {
-			return r
-		}
-	}
-	t.Fatalf("no row for libraryItemId %q in %v", libraryItemID, rows)
-	return nil
-}
-
 // ── constructor ─────────────────────────────────────────────────────────────
 
 // TestUserDataProviderRefusesMissingDependencies: every dependency is required.
