@@ -623,6 +623,15 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	if updateErr != nil {
 		return nil, fmt.Errorf("failed to update book: %w", updateErr)
 	}
+	// A nil book with a nil error violates the contract every real Store honors
+	// (PebbleStore returns an error on every path that yields no book), but
+	// database.MockStore returns (nil, nil) whenever UpdateBookFunc is unset. That
+	// made this an outright panic at updatedBook.Title below rather than anything
+	// diagnosable. Fail loudly instead: a store that reports success while handing
+	// back nothing is a bug wherever it happens, not a case to route around.
+	if updatedBook == nil {
+		return nil, fmt.Errorf("update book %s: store reported success but returned no book", id)
+	}
 
 	// Check whether any other book already carries the same hash — if so,
 	// emit a dedup candidate so the user can review the potential duplicate.
@@ -658,10 +667,12 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 		pendingCover = meta.CoverURL
 	}
 
-	// Queue background ISBN/ASIN enrichment if identifiers are missing
-	if updatedBook != nil {
-		mfs.queueISBNEnrichment(id, updatedBook)
-	}
+	// Queue background ISBN/ASIN enrichment if identifiers are missing.
+	// No nil check: the guard above already rejected a nil book, and this one
+	// sitting AFTER an unguarded updatedBook.Title deref was what staticcheck
+	// flagged (SA5011) -- it implied a nil was possible at a point that would
+	// already have panicked.
+	mfs.queueISBNEnrichment(id, updatedBook)
 
 	// Tag the book with metadata:source:* and metadata:language:*
 	// as system-applied provenance tags. Uses the singleton

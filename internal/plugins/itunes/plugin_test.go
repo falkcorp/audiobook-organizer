@@ -39,6 +39,15 @@ func TestStubOps_NoCronSchedule(t *testing.T) {
 	if s := p.pathReconciledDef().Schedule; s != nil {
 		t.Errorf("itunes.path-reconcile is a stub but has schedule %q — remove it or implement the op", *s)
 	}
+	// pathRepairDef was missing from this list until 2026-08-19. It is the only
+	// one of the five stub defs kept alive by neither this test nor an explicit
+	// keepalive (importDef has one at import.go:46), which is why staticcheck
+	// reported it as unused while its identical siblings passed. The gap was not
+	// only cosmetic: a Schedule added here would have reproduced the exact C1
+	// incident this test exists to prevent, with no test to catch it.
+	if s := p.pathRepairDef().Schedule; s != nil {
+		t.Errorf("itunes.path-repair is a stub but has schedule %q — remove it or implement the op", *s)
+	}
 }
 
 // stubWarnReporter captures Log calls so the not-implemented warning can be

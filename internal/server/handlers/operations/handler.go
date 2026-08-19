@@ -109,23 +109,14 @@ func (h *Handler) resolveScheduler() Scheduler {
 
 // --- Operation status / cancel ---
 
-// operationV2ToLegacy converts a v2 registry row to the legacy Operation shape
-// that the frontend's pollOperation helper expects (id, status, progress, etc.).
-func operationV2ToLegacy(v2 *database.OperationV2Row) database.Operation {
-	op := database.Operation{
-		ID:           v2.ID,
-		Type:         v2.DefID,
-		Status:       v2.Status,
-		Progress:     v2.ProgressCurrent,
-		Total:        v2.ProgressTotal,
-		Message:      v2.ProgressMessage,
-		CreatedAt:    v2.QueuedAt,
-		StartedAt:    v2.StartedAt,
-		CompletedAt:  v2.CompletedAt,
-		ErrorMessage: v2.ErrorMessage,
-	}
-	return op
-}
+// operationV2ToLegacy WAS HERE AND HAS BEEN DELETED (2026-08-19).
+//
+// It converted a v2 registry row into the legacy Operation shape at READ time.
+// Nothing called it, and nothing should: internal/operations/registry/
+// legacy_op_status.go keeps the legacy row in step by WRITING it as the v2 run
+// progresses, so the legacy shape is materialised, not derived. A read-time
+// converter alongside a write-time bridge is two sources of truth for the same
+// row -- worth saying out loud while the kill-v1 migration is still in flight.
 
 // CancelOperation implements DELETE /operations/:id.
 func (h *Handler) CancelOperation(c *gin.Context) {
