@@ -1,7 +1,7 @@
 // file: internal/deluge/import.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-05-15
+// last-edited: 2026-08-19
 //
 // ImportToLibrary copies a Deluge-managed file into the library root,
 // updates the BookFile record, and optionally tells Deluge to move
@@ -42,7 +42,7 @@ import (
 func ImportToLibrary(
 	cfg *config.Config,
 	delugeClient *Client,
-	store database.Store,
+	store delugeStore,
 	bookFile *database.BookFile,
 ) (newPath string, err error) {
 	if bookFile == nil {

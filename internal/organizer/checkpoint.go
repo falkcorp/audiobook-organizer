@@ -1,6 +1,7 @@
 // file: internal/organizer/checkpoint.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7f8a9b0c-1d2e-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-08-19
 //
 // Phase checkpoints for the metadata apply pipeline (GFO-4).
 //
@@ -61,7 +62,7 @@ func ClearCheckpoints(store database.UserPreferenceStore, bookID string) {
 
 // CleanupStaleCheckpoints removes checkpoints older than the TTL.
 // Called from the maintenance window.
-func CleanupStaleCheckpoints(store database.Store) int {
+func CleanupStaleCheckpoints(store checkpointStore) int {
 	// This is a best-effort scan. Since we use the _system user's
 	// preference namespace, we can't efficiently enumerate all
 	// checkpoint keys without a prefix scan. For now, stale

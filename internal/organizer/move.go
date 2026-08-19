@@ -1,7 +1,7 @@
 // file: internal/organizer/move.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-13
+// last-edited: 2026-08-19
 
 package organizer
 
@@ -29,7 +29,7 @@ type MoveBookFileResult struct {
 //  4. If DB update fails, move the file back and return error
 //
 // This prevents orphaned files (file moved but DB not updated).
-func MoveBookFile(store database.Store, bookID, oldPath, newPath string, extraUpdates *database.Book) error {
+func MoveBookFile(store bookMover, bookID, oldPath, newPath string, extraUpdates *database.Book) error {
 	if oldPath == newPath {
 		return nil // Nothing to do
 	}

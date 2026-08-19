@@ -1,7 +1,7 @@
 // file: internal/deluge/importer_adapter.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f6a7b8c9-d0e1-2345-f012-456789012345
-// last-edited: 2026-05-11
+// last-edited: 2026-08-19
 //
 // LibraryImporterAdapter implements tagger.LibraryImporter on top of
 // ImportToLibrary. It is wired into the Server at startup so
@@ -16,13 +16,12 @@ import (
 	"log/slog"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // LibraryImporterAdapter satisfies tagger.LibraryImporter using the
 // ImportToLibrary function and its wired Store + DelugeClient.
 type LibraryImporterAdapter struct {
-	store        database.Store
+	store        delugeStore
 	delugeClient *Client
 	cfg          *config.Config
 }
@@ -30,7 +29,7 @@ type LibraryImporterAdapter struct {
 // NewLibraryImporterAdapter creates a new adapter. delugeClient may be nil
 // (Deluge MoveStorage will be skipped but the copy still succeeds).
 // cfg is passed by pointer; callers should use &config.AppConfig.
-func NewLibraryImporterAdapter(store database.Store, delugeClient *Client, cfg *config.Config) *LibraryImporterAdapter {
+func NewLibraryImporterAdapter(store delugeStore, delugeClient *Client, cfg *config.Config) *LibraryImporterAdapter {
 	return &LibraryImporterAdapter{
 		store:        store,
 		delugeClient: delugeClient,

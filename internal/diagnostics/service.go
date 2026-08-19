@@ -1,7 +1,7 @@
 // file: internal/diagnostics/service.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d1a9n0st-1cs0-s3rv-1c3z-1pexp0rt001
-// last-edited: 2026-07-07
+// last-edited: 2026-08-19
 
 package diagnostics
 
@@ -18,13 +18,13 @@ import (
 
 // Service generates diagnostic ZIP exports for troubleshooting and AI analysis.
 type Service struct {
-	db            database.Store
+	db            diagnosticsStore
 	aiPipeline    interface{} // *ai.Pipeline or nil
 	itunesXMLPath string
 }
 
 // NewService creates a new diagnostics Service.
-func NewService(db database.Store, aiPipeline interface{}, itunesXMLPath string) *Service {
+func NewService(db diagnosticsStore, aiPipeline interface{}, itunesXMLPath string) *Service {
 	return &Service{
 		db:            db,
 		aiPipeline:    aiPipeline,

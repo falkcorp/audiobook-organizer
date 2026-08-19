@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-07-18
+// last-edited: 2026-08-19
 //
 // Background job that upgrades metadata from lower-quality sources
 // (primarily Google Books) to richer ones (Hardcover, Audible/Audnexus)
@@ -35,14 +35,14 @@ import (
 // MetadataUpgradeService finds books with low-quality metadata
 // sources and attempts to upgrade them to richer sources.
 type MetadataUpgradeService struct {
-	DB      database.Store
+	DB      metabatchStore
 	Fetcher *metafetch.Service
 }
 
 // NewMetadataUpgradeService creates an upgrade service. The fetcher
 // provides the search + apply pipeline; the db provides the tag
 // lookup for finding eligible books.
-func NewMetadataUpgradeService(db database.Store, fetcher *metafetch.Service) *MetadataUpgradeService {
+func NewMetadataUpgradeService(db metabatchStore, fetcher *metafetch.Service) *MetadataUpgradeService {
 	return &MetadataUpgradeService{DB: db, Fetcher: fetcher}
 }
 
