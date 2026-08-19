@@ -115,7 +115,7 @@ type metafetchNarratorStore interface {
 	GetNarratorByID(id int) (*database.Narrator, error)
 }
 
-// metafetchStore is the dependency surface of Service, measured with an
+// Store is the dependency surface of Service, measured with an
 // empty-interface compiler probe run under -gcflags=-e: 36 direct calls and
 // five forwarding constraints, 64 distinct methods in total.
 //
@@ -126,7 +126,12 @@ type metafetchNarratorStore interface {
 // pipeline_checkpoint.go (which forward to organizer, where the same three
 // functions already declared database.UserPreferenceStore -- the metafetch copy
 // was an unnarrowed duplicate of an already-narrowed twin).
-type metafetchStore interface {
+//
+// Exported, unlike most consumer-side interfaces here, because a caller that
+// forwards its own store into NewService has to be able to name this
+// requirement -- see audiobooks.NewOrganizeService, which composes it with
+// organizer.Store. organizer.Store is exported for the same reason.
+type Store interface {
 	forwardedStores
 
 	metadataCacheStore
@@ -138,7 +143,7 @@ type metafetchStore interface {
 }
 
 type Service struct {
-	db               metafetchStore
+	db               Store
 	olStore          *openlibrary.OLStore
 	overrideSources  []metadata.MetadataSource // for testing
 	isbnEnrichment   *ISBNService
