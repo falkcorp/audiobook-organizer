@@ -14,7 +14,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
-func NewService(db metafetchStore) *Service {
+func NewService(db Store) *Service {
 	return &Service{db: db}
 }
 

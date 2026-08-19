@@ -1,7 +1,7 @@
 // file: internal/audiobooks/organize.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-07-13
+// last-edited: 2026-08-19
 //
 // Thin forwarding layer — the real implementation now lives in
 // internal/organizer/service.go. This file provides type aliases and
@@ -24,9 +24,23 @@ type OrganizeService = organizer.Service
 type OrganizeRequest = organizer.Request
 type OrganizeStats = organizer.Stats
 
+// organizeServiceStore is what this wrapper forwards its store into: the
+// organizer service it constructs, and the metafetch service the
+// FetchMetadataForBook callback builds per call. Naming both rather than
+// inlining their methods keeps this at two entries and means it re-narrows on
+// its own whenever either package narrows further.
+//
+// database.Store until 2026-08-19, and it could not have been narrowed sooner:
+// metafetch.NewService still took the union until the four-layer forwarding
+// chain beneath it was narrowed first.
+type organizeServiceStore interface {
+	organizer.Store
+	metafetch.Store
+}
+
 // NewOrganizeService creates a new organizer.Service and wires up
 // server-specific callbacks (isProtectedPath, iTunes discovery, etc.).
-func NewOrganizeService(db database.Store) *OrganizeService {
+func NewOrganizeService(db organizeServiceStore) *OrganizeService {
 	svc := organizer.NewService(db)
 
 	// Wire server-specific callbacks. iTunes callbacks are set later in
