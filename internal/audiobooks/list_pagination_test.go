@@ -1,7 +1,7 @@
 // file: internal/audiobooks/list_pagination_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c1e9b42-3a6d-4f01-9d8e-2b5c6a7e1f04
-// last-edited: 2026-06-28
+// last-edited: 2026-08-19
 
 package audiobooks
 
@@ -68,9 +68,12 @@ func TestGetAudiobooks_TitlePrimaryPagination(t *testing.T) {
 }
 
 // unwrapStore mimics the production indexedStore decorator: it embeds a
-// database.Store and exposes Unwrap() so the pushdown's single-level Unwrap can
-// reach the concrete PebbleStore underneath. This proves the fix holds for the
-// real production store shape (service store is wrapped, not bare).
+// database.Store and exposes Unwrap() so capability resolution can reach the
+// concrete PebbleStore underneath. This proves the fix holds for the real
+// production store shape (service store is wrapped, not bare).
+//
+// It nests: unwrapStore embeds the Store interface, so it satisfies Store
+// itself and can wrap another unwrapStore. See the two-level test below.
 type unwrapStore struct {
 	database.Store
 }
@@ -189,4 +192,48 @@ func TestGetAudiobooks_ExcludeQuarantined(t *testing.T) {
 		}
 	}
 	require.Len(t, seen, wantVisible, "paging must surface every non-quarantined book exactly once")
+}
+
+// TestSummariesPushdown_ReachesThroughMultiLevelDecorator pins the capability
+// walk at more than one layer.
+//
+// Until 2026-08-19 the pushdown resolved its fast path by hand:
+//
+//	if fs, ok := svc.store.(filteredSummaryStore); ok { ... }
+//	if uw, ok := svc.store.(interface{ Unwrap() database.Store }); ok {
+//		if fs, ok2 := uw.Unwrap().(filteredSummaryStore); ok2 { ... }
+//	}
+//
+// which unwraps exactly once. Production's chain is one deep today, so that was
+// correct-by-accident rather than correct: the second decorator anyone adds
+// silently disables the pushdown, and the fallback returns the right rows by a
+// slower path, so nothing fails loudly. database.AsCapability walks the chain
+// (bounded by maxUnwrapDepth) and exists precisely because this failure mode
+// already reached production once through a different bare assertion.
+//
+// Asserting on didPushdown rather than on the returned rows is deliberate: both
+// paths return the same books, so a row-level assertion passes either way and
+// measures nothing.
+func TestSummariesPushdown_ReachesThroughMultiLevelDecorator(t *testing.T) {
+	svcInner, _ := seedPaginationStore(t, 8)
+	inner := svcInner.store.(database.Store)
+
+	for _, tc := range []struct {
+		name  string
+		store database.Store
+	}{
+		{"one level", unwrapStore{Store: inner}},
+		{"two levels", unwrapStore{Store: unwrapStore{Store: inner}}},
+		{"three levels", unwrapStore{Store: unwrapStore{Store: unwrapStore{Store: inner}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewAudiobookService(tc.store)
+			_, didPushdown, err := svc.summariesPushdownFiltered(0, 0, database.BookSummaryFilter{})
+			require.NoError(t, err)
+			require.True(t, didPushdown,
+				"filteredSummaryStore must resolve through the decorator chain; "+
+					"a false here means the pushdown silently degraded to the "+
+					"fetch-everything-and-post-filter path")
+		})
+	}
 }

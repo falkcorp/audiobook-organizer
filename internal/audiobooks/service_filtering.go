@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-08-17
+// last-edited: 2026-08-19
 
 package audiobooks
 
@@ -769,15 +769,9 @@ func (svc *AudiobookService) summariesPushdown(limit, offset int, isPrimary *boo
 		SortAscending:      sortAscending,
 		ExcludeQuarantined: excludeQuarantined,
 	}
-	if fs, ok := svc.store.(filteredSummaryStore); ok {
+	if fs, ok := database.AsCapability[filteredSummaryStore](svc.store); ok {
 		s, e := fs.GetAllBookSummariesFiltered(limit, offset, filter)
 		return s, true, e
-	}
-	if uw, ok := svc.store.(interface{ Unwrap() database.Store }); ok {
-		if fs, ok2 := uw.Unwrap().(filteredSummaryStore); ok2 {
-			s, e := fs.GetAllBookSummariesFiltered(limit, offset, filter)
-			return s, true, e
-		}
 	}
 	s, e := svc.store.GetAllBookSummaries(limit, offset)
 	return s, false, e
@@ -833,15 +827,9 @@ type countingFilteredStore interface {
 // non-memdb test path). This boolean is the contract that lets the
 // caller skip the post-filter pass safely in production.
 func (svc *AudiobookService) summariesPushdownFiltered(limit, offset int, filter database.BookSummaryFilter) (summaries []database.BookSummary, didPushdown bool, err error) {
-	if fs, ok := svc.store.(filteredSummaryStore); ok {
+	if fs, ok := database.AsCapability[filteredSummaryStore](svc.store); ok {
 		s, e := fs.GetAllBookSummariesFiltered(limit, offset, filter)
 		return s, true, e
-	}
-	if uw, ok := svc.store.(interface{ Unwrap() database.Store }); ok {
-		if fs, ok2 := uw.Unwrap().(filteredSummaryStore); ok2 {
-			s, e := fs.GetAllBookSummariesFiltered(limit, offset, filter)
-			return s, true, e
-		}
 	}
 	// Fallback: no filtered store. Fetch everything; caller post-filters
 	// in-memory. Pass (0, 0) so the caller sees the full set and applies
@@ -857,13 +845,8 @@ func (svc *AudiobookService) summariesPushdownFiltered(limit, offset int, filter
 // itself fell back to unfiltered summaries (mock/non-memdb path), we
 // re-apply the filter here so the count is still correct.
 func (svc *AudiobookService) countSummariesPushdownFiltered(filter database.BookSummaryFilter) (int, error) {
-	if cs, ok := svc.store.(countingFilteredStore); ok {
+	if cs, ok := database.AsCapability[countingFilteredStore](svc.store); ok {
 		return cs.CountBookSummariesFiltered(filter)
-	}
-	if uw, ok := svc.store.(interface{ Unwrap() database.Store }); ok {
-		if cs, ok2 := uw.Unwrap().(countingFilteredStore); ok2 {
-			return cs.CountBookSummariesFiltered(filter)
-		}
 	}
 	summaries, didPushdown, err := svc.summariesPushdownFiltered(0, 0, filter)
 	if err != nil {
@@ -1116,15 +1099,9 @@ func (svc *AudiobookService) FetchBookFilesForBooks(books []database.Book) map[s
 		GetBookFilesForIDsCore(ids []string) (map[string][]database.BookFileCore, error)
 	}
 	var filesByBookID map[string][]database.BookFileCore
-	if fs, ok := svc.store.(batchFilesStore); ok {
+	if fs, ok := database.AsCapability[batchFilesStore](svc.store); ok {
 		if m, err := fs.GetBookFilesForIDsCore(bookIDs); err == nil {
 			filesByBookID = m
-		}
-	} else if uw, ok := svc.store.(interface{ Unwrap() database.Store }); ok {
-		if fs, ok2 := uw.Unwrap().(batchFilesStore); ok2 {
-			if m, err := fs.GetBookFilesForIDsCore(bookIDs); err == nil {
-				filesByBookID = m
-			}
 		}
 	}
 	if filesByBookID == nil {

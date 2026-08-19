@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.19.0
+// version: 3.20.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-08-17
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -92,7 +92,7 @@ type introTranscribeParams struct {
 func (p *Plugin) introTranscribeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.transcribe-book-intros",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Transcribe book intros",
 		Description:     "Extracts the first 90 seconds of each book's first audio file and transcribes it with Whisper. Stores the result in TranscribedTitle/Author/Narrator (separate from curated metadata) for disambiguation and dedup cross-checks. Uses batch mode: one Python process per page of 200 books loads the model once. 90s captures past Audible jingles/music intros that caused 30s clips to return only 'This is Audible.' Param reparse_only=true re-runs the parser over already-stored transcripts and rewrites the parsed fields with no ffmpeg/Whisper — use it to apply a parser fix to existing books cheaply.",
@@ -195,14 +195,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// so a direct assertion misses the capability — unwrap one level like the
 	// HTTP handlers do. Without this the sink stays nil and stats:transcribe is
 	// never written (the aggregate endpoint returns null even while the op runs).
-	var statsSink database.TranscribeStatsStore
-	if s, ok := store.(database.TranscribeStatsStore); ok {
-		statsSink = s
-	} else if uw, ok := store.(interface{ Unwrap() database.Store }); ok {
-		if s, ok2 := uw.Unwrap().(database.TranscribeStatsStore); ok2 {
-			statsSink = s
-		}
-	}
+	statsSink, _ := database.AsCapability[database.TranscribeStatsStore](store)
 	startedAt := time.Now()
 	accum := newTranscribeStatsAccum(statsSink, startedAt.Format(time.RFC3339), total, startedAt)
 	accum.flush(false) // initial write: monitor sees the run has started

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-08-11
+// last-edited: 2026-08-19
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -687,15 +687,9 @@ func (h *Handler) GetDashboard(c *gin.Context) {
 	// Try to read broken file count from underlying store (PebbleStore)
 	brokenFileCount := 0
 	if store != nil {
-		if gf, ok := store.(interface{ GetBrokenFileCount() (int, error) }); ok {
+		if gf, ok := database.AsCapability[interface{ GetBrokenFileCount() (int, error) }](store); ok {
 			if cnt, err := gf.GetBrokenFileCount(); err == nil {
 				brokenFileCount = cnt
-			}
-		} else if uw, ok := store.(interface{ Unwrap() database.Store }); ok {
-			if inner, ok2 := uw.Unwrap().(interface{ GetBrokenFileCount() (int, error) }); ok2 {
-				if cnt, err := inner.GetBrokenFileCount(); err == nil {
-					brokenFileCount = cnt
-				}
 			}
 		}
 	}
@@ -887,14 +881,7 @@ func (h *Handler) GetQuickQueries(c *gin.Context) {
 		GetQuickQueryCounts() ([]database.QuickQueryResult, error)
 	}
 
-	var getter quickQueryGetter
-	if g, ok := store.(quickQueryGetter); ok {
-		getter = g
-	} else if uw, ok := store.(interface{ Unwrap() database.Store }); ok {
-		if g, ok2 := uw.Unwrap().(quickQueryGetter); ok2 {
-			getter = g
-		}
-	}
+	getter, _ := database.AsCapability[quickQueryGetter](store)
 
 	if getter == nil {
 		// Store implementation does not support quick queries (e.g. SQLite in tests).
@@ -923,14 +910,7 @@ func (h *Handler) GetTranscribeStats(c *gin.Context) {
 		return
 	}
 
-	var ts database.TranscribeStatsStore
-	if s, ok := store.(database.TranscribeStatsStore); ok {
-		ts = s
-	} else if uw, ok := store.(interface{ Unwrap() database.Store }); ok {
-		if s, ok2 := uw.Unwrap().(database.TranscribeStatsStore); ok2 {
-			ts = s
-		}
-	}
+	ts, _ := database.AsCapability[database.TranscribeStatsStore](store)
 	if ts == nil {
 		// Store does not support transcribe stats (e.g. SQLite in tests).
 		httputil.RespondWithOK(c, nil)
