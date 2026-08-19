@@ -1,6 +1,7 @@
 // file: internal/database/tag_helpers.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
+// last-edited: 2026-08-18
 
 package database
 
@@ -36,7 +37,33 @@ import (
 // because mismatched prefix/tag combinations are almost always
 // programmer bugs ("metadata:source:audible" with prefix
 // "metadata:language:" would delete every language tag).
-func EnsureSingletonBookTag(store Store, bookID, prefix, fullTag, source string) error {
+// The three interfaces below are what the EnsureSingleton* helpers below need.
+// Each previously took Store -- the 398-method union -- to call three methods on
+// one entity. They are declared here rather than reusing the entity tag
+// interfaces so a caller only has to satisfy the entity it is tagging.
+
+// BookTagSingletonStore is what EnsureSingletonBookTag needs.
+type BookTagSingletonStore interface {
+	GetBookTagsDetailed(bookID string) ([]BookTag, error)
+	RemoveBookTagsByPrefix(bookID, prefix, source string) error
+	AddBookTagWithSource(bookID, tag, source string) error
+}
+
+// AuthorTagSingletonStore is what EnsureSingletonAuthorTag needs.
+type AuthorTagSingletonStore interface {
+	GetAuthorTagsDetailed(authorID int) ([]BookTag, error)
+	RemoveAuthorTagsByPrefix(authorID int, prefix, source string) error
+	AddAuthorTagWithSource(authorID int, tag, source string) error
+}
+
+// SeriesTagSingletonStore is what EnsureSingletonSeriesTag needs.
+type SeriesTagSingletonStore interface {
+	GetSeriesTagsDetailed(seriesID int) ([]BookTag, error)
+	RemoveSeriesTagsByPrefix(seriesID int, prefix, source string) error
+	AddSeriesTagWithSource(seriesID int, tag, source string) error
+}
+
+func EnsureSingletonBookTag(store BookTagSingletonStore, bookID, prefix, fullTag, source string) error {
 	prefix = util.NormalizeString(prefix)
 	fullTag = util.NormalizeString(fullTag)
 	if prefix == "" || fullTag == "" {
@@ -88,7 +115,7 @@ func EnsureSingletonBookTag(store Store, bookID, prefix, fullTag, source string)
 
 // EnsureSingletonAuthorTag mirrors EnsureSingletonBookTag for
 // authors — same semantics, keyed by author integer ID.
-func EnsureSingletonAuthorTag(store Store, authorID int, prefix, fullTag, source string) error {
+func EnsureSingletonAuthorTag(store AuthorTagSingletonStore, authorID int, prefix, fullTag, source string) error {
 	prefix = util.NormalizeString(prefix)
 	fullTag = util.NormalizeString(fullTag)
 	if prefix == "" || fullTag == "" {
@@ -131,7 +158,7 @@ func EnsureSingletonAuthorTag(store Store, authorID int, prefix, fullTag, source
 
 // EnsureSingletonSeriesTag mirrors EnsureSingletonBookTag for
 // series — same semantics, keyed by series integer ID.
-func EnsureSingletonSeriesTag(store Store, seriesID int, prefix, fullTag, source string) error {
+func EnsureSingletonSeriesTag(store SeriesTagSingletonStore, seriesID int, prefix, fullTag, source string) error {
 	prefix = util.NormalizeString(prefix)
 	fullTag = util.NormalizeString(fullTag)
 	if prefix == "" || fullTag == "" {

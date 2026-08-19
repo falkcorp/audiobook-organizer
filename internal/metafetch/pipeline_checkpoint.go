@@ -1,6 +1,7 @@
 // file: internal/metafetch/pipeline_checkpoint.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 7f8a9b0c-1d2e-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-08-18
 //
 // Thin forwarding layer — the real implementation now lives in
 // internal/organizer/checkpoint.go.
@@ -22,17 +23,17 @@ const (
 )
 
 // setCheckpoint marks a phase as complete for a book (forwarded to organizer).
-func setCheckpoint(store database.Store, bookID, phase string) {
+func setCheckpoint(store database.UserPreferenceStore, bookID, phase string) {
 	organizer.SetCheckpoint(store, bookID, phase)
 }
 
 // hasCheckpoint returns true if the phase was already completed (forwarded to organizer).
-func hasCheckpoint(store database.Store, bookID, phase string) bool {
+func hasCheckpoint(store database.UserPreferenceStore, bookID, phase string) bool {
 	return organizer.HasCheckpoint(store, bookID, phase)
 }
 
 // clearCheckpoints removes all phase markers for a book (forwarded to organizer).
-func clearCheckpoints(store database.Store, bookID string) {
+func clearCheckpoints(store database.UserPreferenceStore, bookID string) {
 	organizer.ClearCheckpoints(store, bookID)
 }
 
