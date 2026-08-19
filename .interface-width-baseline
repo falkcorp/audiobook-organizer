@@ -1,7 +1,7 @@
 # file: .interface-width-baseline
-# version: 1.5.0
+# version: 1.6.0
 # guid: 2b8e4f16-9d07-4c3a-b512-6a94ef7d0c38
-# last-edited: 2026-08-18
+# last-edited: 2026-08-19
 #
 # The number of `interfacebloat` findings tolerated in the tree. This is a
 # RATCHET: CI fails if the count goes UP, and also fails if it goes DOWN without
@@ -75,8 +75,34 @@
 # itself, it hands the store to resolveAuthorAndSeriesNames, and the embed says
 # exactly that.
 #
-# So the remaining 1 is database.Store (40), the union type, where the plan is
-# to make it unreachable rather than smaller -- see
-# docs/plans/2026-08-18-decouple-database-layer.md phases 3 and 4. This number
-# is expected to hold until that is taken.
-1
+# Lowered to 0 on 2026-08-19 by REGROUPING database.Store's 40 directly-embedded
+# sub-interfaces into six domain composites (CatalogStore, MediaStore,
+# AccountStore, EnrichmentStore, OperationsStore, PlatformStore). Store's method
+# set is byte-identical -- scripts/verify_interface_split.py reports
+# "Store 40 -> 40 IDENTICAL" -- and no consumer moved.
+#
+# This file predicted otherwise, and the way it was wrong is worth keeping. It
+# said: "the remaining 1 is database.Store (40), the union type, where the plan
+# is to make it unreachable rather than smaller ... This number is expected to
+# hold until that is taken." Making it unreachable is still the right long-term
+# goal and is still not done. But the PREDICTION conflated two different things:
+# how many methods Store transitively carries (still 398, unchanged) with how
+# many entries it DECLARES (was 40, now 6). interfacebloat only ever measured
+# the second. That is the third time this file has recorded the same class of
+# error -- see the itunesservice.Store, JobStore and audiobookStore notes above,
+# each of which was called unreachable and then reached. Declared entries are
+# cheap to regroup; transitive width is what needs real work. Do not let a note
+# about the second argue against doing the first.
+#
+# A 0 baseline is now a hard gate: any new interface declaring more than 8
+# entries fails CI unless it carries an explained //nolint:interfacebloat.
+#
+# Verifying THIS zero mattered more than usual, because a false 0 from a
+# poisoned result cache is the documented failure mode above and its remediation
+# text advises setting the baseline to exactly this. Three checks, all in the
+# gate's own scoped cache directory: cold-cache run returns 0; a positive
+# control that re-widens CatalogStore to 12 entries is still DETECTED, so the
+# linter is live rather than inert; and the count is 0 again after reverting the
+# control. An instrument that cannot find a planted finding is not reporting a
+# clean tree.
+0
