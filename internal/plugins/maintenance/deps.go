@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-08-14
+// last-edited: 2026-08-19
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -45,12 +45,19 @@ type MetadataRunners interface {
 }
 
 // SeriesRunners runs the series maintenance operations.
+//
+// Neither method takes a store. They used to thread a database.Store -- 398
+// methods -- from the caller purely so the implementation could reach a store it
+// already had: the implementor is *Server, which holds one, and the caller
+// obtained the very same value from this same interface's StoreProvider.Store().
+// Removing the parameter deletes the coupling rather than shrinking it, and the
+// nil-store guard moved to the implementation with it.
 type SeriesRunners interface {
 	// ExecuteSeriesPrune delegates to server.executeSeriesPrune.
-	ExecuteSeriesPrune(ctx context.Context, store database.Store, progress operations.ProgressReporter, opID string) error
+	ExecuteSeriesPrune(ctx context.Context, progress operations.ProgressReporter, opID string) error
 	// ExecuteSeriesNormalizeCore delegates to server.executeSeriesNormalizeCore.
 	// Returns slice of affected series IDs and any error.
-	ExecuteSeriesNormalizeCore(ctx context.Context, store database.Store, enqueueWB func(string)) ([]string, error)
+	ExecuteSeriesNormalizeCore(ctx context.Context, enqueueWB func(string)) ([]string, error)
 }
 
 // MediaFileRunners runs the audio-container repair operations.
