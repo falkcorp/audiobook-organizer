@@ -14,6 +14,7 @@ import {
   Paper,
   Stack,
   Table,
+  TableContainer,
   TableBody,
   TableCell,
   TableHead,
@@ -336,6 +337,7 @@ export const BookDetailVersionGroup = ({
                 )}
               </Stack>
               {/* Path and codec info */}
+              <TableContainer>
               <Table size="small" sx={{ mb: 2 }}>
                 <TableBody>
                   <TableRow>
@@ -356,6 +358,7 @@ export const BookDetailVersionGroup = ({
                   )}
                 </TableBody>
               </Table>
+              </TableContainer>
               {vSegs.length > 1 && metadataEntries.length > 0 && (
                 <Box
                   sx={{
@@ -483,6 +486,7 @@ export const BookDetailVersionGroup = ({
                           ))}
                       </Stack>
                     )}
+                    <TableContainer>
                     <Table size="small" data-testid="segment-table">
                       <TableHead>
                         <TableRow>
@@ -565,6 +569,7 @@ export const BookDetailVersionGroup = ({
                         })}
                       </TableBody>
                     </Table>
+                    </TableContainer>
                     {vSegs.length > SEGMENT_PREVIEW_COUNT && (
                       <Box sx={{ mt: 1 }}>
                         <Button

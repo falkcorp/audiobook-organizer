@@ -16,6 +16,7 @@ import {
   FormControlLabel,
   IconButton,
   Table,
+  TableContainer,
   TableBody,
   TableCell,
   TableHead,
@@ -286,6 +287,7 @@ export const BookDetailDialogs = ({
                     </Typography>
 
                     {(step.from || step.to) && (
+                      <TableContainer>
                       <Table size="small" sx={{ mt: 0.5 }}>
                         <TableBody>
                           {step.from && (
@@ -306,6 +308,7 @@ export const BookDetailDialogs = ({
                           )}
                         </TableBody>
                       </Table>
+                      </TableContainer>
                     )}
 
                     {step.files && step.files.length > 0 && (
@@ -327,6 +330,7 @@ export const BookDetailDialogs = ({
                           {Object.keys(step.tags).length} tags will be written
                         </Button>
                         <Collapse in={expandedTagStep}>
+                          <TableContainer>
                           <Table size="small" sx={{ mt: 0.5 }}>
                             <TableHead>
                               <TableRow>
@@ -343,6 +347,7 @@ export const BookDetailDialogs = ({
                               ))}
                             </TableBody>
                           </Table>
+                          </TableContainer>
                         </Collapse>
                       </>
                     )}
@@ -543,6 +548,7 @@ export const BookDetailDialogs = ({
             </Typography>
           </Box>
           <Collapse in={rejHistoryOpen}>
+            <TableContainer>
             <Table size="small" sx={{ mt: 1 }}>
               <TableHead>
                 <TableRow>
@@ -569,6 +575,7 @@ export const BookDetailDialogs = ({
                 ))}
               </TableBody>
             </Table>
+            </TableContainer>
           </Collapse>
         </Box>
       )}

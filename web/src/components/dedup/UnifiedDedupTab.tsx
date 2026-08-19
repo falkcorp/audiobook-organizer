@@ -42,6 +42,7 @@ import {
   Snackbar,
   Stack,
   Table,
+  TableContainer,
   TableBody,
   TableCell,
   TableHead,
@@ -996,6 +997,7 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
       ) : (
         <>
           <Paper variant="outlined">
+            <TableContainer>
             <Table size="small">
               <TableHead>
                 <TableRow>
@@ -1167,6 +1169,7 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
                 })}
               </TableBody>
             </Table>
+            </TableContainer>
           </Paper>
 
           <TablePagination

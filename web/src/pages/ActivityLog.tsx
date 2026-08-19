@@ -24,6 +24,7 @@ import {
   Paper,
   Stack,
   Table,
+  TableContainer,
   TableBody,
   TableCell,
   TableHead,
@@ -1708,6 +1709,7 @@ export default function ActivityLog() {
                 Showing the last successful result — the most recent refresh failed. {error}
               </Alert>
             )}
+            <TableContainer>
             <Table size="small">
             <TableHead>
               <TableRow>
@@ -2019,6 +2021,7 @@ export default function ActivityLog() {
               })}
             </TableBody>
             </Table>
+            </TableContainer>
           </>
         )}
 

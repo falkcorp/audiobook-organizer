@@ -22,6 +22,7 @@ import {
   Link,
   TextField,
   Table,
+  TableContainer,
   TableHead,
   TableRow,
   TableCell,
@@ -331,6 +332,7 @@ function AcousticComparePanel({ initialA = '', initialB = '' }: AcousticCompareP
           </Stack>
 
           {/* Segment table */}
+          <TableContainer>
           <Table size="small">
             <TableHead>
               <TableRow>
@@ -373,6 +375,7 @@ function AcousticComparePanel({ initialA = '', initialB = '' }: AcousticCompareP
               ))}
             </TableBody>
           </Table>
+          </TableContainer>
         </Box>
       )}
     </Paper>
@@ -867,6 +870,7 @@ export function AcousticDedupTab() {
               </Button>
             </Stack>
           )}
+          <TableContainer>
           <Table size="small">
             <TableHead>
               <TableRow>
@@ -979,6 +983,7 @@ export function AcousticDedupTab() {
               })}
             </TableBody>
           </Table>
+          </TableContainer>
           <TablePagination
             component="div"
             count={total}

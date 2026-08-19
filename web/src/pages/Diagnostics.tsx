@@ -31,6 +31,7 @@ import {
   Stack,
   Switch,
   Table,
+  TableContainer,
   TableBody,
   TableCell,
   TableHead,
@@ -614,6 +615,7 @@ export function Diagnostics() {
                     <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
                       SQLite — Main Store ({(dbHealth.sqlite.size_bytes / 1024 / 1024).toFixed(1)} MB)
                     </Typography>
+                    <TableContainer>
                     <Table size="small">
                       <TableHead>
                         <TableRow>
@@ -630,6 +632,7 @@ export function Diagnostics() {
                         ))}
                       </TableBody>
                     </Table>
+                    </TableContainer>
                   </Paper>
                 )}
 
