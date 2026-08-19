@@ -1,5 +1,5 @@
 // file: internal/merge/sync_follow.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 50421381-9def-4b19-bd23-6fa1a03c24d3
 // last-edited: 2026-08-19
 
@@ -72,7 +72,7 @@ var syncRepointMu sync.Mutex
 // (MintOrGetSyncID returns the existing id; RecordSyncMerge returns early when
 // the redirect is already recorded and de-duplicates MergedFrom), so a retried
 // or concurrently repeated merge cannot double-redirect or grow a chain.
-func FollowMerge(db userProgressMerger, follower SyncFollower, winnerBookID string, loserBookIDs []string) {
+func FollowMerge(db UserProgressMerger, follower SyncFollower, winnerBookID string, loserBookIDs []string) {
 	if follower == nil || db == nil || winnerBookID == "" {
 		return
 	}
@@ -105,7 +105,7 @@ func FollowMerge(db userProgressMerger, follower SyncFollower, winnerBookID stri
 // cannot reach a *Service (dedup.MergeBooks). It derives
 // the follower by type assertion; a store that does not implement
 // SyncIdentityStore yields a nil follower and the whole call is a no-op.
-func FollowMergeWithStore(db userProgressMerger, winnerBookID string, loserBookIDs []string) {
+func FollowMergeWithStore(db UserProgressMerger, winnerBookID string, loserBookIDs []string) {
 	follower := database.AsSyncIdentityStore(db)
 	if follower == nil {
 		// Warn, not debug: the only in-tree caller is a HARD-delete merge, so
@@ -206,7 +206,7 @@ func followSyncFilesForBookChange(db syncCapabilityStore, oldBookID, newBookID s
 //
 // Idempotent: a second call finds no syncID on oldBookID (the reverse index
 // moved) and returns without touching anything.
-func FollowBookIDChange(db userProgressMerger, oldBookID, newBookID string) {
+func FollowBookIDChange(db UserProgressMerger, oldBookID, newBookID string) {
 	if db == nil || oldBookID == "" || newBookID == "" || oldBookID == newBookID {
 		return
 	}
@@ -267,7 +267,7 @@ func FollowBookIDChange(db userProgressMerger, oldBookID, newBookID string) {
 // instance (a household, not the library), so a plain sequential loop is
 // correct here -- deliberately NOT a worker pool, per CLAUDE.md's own
 // "whole-library-scale" threshold.
-func mergeUserProgress(db userProgressMerger, loserBookID, winnerBookID string) error {
+func mergeUserProgress(db UserProgressMerger, loserBookID, winnerBookID string) error {
 	users, err := db.ListUsers()
 	if err != nil {
 		return fmt.Errorf("list users: %w", err)

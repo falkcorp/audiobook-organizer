@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_acoustid_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c8f25a0d-8e69-47f7-a36f-60c191b73810
-// last-edited: 2026-06-28
+// last-edited: 2026-08-19
 
 package dedup
 
@@ -123,7 +123,6 @@ func TestAcoustIDScan_NormalTitleContainingBoilerplateWordStillEmitsCandidate(t 
 		t.Fatalf("expected one acoustid candidate for real title, got %d (%+v)", total, candidates)
 	}
 }
-
 
 func TestAcoustIDScan_BoilerplatePrefixTitleDoesNotEmitCandidate(t *testing.T) {
 	engine, mock, es := setupTestEngine(t)

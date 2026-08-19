@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.63.0
+// version: 1.64.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-07-18
+// last-edited: 2026-08-19
 
 package dedup
 
@@ -63,7 +63,7 @@ const wholeBacklogCandidateLimit = 1_000_000
 type Engine struct {
 	embedStore   *database.EmbeddingStore
 	chromemStore database.VectorANNStore
-	bookStore    database.Store
+	bookStore    dedupStore
 	embedClient  *ai.EmbeddingClient
 	llmParser    *ai.OpenAIParser
 	mergeService *merge.Service
@@ -143,7 +143,7 @@ type Engine struct {
 // aiJobsStore may be nil; if so, RunLLMReview will fall back to synchronous ReviewDedupPairs.
 func NewEngine(
 	embedStore *database.EmbeddingStore,
-	bookStore database.Store,
+	bookStore dedupStore,
 	embedClient *ai.EmbeddingClient,
 	llmParser *ai.OpenAIParser,
 	mergeService *merge.Service,

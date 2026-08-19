@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_metadata.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: e1f2a3b4-c5d6-4e7f-8a0b-1c2d3e4f5a6b
-// last-edited: 2026-07-18
+// last-edited: 2026-08-19
 
 // Package dedup — metadata-based collector family (fable5 T014).
 //
@@ -45,9 +45,9 @@ import (
 
 // ─── store interfaces ──────────────────────────────────────────────────────────
 
-// DurationCollectorStore is the subset of database.Store required by
+// DurationCollectorStore is the subset of dedupStore required by
 // CollectDuration for the book-query and alt-title path.  Tag side-effects
-// use the full database.Store passed separately so that
+// use the full dedupStore passed separately so that
 // database.EnsureSingletonBookTag (which requires the full Store interface)
 // can be called without a type assertion.
 //
@@ -58,7 +58,7 @@ type DurationCollectorStore interface {
 	GetBookAlternativeTitles(bookID string) ([]database.BookAlternativeTitle, error)
 }
 
-// MetaFuzzyStore is the subset of database.Store required by CollectMetaFuzzy.
+// MetaFuzzyStore is the subset of dedupStore required by CollectMetaFuzzy.
 type MetaFuzzyStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetAuthorByID(id int) (*database.Author, error)
@@ -139,12 +139,12 @@ func allNormalizedTitleFormsForStore(store interface {
 //
 // Logic unchanged from checkDurationMatch; emission shape only.
 //
-// tagStore is the database.Store used for side-effect tag writes; it must be
+// tagStore is the dedupStore used for side-effect tag writes; it must be
 // non-nil if tag side-effects are desired (pass nil to disable).  In production
-// the engine passes its bookStore field which is a database.Store superset.
+// the engine passes its bookStore field which is a dedupStore superset.
 func CollectDuration(
 	store DurationCollectorStore,
-	tagStore database.Store, // may be nil — side-effect tags silently skipped
+	tagStore dedupStore, // may be nil — side-effect tags silently skipped
 	book *database.Book,
 	cfg DurationCollectorConfig,
 ) ([]unified.Signal, error) {

@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_exact.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c9d0e1f2-a3b4-4c5d-8e6f-7a8b9c0d1e2f
-// last-edited: 2026-07-07
+// last-edited: 2026-08-19
 
 // Package dedup — exact-tier collector family (fable5 T014).
 //
@@ -40,14 +40,14 @@ import (
 
 // ─── store interfaces ──────────────────────────────────────────────────────────
 
-// ExactFileHashStore is the subset of database.Store required by
+// ExactFileHashStore is the subset of dedupStore required by
 // CollectExactFileHash.
 type ExactFileHashStore interface {
 	GetBookByFileHash(hash string) (*database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 }
 
-// ISBNASINStore is the subset of database.Store required by CollectISBNASIN.
+// ISBNASINStore is the subset of dedupStore required by CollectISBNASIN.
 // GetAllBooksCore drives the O(N) scan fallback; GetBookByID hydrates the
 // indexed fast path (one point-read per index match).
 type ISBNASINStore interface {
@@ -55,7 +55,7 @@ type ISBNASINStore interface {
 	GetBookByID(id string) (*database.Book, error)
 }
 
-// MetaSrcHashStore is the subset of database.Store required by
+// MetaSrcHashStore is the subset of dedupStore required by
 // CollectMetaSrcHash.
 type MetaSrcHashStore interface {
 	GetBooksByMetadataSourceHash(hash string) ([]database.Book, error)

@@ -1,5 +1,5 @@
 // file: internal/merge/store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
 // last-edited: 2026-08-19
 
@@ -20,8 +20,10 @@ type mergeBookReader interface {
 	GetBookByID(id string) (*database.Book, error)
 }
 
-// mergeBookWriter covers the book mutations a merge performs.
-type mergeBookWriter interface {
+// BookWriter covers the book mutations a merge performs. Exported because
+// SoftDeleteBook is exported, so a caller that forwards its own store into it
+// has to be able to name this requirement -- see internal/dedup.
+type BookWriter interface {
 	mergeBookReader
 
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
@@ -52,9 +54,10 @@ type userPositionStore interface {
 	ClearUserPositions(userID, bookID string) error
 }
 
-// userProgressMerger adds the fan-out over every user. The Follow* entry points
-// take this because that is the whole of what they forward.
-type userProgressMerger interface {
+// UserProgressMerger adds the fan-out over every user. The Follow* entry points
+// take this because that is the whole of what they forward. Exported for the
+// same reason as BookWriter: FollowMergeWithStore is called from internal/dedup.
+type UserProgressMerger interface {
 	userPositionStore
 
 	ListUsers() ([]database.User, error)
@@ -74,9 +77,9 @@ type syncCapabilityStore = any
 
 // mergeStore is the whole surface, for Service and its constructor.
 type mergeStore interface {
-	mergeBookWriter
+	BookWriter
 	mergeBookFileStore
 	mergeAuthorStore
-	userProgressMerger
+	UserProgressMerger
 	mergeExternalIDReader
 }

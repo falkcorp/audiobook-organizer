@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_acoustid.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a7b3c841-d9e2-4f15-88a0-5bc12e347f6d
-// last-edited: 2026-06-28
+// last-edited: 2026-08-19
 
 // Package dedup — acoustic-ID collector family (fable5 T013).
 //
@@ -40,7 +40,7 @@ import (
 
 // ─── store interfaces ──────────────────────────────────────────────────────────
 // Narrow interfaces so tests can inject stubs without pulling in the whole
-// database.Store.  T014's orchestrator passes a *database.PebbleStore (which
+// dedupStore.  T014's orchestrator passes a *database.PebbleStore (which
 // implements both) when wiring the Engine.
 
 // ExactAcoustIDStore is the subset of database.BookFileStore required by

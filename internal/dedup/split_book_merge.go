@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
-// last-edited: 2026-07-16
+// last-edited: 2026-08-19
 
 // Split-book cluster merge — portable across SQLite and Pebble.
 //
@@ -21,16 +21,15 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
 // SplitBookMergeResult summarises a successful merge.
 type SplitBookMergeResult struct {
-	KeepID         string `json:"keep_id"`
-	MergedSrcCount int    `json:"merged_src_count"`
-	FilesMoved     int    `json:"files_moved"`
-	NewDuration    int    `json:"new_duration"`
+	KeepID         string   `json:"keep_id"`
+	MergedSrcCount int      `json:"merged_src_count"`
+	FilesMoved     int      `json:"files_moved"`
+	NewDuration    int      `json:"new_duration"`
 	Errors         []string `json:"errors,omitempty"`
 }
 
@@ -44,7 +43,7 @@ type SplitBookMergeResult struct {
 // Per-src errors are collected but do not abort — the remaining sources
 // still get processed so the operator doesn't end up with a half-merged
 // cluster.
-func MergeSplitBookCluster(store database.Store, keepID string, srcIDs []string, suggestedTitle string) (*SplitBookMergeResult, error) {
+func MergeSplitBookCluster(store dedupStore, keepID string, srcIDs []string, suggestedTitle string) (*SplitBookMergeResult, error) {
 	if keepID == "" {
 		return nil, fmt.Errorf("MergeSplitBookCluster: empty keepID")
 	}
