@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rescore_labeled_examples.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e9c1a70-5d84-4b62-8f01-6a2d7c0e9b53
-// last-edited: 2026-07-13
+// last-edited: 2026-08-19
 
 // Package dedup — op dedup.rescore-labeled-examples.
 //
@@ -84,7 +84,7 @@ type labeledExampleStore interface {
 func (p *Plugin) rescoreLabeledExamplesDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.rescore-labeled-examples",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "dedup",
 		DisplayName: "Rescore labeled examples (populate ScoreBreakdowns for calibration)",
 		Description: "Recomputes each labeled dedup pair's ScoreBreakdown with the engine's " +

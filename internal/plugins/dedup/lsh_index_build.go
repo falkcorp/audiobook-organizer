@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/lsh_index_build.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: e61b955e-93bf-4ea6-bb1f-7acd30491fdb
-// last-edited: 2026-07-12
+// last-edited: 2026-08-19
 
 package dedup
 
@@ -69,7 +69,7 @@ type LSHIndexStore interface {
 func (p *Plugin) lshIndexBuildDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "dedup.lsh-index-build",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "dedup",
 		DisplayName:     "Build LSH fingerprint index",
 		Description:     "Builds the fpidx: secondary index over whole-file AcoustID fingerprints, enabling fast near-duplicate lookup without a full O(N) scan.",

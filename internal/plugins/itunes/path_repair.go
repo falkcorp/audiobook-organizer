@@ -1,7 +1,7 @@
 // file: internal/plugins/itunes/path_repair.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e5f6a7b8-c9d0-1234-efgh-345678901234
-// last-edited: 2026-07-17
+// last-edited: 2026-08-19
 
 package itunes
 
@@ -16,7 +16,7 @@ import (
 func (p *Plugin) pathRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:                    "itunes.path-repair",
-		Liveness: sdk.LivenessManual,
+		Liveness:              sdk.LivenessManual,
 		Plugin:                "itunes",
 		DisplayName:           "iTunes Path Repair",
 		Description:           "Repair iTunes track paths that reference stale file locations.",

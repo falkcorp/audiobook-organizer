@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/fingerprint_rescan.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a7b8c9d0-e1f2-3456-def0-123456789abc
-// last-edited: 2026-07-07
+// last-edited: 2026-08-19
 
 package acoustid
 
@@ -304,7 +304,7 @@ func fpRescanWorkers() int {
 }
 
 // loadBooksForRescan fetches the set of books targeted by the requested scope.
-func loadBooksForRescan(store database.Store, scope string, bookIDs []string) ([]database.Book, error) {
+func loadBooksForRescan(store pluginStore, scope string, bookIDs []string) ([]database.Book, error) {
 	switch scope {
 	case scopeAll, scopeMissing:
 		// GetAllBooksFullFrom returns FULL (GetBookByID-sourced) books, matching

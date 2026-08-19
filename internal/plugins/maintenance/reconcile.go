@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reconcile.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b8c9d0e1-f2a3-4567-1234-789012345678
-// last-edited: 2026-06-25
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -24,7 +24,7 @@ func (p *Plugin) reconcileScanDef() sdk.OperationDef {
 	sched := "0 3 * * *" // 03:00 daily
 	return sdk.OperationDef{
 		ID:              "maintenance.reconcile-scan",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Reconcile scan",
 		Description:     "Finds books with missing files and attempts to match them to untracked files on disk.",
@@ -78,7 +78,7 @@ func (p *Plugin) runReconcileScan(ctx context.Context, _ json.RawMessage, report
 func (p *Plugin) itunesHealDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.itunes-heal",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "iTunes path heal",
 		Description:     "Heals iTunes tracks moved by the organize operation: parses iTunes XML, finds each missing file in the library by filename/author/track, and reflinks it back to the expected path.",

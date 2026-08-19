@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/dataset_backfill.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2d6f8a13-7c40-4e92-8b15-9a3e5c7d2f64
-// last-edited: 2026-07-13
+// last-edited: 2026-08-19
 
 // Package dedup — op dedup.dataset-backfill (spec C4 backfill).
 //
@@ -48,7 +48,7 @@ type datasetBackfillParams struct {
 func (p *Plugin) datasetBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.dataset-backfill",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "dedup",
 		DisplayName: "Backfill dedup tuning dataset",
 		Description: "Builds a labeled example per pending candidate, runs deterministic catchers, " +

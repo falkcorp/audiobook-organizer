@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/drain_stale_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 84155b4f-53cc-4c81-be5e-7575dd040725
-// last-edited: 2026-07-03
+// last-edited: 2026-08-19
 
 // Tests for the dedup.drain-stale op wrapper (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -52,8 +52,8 @@ func drainMockStore(flagSet *bool) *database.MockStore {
 		"book-b": {ID: "book-b", Title: "A Real Book", Duration: &dur},
 	}
 	return &database.MockStore{
-		GetBookByIDFunc:   func(id string) (*database.Book, error) { return books[id], nil },
-		GetBookFilesFunc:  func(string) ([]database.BookFile, error) { return nil, nil },
+		GetBookByIDFunc:  func(id string) (*database.Book, error) { return books[id], nil },
+		GetBookFilesFunc: func(string) ([]database.BookFile, error) { return nil, nil },
 		GetSettingFunc: func(key string) (*database.Setting, error) {
 			if flagSet != nil && *flagSet && key == drainStaleDoneFlag {
 				return &database.Setting{Key: key, Value: "true"}, nil

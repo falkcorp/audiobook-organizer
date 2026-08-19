@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/calibrate_scoring.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4e1c8b2a-6d90-4f37-9b1a-2c3d4e5f6a70
-// last-edited: 2026-07-11
+// last-edited: 2026-08-19
 
 // Package metafetch — op metafetch.calibrate-scoring (INIT-3-T1).
 //
@@ -118,7 +118,7 @@ type calibrateScoringParams struct {
 func (p *Plugin) calibrateScoringDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "metafetch.calibrate-scoring",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "metafetch",
 		DisplayName: "Calibrate metadata scoring (report only)",
 		Description: "Read-only INIT-3-T1 harness: replays persisted metadata-candidate caches " +

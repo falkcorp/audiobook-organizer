@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/store_slices.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8d3b6f14-2a97-4e51-b0c8-5f7e91d24a63
-// last-edited: 2026-08-18
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -225,9 +225,9 @@ var (
 	_ reviewHoldStore       = (*database.PebbleStore)(nil)
 	_ bookFileCreator       = (*database.PebbleStore)(nil)
 
-	_ bookFieldWriter       = (*database.MockStore)(nil)
-	_ fsRegroupStore        = (*database.MockStore)(nil)
-	_ itunesRegroupStore    = (*database.MockStore)(nil)
-	_ orphanFileScanner     = (*database.MockStore)(nil)
-	_ reviewHoldStore       = (*database.MockStore)(nil)
+	_ bookFieldWriter    = (*database.MockStore)(nil)
+	_ fsRegroupStore     = (*database.MockStore)(nil)
+	_ itunesRegroupStore = (*database.MockStore)(nil)
+	_ orphanFileScanner  = (*database.MockStore)(nil)
+	_ reviewHoldStore    = (*database.MockStore)(nil)
 )

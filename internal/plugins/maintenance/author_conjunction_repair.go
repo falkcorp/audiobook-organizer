@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
-// last-edited: 2026-08-14
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -94,7 +94,7 @@ const (
 func (p *Plugin) authorConjunctionRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.author-conjunction-repair",
-		Liveness: sdk.LivenessManual,
+		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Repair author names with a stranded ampersand",
 		Description: "Repairs author rows named like '& Conrad Westmaas', created when an " +

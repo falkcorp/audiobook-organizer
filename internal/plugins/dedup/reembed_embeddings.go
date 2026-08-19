@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/reembed_embeddings.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9d8c7b6a-5e4f-3a2b-1c0d-9e8f7a6b5c4d
-// last-edited: 2026-07-07
+// last-edited: 2026-08-19
 
 // Package dedup — op dedup.reembed-embeddings.
 //
@@ -82,7 +82,7 @@ type reembedEmbeddingsParams struct {
 func (p *Plugin) reembedEmbeddingsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.reembed-embeddings",
-		Liveness: sdk.LivenessManual,
+		Liveness:    sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Re-embed corpus (embedding model change)",
 		Description: "Re-embeds every book whose stored embedding was produced by a " +

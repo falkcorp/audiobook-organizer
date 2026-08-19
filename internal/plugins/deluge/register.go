@@ -1,6 +1,6 @@
 // file: internal/plugins/deluge/register.go
-// version: 1.1.2
-// last-edited: 2026-06-23
+// version: 1.2.0
+// last-edited: 2026-08-19
 
 // Service registry registration for the deluge UOS plugin (W5/W7).
 //
@@ -15,7 +15,6 @@ import (
 	"log/slog"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
@@ -40,7 +39,7 @@ func init() {
 				return (*Plugin)(nil), nil
 			}
 			cache := delugeclient.NewProtectedPathCache(client, cfg.ProtectedPaths)
-			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
+			store := serviceregistry.Get[pluginStore](c, serviceregistry.KeyStore)
 			return New(client, cache, store), nil
 		},
 	})

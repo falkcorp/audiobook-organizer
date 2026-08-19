@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/split_book_scan.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4c6e8f0b-3a5b-7c9d-1e2f-4a6b8c0d2e3f
-// last-edited: 2026-07-17
+// last-edited: 2026-08-19
 
 package dedup
 
@@ -23,7 +23,7 @@ import (
 func (p *Plugin) splitBookScanDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "dedup.split-book-scan",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "Split-book backfill scan",
 		Description:     "Scans the library for one-Book-per-chapter clusters and saves merge candidates.",

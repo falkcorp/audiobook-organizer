@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-08-17
+// last-edited: 2026-08-19
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -49,7 +49,7 @@ type fsRegroupParams struct {
 func (p *Plugin) fsRegroupXMLDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.fs-regroup-xml",
-		Liveness: sdk.LivenessManual,
+		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Heal shattered filesystem books (tag-anchored regroup)",
 		Description: "Regroups filesystem-scanner-shattered books (one-book-per-chapter-subdir) back into " +

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/build_candidate_index.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 87487445-8923-477d-866c-b8153fd7755b
-// last-edited: 2026-07-12
+// last-edited: 2026-08-19
 
 // Package dedup — op dedup.build-candidate-status-index (INIT-2 T4).
 //
@@ -55,7 +55,7 @@ const candidateStatusIndexScanLimit = 2_000_000
 func (p *Plugin) buildCandidateStatusIndexDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.build-candidate-status-index",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "dedup",
 		DisplayName: "Build candidate status secondary index",
 		Description: "Backfills the dedup:s: status secondary index over dedup candidates, " +

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/build_isbn_index.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-07-07
+// last-edited: 2026-08-19
 
 // Package dedup — op dedup.build-isbn-index.
 //
@@ -44,7 +44,7 @@ type buildISBNIndexParams struct {
 func (p *Plugin) buildISBNIndexDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.build-isbn-index",
-		Liveness: sdk.LivenessManual,
+		Liveness:    sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Build ISBN/ASIN secondary index",
 		Description: "Backfills the book:isbn10:, book:isbn13:, and book:asin: secondary " +

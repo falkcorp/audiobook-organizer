@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
-// last-edited: 2026-08-17
+// last-edited: 2026-08-19
 
 // Package maintenance — op maintenance.regroup-shattered-ai (PR-B1).
 //
@@ -104,7 +104,7 @@ type regroupPayload struct {
 func (p *Plugin) regroupShatteredAIDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.regroup-shattered-ai",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Regroup shattered books (dry-run · review-queue producer)",
 		Description: "Scans the whole library, groups the single-file books left by the broken iTunes import " +

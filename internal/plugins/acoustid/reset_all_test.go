@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/reset_all_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8b2f4a6c-1d3e-4f5a-9c7b-0e1a2b3c4d5f
-// last-edited: 2026-07-06
+// last-edited: 2026-08-19
 
 package acoustid
 
@@ -34,14 +34,14 @@ func (r *resetAllTestReporter) UpdateProgress(current, total int, message string
 	return nil
 }
 func (r *resetAllTestReporter) Log(slog.Level, string, ...slog.Attr) error { return nil }
-func (r *resetAllTestReporter) Logger() *slog.Logger                      { return slog.Default() }
-func (r *resetAllTestReporter) Checkpoint(any) error                      { return nil }
-func (r *resetAllTestReporter) IsCanceled() bool                          { return false }
+func (r *resetAllTestReporter) Logger() *slog.Logger                       { return slog.Default() }
+func (r *resetAllTestReporter) Checkpoint(any) error                       { return nil }
+func (r *resetAllTestReporter) IsCanceled() bool                           { return false }
 func (r *resetAllTestReporter) RunPhase(ctx context.Context, _ string, fn func(context.Context, sdk.Reporter) error) error {
 	return fn(ctx, r)
 }
 func (r *resetAllTestReporter) Trigger(context.Context, string, any) error { return nil }
-func (r *resetAllTestReporter) SetCurrentItem(string)                     {}
+func (r *resetAllTestReporter) SetCurrentItem(string)                      {}
 
 // newTestResetAllEmbeddingStore opens a real, temp-dir-backed EmbeddingStore.
 // EmbeddingStore is a concrete PebbleDB-backed struct (not an interface), so

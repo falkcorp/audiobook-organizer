@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/plugin.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c4d1f0a-2b7e-4c61-8a3d-5e9f0b1c2d34
-// last-edited: 2026-07-11
+// last-edited: 2026-08-19
 
 // Package metafetch is the UOS plugin for metadata-fetch maintenance/analysis
 // operations. It wraps the internal metafetch.Service (persisted candidate
@@ -28,7 +28,7 @@ import (
 // books and reading metadata-field-state override provenance). Neither is
 // mutated by any op in this package.
 type Plugin struct {
-	store    database.Store
+	store    pluginStore
 	mfs      *metafetch.Service
 	registry sdk.Registry // set in Register; unused by the read-only ops today
 }
@@ -36,7 +36,7 @@ type Plugin struct {
 // New constructs a metafetch Plugin. Either dependency may be nil (e.g. the
 // metafetch service failed to build); the ops return a descriptive error at
 // run time rather than panicking.
-func New(store database.Store, mfs *metafetch.Service) *Plugin {
+func New(store pluginStore, mfs *metafetch.Service) *Plugin {
 	return &Plugin{store: store, mfs: mfs}
 }
 
@@ -61,4 +61,12 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		}
 	}
 	return nil
+}
+
+// pluginStore is what this plugin reads, measured with an empty-interface
+// compiler probe under -gcflags=-e: two methods, no forwarding constraints. It
+// was pluginStore -- 398 methods -- until 2026-08-19.
+type pluginStore interface {
+	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
+	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
 }

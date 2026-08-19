@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/check_book.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3f2e1d0c-b9a8-7654-3210-fedcba987654
-// last-edited: 2026-07-12
+// last-edited: 2026-08-19
 
 // check_book.go implements the dedup.check-book UOS operation (M4).
 //
@@ -49,7 +49,7 @@ type checkBookParams struct {
 func (p *Plugin) checkBookDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.check-book",
-		Liveness: sdk.LivenessManual,
+		Liveness:    sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Dedup check (per-book)",
 		Description: "Runs a per-book dedup check after import, coalescing burst enqueues " +

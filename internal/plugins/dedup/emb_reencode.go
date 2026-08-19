@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/emb_reencode.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 9f4e2a1c-d7b3-4e8f-b5c0-2a1d9e4f7b3c
-// last-edited: 2026-07-12
+// last-edited: 2026-08-19
 
 // Package dedup — op dedup.emb-reencode (T021, SPEC 3 §3).
 //
@@ -62,7 +62,7 @@ type embReencodeParams struct {
 func (p *Plugin) embReencodeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.emb-reencode",
-		Liveness: sdk.LivenessManual,
+		Liveness:    sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Re-encode embeddings to float16+zstd (T021)",
 		Description: "Rewrites all emb:v: blobs from legacy float32 (v0) to float16+zstd (v1), " +

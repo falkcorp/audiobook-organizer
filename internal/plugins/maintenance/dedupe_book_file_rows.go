@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
-// last-edited: 2026-08-06
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -35,7 +35,7 @@ type DedupeBookFileRowsParams struct {
 func (p *Plugin) dedupeBookFileRowsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.dedupe-book-file-rows",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "De-duplicate book_file rows",
 		Description:     "Finds books holding MORE THAN ONE book_file row for the same file_path and removes the redundant rows, then recomputes the book's aggregates. Duplicated rows inflate a book's total duration and file size by the duplication factor. Dry-run by default — pass {\"apply\": true} to delete.",

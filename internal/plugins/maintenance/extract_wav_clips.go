@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/extract_wav_clips.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e1f2a3b4-c5d6-7890-abcd-ef1234567890
-// last-edited: 2026-08-11
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -27,7 +27,7 @@ const extractWAVPageSize = 500 // larger pages — pure I/O, no GPU wait
 func (p *Plugin) extractWAVClipsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.extract-wav-clips",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Extract WAV clips for transcription cache",
 		Description:     "Extracts the first 90 seconds of each book's first audio file and saves the result in {library}/.wav-cache/{hash}.wav. Also hashes the source file and the extracted clip, persists the source SHA-256 to BookFile.FileHash (when missing), and creates a content-stable hardlink so the transcription cache survives organize path changes.",

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f6a7b8c9-d0e1-2345-f012-567890123456
-// last-edited: 2026-08-14
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -20,7 +20,7 @@ import (
 func (p *Plugin) seriesNormalizeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.series-normalize",
-		Liveness: sdk.LivenessNone,
+		Liveness:        sdk.LivenessNone,
 		ProgressTimeout: 30 * time.Minute, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "Normalize series names",
@@ -65,7 +65,7 @@ func (p *Plugin) seriesPruneDef() sdk.OperationDef {
 	sched := "0 3 * * 2" // 03:00 every Tuesday
 	return sdk.OperationDef{
 		ID:              "maintenance.series-prune",
-		Liveness: sdk.LivenessNone,
+		Liveness:        sdk.LivenessNone,
 		ProgressTimeout: 30 * time.Minute, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "Prune duplicate series",

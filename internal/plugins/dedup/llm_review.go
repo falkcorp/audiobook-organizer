@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/llm_review.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-07-18
+// last-edited: 2026-08-19
 
 package dedup
 
@@ -17,7 +17,7 @@ import (
 func (p *Plugin) llmReviewDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "dedup.llm-review",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "LLM review of candidates",
 		Description:     "Runs LLM review pass over ambiguous embedding-layer candidates.",

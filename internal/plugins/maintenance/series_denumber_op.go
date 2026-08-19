@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
-// last-edited: 2026-08-14
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -73,7 +73,7 @@ func writeSeriesDenumberReport(path string, plans []SeriesMergePlan, allowMedium
 func (p *Plugin) seriesDenumberDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.series-denumber",
-		Liveness: sdk.LivenessManual,
+		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Merge series that carry a book number in their name",
 		Description: "A series name should name the series, but many carry the book's position instead " +

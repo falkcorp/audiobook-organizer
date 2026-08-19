@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: f6a7b8c9-d0e1-2345-def0-123456789abc
-// last-edited: 2026-08-07
+// last-edited: 2026-08-19
 
 package acoustid
 
@@ -238,7 +238,7 @@ func fingerprintEligibility(f database.BookFile, force bool) (fingerprintFileOut
 // to 7-segment ffmpeg mode when fpcalc is not installed. In segment mode only
 // Seg0-Seg6 are written; AcoustIDFingerprint stays empty until fpcalc is
 // installed and a force-rescan is run.
-func fingerprintBookFile(store database.Store, f database.BookFile, force bool) fingerprintFileOutcome {
+func fingerprintBookFile(store pluginStore, f database.BookFile, force bool) fingerprintFileOutcome {
 	if outcome, _, stop := fingerprintEligibility(f, force); stop {
 		return outcome
 	}
@@ -248,7 +248,7 @@ func fingerprintBookFile(store database.Store, f database.BookFile, force bool) 
 // doFingerprintFile runs fpcalc/ffmpeg and persists the result. Callers must
 // have already confirmed eligibility via fingerprintEligibility. force=true
 // additionally clears legacy Seg1..6 fields.
-func doFingerprintFile(store database.Store, f database.BookFile, force bool) fingerprintFileOutcome {
+func doFingerprintFile(store pluginStore, f database.BookFile, force bool) fingerprintFileOutcome {
 	wf, err := fingerprint.FileWholeFingerprint(f.FilePath)
 	if err != nil && !errors.Is(err, fingerprint.ErrNotAvailable) {
 		slog.Warn("fingerprint", "path", f.FilePath, "err", err)
@@ -304,7 +304,7 @@ func doFingerprintFile(store database.Store, f database.BookFile, force bool) fi
 // markFingerprintFailure writes a permanent failure tombstone to the BookFile row so
 // future fingerprint scans skip it (unless force=true). The tombstone survives
 // service restarts — only a successful fingerprinting run clears it.
-func markFingerprintFailure(store database.Store, f database.BookFile, reason, detail string) {
+func markFingerprintFailure(store pluginStore, f database.BookFile, reason, detail string) {
 	now := time.Now()
 	updated := f
 	updated.FingerprintFailedAt = &now
@@ -323,7 +323,7 @@ func markFingerprintFailure(store database.Store, f database.BookFile, reason, d
 // produce a usable book sig with a coverage mask + percentage. The strict
 // SynthesizeBookSignature was dropping ~71% of books in production because
 // any one failing file caused the whole synthesis to bail.
-func synthesizeBookSignatureForBook(store database.Store, bookID string) error {
+func synthesizeBookSignatureForBook(store pluginStore, bookID string) error {
 	files, err := store.GetBookFiles(bookID)
 	if err != nil {
 		return fmt.Errorf("get book files: %w", err)

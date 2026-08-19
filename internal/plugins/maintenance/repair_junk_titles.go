@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repair_junk_titles.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c4e7a12-3b58-4d06-8f21-7ae5c0d94b63
-// last-edited: 2026-08-04
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -31,7 +31,7 @@ type RepairJunkTitlesParams struct {
 func (p *Plugin) repairJunkTitlesDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.repair-junk-titles",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Recover book titles that were replaced by junk",
 		Description: "Repairs books whose stored title is demonstrably not a title — \"read by narrator\" " +

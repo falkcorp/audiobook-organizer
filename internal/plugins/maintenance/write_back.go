@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/write_back.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d0e1f2a3-b4c5-6789-3456-901234567890
-// last-edited: 2026-05-07
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -27,7 +27,7 @@ type BulkWriteBackParams struct {
 func (p *Plugin) bulkWriteBackDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.bulk-write-back",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Bulk write-back",
 		Description:     "Writes metadata tags back to files for a set of books. Interrupted runs surface in UI for operator confirmation before resuming.",

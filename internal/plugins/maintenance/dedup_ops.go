@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_ops.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e1f2a3b4-c5d6-7890-4567-012345678901
-// last-edited: 2026-07-05
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -22,7 +22,7 @@ import (
 func (p *Plugin) dedupLLMReviewDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.dedup-llm-review",
-		Liveness: sdk.LivenessNone,
+		Liveness:        sdk.LivenessNone,
 		ProgressTimeout: 60 * time.Minute, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "Dedup LLM review",
@@ -54,7 +54,7 @@ func (p *Plugin) aiDedupBatchDef() sdk.OperationDef {
 	sched := "0 0 * * *" // midnight daily
 	return sdk.OperationDef{
 		ID:              "maintenance.ai-dedup-batch",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "AI author dedup batch",
 		Description:     "Submits authors to the OpenAI Batch API for dedup review (50% cheaper, up to 24h turnaround).",

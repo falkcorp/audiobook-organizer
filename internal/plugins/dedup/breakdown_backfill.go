@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/breakdown_backfill.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ec0f5e9d-2f6d-485d-9f24-ad3d917d1834
-// last-edited: 2026-07-17
+// last-edited: 2026-08-19
 
 // Package dedup — op dedup.breakdown-backfill.
 //
@@ -108,7 +108,7 @@ type breakdownBackfillReport struct {
 func (p *Plugin) breakdownBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.breakdown-backfill",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "dedup",
 		DisplayName: "Backfill ScoreBreakdowns onto pre-T015 pending candidates",
 		Description: "Recomputes the unified signal set + composed score for every pending dedup " +

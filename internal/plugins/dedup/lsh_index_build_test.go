@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/lsh_index_build_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c1cf5590-1bc1-4f88-9031-62333bcb593f
-// last-edited: 2026-07-06
+// last-edited: 2026-08-19
 
 package dedup
 
@@ -110,7 +110,7 @@ func (f *fakeReporter) RunPhase(_ context.Context, _ string, fn func(context.Con
 	return fn(context.Background(), f)
 }
 func (f *fakeReporter) Trigger(_ context.Context, _ string, _ any) error { return nil }
-func (f *fakeReporter) SetCurrentItem(_ string)                           {}
+func (f *fakeReporter) SetCurrentItem(_ string)                          {}
 
 // pluginWithMockStore creates a Plugin whose store satisfies LSHIndexStore
 // via type assertion without needing to implement database.Store. We rely on

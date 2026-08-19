@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/drain_stale.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a6103a90-d68c-4db5-ace4-e2a9fb2a51e1
-// last-edited: 2026-07-11
+// last-edited: 2026-08-19
 
 // Package dedup — op dedup.drain-stale (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -59,7 +59,7 @@ type drainStaleParams struct {
 func (p *Plugin) drainStaleDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.drain-stale",
-		Liveness: sdk.LivenessManual,
+		Liveness:    sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Drain stale exact candidates",
 		Description: "Re-evaluates pending exact-layer dedup candidates emitted before the CONS-16 " +

@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/reset_all.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f3b1e8c4-2d7a-4d62-aabb-1f1d6e2c4a01
-// last-edited: 2026-07-06
+// last-edited: 2026-08-19
 
 package acoustid
 
@@ -66,7 +66,14 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 	// Fast path: PebbleStore exposes a batched bulk-clear that fsyncs once
 	// per ~2000 records instead of once per UpdateBookFile call — ~100×
 	// faster than the per-row fallback below.
-	if pebble, ok := p.store.(*database.PebbleStore); ok {
+	// AsPebbleStore, not a bare assertion: the server installs the indexedStore
+	// decorator during Start(), and p.store therefore holds the WRAPPER in
+	// production. A bare p.store.(*database.PebbleStore) fails against it and
+	// silently takes the per-row fallback below -- ~100x slower, with no error
+	// and nothing in the logs to say the fast path was skipped. See
+	// database/store_capability.go, which documents two prod jobs degraded this
+	// way for weeks.
+	if pebble := database.AsPebbleStore(p.store); pebble != nil {
 		var totalN int
 		c, t, clearErr := pebble.ClearAllAcoustIDFingerprints(ctx, 2000,
 			func(processed, c, t int) {

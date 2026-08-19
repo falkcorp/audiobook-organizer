@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/embed_async.go
-// version: 2.1.1
+// version: 2.2.0
 // guid: b1c2d3e4-f5a6-7890-bcde-f01234567890
-// last-edited: 2026-07-12
+// last-edited: 2026-08-19
 
 // T018: embed_async.go is a thin wrapper that delegates to runEmbedScanMode
 // (in embed_scan.go) with async=true.
@@ -25,7 +25,7 @@ import (
 func (p *Plugin) embedAsyncDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "dedup.embed-async",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "dedup",
 		DisplayName:     "Embed books async (batch API) [deprecated — use embed-scan with async:true]",
 		Description:     "Deprecated: delegates to dedup.embed-scan with async=true. Submits all un-embedded books to the OpenAI Batch API. Results arrive within 24 hours and are ingested automatically.",

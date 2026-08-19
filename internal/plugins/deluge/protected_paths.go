@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/protected_paths.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-05-07
+// last-edited: 2026-08-19
 
 package deluge
 
@@ -16,7 +16,7 @@ import (
 func (p *Plugin) protectedPathsSyncDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "deluge.protected-paths-sync",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "deluge",
 		DisplayName:     "Sync protected paths from Deluge",
 		Description:     "Refreshes the protected-path cache from Deluge torrent save paths.",

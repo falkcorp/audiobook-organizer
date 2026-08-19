@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/mine_gold_labels.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8f4c2a16-5d70-4e93-bc28-1a6e9d3b7c52
-// last-edited: 2026-07-05
+// last-edited: 2026-08-19
 
 // Package dedup — op dedup.mine-gold-labels (dedup tuning dataset, positive miner).
 //
@@ -43,7 +43,7 @@ type mineGoldLabelsParams struct {
 func (p *Plugin) mineGoldLabelsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.mine-gold-labels",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "dedup",
 		DisplayName: "Mine high-confidence dedup labels",
 		Description: "Labels pending candidates that share a file hash, AcoustID recording id, or " +

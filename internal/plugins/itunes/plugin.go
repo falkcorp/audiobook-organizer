@@ -1,7 +1,7 @@
 // file: internal/plugins/itunes/plugin.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-05-07
+// last-edited: 2026-08-19
 
 // Package itunes is the UOS plugin for iTunes/Music library operations.
 // It wraps the internal iTunes service and registers OperationDefs through
@@ -11,7 +11,6 @@ package itunes
 import (
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -19,14 +18,19 @@ import (
 // Plugin is the iTunes plugin. It wraps the shared iTunes service so that
 // the Run functions can call service methods without importing internal packages.
 type Plugin struct {
-	svc   *itunesservice.Service
-	store database.Store
+	svc *itunesservice.Service
 }
 
 // New constructs an iTunes Plugin. svc may be nil or disabled;
 // the Register method will return nil (nil-guard pattern).
-func New(svc *itunesservice.Service, store database.Store) *Plugin {
-	return &Plugin{svc: svc, store: store}
+//
+// It took a database.Store until 2026-08-19 and never read it: an
+// empty-interface compiler probe reported zero methods, and the field had
+// exactly three mentions in the package -- this declaration, this parameter,
+// and the registry lookup that fed it. Removing the parameter beats narrowing
+// it; the dependency is deleted rather than shrunk.
+func New(svc *itunesservice.Service) *Plugin {
+	return &Plugin{svc: svc}
 }
 
 // ID implements sdk.Plugin.

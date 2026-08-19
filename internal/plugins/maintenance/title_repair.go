@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_repair.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 13bedd46-9b61-41a2-b791-36813d7ffcb9
-// last-edited: 2026-07-17
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -143,7 +143,7 @@ func decideTitleRepair(in titleRepairBook, agreedFn func(dirPath string) (agreed
 func (p *Plugin) titleRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.title-repair",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Repair leaked chapter-tag titles (CONS-17b)",
 		Description:     "Re-derives each multi-file book's title via the CONS-17b all-chapters-agree check and repairs stored titles that are per-chapter tag residue (e.g. 'Big Finish Ident'). Skips single-file books and any title with override/fetched provenance. Default dry-run previews old→new; set apply=true to write.",
