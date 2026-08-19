@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
-// last-edited: 2026-07-05
+// last-edited: 2026-08-18
 
 // AIHandler hosts the AI HTTP endpoints extracted from the server package:
 // filename parsing, OpenAI / metadata-source connection tests, per-book AI
@@ -32,6 +32,15 @@ import (
 	"github.com/gin-gonic/gin"
 	ulid "github.com/oklog/ulid/v2"
 )
+
+// aiHandlerStore is what this handler calls, measured by emptying it and reading
+// the compiler's enumeration. It was an inline anonymous interface embedding
+// database.AuthorStore + database.OperationStore — 51 methods.
+type aiHandlerStore interface {
+	GetAllAuthors() ([]database.Author, error)
+	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
+	UpdateOperationResultData(id string, resultData string) error
+}
 
 // --- narrow dependency interfaces ---
 
@@ -796,10 +805,7 @@ func AIReviewGroupsMode(ctx context.Context, progress operations.ProgressReporte
 // AIReviewFullMode sends all authors to AI for duplicate discovery. Relocated
 // from the server package (was *Server.aiReviewFullMode); called by the op
 // executor in package server (ai_ops.go) as a package-level function.
-func AIReviewFullMode(ctx context.Context, progress operations.ProgressReporter, parser aiParser, store interface {
-	database.AuthorStore
-	database.OperationStore
-}, opID string) error {
+func AIReviewFullMode(ctx context.Context, progress operations.ProgressReporter, parser aiParser, store aiHandlerStore, opID string) error {
 	_ = progress.Log("info", "Starting AI review (full mode) — discovering duplicates from all authors", nil)
 	// Pre-load total is unknown; use a placeholder (0/1) Start so we never emit 0/0.
 	_ = progress.UpdateProgress(0, 1, "Loading all authors... (0/1 0.00%)")

@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
-// last-edited: 2026-08-14
+// last-edited: 2026-08-18
 //
 // Shared, non-HTTP helpers that were extracted from duplicates_handlers.go when
 // the 17 duplicates HTTP handlers moved to internal/server/handlers/duplicates.
@@ -39,6 +39,24 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	ulid "github.com/oklog/ulid/v2"
 )
+
+// seriesPruneStore and seriesMergeStore are what the series maintenance helpers
+// actually call, measured by emptying each and reading the compiler's
+// enumeration. Both were inline anonymous interfaces of database.* embeds —
+// 111 and 60 methods — in parameter position.
+type seriesPruneStore interface {
+	GetAllSeries() ([]database.Series, error)
+	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
+	DeleteSeries(id int) error
+	GetBookByID(id string) (*database.Book, error)
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	CreateOperationChange(change *database.OperationChange) error
+}
+
+type seriesMergeStore interface {
+	GetAllSeries() ([]database.Series, error)
+	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
+}
 
 // filterReviewedAuthorGroups removes author dedup groups where all author IDs
 // have already been reviewed via AI scans (applied results with skip/split/merge).
@@ -93,12 +111,7 @@ func (s *Server) filterReviewedAuthorGroups(groups []dedup.AuthorDedupGroup) []d
 }
 
 // executeSeriesPrune performs the actual series prune logic (used by both HTTP handler and scheduler).
-func (s *Server) executeSeriesPrune(ctx context.Context, store interface {
-	database.BookStore
-	database.AuthorStore
-	database.SeriesStore
-	database.OperationStore
-}, progress operations.ProgressReporter, operationID string) error {
+func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore, progress operations.ProgressReporter, operationID string) error {
 	_ = progress.Log("info", "Starting series auto-prune...", nil)
 
 	allSeries, err := store.GetAllSeries()
@@ -343,10 +356,7 @@ type seriesNormalizePreviewResult struct {
 // computeSeriesNormalizeActions iterates all series, strips contamination from
 // each name, and returns the list of rename / merge_into / flag actions that
 // would be taken by a full normalize run. No writes are performed.
-func computeSeriesNormalizeActions(store interface {
-	database.SeriesStore
-	database.BookStore
-}) []seriesNormalizeAction {
+func computeSeriesNormalizeActions(store seriesMergeStore) []seriesNormalizeAction {
 	allSeries, err := store.GetAllSeries()
 	if err != nil {
 		return nil
@@ -415,10 +425,7 @@ func computeSeriesNormalizeActions(store interface {
 // seriesNormalizePreview HTTP handler so the duplicates sub-package can obtain
 // the identical payload through an injected closure (it cannot reference the
 // unexported seriesNormalizeAction / seriesNormalizePreviewResult types).
-func buildSeriesNormalizePreview(store interface {
-	database.SeriesStore
-	database.BookStore
-}) seriesNormalizePreviewResult {
+func buildSeriesNormalizePreview(store seriesMergeStore) seriesNormalizePreviewResult {
 	actions := computeSeriesNormalizeActions(store)
 
 	flagged := make([]seriesNormalizeAction, 0)

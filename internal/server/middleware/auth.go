@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth.go
-// version: 1.5.3
+// version: 1.6.0
 // guid: 83c42ecb-1df2-4baf-9890-3f91ab4db6fe
-// last-edited: 2026-07-26
+// last-edited: 2026-08-18
 
 package middleware
 
@@ -16,6 +16,30 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/gin-gonic/gin"
 )
+
+// The auth middleware's three store parameters, measured by emptying each and
+// reading the compiler's enumeration. They were inline anonymous interfaces of
+// database.* embeds — 25, 25 and 20 methods — repeated across four parameters.
+//
+// effectivePermissionsFor took database.RoleStore (6 methods) for one lookup;
+// that is what forced RoleStore into the two composites above.
+type roleResolver interface {
+	GetRoleByID(id string) (*database.Role, error)
+}
+
+type authKeyStore interface {
+	roleResolver
+	GetUserByID(id string) (*database.User, error)
+	GetAPIKeyByHash(hash string) (*database.APIKey, error)
+	TouchAPIKeyLastUsed(id string, at time.Time, ip string) error
+}
+
+type authSessionStore interface {
+	authKeyStore
+	CountUsers() (int, error)
+	GetSession(id string) (*database.Session, error)
+	RevokeSession(id string) error
+}
 
 const (
 	// SessionCookieName is the auth session cookie used by API clients.
@@ -90,12 +114,7 @@ func CurrentAPIKey(c *gin.Context) (*database.APIKey, bool) {
 // RequireAuth enforces session-based auth when at least one user exists.
 // Tokens prefixed with "abk_" are routed through API key validation;
 // all other tokens fall through to session validation.
-func RequireAuth(store interface {
-	database.UserReader
-	database.RoleStore
-	database.SessionStore
-	database.APIKeyStore
-}) gin.HandlerFunc {
+func RequireAuth(store authSessionStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if store == nil {
 			c.Next()
@@ -174,11 +193,7 @@ func RequireAuth(store interface {
 
 // handleAPIKeyAuth validates an "abk_" prefixed token and, on success, binds
 // the user and scoped permissions to the context then calls c.Next().
-func handleAPIKeyAuth(c *gin.Context, store interface {
-	database.UserReader
-	database.RoleStore
-	database.APIKeyStore
-}, rawToken string) {
+func handleAPIKeyAuth(c *gin.Context, store authKeyStore, rawToken string) {
 	hash := database.HashAPIKeyToken(rawToken)
 	key, err := store.GetAPIKeyByHash(hash)
 	if err != nil {
@@ -264,7 +279,7 @@ func intersectPermissions(rolePerms []auth.Permission, scopes []string) []auth.P
 // Permissions slice for the given user. Unknown roles are skipped.
 // Returns nil if the user has no roles (which makes every Can()
 // check return false — safe default).
-func effectivePermissionsFor(store database.RoleStore, user *database.User) []auth.Permission {
+func effectivePermissionsFor(store roleResolver, user *database.User) []auth.Permission {
 	if user == nil || len(user.Roles) == 0 || store == nil {
 		return nil
 	}
@@ -298,12 +313,7 @@ func effectivePermissionsFor(store database.RoleStore, user *database.User) []au
 //
 // Exception: if no users exist yet (first-run bootstrap), the check
 // is bypassed so the /setup wizard can run unauthenticated.
-func RequirePermission(store interface {
-	database.UserReader
-	database.RoleStore
-	database.SessionStore
-	database.APIKeyStore
-}, p auth.Permission) gin.HandlerFunc {
+func RequirePermission(store authSessionStore, p auth.Permission) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// First-run bypass — RequireAuth uses the same pattern.
 		if store != nil {
