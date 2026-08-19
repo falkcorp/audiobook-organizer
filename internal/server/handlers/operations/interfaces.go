@@ -21,27 +21,20 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 )
 
-// OperationsStore is what this handler actually calls, measured by emptying it
-// and reading the compiler's enumeration: fourteen direct calls, plus three
-// methods for sweep.tombstoneSweeper and database.SettingsStore for
-// config.SaveConfigToDatabase.
+// The operations handler's database surface, grouped by what each part is for.
 //
-// It previously embedded database.BookStore with the note "structural
-// satisfaction requires the full" — true until #2566 narrowed the sweep/audit
-// parameters that demanded it. The constraint is now sweep.fileAuditor (one
-// method) and sweep.tombstoneSweeper (three).
-//
-// database.SettingsStore stays embedded rather than method-listed: it is four
-// methods, already the right size, and this is what using the domain pieces
-// looks like.
-type OperationsStore interface {
-	database.SettingsStore
-
+// OperationsStore previously embedded database.BookStore with the note
+// "structural satisfaction requires the full" — accurate until #2566 narrowed the
+// sweep/audit parameters that demanded it. The constraint is now
+// sweep.fileAuditor (one method) and sweep.tombstoneSweeper (three).
+type operationsBookStore interface {
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetBookByID(id string) (*database.Book, error)
 	ListBookTombstones(limit int) ([]database.Book, error)
 	DeleteBookTombstone(id string) error
+}
 
+type operationsContributorStore interface {
 	CreateAuthor(name string) (*database.Author, error)
 	GetAuthorByID(id int) (*database.Author, error)
 	GetAuthorByName(name string) (*database.Author, error)
@@ -49,12 +42,24 @@ type OperationsStore interface {
 	CreateNarrator(name string) (*database.Narrator, error)
 	GetNarratorByName(name string) (*database.Narrator, error)
 	SetBookNarrators(bookID string, narrators []database.BookNarrator) error
+}
 
+type operationsRecordStore interface {
 	GetOperationByID(id string) (*database.Operation, error)
 	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
 	GetRecentOperations(limit int) ([]database.Operation, error)
 	UpdateOperationStatus(id, status string, progress, total int, message string) error
 	DeleteOperationsByStatus(statuses []string) (int, error)
+}
+
+// OperationsStore is kept as a composition so the declaration stays narrow.
+// database.SettingsStore is embedded rather than method-listed: it is four
+// methods and already the right size — using a domain piece is the goal.
+type OperationsStore interface {
+	database.SettingsStore
+	operationsBookStore
+	operationsContributorStore
+	operationsRecordStore
 }
 
 // OperationsRegistry is the narrow operations-registry subset the operations
