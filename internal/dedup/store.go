@@ -1,5 +1,5 @@
 // file: internal/dedup/store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6c17e2b9-3f48-4d95-8a20-7b5e1c904f36
 // last-edited: 2026-08-19
 
@@ -94,8 +94,12 @@ type dedupDuplicateStore interface {
 	CreateOperationChange(change *database.OperationChange) error
 }
 
-// dedupStore is the whole surface, for Engine and the exported entry points.
-type dedupStore interface {
+// Store is the whole surface, for Engine and the exported entry points.
+//
+// Exported because MergeBooks and MergeSplitBookCluster are exported: a caller
+// that forwards its own store into them has to be able to name this. See
+// internal/reconcile and internal/server/handlers.
+type Store interface {
 	dedupForwardedStores
 	dedupCheckpointStores
 	dedupBookReader

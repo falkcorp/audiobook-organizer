@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-07-18
+// last-edited: 2026-08-19
 
 package reconcile
 
@@ -260,7 +260,7 @@ func DisambiguateMatch(expectedPath, artist, album string, trackNum int, candida
 // If all candidates are acoustically identical (similarity ≥ 0.9), they are
 // duplicate books from the organize bug. MergeBooks collapses them and returns
 // the surviving path. Acoustically distinct candidates return ("", 0).
-func resolveAmbiguousByDB(ctx context.Context, store database.Store, candidates []string) (string, int) {
+func resolveAmbiguousByDB(ctx context.Context, store reconcileStore, candidates []string) (string, int) {
 	if len(candidates) == 0 {
 		return "", 0
 	}
@@ -306,7 +306,7 @@ func resolveAmbiguousByDB(ctx context.Context, store database.Store, candidates 
 // resolveAmbiguousByBookMeta looks up each candidate's Book in the DB and
 // scores its title and file path (which encodes the author directory) against
 // the iTunes track's Album and Artist via word overlap. Pure DB — no API calls.
-func resolveAmbiguousByBookMeta(store database.Store, track iTunesTrack, candidates []string) string {
+func resolveAmbiguousByBookMeta(store reconcileStore, track iTunesTrack, candidates []string) string {
 	albumWords := titleWords(track.Album)
 	artistWords := titleWords(track.Artist)
 	if len(albumWords) == 0 {
@@ -372,7 +372,7 @@ func resolveAmbiguousByBookMeta(store database.Store, track iTunesTrack, candida
 // when non-nil, fpcalc failures and AcoustID lookup failures are tallied and
 // rate-limited-Warn logged instead of silently `continue`-ing — before H3
 // these were indistinguishable from "no match", inflating `ambiguous`.
-func resolveAmbiguousByAcoustID(ctx context.Context, store database.Store, ac *acoustid.Client, track iTunesTrack, candidates []string, failures *resolverFailureCounters) string {
+func resolveAmbiguousByAcoustID(ctx context.Context, store reconcileStore, ac *acoustid.Client, track iTunesTrack, candidates []string, failures *resolverFailureCounters) string {
 	albumWords := titleWords(track.Album)
 	artistWords := titleWords(track.Artist)
 
@@ -458,7 +458,7 @@ func resolveAmbiguousByAcoustID(ctx context.Context, store database.Store, ac *a
 // find the book's current file path. This is the most reliable not-found
 // resolver: if the file was organized to a different name/location, the PID
 // stored on the BookFile points directly to it — no filesystem scan needed.
-func resolveNotFoundByPID(store database.Store, pid string) string {
+func resolveNotFoundByPID(store reconcileStore, pid string) string {
 	if pid == "" || store == nil {
 		return ""
 	}
@@ -485,7 +485,7 @@ func resolveNotFoundByPID(store database.Store, pid string) string {
 // failures may be nil; when non-nil, Whisper transcription failures are
 // tallied and rate-limited-Warn logged instead of a silent `continue` — see
 // resolveAmbiguousByAcoustID's doc comment for why this matters (H3).
-func resolveAmbiguousByTranscription(ctx context.Context, store database.Store, track iTunesTrack, candidates []string, failures *resolverFailureCounters) string {
+func resolveAmbiguousByTranscription(ctx context.Context, store reconcileStore, track iTunesTrack, candidates []string, failures *resolverFailureCounters) string {
 	if len(candidates) == 0 || len(candidates) > 5 {
 		return ""
 	}
@@ -660,7 +660,7 @@ func titleWords(s string) []string {
 //     AcoustID title+artists lookup → metadata match; rate-limited, API key required
 //  5. fuzzyFindByAlbum — full index path-content scan for tracks with zero filename
 //     matches; finds files in correctly-named book folders with different filenames
-func RunITunesHeal(ctx context.Context, store database.Store, reporter sdk.Reporter, params json.RawMessage) error {
+func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Reporter, params json.RawMessage) error {
 	cfg := config.AppConfig.ITunes
 	if cfg.LibraryReadPath == "" {
 		return fmt.Errorf("itunes.library_read_path not configured")
@@ -734,10 +734,10 @@ func RunITunesHeal(ctx context.Context, store database.Store, reporter sdk.Repor
 	// may still live there and are valid heal sources. Only the library scanner
 	// must avoid it (to prevent importing iTunes source files as library books).
 	skipDirs := map[string]bool{
-		rootDir:                                       true,
-		filepath.Join(booksRoot, "bkup"):              true,
-		filepath.Join(booksRoot, "logs"):              true,
-		filepath.Join(booksRoot, "playlists"):         true,
+		rootDir:                                      true,
+		filepath.Join(booksRoot, "bkup"):             true,
+		filepath.Join(booksRoot, "logs"):             true,
+		filepath.Join(booksRoot, "playlists"):        true,
 		filepath.Join(booksRoot, "snapshot-list-v1"): true,
 	}
 	if entries, err := os.ReadDir(booksRoot); err == nil {

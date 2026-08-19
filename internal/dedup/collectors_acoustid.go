@@ -1,5 +1,5 @@
 // file: internal/dedup/collectors_acoustid.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a7b3c841-d9e2-4f15-88a0-5bc12e347f6d
 // last-edited: 2026-08-19
 
@@ -40,7 +40,7 @@ import (
 
 // ─── store interfaces ──────────────────────────────────────────────────────────
 // Narrow interfaces so tests can inject stubs without pulling in the whole
-// dedupStore.  T014's orchestrator passes a *database.PebbleStore (which
+// Store.  T014's orchestrator passes a *database.PebbleStore (which
 // implements both) when wiring the Engine.
 
 // ExactAcoustIDStore is the subset of database.BookFileStore required by

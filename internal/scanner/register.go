@@ -1,6 +1,6 @@
 // file: internal/scanner/register.go
-// version: 1.0.1
-// last-edited: 2026-06-23
+// version: 1.1.0
+// last-edited: 2026-08-19
 
 package scanner
 
@@ -15,7 +15,7 @@ func init() {
 		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyEmbeddingStore},
 		Groups: []string{"core"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
+			store := serviceregistry.Get[scannerStore](c, serviceregistry.KeyStore)
 			scanSvc := NewScanService(store)
 			// Wire in EmbeddingStore for metadata hash dedup detection
 			if es := serviceregistry.Get[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore); es != nil {

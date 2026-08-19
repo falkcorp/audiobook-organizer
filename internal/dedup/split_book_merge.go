@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
 // last-edited: 2026-08-19
 
@@ -43,7 +43,7 @@ type SplitBookMergeResult struct {
 // Per-src errors are collected but do not abort — the remaining sources
 // still get processed so the operator doesn't end up with a half-merged
 // cluster.
-func MergeSplitBookCluster(store dedupStore, keepID string, srcIDs []string, suggestedTitle string) (*SplitBookMergeResult, error) {
+func MergeSplitBookCluster(store Store, keepID string, srcIDs []string, suggestedTitle string) (*SplitBookMergeResult, error) {
 	if keepID == "" {
 		return nil, fmt.Errorf("MergeSplitBookCluster: empty keepID")
 	}
