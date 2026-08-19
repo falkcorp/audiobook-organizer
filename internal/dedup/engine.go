@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.65.0
+// version: 1.66.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-08-19
 
@@ -206,6 +206,44 @@ func (de *Engine) SetAcoustIDBookFileStore(s ExactAcoustIDStore) {
 // In production the caller passes the same *database.PebbleStore as bookStore.
 func (de *Engine) SetLSHStore(s LSHAcoustIDStore) {
 	de.lshAcoustIDStore = s
+}
+
+// lshCandidateStore is the pair of methods AcoustIDScan's Tier-0 candidate
+// lookup needs off the book store.
+//
+// Named rather than written inline at the call site because the two halves have
+// very different reachability, and inlining averaged that away. GetBookFileByID
+// is part of database.Store, so any decorator that embeds that interface
+// promotes it. LookupAcoustIDCandidates is a *database.PebbleStore-only
+// capability that database.Store does NOT declare (compile-probed 2026-08-19
+// with `var _ interface{...} = (database.Store)(nil)`). An assertion for BOTH
+// therefore takes the WORSE reachability of the two and fails on any decorator,
+// and nothing in the inline spelling says which half is the weak one.
+//
+// de.bookStore is the BARE store today, so the inline form was not failing:
+// serviceregistry.Container.Build runs eagerly inside NewServer and resolves
+// KeyStore to the value Override("store", resolvedStore) put there, and that
+// entry is never replaced with the wrapped store. This is hardening, not a bug
+// fix. It earns its keep because the call site's `if lshStore != nil` guard is
+// silent -- a nil there drops the whole scan onto the O(n) segment walk with no
+// log line and no error, indistinguishable from a SQLite backend.
+type lshCandidateStore interface {
+	LookupAcoustIDCandidates(fp []byte, maxCandidates int) ([]string, error)
+	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
+}
+
+// resolveLSHCandidateStore walks the decorator chain for lshCandidateStore,
+// returning nil for a genuinely non-Pebble backend (SQLite, a test double).
+//
+// A named function rather than an inline assertion for the same reason
+// resolveVGBackfiller and resolveWarmupWaiter are: a guard that cannot reach the
+// production call site does not guard it, and a test can only exercise what it
+// can name.
+func resolveLSHCandidateStore(s any) lshCandidateStore {
+	if c, ok := database.AsCapability[lshCandidateStore](s); ok {
+		return c
+	}
+	return nil
 }
 
 // ISBNIndexStore is the narrow interface that checkExactISBN uses to perform
@@ -4032,10 +4070,12 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 			// LSH-backed candidate lookup is optional — only PebbleStore
 			// implements it. SQLite/mock stores skip this path and fall
 			// through to the segment walk below.
-			lshStore, _ := de.bookStore.(interface {
-				LookupAcoustIDCandidates(fp []byte, maxCandidates int) ([]string, error)
-				GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
-			})
+			//
+			// Resolved through the decorator chain rather than with a bare
+			// inline assertion. de.bookStore is bare today so both spellings
+			// agree; see resolveLSHCandidateStore for why the inline one is a
+			// trap regardless.
+			lshStore := resolveLSHCandidateStore(de.bookStore)
 
 			for _, f := range files {
 				if isBoilerplateTitle(f.Title) {
