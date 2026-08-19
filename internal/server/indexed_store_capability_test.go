@@ -1,7 +1,7 @@
 // file: internal/server/indexed_store_capability_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2c7f4b18-6e93-4a52-9d81-5f0a3b6c8e27
-// last-edited: 2026-08-15
+// last-edited: 2026-08-19
 
 package server
 
@@ -224,4 +224,52 @@ func TestIndexedStoreExposesVersionGroupBackfill(t *testing.T) {
 		t.Fatalf("version group lookup after backfill: got %d books, want 1 (%s)",
 			len(got), created.ID)
 	}
+}
+
+// TestWarmupWaiterResolvesThroughDecorator is the FOURTH instance of the bug
+// this file exists to prevent.
+//
+// wire_abs_routes.go used a bare `s.Store().(*database.PebbleStore)` to reach
+// WaitForWarmup before building the ABS contributor cache. WaitForWarmup is a
+// *PebbleStore method, so the assertion misses whenever the Bleve indexedStore
+// decorator is installed — and the fallback is to skip the wait entirely and
+// warm anyway.
+//
+// That fallback is not a degraded mode, it is a wrong answer with a long life:
+// the cache stores the set of authors of VISIBLE books, so building it against a
+// half-published memdb caches a view of a library that does not exist and serves
+// it for the whole TTL. The warm is launched from a goroutine at wire time, so
+// whether the decorator is installed yet is a race rather than a constant, which
+// is why this never presented as a clean always-broken failure.
+//
+// SCOPE: asserts the capability RESOLVES through the decorator. It does not
+// re-prove that WaitForWarmup itself blocks correctly.
+func TestWarmupWaiterResolvesThroughDecorator(t *testing.T) {
+	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	t.Cleanup(func() { _ = inner.Close() })
+
+	var wrapped database.Store = &indexedStore{Store: inner, server: nil}
+
+	// The shape of the original bug: a bare assertion cannot see through the
+	// decorator. Assert it rather than imply it — if this ever starts
+	// succeeding, the decorator has changed and the check below stops testing
+	// anything.
+	if _, ok := wrapped.(*database.PebbleStore); ok {
+		t.Fatal("a bare *database.PebbleStore assertion now resolves through the " +
+			"decorator; this test no longer reproduces the production bug")
+	}
+
+	// The PRODUCTION resolver, not database.AsCapability directly. Calling the
+	// helper here would prove only that the helper works, which says nothing
+	// about whether wire_abs_routes.go uses it. Reverting resolveWarmupWaiter to
+	// a bare assertion must turn this red.
+	w, ok := resolveWarmupWaiter(wrapped)
+	if !ok {
+		t.Fatal("resolveWarmupWaiter through indexedStore failed; the ABS " +
+			"contributor cache would be warmed against a half-published memdb")
+	}
+	w.WaitForWarmup()
 }

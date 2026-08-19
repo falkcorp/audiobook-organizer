@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.13.0
+// version: 1.15.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-08-16
+// last-edited: 2026-08-19
 
 package server
 
@@ -490,9 +490,28 @@ func (s *Server) wireABSRoutes() {
 	// VISIBLE books; building it against a half-published memdb would cache a view
 	// of a library that does not exist yet, and it would then be served for the
 	// whole TTL. A slow-but-correct warm beats a fast wrong one.
+	//
+	// The store is read HERE, synchronously, and NOT inside the goroutine.
+	// s.store is a plain field that Server.Start later overwrites with the Bleve
+	// indexedStore wrapper (server_lifecycle.go), and this goroutine is spawned
+	// at route-wiring time, from NewServer, before Start runs. Reading s.Store()
+	// from the goroutine body is therefore an unsynchronized read racing that
+	// write, and the two outcomes used to disagree: the old bare
+	// store.(*database.PebbleStore) assertion succeeded against the bare store
+	// and failed against the wrapper, so whether the warm waited at all was
+	// decided by scheduling. resolveWarmupWaiter alone would only make both
+	// outcomes correct; hoisting the read removes the race instead of tolerating
+	// it. Nothing writes s.store before NewServer returns, so this read needs no
+	// synchronization of its own.
+	//
+	// Not covered by -race today: wire_abs_routes_test.go reaches wireABSRoutes
+	// only with ABSAPIEnabled false, which returns before this point, so the
+	// detector's silence on the old code was absence of coverage rather than
+	// absence of a race.
+	warmStore := s.Store()
 	go func() {
-		if ps, ok := s.Store().(*database.PebbleStore); ok {
-			ps.WaitForWarmup()
+		if w, ok := resolveWarmupWaiter(warmStore); ok {
+			w.WaitForWarmup()
 		}
 		handler.WarmContributors(context.Background())
 	}()
@@ -686,4 +705,29 @@ func asCollectionStore(s any) abshandler.CollectionStore {
 		return cs
 	}
 	return nil
+}
+
+// warmupWaiter is the one method the contributor-cache warm needs before it may
+// read the memdb.
+type warmupWaiter interface {
+	WaitForWarmup()
+}
+
+// resolveWarmupWaiter finds the memdb warmup gate through the Bleve indexedStore
+// decorator that Server.Start installs.
+//
+// This is a named function rather than an inline assertion for the same reason
+// resolveVGBackfiller is: a guard that cannot reach the production call site does
+// not guard it. TestWarmupWaiterResolvesThroughDecorator calls THIS, so reverting
+// it to a bare `s.Store().(*database.PebbleStore)` turns that test red.
+//
+// The bare form was live until 2026-08-19 and its failure mode is the one the
+// comment at the call site describes: skip the wait, build the contributor cache
+// against a half-published memdb, and serve that view of a library that does not
+// exist for the whole TTL. Its argument is now captured synchronously at wire
+// time, so the value reaching here is the bare store deterministically and this
+// resolves trivially; going through the chain is what keeps that true if the
+// wiring order ever changes and a decorated store starts arriving instead.
+func resolveWarmupWaiter(s any) (warmupWaiter, bool) {
+	return database.AsCapability[warmupWaiter](s)
 }

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
 // last-edited: 2026-08-19
 
@@ -637,7 +637,16 @@ func (h *DiagnosticsHandler) GetDBHealth(c *gin.Context) {
 	resp := dbHealthResponse{}
 
 	// Main store stats — PebbleDB only since fable5 T022.
-	if st, ok := store.(*database.PebbleStore); ok {
+	//
+	// AsPebbleStore, not a bare assertion. Traced 2026-08-19: this handler is
+	// built in wireHandlers, which runs setupRoutes -> NewServer, so the
+	// s.Store() it captured is the BARE store and the bare form was NOT failing
+	// here. Construction time is what decides this, not the fact that GetDBHealth
+	// itself runs at request time. Converted for uniformity with the other nine
+	// sites (#2597) and because the failure mode is invisible: a nil here just
+	// drops resp.Pebble from the payload, so db-health reports a healthy store
+	// with no Pebble section rather than an error.
+	if st := database.AsPebbleStore(store); st != nil {
 		keyCount, sizeBytes, err := st.KeyCount()
 		if err != nil {
 			slog.Warn("db-health pebble key count", "err", err)
