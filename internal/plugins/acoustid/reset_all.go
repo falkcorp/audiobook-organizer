@@ -73,7 +73,7 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 	// and nothing in the logs to say the fast path was skipped. See
 	// database/store_capability.go, which documents two prod jobs degraded this
 	// way for weeks.
-	if pebble := database.AsPebbleStore(p.store); pebble != nil {
+	if pebble := resolveFingerprintResetter(p.store); pebble != nil {
 		var totalN int
 		c, t, clearErr := pebble.ClearAllAcoustIDFingerprints(ctx, 2000,
 			func(processed, c, t int) {
@@ -202,5 +202,26 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 
 	prog.Done(fmt.Sprintf("Reset complete: %d files cleared, %d candidates dropped, LSH index wiped (elapsed %s). Now enqueue acoustid.fingerprint-rescan with scope=all force=true.",
 		cleared, deleted, time.Since(startedAt).Round(time.Second)))
+	return nil
+}
+
+// fingerprintResetter is the batched whole-library AcoustID fingerprint wipe.
+//
+// Not on database.Store (compile-probed 2026-08-19), so a bare assertion fails
+// through the Bleve indexedStore decorator -- which is exactly how this op
+// degraded to the one-row-at-a-time fallback in production. Named rather than
+// resolved with database.AsPebbleStore so this package does not depend on the
+// concrete type by name -- see
+// docs/plans/2026-08-19-split-the-pebblestore-surface.md.
+type fingerprintResetter interface {
+	ClearAllAcoustIDFingerprints(ctx context.Context, batchSize int, progress func(processed, cleared, total int)) (int, int, error)
+}
+
+// resolveFingerprintResetter walks the decorator chain, returning nil on a
+// backend without the batched wipe so the caller keeps its per-row fallback.
+func resolveFingerprintResetter(s any) fingerprintResetter {
+	if c, ok := database.AsCapability[fingerprintResetter](s); ok {
+		return c
+	}
 	return nil
 }

@@ -171,7 +171,7 @@ func (de *Engine) PostInit(ctx context.Context, c *serviceregistry.Container) er
 	// Hardening, not a bug fix. It is worth doing anyway because the fallback is
 	// silent: checkExactISBN would just keep using the O(n) GetAllBooks path
 	// forever instead of the O(matches) indexed one, with nothing logged.
-	if ps := database.AsPebbleStore(de.bookStore); ps != nil {
+	if ps := resolveISBNIndexStore(de.bookStore); ps != nil {
 		de.SetISBNIndexStore(ps)
 		slog.Info("[dedup] PostInit wired ISBNIndexStore (checkExactISBN will use indexed path when flag is set)")
 	}
@@ -233,6 +233,29 @@ func (de *Engine) Stop(ctx context.Context) error {
 	case <-time.After(timeout):
 		slog.Warn("[dedup] hydration goroutine did not stop within timeout — proceeding with shutdown",
 			"timeout", timeout)
+	}
+	return nil
+}
+
+// resolveISBNIndexStore walks the decorator chain for ISBNIndexStore, the
+// interface this package already declares for checkExactISBN's indexed path.
+//
+// No new interface is needed here -- ISBNIndexStore predates this change; what
+// changes is that PostInit no longer names *database.PebbleStore to obtain one.
+//
+// This one is a MIXED-reachability composite, and it is the only one in this
+// sweep. Compile-probed 2026-08-19 against database.Store with
+// `var _ interface{...} = (database.Store)(nil)` under -gcflags=-e:
+// GetBookIDsByISBNASIN IS declared on database.Store, IsISBNIndexBuilt is NOT.
+// A composite takes the WORSE reachability of its members, so the pair fails
+// through any decorator that embeds the database.Store interface even though
+// half of it would resolve -- and nothing in the syntax says which half is the
+// weak one. That is why this must go through AsCapability rather than a bare
+// assertion. Same shape as dedup's lshCandidateStore (#2598).
+// See docs/plans/2026-08-19-split-the-pebblestore-surface.md.
+func resolveISBNIndexStore(s any) ISBNIndexStore {
+	if c, ok := database.AsCapability[ISBNIndexStore](s); ok {
+		return c
 	}
 	return nil
 }

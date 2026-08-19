@@ -638,15 +638,15 @@ func (h *DiagnosticsHandler) GetDBHealth(c *gin.Context) {
 
 	// Main store stats — PebbleDB only since fable5 T022.
 	//
-	// AsPebbleStore, not a bare assertion. Traced 2026-08-19: this handler is
-	// built in wireHandlers, which runs setupRoutes -> NewServer, so the
-	// s.Store() it captured is the BARE store and the bare form was NOT failing
-	// here. Construction time is what decides this, not the fact that GetDBHealth
-	// itself runs at request time. Converted for uniformity with the other nine
-	// sites (#2597) and because the failure mode is invisible: a nil here just
-	// drops resp.Pebble from the payload, so db-health reports a healthy store
-	// with no Pebble section rather than an error.
-	if st := database.AsPebbleStore(store); st != nil {
+	// resolveKeyCounter, not a bare assertion and no longer the concrete type.
+	// Traced 2026-08-19: this handler is built in wireHandlers, which runs
+	// setupRoutes -> NewServer, so the s.Store() it captured is the BARE store
+	// and the bare form was NOT failing here. Construction time is what decides
+	// this, not the fact that GetDBHealth itself runs at request time. The
+	// failure mode is invisible either way: a nil here just drops resp.Pebble
+	// from the payload, so db-health reports a healthy store with no Pebble
+	// section rather than an error.
+	if st := resolveKeyCounter(store); st != nil {
 		keyCount, sizeBytes, err := st.KeyCount()
 		if err != nil {
 			slog.Warn("db-health pebble key count", "err", err)
@@ -712,4 +712,23 @@ func (h *DiagnosticsHandler) GetDBHealth(c *gin.Context) {
 	}
 
 	httputil.RespondWithOK(c, resp)
+}
+
+// keyCounter is the single Pebble-only statistic the db-health endpoint reports.
+//
+// Not on database.Store (compile-probed 2026-08-19), so a bare assertion fails
+// through the Bleve indexedStore decorator. Named rather than resolved with
+// database.AsPebbleStore so this package does not depend on the concrete type
+// by name -- see docs/plans/2026-08-19-split-the-pebblestore-surface.md.
+type keyCounter interface {
+	KeyCount() (count int64, sizeBytes uint64, err error)
+}
+
+// resolveKeyCounter walks the decorator chain, returning nil on a backend that
+// does not keep Pebble key statistics.
+func resolveKeyCounter(s any) keyCounter {
+	if c, ok := database.AsCapability[keyCounter](s); ok {
+		return c
+	}
+	return nil
 }
