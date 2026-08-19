@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/purge_millisecond_durations.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7ad86e89-caff-4b83-8cdb-ec0403de1d98
-// last-edited: 2026-08-04
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -35,7 +35,7 @@ type PurgeMillisecondDurationsParams struct {
 func (p *Plugin) purgeMillisecondDurationsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.purge-millisecond-durations",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Convert millisecond book_file durations to seconds",
 		Description: "BookFile.Duration is seconds by convention, but an old iTunes import path stored " +

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/cleanup_orphan_embeddings.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9be49561-c03e-484c-ae53-723bbe299ebe
-// last-edited: 2026-07-04
+// last-edited: 2026-08-19
 
 // Package dedup — op dedup.cleanup-orphan-embeddings.
 //
@@ -82,7 +82,7 @@ func (r cleanupOrphanReport) summary() string {
 func (p *Plugin) cleanupOrphanEmbeddingsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.cleanup-orphan-embeddings",
-		Liveness: sdk.LivenessManual,
+		Liveness:    sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Clean up orphaned book embeddings",
 		Description: "Retroactive counterpart to PR #1802's DeleteBook fix: finds emb:v:book:* rows " +

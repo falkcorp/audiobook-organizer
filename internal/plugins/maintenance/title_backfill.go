@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-07
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -33,7 +33,7 @@ type pendingUpdate struct {
 func (p *Plugin) titleBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.title-backfill",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Strip chapter prefixes from book titles",
 		Description:     "Scans all books and removes leading chapter/track markers from Book.Title (e.g. '(76/85) Tarkin' → 'Tarkin'). Default dry-run previews changes; set dryRun=false to apply.",

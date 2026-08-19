@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/cleanup_orphan_author_embeddings.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-07-08
+// last-edited: 2026-08-19
 
 // Package dedup — op dedup.cleanup-orphan-author-embeddings.
 //
@@ -93,7 +93,7 @@ func (r cleanupOrphanAuthorReport) summary() string {
 func (p *Plugin) cleanupOrphanAuthorEmbeddingsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.cleanup-orphan-author-embeddings",
-		Liveness: sdk.LivenessManual,
+		Liveness:    sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Clean up orphaned author embeddings",
 		Description: "Author-side counterpart to dedup.cleanup-orphan-embeddings (books): finds " +

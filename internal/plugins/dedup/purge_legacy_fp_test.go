@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/purge_legacy_fp_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9e4b7f3a-2c1d-4e8b-b6a5-0d7c9e2f5b8a
-// last-edited: 2026-07-06
+// last-edited: 2026-08-19
 
 // Table-driven tests for the dedup.purge-legacy-fp-candidates op (T015).
 //
@@ -60,8 +60,8 @@ type mockReporter struct{}
 var _ sdk.Reporter = (*mockReporter)(nil)
 
 func (m *mockReporter) UpdateProgress(current, total int, message string) error { return nil }
-func (m *mockReporter) IsCanceled() bool                                         { return false }
-func (m *mockReporter) Logger() *slog.Logger                                     { return slog.Default() }
+func (m *mockReporter) IsCanceled() bool                                        { return false }
+func (m *mockReporter) Logger() *slog.Logger                                    { return slog.Default() }
 func (m *mockReporter) Log(level slog.Level, message string, attrs ...slog.Attr) error {
 	return nil
 }
@@ -103,19 +103,19 @@ func TestPurgeLegacyFP(t *testing.T) {
 
 	const (
 		futureCutover = "2099-01-01T00:00:00Z" // all now-inserted rows are pre-cutover
-		pastCutover   = "2020-01-01T00:00:00Z"  // all now-inserted rows are post-cutover
+		pastCutover   = "2020-01-01T00:00:00Z" // all now-inserted rows are post-cutover
 	)
 
 	tests := []struct {
-		name           string
-		layer          string
-		similarity     *float64
-		cutoverParam   string // RFC3339 cutover to pass in params
-		fileHashA      string // BookFile FileHash for entity A (empty = no files)
-		fileHashB      string // BookFile FileHash for entity B (empty = no files)
-		sharedHash     bool   // if true, A and B share the same hash (genuine dupe)
-		apply          bool
-		wantStatus     string // expected final status
+		name         string
+		layer        string
+		similarity   *float64
+		cutoverParam string // RFC3339 cutover to pass in params
+		fileHashA    string // BookFile FileHash for entity A (empty = no files)
+		fileHashB    string // BookFile FileHash for entity B (empty = no files)
+		sharedHash   bool   // if true, A and B share the same hash (genuine dupe)
+		apply        bool
+		wantStatus   string // expected final status
 	}{
 		{
 			name:         "stale_row_apply",

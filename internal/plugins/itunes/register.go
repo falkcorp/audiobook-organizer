@@ -1,6 +1,6 @@
 // file: internal/plugins/itunes/register.go
-// version: 2.0.1
-// last-edited: 2026-06-23
+// version: 2.1.0
+// last-edited: 2026-08-19
 
 // Service registry registration for the iTunes UOS plugin (W5).
 //
@@ -21,7 +21,6 @@ import (
 	"context"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
@@ -43,7 +42,7 @@ func (p *Plugin) PostInit(_ context.Context, c *serviceregistry.Container) error
 func init() {
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "itunesplugin",
-		Needs:  []string{serviceregistry.KeyITunes, serviceregistry.KeyStore, serviceregistry.KeyConfig},
+		Needs:  []string{serviceregistry.KeyITunes, serviceregistry.KeyConfig},
 		Groups: []string{"plugins"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
@@ -54,8 +53,7 @@ func init() {
 				return (*Plugin)(nil), nil
 			}
 			svc := serviceregistry.Get[*itunesservice.Service](c, serviceregistry.KeyITunes)
-			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
-			return New(svc, store), nil
+			return New(svc), nil
 		},
 	})
 }

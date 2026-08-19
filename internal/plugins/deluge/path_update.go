@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/path_update.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-06-23
+// last-edited: 2026-08-19
 
 package deluge
 
@@ -22,7 +22,7 @@ import (
 func (p *Plugin) pathUpdateDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "deluge.path-update",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "deluge",
 		DisplayName:     "Update Deluge torrent path",
 		Description:     "Updates a torrent's storage path in Deluge after a book is relocated.",

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_unlinked.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c17b493a-8d02-4f65-b9e1-604a8f2371cd
-// last-edited: 2026-08-17
+// last-edited: 2026-08-19
 
 // Package maintenance — op maintenance.relink-unlinked-books.
 //
@@ -69,7 +69,7 @@ type relinkParams struct {
 func (p *Plugin) relinkUnlinkedBooksDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.relink-unlinked-books",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Relink unlinked books (detect · repair)",
 		Description: "Finds Book rows that own ZERO book_file rows but whose file_path still resolves on disk, " +

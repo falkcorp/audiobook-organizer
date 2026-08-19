@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/centralization.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-07-12
+// last-edited: 2026-08-19
 
 package deluge
 
@@ -24,7 +24,7 @@ import (
 func (p *Plugin) centralizationDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "deluge.centralize",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "deluge",
 		DisplayName:     "Centralize Deluge books",
 		Description:     "Moves Deluge-sourced audiobooks from protected paths into the main library.",

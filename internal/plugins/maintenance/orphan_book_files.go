@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9d2c4f6a-8e1b-4c5d-9a7b-3e5f1a2c4b6d
-// last-edited: 2026-08-17
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -33,7 +33,7 @@ func (p *Plugin) orphanBookFilesCleanupDef() sdk.OperationDef {
 	sched := "15 2 * * *" // 02:15 daily — nightly maintenance window
 	return sdk.OperationDef{
 		ID:              "maintenance.orphan-book-files-cleanup",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Orphan book_file cleanup",
 		Description:     "Detects book_file rows whose book_id no longer references an existing book. Reports the count by default; pass {\"delete\": true} to remove the orphans.",

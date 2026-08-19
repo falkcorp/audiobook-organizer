@@ -1,7 +1,7 @@
 // file: internal/plugins/itunes/import.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-07-17
+// last-edited: 2026-08-19
 
 package itunes
 
@@ -17,7 +17,7 @@ import (
 func (p *Plugin) importDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:                    "itunes.import",
-		Liveness: sdk.LivenessManual,
+		Liveness:              sdk.LivenessManual,
 		Plugin:                "itunes",
 		DisplayName:           "iTunes Library Import",
 		Description:           "Import audiobooks from the iTunes/Music library into the organizer.",

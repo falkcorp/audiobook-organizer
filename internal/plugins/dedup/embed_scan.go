@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/embed_scan.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: e2f3a4b5-c6d7-8901-bcde-f12345678901
-// last-edited: 2026-07-07
+// last-edited: 2026-08-19
 
 // T018: embed_scan.go is the canonical implementation for both
 // dedup.embed-scan (sync) and dedup.embed-async (async/batch API).
@@ -50,7 +50,7 @@ type EmbedScanParams struct {
 func (p *Plugin) embedScanDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "dedup.embed-scan",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "dedup",
 		DisplayName:     "Embed all books",
 		Description:     "Re-embeds every primary book that lacks a fresh embedding. Pass {\"async\":true} to use the OpenAI Batch API instead of synchronous per-book calls.",

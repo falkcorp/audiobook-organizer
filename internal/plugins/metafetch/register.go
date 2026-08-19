@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/register.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a2f9c1d-4e63-4b80-9c15-6d0e1f2a3b40
-// last-edited: 2026-07-11
+// last-edited: 2026-08-19
 
 // Service registry registration for the metafetch UOS plugin (INIT-3-T1).
 //
@@ -16,7 +16,6 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
@@ -28,7 +27,7 @@ func init() {
 		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyMetaFetch},
 		Groups: []string{"plugins"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
+			store := serviceregistry.Get[pluginStore](c, serviceregistry.KeyStore)
 			mfs, _ := serviceregistry.TryGet[*metafetch.Service](c, serviceregistry.KeyMetaFetch)
 			if store == nil || mfs == nil {
 				return (*Plugin)(nil), nil

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/integrity_check.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7f4a2b3c-9d1e-4f6a-8b5c-2e0d1f3a4b5c
-// last-edited: 2026-08-17
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -24,7 +24,7 @@ func (p *Plugin) integrityCheckDef() sdk.OperationDef {
 	sched := "30 2 * * *" // 02:30 daily — nightly maintenance window
 	return sdk.OperationDef{
 		ID:              "maintenance.file-integrity-check",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "File integrity check",
 		Description:     "Flags book_file rows where file_hash differs from original_file_hash with no AO tag-write on record (post_metadata_hash empty) — a candidate for external modification or bit-rot. Report-only; takes no action.",

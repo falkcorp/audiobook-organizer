@@ -1,6 +1,7 @@
 // file: internal/plugins/dedup/purge_stale.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7f3e1b2c-4a8d-4e1f-9c2a-3e5b8d0a1c47
+// last-edited: 2026-08-19
 
 package dedup
 
@@ -28,7 +29,7 @@ import (
 func (p *Plugin) purgeStaleDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "dedup.purge-stale",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "Cleanup stale dedup candidates",
 		Description:     "Deletes pending dedup candidates that are no longer valid (chapter files in same folder, same version-group, distinct series volumes).",

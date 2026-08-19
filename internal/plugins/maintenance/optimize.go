@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/optimize.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d4e5f6a7-b8c9-0123-4567-890123456789
-// last-edited: 2026-08-12
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -21,7 +21,7 @@ import (
 func (p *Plugin) optimizeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "library.optimize",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Library optimize sweep",
 		Description:     "Chains cleanup-stale → fingerprint-rescan(missing) → dedup-acoustid-scan → backfill into one user-triggered maintenance pass.",

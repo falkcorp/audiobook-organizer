@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/calibrate_embedding_thresholds.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f1d2e3a-4b5c-4d6e-8f90-1a2b3c4d5e6f
-// last-edited: 2026-07-11
+// last-edited: 2026-08-19
 
 // Package dedup — op dedup.calibrate-embedding-thresholds (DEDUP-2/3).
 //
@@ -110,7 +110,7 @@ type calibrateEmbeddingThresholdsParams struct {
 func (p *Plugin) calibrateEmbeddingThresholdsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.calibrate-embedding-thresholds",
-		Liveness: sdk.LivenessManual,
+		Liveness:    sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Calibrate embedding thresholds (report only)",
 		Description: "Read-only DEDUP-2/3 harness: scores the labeled gold dataset with the " +

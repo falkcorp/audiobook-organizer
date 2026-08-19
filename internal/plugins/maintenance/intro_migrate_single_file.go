@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6b0d94e7-1c58-4a32-bf07-9e5d2a17c630
-// last-edited: 2026-08-17
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -90,7 +90,7 @@ const introMigratePageSize = 500
 func (p *Plugin) introMigrateSingleFileDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.intro-migrate-single-file",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Migrate intro transcripts to single-file books",
 		Description:     "Tier 0 of the per-file intro backfill. Copies the book-level intro transcript onto the book's one BookFile row, for the ~33,780 single-file books (75.3% of the library). Zero GPU: it is a copy, not a transcription. Multi-file books are deliberately refused because the book-level transcript does not record which file produced it and the silence-retry path may have used file 2. Defaults to dry_run=true; pass dry_run=false to write.",

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/backfill.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f2a3b4c5-d6e7-8901-5678-123456789012
-// last-edited: 2026-07-18
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -22,7 +22,7 @@ import (
 func (p *Plugin) externalIDBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.external-id-backfill",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "External ID backfill",
 		Description:     "One-shot backfill of external IDs (iTunes PIDs, etc.) from the existing database.",
@@ -54,7 +54,7 @@ func (p *Plugin) runExternalIDBackfill(_ context.Context, _ json.RawMessage, rep
 func (p *Plugin) movementAtomCleanupDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.movement-atom-cleanup",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Strip movement atoms",
 		Description:     "Strips unwanted movement atoms from M4B files that cause chapter parsing issues.",
@@ -80,7 +80,7 @@ func (p *Plugin) runMovementAtomCleanup(ctx context.Context, _ json.RawMessage, 
 func (p *Plugin) malformedM4BRemuxDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.malformed-m4b-remux",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Remux malformed M4B files",
 		Description:     "Remuxes M4B files with broken container structure without re-encoding audio.",
@@ -114,7 +114,7 @@ func (p *Plugin) runMalformedM4BRemux(ctx context.Context, _ json.RawMessage, re
 func (p *Plugin) malformedM4BTranscodeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.malformed-m4b-transcode",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Transcode malformed M4B files",
 		Description:     "Full re-encode of M4B files that cannot be remuxed. Interrupted runs surface in UI for operator confirmation.",

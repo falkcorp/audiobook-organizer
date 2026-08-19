@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_backfill.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1f6b3d28-9a47-4c50-8e21-7b0c4a9d6e35
-// last-edited: 2026-07-06
+// last-edited: 2026-08-19
 
 // Package maintenance — op maintenance.tag-backfill.
 //
@@ -44,7 +44,7 @@ type tagBackfillParams struct {
 func (p *Plugin) tagBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.tag-backfill",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Backfill lossless file tags (RawTags + track/disc)",
 		Description: "Reads each BookFile's audio tags and backfills the lossless RawTags map plus " +

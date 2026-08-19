@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/calibrate_composite.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4c2f7a91-8d3b-4e6a-9f10-5b7c2d1e8a34
-// last-edited: 2026-07-18
+// last-edited: 2026-08-19
 
 // Package dedup — op dedup.calibrate-composite (INIT-1 T5).
 //
@@ -136,7 +136,7 @@ type calibrateCompositeParams struct {
 func (p *Plugin) calibrateCompositeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.calibrate-composite",
-		Liveness: sdk.LivenessManual,
+		Liveness:    sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Calibrate composite scorer (report; apply gated)",
 		Description: "Replays each labeled pair's stored ScoreBreakdown signals through " +

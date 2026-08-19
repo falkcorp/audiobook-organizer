@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/batch_poller.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: c9d0e1f2-a3b4-5678-2345-890123456789
-// last-edited: 2026-05-07
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -20,7 +20,7 @@ func (p *Plugin) batchPollerDef() sdk.OperationDef {
 	sched := "*/5 * * * *" // every 5 minutes
 	return sdk.OperationDef{
 		ID:              "maintenance.batch-poller",
-		Liveness: sdk.LivenessNone,
+		Liveness:        sdk.LivenessNone,
 		ProgressTimeout: 5 * time.Minute, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "OpenAI batch poller",

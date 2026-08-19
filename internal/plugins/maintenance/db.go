@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/db.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d4e5f6a7-b8c9-0123-def0-345678901234
-// last-edited: 2026-05-07
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -19,7 +19,7 @@ func (p *Plugin) dbOptimizeDef() sdk.OperationDef {
 	sched := "0 2 * * 0" // 02:00 every Sunday
 	return sdk.OperationDef{
 		ID:              "maintenance.db-optimize",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Optimize database",
 		Description:     "Runs VACUUM/ANALYZE/WAL-checkpoint on all database stores.",

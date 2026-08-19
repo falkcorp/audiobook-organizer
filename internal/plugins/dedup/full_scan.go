@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/full_scan.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-04
+// last-edited: 2026-08-19
 
 // T018: full_scan.go enforces phase ordering for the full dedup scan:
 //
@@ -68,7 +68,7 @@ func etaSuffix(phaseStart time.Time, done, total int) string {
 func (p *Plugin) fullScanDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "dedup.full-scan",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "dedup",
 		DisplayName:     "Full dedup scan",
 		Description:     "Runs a full embedding-based dedup scan, purging stale candidates first.",

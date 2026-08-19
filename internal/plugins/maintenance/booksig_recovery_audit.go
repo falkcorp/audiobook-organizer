@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_recovery_audit.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5f2a7c14-9b3e-4d6a-8e1f-2c0d5a9b7e34
-// last-edited: 2026-08-17
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -67,7 +67,7 @@ func (e auditExample) String() string {
 func (p *Plugin) bookSigRecoveryAuditDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.booksig-recovery-audit",
-		Liveness: sdk.LivenessManual,
+		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Audit/restore wiped Description/BookSig from snapshots",
 		Description: "Dry-run audit (default) or owner-greenlit apply mode (STOR-1/STOR-2). " +

@@ -1,7 +1,7 @@
 // file: internal/plugins/itunes/plugin_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a7b8c9d0-e1f2-3456-ghij-567890123456
-// last-edited: 2026-08-16
+// last-edited: 2026-08-19
 
 package itunes
 
@@ -18,7 +18,7 @@ import (
 // TestPlugin_NilGuard tests that the plugin handles nil service gracefully.
 // This is critical for server initialization when iTunes is disabled.
 func TestPlugin_NilGuard(t *testing.T) {
-	p := New(nil, nil)
+	p := New(nil)
 	if err := p.Register(nil); err != nil {
 		t.Fatalf("nil guard: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestPlugin_NilGuard(t *testing.T) {
 // op-history row every 10/30 minutes). Restore schedules only alongside a
 // real implementation.
 func TestStubOps_NoCronSchedule(t *testing.T) {
-	p := New(nil, nil)
+	p := New(nil)
 	if s := p.syncDef().Schedule; s != nil {
 		t.Errorf("itunes.sync is a stub but has schedule %q — remove it or implement the op", *s)
 	}
@@ -84,7 +84,7 @@ func (r *stubWarnReporter) SetCurrentItem(label string) {}
 // The log line is gone because the returned error carries the same
 // information to the same place, and cannot be mistaken for success.
 func TestStubRuns_FailInsteadOfReportingSuccess(t *testing.T) {
-	p := New(nil, nil)
+	p := New(nil)
 	rep := &stubWarnReporter{}
 	runs := map[string]func(context.Context) error{
 		"itunes.sync":           func(ctx context.Context) error { return p.runSync(ctx, nil, rep) },
@@ -128,7 +128,7 @@ func TestRegister_OnlyRegistersDefsWithARealRun(t *testing.T) {
 		"itunes.path-repair":    "server.RegisterITunesPathRepairOp (Repair.Repair)",
 	}
 
-	p := New(nil, nil)
+	p := New(nil)
 	var got []string
 	for _, def := range p.registeredDefs() {
 		got = append(got, def.ID)

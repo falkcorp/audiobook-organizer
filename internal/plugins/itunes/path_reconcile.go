@@ -1,7 +1,7 @@
 // file: internal/plugins/itunes/path_reconcile.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: d4e5f6a7-b8c9-0123-defg-234567890123
-// last-edited: 2026-07-17
+// last-edited: 2026-08-19
 
 package itunes
 
@@ -19,7 +19,7 @@ func (p *Plugin) pathReconciledDef() sdk.OperationDef {
 	// nothing. Restore a schedule only together with a real implementation.
 	return sdk.OperationDef{
 		ID:                    "itunes.path-reconcile",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:              sdk.LivenessRunItems,
 		Plugin:                "itunes",
 		DisplayName:           "iTunes Path Reconcile",
 		Description:           "Reconcile iTunes track paths after library reorganizations.",

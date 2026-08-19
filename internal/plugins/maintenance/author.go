@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
-// last-edited: 2026-07-18
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -24,7 +24,7 @@ func (p *Plugin) authorDedupScanDef() sdk.OperationDef {
 	sched := "0 1 * * *" // 01:00 daily
 	return sdk.OperationDef{
 		ID:              "maintenance.author-dedup-scan",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Author dedup scan",
 		Description:     "Refreshes author duplicate-group cache using fuzzy name matching.",
@@ -87,7 +87,7 @@ func (p *Plugin) authorSplitScanDef() sdk.OperationDef {
 	sched := "0 2 * * 1" // 02:00 every Monday
 	return sdk.OperationDef{
 		ID:              "maintenance.author-split-scan",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Author split scan",
 		Description:     "Finds and splits composite author names (e.g. 'Smith, J. & Jones, A.').",
@@ -276,7 +276,7 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, _ json.RawMessage, repo
 func (p *Plugin) resolveProductionAuthorsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.resolve-production-authors",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Resolve production company authors",
 		Description:     "Resolves real authors for production company entries using external metadata.",

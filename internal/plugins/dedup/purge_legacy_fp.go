@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/purge_legacy_fp.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3b7a2e9f-c1d4-4f8b-a5e0-6d3c8b2f1e47
-// last-edited: 2026-07-06
+// last-edited: 2026-08-19
 
 // Package dedup — op dedup.purge-legacy-fp-candidates (T015, SPEC 1 §8 step 2).
 //
@@ -61,7 +61,7 @@ type purgeLegacyFPParams struct {
 func (p *Plugin) purgeLegacyFPDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.purge-legacy-fp-candidates",
-		Liveness: sdk.LivenessManual,
+		Liveness:    sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Purge legacy fingerprint candidates",
 		Description: "Marks pre-whole-file-fingerprint exact/embedding sim=1.0 candidates as stale-fp. " +

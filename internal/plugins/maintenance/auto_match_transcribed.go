@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7a3b5c1d-2e4f-6a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-11
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -35,7 +35,7 @@ type autoMatchTranscribedParams struct {
 func (p *Plugin) autoMatchTranscribedDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.auto-match-transcribed",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Auto-match transcribed books",
 		Description:     "Walks the library and auto-applies the best metadata candidate to unreviewed books whose audio-derived transcription exactly matches a search result above a configurable score threshold. Dry-run by default — pass dry_run=false to apply. Checkpointed and cancellable.",

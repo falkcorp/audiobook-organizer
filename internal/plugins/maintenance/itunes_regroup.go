@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-08-17
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -40,7 +40,7 @@ type itunesRegroupParams struct {
 func (p *Plugin) itunesRegroupDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.itunes-regroup",
-		Liveness: sdk.LivenessManual,
+		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Re-group fragmented/over-merged iTunes books in place",
 		Description:     "Re-groups existing iTunes-imported books to match the FIXED importer grouping (CONS-FRAG): consolidates fragmented anthologies/chapter-parts and splits over-merged books, in place via per-PID external-id + BookFile reassignment, preserving enrichment and version groups. Version-entangled groups are skipped. Default dry-run reports the plan; set dryRun=false to apply.",

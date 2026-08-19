@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/probe_directory_books.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6f2a90d4-3c81-4e57-b0a6-9d47e1c85b23
-// last-edited: 2026-08-06
+// last-edited: 2026-08-19
 
 // Package maintenance — op maintenance.probe-directory-books.
 //
@@ -108,7 +108,7 @@ var (
 func (p *Plugin) probeDirectoryBooksDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.probe-directory-books",
-		Liveness: sdk.LivenessRunItems,
+		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Probe directory-shaped books (tier 2 · re-classify)",
 		Description: "Tier-2 escalation over the directory-shaped unlinked books that relink-unlinked-books could only " +
