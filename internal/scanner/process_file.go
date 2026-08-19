@@ -216,10 +216,10 @@ func PersistChaptersForBook(ctx context.Context, bookFilePath string, scanLog lo
 	// is silent (a sampled warning that reads like an unsupported backend
 	// rather than a bug), and the cost of being right by construction is one
 	// function call.
-	ps := database.AsPebbleStore(store)
+	ps := resolveChapterStore(store)
 	if ps == nil {
 		warnSampled(&chapterStoreAssertErrCount, scanLog,
-			"scanner.PersistChaptersForBook: store is %T, not *database.PebbleStore -- chapter extraction skipped for %s",
+			"scanner.PersistChaptersForBook: store %T does not carry the chapter capability -- chapter extraction skipped for %s",
 			store, bookFilePath)
 		return nil
 	}
@@ -340,4 +340,25 @@ func logChapterWarn(scanLog logger.Logger, format string, args ...interface{}) {
 		return
 	}
 	defaultLog.Warn(format, args...)
+}
+
+// chapterStore is the read/write pair chapter persistence needs.
+//
+// Neither method is on database.Store (compile-probed 2026-08-19), so a bare
+// assertion fails through the Bleve indexedStore decorator. Named rather than
+// resolved with database.AsPebbleStore so this package does not depend on the
+// concrete type by name -- see
+// docs/plans/2026-08-19-split-the-pebblestore-surface.md.
+type chapterStore interface {
+	GetChaptersForBook(bookID string) ([]database.Chapter, error)
+	SaveChaptersForBook(bookID string, chapters []database.Chapter) error
+}
+
+// resolveChapterStore walks the decorator chain, returning nil on a backend
+// that cannot persist chapters so the caller logs a sampled warning and skips.
+func resolveChapterStore(s any) chapterStore {
+	if c, ok := database.AsCapability[chapterStore](s); ok {
+		return c
+	}
+	return nil
 }

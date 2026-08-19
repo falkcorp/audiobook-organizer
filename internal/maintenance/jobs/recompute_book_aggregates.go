@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/recompute_book_aggregates.go
 // version: 1.4.0
 // guid: 9b0c1d2e-3f4a-5b6c-7d8e-9f0a1b2c3d4e
-// last-edited: 2026-08-17
+// last-edited: 2026-08-19
 
 // Maintenance job: recompute-book-aggregates
 //
@@ -58,14 +58,15 @@ func (j *recomputeBookAggregatesJob) Run(
 	reporter maintenance.ProgressReporter,
 	dryRun bool,
 ) error {
-	// AsPebbleStore, not a bare assertion: this job runs through
-	// server.maintenance_job_op, which resolves Server.Store() at op-run time and
-	// therefore hands us the Bleve search-index decorator in production. A bare
-	// `store.(*database.PebbleStore)` failed against that wrapper, so every prod run
-	// took the interface fallback below — which skips the
+	// resolveAggregatesBackfillMarker, not a bare assertion and no longer the
+	// concrete type: this job runs through server.maintenance_job_op, which
+	// resolves Server.Store() at op-run time and therefore hands us the Bleve
+	// search-index decorator in production. A bare
+	// `store.(*database.PebbleStore)` failed against that wrapper, so every prod
+	// run took the interface fallback below — which skips the
 	// IsBookAggregatesBackfillDone sentinel checked further down and so redid the
 	// entire 40k-book backfill each time instead of short-circuiting.
-	pebbleStore := database.AsPebbleStore(store)
+	pebbleStore := resolveAggregatesBackfillMarker(store)
 	if pebbleStore == nil {
 		// Fallback for test double or SQLite: iterate via the Store interface.
 		return j.runViaInterface(ctx, store, reporter, dryRun)
@@ -249,4 +250,26 @@ func (j *recomputeBookAggregatesJob) runViaInterface(
 // PR-2 moves it to reporter.Checkpoint; the policy is unchanged by that move.
 func (j *recomputeBookAggregatesJob) Policy() maintenance.ExecutionPolicy {
 	return maintenance.RestartPolicy()
+}
+
+// aggregatesBackfillMarker is the one-time sentinel pair that lets this job
+// short-circuit a completed 40k-book backfill instead of redoing it.
+//
+// Neither method is on database.Store (compile-probed 2026-08-19), so a bare
+// assertion fails through the Bleve indexedStore decorator and the job silently
+// loses its short-circuit. Named rather than resolved with
+// database.AsPebbleStore so this package does not depend on the concrete type
+// by name -- see docs/plans/2026-08-19-split-the-pebblestore-surface.md.
+type aggregatesBackfillMarker interface {
+	IsBookAggregatesBackfillDone() bool
+	MarkBookAggregatesBackfillDone() error
+}
+
+// resolveAggregatesBackfillMarker walks the decorator chain, returning nil on a
+// backend without the sentinel so the caller keeps its interface fallback.
+func resolveAggregatesBackfillMarker(s any) aggregatesBackfillMarker {
+	if c, ok := database.AsCapability[aggregatesBackfillMarker](s); ok {
+		return c
+	}
+	return nil
 }

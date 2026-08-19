@@ -62,11 +62,12 @@ func init() {
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
-			ps := database.AsPebbleStore(store)
-			if ps == nil {
-				return (*database.EmbeddingStore)(nil), nil
+			// FromStore, not AsPebbleStore + DB(): the unwrap lives in
+			// internal/database so this package does not name *PebbleStore.
+			if es := database.NewEmbeddingStoreFromStore(store); es != nil {
+				return es, nil
 			}
-			return database.NewEmbeddingStore(ps.DB()), nil
+			return (*database.EmbeddingStore)(nil), nil
 		},
 	})
 
@@ -196,12 +197,12 @@ func init() {
 				return (*database.PebbleMetricsStore)(nil), nil
 			}
 			store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
-			ps := database.AsPebbleStore(store)
-			if ps == nil {
+			ms := database.NewPebbleMetricsStoreFromStore(store)
+			if ms == nil {
 				slog.Warn("metricsstore: backend is not PebbleStore, metrics disabled")
 				return (*database.PebbleMetricsStore)(nil), nil
 			}
-			return database.NewPebbleMetricsStore(ps.DB()), nil
+			return ms, nil
 		},
 	})
 
@@ -214,13 +215,12 @@ func init() {
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
 			store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
-			ps := database.AsPebbleStore(store)
-			if ps == nil {
-				return (*database.AIScanStore)(nil), nil
-			}
-			s, err := database.NewAIScanStoreFromDB(ps.DB())
+			s, err := database.NewAIScanStoreFromStore(store)
 			if err != nil {
 				slog.Warn("Failed to init AI scan store", "err", err)
+				return (*database.AIScanStore)(nil), nil
+			}
+			if s == nil {
 				return (*database.AIScanStore)(nil), nil
 			}
 			return s, nil

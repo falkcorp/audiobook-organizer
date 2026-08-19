@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/sweep_pebble_metrics_ttl.go
 // version: 1.3.0
 // guid: b8c9d0e1-f2a3-0008-1234-000000000008
-// last-edited: 2026-08-17
+// last-edited: 2026-08-19
 
 // Package jobs — maintenance job: sweep expired Pebble metrics snapshots.
 //
@@ -47,22 +47,21 @@ func (j *sweepPebbleMetricsTTLJob) Run(
 	reporter maintenance.ProgressReporter,
 	dryRun bool,
 ) error {
-	// AsPebbleStore, not a bare assertion: this job runs through
-	// server.maintenance_job_op, which resolves Server.Store() at op-run time and
-	// therefore hands us the Bleve search-index decorator in production. A bare
-	// `store.(*database.PebbleStore)` failed against that wrapper, so this job took
-	// the skip branch below on every prod run and expired metrics snapshots were
-	// never swept. Nothing surfaced it because skipping is a legitimate outcome on
-	// a non-Pebble backend.
-	ps := database.AsPebbleStore(store)
-	if ps == nil {
+	// FromStore, which resolves through the decorator chain internally: this job
+	// runs through server.maintenance_job_op, which resolves Server.Store() at
+	// op-run time and therefore hands us the Bleve search-index decorator in
+	// production. A bare `store.(*database.PebbleStore)` failed against that
+	// wrapper, so this job took the skip branch below on every prod run and
+	// expired metrics snapshots were never swept. Nothing surfaced it because
+	// skipping is a legitimate outcome on a non-Pebble backend. Constructing via
+	// internal/database also keeps *PebbleStore out of this package entirely.
+	metricsStore := database.NewPebbleMetricsStoreFromStore(store)
+	if metricsStore == nil {
 		// Not a Pebble backend — no-op (test double or SQLite fallback).
 		slog.Info("sweep-pebble-metrics-ttl: store is not a PebbleStore; skipping")
 		reporter.Log("info", "Store is not PebbleStore — skipped", nil)
 		return nil
 	}
-
-	metricsStore := database.NewPebbleMetricsStore(ps.DB())
 
 	if dryRun {
 		reporter.Log("info", "dry-run: would sweep expired Pebble metrics snapshots", nil)

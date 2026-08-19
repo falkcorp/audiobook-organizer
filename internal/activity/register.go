@@ -38,15 +38,16 @@ func init() {
 			// store with indexedStore during Start(), and a bare
 			// store.(*database.PebbleStore) fails through that decorator --
 			// silently taking the "non-Pebble backend" branch below, which
-			// looks like a supported configuration rather than a bug. See
+			// looks like a supported configuration rather than a bug. The
+			// FromStore constructor does that unwrap inside internal/database,
+			// so this package never names the concrete type. See
 			// database/store_capability.go.
-			ps := database.AsPebbleStore(store)
-			if ps == nil {
+			s := database.NewPebbleActivityStoreFromStore(store)
+			if s == nil {
 				// Non-Pebble backend (test double, SQLite) — return nil pointer;
 				// the activitystore Build checks for nil and falls back to NutsDB-only.
 				return (*database.PebbleActivityStore)(nil), nil
 			}
-			s := database.NewPebbleActivityStore(ps.DB())
 			slog.Info("[activity] Pebble activity store initialised")
 			return s, nil
 		},
