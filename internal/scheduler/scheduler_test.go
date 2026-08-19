@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -18,7 +17,7 @@ import (
 // don't touch the database).
 func testDeps() SchedulerDeps {
 	return SchedulerDeps{
-		Store:               func() database.Store { return nil },
+		Store:               func() SchedulerStore { return nil },
 		HasDedupEngine:      func() bool { return false },
 		HasMetadataFetchSvc: func() bool { return false },
 		HasActivitySvc:      func() bool { return false },

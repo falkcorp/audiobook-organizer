@@ -40,7 +40,7 @@ func setupMaintenanceTestServer(t *testing.T) *Server {
 
 	srv := NewServer(store)
 	srv.scheduler = scheduler.NewTaskScheduler(scheduler.SchedulerDeps{
-		Store:               srv.Store,
+		Store:               func() scheduler.SchedulerStore { return srv.Store() },
 		OpRegistry:          srv.opRegistry,
 		HasDedupEngine:      func() bool { return false },
 		HasMetadataFetchSvc: func() bool { return false },

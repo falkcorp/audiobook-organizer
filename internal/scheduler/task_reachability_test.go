@@ -8,8 +8,6 @@ package scheduler
 import (
 	"testing"
 	"time"
-
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // reachabilityTestDeps builds a fully-capable SchedulerDeps.
@@ -28,7 +26,7 @@ import (
 // nothing on the reachability path invokes the store.
 func reachabilityTestDeps() SchedulerDeps {
 	return SchedulerDeps{
-		Store:               func() database.Store { return nil },
+		Store:               func() SchedulerStore { return nil },
 		HasDedupEngine:      func() bool { return true },
 		HasMetadataFetchSvc: func() bool { return true },
 		HasActivitySvc:      func() bool { return true },

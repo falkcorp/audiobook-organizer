@@ -620,7 +620,7 @@ func TestUpdateTaskConfig_PurgeDeletedEnabledNamesTheRealKey(t *testing.T) {
 func schedulerView(t *testing.T, name string) (scheduler.TaskInfo, bool) {
 	t.Helper()
 	ts := scheduler.NewTaskScheduler(scheduler.SchedulerDeps{
-		Store:               func() database.Store { return nil },
+		Store:               func() scheduler.SchedulerStore { return nil },
 		HasDedupEngine:      func() bool { return false },
 		HasMetadataFetchSvc: func() bool { return false },
 		HasActivitySvc:      func() bool { return false },

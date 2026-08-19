@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.20.0
+// version: 3.21.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-08-17
+// last-edited: 2026-08-18
 
 package server
 
@@ -447,7 +447,18 @@ func (s *Server) Start(cfg ServerConfig) error {
 
 	// Start unified task scheduler (replaces individual iTunes sync and purge tickers)
 	s.scheduler = scheduler.NewTaskScheduler(scheduler.SchedulerDeps{
-		Store:      s.Store,
+		// Adapter, not a plain method value: function types must be identical
+		// for assignment, so a func() database.Store cannot be assigned to a
+		// func() scheduler.SchedulerStore even though the interface satisfies
+		// it. A nil database.Store converts to a nil SchedulerStore, so the
+		// documented "may return nil before the DB is up" contract holds.
+		Store: func() scheduler.SchedulerStore {
+			st := s.Store()
+			if st == nil {
+				return nil
+			}
+			return st
+		},
 		OpRegistry: s.opRegistry,
 		HasDedupEngine: func() bool {
 			return s.dedupEngine != nil

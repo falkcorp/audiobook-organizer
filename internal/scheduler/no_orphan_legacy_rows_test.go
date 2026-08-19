@@ -75,7 +75,7 @@ func TestScheduledTasksDoNotWriteOrphanLegacyRows(t *testing.T) {
 			}))
 
 			deps := testDeps()
-			deps.Store = func() database.Store { return store }
+			deps.Store = func() SchedulerStore { return store }
 			deps.OpRegistry = reg
 
 			ts := NewTaskScheduler(deps)
