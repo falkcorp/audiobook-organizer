@@ -1,5 +1,5 @@
 // file: internal/merge/collision.go
-// version: 1.0.0
+// version: 1.1.0
 
 package merge
 
@@ -8,8 +8,6 @@ import (
 	"encoding/hex"
 	"io"
 	"os"
-
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // CollisionCandidate describes one existing book that may collide
@@ -22,7 +20,7 @@ type CollisionCandidate struct {
 }
 
 // BookTitle returns the title for a book ID, or empty string if not found.
-func BookTitle(store database.Store, id string) string {
+func BookTitle(store mergeBookReader, id string) string {
 	b, _ := store.GetBookByID(id)
 	if b != nil {
 		return b.Title

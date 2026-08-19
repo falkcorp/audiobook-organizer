@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-07-30
+// last-edited: 2026-08-19
 
 package merge
 
@@ -48,7 +48,7 @@ func AsExternalIDReassigner(s any) ExternalIDReassigner {
 // dedup.MergeBooks path so any two merges are mutually exclusive on a shared
 // book row.
 type Service struct {
-	db               database.Store
+	db               mergeStore
 	writeBackBatcher WriteBackEnqueuer
 	syncFollower     SyncFollower
 }
@@ -79,16 +79,16 @@ type Result struct {
 
 // NewService creates a new Service. The sync-identity follower is wired
 // automatically when db supports it (the production *PebbleStore does); stores
-// that do not — mocks, wrappers that embed database.Store — yield nil and the
-// merge paths simply do not touch sync identity. Override with
-// SetSyncFollower.
-func NewService(db database.Store) *Service {
+// that do not — mocks, and decorators that embed the Store interface rather
+// than forwarding capability methods — yield nil and the merge paths simply do
+// not touch sync identity. Override with SetSyncFollower.
+func NewService(db mergeStore) *Service {
 	follower := database.AsSyncIdentityStore(db)
 	if follower == nil {
 		// Say so out loud. A nil follower silently disables the whole
 		// merge-follow hook, and the only way it can happen in production is
-		// someone wrapping the concrete store in a decorator that embeds
-		// database.Store — exactly the kind of change whose blast radius is
+		// someone wrapping the concrete store in a decorator that embeds the
+		// Store interface — exactly the kind of change whose blast radius is
 		// invisible otherwise.
 		slog.Warn("merge: store does not implement SyncIdentityStore; merges will NOT carry ABS sync identity or listening progress")
 	}
@@ -541,7 +541,7 @@ func (ms *Service) attachVirtualFile(b *database.Book, targetBookID string) int 
 
 // SoftDeleteBook marks a book as deleted using the MarkedForDeletion flag.
 // If UpdateBook fails, falls back to hard-delete via DeleteBook.
-func SoftDeleteBook(store database.Store, bookID string) error {
+func SoftDeleteBook(store mergeBookWriter, bookID string) error {
 	current, err := store.GetBookByID(bookID)
 	if err != nil {
 		return fmt.Errorf("GetBookByID %s: %w", bookID, err)
