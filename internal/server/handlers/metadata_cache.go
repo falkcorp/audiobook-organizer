@@ -399,14 +399,6 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 	})
 }
 
-// errString renders an error for the JSON response, tolerating nil.
-func errString(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
-}
-
 // ClearMetadataNoMatch handles POST /api/v1/audiobooks/:id/clear-no-match.
 //
 // Clears a book's MetadataReviewStatus back to null so it re-surfaces in the

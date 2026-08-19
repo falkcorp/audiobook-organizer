@@ -74,6 +74,15 @@ func newConjRepairPlugin(
 			w.renamedAuthors[id] = name
 			return nil
 		},
+		// The op writes books too (author_conjunction_repair.go:357). Until
+		// 2026-08-19 neither fake set this, so conjRepairWrites.updatedBooks was
+		// declared and never populated -- which is how staticcheck found it. The
+		// consequence was real: this struct exists so a dry-run test can "assert on
+		// silence", and a dry run that called UpdateBook was invisible to it.
+		UpdateBookFunc: func(id string, b *database.Book) (*database.Book, error) {
+			w.updatedBooks = append(w.updatedBooks, id)
+			return b, nil
+		},
 	}
 	return New(&fakeDeps{store: store})
 }
@@ -115,6 +124,15 @@ func newConjRepairPluginWithDeps(
 		UpdateAuthorNameFunc: func(id int, name string) error {
 			w.renamedAuthors[id] = name
 			return nil
+		},
+		// The op writes books too (author_conjunction_repair.go:357). Until
+		// 2026-08-19 neither fake set this, so conjRepairWrites.updatedBooks was
+		// declared and never populated -- which is how staticcheck found it. The
+		// consequence was real: this struct exists so a dry-run test can "assert on
+		// silence", and a dry run that called UpdateBook was invisible to it.
+		UpdateBookFunc: func(id string, b *database.Book) (*database.Book, error) {
+			w.updatedBooks = append(w.updatedBooks, id)
+			return b, nil
 		},
 	}
 	deps.fakeDeps = fakeDeps{store: store}

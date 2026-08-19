@@ -23,9 +23,6 @@ const wantStrippedCount = 9
 // are byte-exact and reflect.DeepEqual on *time.Time fields is reliable.
 var dlFixedTime = time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
 
-func dlIntPtr(i int) *int       { return &i }
-func dlInt64Ptr(i int64) *int64 { return &i }
-
 // dlPopulateNonZero recursively fills every settable field of v with a
 // distinctive non-zero sentinel. The whole point of T1 is that a NEW field
 // added to Book (and to stripBookForMemdb) is automatically covered — that only
