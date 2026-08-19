@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.6.0
+// version: 5.7.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-08-15
+// last-edited: 2026-08-18
 
 package metafetch
 
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
@@ -31,8 +32,113 @@ type WriteBackEnqueuer interface {
 	Enqueue(bookID string)
 }
 
+// forwardedStores is what metafetch hands its store to rather than calls
+// itself. Every entry is another package's declared parameter type, so this is
+// the literal forwarding requirement, and it is kept separate from the groups
+// below because that is the distinction the compiler probe reports: a direct
+// call fails as "has no field or method", a forwarding requirement as "does not
+// implement".
+type forwardedStores interface {
+	// database.EnsureSingletonBookTag, from the tag write-back path.
+	database.BookTagSingletonStore
+	// The tagger deps struct built in service_writeback.go.
+	database.BookFileHashUpdater
+	// database.{Get,Put}CachedMetadataFetch, the fetch/search response cache.
+	database.RawKVStore
+	// hasCheckpoint / setCheckpoint / clearCheckpoints in the write-back
+	// phase gate, which forward to organizer.
+	database.UserPreferenceStore
+	// newPathOrganizer, for computing an organized destination path.
+	organizer.OrganizerStore
+}
+
+// metadataCacheStore is the per-book candidate cache in cache.go.
+type metadataCacheStore interface {
+	GetMetadataCache(bookID string) (*database.MetadataCandidateCache, error)
+	PutMetadataCache(entry *database.MetadataCandidateCache) error
+	ListMetadataCacheKeys() ([]database.MetadataCacheSummary, error)
+	DeleteMetadataCache(bookID string) error
+}
+
+// metadataFieldStateStore is the per-field manual-override state plus the
+// change-history record written whenever a fetched value is applied.
+type metadataFieldStateStore interface {
+	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
+	UpsertMetadataFieldState(state *database.MetadataFieldState) error
+	DeleteMetadataFieldState(bookID, field string) error
+	RecordMetadataChange(record *database.MetadataChangeRecord) error
+}
+
+// metafetchBookStore is the book entity: lookup, create, update, plus the two
+// duplicate-detection views and the flag their match writes.
+type metafetchBookStore interface {
+	GetBookByID(id string) (*database.Book, error)
+	CreateBook(book *database.Book) (*database.Book, error)
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	GetBookTags(bookID string) ([]string, error)
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+	GetBooksByMetadataSourceHash(hash string) ([]database.Book, error)
+	FlagMetadataHashDuplicate(primaryID, duplicateID string) error
+}
+
+// metafetchFileStore is everything about bytes on disk: the file rows, the
+// move/rename bookkeeping the write-back path records, and the import roots a
+// destination path is checked against.
+type metafetchFileStore interface {
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	GetBookFileByPath(filePath string) (*database.BookFile, error)
+	CreateBookFile(file *database.BookFile) error
+	UpdateBookFile(id string, file *database.BookFile) error
+	RecordPathChange(change *database.BookPathChange) error
+	SetLastWrittenAt(id string, t time.Time) error
+	MarkNeedsRescan(bookID string) error
+	GetAllImportPaths() ([]database.ImportPath, error)
+}
+
+// metafetchContributorStore is the get-or-create pass service_apply.go runs when
+// a fetched result names an author or series that may not exist yet.
+type metafetchContributorStore interface {
+	GetAuthorByName(name string) (*database.Author, error)
+	CreateAuthor(name string) (*database.Author, error)
+	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
+	SetBookAuthors(bookID string, authors []database.BookAuthor) error
+	GetSeriesByName(name string, authorID *int) (*database.Series, error)
+	CreateSeries(name string, authorID *int) (*database.Series, error)
+}
+
+// metafetchNarratorStore is the narrator half. Separate from the contributor
+// group above because the apply path never creates a narrator by name -- it
+// only reads and rewrites the join rows.
+type metafetchNarratorStore interface {
+	GetBookNarrators(bookID string) ([]database.BookNarrator, error)
+	SetBookNarrators(bookID string, narrators []database.BookNarrator) error
+	GetNarratorByID(id int) (*database.Narrator, error)
+}
+
+// metafetchStore is the dependency surface of Service, measured with an
+// empty-interface compiler probe run under -gcflags=-e: 36 direct calls and
+// five forwarding constraints, 64 distinct methods in total.
+//
+// It was previously database.Store -- 398 methods. The probe could not report
+// this set until two things below it were narrowed, because both of them took
+// database.Store and so re-imposed the union on anything that forwarded to
+// them: database.EnsureSingletonBookTag, and the three checkpoint helpers in
+// pipeline_checkpoint.go (which forward to organizer, where the same three
+// functions already declared database.UserPreferenceStore -- the metafetch copy
+// was an unnarrowed duplicate of an already-narrowed twin).
+type metafetchStore interface {
+	forwardedStores
+
+	metadataCacheStore
+	metadataFieldStateStore
+	metafetchBookStore
+	metafetchFileStore
+	metafetchContributorStore
+	metafetchNarratorStore
+}
+
 type Service struct {
-	db               database.Store
+	db               metafetchStore
 	olStore          *openlibrary.OLStore
 	overrideSources  []metadata.MetadataSource // for testing
 	isbnEnrichment   *ISBNService

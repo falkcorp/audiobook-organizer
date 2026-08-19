@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_wiring.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 571bfbf4-238b-49cb-a6d8-b302921dd1c4
 // last-edited: 2026-05-01
 
@@ -8,14 +8,13 @@ package metafetch
 import (
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
-func NewService(db database.Store) *Service {
+func NewService(db metafetchStore) *Service {
 	return &Service{db: db}
 }
 
