@@ -1,6 +1,7 @@
 // file: internal/organizer/preview.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f1a2b3c4-d5e6-7890-abcd-ef1234567890
+// last-edited: 2026-08-18
 
 package organizer
 
@@ -40,7 +41,7 @@ type PreviewResponse struct {
 
 // PreviewService builds a read-only preview of what a single-book organize would do.
 type PreviewService struct {
-	db database.Store
+	db Store
 
 	// IsProtectedPath checks whether a file path is protected (e.g. import/iTunes).
 	// Set by the server package after construction.
@@ -53,7 +54,7 @@ type PreviewService struct {
 }
 
 // NewPreviewService creates a new PreviewService.
-func NewPreviewService(db database.Store) *PreviewService {
+func NewPreviewService(db Store) *PreviewService {
 	return &PreviewService{
 		db: db,
 		// Defaults that can be overridden by server package
