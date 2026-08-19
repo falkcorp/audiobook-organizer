@@ -1,7 +1,7 @@
 // file: internal/database/storecap.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-31
+// last-edited: 2026-08-19
 
 package database
 
@@ -40,7 +40,12 @@ func GetOpsV2(store Store) OpsV2Store {
 // decorator chain. Returns nil if store is nil or no layer satisfies AIJobsStore.
 //
 // Use this instead of scattering `store.(database.AIJobsStore)` type assertions.
-func GetAIJobs(store Store) AIJobsStore {
+//
+// Takes `any`, not Store: the only thing it does with the argument is hand it to
+// AsCapability, which takes `any` precisely because a decorator hides capability
+// methods from a static type. Declaring Store here imposed 398 methods on every
+// caller to satisfy a call that constrains nothing.
+func GetAIJobs(store any) AIJobsStore {
 	if aij, ok := AsCapability[AIJobsStore](store); ok {
 		return aij
 	}

@@ -1,6 +1,6 @@
 // file: internal/server/registry_wire.go
-// version: 1.21.0
-// last-edited: 2026-08-14
+// version: 1.22.0
+// last-edited: 2026-08-19
 
 package server
 
@@ -49,7 +49,7 @@ func init() {
 		Needs:  []string{serviceregistry.KeyStore},
 		Groups: []string{"core"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
+			store := serviceregistry.Get[sysinfo.SystemServiceStore](c, serviceregistry.KeyStore)
 			return sysinfo.NewSystemService(store, appVersion, calculateLibrarySizes), nil
 		},
 	})
@@ -61,9 +61,9 @@ func init() {
 		Needs:  []string{serviceregistry.KeyStore},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
-			ps, ok := store.(*database.PebbleStore)
-			if !ok {
+			store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
+			ps := database.AsPebbleStore(store)
+			if ps == nil {
 				return (*database.EmbeddingStore)(nil), nil
 			}
 			return database.NewEmbeddingStore(ps.DB()), nil
@@ -115,7 +115,7 @@ func init() {
 		Needs:  []string{serviceregistry.KeyStore},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
+			store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
 			return database.GetAIJobs(store), nil
 		},
 	})
@@ -149,7 +149,7 @@ func init() {
 			if llmParser == nil {
 				slog.Info("dedup engine: LLM parser unavailable (LLM mode disabled) — Layer 3 LLM review off")
 			}
-			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
+			store := serviceregistry.Get[dedup.Store](c, serviceregistry.KeyStore)
 			mergeSvc := serviceregistry.Get[*merge.Service](c, serviceregistry.KeyMerge)
 			engine := dedup.NewEngine(embStore, store, embClient, llmParser, mergeSvc)
 			engine.BookHighThreshold = cfg.Dedup.BookHighThreshold
@@ -195,9 +195,9 @@ func init() {
 			if cfg.DatabasePath == "" {
 				return (*database.PebbleMetricsStore)(nil), nil
 			}
-			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
-			ps, ok := store.(*database.PebbleStore)
-			if !ok {
+			store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
+			ps := database.AsPebbleStore(store)
+			if ps == nil {
 				slog.Warn("metricsstore: backend is not PebbleStore, metrics disabled")
 				return (*database.PebbleMetricsStore)(nil), nil
 			}
@@ -213,9 +213,9 @@ func init() {
 		Needs:  []string{serviceregistry.KeyStore},
 		Groups: []string{"ai"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
-			ps, ok := store.(*database.PebbleStore)
-			if !ok {
+			store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
+			ps := database.AsPebbleStore(store)
+			if ps == nil {
 				return (*database.AIScanStore)(nil), nil
 			}
 			s, err := database.NewAIScanStoreFromDB(ps.DB())
@@ -240,7 +240,7 @@ func init() {
 			if scanStore == nil || parser == nil {
 				return (*aiscan.PipelineManager)(nil), nil
 			}
-			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
+			store := serviceregistry.Get[aiscan.Store](c, serviceregistry.KeyStore)
 			return aiscan.NewPipelineManager(scanStore, store, parser), nil
 		},
 	})
@@ -261,7 +261,7 @@ func init() {
 		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyConfig, serviceregistry.KeyEventBus, serviceregistry.KeyMetaFetch},
 		Groups: []string{"core"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
+			store := serviceregistry.Get[itunesWireStore](c, serviceregistry.KeyStore)
 			cfg := serviceregistry.Get[*config.Config](c, serviceregistry.KeyConfig)
 			bus := serviceregistry.Get[*plugin.EventBus](c, serviceregistry.KeyEventBus)
 			mf := serviceregistry.Get[*metafetch.Service](c, serviceregistry.KeyMetaFetch)
@@ -400,4 +400,12 @@ func wireServerFromContainer(s *Server, c *serviceregistry.Container) {
 	if adapter, ok := serviceregistry.TryGet[*updater.SchedulerStarterAdapter](c, "updatescheduler"); ok && adapter != nil {
 		s.updateScheduler = adapter.Scheduler()
 	}
+}
+
+// itunesWireStore is the iTunes service's own store plus the organizer surface
+// its path-repair tier hands to org.SetStore. Two entries, both named, so this
+// re-narrows on its own when either package does.
+type itunesWireStore interface {
+	itunesservice.Store
+	organizer.OrganizerStore
 }
