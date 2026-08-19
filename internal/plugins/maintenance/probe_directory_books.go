@@ -161,7 +161,7 @@ func (p *Plugin) runProbeDirectoryBooks(ctx context.Context, raw json.RawMessage
 	}
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("using ffprobe at %s", ffprobePath))
 
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

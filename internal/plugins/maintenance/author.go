@@ -41,7 +41,7 @@ func (p *Plugin) authorDedupScanDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runAuthorDedupScan(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
@@ -104,7 +104,7 @@ func (p *Plugin) authorSplitScanDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runAuthorSplitScan(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
@@ -293,7 +293,7 @@ func (p *Plugin) resolveProductionAuthorsDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runResolveProductionAuthors(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

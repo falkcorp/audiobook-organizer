@@ -151,7 +151,7 @@ var probeChaptersFn = audioutil.ProbeChapters
 // methods works unchanged — and so a backend that does NOT gets a clear refusal
 // instead of a nil-pointer panic.
 //
-// 🔴 RESOLVE IT WITH database.AsCapability, NEVER A BARE ASSERTION. deps.Store()
+// 🔴 RESOLVE IT WITH database.AsCapability, NEVER A BARE ASSERTION. deps.OpsStore()
 // returns Server.store, which is REPLACED by the *server.indexedStore decorator
 // at server_lifecycle.go:290 once the search index opens. indexedStore embeds
 // database.Store, so only methods on THAT interface are promoted — and the
@@ -285,7 +285,7 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 	}
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("using ffprobe at %s", ffprobePath))
 
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

@@ -74,7 +74,7 @@ func (p *Plugin) runPurgeMillisecondDurations(ctx context.Context, raw json.RawM
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

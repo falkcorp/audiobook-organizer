@@ -75,7 +75,7 @@ func (p *Plugin) runAIDedupBatch(ctx context.Context, _ json.RawMessage, reporte
 		return fmt.Errorf("AI parsing is not enabled")
 	}
 
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

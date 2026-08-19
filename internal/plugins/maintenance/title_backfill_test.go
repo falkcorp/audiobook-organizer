@@ -36,10 +36,14 @@ func (r *fakeReporter) SetCurrentItem(_ string)                          {}
 
 var _ sdk.Reporter = (*fakeReporter)(nil)
 
-// fakeDeps satisfies the ServerDeps interface with only Store() wired.
+// fakeDeps satisfies the ServerDeps interface with only the store accessors
+// wired. All three return the same value; the narrowing lives in the declared
+// type, not in what is handed over.
 type fakeDeps struct{ store database.Store }
 
-func (d fakeDeps) Store() database.Store { return d.store }
+func (d fakeDeps) OpsStore() OpsStore                        { return d.store }
+func (d fakeDeps) ReconcileStore() ReconcileStore            { return d.store }
+func (d fakeDeps) PlaylistStore() database.UserPlaylistStore { return d.store }
 
 // Delegate stubs — maintenance plugin calls these on ServerDeps from other ops.
 func (d fakeDeps) RunIsbnEnrichment(_ context.Context, _ operations.ProgressReporter, _ string) error {

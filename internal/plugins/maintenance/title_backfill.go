@@ -57,7 +57,7 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 		}
 	}
 
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

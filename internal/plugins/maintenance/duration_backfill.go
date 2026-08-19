@@ -71,7 +71,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		}
 	}
 
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

@@ -41,7 +41,7 @@ func (p *Plugin) reconcileScanDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runReconcileScan(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
@@ -94,5 +94,5 @@ func (p *Plugin) itunesHealDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runITunesHeal(ctx context.Context, params json.RawMessage, reporter sdk.Reporter) error {
-	return reconcile.RunITunesHeal(ctx, p.deps.Store(), reporter, params)
+	return reconcile.RunITunesHeal(ctx, p.deps.ReconcileStore(), reporter, params)
 }

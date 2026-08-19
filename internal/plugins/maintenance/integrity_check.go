@@ -41,7 +41,7 @@ func (p *Plugin) integrityCheckDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runIntegrityCheck(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

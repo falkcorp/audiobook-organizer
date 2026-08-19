@@ -106,7 +106,7 @@ func (p *Plugin) runBookSigSidecarMigrate(ctx context.Context, raw json.RawMessa
 	}
 	log := reporter.Logger()
 
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

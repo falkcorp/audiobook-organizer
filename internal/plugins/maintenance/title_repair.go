@@ -180,7 +180,7 @@ func (p *Plugin) runTitleRepair(ctx context.Context, raw json.RawMessage, report
 		}
 	}
 
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

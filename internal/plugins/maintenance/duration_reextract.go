@@ -317,7 +317,7 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 		skipBefore = time.Now().AddDate(0, 0, -params.SkipAgeDays)
 	}
 
-	store := p.deps.Store()
+	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
