@@ -1,7 +1,7 @@
 // file: internal/server/audiobooks_compat.go
-// version: 1.0.1
+// version: 2.0.0
 // guid: b1c2d3e4-f5a6-7890-bcde-f01234560020
-// last-edited: 2026-07-12
+// last-edited: 2026-08-18
 //
 // Type aliases and function variables that let the rest of internal/server/
 // continue using the old unqualified names after the seven service files
@@ -12,7 +12,6 @@ package server
 
 import (
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // --- AudiobookService -------------------------------------------------------
@@ -63,10 +62,8 @@ func IsPerUserField(field string) bool {
 	return audiobookspkg.IsPerUserField(field)
 }
 
-// NewAudiobookService delegates to the audiobooks package.
-func NewAudiobookService(store database.Store) *AudiobookService {
-	return audiobookspkg.NewAudiobookService(store)
-}
+// NewAudiobookService is the audiobooks constructor under its pre-move name.
+var NewAudiobookService = audiobookspkg.NewAudiobookService
 
 // --- AudiobookUpdateService -------------------------------------------------
 
@@ -75,10 +72,8 @@ type (
 	AudiobookUpdateService = audiobookspkg.AudiobookUpdateService
 )
 
-// NewAudiobookUpdateService delegates to the audiobooks package.
-func NewAudiobookUpdateService(db database.Store) *AudiobookUpdateService {
-	return audiobookspkg.NewAudiobookUpdateService(db)
-}
+// NewAudiobookUpdateService is the audiobooks constructor under its pre-move name.
+var NewAudiobookUpdateService = audiobookspkg.NewAudiobookUpdateService
 
 // --- AuthorSeriesService ----------------------------------------------------
 
@@ -105,10 +100,8 @@ type (
 	SeriesWithCountsResponse = audiobookspkg.SeriesWithCountsResponse
 )
 
-// NewAuthorSeriesService delegates to the audiobooks package.
-func NewAuthorSeriesService(db database.Store) *AuthorSeriesService {
-	return audiobookspkg.NewAuthorSeriesService(db)
-}
+// NewAuthorSeriesService is the audiobooks constructor under its pre-move name.
+var NewAuthorSeriesService = audiobookspkg.NewAuthorSeriesService
 
 // --- OrganizeService --------------------------------------------------------
 
@@ -123,10 +116,8 @@ type (
 	OrganizeStats = audiobookspkg.OrganizeStats
 )
 
-// NewOrganizeService delegates to the audiobooks package.
-func NewOrganizeService(db database.Store) *OrganizeService {
-	return audiobookspkg.NewOrganizeService(db)
-}
+// NewOrganizeService is the audiobooks constructor under its pre-move name.
+var NewOrganizeService = audiobookspkg.NewOrganizeService
 
 // --- OrganizePreviewService -------------------------------------------------
 
@@ -141,10 +132,8 @@ type (
 	OrganizePreviewService = audiobookspkg.OrganizePreviewService
 )
 
-// NewOrganizePreviewService delegates to the audiobooks package.
-func NewOrganizePreviewService(db database.Store) *OrganizePreviewService {
-	return audiobookspkg.NewOrganizePreviewService(db)
-}
+// NewOrganizePreviewService is the audiobooks constructor under its pre-move name.
+var NewOrganizePreviewService = audiobookspkg.NewOrganizePreviewService
 
 // --- RevertService ----------------------------------------------------------
 
@@ -153,10 +142,8 @@ type (
 	RevertService = audiobookspkg.RevertService
 )
 
-// NewRevertService delegates to the audiobooks package.
-func NewRevertService(db database.Store) *RevertService {
-	return audiobookspkg.NewRevertService(db)
-}
+// NewRevertService is the audiobooks constructor under its pre-move name.
+var NewRevertService = audiobookspkg.NewRevertService
 
 // --- RenameService ----------------------------------------------------------
 
@@ -174,10 +161,8 @@ type (
 	RenameApplyResult = audiobookspkg.RenameApplyResult
 )
 
-// NewRenameService delegates to the audiobooks package.
-func NewRenameService(db database.Store) *RenameService {
-	return audiobookspkg.NewRenameService(db)
-}
+// NewRenameService is the audiobooks constructor under its pre-move name.
+var NewRenameService = audiobookspkg.NewRenameService
 
 // applyOverrideToPayload delegates to the audiobooks package.
 // Kept unexported so server-package whitebox tests can reference it directly.
