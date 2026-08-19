@@ -270,7 +270,9 @@ declarations, schedules/triggers, testing patterns, and a worked example.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+PolyForm Noncommercial License 1.0.0 — free for noncommercial use (personal,
+hobby, research, education, nonprofit). Commercial use requires a separate
+license from the author. See [LICENSE](LICENSE) for the full terms.
 
 ## Repository Automation
 
