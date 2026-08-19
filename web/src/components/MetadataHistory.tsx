@@ -17,6 +17,7 @@ import {
   Snackbar,
   Stack,
   Table,
+  TableContainer,
   TableBody,
   TableCell,
   TableHead,
@@ -209,6 +210,7 @@ export const MetadataHistory = ({
             <Alert severity="info">No metadata changes recorded yet.</Alert>
           )}
           {!loading && history.length > 0 && (
+            <TableContainer>
             <Table size="small">
               <TableHead>
                 <TableRow>
@@ -323,6 +325,7 @@ export const MetadataHistory = ({
                 })}
               </TableBody>
             </Table>
+            </TableContainer>
           )}
           {/* Version Snapshots Section */}
           <Box sx={{ mt: 3 }}>
@@ -352,6 +355,7 @@ export const MetadataHistory = ({
               </Alert>
             )}
             {!cowLoading && cowVersions.length > 0 && (
+              <TableContainer>
               <Table size="small">
                 <TableHead>
                   <TableRow>
@@ -393,6 +397,7 @@ export const MetadataHistory = ({
                   ))}
                 </TableBody>
               </Table>
+              </TableContainer>
             )}
           </Box>
         </DialogContent>
