@@ -1,5 +1,5 @@
 # file: .mockery.yaml
-# version: 1.23.0
+# version: 1.24.0
 # guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 # last-edited: 2026-08-19
 
@@ -110,6 +110,19 @@ packages:
   #
   # The lesson generalises: check whether a behaviour is already covered, and
   # whether the covering test actually RUNS, before adding a double for it.
+  #
+  # internal/plugins/dedup's ISBNIndexStore is deliberately NOT here, for a
+  # different reason than the three above: a mock would be actively misleading.
+  # What resolveISBNIndexStore has to get right is walking the decorator chain,
+  # and a generated mock satisfies the interface by construction -- it resolves
+  # on the FIRST assertion whether or not the resolver ever unwraps, so the
+  # mutation that reverts AsCapability to a bare assertion would still pass.
+  # internal/plugins/dedup/isbn_index_store_capability_test.go uses hand-written
+  # fixtures instead: a decorator embedding the database.Store interface over a
+  # capable store. That mutation was run and it goes red.
+  #
+  # This applies to every resolveX in the sweep: never mock the interface a
+  # capability resolver resolves.
   #
   # These exclusions are judgement calls about test value, not claims that the
   # code is untestable. If either call site is ever extracted into a function
