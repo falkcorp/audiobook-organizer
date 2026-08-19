@@ -14,7 +14,7 @@ func init() {
 		Needs:  []string{serviceregistry.KeyStore},
 		Groups: []string{"core"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[mergeStore](c, serviceregistry.KeyStore)
+			store := serviceregistry.Get[Store](c, serviceregistry.KeyStore)
 			return NewService(store), nil
 		},
 	})

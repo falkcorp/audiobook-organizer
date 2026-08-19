@@ -35,7 +35,6 @@ func (s *Server) initPlugins(ctx context.Context) {
 	}
 
 	baseDeps := plugin.Deps{
-		Store:  s.Store(),
 		Events: s.eventBus,
 		Logger: logger.New("plugin"),
 	}

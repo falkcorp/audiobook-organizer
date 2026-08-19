@@ -18,13 +18,13 @@ import (
 
 // Service generates diagnostic ZIP exports for troubleshooting and AI analysis.
 type Service struct {
-	db            diagnosticsStore
+	db            Store
 	aiPipeline    interface{} // *ai.Pipeline or nil
 	itunesXMLPath string
 }
 
 // NewService creates a new diagnostics Service.
-func NewService(db diagnosticsStore, aiPipeline interface{}, itunesXMLPath string) *Service {
+func NewService(db Store, aiPipeline interface{}, itunesXMLPath string) *Service {
 	return &Service{
 		db:            db,
 		aiPipeline:    aiPipeline,

@@ -13,7 +13,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -42,11 +42,11 @@ type SplitBookCandidateStore interface {
 type SplitBookHandler struct {
 	opEnqueuer SplitBookOpEnqueuer     // may be nil
 	candStore  SplitBookCandidateStore // may be nil
-	mergeStore database.Store          // required by MergeSplitBookCluster
+	mergeStore dedup.Store             // required by MergeSplitBookCluster
 }
 
 // NewSplitBookHandler constructs a SplitBookHandler.
-func NewSplitBookHandler(op SplitBookOpEnqueuer, cands SplitBookCandidateStore, store database.Store) *SplitBookHandler {
+func NewSplitBookHandler(op SplitBookOpEnqueuer, cands SplitBookCandidateStore, store dedup.Store) *SplitBookHandler {
 	return &SplitBookHandler{opEnqueuer: op, candStore: cands, mergeStore: store}
 }
 
