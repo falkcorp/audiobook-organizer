@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-08-18
+// last-edited: 2026-08-19
 //
 // Undo engine (spec 3.2 task 3). Reverses the destructive changes
 // recorded by a prior operation by walking its operation_changes
@@ -283,16 +283,16 @@ type UndoConflictItem struct {
 	Reason     string `json:"reason"`
 }
 
-// conflictChecker is the two-method slice the preflight conflict scan needs.
+// ConflictChecker is the two-method slice the preflight conflict scan needs.
 // Both entry points previously took database.Store — all 398 methods.
-type conflictChecker interface {
+type ConflictChecker interface {
 	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
 	GetBookByID(id string) (*database.Book, error)
 }
 
 // PreflightUndoConflicts scans the operation's changes and reports
 // which ones can be safely undone vs which have conflicts.
-func PreflightUndoConflicts(store conflictChecker, operationID string) (*UndoConflictReport, error) {
+func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoConflictReport, error) {
 	changes, err := store.GetOperationChanges(operationID)
 	if err != nil {
 		return nil, fmt.Errorf("load changes: %w", err)
@@ -349,7 +349,7 @@ func PreflightUndoConflicts(store conflictChecker, operationID string) (*UndoCon
 	return report, nil
 }
 
-func checkFileMoveConflict(store conflictChecker, c *database.OperationChange) *UndoConflictItem {
+func checkFileMoveConflict(store ConflictChecker, c *database.OperationChange) *UndoConflictItem {
 	if c.NewValue == "" {
 		return nil
 	}

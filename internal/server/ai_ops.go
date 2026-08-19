@@ -1,7 +1,7 @@
 // file: internal/server/ai_ops.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-07-16
+// last-edited: 2026-08-19
 
 // ai_ops registers the ai.author-review and ai.author-merge-apply
 // OperationDefs that previously went through the legacy BridgeQueue.
@@ -51,7 +51,7 @@ type aiMergeApplyOpParams struct {
 func (s *Server) RegisterAIAuthorReviewOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "ai.author-review",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "ai",
 		DisplayName:     "AI Author Duplicate Review",
 		Description:     "Uses AI to review and identify duplicate author entries in the library.",
@@ -97,7 +97,7 @@ func (s *Server) RegisterAIAuthorReviewOp(reg *opsregistry.Registry) error {
 func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "ai.author-merge-apply",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "ai",
 		DisplayName:     "AI Author Merge Apply",
 		Description:     "Applies AI-suggested author merge, rename, alias, and split actions to the library.",

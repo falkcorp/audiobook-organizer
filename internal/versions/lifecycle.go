@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-08-19
 //
@@ -96,7 +96,7 @@ func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
 
 // CleanupTrashedVersions is the maintenance task that purges versions
 // past their TTL. Called by the scheduler.
-func CleanupTrashedVersions(store trashedVersionCleaner) (purged int) {
+func CleanupTrashedVersions(store TrashedVersionCleaner) (purged int) {
 	trashed, err := store.ListTrashedBookVersions()
 	if err != nil {
 		slog.Warn("list trashed versions", "error", err)

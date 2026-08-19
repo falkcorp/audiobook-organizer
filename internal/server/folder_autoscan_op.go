@@ -1,7 +1,7 @@
 // file: internal/server/folder_autoscan_op.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7b3e9f2a-4c1d-4e85-a6b8-2f0d5c8e1a93
-// last-edited: 2026-08-11
+// last-edited: 2026-08-19
 //
 // folder_autoscan_op registers the "library.folder-auto-scan" UOS v2 OperationDef.
 // This op is enqueued when a new import path is added to the library; it replicates
@@ -38,7 +38,7 @@ type folderAutoScanOpParams struct {
 func (s *Server) RegisterFolderAutoScanOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "library.folder-auto-scan",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Folder Auto-Scan",
 		Description:     "Auto-scan a newly added import path folder for audiobooks, then optionally organize and dedup.",

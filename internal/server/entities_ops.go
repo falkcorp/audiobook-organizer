@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
-// last-edited: 2026-07-13
+// last-edited: 2026-08-19
 
 // entities_ops registers the UOS-02 OperationDefs for author entity
 // operations: author-merge and resolve-production-author. Each def is
@@ -47,7 +47,7 @@ type resolveProductionAuthorOpParams struct {
 func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "entities.author-merge",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "entities",
 		DisplayName:     "Author Merge",
 		Description:     "Merge one or more author records into a single canonical author, relinking all associated books.",
@@ -194,7 +194,7 @@ func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "entities.resolve-production-author",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "entities",
 		DisplayName:     "Resolve Production Author",
 		Description:     "Attempt to discover real authors for books attributed to a production company via metadata lookups and AI cover analysis.",
@@ -323,7 +323,7 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 // Fail-closed: if hydration fails it returns the error and writes NOTHING. A
 // skipped publisher tag is far better than a wiped record; the caller counts the
 // skip and moves on to the next book.
-func assignPublisherPreservingRecord(store database.Store, bookID, publisher string) error {
+func assignPublisherPreservingRecord(store entityAssignStore, bookID, publisher string) error {
 	full, err := store.GetBookByID(bookID)
 	if err != nil {
 		return fmt.Errorf("hydrate book %s before publisher write: %w", bookID, err)
@@ -350,7 +350,7 @@ func assignPublisherPreservingRecord(store database.Store, bookID, publisher str
 // attributed to the production company (unresolved) rather than half-applied or
 // wiped. The join rewrite itself is best-effort: an error there is logged by the
 // caller path but does not roll back the AuthorID write (matching prior behavior).
-func assignResolvedAuthorPreservingRecord(store database.Store, bookID string, resolvedAuthorID, prodAuthorID int) error {
+func assignResolvedAuthorPreservingRecord(store authorAssignStore, bookID string, resolvedAuthorID, prodAuthorID int) error {
 	full, err := store.GetBookByID(bookID)
 	if err != nil {
 		return fmt.Errorf("hydrate book %s before author write: %w", bookID, err)

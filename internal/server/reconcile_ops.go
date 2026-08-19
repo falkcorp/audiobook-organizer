@@ -1,6 +1,7 @@
 // file: internal/server/reconcile_ops.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c2d8f41-a3e7-4b19-8d60-9f1e2c3a4b5d
+// last-edited: 2026-08-19
 
 // reconcile_ops registers the v2 OperationDefs for the reconcile scan and
 // reconcile apply operations. The HTTP handlers in reconcile.go create v1 op
@@ -38,7 +39,7 @@ type reconcileApplyOpParams struct {
 func (s *Server) RegisterReconcileScanOpV2(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "reconcile.scan",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "reconcile",
 		DisplayName:     "Reconcile Scan",
 		Description:     "Scan for books with missing files and match them to untracked files on disk.",
@@ -78,7 +79,7 @@ func (s *Server) RegisterReconcileScanOpV2(reg *opsregistry.Registry) error {
 func (s *Server) RegisterReconcileApplyOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "reconcile.apply",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "reconcile",
 		DisplayName:     "Reconcile Apply",
 		Description:     "Apply a set of file-to-book reconcile matches, moving files and updating the database.",

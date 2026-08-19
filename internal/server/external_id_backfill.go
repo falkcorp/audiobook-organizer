@@ -1,7 +1,7 @@
 // file: internal/server/external_id_backfill.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a3b4c5d6-e7f8-4a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-07-18
+// last-edited: 2026-08-19
 
 package server
 
@@ -76,7 +76,7 @@ func (s *Server) backfillExternalIDs(progress func(processed, total int, msg str
 // itunes.ExternalIDBackfillStore interface.
 type externalIDStoreAdapter struct {
 	eidStore ExternalIDStore
-	store    database.Store
+	store    externalIDBackfillStore
 }
 
 func (a *externalIDStoreAdapter) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {

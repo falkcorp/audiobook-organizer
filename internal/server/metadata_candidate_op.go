@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
-// last-edited: 2026-05-11
+// last-edited: 2026-08-19
 //
 // Registers the metadata.candidate-fetch v2 OperationDef. Pure params
 // type moved to internal/metabatch.FetchOpParams.
@@ -35,7 +35,7 @@ type metadataCandidateFetchOpParams = metabatch.FetchOpParams
 func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "metadata.candidate-fetch",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "metadata",
 		DisplayName:     "Fetch Metadata Candidates",
 		Description:     "Fetch and cache metadata candidates for a set of audiobooks (rate-limited, parallel). Results are stored in v1 OperationResult rows for review.",

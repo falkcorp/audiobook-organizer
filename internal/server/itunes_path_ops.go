@@ -1,7 +1,7 @@
 // file: internal/server/itunes_path_ops.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c4e9b2a-1f3d-4e5a-8b6c-0d2e4f6a8c0e
-// last-edited: 2026-08-11
+// last-edited: 2026-08-19
 //
 // itunes_path_ops registers the v2 OperationDefs for iTunes path-reconcile
 // and path-repair operations, and provides the HTTP handlers that replace
@@ -90,7 +90,7 @@ func (s *Server) handleITunesPathRepair(c *gin.Context) {
 func (s *Server) RegisterITunesPathReconcileOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "itunes.path-reconcile",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "itunes",
 		DisplayName:     "iTunes Path Reconcile",
 		Description:     "Recompute ITunesPath fields for all iTunes-tracked books and enqueue write-back.",
@@ -122,7 +122,7 @@ func (s *Server) RegisterITunesPathReconcileOp(reg *opsregistry.Registry) error 
 func (s *Server) RegisterITunesPathRepairOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "itunes.path-repair",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "itunes",
 		DisplayName:     "iTunes Path Repair",
 		Description:     "Find stale iTunes locations and re-discover correct paths via PID, tag scan, or fuzzy match.",

@@ -1,6 +1,7 @@
 // file: internal/server/library_size_refresh_op.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9f1c2d3e-4b5a-6c7d-8e9f-0a1b2c3d4e5f
+// last-edited: 2026-08-19
 
 // library.size-refresh: walks the library root + import-path trees to
 // recompute physical on-disk sizes. Runs nightly via the maintenance
@@ -29,7 +30,7 @@ import (
 func (s *Server) RegisterLibrarySizeRefreshOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "library.size-refresh",
-		Liveness: opsregistry.LivenessManual,
+		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Library Size Refresh",
 		Description:     "Walk the library + import-path trees to refresh on-disk size cache.",

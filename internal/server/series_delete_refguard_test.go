@@ -1,7 +1,7 @@
 // file: internal/server/series_delete_refguard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b6c1e07-9a34-4d82-bf16-0c72e9a35d84
-// last-edited: 2026-08-14
+// last-edited: 2026-08-19
 
 package server
 
@@ -28,7 +28,6 @@ import (
 // Both tests below FAIL against the old filtered guard, which is the point:
 // each builds a series that the display counter reports as empty and the
 // unfiltered counter reports as referenced.
-
 
 // TestBulkDeleteSeries_KeepsSeriesWhoseOnlyBookIsTrashed is the exact shape of
 // series 160094 on production ("Queen of Fire: A Raven's Shadow Novel"), whose
