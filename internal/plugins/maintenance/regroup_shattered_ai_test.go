@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3a9f6c04-8e21-4b57-9d0a-6f2e7c1b5a48
-// last-edited: 2026-07-25
+// last-edited: 2026-08-19
 
 package maintenance
 
@@ -172,12 +172,13 @@ func TestRegroupShatteredAI_DryRun_WritesHolds_ZeroMutations_Idempotent(t *testi
 
 	// A chapter-shatter book folder: 6 single-file chapter shells under one book folder.
 	base := "/lib/Adrian Tchaikovsky/Cage of Souls"
-	var ids []string
+	shatterIDs := map[string]bool{}
 	for i := 1; i <= 6; i++ {
-		ids = append(ids, seedShatterBook(t, s, base+"/Cage of Souls - "+itoa(i)+"/01.mp3"))
+		shatterIDs[seedShatterBook(t, s, base+"/Cage of Souls - "+itoa(i)+"/01.mp3")] = true
 	}
-	// A lone genuine single-file book that must NOT produce a hold.
-	ids = append(ids, seedShatterBook(t, s, "/lib/Andy Weir/The Martian/The Martian.m4b"))
+	// A lone genuine single-file book that must NOT produce a hold, and must not
+	// appear among the hold's members either.
+	loneID := seedShatterBook(t, s, "/lib/Andy Weir/The Martian/The Martian.m4b")
 
 	beforeBooks, beforeFiles := countBooksAndFiles(t, s)
 
@@ -211,6 +212,29 @@ func TestRegroupShatteredAI_DryRun_WritesHolds_ZeroMutations_Idempotent(t *testi
 	if hold.FolderRef != base {
 		t.Errorf("hold folderRef = %q, want %q", hold.FolderRef, base)
 	}
+	// The hold must cover exactly the six shattered books and NOT the lone single.
+	// Until 2026-08-19 the seeded IDs were collected into a slice nothing ever read
+	// (staticcheck SA4006/SA4010 flagged the discarded append), so a hold with the
+	// WRONG MEMBERS passed this test: total==1 and the folder ref both stay correct
+	// while membership is wrong. Verified live by mutation -- inverting the length
+	// check fires the error against real payload data, so this is not vacuous.
+	var pl regroupPayload
+	if perr := json.Unmarshal([]byte(hold.Payload), &pl); perr != nil {
+		t.Fatalf("unmarshal hold payload: %v (payload=%q)", perr, hold.Payload)
+	}
+	if len(pl.MemberBookIDs) != len(shatterIDs) {
+		t.Errorf("hold has %d member book IDs, want %d: %v",
+			len(pl.MemberBookIDs), len(shatterIDs), pl.MemberBookIDs)
+	}
+	for _, id := range pl.MemberBookIDs {
+		if id == loneID {
+			t.Errorf("hold swept in the lone single-file book %q — it must be skipped", loneID)
+		}
+		if !shatterIDs[id] {
+			t.Errorf("hold names book %q, which was never seeded into %s", id, base)
+		}
+	}
+
 	if hold.Status != database.ReviewStatusPending {
 		t.Errorf("hold status = %q, want pending", hold.Status)
 	}
