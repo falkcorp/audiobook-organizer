@@ -1276,8 +1276,8 @@ func readCandRec(db *pebble.DB, id int64) (candRec, bool) {
 	return rec, true
 }
 
-// deleteDedupCandidatesForBook stages the teardown of every dedup candidate that
-// references book `bookID` on either side into `b`, located through the
+// deleteDedupCandidatesForBook stages the teardown of every PENDING dedup
+// candidate that references book `bookID` on either side into `b`, via the
 // "dedup:e:book:<id>:" entity index — an O(k) prefix scan over that book's own
 // candidates, not a scan of the whole candidate keyspace.
 //
@@ -1319,6 +1319,20 @@ func deleteDedupCandidatesForBook(db *pebble.DB, b *pebble.Batch, bookID string)
 			// far side's own DeleteBook will clear its index entry.
 			_ = b.Delete(key, nil)
 			_ = b.Delete(dedupRecKey(id), nil)
+			continue
+		}
+		// Only PENDING candidates are torn down. "merged" and "dismissed" rows are
+		// historical records — they are what populates the Merged / Dismissed tabs
+		// in the dedup UI, and a merge legitimately HARD-DELETES the merged-away
+		// book (see internal/dedup/book_dedup.go), so those rows reference a
+		// deleted book BY DESIGN and must outlive it. Cascading over them would
+		// empty the Merged tab on every merge.
+		//
+		// This is deliberately the same rule PurgeStaleCandidates enforces, and
+		// for the same reason its own comment gives. A non-pending row referencing
+		// a deleted book is not a stuck work item: it never appears in the pending
+		// queue and is never re-scored, so leaving it costs nothing.
+		if rec.Status != "pending" {
 			continue
 		}
 		deleteCandidateKeys(b, id, rec)

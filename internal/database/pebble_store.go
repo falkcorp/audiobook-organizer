@@ -2796,10 +2796,17 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	// in the primitive covers every caller by construction, including the next
 	// one somebody adds.
 	//
-	// Deleted, not marked status="merged": on a hard delete nothing was merged,
-	// so that status would be a lie for most of these callers, and the merge
-	// audit trail lives in OperationChange ("book_delete" /
-	// "merged_into:<keepID>") rather than in the candidate row.
+	// Scoped to PENDING candidates only, which is the same rule
+	// PurgeStaleCandidates enforces. "merged" and "dismissed" rows are the
+	// historical records behind the dedup UI's Merged / Dismissed tabs, and a
+	// merge hard-deletes the merged-away book — so those rows point at a deleted
+	// book BY DESIGN and must survive it. Cascading over them would empty the
+	// Merged tab on every merge.
+	//
+	// Pending rows are deleted rather than transitioned to status="merged":
+	// on a hard delete nothing was merged, so that status would be false for
+	// most of these callers, and the merge audit trail lives in OperationChange
+	// ("book_delete" / "merged_into:<keepID>") rather than in the candidate row.
 	// CleanupCandidatesAfterMerge is still required and stays: merge.Service
 	// .MergeBooks *soft*-deletes, so its book row survives and its candidates
 	// must be transitioned rather than removed.

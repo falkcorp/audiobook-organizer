@@ -130,3 +130,59 @@ func TestDeleteBook_CascadeRemovesStaleEntityIndexEntry(t *testing.T) {
 	require.False(t, cascadeKeyPresent(t, db, staleKey),
 		"stale entity-index entry must be removed, not skipped")
 }
+
+// TestDeleteBook_CascadeSparesNonPendingCandidates is the regression guard for
+// the dedup UI's Merged / Dismissed tabs.
+//
+// A dedup merge HARD-deletes the merged-away book and marks its candidate row
+// status="merged". That row therefore references a deleted book *by design*, and
+// it is what the Merged tab renders. An unscoped cascade would delete it on the
+// very same DeleteBook call that completes the merge, emptying the tab. This is
+// the same rule PurgeStaleCandidates enforces, and for the same reason.
+func TestDeleteBook_CascadeSparesNonPendingCandidates(t *testing.T) {
+	store, err := NewPebbleStore(t.TempDir() + "/db")
+	require.NoError(t, err)
+	defer store.Close()
+	db := store.DB()
+	emb := NewEmbeddingStore(db)
+
+	mkCascadeBook(t, store, "bA", "Merged Away")
+	mkCascadeBook(t, store, "bB", "Kept")
+	mkCascadeBook(t, store, "bC", "Other")
+
+	sim := 0.95
+	mergedID, _, err := emb.UpsertCandidateNew(DedupCandidate{
+		EntityType: "book", EntityAID: "bA", EntityBID: "bB",
+		Layer: "embedding", Similarity: &sim,
+	})
+	require.NoError(t, err)
+	require.NoError(t, emb.UpdateCandidateStatus(mergedID, "merged"))
+
+	dismissedID, _, err := emb.UpsertCandidateNew(DedupCandidate{
+		EntityType: "book", EntityAID: "bA", EntityBID: "bC",
+		Layer: "embedding", Similarity: &sim,
+	})
+	require.NoError(t, err)
+	require.NoError(t, emb.UpdateCandidateStatus(dismissedID, "dismissed"))
+
+	// A pending row on the same book, to prove the cascade still fires at all
+	// in this test — otherwise a cascade that did nothing would also pass.
+	mkCascadeBook(t, store, "bD", "Pending Peer")
+	pendingID, _, err := emb.UpsertCandidateNew(DedupCandidate{
+		EntityType: "book", EntityAID: "bA", EntityBID: "bD",
+		Layer: "embedding", Similarity: &sim,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, store.DeleteBook("bA"))
+
+	require.True(t, cascadeKeyPresent(t, db, dedupRecKey(mergedID)),
+		`status="merged" row must survive: it is what the Merged tab renders`)
+	require.True(t, cascadeKeyPresent(t, db, dedupEntityKey("book", "bA", mergedID)),
+		"merged row's entity index must survive so the tab can still find it")
+	require.True(t, cascadeKeyPresent(t, db, dedupRecKey(dismissedID)),
+		`status="dismissed" row must survive: it is what the Dismissed tab renders`)
+
+	require.False(t, cascadeKeyPresent(t, db, dedupRecKey(pendingID)),
+		"pending row must still be torn down")
+}
