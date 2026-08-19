@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.88.0
+// version: 2.89.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-08-06
+// last-edited: 2026-08-19
 
 package database
 
@@ -15,47 +15,90 @@ import (
 // on a narrower sub-interface defined in iface_*.go; Store itself is
 // used by the server bootstrap and test fixtures that genuinely need
 // wide access. See docs/superpowers/specs/2026-04-17-store-interface-segregation-design.md.
+//
+// The 40 sub-interfaces it used to embed directly are grouped by domain below.
+// This is a REGROUPING, not a narrowing: Store's method set is byte-identical
+// and no consumer moved. It exists because `interfacebloat` counts embedded
+// entries, so a flat list of 40 was the last finding in the whole repo and held
+// the width baseline at 1. Each group is also a usable dependency in its own
+// right for anything that genuinely needs a whole domain.
+//
+// scripts/verify_interface_split.py proves the signature set is unchanged.
 type Store interface {
-	LifecycleStore
+	CatalogStore
+	MediaStore
+	AccountStore
+	EnrichmentStore
+	OperationsStore
+	PlatformStore
+}
+
+// CatalogStore is the library's bibliographic entities -- what a book IS.
+type CatalogStore interface {
 	BookStore
 	AuthorStore
 	SeriesStore
-	UserStore
 	NarratorStore
 	WorkStore
+	BookVersionStore
+	CollectionStore
+}
+
+// MediaStore is the physical/playable layer -- files on disk, their segments,
+// ordering, and where a listener is in them.
+type MediaStore interface {
+	BookFileStore
+	BookSegmentStore
+	PlaylistStore
+	UserPlaylistStore
+	PathHistoryStore
+	PlaybackStore
+}
+
+// AccountStore is identity and authorisation.
+type AccountStore interface {
+	UserStore
 	SessionStore
 	OAuthIdentityStore
 	RoleStore
 	APIKeyStore
 	InviteStore
 	UserPreferenceStore
-	UserPositionStore
-	BookVersionStore
-	BookFileStore
-	BookSegmentStore
-	PlaylistStore
-	UserPlaylistStore
-	CollectionStore
-	ImportPathStore
-	OperationStore
+}
+
+// EnrichmentStore is everything that DESCRIBES a book without being part of it:
+// fetched metadata, its caches and rejections, external identifiers, tags.
+type EnrichmentStore interface {
+	MetadataStore
+	MetadataCacheStore
+	RejectedMetadataStore
+	ExternalIDStore
 	TagStore
 	UserTagStore
-	MetadataStore
 	HashBlocklistStore
-	ITunesStateStore
-	PathHistoryStore
-	ExternalIDStore
-	RawKVStore
-	PlaybackStore
-	SettingsStore
-	StatsStore
+}
+
+// OperationsStore is background work -- ops v1/v2, maintenance jobs, the activity
+// feed, AI jobs, and the human review queue.
+type OperationsStore interface {
+	OperationStore
+	OpsV2Store
 	MaintenanceStore
 	SystemActivityStore
 	AIJobsStore
-	RejectedMetadataStore
-	OpsV2Store
-	MetadataCacheStore
 	ReviewStore
+}
+
+// PlatformStore is process- and deployment-level concerns rather than library
+// content: lifecycle, configuration, import roots, raw KV, and aggregates.
+type PlatformStore interface {
+	LifecycleStore
+	ImportPathStore
+	ITunesStateStore
+	RawKVStore
+	SettingsStore
+	StatsStore
+	UserPositionStore
 }
 
 // BookAlternativeTitle represents a variant name for a book — romaji
