@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-08-19-split-the-pebblestore-surface.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 7a2e4d19-6c83-4b15-9f07-2d81e5a3c6b4 -->
 <!-- last-edited: 2026-08-19 -->
 
@@ -25,7 +25,7 @@ All figures re-measured on merged main `d151740c`, 2026-08-19.
 | `database.Store` sub-interfaces | 40 | `internal/database/store.go:18` |
 | `database.Store` methods | ~398 | composed |
 | `*PebbleStore` methods (non-test) | **558** | 48 files under `internal/database/` |
-| `database.Store` consumer refs left | **10** | 6 by design, 3 test helpers, 1 hands-off |
+| `database.Store` consumer refs left | **10** | 3 test helpers + **7 production** — see the correction below; "6 by design" was wrong |
 | **`AsPebbleStore` code call sites** | **16** | 9 packages outside `internal/database` |
 
 > **Counting note.** Two filters are load-bearing and both bit me while measuring.
@@ -205,10 +205,70 @@ Each step is one PR, independently revertable, no behaviour change.
 
 ### What this does NOT do
 
-It does not shrink `database.Store`. The remaining 10 refs are the composition
-root, the decorator, two test helpers and the hands-off maintenance lane; they
-die only when `database.Store` itself is deleted, which is downstream of step 8.
+It does not shrink `database.Store`. Three of the remaining 10 refs are test
+helpers; the other seven are production and **two of them are wide-store
+accessors that this sentence used to hide** — see the correction below.
 This plan makes that possible later; it does not do it now.
+
+
+## Correction 2026-08-19 — "6 by design" absorbed the largest remaining hole
+
+The table above said the 10 remaining consumer refs were "6 by design, 3 test
+helpers, 1 hands-off", and the closing section glossed them as "the composition
+root, the decorator, two test helpers and the hands-off maintenance lane." Both
+readings were re-derived with `go/packages` at full type resolution (144 packages,
+0 load errors) using the instrument in
+`docs/audits/2026-08-16-store-interface-decomposition.md` §2b. The count of 10 is
+**correct**. The *characterisation* is not.
+
+### The 10, enumerated
+
+| site | kind | verdict |
+|---|---|---|
+| `internal/server/server.go:165` | struct field | composition root — **required** |
+| `internal/server/server.go:420` | `NewServer` param | composition root — **required** |
+| `internal/server/indexed_store.go:45` | embedded field | decorator must embed — **required** |
+| `internal/server/indexed_store.go:87` | `Unwrap` result | `AsCapability` walk contract — **required** |
+| **`internal/server/server.go:331`** | **`Server.Store()` result** | 🔴 **NOT a composition root — a distribution point** |
+| `internal/server/server_lifecycle.go:1802` | `resolveVGBackfiller` param | 🟡 narrowable; only feeds `AsCapability` |
+| `internal/plugins/maintenance/deps.go:22` | `StoreProvider.Store()` result | 🔴 already tracked |
+| `internal/testutil/integration.go:30` | struct field | test helper |
+| `internal/database/dbtest/invariants.go:62`, `:188` | params | test helpers |
+
+### Why the gloss was wrong
+
+A composition root is `Server.store` (the field) plus `NewServer` (the param) —
+two refs, both genuinely required. **`Server.Store()` is a public accessor that
+hands the full 398-method type to every caller in the package.** Measured with
+`types.Info.Selections`, which resolves the receiver type of each call and so
+follows the `store := s.Store(); store.X()` idiom that grep cannot:
+
+| accessor | call sites | distinct methods used | narrowing available |
+|---|---:|---:|---|
+| **`Server.Store()`** | **216** | **88** | 398 → 88 (**4.5×**) |
+| `StoreProvider.Store()` | 111 | 39 | 398 → 39 (10.2×) |
+
+Repo-wide: **113 distinct methods** across **342** call sites on a
+`database.Store` value. **271 of 315 `s.Store()` uses are not immediately
+dotted**, which is why a grep-shaped census reported this as a single benign
+reference instead of the largest remaining consumer surface.
+
+### The two lessons
+
+1. **Verify a "by design" label before believing it.** This is the same failure
+   recorded in `CLAUDE.md`'s worked example: a justification written when it was
+   true, never re-checked as the code grew around it. Nothing here regressed —
+   the label was simply never re-derived after `Server.Store()` accumulated its
+   callers.
+2. **Grep undercounted my own number.** A boundary-matched, comment-stripped grep
+   reported **5** production refs; the AST reports **7**, missing `server.go:420`,
+   `server.go:331` and `server_lifecycle.go:1802`. Cross-check: an independent
+   grep+hand costing of the maintenance hole gave **38** direct methods against
+   the AST's **39** — one apart, which is what agreement looks like.
+
+Neither accessor is narrowed by this plan. Both need the same shape of decision
+(one shared interface vs. segregating the outliers) plus grouping into ≤8 declared
+entries to stay under `interfacebloat` and the width ratchet.
 
 ## Test strategy
 
