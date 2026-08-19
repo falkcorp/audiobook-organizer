@@ -1,5 +1,5 @@
 // file: internal/server/undo_engine.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0b8c9d6e-1f7a-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-08-18
 //
@@ -26,15 +26,23 @@ type UndoConflictReport = undo.UndoConflictReport
 // UndoConflictItem is re-exported from the undo package.
 type UndoConflictItem = undo.UndoConflictItem
 
+// serverUndoStore is the union of what undo.RunUndoOperation needs and what the
+// Deluge callback closes over — measured, not guessed. The parameter was an
+// inline anonymous interface embedding database.BookStore + BookVersionStore +
+// OperationStore: 90 methods for these five.
+type serverUndoStore interface {
+	GetBookByID(id string) (*database.Book, error)
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
+	CreateOperationChange(change *database.OperationChange) error
+	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
+}
+
 // RunUndoOperation wraps the undo engine with server-specific callback
 // for Deluge integration. It loads the changes for targetOpID, walks them
 // in reverse order, and applies the inverse of each change.
 func RunUndoOperation(
-	store interface {
-		database.BookStore
-		database.BookVersionStore
-		database.OperationStore
-	},
+	store serverUndoStore,
 	targetOpID string,
 	progress func(step string, pct int),
 ) (*UndoResult, error) {
