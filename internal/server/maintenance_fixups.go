@@ -21,23 +21,33 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// maintenanceStore is what the maintenance fixups actually call, measured by
-// emptying it and reading the compiler's enumeration: eleven direct calls plus
-// GetAllSeries, carried so this value satisfies seriesMergeStore. It was seven
-// database.* embeds — 131 methods, none declared here.
-type maintenanceStore interface {
+// The maintenance fixups' database surface, grouped by what each part is for.
+// maintenanceStore was seven database.* embeds — 131 methods — until 2026-08-18.
+type libraryCounters interface {
 	CountAuthors() (int, error)
 	CountFiles() (int, error)
 	CountPrimaryBooks() (int, error)
 	CountSeries() (int, error)
+}
+
+type maintenanceBookStore interface {
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetBookByID(id string) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
 	DeleteBookFilesForBook(bookID string) error
+}
+
+type maintenanceSeriesStore interface {
 	GetAllSeries() ([]database.Series, error)
 	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
 	UpdateSeriesName(id int, name string) error
 	DeleteSeries(id int) error
+}
+
+type maintenanceStore interface {
+	libraryCounters
+	maintenanceBookStore
+	maintenanceSeriesStore
 }
 
 func (s *Server) handleWipe(c *gin.Context) {

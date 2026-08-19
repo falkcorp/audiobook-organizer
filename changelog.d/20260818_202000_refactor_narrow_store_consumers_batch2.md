@@ -24,3 +24,8 @@ true when the sweep/audit parameters were narrowed. Its constraint is now
 `database.SettingsStore` stays embedded rather than method-listed: it is four
 methods and already the right size. Using the domain pieces is the goal — the
 problem was never that the pieces existed, it was that consumers took the union.
+
+Both `maintenanceStore` and `OperationsStore` are kept as compositions of focused
+interfaces rather than flat method lists. `interfacebloat` counts declared entries,
+so a flat list of the methods actually used trades a smaller method set for a wider
+declaration — narrowing one axis while regressing the other.
