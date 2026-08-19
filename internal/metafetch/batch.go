@@ -1,7 +1,7 @@
 // file: internal/metafetch/batch.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-05-01
+// last-edited: 2026-08-19
 
 package metafetch
 
@@ -42,7 +42,7 @@ type CandidateResult struct {
 
 // BuildCandidateBookInfo builds a CandidateBookInfo from a database.Book.
 // store is used to look up the first BookFile for ITunesPath; pass nil to skip.
-func BuildCandidateBookInfo(book *database.Book, store database.Store) CandidateBookInfo {
+func BuildCandidateBookInfo(book *database.Book, store bookFileLister) CandidateBookInfo {
 	info := CandidateBookInfo{
 		ID:       book.ID,
 		Title:    book.Title,
@@ -86,7 +86,7 @@ func CountByStatus(results []CandidateResult, status string) int {
 // LoadRejectedCandidateKeys finds previously rejected candidates for a book.
 // Uses a dedicated rejection key prefix for fast lookup instead of scanning
 // all operation results.
-func LoadRejectedCandidateKeys(store database.Store, bookID string) map[string]bool {
+func LoadRejectedCandidateKeys(store rejectedKeyScanner, bookID string) map[string]bool {
 	keys := make(map[string]bool)
 	// Scan only rejection keys for this specific book
 	pairs, err := store.ScanPrefix(fmt.Sprintf("rejected_candidate:%s:", bookID))

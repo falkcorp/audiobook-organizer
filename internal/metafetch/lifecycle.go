@@ -1,5 +1,5 @@
 // file: internal/metafetch/lifecycle.go
-// version: 1.3.0
+// version: 1.4.0
 
 // Lifecycle methods on *metafetch.Service that the serviceregistry
 // container picks up via interface satisfaction. PostInit wires the
@@ -15,7 +15,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
@@ -86,7 +85,7 @@ func (mfs *Service) PostInit(ctx context.Context, c *serviceregistry.Container) 
 
 	// ISBN enrichment — needs a source chain. Empty chain (e.g. no
 	// AI key, no Audnexus) means no enrichment.
-	if store, ok := serviceregistry.TryGet[database.Store](c, "store"); ok && store != nil {
+	if store, ok := serviceregistry.TryGet[isbnEnrichmentStore](c, "store"); ok && store != nil {
 		if sources := mfs.BuildSourceChain(); len(sources) > 0 {
 			mfs.SetISBNEnrichment(NewISBNService(store, sources))
 		}

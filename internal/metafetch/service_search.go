@@ -467,7 +467,6 @@ func (mfs *Service) searchMetadataForBook(
 				}
 			}
 
-
 			baseScores, baseTier := mfs.ScoreBaseCandidates(ctx, book, allResults, searchWords)
 			fetched[srcIdx] = sourceFetch{
 				name:       src.Name(),
