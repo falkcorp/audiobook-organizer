@@ -1,7 +1,7 @@
 // file: internal/database/migrations.go
-// version: 1.41.2
+// version: 1.42.0
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
-// last-edited: 2026-07-16
+// last-edited: 2026-08-18
 
 package database
 
@@ -13,8 +13,30 @@ import (
 	"time"
 )
 
+// migrationStore is what the migration runner and its migrations actually need.
+// The parameter was database.Store — all 398 methods — measured 2026-08-18 by
+// swapping it for an empty interface and reading the compiler's enumeration.
+//
+// Of the 61 migration functions, 60 touch the store not at all: the Pebble schema
+// is created by store initialisation, so most migrations only log and return nil.
+// The one that does, migration007Up, type-asserts straight past this interface to
+// *PebbleStore for an unexported method — which is legal from any non-empty
+// interface, and is why the assertion still compiles here.
+//
+// The six methods below are the runner's own bookkeeping (version tracking in
+// user preferences) plus what migration014UpPebble rewrites.
+type migrationStore interface {
+	GetUserPreference(key string) (*UserPreference, error)
+	SetUserPreference(key, value string) error
+	GetAllUserPreferences() ([]UserPreference, error)
+
+	GetAllBooksCore(limit, offset int) ([]BookCore, error)
+	GetBookByID(id string) (*Book, error)
+	UpdateBook(id string, book *Book) (*Book, error)
+}
+
 // MigrationFunc represents a migration operation
-type MigrationFunc func(store Store) error
+type MigrationFunc func(store migrationStore) error
 
 // Migration represents a single database migration
 type Migration struct {
@@ -402,7 +424,7 @@ var migrations = []Migration{
 }
 
 // RunMigrations applies all pending migrations
-func RunMigrations(store Store) error {
+func RunMigrations(store migrationStore) error {
 	currentVersion, err := getCurrentVersion(store)
 	if err != nil {
 		return fmt.Errorf("failed to get current version: %w", err)
@@ -452,7 +474,7 @@ func RunMigrations(store Store) error {
 }
 
 // getCurrentVersion retrieves the current schema version
-func getCurrentVersion(store Store) (int, error) {
+func getCurrentVersion(store migrationStore) (int, error) {
 	// Try to get version from preferences
 	pref, err := store.GetUserPreference("db_version")
 	if err != nil || pref == nil || pref.Value == nil {
@@ -469,7 +491,7 @@ func getCurrentVersion(store Store) (int, error) {
 }
 
 // setVersion updates the current schema version
-func setVersion(store Store, version int) error {
+func setVersion(store migrationStore, version int) error {
 	dbVersion := DatabaseVersion{
 		Version:   version,
 		UpdatedAt: time.Now(),
@@ -484,7 +506,7 @@ func setVersion(store Store, version int) error {
 }
 
 // recordMigration stores a migration record
-func recordMigration(store Store, m Migration) error {
+func recordMigration(store migrationStore, m Migration) error {
 	record := MigrationRecord{
 		Version:     m.Version,
 		Description: m.Description,
@@ -503,7 +525,7 @@ func recordMigration(store Store, m Migration) error {
 // Migration implementations
 
 // migration001Up initializes the basic schema
-func migration001Up(store Store) error {
+func migration001Up(store migrationStore) error {
 	// Basic schema is created automatically by store initialization
 	// This migration just validates the structure exists
 	slog.Info("- Validating basic schema (authors, series, books, playlists)")
@@ -511,42 +533,42 @@ func migration001Up(store Store) error {
 }
 
 // migration002Up adds import paths and operations support
-func migration002Up(store Store) error {
+func migration002Up(store migrationStore) error {
 	// These structures are already supported by the current store interface
 	slog.Info("- Adding import paths and operations support")
 	return nil
 }
 
 // migration003Up adds user preferences support
-func migration003Up(store Store) error {
+func migration003Up(store migrationStore) error {
 	// User preferences already supported by current interface
 	slog.Info("- Adding user preferences support")
 	return nil
 }
 
 // migration004Up adds extended Pebble keyspace
-func migration004Up(store Store) error {
+func migration004Up(store migrationStore) error {
 	// Extended keyspace (users, sessions, segments, playback) already supported
 	slog.Info("- Adding extended Pebble keyspace (users, sessions, segments, playback)")
 	return nil
 }
 
 // migration005Up adds media info and version management fields to books table
-func migration005Up(store Store) error {
+func migration005Up(store migrationStore) error {
 	slog.Info("- Adding media info and version management fields to books table")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration006Up adds original and organized file hash tracking columns
-func migration006Up(store Store) error {
+func migration006Up(store migrationStore) error {
 	slog.Info("- Adding original/organized file hash columns to books table")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration007Up renames library folder entities to import paths across backends.
-func migration007Up(store Store) error {
+func migration007Up(store migrationStore) error {
 	slog.Info("- Renaming import paths to import paths")
 
 	if s, ok := store.(*PebbleStore); ok {
@@ -558,7 +580,7 @@ func migration007Up(store Store) error {
 	return nil
 }
 
-func migration008Up(store Store) error {
+func migration008Up(store migrationStore) error {
 	slog.Info("- Adding do_not_import table for hash blocklist")
 	// SQLite branch removed (fable5 T022); Pebble keyspace available by default.
 	slog.Info("- Pebble keyspace for do_not_import enabled")
@@ -566,35 +588,35 @@ func migration008Up(store Store) error {
 }
 
 // migration009Up adds state machine and lifecycle tracking fields to books table
-func migration009Up(store Store) error {
+func migration009Up(store migrationStore) error {
 	slog.Info("- Adding state machine and lifecycle fields to books table")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration010Up adds metadata_states table for persisted metadata provenance
-func migration010Up(store Store) error {
+func migration010Up(store migrationStore) error {
 	slog.Info("- Adding metadata_states table for metadata provenance")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration011Up adds iTunes import metadata fields to books table.
-func migration011Up(store Store) error {
+func migration011Up(store migrationStore) error {
 	slog.Info("- Adding iTunes import metadata fields to books table")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration012Up adds created_at and updated_at timestamp columns to books table
-func migration012Up(store Store) error {
+func migration012Up(store migrationStore) error {
 	slog.Info("- Adding created_at and updated_at timestamp columns to books table")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration013Up adds wanted state support and multi-path tracking
-func migration013Up(store Store) error {
+func migration013Up(store migrationStore) error {
 	slog.Info("- Adding wanted state support and multi-path tracking")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -604,7 +626,7 @@ func migration013Up(store Store) error {
 // placeholders like {series} or {author}) by setting library_state to
 // 'needs_review'. This is a one-time cleanup for paths written before the
 // leftover-placeholder guard was added to expandPattern.
-func migration014Up(store Store) error {
+func migration014Up(store migrationStore) error {
 	slog.Info("Running migration 14 Flag books with corrupted organize paths")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -613,7 +635,7 @@ func migration014Up(store Store) error {
 // migration014UpPebble handles the corrupted-path check for PebbleDB stores.
 //
 //lint:ignore U1000 kept: real Pebble corrupted-path migration logic not yet dispatched from the migration014Up no-op stub (follow-up wire-up, 2026-07-12)
-func migration014UpPebble(store Store) error {
+func migration014UpPebble(store migrationStore) error {
 	books, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		return fmt.Errorf("migration 14: failed to list books: %w", err)
@@ -645,39 +667,39 @@ func migration014UpPebble(store Store) error {
 }
 
 // migration015Up adds book_authors junction table, cover_url, and narrators_json
-func migration015Up(store Store) error {
+func migration015Up(store migrationStore) error {
 	slog.Info("- Adding book_authors junction table, cover_url, and narrators_json")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration016Up creates users, sessions, book_segments, and playback tracking tables
-func migration016Up(store Store) error {
+func migration016Up(store migrationStore) error {
 	slog.Info("- Adding users, sessions, book_segments, and playback tables")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration017Up adds composite indexes for common queries and FTS5 full-text search
-func migration017Up(store Store) error {
+func migration017Up(store migrationStore) error {
 	slog.Info("- Adding composite indexes and FTS5 full-text search")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
-func migration018Up(store Store) error {
+func migration018Up(store migrationStore) error {
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
-func migration019Up(store Store) error {
+func migration019Up(store migrationStore) error {
 	slog.Info("- Adding metadata_changes_history table for undo support")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // GetMigrationHistory returns all applied migrations
-func GetMigrationHistory(store Store) ([]MigrationRecord, error) {
+func GetMigrationHistory(store migrationStore) ([]MigrationRecord, error) {
 	// Get all preferences that start with "migration_"
 	allPrefs, err := store.GetAllUserPreferences()
 	if err != nil {
@@ -703,14 +725,14 @@ func GetMigrationHistory(store Store) ([]MigrationRecord, error) {
 }
 
 // migration020Up adds narrators and book_narrators tables
-func migration020Up(store Store) error {
+func migration020Up(store migrationStore) error {
 	slog.Info("- Adding narrators and book_narrators tables")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration021Up adds the operation_summary_logs table for persistent operation history
-func migration021Up(store Store) error {
+func migration021Up(store migrationStore) error {
 	slog.Info("- Adding operation_summary_logs table for persistent operation history")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -730,7 +752,7 @@ func migration021Up(store Store) error {
 //
 // The migration is idempotent: it uses INSERT OR IGNORE and only touches rows
 // where the author name actually contains " & ".
-func migration022Up(store Store) error {
+func migration022Up(store migrationStore) error {
 	slog.Info("- Running migration 22 backfill book_authors (&-split) and book_narrators")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -739,67 +761,67 @@ func migration022Up(store Store) error {
 // migration023Up adds metadata_updated_at and last_written_at timestamp columns to books table.
 // metadata_updated_at is set only when user-visible metadata changes; last_written_at is set
 // when metadata is written back to audio files on disk.
-func migration023Up(store Store) error {
+func migration023Up(store migrationStore) error {
 	slog.Info("- Adding metadata_updated_at and last_written_at to books table")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration024Up adds metadata_review_status column to books table.
-func migration024Up(store Store) error {
+func migration024Up(store migrationStore) error {
 	slog.Info("- Adding metadata_review_status to books table")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration025Up adds asin column to books table.
-func migration025Up(store Store) error {
+func migration025Up(store migrationStore) error {
 	slog.Info("- Column already exists, skipping")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration026Up creates book_tombstones table for safe deletion pattern.
-func migration026Up(store Store) error {
+func migration026Up(store migrationStore) error {
 	slog.Info("- book_tombstones table created successfully")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration027Up adds result_data column to operations table.
-func migration027Up(store Store) error {
+func migration027Up(store migrationStore) error {
 	slog.Info("- result_data column already exists")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration028Up adds external provider ID columns to books table.
-func migration028Up(store Store) error {
+func migration028Up(store migrationStore) error {
 	slog.Info("- Adding external provider ID columns (open_library_id, hardcover_id, google_books_id)")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
-func migration029Up(store Store) error {
+func migration029Up(store migrationStore) error {
 	slog.Info("- Creating operation_changes table for undo/rollback tracking")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
-func migration030Up(store Store) error {
+func migration030Up(store migrationStore) error {
 	slog.Info("- Adding file_hash column to book_segments for auto-relinking")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
-func migration031Up(store Store) error {
+func migration031Up(store migrationStore) error {
 	slog.Info("- Adding system_activity_log table and logs_pruned flag")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration032Up adds scan cache columns for incremental scanning
-func migration032Up(store Store) error {
+func migration032Up(store migrationStore) error {
 	slog.Info("- Adding scan cache columns for incremental scanning")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -807,7 +829,7 @@ func migration032Up(store Store) error {
 
 // migration033Up creates the deferred_itunes_updates table for storing
 // transcode path changes that should be applied on the next iTunes sync.
-func migration033Up(store Store) error {
+func migration033Up(store migrationStore) error {
 	slog.Info("- Creating deferred_itunes_updates table")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -815,7 +837,7 @@ func migration033Up(store Store) error {
 
 // migration034Up creates the external_id_map table for mapping external
 // identifiers (iTunes PIDs, Audible ASINs, etc.) to book IDs.
-func migration034Up(store Store) error {
+func migration034Up(store migrationStore) error {
 	slog.Info("- Creating external_id_map table")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -823,28 +845,28 @@ func migration034Up(store Store) error {
 
 // migration035Up creates the book_path_history table for tracking file
 // rename/move operations over time.
-func migration035Up(store Store) error {
+func migration035Up(store migrationStore) error {
 	slog.Info("- Creating book_path_history table")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration036Up adds the genre column to the books table.
-func migration036Up(store Store) error {
+func migration036Up(store migrationStore) error {
 	slog.Info("- Adding genre column to books table")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration038Up adds itunes_path column to books table.
-func migration038Up(store Store) error {
+func migration038Up(store migrationStore) error {
 	slog.Info("- Adding itunes_path column to books table")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration037Up creates the book_tags table for user-defined tags.
-func migration037Up(store Store) error {
+func migration037Up(store migrationStore) error {
 	slog.Info("- Creating book_tags table for user-defined tags")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -853,14 +875,14 @@ func migration037Up(store Store) error {
 // migration039Up creates the book_files table and migrates data from book_segments.
 // book_files uses ULID string book_id (matching books.id directly), whereas
 // book_segments used a legacy CRC32 numeric hash of the ULID as book_id.
-func migration039Up(store Store) error {
+func migration039Up(store migrationStore) error {
 	slog.Info("- Creating book_files table and migrating book_segments data")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration040Up adds last_organize_operation_id and last_organized_at columns to books.
-func migration040Up(store Store) error {
+func migration040Up(store migrationStore) error {
 	slog.Info("- Adding last_organize_operation_id and last_organized_at to books table")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -869,14 +891,14 @@ func migration040Up(store Store) error {
 // migration041Up adds itunes_sync_status column to books for tracking whether
 // each book's metadata has been written back to the iTunes library.
 // Values: "synced" (up-to-date), "dirty" (changed), "unlinked" (no iTunes), nil (unknown).
-func migration041Up(store Store) error {
+func migration041Up(store migrationStore) error {
 	slog.Info("- Adding itunes_sync_status column to books table")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration042Up drops dead tables and adds missing indexes for common query patterns.
-func migration042Up(store Store) error {
+func migration042Up(store migrationStore) error {
 	slog.Info("- Dropping dead tables and adding missing indexes")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -884,7 +906,7 @@ func migration042Up(store Store) error {
 
 // migration043Up drops the deprecated book_segments table.
 // Data was migrated to book_files in migration 39. No production code reads this table.
-func migration043Up(store Store) error {
+func migration043Up(store migrationStore) error {
 	slog.Info("- Dropping deprecated book_segments table and adding remaining indexes")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -893,14 +915,14 @@ func migration043Up(store Store) error {
 // migration044Up adds PID lifecycle tracking to external_id_map.
 // provenance: "itunes" (imported), "generated" (we created), "recycled" (reused)
 // removed_at: timestamp when we sent a remove to the ITL; null while live
-func migration044Up(store Store) error {
+func migration044Up(store migrationStore) error {
 	slog.Info("- Added provenance and removed_at to external_id_map")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration045Up creates the operation_results table for structured per-book operation output.
-func migration045Up(store Store) error {
+func migration045Up(store migrationStore) error {
 	slog.Info("- Created operation_results table")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -926,7 +948,7 @@ func migration045Up(store Store) error {
 //	created_at — audit trail
 //
 // UNIQUE(book_id, title) prevents dup rows for the same variant.
-func migration046Up(store Store) error {
+func migration046Up(store migrationStore) error {
 	slog.Info("- Created book_alternative_titles table")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -955,7 +977,7 @@ func migration046Up(store Store) error {
 //
 // An index on source lets "tag:metadata:source:google_books AND
 // source=system" filter cheaply for the metadata-upgrade workflow.
-func migration047Up(store Store) error {
+func migration047Up(store migrationStore) error {
 	slog.Info("- Added source column to book_tags")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -979,7 +1001,7 @@ func migration047Up(store Store) error {
 // Schema mirrors book_tags after migration 47: primary key on
 // (entity_id, tag), `source` column defaulting to 'user', plus
 // indexes on tag and source for reverse lookup and filtering.
-func migration048Up(store Store) error {
+func migration048Up(store migrationStore) error {
 	slog.Info("- Created author_tags and series_tags tables")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -988,14 +1010,14 @@ func migration048Up(store Store) error {
 // migration049Up adds acoustid_fingerprint and acoustid_duration columns to
 // book_files. These store AcoustID fingerprints (from fpcalc) for
 // content-based matching that survives metadata rewrites and file moves.
-func migration049Up(store Store) error {
+func migration049Up(store migrationStore) error {
 	slog.Info("- Added acoustid_fingerprint, acoustid_duration to book_files")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration051Up adds quarantine_reason and quarantined_at columns to books.
-func migration051Up(store Store) error {
+func migration051Up(store migrationStore) error {
 	slog.Info("- Added quarantine_reason, quarantined_at to books")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -1004,7 +1026,7 @@ func migration051Up(store Store) error {
 // migration052Up creates the ai_jobs tracking table and ai_job_payloads
 // blob table used by the internal/ai/aijobs package to route bulk LLM work
 // through the OpenAI Batch API.
-func migration052Up(store Store) error {
+func migration052Up(store migrationStore) error {
 	slog.Info("- Created ai_jobs, ai_job_payloads")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -1015,7 +1037,7 @@ func migration052Up(store Store) error {
 // The old acoustid_fingerprint column is retained (SQLite cannot drop columns
 // in older versions) but is no longer read or written by the application.
 // PebbleDB is schema-free; the new segment fields live on the struct.
-func migration050Up(store Store) error {
+func migration050Up(store migrationStore) error {
 	slog.Info("- Added acoustid_seg0–acoustid_seg6 to book_files")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -1024,7 +1046,7 @@ func migration050Up(store Store) error {
 // migration053Up adds post_metadata_hash to book_files for recording the SHA-256
 // of the file after a metadata tag write. This allows the pre-write identity
 // (original_file_hash) to always be recoverable even after tags are modified.
-func migration053Up(store Store) error {
+func migration053Up(store migrationStore) error {
 	slog.Info("- Added post_metadata_hash to book_files")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -1033,7 +1055,7 @@ func migration053Up(store Store) error {
 // migration054Up creates the metadata_rejections table for auditing every
 // candidate that was rejected for a book (user action, below-threshold score,
 // duration mismatch, wrong language, or skipped in the UI).
-func migration054Up(store Store) error {
+func migration054Up(store migrationStore) error {
 	slog.Info("- Created metadata_rejections table")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -1043,7 +1065,7 @@ func migration054Up(store Store) error {
 // The value is sha256("{source}:{canonical_id}"), e.g. sha256("audible:B0XXXXXXXX").
 // Identical hashes mean two book records were applied from the exact same external record
 // and are almost certainly duplicates.
-func migration055Up(store Store) error {
+func migration055Up(store migrationStore) error {
 	slog.Info("- Added metadata_source_hash to books, created index idx_books_metadata_source_hash")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -1053,7 +1075,7 @@ func migration055Up(store Store) error {
 // When MergeChapterBooks() absorbs a chapter file into a consolidated book, the
 // source book row has is_primary_version set to 0 and merged_into_book_id set to
 // the primary book's ID so the merge is auditable.
-func migration056Up(store Store) error {
+func migration056Up(store migrationStore) error {
 	slog.Info("- Added merged_into_book_id to books, created index idx_books_merged_into")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -1063,7 +1085,7 @@ func migration056Up(store Store) error {
 // duplicate audiobook records for the same physical file within each library context.
 // The index is partial (WHERE file_hash IS NOT NULL) to avoid affecting existing rows
 // with NULL or empty hashes during migration.
-func migration057Up(store Store) error {
+func migration057Up(store migrationStore) error {
 	slog.Info("- Added unique index on (file_hash, source_import_path)")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -1073,7 +1095,7 @@ func migration057Up(store Store) error {
 // (spec: 2026-05-03-unified-book-fingerprint.md). These columns synthesize a
 // deterministic book-level fingerprint from the per-file 7-segment chromaprints,
 // enabling dedup matching across different file splits (e.g., 1 .m4b vs 30 .mp3s).
-func migration058Up(store Store) error {
+func migration058Up(store migrationStore) error {
 	slog.Info("- Added book_sig_v1, book_sig_segments, book_sig_built_at to books")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
@@ -1081,21 +1103,21 @@ func migration058Up(store Store) error {
 
 // migration059Up adds the UOS v2 core schema described in
 // docs/superpowers/specs/2026-05-04-unified-operations-system.md §2.1.
-func migration059Up(store Store) error {
+func migration059Up(store migrationStore) error {
 	slog.Info("- Added UOS v2 core schema")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration059Down removes the UOS v2 core schema added by migration059Up.
-func migration059Down(store Store) error {
+func migration059Down(store migrationStore) error {
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
 }
 
 // migration060Up adds partial book-signature coverage columns to books and
 // structured fingerprint-failure diagnosis columns to book_files.
-func migration060Up(store Store) error {
+func migration060Up(store migrationStore) error {
 	slog.Info("+ Added partial sig mask/coverage to books, diagnosis columns to book_files")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
