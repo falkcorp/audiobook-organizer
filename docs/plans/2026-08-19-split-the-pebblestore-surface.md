@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-08-19-split-the-pebblestore-surface.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 7a2e4d19-6c83-4b15-9f07-2d81e5a3c6b4 -->
 <!-- last-edited: 2026-08-19 -->
 
@@ -59,6 +59,50 @@ Split the type into N structs and every one of them needs a pointer back to that
 shared core, so you get N facades over one object plus N new indirections — more
 code, same coupling, and a `Close()` whose ownership is now ambiguous. The
 558-method count is a symptom; the shared mutable core is the actual constraint.
+
+> **MEASURED 2026-08-19 — the mutex half of this argument is WRONG.** The list
+> above was written from reading the struct declaration, not from measuring
+> usage. Measured across the 48 non-test files that declare `*PebbleStore`
+> methods, resolving each file's actual receiver name and stripping comment
+> lines:
+>
+> | field | files that use it |
+> |---|---|
+> | `db` | **45 / 48** |
+> | `mem()` (the accessor over `memPtr`) | **10 / 48** |
+> | `counterMu` | 1 (`pebble_store_authors.go`) |
+> | `opsMu`, `opsLogSeq` | 1 (`pebble_store_ops_v2.go`) |
+> | `reviewMu` | 1 (`review_store.go`) |
+> | `libraryCountsRecomputeMu` | 1 (`pebble_store_stats.go`) |
+> | `libGen` | 1 (`library_generation.go`) |
+> | `primaryCountMu`, `primaryCountRecomputeMu`, `primaryCount*` | 0 outside the declaration |
+>
+> Every mutex is used by **exactly one** domain file. (Each also appears in
+> `pebble_store.go`, but that is the struct declaration and constructor, where
+> all 18 fields appear by definition — it is not a second user.) The five
+> mutexes were cited as proof the state cannot be partitioned by domain; they
+> are the part that partitions most cleanly. Each would move with its domain.
+>
+> **What this does NOT overturn.** The *conclusion* survives its broken premise.
+> `db` at 45/48 and the memdb layer at 10/48, plus `memPending`, the warmup
+> lifecycle, `UseMemDB` and `rootDir`, are genuinely cross-cutting. Every domain
+> struct would still hold a pointer to that core, so "N facades over one object"
+> stands. What changes is that the core is **smaller and better-defined** than
+> claimed — roughly 6 shared fields, not 18 — and the remaining ~11 are
+> domain-local.
+>
+> **So the split is a cost/benefit call, not a design impossibility.** That is a
+> different question from the one this section originally answered, and it is
+> the user's to make: 558 methods across 48 files, against production.
+>
+> **Bound on this evidence.** The counts are FILE-level, not method-level. A
+> file that touches `db` anywhere counts once, whether one method uses it or
+> forty. An actual split needs per-method field analysis, which this is not.
+> Two earlier passes at these numbers were wrong and are recorded so the same
+> mistakes are not repeated: a `\b[a-z]{1,3}\.db\b` pattern reported `db` in
+> 18/48 (it under-matched longer receivers and over-matched elsewhere), and an
+> unanchored `.db` grep across the package reported 61 files — more files than
+> have `*PebbleStore` methods at all. Resolve the receiver name per file.
 
 **There is also a blocker that has to be cleared regardless:** 16 sites in 9
 packages name `*PebbleStore` concretely. A type that 9 packages depend on by name
