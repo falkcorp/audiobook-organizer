@@ -1,7 +1,7 @@
 // file: internal/maintenance/job.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-08-17
+// last-edited: 2026-08-18
 
 package maintenance
 
@@ -168,38 +168,136 @@ func RequeuePolicy() ExecutionPolicy {
 	return p
 }
 
-// JobStore is the database surface a maintenance job may use.
+// The maintenance jobs' database surface, grouped by what each part is for.
 //
-// It replaces database.Store in Run's signature. Store embeds 40 sub-interfaces
-// resolving to 398 methods; the 37 jobs together touch 12 of them — 187 methods,
-// a 53% smaller contract. The union was measured from every direct store.X() call
-// in the job bodies plus the parameter types of every helper a job hands `store`
-// to, not from a naming pattern.
+// JobStore was twelve database.* embeds — 187 methods — after #2534 narrowed
+// Run's parameter down from database.Store (398). That was the right move at the
+// time and the arbitration deliberately chose a shared store over per-job
+// interfaces. What it could not know is how little of the 187 the jobs touch.
 //
-// Listing the sub-interfaces rather than the methods is deliberate: it mirrors how
-// database.Store itself is built, so a job needing a genuinely new capability adds
-// one line here and that line is the review surface. Widening it should feel like
-// a decision.
+// Measured 2026-08-18 by emptying JobStore and reading the compiler's
+// enumeration across all 37 jobs: 37 methods called directly, plus 15 more
+// reached only through the narrow slices in jobs/store_slices.go. 52 of 187.
 //
-// What this does NOT do: it does not delete database.MockStore. MockStore is
-// imported far beyond this package and satisfies JobStore too, so the 14 job tests
-// that build one still compile unchanged. What it buys is a bounded contract and
-// the option of a small per-job double.
+// Kept as a composition rather than a flat list because interfacebloat counts
+// declared entries: the flat form would trade a smaller method set for a wider
+// declaration. Seven entries leaves one slot of headroom under the limit of
+// eight, so the next job needing a new capability adds a method to a group
+// rather than restructuring this type.
 //
-// Nothing here is a new type — all 12 already existed in internal/database.
+// What this does NOT do: it does not delete database.MockStore, which satisfies
+// the narrower JobStore just as it satisfied the wider one, so the job tests
+// that build one still compile unchanged.
+type jobBookReader interface {
+	GetBookByID(id string) (*database.Book, error)
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
+	ListBookIDs() ([]string, error)
+	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
+	GetBookChangeHistory(bookID string, limit int) ([]database.MetadataChangeRecord, error)
+}
+
+type jobBookWriter interface {
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	DeleteBook(id string) error
+	RecomputeBookAggregates(bookID string) error
+	MergeChapterBooks(primaryID string, srcIDs []string, commonTitle string, totalDuration float64) error
+}
+
+type jobBookStore interface {
+	jobBookReader
+	jobBookWriter
+}
+
+type jobBookFileReader interface {
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
+	GetAllBookFilesCore() ([]database.BookFileCore, error)
+	GetBookFilesNeedingDelugeImportCore() ([]database.BookFileCore, error)
+}
+
+type jobBookFileWriter interface {
+	CreateBookFile(file *database.BookFile) error
+	UpdateBookFile(id string, file *database.BookFile) error
+	UpsertBookFile(file *database.BookFile) error
+	SetBookFileHash(id, hash string) error
+	DeleteBookFilesForBook(bookID string) error
+}
+
+type jobBookFileStore interface {
+	jobBookFileReader
+	jobBookFileWriter
+}
+
+type jobContributorStore interface {
+	CreateAuthor(name string) (*database.Author, error)
+	GetAllAuthors() ([]database.Author, error)
+	GetAuthorByID(id int) (*database.Author, error)
+	GetAuthorByName(name string) (*database.Author, error)
+	GetAllSeries() ([]database.Series, error)
+	GetAllSeriesBookCounts() (map[int]int, error)
+	DeleteSeries(id int) error
+}
+
+type jobUserStateStore interface {
+	ListUsers() ([]database.User, error)
+	GetUserBookState(userID, bookID string) (*database.UserBookState, error)
+	SetUserBookState(state *database.UserBookState) error
+	SetUserPosition(userID, bookID, segmentID string, positionSeconds float64) error
+	ListUserPositionsForBook(userID, bookID string) ([]database.UserPosition, error)
+	AddBookUserTag(bookID string, tag string) error
+	GetBookUserTags(bookID string) ([]string, error)
+}
+
+type jobOperationRecordStore interface {
+	GetOperationByID(id string) (*database.Operation, error)
+	GetOperationParams(opID string) ([]byte, error)
+	GetOperationResults(operationID string) ([]database.OperationResult, error)
+	CreateOperationResult(result *database.OperationResult) error
+	SaveOperationSummaryLog(op *database.OperationSummaryLog) error
+	ListOperations(limit, offset int) ([]database.Operation, int, error)
+	DeleteOperationWithLogs(id string) error
+}
+
+type jobOperationStateStore interface {
+	GetOperationState(opID string) ([]byte, error)
+	SaveOperationState(opID string, state []byte) error
+	DeleteOperationState(opID string) error
+}
+
+type jobOperationStore interface {
+	jobOperationRecordStore
+	jobOperationStateStore
+}
+
+// jobKVStore is settings plus the raw key/value space the retention and sweep
+// jobs use for their own bookkeeping rows.
+type jobKVStore interface {
+	GetSetting(key string) (*database.Setting, error)
+	SetSetting(key, value, typ string, isSecret bool) error
+	GetRaw(key string) ([]byte, error)
+	SetRaw(key string, value []byte) error
+	DeleteRaw(key string) error
+	ScanPrefix(prefix string) ([]database.KVPair, error)
+	CountPrefix(prefix string) (int64, error)
+}
+
+type jobExternalIDStore interface {
+	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
+	ReassignExternalIDs(oldBookID, newBookID string) error
+}
+
+// JobStore is the database contract every maintenance job runs against.
+// Widening it should still feel like a decision: a job needing a genuinely new
+// capability adds one method to one group, and that line is the review surface.
 type JobStore interface {
-	database.BookStore
-	database.BookFileStore
-	database.AuthorStore
-	database.OperationStore
-	database.SeriesStore
-	database.ExternalIDStore
-	database.UserStore
-	database.UserPositionStore
-	database.UserTagStore
-	database.SettingsStore
-	database.MetadataStore
-	database.RawKVStore
+	jobBookStore
+	jobBookFileStore
+	jobContributorStore
+	jobUserStateStore
+	jobOperationStore
+	jobKVStore
+	jobExternalIDStore
 }
 
 // PolicyAware is satisfied by every MaintenanceJob. It is a separate interface
