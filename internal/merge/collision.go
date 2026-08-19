@@ -1,5 +1,5 @@
 // file: internal/merge/collision.go
-// version: 1.1.0
+// version: 1.2.0
 
 package merge
 
@@ -20,7 +20,7 @@ type CollisionCandidate struct {
 }
 
 // BookTitle returns the title for a book ID, or empty string if not found.
-func BookTitle(store mergeBookReader, id string) string {
+func BookTitle(store BookReader, id string) string {
 	b, _ := store.GetBookByID(id)
 	if b != nil {
 		return b.Title

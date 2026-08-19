@@ -1,7 +1,7 @@
 // file: internal/importer/collision.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5c7d8e9f-0a1b-2c3d-4e5f-6a7b8c9d0e1f
-// last-edited: 2026-07-07
+// last-edited: 2026-08-19
 //
 // Import-time collision preview. Before importing a file, check whether
 // it collides with an existing book (by title match, file hash, or fingerprint)
@@ -13,7 +13,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -40,7 +39,7 @@ type CollisionPreviewResult struct {
 //
 // It returns a CollisionPreviewResult with all detected candidates, allowing the user
 // to decide whether to skip, merge, or create a new version.
-func CheckImportCollisions(store database.Store, req *CollisionPreviewRequest) *CollisionPreviewResult {
+func CheckImportCollisions(store collisionStore, req *CollisionPreviewRequest) *CollisionPreviewResult {
 	var candidates []merge.CollisionCandidate
 
 	// 1. Fingerprint check (purged/blocked content).

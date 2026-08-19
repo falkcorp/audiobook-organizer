@@ -1,11 +1,10 @@
 // file: internal/audiobooks/register.go
-// version: 1.1.1
-// last-edited: 2026-06-23
+// version: 1.2.0
+// last-edited: 2026-08-19
 
 package audiobooks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 
@@ -15,7 +14,7 @@ func init() {
 		Needs:  []string{serviceregistry.KeyStore},
 		Groups: []string{"core"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
+			store := serviceregistry.Get[audiobookStore](c, serviceregistry.KeyStore)
 			return NewAudiobookService(store), nil
 		},
 	})
@@ -24,7 +23,7 @@ func init() {
 		Needs:  []string{serviceregistry.KeyStore},
 		Groups: []string{"core"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
+			store := serviceregistry.Get[organizeServiceStore](c, serviceregistry.KeyStore)
 			return NewOrganizeService(store), nil
 		},
 	})

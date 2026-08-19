@@ -1,5 +1,5 @@
 // file: internal/merge/store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
 // last-edited: 2026-08-19
 
@@ -15,8 +15,9 @@ import "github.com/falkcorp/audiobook-organizer/internal/database"
 // the free functions in sync_follow.go need only user-progress methods, and
 // BookTitle needs exactly one.
 
-// mergeBookReader is the single lookup collision.go needs.
-type mergeBookReader interface {
+// BookReader is the single lookup collision.go needs. Exported because
+// BookTitle is exported and internal/importer forwards its store into it.
+type BookReader interface {
 	GetBookByID(id string) (*database.Book, error)
 }
 
@@ -24,7 +25,7 @@ type mergeBookReader interface {
 // SoftDeleteBook is exported, so a caller that forwards its own store into it
 // has to be able to name this requirement -- see internal/dedup.
 type BookWriter interface {
-	mergeBookReader
+	BookReader
 
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
 	DeleteBook(id string) error
