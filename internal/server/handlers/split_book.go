@@ -1,5 +1,5 @@
 // file: internal/server/handlers/split_book.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-08-19
 
@@ -14,7 +14,6 @@ import (
 	"net/http"
 
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
-	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/gin-gonic/gin"
@@ -29,8 +28,8 @@ type SplitBookOpEnqueuer interface {
 // SplitBookCandidateStore is the narrow interface for reading and managing
 // persisted split-book candidate clusters.
 type SplitBookCandidateStore interface {
-	List() ([]dedupengine.SplitBookCandidate, error)
-	Get(id string) (*dedupengine.SplitBookCandidate, error)
+	List() ([]dedup.SplitBookCandidate, error)
+	Get(id string) (*dedup.SplitBookCandidate, error)
 	Delete(id string) error
 }
 
@@ -78,7 +77,7 @@ func (h *SplitBookHandler) ListSplitBookCandidates(c *gin.Context) {
 		return
 	}
 	if cands == nil {
-		cands = []dedupengine.SplitBookCandidate{}
+		cands = []dedup.SplitBookCandidate{}
 	}
 	httputil.RespondWithOK(c, gin.H{
 		"candidates": cands,
@@ -140,7 +139,7 @@ func (h *SplitBookHandler) MergeSplitBookCandidate(c *gin.Context) {
 		return
 	}
 
-	result, err := dedupengine.MergeSplitBookCluster(h.mergeStore, keepID, srcIDs, cand.SuggestedTitle)
+	result, err := dedup.MergeSplitBookCluster(h.mergeStore, keepID, srcIDs, cand.SuggestedTitle)
 	if err != nil {
 		httputil.InternalError(c, "split-book merge failed", err)
 		return
