@@ -48,7 +48,7 @@ func AsExternalIDReassigner(s any) ExternalIDReassigner {
 // dedup.MergeBooks path so any two merges are mutually exclusive on a shared
 // book row.
 type Service struct {
-	db               mergeStore
+	db               Store
 	writeBackBatcher WriteBackEnqueuer
 	syncFollower     SyncFollower
 }
@@ -82,7 +82,7 @@ type Result struct {
 // that do not — mocks, and decorators that embed the Store interface rather
 // than forwarding capability methods — yield nil and the merge paths simply do
 // not touch sync identity. Override with SetSyncFollower.
-func NewService(db mergeStore) *Service {
+func NewService(db Store) *Service {
 	follower := database.AsSyncIdentityStore(db)
 	if follower == nil {
 		// Say so out loud. A nil follower silently disables the whole

@@ -32,7 +32,9 @@ type seriesAggregateReader interface {
 	GetAllSeriesFileCounts() (map[int]int, error)
 }
 
-type diagnosticsStore interface {
+// Store is the diagnostics consumer slice. Exported so a caller that constructs
+// a Service (internal/server/handlers) can name it instead of database.Store.
+type Store interface {
 	libraryCounter
 	authorAggregateReader
 	seriesAggregateReader

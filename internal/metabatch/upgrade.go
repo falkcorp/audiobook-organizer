@@ -35,14 +35,14 @@ import (
 // MetadataUpgradeService finds books with low-quality metadata
 // sources and attempts to upgrade them to richer sources.
 type MetadataUpgradeService struct {
-	DB      metabatchStore
+	DB      Store
 	Fetcher *metafetch.Service
 }
 
 // NewMetadataUpgradeService creates an upgrade service. The fetcher
 // provides the search + apply pipeline; the db provides the tag
 // lookup for finding eligible books.
-func NewMetadataUpgradeService(db metabatchStore, fetcher *metafetch.Service) *MetadataUpgradeService {
+func NewMetadataUpgradeService(db Store, fetcher *metafetch.Service) *MetadataUpgradeService {
 	return &MetadataUpgradeService{DB: db, Fetcher: fetcher}
 }
 

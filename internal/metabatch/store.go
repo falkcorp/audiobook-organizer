@@ -1,5 +1,5 @@
 // file: internal/metabatch/store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d4e6b02-8a15-4c73-b2f9-7e1a3d508c62
 // last-edited: 2026-08-19
 
@@ -17,7 +17,10 @@ type operationResultReader interface {
 	GetOperationResults(operationID string) ([]database.OperationResult, error)
 }
 
-type metabatchStore interface {
+// Store is the metabatch consumer slice. Exported so a caller that constructs a
+// MetadataUpgradeService (internal/scheduler) can name this instead of reaching
+// for database.Store.
+type Store interface {
 	operationResultReader
 
 	GetBookByID(id string) (*database.Book, error)

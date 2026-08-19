@@ -7,7 +7,6 @@ package plugin
 import (
 	"context"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
@@ -36,8 +35,13 @@ type Plugin interface {
 // Deps is the dependency bag passed to plugins during Init.
 // Plugins use this to interact with the host. They never import
 // internal/server.
+// Store was here until 2026-08-19 and was write-only: internal/server's
+// plugins_init.go set it from s.Store() and no implementor ever read it. The
+// only Plugin in-tree is internal/plugins/webhook; everything that looks like a
+// plugin store dependency (p.deps.Store()) belongs to pkg/plugin/sdk's separate
+// Deps type. Removing the field beats narrowing it -- there is no requirement
+// left to express.
 type Deps struct {
-	Store  database.Store
 	Events *EventBus
 	Config map[string]string
 	Logger logger.Logger

@@ -119,8 +119,37 @@ type dbHealthMetadataCache struct {
 // dependency interfaces (plus clean concrete database stores and the AI batch
 // parser) so the handler is mockable and package handlers never imports package
 // server.
+// diagnosticsStore is everything the diagnostics endpoints need from the store.
+// Was database.Store (398 methods) until 2026-08-19, on a comment claiming a
+// "db-health type switch" required the full surface. Verified before believing:
+// there is no type switch or type assertion on this field anywhere in the file.
+//
+// Most of the width is forwarding, so those requirements are embedded BY NAME
+// rather than transcribed -- one declared entry each, and each re-narrows on its
+// own when its own package does. Note that an empty-interface compiler probe
+// reports only the FIRST missing method of a constraint, so a constraint is
+// indistinguishable from a single direct call in the raw output; the direct
+// calls below were confirmed by re-probing with the constraints satisfied.
+type diagnosticsStore interface {
+	diagnostics.Store   // NewService, lazy-construction fallback
+	merge.Store         // NewService, lazy-construction fallback
+	database.RawKVStore // CountCachedMetadataFetches
+
+	diagnosticsOperationStore
+}
+
+// diagnosticsOperationStore is the operation bookkeeping the apply/export paths
+// do while a long diagnostics run is in flight.
+type diagnosticsOperationStore interface {
+	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
+	GetOperationByID(id string) (*database.Operation, error)
+	UpdateOperationError(id, errorMessage string) error
+	UpdateOperationResultData(id string, resultData string) error
+	UpdateOperationStatus(id, status string, progress, total int, message string) error
+}
+
 type DiagnosticsHandler struct {
-	store          database.Store           // full store (db-health type switch + apply/export paths)
+	store          diagnosticsStore         // see diagnosticsStore
 	diagService    DiagnosticsService       // diagnostics service (CollectAllBooks); may be nil
 	mergeService   MergeService             // merge service (MergeBooks); may be nil
 	embeddingStore *database.EmbeddingStore // embeddings health stats; may be nil
@@ -135,7 +164,7 @@ type DiagnosticsHandler struct {
 // server-side lazy construction fallback. batchParser may be nil — the submit-AI
 // flow falls back to preparing batch data without submission.
 func NewDiagnosticsHandler(
-	store database.Store,
+	store diagnosticsStore,
 	diagService DiagnosticsService,
 	mergeService MergeService,
 	embeddingStore *database.EmbeddingStore,

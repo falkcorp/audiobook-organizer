@@ -76,8 +76,9 @@ type mergeExternalIDReader interface {
 // interface here would state a requirement that does not exist.
 type syncCapabilityStore = any
 
-// mergeStore is the whole surface, for Service and its constructor.
-type mergeStore interface {
+// Store is the whole merge surface, for Service and its constructor. Exported
+// so a caller that constructs a Service can name it instead of database.Store.
+type Store interface {
 	BookWriter
 	mergeBookFileStore
 	mergeAuthorStore
