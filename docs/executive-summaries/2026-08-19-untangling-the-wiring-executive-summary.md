@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-19-untangling-the-wiring-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 3c1f9a76-5e28-4d0b-9a41-6b2f70d5e8c4 -->
 <!-- last-edited: 2026-08-19 -->
 
@@ -84,6 +84,21 @@ maintenance jobs was finished the same day. They break down as:
 **Narrowing the components is finished.** Nothing further can be reached that way. The
 remaining work is to split the database object itself into pieces, so the giant
 connector has nothing left to plug into and can be deleted outright.
+
+**One more loose plug turned up afterwards**, and it is worth recording rather than
+quietly fixing, because the sentence above was written before it was found. A
+maintenance task that builds a book-lookup index was still assuming it would be handed
+the database object directly, rather than asking for the specific abilities it needs.
+Nothing was broken by this: as the program is currently wired, it *is* handed that
+object directly, so the assumption holds. It would have broken the first time anything
+wrapped the database — which the program already does elsewhere, for other callers. It
+now asks for what it needs, the same way every other component does, and it still
+refuses to run loudly rather than quietly doing nothing if those abilities are missing.
+
+The general lesson is the one this whole page is about: a component that works today
+because of how something else happens to be wired is not the same as a component that
+works. The first kind fails silently later, and there is nothing in the code that
+says which kind you are looking at.
 
 ## The tidy-up, and what it is not
 
