@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-08-14
+// last-edited: 2026-08-19
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -352,23 +352,17 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 			return
 		}
 		var bookIDs []string
-		// Try direct method on store, fallback to Unwrap() if decorated
-		if lf, ok := store.(interface{ ListBooksWithFileErrors() ([]string, error) }); ok {
+		// Resolved through any decorator chain — the search-index wrapper hides
+		// this capability from a bare assertion.
+		if lf, ok := database.AsCapability[interface {
+			ListBooksWithFileErrors() ([]string, error)
+		}](store); ok {
 			ids, err := lf.ListBooksWithFileErrors()
 			if err != nil {
 				httputil.InternalError(c, "failed to list books with file errors", err)
 				return
 			}
 			bookIDs = ids
-		} else if uw, ok := store.(interface{ Unwrap() database.Store }); ok {
-			if inner, ok2 := uw.Unwrap().(interface{ ListBooksWithFileErrors() ([]string, error) }); ok2 {
-				ids, err := inner.ListBooksWithFileErrors()
-				if err != nil {
-					httputil.InternalError(c, "failed to list books with file errors", err)
-					return
-				}
-				bookIDs = ids
-			}
 		}
 
 		if bookIDs == nil {
@@ -420,26 +414,15 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 	}
 	if quickQueryID != "" {
 		var bookIDs []string
-		if qqStore, ok := store.(interface {
+		if qqStore, ok := database.AsCapability[interface {
 			GetAllBookIDsForQuickQuery(id string) ([]string, error)
-		}); ok {
+		}](store); ok {
 			ids, err := qqStore.GetAllBookIDsForQuickQuery(quickQueryID)
 			if err != nil {
 				httputil.InternalError(c, "failed to list books for quick query", err)
 				return
 			}
 			bookIDs = ids
-		} else if uw, ok := store.(interface{ Unwrap() database.Store }); ok {
-			if inner, ok2 := uw.Unwrap().(interface {
-				GetAllBookIDsForQuickQuery(id string) ([]string, error)
-			}); ok2 {
-				ids, err := inner.GetAllBookIDsForQuickQuery(quickQueryID)
-				if err != nil {
-					httputil.InternalError(c, "failed to list books for quick query", err)
-					return
-				}
-				bookIDs = ids
-			}
 		}
 
 		if bookIDs == nil {
@@ -478,19 +461,11 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 		}
 
 		qqBookFilesMap := make(map[string][]database.BookFileCore)
-		if qqGgf, ok := store.(interface {
+		if qqGgf, ok := database.AsCapability[interface {
 			GetBookFilesForIDsCore(ids []string) (map[string][]database.BookFileCore, error)
-		}); ok {
+		}](store); ok {
 			if qqBfm, err := qqGgf.GetBookFilesForIDsCore(qqBookIDs); err == nil {
 				qqBookFilesMap = qqBfm
-			}
-		} else if qqUw, ok := store.(interface{ Unwrap() database.Store }); ok {
-			if qqInner, ok2 := qqUw.Unwrap().(interface {
-				GetBookFilesForIDsCore(ids []string) (map[string][]database.BookFileCore, error)
-			}); ok2 {
-				if qqBfm, err := qqInner.GetBookFilesForIDsCore(qqBookIDs); err == nil {
-					qqBookFilesMap = qqBfm
-				}
 			}
 		}
 
