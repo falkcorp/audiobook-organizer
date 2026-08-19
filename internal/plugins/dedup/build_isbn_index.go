@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/build_isbn_index.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-08-19
 
@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -75,9 +76,14 @@ func (p *Plugin) runBuildISBNIndex(ctx context.Context, rawParams json.RawMessag
 	// The store must implement ISBNIndexStore so the op can write index rows
 	// and set/read the completion flag without going through the generic
 	// SetSetting path (which uses a different key from IsISBNIndexBuilt).
-	isbnStore, ok := p.store.(ISBNIndexStore)
-	if !ok {
-		return fmt.Errorf("store does not implement ISBNIndexStore (expected *database.PebbleStore)")
+	//
+	// Resolved through the decorator chain rather than asserted on p.store
+	// directly -- see resolveISBNIndexStore below for why a bare assertion is
+	// fragile here.
+	isbnStore := resolveISBNIndexStore(p.store)
+	if isbnStore == nil {
+		return fmt.Errorf("store does not provide the ISBNIndexStore capability " +
+			"(WriteISBNIndexForBook, IsISBNIndexBuilt, SetISBNIndexBuilt)")
 	}
 
 	// --- Parse params ---
@@ -256,6 +262,35 @@ type ISBNIndexStore interface {
 	// Settings key as IsISBNIndexBuilt — both are on *database.PebbleStore,
 	// so this is guaranteed by construction.
 	SetISBNIndexBuilt() error
+}
+
+// resolveISBNIndexStore walks the decorator chain for ISBNIndexStore instead of
+// asserting on the store value directly.
+//
+// Why this is not a bare assertion. p.store is a pluginStore, whose dynamic
+// value today is the bare *database.PebbleStore seeded into the service
+// registry -- so `p.store.(ISBNIndexStore)` succeeds as things currently
+// stand, and this change fixes no live failure. It stops the op from being one
+// decorator away from breaking: any wrapper that embeds the database.Store
+// interface (internal/server's indexedStore is one) satisfies pluginStore
+// while hiding the concrete type, and the assertion would then fail.
+//
+// All THREE methods are absent from database.Store -- compile-probed
+// 2026-08-19 individually with `var _ interface{ M(...) } = (Store)(nil)`
+// under -gcflags=-e, plus a positive control to prove the probe distinguishes
+// both answers. This composite is therefore UNIFORMLY unreachable, unlike
+// internal/dedup's same-named ISBNIndexStore, which is a mixed composite
+// (GetBookIDsByISBNASIN is on database.Store, IsISBNIndexBuilt is not).
+//
+// Unlike the silent-fallback conversions in this sweep (#2597-#2601), this
+// call site fails LOUDLY: the op returns an error naming the missing
+// capability. Nothing degrades silently here; the op just refuses to run.
+// See docs/plans/2026-08-19-split-the-pebblestore-surface.md.
+func resolveISBNIndexStore(s any) ISBNIndexStore {
+	if c, ok := database.AsCapability[ISBNIndexStore](s); ok {
+		return c
+	}
+	return nil
 }
 
 // derefStrPlugin is a nil-safe string pointer deref for use in the dedup plugin.
