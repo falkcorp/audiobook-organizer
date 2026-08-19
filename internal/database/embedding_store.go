@@ -1,5 +1,5 @@
 // file: internal/database/embedding_store.go
-// version: 2.11.0
+// version: 2.11.1
 // last-edited: 2026-08-19
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
@@ -1313,10 +1313,17 @@ func deleteDedupCandidatesForBook(db *pebble.DB, b *pebble.Batch, bookID string)
 		rec, ok := readCandRec(db, id)
 		if !ok {
 			// Record absent or corrupt. Delete what we can still name: this
-			// index entry and the record key. The pair key, the far entity
-			// entry and the status entry are unrecoverable without the record —
-			// but they are also already unreachable from this book, and the
-			// far side's own DeleteBook will clear its index entry.
+			// index entry and the record key. The pair key, the far side's
+			// entity entry and the status entry name values that only the
+			// record carried, so they cannot be derived here.
+			//
+			// The far side's entry is left behind, and that is inert rather
+			// than merely tolerable: the entity index has exactly two
+			// consumers — ListCandidatesForEntity and this function — and both
+			// re-resolve every hit through dedupRecKey and skip an entry that
+			// does not resolve. Nothing reads the index and trusts it. Do not
+			// add a consumer that does without also making this branch
+			// resolve the far side first.
 			_ = b.Delete(key, nil)
 			_ = b.Delete(dedupRecKey(id), nil)
 			continue
