@@ -213,7 +213,7 @@ func (s *Server) RegisterLibraryImportOp(reg *opsregistry.Registry) error {
 
 			// Security: the path is user-supplied. Validate + canonicalize it
 			// against the configured import paths before touching the filesystem.
-			cleanPath, err := fileops.ValidateUserPath(s.Store(), p.Path)
+			cleanPath, err := fileops.ValidateUserPath(s.storeForWiring(), p.Path)
 			if err != nil {
 				return fmt.Errorf("import path rejected: %w", err)
 			}
@@ -366,14 +366,14 @@ func (s *Server) RegisterLibraryTranscodeOp(reg *opsregistry.Registry) error {
 				KeepOriginal: p.KeepOriginal,
 			}
 
-			outputPath, err := transcode.Transcode(ctx, opts, s.Store(), progress)
+			outputPath, err := transcode.Transcode(ctx, opts, s.Ops(), progress)
 			if err != nil {
 				op.SetStatus("failed")
 				logging.Error(ctx, "transcode failed", "book_id", p.BookID, "err", err)
 				return err
 			}
 
-			originalBook, err := s.Store().GetBookByID(p.BookID)
+			originalBook, err := s.Ops().GetBookByID(p.BookID)
 			if err != nil {
 				op.SetStatus("failed")
 				logging.Error(ctx, "transcode: failed to get original book", "book_id", p.BookID, "err", err)
@@ -392,7 +392,7 @@ func (s *Server) RegisterLibraryTranscodeOp(reg *opsregistry.Registry) error {
 			originalBook.IsPrimaryVersion = &notPrimary
 			originalBook.VersionGroupID = &groupID
 			originalBook.VersionNotes = &origNotes
-			if _, err := s.Store().UpdateBook(p.BookID, originalBook); err != nil {
+			if _, err := s.Ops().UpdateBook(p.BookID, originalBook); err != nil {
 				progress.Log("warn", fmt.Sprintf("Failed to update original book version info: %v", err), nil)
 			}
 
@@ -429,7 +429,7 @@ func (s *Server) RegisterLibraryTranscodeOp(reg *opsregistry.Registry) error {
 				VersionGroupID:       &groupID,
 				VersionNotes:         &m4bNotes,
 			}
-			if _, err := s.Store().CreateBook(newBook); err != nil {
+			if _, err := s.Ops().CreateBook(newBook); err != nil {
 				progress.Log("warn", fmt.Sprintf("Failed to create M4B version record, updating original: %v", err), nil)
 				isPrim := true
 				fallbackNotes := fmt.Sprintf("Transcoded to M4B (in-place, original was at %s)", originalBook.FilePath)
@@ -440,7 +440,7 @@ func (s *Server) RegisterLibraryTranscodeOp(reg *opsregistry.Registry) error {
 				originalBook.IsPrimaryVersion = &isPrim
 				originalBook.VersionGroupID = &groupID
 				originalBook.VersionNotes = &fallbackNotes
-				if _, updateErr := s.Store().UpdateBook(p.BookID, originalBook); updateErr != nil {
+				if _, updateErr := s.Ops().UpdateBook(p.BookID, originalBook); updateErr != nil {
 					return updateErr
 				}
 				return nil
@@ -452,7 +452,7 @@ func (s *Server) RegisterLibraryTranscodeOp(reg *opsregistry.Registry) error {
 			if !config.AppConfig.ITunes.WriteBackEnabled &&
 				originalBook.ITunesPersistentID != nil &&
 				*originalBook.ITunesPersistentID != "" {
-				if err := s.Store().CreateDeferredITunesUpdate(
+				if err := s.Ops().CreateDeferredITunesUpdate(
 					originalBook.ID,
 					*originalBook.ITunesPersistentID,
 					originalBook.FilePath,

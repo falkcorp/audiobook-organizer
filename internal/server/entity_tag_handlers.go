@@ -29,18 +29,18 @@ type entityTagOps struct {
 func (s *Server) authorTagOps() entityTagOps {
 	return entityTagOps{
 		name:          "author",
-		getDetailed:   s.Store().GetAuthorTagsDetailed,
-		add:           s.Store().AddAuthorTag,
-		addWithSource: s.Store().AddAuthorTagWithSource,
+		getDetailed:   s.Ops().GetAuthorTagsDetailed,
+		add:           s.Ops().AddAuthorTag,
+		addWithSource: s.Ops().AddAuthorTagWithSource,
 	}
 }
 
 func (s *Server) seriesTagOps() entityTagOps {
 	return entityTagOps{
 		name:          "series",
-		getDetailed:   s.Store().GetSeriesTagsDetailed,
-		add:           s.Store().AddSeriesTag,
-		addWithSource: s.Store().AddSeriesTagWithSource,
+		getDetailed:   s.Ops().GetSeriesTagsDetailed,
+		add:           s.Ops().AddSeriesTag,
+		addWithSource: s.Ops().AddSeriesTagWithSource,
 	}
 }
 

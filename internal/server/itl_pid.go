@@ -25,7 +25,7 @@ import (
 // read-only: it reports the duplicate-PID census + relocate-correctness probe.
 func (s *Server) pidIntegrityHandler(c *gin.Context) {
 	itlPath, _ := resolveITLWritePath(c) // best-effort: census works without the ITL
-	report, err := itunes.ComputePIDIntegrity(s.Store(), itlPath)
+	report, err := itunes.ComputePIDIntegrity(s.storeForWiring(), itlPath)
 	if err != nil {
 		httputil.RespondWithInternalError(c, fmt.Sprintf("pid-integrity census failed: %v", err))
 		return
@@ -60,7 +60,7 @@ func (s *Server) pidRepairHandler(c *gin.Context) {
 	if !ok {
 		return
 	}
-	groups, preview, err := itunes.ComputePIDRepairPlan(s.Store(), itlPath, itlPathMappings())
+	groups, preview, err := itunes.ComputePIDRepairPlan(s.storeForWiring(), itlPath, itlPathMappings())
 	if err != nil {
 		httputil.RespondWithInternalError(c, fmt.Sprintf("pid-repair plan failed: %v", err))
 		return
@@ -71,7 +71,7 @@ func (s *Server) pidRepairHandler(c *gin.Context) {
 		return
 	}
 
-	result, err := itunes.ApplyPIDRepairPlan(s.Store(), groups)
+	result, err := itunes.ApplyPIDRepairPlan(s.storeForWiring(), groups)
 	if err != nil {
 		httputil.RespondWithInternalError(c, fmt.Sprintf("pid-repair apply failed: %v", err))
 		return

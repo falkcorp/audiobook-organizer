@@ -56,7 +56,7 @@ func (s *Server) RegisterReconcileScanOpV2(reg *opsregistry.Registry) error {
 			if err := json.Unmarshal(rawParams, &p); err != nil {
 				return fmt.Errorf("reconcile.scan: decode params: %w", err)
 			}
-			store := s.Store()
+			store := s.storeForWiring()
 			if store == nil {
 				return fmt.Errorf("reconcile.scan: database not initialized")
 			}
@@ -96,7 +96,7 @@ func (s *Server) RegisterReconcileApplyOp(reg *opsregistry.Registry) error {
 			if err := json.Unmarshal(rawParams, &p); err != nil {
 				return fmt.Errorf("reconcile.apply: decode params: %w", err)
 			}
-			store := s.Store()
+			store := s.storeForWiring()
 			if store == nil {
 				return fmt.Errorf("reconcile.apply: database not initialized")
 			}

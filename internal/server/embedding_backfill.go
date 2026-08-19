@@ -183,7 +183,7 @@ func embedAuthorsConcurrent(ctx context.Context, authors []database.Author, conc
 // runEmbeddingBackfill embeds all books and authors on first startup and
 // re-runs once after each backfill version bump.
 func (s *Server) runEmbeddingBackfill() {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil || s.dedupEngine == nil {
 		return
 	}

@@ -53,7 +53,7 @@ func (s *Server) handleRestoreCover(c *gin.Context) {
 		return
 	}
 
-	book, err := s.Store().GetBookByID(bookID)
+	book, err := s.Ops().GetBookByID(bookID)
 	if err != nil || book == nil {
 		httputil.RespondWithNotFound(c, "book", "")
 		return
@@ -89,7 +89,7 @@ func (s *Server) handleRestoreCover(c *gin.Context) {
 	ext := filepath.Ext(req.Filename)
 	coverURL := "/api/v1/covers/local/" + bookID + ext
 	book.CoverURL = &coverURL
-	if _, err := s.Store().UpdateBook(book.ID, book); err != nil {
+	if _, err := s.Ops().UpdateBook(book.ID, book); err != nil {
 		httputil.InternalError(c, "update book cover", err)
 		return
 	}

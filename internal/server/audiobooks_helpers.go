@@ -149,14 +149,14 @@ const facetsCacheKey = "all"
 // that is the pre-existing 500 path, unaffected by this task.
 func (s *Server) buildFacetsResponse(ctx context.Context) (gin.H, error) {
 	_ = ctx // reserved for parity with buildAudiobookListResponse; no context-aware call in this path yet.
-	if s.Store() == nil {
+	if s.Ops() == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	genres, err := s.Store().GetDistinctGenres()
+	genres, err := s.Ops().GetDistinctGenres()
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch genres: %w", err)
 	}
-	languages, err := s.Store().GetDistinctLanguages()
+	languages, err := s.Ops().GetDistinctLanguages()
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch languages: %w", err)
 	}
@@ -188,7 +188,7 @@ func (s *Server) buildFacetsResponse(ctx context.Context) (gin.H, error) {
 // first Library page load hits the cache instead of triggering a full
 // PebbleDB scan.
 func (s *Server) warmFacetsCache() {
-	if s.Store() == nil {
+	if s.Ops() == nil {
 		return
 	}
 	slog.Info("facets pre-warming genres/languages cache")
@@ -215,7 +215,7 @@ func (s *Server) runAutoPurgeSoftDeleted(opID string) {
 	if config.AppConfig.PurgeSoftDeletedAfterDays <= 0 {
 		return
 	}
-	if s.Store() == nil {
+	if s.Ops() == nil {
 		slog.Debug("Auto-purge skipped database not initialized")
 		return
 	}

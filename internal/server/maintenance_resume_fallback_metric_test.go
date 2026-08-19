@@ -76,7 +76,7 @@ func TestResumeLegacyOp_NoSavedParamsIncrementsFallbackCounter(t *testing.T) {
 	// No saved params → the fallback branch must fire and count.
 	opID := ulid.Make().String()
 	opType := "maintenance:" + jobID
-	if _, err := server.Store().CreateOperation(opID, opType, nil); err != nil {
+	if _, err := server.Ops().CreateOperation(opID, opType, nil); err != nil {
 		t.Fatalf("CreateOperation: %v", err)
 	}
 
@@ -95,10 +95,10 @@ func TestResumeLegacyOp_NoSavedParamsIncrementsFallbackCounter(t *testing.T) {
 	// fallbacks, not resumes. Without this, an increment misplaced onto the
 	// happy path would still pass the assertion above.
 	opID2 := ulid.Make().String()
-	if _, err := server.Store().CreateOperation(opID2, opType, nil); err != nil {
+	if _, err := server.Ops().CreateOperation(opID2, opType, nil); err != nil {
 		t.Fatalf("CreateOperation: %v", err)
 	}
-	if err := operations.SaveParams(server.Store(), opID2, maintenanceJobOpParams{
+	if err := operations.SaveParams(server.Ops(), opID2, maintenanceJobOpParams{
 		LegacyOpID: opID2,
 		JobID:      jobID,
 		DryRun:     true,

@@ -114,7 +114,7 @@ func nextBatchSize(backlog int) int {
 // is logged at ERROR (not WARN) because it means an index update is lost with
 // no way to recover it — strictly worse than the drop itself.
 func (s *Server) markIndexDirty(bookID string) {
-	ds := database.AsSearchIndexDirtyStore(s.Store())
+	ds := database.AsSearchIndexDirtyStore(s.Ops())
 	if ds == nil {
 		// No durable set available (memdb-only test server, or the store
 		// does not implement the capability). The drop is still counted and
@@ -157,7 +157,7 @@ func (s *Server) runSearchReconciler() {
 // mechanism exists because a recorded intent was lost, so trusting another
 // recorded intent would repeat the mistake.
 func (s *Server) reconcileOnce() {
-	ds := database.AsSearchIndexDirtyStore(s.Store())
+	ds := database.AsSearchIndexDirtyStore(s.Ops())
 	if ds == nil {
 		return
 	}
@@ -192,7 +192,7 @@ func (s *Server) reconcileOnce() {
 		// GetBookByID, matching IndexBookByID's own read — a nil book with a
 		// nil error is the "row is gone" signal, which is what distinguishes
 		// a reindex from an index delete.
-		book, gerr := s.Store().GetBookByID(id)
+		book, gerr := s.Ops().GetBookByID(id)
 		switch {
 		case gerr != nil:
 			// Leave the key in place so the next tick retries it.

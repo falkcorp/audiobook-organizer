@@ -51,7 +51,7 @@ func asExternalIDStore(s any) ExternalIDStore {
 // failure here (e.g. a write error mid-backfill) used to leave the op
 // reporting success unconditionally.
 func (s *Server) backfillExternalIDs(progress func(processed, total int, msg string)) error {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		return nil
 	}

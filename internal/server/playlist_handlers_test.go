@@ -189,7 +189,7 @@ func TestPlaylist_GetSmartEvaluates(t *testing.T) {
 	}
 
 	// Materialized cache should have been persisted.
-	pl, _ := srv.Store().GetUserPlaylist(created.Data.ID)
+	pl, _ := srv.storeForWiring().GetUserPlaylist(created.Data.ID)
 	if len(pl.MaterializedBookIDs) != 2 {
 		t.Errorf("materialized cache = %v, want 2 entries", pl.MaterializedBookIDs)
 	}
@@ -334,7 +334,7 @@ func TestPlaylist_Materialize(t *testing.T) {
 	}
 
 	// Original smart playlist is still there and still smart.
-	src, _ := srv.Store().GetUserPlaylist(smart.Data.ID)
+	src, _ := srv.storeForWiring().GetUserPlaylist(smart.Data.ID)
 	if src == nil || src.Type != database.UserPlaylistTypeSmart {
 		t.Errorf("source playlist changed or missing: %+v", src)
 	}

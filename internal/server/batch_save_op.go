@@ -59,7 +59,7 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 				}
 			}
 
-			store := s.Store()
+			store := s.storeForWiring()
 			progress := registryProgressAdapter{r: reporter}
 			opID := p.LegacyOpID
 			bookIDs := p.BookIDs

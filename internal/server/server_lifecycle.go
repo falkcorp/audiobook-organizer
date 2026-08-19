@@ -45,7 +45,7 @@ import (
 )
 
 func (s *Server) resumeInterruptedOperations() {
-	store := s.Store()
+	store := s.storeForWiring()
 	if store == nil {
 		return
 	}
@@ -109,7 +109,7 @@ func (s *Server) resumeV2Op(opID, opType string, policy opsregistry.ResumePolicy
 		newID, err := s.opRegistry.EnqueueOp(context.Background(), opType, nil)
 		if err != nil {
 			slog.Warn("Failed to re-enqueue v2 op on restart-resume", "opID", opID, "opType", opType, "err", err)
-			_ = s.Store().UpdateOperationError(opID, "failed to resume: "+err.Error())
+			_ = s.Ops().UpdateOperationError(opID, "failed to resume: "+err.Error())
 			return
 		}
 		// Close the old row out rather than leaving it mid-flight, so the
@@ -117,26 +117,26 @@ func (s *Server) resumeV2Op(opID, opType string, policy opsregistry.ResumePolicy
 		// phantom that never moves again.
 		now := time.Now()
 		reason := fmt.Sprintf("interrupted during %s — restarted as %s", opType, newID)
-		_ = s.Store().UpdateOperationV2Status(opID, "interrupted_restart", nil, &now, &reason)
+		_ = s.Ops().UpdateOperationV2Status(opID, "interrupted_restart", nil, &now, &reason)
 		slog.Info("Restarted interrupted operation", "oldOpID", opID, "newOpID", newID, "opType", opType)
 	case opsregistry.ResumeRequeue:
 		// Re-enqueue from zero (idempotent op).
 		if _, err := s.opRegistry.EnqueueOp(context.Background(), opType, nil); err != nil {
 			slog.Warn("Failed to re-enqueue v2 op on resume", "opID", opID, "opType", opType, "err", err)
-			_ = s.Store().UpdateOperationError(opID, "failed to resume: "+err.Error())
+			_ = s.Ops().UpdateOperationError(opID, "failed to resume: "+err.Error())
 		}
 	case opsregistry.ResumeDrop:
-		_ = s.Store().UpdateOperationError(opID, fmt.Sprintf("interrupted during %s (dropped on restart)", opType))
-		_ = operations.ClearState(s.Store(), opID)
+		_ = s.Ops().UpdateOperationError(opID, fmt.Sprintf("interrupted during %s (dropped on restart)", opType))
+		_ = operations.ClearState(s.storeForWiring(), opID)
 	case opsregistry.ResumeAsk:
 		// Surface in UI — mark as interrupted_ask so the frontend can prompt the user.
 		slog.Info("Op requires user decision to resume or drop", "opID", opID, "opType", opType)
 		now := time.Now()
 		reason := "interrupted — waiting for user to choose resume or drop"
-		_ = s.Store().UpdateOperationV2Status(opID, "interrupted_ask", nil, &now, &reason)
+		_ = s.Ops().UpdateOperationV2Status(opID, "interrupted_ask", nil, &now, &reason)
 	default:
-		_ = s.Store().UpdateOperationError(opID, fmt.Sprintf("interrupted during %s (unknown resume policy)", opType))
-		_ = operations.ClearState(s.Store(), opID)
+		_ = s.Ops().UpdateOperationError(opID, fmt.Sprintf("interrupted during %s (unknown resume policy)", opType))
+		_ = operations.ClearState(s.storeForWiring(), opID)
 	}
 }
 
@@ -177,7 +177,7 @@ func countLegacyV1Ops(ops []database.Operation) int {
 // resumeLegacyOp handles resume for pre-UOS v1 op type names that are not
 // registered in the v2 registry under their original names.
 func (s *Server) resumeLegacyOp(opID, opType string) {
-	store := s.Store()
+	store := s.storeForWiring()
 	switch opType {
 	case "itunes_import":
 		// Migrated to UOS (itunes.import); re-enqueue via registry on resume.
@@ -381,7 +381,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 	}
 	if s.searchIndex != nil {
 		s.indexQueue = make(chan indexRequest, 1024)
-		inner := s.Store()
+		inner := s.storeForWiring()
 		wrapped := &indexedStore{Store: inner, server: s}
 		s.store = wrapped
 		database.SetGlobalStore(wrapped)
@@ -430,8 +430,8 @@ func (s *Server) Start(cfg ServerConfig) error {
 	s.startBackfills()
 
 	// Start periodic cleanup of stale transcode temp files
-	if s.Store() != nil {
-		if paths, err := s.Store().GetAllImportPaths(); err == nil {
+	if s.Ops() != nil {
+		if paths, err := s.Ops().GetAllImportPaths(); err == nil {
 			for _, p := range paths {
 				stopCleanup := transcode.StartCleanupTicker(p.Path, 1*time.Hour, 2*time.Hour)
 				defer stopCleanup()
@@ -453,7 +453,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 		// it. A nil database.Store converts to a nil SchedulerStore, so the
 		// documented "may return nil before the DB is up" contract holds.
 		Store: func() scheduler.SchedulerStore {
-			st := s.Store()
+			st := s.storeForWiring()
 			if st == nil {
 				return nil
 			}
@@ -495,11 +495,11 @@ func (s *Server) Start(cfg ServerConfig) error {
 					runtime.ReadMemStats(&alloc)
 					bookCount := 0
 					folderCount := 0
-					if s.Store() != nil {
-						if bc, err := s.Store().CountPrimaryBooks(); err == nil {
+					if s.Ops() != nil {
+						if bc, err := s.Ops().CountPrimaryBooks(); err == nil {
 							bookCount = bc
 						}
-						if folders, err := s.Store().GetAllImportPaths(); err == nil {
+						if folders, err := s.Ops().GetAllImportPaths(); err == nil {
 							folderCount = len(folders)
 						}
 					}
@@ -551,12 +551,12 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// exhaust the inotify watch limit on a large tree, so it must never be
 	// the only discovery mechanism.
 	var watcherSupervisor *watcher.Supervisor
-	if config.AppConfig.AutoScanEnabled && s.Store() != nil {
+	if config.AppConfig.AutoScanEnabled && s.Ops() != nil {
 		debounce := 5 * time.Second
 		if config.AppConfig.AutoScanDebounceSeconds > 0 {
 			debounce = time.Duration(config.AppConfig.AutoScanDebounceSeconds) * time.Second
 		}
-		watchLog := logger.NewWithActivityLog("auto-scan", s.Store())
+		watchLog := logger.NewWithActivityLog("auto-scan", s.storeForWiring())
 		// The same callback is reused across watchers because each watcher
 		// invokes it with its own root path, so the scan target is correct
 		// per event.
@@ -580,7 +580,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 		// Re-read on every reconcile, not once: this is what makes a path
 		// added through the UI get a watcher without a restart.
 		paths := func() ([]string, error) {
-			importPaths, err := s.Store().GetAllImportPaths()
+			importPaths, err := s.Ops().GetAllImportPaths()
 			if err != nil {
 				return nil, fmt.Errorf("GetAllImportPaths: %w", err)
 			}
@@ -606,8 +606,8 @@ func (s *Server) Start(cfg ServerConfig) error {
 	}
 
 	// Periodic cleanup of expired/revoked auth sessions.
-	if s.Store() != nil {
-		sessionLog := logger.NewWithActivityLog("session-cleanup", s.Store())
+	if s.Ops() != nil {
+		sessionLog := logger.NewWithActivityLog("session-cleanup", s.storeForWiring())
 		sessionCleanupTicker := time.NewTicker(10 * time.Minute)
 		backgroundWG.Add(1)
 		go func() {
@@ -616,7 +616,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 			for {
 				select {
 				case <-sessionCleanupTicker.C:
-					if deleted, err := s.Store().DeleteExpiredSessions(time.Now()); err != nil {
+					if deleted, err := s.Ops().DeleteExpiredSessions(time.Now()); err != nil {
 						sessionLog.Warn("failed to clean up expired sessions: %v", err)
 					} else if deleted > 0 {
 						sessionLog.Info("cleaned up %d expired/revoked sessions", deleted)
@@ -629,7 +629,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 	}
 
 	// Periodically mark stale operations as failed.
-	if s.Store() != nil && config.AppConfig.OperationTimeoutMinutes > 0 {
+	if s.Ops() != nil && config.AppConfig.OperationTimeoutMinutes > 0 {
 		staleTimeout := time.Duration(config.AppConfig.OperationTimeoutMinutes) * time.Minute
 		staleTicker := time.NewTicker(1 * time.Minute)
 		backgroundWG.Add(1)
@@ -1075,12 +1075,12 @@ func (s *Server) seedRolesAndTokens() {
 	// Seed / refresh the multi-user roles (spec 3.7). Idempotent: if
 	// the permission set in auth.SeedRoles has grown since last boot,
 	// existing roles pick up the new entries automatically.
-	if created, updated, err := auth.SeedRoles(s.Store()); err != nil {
+	if created, updated, err := auth.SeedRoles(s.storeForWiring()); err != nil {
 		slog.Warn("seed roles", "err", err)
 	} else if created > 0 || updated > 0 {
 		slog.Info("seed roles created, updated", "created", created, "updated", updated)
 	}
-	if err := auth.SeedSystemUser(s.Store()); err != nil {
+	if err := auth.SeedSystemUser(s.storeForWiring()); err != nil {
 		slog.Warn("seed system user", "err", err)
 	}
 
@@ -1089,11 +1089,11 @@ func (s *Server) seedRolesAndTokens() {
 	// clean path — mirrors the ConsumeBootstrapToken(store, dataDir, …) pattern.
 	if dbPath := config.AppConfig.DatabasePath; dbPath != "" {
 		dataDir := filepath.Clean(filepath.Dir(dbPath))
-		if err := InitBootstrapToken(s.Store(), dataDir); err != nil {
+		if err := InitBootstrapToken(s.storeForWiring(), dataDir); err != nil {
 			slog.Info("Failed to init bootstrap token", "err", err)
 		}
 		if config.AppConfig.WriteStartupReadOnlyKey {
-			if err := InitStartupReadOnlyKey(s.Store(), dataDir); err != nil {
+			if err := InitStartupReadOnlyKey(s.storeForWiring(), dataDir); err != nil {
 				slog.Info("Failed to init startup read-only key", "err", err)
 			}
 		}
@@ -1168,14 +1168,14 @@ func (s *Server) startBackfills() {
 		if err := s.bgCtx.Err(); err != nil {
 			return
 		}
-		b, ok := resolveVGBackfiller(s.Store())
+		b, ok := resolveVGBackfiller(s.Ops())
 		if !ok {
 			// Not a silent fall-through: this is the production repair for an
 			// under-reporting version-group index, and if the store is ever
 			// wrapped or decorated the assertion misses and NOTHING happens.
 			// That is indistinguishable from a completed run unless it says so.
 			slog.Warn("versiongroup-backfill: store does not implement BackfillVersionGroupIndex, index will NOT be rebuilt",
-				"store_type", fmt.Sprintf("%T", s.Store()))
+				"store_type", fmt.Sprintf("%T", s.Ops()))
 			return
 		}
 		if err := b.BackfillVersionGroupIndex(); err != nil {
@@ -1278,7 +1278,7 @@ func (s *Server) perm(p auth.Permission) gin.HandlerFunc {
 	if !config.AppConfig.EnableAuth {
 		return func(c *gin.Context) { c.Next() }
 	}
-	return servermiddleware.RequirePermission(s.Store(), p)
+	return servermiddleware.RequirePermission(s.storeForWiring(), p)
 }
 
 func (s *Server) itunesSvcGuard(fn gin.HandlerFunc) gin.HandlerFunc {
@@ -1325,7 +1325,7 @@ func (s *Server) setupRoutes() {
 	// friction without protecting anything more.
 	metricsAuth := gin.HandlerFunc(func(c *gin.Context) { c.Next() })
 	if config.AppConfig.EnableAuth {
-		metricsAuth = servermiddleware.RequireAuth(s.Store())
+		metricsAuth = servermiddleware.RequireAuth(s.storeForWiring())
 	}
 	s.router.GET("/metrics", buildTopLevelAuthChain(cfMW, metricsAuth,
 		gin.WrapH(promhttp.Handler()))...)
@@ -1356,7 +1356,7 @@ func (s *Server) setupRoutes() {
 	// /api/v1 call succeeded.
 	eventsAuth := gin.HandlerFunc(func(c *gin.Context) { c.Next() })
 	if config.AppConfig.EnableAuth {
-		eventsAuth = servermiddleware.RequireAuth(s.Store())
+		eventsAuth = servermiddleware.RequireAuth(s.storeForWiring())
 	}
 	s.router.GET("/api/events", buildTopLevelAuthChain(cfMW, eventsAuth,
 		func(c *gin.Context) { s.systemHandler.HandleEvents(c) })...)
@@ -1411,7 +1411,7 @@ func (s *Server) setupRoutes() {
 		c.Next()
 	})
 	if config.AppConfig.EnableAuth {
-		authMiddleware = servermiddleware.RequireAuth(s.Store())
+		authMiddleware = servermiddleware.RequireAuth(s.storeForWiring())
 	} else {
 		slog.Warn("authentication is disabled (enable_authfalse) — do not expose this server to untrusted networks")
 	}
@@ -1710,11 +1710,11 @@ func (s *Server) collectStaleOperations(timeout time.Duration) ([]database.Opera
 	if timeout <= 0 {
 		return []database.Operation{}, nil
 	}
-	if s.Store() == nil {
+	if s.Ops() == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
 
-	ops, err := s.Store().GetRecentOperations(500)
+	ops, err := s.Ops().GetRecentOperations(500)
 	if err != nil {
 		return nil, err
 	}
@@ -1734,7 +1734,7 @@ func (s *Server) collectStaleOperations(timeout time.Duration) ([]database.Opera
 }
 
 func (s *Server) failStaleOperations(timeout time.Duration) {
-	staleLog := logger.NewWithActivityLog("reaper", s.Store())
+	staleLog := logger.NewWithActivityLog("reaper", s.storeForWiring())
 	stale, err := s.collectStaleOperations(timeout)
 	if err != nil {
 		staleLog.Warn("stale operation check failed: %v", err)
@@ -1746,7 +1746,7 @@ func (s *Server) failStaleOperations(timeout time.Duration) {
 
 	for _, op := range stale {
 		msg := fmt.Sprintf("operation timed out after %s", timeout)
-		if err := s.Store().UpdateOperationError(op.ID, msg); err != nil {
+		if err := s.Ops().UpdateOperationError(op.ID, msg); err != nil {
 			staleLog.Warn("failed to mark stale operation %s as failed: %v", op.ID, err)
 			continue
 		}
@@ -1775,7 +1775,7 @@ type vgBackfiller interface{ BackfillVersionGroupIndex() error }
 
 // resolveVGBackfiller finds the version-group backfill on the running store.
 //
-// It uses database.AsCapability, NOT a bare type assertion. s.Store() is the
+// It uses database.AsCapability, NOT a bare type assertion. s.Ops() is the
 // *server.indexedStore decorator whenever the Bleve index opened — i.e. always,
 // in production. That decorator embeds the database.Store INTERFACE, so it
 // promotes only that interface's method set and BackfillVersionGroupIndex is

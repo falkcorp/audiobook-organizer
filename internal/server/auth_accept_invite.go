@@ -50,13 +50,13 @@ func (s *Server) handleAcceptInvite(c *gin.Context) {
 		return
 	}
 
-	user, err := s.Store().ConsumeInvite(req.Token, "bcrypt", string(hash))
+	user, err := s.Ops().ConsumeInvite(req.Token, "bcrypt", string(hash))
 	if err != nil {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
 	}
 
-	sess, err := s.Store().CreateSession(user.ID, c.ClientIP(), c.Request.UserAgent(), 30*24*time.Hour)
+	sess, err := s.Ops().CreateSession(user.ID, c.ClientIP(), c.Request.UserAgent(), 30*24*time.Hour)
 	if err != nil {
 		httputil.InternalError(c, "create session", err)
 		return

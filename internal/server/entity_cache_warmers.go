@@ -13,7 +13,7 @@ package server
 import "log/slog"
 
 func (s *Server) warmAuthorsCache() {
-	if s.Store() == nil {
+	if s.Ops() == nil {
 		return
 	}
 	slog.Info("authors pre-warming cache")
@@ -27,7 +27,7 @@ func (s *Server) warmAuthorsCache() {
 }
 
 func (s *Server) warmSeriesCache() {
-	if s.Store() == nil {
+	if s.Ops() == nil {
 		return
 	}
 	slog.Info("series pre-warming cache")

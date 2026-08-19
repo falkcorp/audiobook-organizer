@@ -107,7 +107,7 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 				}
 			}
 
-			store := s.Store()
+			store := s.storeForWiring()
 			ctx = maintenance.WithOperationID(ctx, p.LegacyOpID)
 			progress := registryProgressAdapter{r: reporter}
 			adapter := &maintenance.ProgressAdapter{Ops: progress}

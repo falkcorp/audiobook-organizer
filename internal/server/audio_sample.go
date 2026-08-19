@@ -25,7 +25,7 @@ import (
 //
 // Delegates to internal/audio.ExtractSample for the actual ffmpeg logic.
 func (s *Server) handleAudioSample(c *gin.Context) {
-	book, err := s.Store().GetBookByID(c.Param("id"))
+	book, err := s.Ops().GetBookByID(c.Param("id"))
 	if err != nil || book == nil {
 		httputil.RespondWithNotFound(c, "book", "")
 		return

@@ -404,7 +404,7 @@ func TestRunMaintenanceJob_PersistsResolvedDryRun(t *testing.T) {
 		t.Fatalf("no operation_id in response %s", w.Body.String())
 	}
 
-	saved, err := operations.LoadParams[maintenanceJobOpParams](server.Store(), opID)
+	saved, err := operations.LoadParams[maintenanceJobOpParams](server.Ops(), opID)
 	if err != nil {
 		t.Fatalf("LoadParams: %v", err)
 	}
@@ -478,11 +478,11 @@ func TestResumeLegacyOp_MaintenanceJobHonorsSavedDryRun(t *testing.T) {
 
 			opID := ulid.Make().String()
 			opType := "maintenance:" + tc.job.ID()
-			if _, err := server.Store().CreateOperation(opID, opType, nil); err != nil {
+			if _, err := server.Ops().CreateOperation(opID, opType, nil); err != nil {
 				t.Fatalf("CreateOperation: %v", err)
 			}
 			if tc.savedDry != nil {
-				if err := operations.SaveParams(server.Store(), opID, maintenanceJobOpParams{
+				if err := operations.SaveParams(server.Ops(), opID, maintenanceJobOpParams{
 					LegacyOpID: opID,
 					JobID:      tc.job.ID(),
 					DryRun:     *tc.savedDry,

@@ -12,7 +12,7 @@ import (
 func TestIsProtectedPath_FailedDir(t *testing.T) {
 	// isProtectedPath is now a method on *Server (SERVER-GLOBAL-STORE-AUDIT
 	// phase 3a). A zero-value Server is fine for this test — only the
-	// ".failed/" string-match branch is exercised; s.Store() returns nil
+	// ".failed/" string-match branch is exercised; s.Ops() returns nil
 	// so the import-path branch is skipped.
 	s := &Server{}
 	cases := []struct {

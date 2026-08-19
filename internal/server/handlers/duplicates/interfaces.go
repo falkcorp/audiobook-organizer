@@ -49,7 +49,7 @@ type DuplicatesStore interface {
 // MergeBooks returns the concrete *merge.Result; the handler reads .MergedCount,
 // .VersionGroupID and .PrimaryID off it. The service is reached through a
 // provider closure (getMergeService) so the original nil-fallback
-// (merge.NewService(s.Store()) when s.mergeService is nil) is preserved by the
+// (merge.NewService(s.Ops()) when s.mergeService is nil) is preserved by the
 // controller without this package importing internal/server.
 type MergeService interface {
 	MergeBooks(bookIDs []string, primaryID string) (*merge.Result, error)

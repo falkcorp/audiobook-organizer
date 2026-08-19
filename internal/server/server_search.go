@@ -29,7 +29,7 @@ func (s *Server) safeWriteDeps() tagger.SafeWriteDeps {
 	if s.protectedPathCache == nil {
 		return tagger.SafeWriteDeps{}
 	}
-	store := s.Store()
+	store := s.storeForWiring()
 	importer := deluge.NewLibraryImporterAdapter(store, deluge.GetClient(), &config.AppConfig)
 	return tagger.SafeWriteDeps{
 		ProtectedCache: s.protectedPathCache,
@@ -53,7 +53,7 @@ func (s *Server) buildSearchIndexIfEmpty() {
 	if count > 0 {
 		return
 	}
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		return
 	}
@@ -108,11 +108,11 @@ func (s *Server) IndexBookByID(bookID string) error {
 	if s.searchIndex == nil || bookID == "" {
 		return nil
 	}
-	book, err := s.Store().GetBookByID(bookID)
+	book, err := s.Ops().GetBookByID(bookID)
 	if err != nil || book == nil {
 		return err
 	}
-	return s.searchIndex.IndexBook(search.BookToDoc(s.Store(), book))
+	return s.searchIndex.IndexBook(search.BookToDoc(s.Ops(), book))
 }
 
 // DeleteIndexedBook removes a book from the search index. Called

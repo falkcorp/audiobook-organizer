@@ -78,7 +78,7 @@ func (s *Server) RegisterAIAuthorReviewOp(reg *opsregistry.Registry) error {
 			}
 
 			parser := newAIParser(config.AppConfig.OpenAIAPIKey, config.AppConfig.EnableAIParsing)
-			store := s.Store()
+			store := s.Ops()
 			progress := registryProgressAdapter{r: reporter}
 
 			switch p.Mode {
@@ -120,7 +120,7 @@ func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 				return fmt.Errorf("ai.author-merge-apply: legacy_op_id is required")
 			}
 
-			store := s.Store()
+			store := s.Ops()
 			progress := registryProgressAdapter{r: reporter}
 			suggestions := p.Suggestions
 			total := len(suggestions)

@@ -73,7 +73,7 @@ func (s *Server) buildOAuthWiring() (*handlers.OAuthHandler, gin.HandlerFunc) {
 		slog.Warn("oauth: OAUTH_ALLOWED_EMAILS is empty — every OAuth/Access login will be rejected until it is set")
 	}
 
-	oauthH := handlers.NewOAuthHandler(s.Store(), cfg, codec, providers)
+	oauthH := handlers.NewOAuthHandler(s.storeForWiring(), cfg, codec, providers)
 
 	// Cloudflare Access middleware. NewCFAccessVerifier uses a lazy remote keyset that
 	// refreshes in the BACKGROUND, so it must get a long-lived context, not the
@@ -82,7 +82,7 @@ func (s *Server) buildOAuthWiring() (*handlers.OAuthHandler, gin.HandlerFunc) {
 	if cfg.CFAccessTeamDomain != "" && cfg.CFAccessAUD != "" {
 		if v, verr := oauth.NewCFAccessVerifier(context.Background(), cfg.CFAccessTeamDomain, cfg.CFAccessAUD); verr == nil {
 			cfMW = servermiddleware.CloudflareAccessAuth(
-				servermiddleware.NewCFAccessAuthenticator(v, cfg, s.Store()))
+				servermiddleware.NewCFAccessAuthenticator(v, cfg, s.storeForWiring()))
 			slog.Info("oauth: Cloudflare Access identity passthrough enabled", "team", cfg.CFAccessTeamDomain)
 		} else {
 			slog.Error("oauth: Cloudflare Access verifier init failed — passthrough disabled", "err", verr)

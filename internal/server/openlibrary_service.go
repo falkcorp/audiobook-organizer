@@ -89,7 +89,7 @@ func (s *Server) startOLDownload(c *gin.Context) {
 	}
 
 	tracker := s.olService.Tracker
-	store := s.Store()
+	store := s.Ops()
 	opID := ulid.Make().String()
 	folderPath := targetDir
 	if store != nil {
@@ -127,7 +127,7 @@ func (s *Server) startOLImport(c *gin.Context) {
 		return
 	}
 
-	store := s.Store()
+	store := s.Ops()
 	opID := ulid.Make().String()
 	folderPath := targetDir
 	if store != nil {

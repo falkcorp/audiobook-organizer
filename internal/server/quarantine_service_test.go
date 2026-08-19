@@ -18,7 +18,7 @@ func TestQuarantineBook_MovesFileAndUpdatesDB(t *testing.T) {
 	srv, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	store := srv.Store()
+	store := srv.storeForWiring()
 	require.NotNil(t, store)
 
 	// Create a real file in the library dir
@@ -71,7 +71,7 @@ func TestUnquarantineBook_MovesFileBack(t *testing.T) {
 	srv, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	store := srv.Store()
+	store := srv.storeForWiring()
 	root := config.AppConfig.RootDir
 
 	// Set up a file already in .failed/

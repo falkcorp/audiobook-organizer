@@ -17,7 +17,7 @@ import (
 )
 
 func (s *Server) reconcilePreview(c *gin.Context) {
-	store := s.Store()
+	store := s.storeForWiring()
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -32,7 +32,7 @@ func (s *Server) reconcilePreview(c *gin.Context) {
 }
 
 func (s *Server) startReconcileScan(c *gin.Context) {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -58,7 +58,7 @@ func (s *Server) startReconcileScan(c *gin.Context) {
 }
 
 func (s *Server) latestReconcileScan(c *gin.Context) {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -98,7 +98,7 @@ func (s *Server) latestReconcileScan(c *gin.Context) {
 }
 
 func (s *Server) startReconcile(c *gin.Context) {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
@@ -138,7 +138,7 @@ func (s *Server) startReconcile(c *gin.Context) {
 
 func (s *Server) cleanupDuplicateVersionGroupsHandler(c *gin.Context) {
 	dryRun := c.Query("dry_run") == "true"
-	result, err := reconcile.CleanupDuplicateVersionGroups(s.Store(), config.AppConfig.RootDir, dryRun)
+	result, err := reconcile.CleanupDuplicateVersionGroups(s.storeForWiring(), config.AppConfig.RootDir, dryRun)
 	if err != nil {
 		httputil.InternalError(c, "failed to cleanup version groups", err)
 		return
@@ -151,7 +151,7 @@ func (s *Server) cleanupDuplicateVersionGroupsHandler(c *gin.Context) {
 
 func (s *Server) markBrokenSegmentBooksHandler(c *gin.Context) {
 	dryRun := c.Query("dry_run") == "true"
-	result, err := reconcile.FindBrokenSegmentBooks(s.Store(), dryRun)
+	result, err := reconcile.FindBrokenSegmentBooks(s.storeForWiring(), dryRun)
 	if err != nil {
 		httputil.InternalError(c, "failed to find broken segments", err)
 		return
@@ -164,7 +164,7 @@ func (s *Server) markBrokenSegmentBooksHandler(c *gin.Context) {
 
 func (s *Server) mergeNoVGDuplicatesHandler(c *gin.Context) {
 	dryRun := c.Query("dry_run") == "true"
-	result, err := reconcile.MergeNoVGDuplicates(s.Store(), config.AppConfig.RootDir, dryRun)
+	result, err := reconcile.MergeNoVGDuplicates(s.storeForWiring(), config.AppConfig.RootDir, dryRun)
 	if err != nil {
 		httputil.InternalError(c, "failed to merge duplicates", err)
 		return
@@ -176,7 +176,7 @@ func (s *Server) mergeNoVGDuplicatesHandler(c *gin.Context) {
 }
 
 func (s *Server) assignOrphanVGsHandler(c *gin.Context) {
-	result, err := reconcile.AssignOrphanVGs(s.Store(), config.AppConfig.RootDir)
+	result, err := reconcile.AssignOrphanVGs(s.storeForWiring(), config.AppConfig.RootDir)
 	if err != nil {
 		httputil.InternalError(c, "failed to assign version groups", err)
 		return
@@ -192,7 +192,7 @@ func (s *Server) assignOrphanVGsHandler(c *gin.Context) {
 // ?dry_run=false, so an accidental POST previews rather than rewrites rows.
 func (s *Server) electMissingPrimariesHandler(c *gin.Context) {
 	dryRun := c.DefaultQuery("dry_run", "true") != "false"
-	result, err := reconcile.ElectMissingPrimaries(s.Store(), dryRun)
+	result, err := reconcile.ElectMissingPrimaries(s.storeForWiring(), dryRun)
 	if err != nil {
 		httputil.InternalError(c, "failed to elect missing primary versions", err)
 		return

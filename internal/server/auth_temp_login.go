@@ -71,7 +71,7 @@ func purgeExpiredTempTokens() {
 // user can click to log in. Token is single-use, 15-min TTL, exchanges
 // for a 24h session.
 func (s *Server) createTempLoginToken(c *gin.Context) {
-	if s.Store() == nil {
+	if s.Ops() == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
 	}
@@ -88,7 +88,7 @@ func (s *Server) createTempLoginToken(c *gin.Context) {
 		return
 	}
 
-	user, err := s.Store().GetUserByID(req.UserID)
+	user, err := s.Ops().GetUserByID(req.UserID)
 	if err != nil || user == nil {
 		httputil.RespondWithNotFound(c, "user", req.UserID)
 		return
@@ -153,7 +153,7 @@ func (s *Server) mintTempLoginPayload(c *gin.Context, user *database.User) (gin.
 // redirects to the SPA root. On failure: redirects to /login with an
 // error query param so the SPA can show a message.
 func (s *Server) consumeTempLoginToken(c *gin.Context) {
-	if s.Store() == nil {
+	if s.Ops() == nil {
 		c.Redirect(http.StatusSeeOther, "/login?error=server")
 		return
 	}
@@ -177,7 +177,7 @@ func (s *Server) consumeTempLoginToken(c *gin.Context) {
 		return
 	}
 
-	user, err := s.Store().GetUserByID(entry.UserID)
+	user, err := s.Ops().GetUserByID(entry.UserID)
 	if err != nil || user == nil {
 		c.Redirect(http.StatusSeeOther, "/login?error=user_not_found")
 		return
@@ -191,7 +191,7 @@ func (s *Server) consumeTempLoginToken(c *gin.Context) {
 		return
 	}
 
-	session, err := s.Store().CreateSession(
+	session, err := s.Ops().CreateSession(
 		user.ID,
 		strings.TrimSpace(c.ClientIP()),
 		strings.TrimSpace(c.Request.UserAgent()),

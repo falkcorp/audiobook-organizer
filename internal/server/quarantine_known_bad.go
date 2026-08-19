@@ -17,7 +17,7 @@ const quarantineKnownBadKey = "quarantine_known_bad_v1_done"
 // is marked as permanently taglib-unreadable (transcode_skip_* setting = "true")
 // and quarantines it. These are the ~29 files the transcode pass could not fix.
 func (s *Server) quarantineKnownBadFiles() {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		return
 	}

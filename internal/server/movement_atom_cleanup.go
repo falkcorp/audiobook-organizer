@@ -31,7 +31,7 @@ var movementAtoms = []string{"SHOWWORKMOVEMENT", "MOVEMENTNUMBER", "MOVEMENTNAME
 // period is not blown by a first-run walk over a large library. A canceled
 // run does not write the done flag, so the next startup resumes the cleanup.
 func (s *Server) stripMovementAtoms(ctx context.Context) {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		return
 	}

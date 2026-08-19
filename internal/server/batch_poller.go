@@ -201,7 +201,7 @@ func (s *Server) registerBatchPollerHandlers() {
 				Err:      r.Error,
 			})
 		}
-		store := database.GetAIJobs(s.Store())
+		store := database.GetAIJobs(s.Ops())
 		if store == nil {
 			return fmt.Errorf("aijobs: store does not implement AIJobsStore")
 		}
@@ -242,7 +242,7 @@ func (s *Server) registerBatchPollerHandlers() {
 func (s *Server) storeBatchResultForOperation(batchID string, payload map[string]any) {
 	store := s.batchPoller.db
 	if store == nil {
-		store = s.Store()
+		store = s.storeForWiring()
 	}
 	if store == nil {
 		slog.Warn("batch_poller no store available to save batch results", "batchID", batchID)

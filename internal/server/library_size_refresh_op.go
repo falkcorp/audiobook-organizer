@@ -43,7 +43,7 @@ func (s *Server) RegisterLibrarySizeRefreshOp(reg *opsregistry.Registry) error {
 		Permissions:     []auth.Permission{auth.PermSettingsManage},
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead},
 		Run: func(ctx context.Context, _ json.RawMessage, reporter opsregistry.Reporter) error {
-			store := s.Store()
+			store := s.Ops()
 			if store == nil {
 				return fmt.Errorf("library.size-refresh: database not initialized")
 			}

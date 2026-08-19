@@ -38,7 +38,7 @@ func (s *Server) handleDelugeDiscover(c *gin.Context) {
 		label = config.AppConfig.DelugeDiscoveryLabel
 	}
 
-	unimported, err := delugeclient.DiscoverUnimported(s.Store(), client, label)
+	unimported, err := delugeclient.DiscoverUnimported(s.storeForWiring(), client, label)
 	if err != nil {
 		httputil.RespondWithError(c, http.StatusBadGateway, err.Error(), "BAD_GATEWAY")
 		return
@@ -119,7 +119,7 @@ func (s *Server) handleDiscoveryImport(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&req) // optional body
 
-	store := s.Store()
+	store := s.storeForWiring()
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return

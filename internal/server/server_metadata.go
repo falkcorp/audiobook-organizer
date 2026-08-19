@@ -51,7 +51,7 @@ func encodeMetadataValue(value any) (*string, error) {
 
 func (s *Server) loadLegacyMetadataState(bookID string) (map[string]metafetch.MetadataFieldState, error) {
 	state := map[string]metafetch.MetadataFieldState{}
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		return state, fmt.Errorf("database not initialized")
 	}
@@ -72,7 +72,7 @@ func (s *Server) loadLegacyMetadataState(bookID string) (map[string]metafetch.Me
 
 func (s *Server) loadMetadataState(bookID string) (map[string]metafetch.MetadataFieldState, error) {
 	state := map[string]metafetch.MetadataFieldState{}
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		return state, fmt.Errorf("database not initialized")
 	}
@@ -108,7 +108,7 @@ func (s *Server) loadMetadataState(bookID string) (map[string]metafetch.Metadata
 }
 
 func (s *Server) saveMetadataState(bookID string, state map[string]metafetch.MetadataFieldState) error {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
@@ -190,7 +190,7 @@ func (s *Server) updateFetchedMetadataState(bookID string, values map[string]any
 
 func (s *Server) resolveAuthorAndSeriesNames(book *database.Book) (string, string) {
 	authorName := ""
-	store := s.Store()
+	store := s.Ops()
 	if book.Author != nil {
 		authorName = book.Author.Name
 	} else if book.AuthorID != nil && store != nil {
@@ -216,7 +216,7 @@ func (s *Server) resolveAuthorAndSeriesNames(book *database.Book) (string, strin
 // book ID for join entries, plus maps keyed by author/narrator ID for details.
 // Nil maps are returned if the server's store is not available.
 func (s *Server) batchFetchBookAuthorsAndNarrators(bookIDs []string) (map[string][]database.BookAuthor, map[int]*database.Author, map[string][]database.BookNarrator, map[int]*database.Narrator) {
-	store := s.Store()
+	store := s.Ops()
 	if len(bookIDs) == 0 || store == nil {
 		return nil, nil, nil, nil
 	}
@@ -335,7 +335,7 @@ func (s *Server) enrichBookForResponse(book *database.Book, bookAuthorsMap map[s
 	// Populate metadata_source_hash_duplicate_count if this book has a hash.
 	// This lets the BookDetail UI warn about possible duplicates without an
 	// extra round-trip.
-	if hashStore := s.Store(); book.MetadataSourceHash != nil && *book.MetadataSourceHash != "" && hashStore != nil {
+	if hashStore := s.Ops(); book.MetadataSourceHash != nil && *book.MetadataSourceHash != "" && hashStore != nil {
 		if matches, err := hashStore.GetBooksByMetadataSourceHash(*book.MetadataSourceHash); err == nil {
 			count := 0
 			for _, m := range matches {

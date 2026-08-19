@@ -31,7 +31,7 @@ import (
 // first use. A longer TTL would make every stale read staler; the right fix for
 // "cold at boot" is to warm at boot.
 func (s *Server) warmMetadataResultsCache() {
-	store := s.Store()
+	store := s.Ops()
 	if store == nil {
 		slog.Info("metadata-results warmer skipped — store not initialised")
 		return

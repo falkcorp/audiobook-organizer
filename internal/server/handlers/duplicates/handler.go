@@ -68,7 +68,7 @@ type Handler struct {
 
 	// getMergeService resolves the merge service for mergeBookDuplicatesAsVersions.
 	// The original handler used s.mergeService when non-nil, else constructed
-	// merge.NewService(s.Store()). The controller closes over that exact fallback
+	// merge.NewService(s.Ops()). The controller closes over that exact fallback
 	// so this package needs neither the merge constructor nor a server import.
 	getMergeService func() MergeService
 

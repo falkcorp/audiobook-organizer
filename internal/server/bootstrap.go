@@ -294,7 +294,7 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 		return
 	}
 
-	store := s.Store()
+	store := s.storeForWiring()
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return

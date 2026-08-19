@@ -67,7 +67,7 @@ func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 				}
 			}
 
-			store := s.Store()
+			store := s.Ops()
 			opID := p.LegacyOpID
 			keepID := p.KeepID
 			mergeIDs := p.MergeIDs
@@ -214,7 +214,7 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 				}
 			}
 
-			store := s.Store()
+			store := s.Ops()
 			authorID := p.AuthorID
 			prodAuthorName := p.ProdAuthorName
 

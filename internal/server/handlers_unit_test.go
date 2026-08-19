@@ -4,7 +4,7 @@
 // last-edited: 2026-08-14
 //
 // Unit tests for HTTP handlers using MockStore + httptest.
-// Focuses on handlers that directly call s.Store() without
+// Focuses on handlers that directly call s.Ops() without
 // complex service orchestration.
 
 package server
