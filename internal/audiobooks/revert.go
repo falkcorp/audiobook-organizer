@@ -1,6 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
+// last-edited: 2026-08-18
 
 package audiobooks
 
@@ -15,15 +16,22 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
-// revertServiceStore is the narrow slice of database.Store this service uses.
+// revertServiceStore is the slice of the store this service uses, measured
+// with an empty-interface compiler probe: four direct calls plus
+// GetAllImportPaths, which is what satisfies importPathLister when the store is
+// forwarded to isProtectedPath.
+//
+// It previously embedded database.BookReader, database.BookWriter and
+// database.OperationStore wholesale to reach those four -- the comment above it
+// called that "the narrow slice", which it was only relative to database.Store.
 type revertServiceStore interface {
-	database.BookReader
-	database.BookWriter
-	database.OperationStore
+	GetBookByID(id string) (*database.Book, error)
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
+	RevertOperationChanges(operationID string) error
+
 	// Needed by the embedded isProtectedPath call in revertTagWrite
-	// (SERVER-GLOBAL-STORE-AUDIT phase 6). Inline single-method
-	// rather than database.ImportPathStore so this adapter doesn't
-	// have to expose ImportPath CRUD it never calls.
+	// (SERVER-GLOBAL-STORE-AUDIT phase 6).
 	GetAllImportPaths() ([]database.ImportPath, error)
 }
 
