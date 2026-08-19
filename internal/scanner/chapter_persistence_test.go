@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_persistence_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: cb2ed4a4-974b-4d88-8d46-0a0f365ba430
-// last-edited: 2026-07-30
+// last-edited: 2026-08-19
 
 package scanner
 
@@ -153,10 +153,21 @@ func TestPersistChaptersForBook_MultiFileMP3s_SynthesizesFromTrackTags(t *testin
 	}
 }
 
+// No requireChapterTestFFprobe / requireChapterTestFixture here, deliberately.
+//
+// This test is the one case in this file that never probes anything and never
+// opens the file: PersistChaptersForBook returns at the `len(existingChapters)
+// > 0` guard, before GetBookFiles and before any ffprobe call. The path below
+// is only ever a map key. It carried both guards anyway until 2026-08-19, and
+// the cost was not theoretical -- no workflow in .github/workflows installs
+// ffmpeg, so on CI this SKIPPED every run. Verified by running it with an
+// ffprobe-free PATH: "ffprobe not found on PATH, skipping".
+//
+// So the assertion that a rescan does not re-extract and overwrite existing
+// chapters -- which is what stops every scan of every book rewriting its whole
+// chapter list -- has never actually executed in CI. Its siblings above genuinely
+// need the fixtures; this one only needed to be asked.
 func TestPersistChaptersForBook_Idempotent_SkipsReExtraction(t *testing.T) {
-	requireChapterTestFFprobe(t)
-	requireChapterTestFixture(t, chapterTestOdysseyM4B)
-
 	store, cleanup := setupPebbleStore(t)
 	defer cleanup()
 	SetStore(store)
