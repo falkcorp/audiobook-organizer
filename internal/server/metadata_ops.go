@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-08-19
 //
@@ -168,7 +168,7 @@ func (s *Server) runBulkMetadataFetchAll(
 	ctx context.Context,
 	opID string,
 	params operations.BulkMetadataFetchParams,
-	store database.Store,
+	store bulkMetadataFetchStore,
 	progress operations.ProgressReporter,
 ) error {
 	// Create operation context for structured logging

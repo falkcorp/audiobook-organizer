@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 3.5.0
+// version: 3.6.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-08-16
+// last-edited: 2026-08-19
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -183,7 +183,7 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 func (s *Server) fetchCandidateForBook(
 	ctx context.Context,
 	mfs *metafetch.Service,
-	store database.Store,
+	store candidateFetchStore,
 	limiter *rate.Limiter,
 	opID, bookID string,
 ) CandidateResult {
@@ -854,7 +854,7 @@ func (s *Server) resumeInterruptedMetadataFetch() {
 // one place.
 //
 // Returns (results-by-bookID, status-counts, error).
-func latestMetadataResultsByBook(store database.Store) (map[string]database.OperationResult, map[string]int, error) {
+func latestMetadataResultsByBook(store metadataResultsReader) (map[string]database.OperationResult, map[string]int, error) {
 	allOps, err := store.GetRecentOperations(5000)
 	if err != nil {
 		return nil, nil, err

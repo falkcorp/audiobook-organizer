@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
 // last-edited: 2026-08-19
 
@@ -33,7 +33,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
@@ -207,7 +206,7 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 // reassigns external IDs to the winner, enqueues ITL removals, and soft-deletes
 // losers. Extracted from the op Run body so the reroute (soft-delete +
 // external-ID reassignment, NOT hard delete) is unit-testable on a real store.
-func applyBookMergeReroute(ctx context.Context, store database.Store, ms *merge.Service, keepID string, mergeIDs []string) error {
+func applyBookMergeReroute(ctx context.Context, store bookRerouteStore, ms *merge.Service, keepID string, mergeIDs []string) error {
 	// Build the loser set once, excluding the keep book and de-duping. Callers
 	// (the handler binds keep_id/merge_ids without validation) may include the
 	// keep book in mergeIDs; legacy dedup.MergeBooks guarded this with a

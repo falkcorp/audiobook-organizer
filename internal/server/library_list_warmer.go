@@ -1,7 +1,7 @@
 // file: internal/server/library_list_warmer.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 7e8d9a0b-1c2d-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-08-11
+// last-edited: 2026-08-19
 
 // Pre-warms svc.audiobookService.listCache by firing the queries the UI
 // is most likely to hit on first load — library page (first few pages,
@@ -146,30 +146,6 @@ type memReadyChecker interface {
 	IsMemReady() bool
 }
 
-// storeUnwrapper is implemented by decorator types (e.g. indexedStore)
-// that wrap an inner Store. Used to peel layers and reach the concrete
-// PebbleStore for capability checks like IsMemReady.
-type storeUnwrapper interface {
-	Unwrap() database.Store
-}
-
-// unwrapStore peels Unwrap()-implementing decorators until reaching the
-// innermost Store. Bounded to 8 levels as a sanity guard against cycles.
-func unwrapStore(s database.Store) database.Store {
-	for i := 0; i < 8; i++ {
-		w, ok := s.(storeUnwrapper)
-		if !ok {
-			return s
-		}
-		inner := w.Unwrap()
-		if inner == nil || inner == s {
-			return s
-		}
-		s = inner
-	}
-	return s
-}
-
 // resolveDefaultUserID returns a UserID to warm per-user filtered
 // queries against (read_status, progress_pct, ...). Prefers "admin",
 // falls back to the first user in ListUsers. Returns "" if nothing
@@ -198,13 +174,14 @@ func (s *Server) warmAudiobookListCache() {
 		return
 	}
 	// The Server's store is wrapped by indexedStore (and possibly other
-	// decorators). Peel them to reach the concrete PebbleStore so the
-	// IsMemReady() type assertion succeeds.
-	rawStore := unwrapStore(s.Store())
-	checker, ok := rawStore.(memReadyChecker)
+	// decorators), so IsMemReady has to be resolved through the chain.
+	// AsCapability does that -- this file used to hand-roll the same walk with
+	// its own storeUnwrapper type and a bound of 8, half the shared
+	// maxUnwrapDepth of 16.
+	checker, ok := database.AsCapability[memReadyChecker](s.Store())
 	if !ok {
 		slog.Warn("library list warm-up: store doesn't expose IsMemReady, skipping",
-			"store_type", typeName(rawStore))
+			"store_type", typeName(s.Store()))
 		return
 	}
 

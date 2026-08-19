@@ -1,7 +1,7 @@
 // file: internal/server/file_io_pool.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-08-16
+// last-edited: 2026-08-19
 //
 // Bounded worker pool for file I/O operations (cover embed, tag write,
 // rename). Tracks pending jobs in PebbleDB so they survive restarts.
@@ -20,8 +20,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 const pendingFileOpPrefix = "pending_file_op:"
@@ -45,12 +43,12 @@ type FileIOPool struct {
 	// Set via SetStore after construction (SERVER-GLOBAL-STORE-AUDIT
 	// phase 3a). Nil-safe — the three persistence helpers all no-op
 	// when nil, matching the prior GetGlobalStore == nil branch.
-	store database.Store
+	store rawKVWriter
 }
 
 // SetStore sets the store the pool uses to persist pending file ops.
 // Idempotent. Pass nil to disable persistence (no recovery on restart).
-func (p *FileIOPool) SetStore(s database.Store) { p.store = s }
+func (p *FileIOPool) SetStore(s rawKVWriter) { p.store = s }
 
 type fileIOJobEntry struct {
 	bookID string
