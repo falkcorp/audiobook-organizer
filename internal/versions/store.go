@@ -21,7 +21,8 @@ type versionUpdater interface {
 	UpdateBookVersion(v *database.BookVersion) error
 }
 
-type versionFingerprintReader interface {
+// Exported: internal/importer forwards its store into CheckFingerprint.
+type FingerprintReader interface {
 	GetBookVersionByTorrentHash(hash string) (*database.BookVersion, error)
 }
 
@@ -44,8 +45,9 @@ type TrashedVersionCleaner interface {
 	ListTrashedBookVersions() ([]database.BookVersion, error)
 }
 
-type ingestStore interface {
-	versionFingerprintReader
+// Exported: internal/importer forwards its store into CreateIngestVersion.
+type IngestStore interface {
+	FingerprintReader
 	bookFileLister
 
 	// CreateIngestVersion hands the store to fileops.ValidateUserPath, which

@@ -1,5 +1,5 @@
 // file: internal/versions/fingerprint.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8d5e7f4c-9c5a-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-08-19
 //
@@ -37,7 +37,7 @@ type FingerprintMatch struct {
 // fallback for content without a torrent (manual imports). Both
 // can be empty — in which case no match is returned.
 func CheckFingerprint(
-	store versionFingerprintReader,
+	store FingerprintReader,
 	torrentHash string,
 	fileHashes []string,
 ) *FingerprintMatch {

@@ -1,7 +1,7 @@
 // file: internal/importer/service.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
-// last-edited: 2026-06-16
+// last-edited: 2026-08-19
 
 package importer
 
@@ -19,16 +19,65 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
-// Store is the narrow slice of database.Store this service uses.
-// Temporarily widened to database.Store because versions.CreateIngestVersion
-// requires the full Store interface. A future ISP pass on the versions package
-// will re-narrow this.
-type Store = database.Store
+// Store is the slice of the database this service uses: seven methods it calls
+// directly, plus four forwarding constraints embedded by name.
+//
+// It was `= database.Store` (398 methods) with a comment saying it had been
+// "temporarily widened ... because versions.CreateIngestVersion requires the
+// full Store interface", and that "a future ISP pass on the versions package
+// will re-narrow this." That pass happened in #2582; this is the re-narrowing
+// it promised. The alias had been widened in the meantime, so nothing here was
+// ever measured -- it was inherited.
+
+// importForwarded is what this package hands its store to. Named rather than
+// inlined: four entries instead of ~20, and each re-narrows on its own.
+type importForwarded interface {
+	// fileops.ValidateUserPath, and NewImportPathService.
+	database.ImportPathStore
+	// merge.BookTitle.
+	merge.BookReader
+	// versions.CheckFingerprint.
+	versions.FingerprintReader
+	// versions.CreateIngestVersion.
+	versions.IngestStore
+}
+
+type importEntityStore interface {
+	GetAuthorByName(name string) (*database.Author, error)
+	CreateAuthor(name string) (*database.Author, error)
+	GetSeriesByName(name string, authorID *int) (*database.Series, error)
+	CreateSeries(name string, authorID *int) (*database.Series, error)
+}
+
+type importBookStore interface {
+	CreateBook(book *database.Book) (*database.Book, error)
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetBookByFileHash(hash string) (*database.Book, error)
+}
+
+type Store interface {
+	importForwarded
+	importEntityStore
+	importBookStore
+}
+
+// collisionStore is what CheckImportCollisions needs: two direct lookups plus
+// the three checks it forwards into. Notably NOT the full importer.Store --
+// it neither creates entities nor ingests versions.
+type collisionStore interface {
+	database.ImportPathStore
+	merge.BookReader
+	versions.FingerprintReader
+
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetBookByFileHash(hash string) (*database.Book, error)
+}
 
 type ImportService struct {
 	db          Store
