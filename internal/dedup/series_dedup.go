@@ -1,5 +1,5 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-08-19
 
@@ -94,7 +94,7 @@ func ExtractSeriesNameForDedup(name string) (string, bool) {
 }
 
 // enrichSeries loads books (up to 5) and author name for each series.
-func enrichSeries(store dedupStore, seriesList []database.Series, authorNameMap map[int]string) []SeriesWithBooks {
+func enrichSeries(store Store, seriesList []database.Series, authorNameMap map[int]string) []SeriesWithBooks {
 	result := make([]SeriesWithBooks, 0, len(seriesList))
 	for _, s := range seriesList {
 		authorName := ""
@@ -129,7 +129,7 @@ func enrichSeries(store dedupStore, seriesList []database.Series, authorNameMap 
 // returns the consolidated result.
 func ScanSeriesDuplicates(
 	_ context.Context,
-	store dedupStore,
+	store Store,
 	progress ProgressReporter,
 ) (SeriesScanResult, error) {
 	// Fixed-step scan: 6 stages (start, load, author-lookup, exact, subseries, done).
@@ -265,7 +265,7 @@ type SeriesDedupResult struct {
 // It does NOT invalidate the server cache — the caller must do that.
 func DedupSeries(
 	_ context.Context,
-	store dedupStore,
+	store Store,
 	progress ProgressReporter,
 ) (SeriesDedupResult, error) {
 	if progress != nil {
@@ -413,7 +413,7 @@ type SeriesMergeResult struct {
 // opID is written into OperationChange records for audit.
 func MergeSeries(
 	_ context.Context,
-	store dedupStore,
+	store Store,
 	opID string,
 	keepID int,
 	mergeIDs []int,

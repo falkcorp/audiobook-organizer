@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.55.0
+// version: 1.56.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-18
+// last-edited: 2026-08-19
 
 package scanner
 
@@ -168,13 +168,13 @@ func detectMetadataHashDuplicate(book *database.Book, log logger.Logger) {
 // many readers later; the rwmutex protects against goroutines that
 // touch it before NewServer runs (none today, but cheap insurance).
 var (
-	pkgStore   database.Store
+	pkgStore   scannerStore
 	pkgStoreMu sync.RWMutex
 )
 
 // SetStore wires the database the scanner package's free helpers use
 // for book/file/work/hash lookups. Idempotent; pass nil to clear.
-func SetStore(s database.Store) {
+func SetStore(s scannerStore) {
 	pkgStoreMu.Lock()
 	pkgStore = s
 	pkgStoreMu.Unlock()
@@ -183,7 +183,7 @@ func SetStore(s database.Store) {
 // getStore returns the package-local store with read-lock protection.
 // Used internally by the free helpers in scanner.go and the per-book
 // helpers in book_files.go.
-func getStore() database.Store {
+func getStore() scannerStore {
 	pkgStoreMu.RLock()
 	defer pkgStoreMu.RUnlock()
 	return pkgStore

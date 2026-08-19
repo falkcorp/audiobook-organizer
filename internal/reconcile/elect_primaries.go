@@ -1,7 +1,7 @@
 // file: internal/reconcile/elect_primaries.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 25e1f705-9130-4eb0-bd4b-04d45908c704
-// last-edited: 2026-08-13
+// last-edited: 2026-08-19
 
 package reconcile
 
@@ -178,7 +178,7 @@ func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error
 
 	var (
 		elected, skippedConcurrent, skippedVanished, errCount, processed int64
-		sampleMu                                                        sync.Mutex
+		sampleMu                                                         sync.Mutex
 	)
 
 	var g errgroup.Group

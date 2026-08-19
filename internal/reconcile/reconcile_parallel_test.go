@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile_parallel_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c7f1a94-3e60-4d18-9b5a-8f0c6d2e1a37
-// last-edited: 2026-07-16
+// last-edited: 2026-08-19
 
 package reconcile
 
@@ -241,8 +241,8 @@ func TestFindBrokenSegmentBooks_RealStoreConcurrent(t *testing.T) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
-		seg0 := writeFile(t, dir, "seg0.m4b", "s0")             // present
-		seg1 := filepath.Join(dir, "seg1-missing.m4b")         // never written → missing
+		seg0 := writeFile(t, dir, "seg0.m4b", "s0")    // present
+		seg1 := filepath.Join(dir, "seg1-missing.m4b") // never written → missing
 		book, err := ps.CreateBook(&database.Book{Title: fmt.Sprintf("book %d", i), FilePath: dir})
 		if err != nil {
 			t.Fatalf("create book: %v", err)

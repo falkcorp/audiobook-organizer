@@ -1,7 +1,7 @@
 // file: internal/scanner/config_race_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a8b7c6d-5e4f-3a2b-1c0d-9e8f7a6b5c4d
-// last-edited: 2026-06-10
+// last-edited: 2026-08-19
 
 // Regression tests for the config.AppConfig data race introduced when
 // saveBookToDatabase read config.AppConfig.RootDir inside goroutines that
@@ -35,9 +35,10 @@ import (
 // config.AppConfig.RootDir after the context is cancelled.
 //
 // This is the regression test for the CI race that showed up as:
-//   race: data race on config.AppConfig.RootDir
-//   write by goroutine N (test cleanup): config.AppConfig.RootDir = ...
-//   read by goroutine M (scanner worker): config.AppConfig.RootDir (in saveBookToDatabase)
+//
+//	race: data race on config.AppConfig.RootDir
+//	write by goroutine N (test cleanup): config.AppConfig.RootDir = ...
+//	read by goroutine M (scanner worker): config.AppConfig.RootDir (in saveBookToDatabase)
 //
 // Strategy:
 //  1. Cancel the context before workers can reach saveBook.

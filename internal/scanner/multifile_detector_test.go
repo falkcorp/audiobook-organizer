@@ -1,7 +1,7 @@
 // file: internal/scanner/multifile_detector_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9b4f5d2c-3e6a-4b7c-8d9e-0f1a2b3c4d5e
-// last-edited: 2026-06-24
+// last-edited: 2026-08-19
 
 package scanner
 
@@ -59,11 +59,11 @@ func TestExtractSeqNumber(t *testing.T) {
 
 func TestNormalizeTagValue(t *testing.T) {
 	cases := map[string]string{
-		"":                              "",
-		"Tarkin":                        "tarkin",
-		"  TARKIN  ":                    "tarkin",
-		"Star_Wars - Tarkin":            "star wars tarkin",
-		"Star  Wars\t\tTarkin":          "star wars tarkin",
+		"":                     "",
+		"Tarkin":               "tarkin",
+		"  TARKIN  ":           "tarkin",
+		"Star_Wars - Tarkin":   "star wars tarkin",
+		"Star  Wars\t\tTarkin": "star wars tarkin",
 	}
 	for in, want := range cases {
 		got := normalizeTagValue(in)
