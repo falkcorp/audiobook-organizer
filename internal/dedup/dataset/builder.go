@@ -1,7 +1,7 @@
 // file: internal/dedup/dataset/builder.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4a91c7e0-6d83-4b25-9f10-2c5a8e7d4b31
-// last-edited: 2026-07-11
+// last-edited: 2026-08-19
 
 // Package dataset builds labeled dedup examples and runs deterministic catchers
 // over them. Pure: a store interface in, a database.LabeledExample out, no
@@ -53,12 +53,21 @@ type BuilderStore interface {
 	GetBookFiles(id string) ([]database.BookFile, error)
 }
 
-// StoreAdapter bridges a full database.Store onto the narrower BuilderStore
-// interface (database.Store exposes GetBookByID, not GetBook). Exported here
-// so callers that already hold a database.Store (the live dedup engine, the
+// AdapterSource is what StoreAdapter actually reads. Two methods, measured --
+// the field was database.Store (398 methods) until 2026-08-19 on a comment
+// asserting it needed "a full database.Store". It never did: the reason this
+// adapter exists is a NAME mismatch (the store spells it GetBookByID,
+// BuilderStore wants GetBook), which is orthogonal to width.
+type AdapterSource interface {
+	GetBookByID(id string) (*database.Book, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+}
+
+// StoreAdapter bridges a store onto the narrower BuilderStore interface.
+// Exported so callers that already hold a store (the live dedup engine, the
 // dataset-backfill op) can share a single adapter instead of each defining an
 // identical private one.
-type StoreAdapter struct{ Store database.Store }
+type StoreAdapter struct{ Store AdapterSource }
 
 func (a StoreAdapter) GetBook(id string) (*database.Book, error) { return a.Store.GetBookByID(id) }
 func (a StoreAdapter) GetBookFiles(id string) ([]database.BookFile, error) {
