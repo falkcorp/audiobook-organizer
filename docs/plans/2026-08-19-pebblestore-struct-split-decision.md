@@ -1,11 +1,22 @@
 <!-- file: docs/plans/2026-08-19-pebblestore-struct-split-decision.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: f85db4dd-286a-4361-8bdb-1189236f1fd4 -->
 <!-- last-edited: 2026-08-19 -->
 
 # Splitting the PebbleStore struct — the decision, costed
 
-**Status: PROPOSED — awaiting approval. Nothing here has been executed.**
+**Status: DECIDED 2026-08-19 — PARKED at lowest priority. Not executed, not abandoned.**
+
+The owner's call, recorded verbatim in intent: do anything else before working on
+this, but do not delete it. Tracked as a TODO
+(`todo.d/2026-08-19-pebblestore-struct-split-lowest-priority.md`) so it stays
+visible without competing for attention.
+
+**Do not re-derive the numbers.** They have now been costed twice and corrected
+twice, arriving at the same answer each time. If you are about to re-run a census,
+read the Corrections section below first — the previous error survived an
+independent instrument because that instrument faithfully reproduced a wrong
+*definition*, not a wrong mechanism.
 
 This is the plan the "Plan Before Execution" rule requires before a refactor of
 this size. It exists so the question can be answered yes or no on evidence
