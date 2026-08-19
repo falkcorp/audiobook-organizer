@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.41.0
+// version: 2.42.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-08-17
+// last-edited: 2026-08-19
 
 package server
 
@@ -1168,17 +1168,7 @@ func (s *Server) markDuplicatesFlaggedDirty(reason string) {
 	type quickQueryDirtier interface {
 		MarkQuickQueryDirty(id, reason string)
 	}
-	if qd, ok := s.Store().(quickQueryDirtier); ok {
+	if qd, ok := database.AsCapability[quickQueryDirtier](s.Store()); ok {
 		qd.MarkQuickQueryDirty("duplicates_flagged", reason)
-		return
-	}
-	// Unwrap if decorated (IndexedStore, etc.)
-	type unwrapper interface {
-		Unwrap() database.Store
-	}
-	if uw, ok := s.Store().(unwrapper); ok {
-		if qd, ok2 := uw.Unwrap().(quickQueryDirtier); ok2 {
-			qd.MarkQuickQueryDirty("duplicates_flagged", reason)
-		}
 	}
 }

@@ -1,7 +1,7 @@
 // file: internal/server/metadata_results_cache.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 65b9ee5d-b3df-43ed-95a3-b393bb0532a7
-// last-edited: 2026-08-06
+// last-edited: 2026-08-19
 
 package server
 
@@ -82,7 +82,7 @@ var metaResultsCache metadataResultsCache
 // The synchronous build stays outside the lock. Holding it across a multi-second
 // build would serialise every concurrent request behind one rebuild, which is
 // exactly the access pattern a UI paging through results produces.
-func latestMetadataResultsByBookCached(store database.Store) (map[string]database.OperationResult, map[string]int, error) {
+func latestMetadataResultsByBookCached(store metadataResultsReader) (map[string]database.OperationResult, map[string]int, error) {
 	now := time.Now()
 
 	metaResultsCache.mu.Lock()
@@ -111,7 +111,7 @@ func latestMetadataResultsByBookCached(store database.Store) (map[string]databas
 // flag. Errors are logged and swallowed: the previous entry keeps being served,
 // which is strictly better than failing a request that already had a usable
 // answer.
-func refreshMetadataResultsCache(store database.Store) {
+func refreshMetadataResultsCache(store metadataResultsReader) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("metadata-results background refresh panicked", "panic", r)
@@ -128,7 +128,7 @@ func refreshMetadataResultsCache(store database.Store) {
 // buildAndStoreMetadataResults runs the expensive build and installs the result.
 // reason is logged so a cold build (a user waited) is distinguishable from a
 // background refresh (nobody waited) when reading production logs.
-func buildAndStoreMetadataResults(store database.Store, reason string) (map[string]database.OperationResult, map[string]int, error) {
+func buildAndStoreMetadataResults(store metadataResultsReader, reason string) (map[string]database.OperationResult, map[string]int, error) {
 	// Capture the generation BEFORE reading. Anything that invalidates while this
 	// build runs bumps it, and we must then discard our now-stale result.
 	metaResultsCache.mu.Lock()
