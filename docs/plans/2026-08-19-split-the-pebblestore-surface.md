@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-08-19-split-the-pebblestore-surface.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 7a2e4d19-6c83-4b15-9f07-2d81e5a3c6b4 -->
 <!-- last-edited: 2026-08-19 -->
 
@@ -230,10 +230,34 @@ readings were re-derived with `go/packages` at full type resolution (144 package
 | `internal/server/indexed_store.go:45` | embedded field | decorator must embed — **required** |
 | `internal/server/indexed_store.go:87` | `Unwrap` result | `AsCapability` walk contract — **required** |
 | **`internal/server/server.go:331`** | **`Server.Store()` result** | 🔴 **NOT a composition root — a distribution point** |
-| `internal/server/server_lifecycle.go:1802` | `resolveVGBackfiller` param | 🟡 narrowable; only feeds `AsCapability` |
+| `internal/server/server_lifecycle.go:1802` | `resolveVGBackfiller` param | ✅ **narrowed to `any`** — see below |
 | `internal/plugins/maintenance/deps.go:22` | `StoreProvider.Store()` result | 🔴 already tracked |
 | `internal/testutil/integration.go:30` | struct field | test helper |
 | `internal/database/dbtest/invariants.go:62`, `:188` | params | test helpers |
+
+> **Update: the 🟡 row is now done, and it mattered more than it looked.**
+> `resolveVGBackfiller` and `database.GetOpsV2` were the only two *production*
+> callees whose parameter was declared `database.Store` while the function did
+> nothing but forward the value to `AsCapability`. `GetAIJobs`, sitting fifteen
+> lines below `GetOpsV2`, already took `any` and carried the reason in its doc
+> comment: *"Declaring Store here imposed 398 methods on every caller to satisfy
+> a call that constrains nothing."* `GetOpsV2` was simply the outlier that never
+> got the same treatment.
+>
+> Measured effect of narrowing both to `any` — the required width of a narrowed
+> `Server.Store()`, computed as the union of methods invoked directly plus the
+> method set of every callee parameter a store is passed into:
+>
+> | | before | after |
+> |---|---:|---:|
+> | `internal/server` required width | **398** (1.0×) | **268** (1.5×) |
+> | callees pinning the full interface | 4 distinct / 7 sites | **2 / 4** |
+>
+> Both survivors are legitimate: `cmd.newServer` (the composition root) and
+> `dbtest.assertListingLive` (a test helper). **No production declaration pins
+> `Server.Store()` at 398 any more.** That does not narrow the accessor — 268 is
+> still far too wide to declare — but it removes the hard floor that made
+> narrowing arithmetically impossible.
 
 ### Why the gloss was wrong
 
