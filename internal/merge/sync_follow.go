@@ -1,7 +1,7 @@
 // file: internal/merge/sync_follow.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 50421381-9def-4b19-bd23-6fa1a03c24d3
-// last-edited: 2026-07-30
+// last-edited: 2026-08-19
 
 // Package merge: sync-identity follow hooks.
 //
@@ -72,7 +72,7 @@ var syncRepointMu sync.Mutex
 // (MintOrGetSyncID returns the existing id; RecordSyncMerge returns early when
 // the redirect is already recorded and de-duplicates MergedFrom), so a retried
 // or concurrently repeated merge cannot double-redirect or grow a chain.
-func FollowMerge(db database.Store, follower SyncFollower, winnerBookID string, loserBookIDs []string) {
+func FollowMerge(db userProgressMerger, follower SyncFollower, winnerBookID string, loserBookIDs []string) {
 	if follower == nil || db == nil || winnerBookID == "" {
 		return
 	}
@@ -101,11 +101,11 @@ func FollowMerge(db database.Store, follower SyncFollower, winnerBookID string, 
 	}
 }
 
-// FollowMergeWithStore is FollowMerge for callers that only hold a
-// database.Store and cannot reach a *Service (dedup.MergeBooks). It derives
+// FollowMergeWithStore is FollowMerge for callers that hold only a store and
+// cannot reach a *Service (dedup.MergeBooks). It derives
 // the follower by type assertion; a store that does not implement
 // SyncIdentityStore yields a nil follower and the whole call is a no-op.
-func FollowMergeWithStore(db database.Store, winnerBookID string, loserBookIDs []string) {
+func FollowMergeWithStore(db userProgressMerger, winnerBookID string, loserBookIDs []string) {
 	follower := database.AsSyncIdentityStore(db)
 	if follower == nil {
 		// Warn, not debug: the only in-tree caller is a HARD-delete merge, so
@@ -138,7 +138,7 @@ func FollowMergeWithStore(db database.Store, winnerBookID string, loserBookIDs [
 // Idempotent and no-op-safe by construction: RepointSyncFileToBook is
 // idempotent (a re-run finds the source entry already moved) and empty
 // fileIDs entries are skipped.
-func FollowFileMove(db database.Store, oldBookID, newBookID string, fileIDs []string) {
+func FollowFileMove(db syncCapabilityStore, oldBookID, newBookID string, fileIDs []string) {
 	if db == nil || oldBookID == "" || newBookID == "" || oldBookID == newBookID || len(fileIDs) == 0 {
 		return
 	}
@@ -171,7 +171,7 @@ func FollowFileMove(db database.Store, oldBookID, newBookID string, fileIDs []st
 // Debug, not warn, when the store lacks the capability: both rows survive a
 // version-link (this is not a hard-delete path), matching
 // FollowBookIDChange's own severity choice for the identity/progress carry.
-func followSyncFilesForBookChange(db database.Store, oldBookID, newBookID string) {
+func followSyncFilesForBookChange(db syncCapabilityStore, oldBookID, newBookID string) {
 	sf := database.AsSyncFileStore(db)
 	if sf == nil {
 		slog.Debug("sync-identity follow: store does not implement SyncFileStore; skipping file ino carry-forward",
@@ -206,7 +206,7 @@ func followSyncFilesForBookChange(db database.Store, oldBookID, newBookID string
 //
 // Idempotent: a second call finds no syncID on oldBookID (the reverse index
 // moved) and returns without touching anything.
-func FollowBookIDChange(db database.Store, oldBookID, newBookID string) {
+func FollowBookIDChange(db userProgressMerger, oldBookID, newBookID string) {
 	if db == nil || oldBookID == "" || newBookID == "" || oldBookID == newBookID {
 		return
 	}
@@ -267,7 +267,7 @@ func FollowBookIDChange(db database.Store, oldBookID, newBookID string) {
 // instance (a household, not the library), so a plain sequential loop is
 // correct here -- deliberately NOT a worker pool, per CLAUDE.md's own
 // "whole-library-scale" threshold.
-func mergeUserProgress(db database.Store, loserBookID, winnerBookID string) error {
+func mergeUserProgress(db userProgressMerger, loserBookID, winnerBookID string) error {
 	users, err := db.ListUsers()
 	if err != nil {
 		return fmt.Errorf("list users: %w", err)
@@ -301,7 +301,7 @@ func mergeUserProgress(db database.Store, loserBookID, winnerBookID string) erro
 //
 // The loser side is drained ONLY after a successful copy, so a mid-way store
 // failure can never destroy the position it was supposed to carry forward.
-func mergeUserProgressFor(db database.Store, userID, loserBookID, winnerBookID string) error {
+func mergeUserProgressFor(db userPositionStore, userID, loserBookID, winnerBookID string) error {
 	loserState, err := db.GetUserBookState(userID, loserBookID)
 	if err != nil {
 		return fmt.Errorf("get loser state: %w", err)
