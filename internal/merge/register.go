@@ -1,5 +1,5 @@
 // file: internal/merge/register.go
-// version: 1.1.0
+// version: 1.2.0
 // last-edited: 2026-08-19
 
 package merge

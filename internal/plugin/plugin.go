@@ -1,6 +1,6 @@
 // file: internal/plugin/plugin.go
-// version: 1.1.1
-// last-edited: 2026-07-12
+// version: 1.2.0
+// last-edited: 2026-08-19
 
 package plugin
 

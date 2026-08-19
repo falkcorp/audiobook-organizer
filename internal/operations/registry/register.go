@@ -1,7 +1,7 @@
 // file: internal/operations/registry/register.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-06-23
+// last-edited: 2026-08-19
 
 package registry
 
@@ -32,13 +32,31 @@ func (w *RegistryWrapper) Stop(ctx context.Context) error {
 	return w.Registry.Shutdown(ctx)
 }
 
-// prodSchedulerStore wraps database.Store and adds the BookFiles method
+// opRegistryStore is what the "opregistry" service needs from the store. Was
+// database.Store (398 methods) until 2026-08-19, on a comment reading "resolve
+// the wide database.Store so we get GetBookByID and all OpsV2Store methods from
+// the same concrete *PebbleStore instance". The same-instance requirement is
+// real and preserved -- this is still one resolution of KeyStore -- but it never
+// needed the wide type to hold: an interface value carries its dynamic type
+// either way.
+//
+// BookFiles is deliberately absent even though DepStore declares it:
+// prodSchedulerStore supplies that method itself, and demanding it from the
+// underlying store would be asking for a method *PebbleStore does not have.
+type opRegistryStore interface {
+	database.OpsV2Store // New, and 7 of the 8 DepStore/SchedulerStore methods
+
+	// The one thing SchedulerStore needs that OpsV2Store does not carry.
+	GetBookByID(id string) (*database.Book, error)
+}
+
+// prodSchedulerStore wraps opRegistryStore and adds the BookFiles method
 // required by SchedulerStore (which embeds DepStore). BookFiles returns nil
 // so AllFiles requirements are treated as unmet — a conservative stance that
 // matches OpsV2DepAdapter. The dedup.check-book op only uses ReqFieldSet
 // (not AllFiles), so this is correct, not a stub to remove later.
 type prodSchedulerStore struct {
-	database.Store
+	opRegistryStore
 }
 
 // BookFiles satisfies DepStore.BookFiles. Returns nil so AllFiles requirements
@@ -62,15 +80,15 @@ func init() {
 		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyOpHub},
 		Groups: []string{"scheduler"},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			// Resolve the wide database.Store so we get GetBookByID and all
-			// OpsV2Store methods from the same concrete *PebbleStore instance.
-			store := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)
+			// One resolution of KeyStore, so GetBookByID and the OpsV2Store
+			// methods all come from the same concrete *PebbleStore instance.
+			store := serviceregistry.Get[opRegistryStore](c, serviceregistry.KeyStore)
 			hub := serviceregistry.Get[*EventHub](c, serviceregistry.KeyOpHub)
 			reg := New(store, slog.Default(), 8, hub)
 
 			// Wire the book store for dep evaluation (ReqFieldSet).
-			// prodSchedulerStore wraps database.Store and adds BookFiles (nil shim).
-			schedStore := &prodSchedulerStore{Store: store}
+			// prodSchedulerStore adds BookFiles (nil shim).
+			schedStore := &prodSchedulerStore{opRegistryStore: store}
 			reg.SetDepBookStore(schedStore)
 
 			// Wire the DepsScheduler so waiting_deps ops are re-evaluated after

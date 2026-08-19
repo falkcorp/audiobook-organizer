@@ -1,5 +1,5 @@
 // file: internal/diagnostics/service.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: d1a9n0st-1cs0-s3rv-1c3z-1pexp0rt001
 // last-edited: 2026-08-19
 

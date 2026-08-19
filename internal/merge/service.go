@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-08-19
 

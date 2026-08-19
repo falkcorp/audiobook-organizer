@@ -1,5 +1,5 @@
 // file: internal/merge/store.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
 // last-edited: 2026-08-19
 

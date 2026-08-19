@@ -1,7 +1,7 @@
 // file: internal/server/handlers/split_book.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-06-02
+// last-edited: 2026-08-19
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. SplitBookHandler covers the split-book deduplication

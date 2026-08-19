@@ -1,5 +1,5 @@
 // file: internal/server/metadata_stores.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b8e04c27-5a91-4f36-9d18-2c73e5a081f4
 // last-edited: 2026-08-19
 
@@ -23,17 +23,25 @@ type operationResultStore interface {
 // bulkMetadataFetchStore: runBulkMetadataFetchAll. The two cache helpers it
 // forwards into already declare database.RawKVStore, so that is embedded by name.
 type bulkMetadataFetchStore interface {
+	bulkMetadataFetchCommon
+
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+}
+
+// bulkMetadataFetchCommon is what both bulk-fetch entry points share: the
+// operation-result bookkeeping that gives them their resume semantics, the raw
+// KV cache the fetch helpers read and write, and the author list.
+type bulkMetadataFetchCommon interface {
 	operationResultStore
 	database.RawKVStore
 
 	GetAllAuthors() ([]database.Author, error)
-	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 }
 
 // bulkMetadataFetchByIDStore: runBulkMetadataFetchForBookIDs, which resolves
 // individual books rather than paging the whole library.
 type bulkMetadataFetchByIDStore interface {
-	bulkMetadataFetchStore
+	bulkMetadataFetchCommon
 
 	GetBookByID(id string) (*database.Book, error)
 	GetAuthorByID(id int) (*database.Author, error)

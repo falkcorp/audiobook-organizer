@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
-// last-edited: 2026-08-18
+// last-edited: 2026-08-19
 
 // AIHandler hosts the AI HTTP endpoints extracted from the server package:
 // filename parsing, OpenAI / metadata-source connection tests, per-book AI
@@ -128,8 +128,42 @@ type aiMergeApplyOpParams struct {
 // interfaces (plus the concrete dedup cache and an injected enrich function) so
 // the handler is fully mockable and package handlers never imports package
 // server.
+// aiStore is everything the AI handler needs from the store. Was
+// database.Store (398 methods) until 2026-08-19, on a comment reading "full
+// store for the author-review paths". An empty-interface compiler probe under
+// -gcflags=-e enumerated exactly the eight methods below, with no forwarding
+// constraints and no `too many errors` truncation.
+type aiStore interface {
+	aiReviewGroupsStore
+	aiAuthorReviewStore
+	aiOperationStore
+}
+
+// aiReviewGroupsStore is the two methods AIReviewGroupsMode itself touches. It
+// is a separate declaration rather than a slice of aiStore because the function
+// is exported and callable without an AIHandler, so its own requirement is worth
+// stating exactly -- probed independently, not assumed to be a subset.
+type aiReviewGroupsStore interface {
+	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
+	UpdateOperationResultData(id string, resultData string) error
+}
+
+// aiAuthorReviewStore is the author/book reads behind the author-review paths.
+type aiAuthorReviewStore interface {
+	GetAllAuthorBookCounts() (map[int]int, error)
+	GetAllAuthors() ([]database.Author, error)
+	GetAuthorByID(id int) (*database.Author, error)
+	GetBookByID(id string) (*database.Book, error)
+}
+
+// aiOperationStore is the operation bookkeeping the AI review runs do.
+type aiOperationStore interface {
+	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
+	ListOperations(limit, offset int) ([]database.Operation, int, error)
+}
+
 type AIHandler struct {
-	store      database.Store           // full store for the author-review paths
+	store      aiStore                  // 8 methods; see aiStore
 	scanStore  AIScanStore              // AI scan persistence
 	pipeline   AIPipeline               // scan pipeline manager (start/cancel)
 	updater    AudiobookUpdater         // audiobook update service (parse-with-ai)
@@ -142,7 +176,7 @@ type AIHandler struct {
 // enrichBookForResponseSingle; its result is only used as a JSON response body,
 // so any is sufficient.
 func NewAIHandler(
-	store database.Store,
+	store aiStore,
 	scanStore AIScanStore,
 	pipeline AIPipeline,
 	updater AudiobookUpdater,
@@ -727,7 +761,7 @@ func (h *AIHandler) ListAIJobs(c *gin.Context) {
 
 // UnwrapAIJobsStore peels Store decorator layers until it finds one satisfying
 // database.AIJobsStore. Delegates to database.GetAIJobs; kept for API compat.
-func UnwrapAIJobsStore(s database.Store) (database.AIJobsStore, bool) {
+func UnwrapAIJobsStore(s any) (database.AIJobsStore, bool) {
 	aij := database.GetAIJobs(s)
 	return aij, aij != nil
 }
@@ -737,7 +771,7 @@ func UnwrapAIJobsStore(s database.Store) (database.AIJobsStore, bool) {
 // (was *Server.aiReviewGroupsMode); the op executor in package server
 // (ai_ops.go) calls it as a package-level function. Receiver-free — every
 // dependency arrives as a parameter.
-func AIReviewGroupsMode(ctx context.Context, progress operations.ProgressReporter, parser aiParser, store database.Store, opID string, dedupGroups []dedup.AuthorDedupGroup) error {
+func AIReviewGroupsMode(ctx context.Context, progress operations.ProgressReporter, parser aiParser, store aiReviewGroupsStore, opID string, dedupGroups []dedup.AuthorDedupGroup) error {
 	_ = progress.Log("info", fmt.Sprintf("Starting AI review (groups mode) of %d duplicate author groups", len(dedupGroups)), nil)
 	// Schedule: 1 setup + N input rows + 1 send + 1 done = len+3 steps.
 	totalSteps := len(dedupGroups) + 3

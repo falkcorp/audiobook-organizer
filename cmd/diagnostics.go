@@ -1,7 +1,7 @@
 // file: cmd/diagnostics.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c8f6a0d4-2a8b-48cf-9d08-02cc9915d9fc
-// last-edited: 2026-07-07
+// last-edited: 2026-08-19
 
 package cmd
 
@@ -59,7 +59,17 @@ func init() {
 	diagnosticsCmd.AddCommand(queryCmd)
 }
 
-func ensureDiagnosticsStore() (database.Store, func(), error) {
+// diagnosticsCLIStore is the two methods the two diagnostics subcommands make
+// on the store. Was database.Store (398 methods) until 2026-08-19; enumerated
+// with an empty-interface compiler probe under -gcflags=-e. The --raw query path
+// resolves its concrete Pebble handle through database.AsPebbleStore, which
+// takes any, so it does not widen this.
+type diagnosticsCLIStore interface {
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	DeleteBook(id string) error
+}
+
+func ensureDiagnosticsStore() (diagnosticsCLIStore, func(), error) {
 	store, err := database.InitializeStore(
 		config.AppConfig.DatabaseType,
 		config.AppConfig.DatabasePath,
