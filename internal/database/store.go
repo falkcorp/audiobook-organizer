@@ -24,17 +24,36 @@ import (
 // right for anything that genuinely needs a whole domain.
 //
 // scripts/verify_interface_split.py proves the signature set is unchanged.
+// The six composites below are deliberately UNEXPORTED, and that is the whole
+// point of them.
+//
+// Exporting them would create six brand-new nameable wide types -- catalogStore
+// alone reaches ~60 methods -- each declaring <= 8 entries and therefore
+// permanently invisible to interfacebloat, the very linter this grouping exists
+// to satisfy. A consumer could then depend on database.CatalogStore and be as
+// over-coupled as it was before, with the gate reporting 0. That is the exact
+// re-widening this lane spent 28 PRs undoing: the established idiom here is a
+// consumer-side interface declared where it is USED (250 of them exist outside
+// this package, median 2 methods), not a broad one offered from here.
+//
+// Unexported costs nothing. Their methods are exported, so Store stays usable
+// and implementable from any package; only the GROUPING NAMES are package-private.
+//
+// One of them would also have been actively misleading:
+// internal/server/handlers/operations already declares its own OperationsStore,
+// a narrow consumer interface. Two types with that name meaning opposite things
+// is a trap for whoever reads the second one first.
 type Store interface {
-	CatalogStore
-	MediaStore
-	AccountStore
-	EnrichmentStore
-	OperationsStore
-	PlatformStore
+	catalogStore
+	mediaStore
+	accountStore
+	enrichmentStore
+	operationsStore
+	platformStore
 }
 
-// CatalogStore is the library's bibliographic entities -- what a book IS.
-type CatalogStore interface {
+// catalogStore is the library's bibliographic entities -- what a book IS.
+type catalogStore interface {
 	BookStore
 	AuthorStore
 	SeriesStore
@@ -44,9 +63,9 @@ type CatalogStore interface {
 	CollectionStore
 }
 
-// MediaStore is the physical/playable layer -- files on disk, their segments,
+// mediaStore is the physical/playable layer -- files on disk, their segments,
 // ordering, and where a listener is in them.
-type MediaStore interface {
+type mediaStore interface {
 	BookFileStore
 	BookSegmentStore
 	PlaylistStore
@@ -55,8 +74,8 @@ type MediaStore interface {
 	PlaybackStore
 }
 
-// AccountStore is identity and authorisation.
-type AccountStore interface {
+// accountStore is identity and authorisation.
+type accountStore interface {
 	UserStore
 	SessionStore
 	OAuthIdentityStore
@@ -66,9 +85,9 @@ type AccountStore interface {
 	UserPreferenceStore
 }
 
-// EnrichmentStore is everything that DESCRIBES a book without being part of it:
+// enrichmentStore is everything that DESCRIBES a book without being part of it:
 // fetched metadata, its caches and rejections, external identifiers, tags.
-type EnrichmentStore interface {
+type enrichmentStore interface {
 	MetadataStore
 	MetadataCacheStore
 	RejectedMetadataStore
@@ -78,9 +97,9 @@ type EnrichmentStore interface {
 	HashBlocklistStore
 }
 
-// OperationsStore is background work -- ops v1/v2, maintenance jobs, the activity
+// operationsStore is background work -- ops v1/v2, maintenance jobs, the activity
 // feed, AI jobs, and the human review queue.
-type OperationsStore interface {
+type operationsStore interface {
 	OperationStore
 	OpsV2Store
 	MaintenanceStore
@@ -89,9 +108,9 @@ type OperationsStore interface {
 	ReviewStore
 }
 
-// PlatformStore is process- and deployment-level concerns rather than library
+// platformStore is process- and deployment-level concerns rather than library
 // content: lifecycle, configuration, import roots, raw KV, and aggregates.
-type PlatformStore interface {
+type platformStore interface {
 	LifecycleStore
 	ImportPathStore
 	ITunesStateStore
