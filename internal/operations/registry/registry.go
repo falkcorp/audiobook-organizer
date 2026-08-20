@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.12.0
+// version: 3.13.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-08-16
+// last-edited: 2026-08-20
 
 package registry
 
@@ -413,14 +413,23 @@ func (r *Registry) Start(ctx context.Context) {
 	}
 }
 
-// RegisterOp validates and registers an OperationDef.
-// Returns an error if:
-//   - def.ID is empty
-//   - def.ID contains ':' (reserved by the completion keyspace)
-//   - def.Run is nil
-//   - def.ResumePolicy == ResumeUnspecified
-//   - def.ID is already registered
-func (r *Registry) RegisterOp(def OperationDef) error {
+// ValidateOpDef checks every rule an OperationDef must satisfy on its own, with
+// no reference to registry state. RegisterOp calls it first, so this function IS
+// the boot contract: whatever it rejects here, the server refuses to start on.
+//
+// It is exported so a plugin's own tests can assert its def table without standing
+// up a Registry (which needs a store). That matters more than it looks. Until
+// 2026-08-20 internal/plugins/maintenance guarded its defs by hand-copying a
+// SUBSET of these rules into a fake registry; the copy checked ResumePolicy and
+// stopped there, so when missing-file-repoint shipped with no Liveness the package
+// suite stayed green and the failure surfaced as the SERVER REFUSING TO BOOT --
+// twice, in the binary smoke test and again in E2E. A test that reimplements a
+// contract can only catch the clauses its author already thought of. Call this
+// instead, and a rule added below is enforced everywhere for free.
+//
+// Rules that depend on what is already registered -- duplicate IDs, requirement
+// cycles -- stay in RegisterOp; a def alone cannot answer them.
+func ValidateOpDef(def OperationDef) error {
 	if def.ID == "" {
 		return errors.New("registry: OperationDef.ID must not be empty")
 	}
@@ -452,6 +461,22 @@ func (r *Registry) RegisterOp(def OperationDef) error {
 	if def.Liveness == LivenessNone && def.ProgressTimeout == 0 {
 		return fmt.Errorf("registry: OperationDef.Liveness is LivenessNone but ProgressTimeout is unset (id=%s): "+
 			"an op that never reports must state how long it may run in silence", def.ID)
+	}
+	return nil
+}
+
+// RegisterOp validates and registers an OperationDef.
+//
+// The stateless rules live in ValidateOpDef and are deliberately NOT re-listed
+// here: this comment used to enumerate five of them and silently omitted both
+// Liveness checks after they were added, which is exactly how a stale doc comment
+// becomes a wrong one. Read ValidateOpDef for the current list.
+//
+// On top of those, RegisterOp rejects a def whose ID is already registered, or
+// whose Requires graph would introduce a cycle.
+func (r *Registry) RegisterOp(def OperationDef) error {
+	if err := ValidateOpDef(def); err != nil {
+		return err
 	}
 
 	r.mu.Lock()

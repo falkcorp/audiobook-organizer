@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/plugin_test.go
-// version: 2.0.0
+// version: 3.0.0
 // guid: a3b4c5d6-e7f8-9012-6789-234567890123
 // last-edited: 2026-08-20
 
@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -56,13 +57,19 @@ func allDefs(t *testing.T) []sdk.OperationDef {
 	return reg.defs
 }
 
-// Every op must state a ResumePolicy. The registry REJECTS ResumeUnspecified at
-// startup and the whole server refuses to boot, so a missing policy is not a lint
-// nit — it is a total outage that ships green from `go test ./...`.
-func TestMaintenancePlugin_Register_AllOpsHaveExplicitResumePolicy(t *testing.T) {
+// Every op must satisfy the SAME contract the server enforces at boot.
+//
+// This calls registry.ValidateOpDef -- the exact function Registry.RegisterOp
+// runs -- instead of restating its rules here. The earlier version of this test
+// hand-checked ResumePolicy and nothing else, so missing-file-repoint shipped
+// without a Liveness, the package suite passed, and the server refused to boot in
+// the smoke test AND in E2E. Two CI round-trips for two clauses of one contract.
+// Delegating means a seventh rule added to the registry tomorrow is enforced here
+// with no edit to this file.
+func TestMaintenancePlugin_AllDefsSatisfyRegistryContract(t *testing.T) {
 	for _, def := range allDefs(t) {
-		if def.ResumePolicy == sdk.ResumeUnspecified {
-			t.Errorf("op %q has no ResumePolicy — the server will refuse to start", def.ID)
+		if err := registry.ValidateOpDef(def); err != nil {
+			t.Errorf("op %q would be REJECTED AT BOOT: %v", def.ID, err)
 		}
 	}
 }
@@ -98,9 +105,6 @@ func TestMaintenancePlugin_HardRules(t *testing.T) {
 		}
 		if strings.TrimSpace(def.Description) == "" {
 			t.Errorf("op %q has no Description", def.ID)
-		}
-		if def.Run == nil {
-			t.Errorf("op %q has a nil Run", def.ID)
 		}
 	}
 }
