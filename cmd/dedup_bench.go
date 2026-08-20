@@ -1,5 +1,5 @@
 // file: cmd/dedup_bench.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-08-20
 
@@ -21,7 +21,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/server"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/spf13/cobra"
@@ -124,7 +124,7 @@ func runDedupBench(cmd *cobra.Command, args []string) error {
 
 	// Compute heuristic groups
 	bookCountFn := func(id int) int { return authorData.BookCounts[id] }
-	groups := server.FindDuplicateAuthors(authorData.Authors, 0.90, bookCountFn)
+	groups := dedup.FindDuplicateAuthors(authorData.Authors, 0.90, bookCountFn)
 	if err := writeJSON(filepath.Join(runDir, "groups.json"), groups); err != nil {
 		return err
 	}
@@ -152,7 +152,7 @@ func runDedupBench(cmd *cobra.Command, args []string) error {
 		}
 
 		slog.Info("Submitted batch jobs", "count", len(jobs))
-		slog.Info("Check results", "command", "dedup-bench check " + runDir)
+		slog.Info("Check results", "command", "dedup-bench check "+runDir)
 		return nil
 	}
 
@@ -185,7 +185,7 @@ func runDedupBench(cmd *cobra.Command, args []string) error {
 	}
 
 	slog.Info("Benchmark complete", "directory", runDir)
-	slog.Info("View report", "command", "cat " + runDir + "/summary.md")
+	slog.Info("View report", "command", "cat "+runDir+"/summary.md")
 	return nil
 }
 
@@ -293,7 +293,7 @@ func runDedupBenchCheck(cmd *cobra.Command, args []string) error {
 		if err := writeSummaryMarkdown(filepath.Join(runDir, "summary.md"), summary); err != nil {
 			return err
 		}
-		slog.Info("Summary updated", "file", runDir + "/summary.md")
+		slog.Info("Summary updated", "file", runDir+"/summary.md")
 	}
 
 	if pending > 0 {
