@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-08-20
 //
@@ -264,7 +264,7 @@ export interface MetadataLane {
   rows: CandidateResult[];
 
   sourceCounts: Record<string, number>;
-  summary: { matched: number; no_match: number; errors: number; total: number };
+  summary: { matched: number; no_match: number; errors: number; total: number; unreviewable: number };
 
   page: number;
   totalPages: number;
@@ -327,7 +327,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     () => (ungrouped.page === requestedPage ? ungrouped.ids : EMPTY_IDS),
     [ungrouped, requestedPage]
   );
-  const [summary, setSummary] = useState({ matched: 0, no_match: 0, errors: 0, total: 0 });
+  const [summary, setSummary] = useState({ matched: 0, no_match: 0, errors: 0, total: 0, unreviewable: 0 });
   const [refreshKey, setRefreshKey] = useState(0);
 
   // Discards out-of-order responses. Without it a slow page-1 fetch that
@@ -381,6 +381,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           no_match: data.no_match ?? allResults.filter((r) => r.status === 'no_match').length,
           errors: data.errors ?? 0,
           total: tc,
+          unreviewable: data.unreviewable ?? 0,
         });
         setLoading(false);
       })

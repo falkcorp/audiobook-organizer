@@ -1,5 +1,5 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
 // last-edited: 2026-08-20
 //
@@ -99,7 +99,7 @@ const SWITCHES: Array<{ key: keyof MetadataFilters; label: string; help?: string
 export interface QueueRailProps {
   loading: boolean;
   rows: CandidateResult[];
-  summary: { matched: number; no_match: number; errors: number; total: number };
+  summary: { matched: number; no_match: number; errors: number; total: number; unreviewable: number };
   sourceCounts: Record<string, number>;
   filters: MetadataFilters;
   setFilters: (patch: Partial<MetadataFilters>) => void;
@@ -160,6 +160,19 @@ export function QueueRail({
             <Chip size="small" color="error" label={`${summary.errors} errors`} />
           )}
           <Chip size="small" variant="outlined" label={`${summary.total} total`} />
+          {summary.unreviewable > 0 && (
+            // `total` counts only what a reviewer can act on. This says what the
+            // cache holds that they cannot, so the difference is stated rather
+            // than left as a silent shortfall.
+            <Tooltip title="Cache entries with no candidate stored, or whose book no longer exists. Nothing here can be reviewed.">
+              <Chip
+                size="small"
+                variant="outlined"
+                color="warning"
+                label={`${summary.unreviewable} unreviewable`}
+              />
+            </Tooltip>
+          )}
           <Tooltip title="Reload the review set">
             <IconButton size="small" onClick={onRefresh} aria-label="Refresh review set">
               <RefreshIcon fontSize="small" />

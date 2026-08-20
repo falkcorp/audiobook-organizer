@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-08-16
+// last-edited: 2026-08-20
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -247,22 +247,64 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		return statusRank[prepared[i].status] < statusRank[prepared[j].status]
 	})
 
-	start := offset
-	if start > len(prepared) {
-		start = len(prepared)
+	// Resolve cached candidates for EVERY prepared row, not just the requested
+	// page, and let that decide what is reviewable.
+	//
+	// This ordering is the fix for a real reporting bug. The counts used to be
+	// tallied over `prepared` — every row whose BOOK resolved — while `results`
+	// additionally dropped any row with no cached candidates or an undecodable
+	// one. On production that was 10,952 counted against 5,774 returned, so the
+	// review rail advertised "10730 matched" over a list that could never hold
+	// more than 5,774 rows, and `errors` was hardcoded 0 so nothing hinted at
+	// the ~5,178 missing. A count that includes rows the caller cannot be given
+	// is not a summary, it is a lie with a number on it.
+	//
+	// Doing this for all rows rather than one page also makes `total_count`
+	// correct for pagination. It is not new work in the real call path: both
+	// callers pass limit=0, so the page has always BEEN every row.
+	cachedByIdx := make([]*metafetch.MetadataCandidateCache, len(prepared))
+	var cg errgroup.Group
+	cg.SetLimit(reviewListConcurrency)
+	for i := range prepared {
+		i := i
+		cg.Go(func() error {
+			entry, _, cerr := h.svc.GetCachedCandidates(prepared[i].sum.BookID)
+			if cerr == nil {
+				cachedByIdx[i] = entry
+			}
+			return nil // a per-entry failure skips that row, never the whole batch
+		})
 	}
-	end := len(prepared)
-	if limit > 0 {
-		end = start + limit
-		if end > len(prepared) {
-			end = len(prepared)
+	_ = cg.Wait()
+
+	// reviewable is every row this endpoint can actually hand back, in the
+	// sorted order established above. Counts and pagination both derive from
+	// it, so they cannot disagree with each other or with `results`.
+	type reviewableRow struct {
+		sum    metafetch.MetadataCacheSummary
+		status string
+		cand   metafetch.MetadataCandidate
+	}
+	reviewable := make([]reviewableRow, 0, len(prepared))
+	var decodeErrors int
+	for i, p := range prepared {
+		entry := cachedByIdx[i]
+		if entry == nil || len(entry.Candidates) == 0 {
+			// No cached candidate means nothing to review. Not an error.
+			continue
 		}
+		var cand metafetch.MetadataCandidate
+		if err := json.Unmarshal(entry.Candidates[0], &cand); err != nil {
+			slog.Warn("GetCacheReviewResults decode candidate", "bookID", p.sum.BookID, "err", err)
+			decodeErrors++
+			continue
+		}
+		reviewable = append(reviewable, reviewableRow{sum: p.sum, status: p.status, cand: cand})
 	}
-	page := prepared[start:end]
 
 	var matched, noMatch, applied int
-	for _, p := range prepared {
-		switch p.status {
+	for _, r := range reviewable {
+		switch r.status {
 		case "no_match":
 			noMatch++
 		case "applied":
@@ -272,59 +314,50 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		}
 	}
 
-	// Read each page entry's cached candidates CONCURRENTLY. This was a serial
-	// GetCachedCandidates per entry, on top of a second GetBookByID per entry
-	// that is now gone (lookupBook serves it from the batch above).
-	//
-	// Results are written to a pre-sized slot per index and assembled in order
-	// below, so the response ordering is byte-identical to the serial version —
-	// this is a paginated listing and reordering it would scramble the UI.
-	cachedByIdx := make([]*metafetch.MetadataCandidateCache, len(page))
-	var cg errgroup.Group
-	cg.SetLimit(reviewListConcurrency)
-	for i := range page {
-		i := i
-		cg.Go(func() error {
-			entry, _, cerr := h.svc.GetCachedCandidates(page[i].sum.BookID)
-			if cerr == nil {
-				cachedByIdx[i] = entry
-			}
-			return nil // a per-entry failure skips that row, never the whole page
-		})
+	start := offset
+	if start > len(reviewable) {
+		start = len(reviewable)
 	}
-	_ = cg.Wait()
+	end := len(reviewable)
+	if limit > 0 {
+		end = start + limit
+		if end > len(reviewable) {
+			end = len(reviewable)
+		}
+	}
+	page := reviewable[start:end]
 
+	// BuildCandidateBookInfo runs for the PAGE only. It is the one genuinely
+	// per-row-expensive call here, and a paginated caller must not pay for rows
+	// it did not ask for.
 	results := make([]metabatch.CandidateResult, 0, len(page))
-	for pageIdx, p := range page {
-		sum := p.sum
-		book := lookupBook(sum.BookID)
+	for i := range page {
+		book := lookupBook(page[i].sum.BookID)
 		if book == nil {
 			continue
 		}
-		entry := cachedByIdx[pageIdx]
-		if entry == nil || len(entry.Candidates) == 0 {
-			continue
-		}
-		var cand metafetch.MetadataCandidate
-		if err := json.Unmarshal(entry.Candidates[0], &cand); err != nil {
-			slog.Warn("GetCacheReviewResults decode candidate", "bookID", sum.BookID, "err", err)
-			continue
-		}
-
+		cand := page[i].cand
 		results = append(results, metabatch.CandidateResult{
 			Book:      metabatch.BuildCandidateBookInfo(h.store, book),
 			Candidate: &cand,
-			Status:    p.status,
+			Status:    page[i].status,
 		})
 	}
 
 	httputil.RespondWithOK(c, gin.H{
-		"results":       results,
-		"total_count":   total,
-		"matched":       matched,
-		"no_match":      noMatch,
-		"errors":        0,
+		"results":     results,
+		"total_count": len(reviewable),
+		"matched":     matched,
+		"no_match":    noMatch,
+		// Real decode failures, not a hardcoded zero. A row counted here is one
+		// the cache holds but nobody can review until it is repaired.
+		"errors":        decodeErrors,
 		"total_applied": applied,
+		// Cache summaries that exist but are not reviewable: no resolvable book,
+		// or no stored candidate. Surfaced so the gap between "the cache has
+		// 14,306 entries" and "you can review 5,774" is visible instead of
+		// being discovered by subtracting two numbers that never agreed.
+		"unreviewable": total - len(reviewable),
 	})
 }
 
