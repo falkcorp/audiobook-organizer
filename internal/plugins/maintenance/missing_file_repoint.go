@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
 // last-edited: 2026-08-20
 
@@ -33,6 +33,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -58,6 +59,11 @@ type missingFileRepointParams struct {
 	// file_size (measured 2026-08-20), so this is a real check on every row, not an
 	// aspiration. Set false only to recover rows whose size was never recorded.
 	RequireSizeMatch *bool `json:"requireSizeMatch"`
+	// ReportPath overrides where the full per-row TSV lands. Empty means a
+	// derived path under reports/ -- the report is written on EVERY run, because
+	// a dry run whose decisions are not readable cannot inform the decision it
+	// exists to inform.
+	ReportPath string `json:"reportPath,omitempty"`
 }
 
 func (p missingFileRepointParams) requireSize() bool {
@@ -68,8 +74,12 @@ func (p missingFileRepointParams) requireSize() bool {
 // bucket, and the buckets are reported, so a row that is NOT repointed is visible
 // rather than silently dropped.
 type repointDecision struct {
-	FileID  string `json:"file_id"`
-	BookID  string `json:"book_id"`
+	FileID string `json:"file_id"`
+	BookID string `json:"book_id"`
+	// Bucket is the coarse outcome ("repointable", "no-shape", ...). Reason carries
+	// the specifics. They are separate columns so the report can be grouped by
+	// outcome without parsing prose out of a sentence that includes row counts.
+	Bucket  string `json:"bucket"`
 	OldPath string `json:"old_path"`
 	NewPath string `json:"new_path,omitempty"`
 	Reason  string `json:"reason"`
@@ -89,7 +99,21 @@ type repointPlan struct {
 	UpdateErrs       int  `json:"update_errs"`
 	CappedAt         int  `json:"capped_at,omitempty"`
 
+	// ReportPath is where the full per-row TSV was written.
+	ReportPath string `json:"report_path,omitempty"`
+
+	// Samples is a STRATIFIED sample for the JSON log line -- up to
+	// samplesPerBucket rows per outcome. The first version of this field kept the
+	// first 40 decisions in iteration order, which on the 2026-08-20 prod run meant
+	// all 40 were target-collision rows from 3 adjacent books: zero rows of the
+	// 14,439 it would actually rewrite were visible. A sample keyed by arrival
+	// order describes the iteration, not the population.
 	Samples []repointDecision `json:"samples,omitempty"`
+
+	// all holds every decision, for the TSV. Not serialised -- 71,954 rows of JSON
+	// in an op log line helps nobody.
+	all           []repointDecision
+	bucketSampled map[string]int
 }
 
 func (p repointPlan) summary() string {
@@ -152,13 +176,43 @@ func (p *Plugin) runMissingFileRepoint(ctx context.Context, rawParams json.RawMe
 		return err
 	}
 	log := reporter.Logger()
+
+	// Write the full per-row report BEFORE the log lines, so a run that is killed
+	// while emitting its summary still leaves the artifact behind.
+	reportPath := params.ReportPath
+	if reportPath == "" {
+		name := registry.ReporterOpID(reporter)
+		if name == "" {
+			name = "unknown-op"
+		}
+		reportPath = filepath.Join("reports", "missing-file-repoint-"+name+".tsv")
+	}
+	if wErr := writeRepointReport(reportPath, plan.all); wErr != nil {
+		// Not fatal: the scan already happened and the counts are still worth
+		// having. But say so loudly -- a silently missing report reads as "there
+		// was nothing to report".
+		log.Error("missing-file-repoint: FAILED to write the per-row report",
+			"path", reportPath, "err", wErr, "rows", len(plan.all))
+	} else {
+		plan.ReportPath = reportPath
+		log.Info("missing-file-repoint: per-row report written",
+			"path", reportPath, "rows", len(plan.all))
+	}
+
 	if b, mErr := json.Marshal(plan); mErr == nil {
 		log.Info("missing-file-repoint report (JSON)", "report", string(b))
 	}
 	if plan.TargetCollision > 0 {
-		log.Warn("missing-file-repoint: rows REFUSED because several rows derive the same file — "+
-			"this is the flattened-directory shape; repointing them all would leave N rows sharing one path",
-			"rows", plan.TargetCollision)
+		// The cause is NOT assumed. Measured on the 2026-08-20 prod run: the
+		// colliding rows belong to DUPLICATE BOOK RECORDS -- three separate books
+		// held book_file rows for the same directory, so two rows derived the same
+		// flat file. Within any single book the derived targets were distinct. An
+		// earlier version of this warning asserted "the flattened-directory shape",
+		// which the sample disproved. Say what was counted; let the report say why.
+		log.Warn("missing-file-repoint: rows REFUSED because more than one row derives the same target file "+
+			"(repointing them all would leave N rows sharing one path). Group the report's collision rows by "+
+			"new_path to see which books collide; duplicate book records are a known cause.",
+			"rows", plan.TargetCollision, "report", reportPath)
 	}
 	if plan.CappedAt > 0 {
 		log.Warn("missing-file-repoint: more repointable rows than the cap — run again to continue",
@@ -310,31 +364,41 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, params miss
 		switch {
 		case o.reason == "no-shape":
 			plan.NoShape++
+			plan.record(repointDecision{FileID: it.file.ID, BookID: it.file.BookID,
+				Bucket: "no-shape", OldPath: it.file.FilePath,
+				Reason: "path does not match the track-slash shape"})
 			continue
 		case o.reason == "no-candidate-bytes", o.reason == "ambiguous-candidates":
 			plan.NoCandidateBytes++
+			plan.record(repointDecision{FileID: it.file.ID, BookID: it.file.BookID,
+				Bucket: "no-bytes", OldPath: it.file.FilePath, Reason: o.reason})
+			continue
+		case o.reason == "unreadable":
+			plan.record(repointDecision{FileID: it.file.ID, BookID: it.file.BookID,
+				Bucket: "unreadable", OldPath: it.file.FilePath,
+				Reason: "stat failed for a reason other than not-exist"})
 			continue
 		case o.target == "":
 			continue
 		}
 		if len(targetClaimants[o.target]) > 1 {
 			plan.TargetCollision++
-			plan.addSample(repointDecision{FileID: it.file.ID, BookID: it.file.BookID,
-				OldPath: it.file.FilePath, NewPath: o.target,
+			plan.record(repointDecision{FileID: it.file.ID, BookID: it.file.BookID,
+				Bucket: "collision", OldPath: it.file.FilePath, NewPath: o.target,
 				Reason: fmt.Sprintf("target-collision: %d rows derive this same file", len(targetClaimants[o.target]))})
 			continue
 		}
 		if owner, taken := claimed[o.target]; taken && owner != it.file.ID {
 			plan.TargetClaimed++
-			plan.addSample(repointDecision{FileID: it.file.ID, BookID: it.file.BookID,
-				OldPath: it.file.FilePath, NewPath: o.target,
+			plan.record(repointDecision{FileID: it.file.ID, BookID: it.file.BookID,
+				Bucket: "already-claimed", OldPath: it.file.FilePath, NewPath: o.target,
 				Reason: "target already claimed by book_file " + owner})
 			continue
 		}
 		if params.requireSize() && it.file.FileSize > 0 && o.size != it.file.FileSize {
 			plan.SizeMismatch++
-			plan.addSample(repointDecision{FileID: it.file.ID, BookID: it.file.BookID,
-				OldPath: it.file.FilePath, NewPath: o.target,
+			plan.record(repointDecision{FileID: it.file.ID, BookID: it.file.BookID,
+				Bucket: "size-mismatch", OldPath: it.file.FilePath, NewPath: o.target,
 				Reason: fmt.Sprintf("size mismatch: row=%d disk=%d", it.file.FileSize, o.size)})
 			continue
 		}
@@ -353,8 +417,9 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, params miss
 	}
 
 	for _, rw := range rewrites {
-		plan.addSample(repointDecision{FileID: rw.item.file.ID, BookID: rw.item.file.BookID,
-			OldPath: rw.item.file.FilePath, NewPath: rw.target, Reason: "repointable"})
+		plan.record(repointDecision{FileID: rw.item.file.ID, BookID: rw.item.file.BookID,
+			Bucket: "repointable", OldPath: rw.item.file.FilePath, NewPath: rw.target,
+			Reason: "would repoint"})
 	}
 	if !params.Apply {
 		log.Info("missing-file-repoint: DRY RUN — no rows written", "would_repoint", len(rewrites))
@@ -408,10 +473,40 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, params miss
 	return plan, nil
 }
 
-// addSample keeps a bounded, representative sample rather than 35k rows of JSON.
-func (p *repointPlan) addSample(d repointDecision) {
-	const maxSamples = 40
-	if len(p.Samples) < maxSamples {
+// record files one row's outcome: every decision into the full list for the TSV,
+// and a per-bucket-capped subset into Samples for the log line.
+func (p *repointPlan) record(d repointDecision) {
+	p.all = append(p.all, d)
+	const samplesPerBucket = 8
+	if p.bucketSampled == nil {
+		p.bucketSampled = map[string]int{}
+	}
+	if p.bucketSampled[d.Bucket] < samplesPerBucket {
+		p.bucketSampled[d.Bucket]++
 		p.Samples = append(p.Samples, d)
 	}
+}
+
+// writeRepointReport dumps EVERY missing row and what was decided about it, TSV.
+//
+// TSV, and every row rather than the repointable ones, for the same reason
+// writeSeriesDenumberReport does it: the file exists to be read by a person
+// deciding whether to run the apply, and sorted or grepped by bucket while they
+// do. A report containing only the rows that would change cannot answer "what
+// about the other 57,515?", which is the question that actually gates the run.
+func writeRepointReport(path string, decisions []repointDecision) error {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o775); err != nil {
+			return err
+		}
+	}
+	// A path with a tab or newline in it would shift every later column silently.
+	clean := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
+	var b strings.Builder
+	b.WriteString("bucket\tfile_id\tbook_id\told_path\tnew_path\treason\n")
+	for _, d := range decisions {
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			d.Bucket, d.FileID, d.BookID, clean(d.OldPath), clean(d.NewPath), clean(d.Reason))
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o664)
 }
