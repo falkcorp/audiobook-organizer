@@ -1,6 +1,7 @@
 // file: internal/telemetry/metrics_handler.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d4e5f6a7-b8c9-0005-deef-000000000005
+// last-edited: 2026-08-20
 
 package telemetry
 
@@ -16,8 +17,8 @@ import (
 //
 // Wire this to your HTTP server under a /metrics endpoint:
 //
-//   handler := telemetry.MetricsHandler()
-//   router.GET("/metrics", gin.WrapF(handler.ServeHTTP))
+//	handler := telemetry.MetricsHandler()
+//	router.GET("/metrics", gin.WrapF(handler.ServeHTTP))
 //
 // This exposes:
 // - All OTEL instrumentation metrics (operation latency, HTTP request counts, etc)

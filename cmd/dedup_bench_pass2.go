@@ -1,5 +1,5 @@
 // file: cmd/dedup_bench_pass2.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2b3c4d5e-6f7a-8901-bcde-222222222222
 // last-edited: 2026-08-20
 
@@ -401,6 +401,6 @@ func submitSingleBatch(ctx context.Context, apiKey, model, systemPrompt, userPro
 	_ = writeJSON(filepath.Join(runDir, "batch_jobs.json"), jobInfo)
 
 	slog.Info("Submitted batch", "batch_id", batch.ID)
-	slog.Info("Check results later", "command", "dedup-bench check " + runDir)
+	slog.Info("Check results later", "command", "dedup-bench check "+runDir)
 	return nil
 }

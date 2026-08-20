@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.80.0
+// version: 1.80.1
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-08-20
 
@@ -1144,7 +1144,7 @@ func InitConfig() {
 	viper.BindEnv("fp_parallel_workers", "FP_PARALLEL_WORKERS")                                   //nolint:errcheck
 	viper.BindEnv("whisper_clip_cache_dir", "WHISPER_CLIP_CACHE_DIR")                             //nolint:errcheck
 	viper.BindEnv("whisper_batch_sleep_ms", "WHISPER_BATCH_SLEEP_MS")                             //nolint:errcheck
-	viper.BindEnv("openai_base_url", "OPENAI_BASE_URL")                                            //nolint:errcheck
+	viper.BindEnv("openai_base_url", "OPENAI_BASE_URL")                                           //nolint:errcheck
 	viper.BindEnv("abs_auth_probe_enabled", "ABS_AUTH_PROBE")                                     //nolint:errcheck
 	viper.BindEnv("abs_itunes_position_backfill_user_id", "ABS_ITUNES_POSITION_BACKFILL_USER_ID") //nolint:errcheck
 	viper.BindEnv("otel_exporter_otlp_endpoint", "OTEL_EXPORTER_OTLP_ENDPOINT")                   //nolint:errcheck

@@ -1,5 +1,5 @@
 // file: internal/itunes/service/playlist_sync_test.go
-// version: 2.0.0
+// version: 2.0.1
 
 package itunesservice
 
@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
+	"github.com/gin-gonic/gin"
 )
 
 func TestMigrateSmartPlaylists_NilLibrary(t *testing.T) {

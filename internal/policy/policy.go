@@ -1,6 +1,7 @@
 // file: internal/policy/policy.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+// last-edited: 2026-08-20
 
 // Package policy evaluates per-book processing policy tags.
 //
@@ -14,14 +15,14 @@ import "github.com/falkcorp/audiobook-organizer/internal/database"
 
 // Known policy tag strings.
 const (
-	TagNoOrganize      = "policy:no-organize"
-	TagNoWriteback     = "policy:no-writeback"
-	TagNoMetadata      = "policy:no-metadata"
-	TagSourceAudible   = "policy:source:audible"
-	TagSourceGoogle    = "policy:source:google"
-	TagSourceISBN      = "policy:source:isbn"
-	TagPriorityHigh    = "policy:priority:high"
-	TagPriorityLow     = "policy:priority:low"
+	TagNoOrganize    = "policy:no-organize"
+	TagNoWriteback   = "policy:no-writeback"
+	TagNoMetadata    = "policy:no-metadata"
+	TagSourceAudible = "policy:source:audible"
+	TagSourceGoogle  = "policy:source:google"
+	TagSourceISBN    = "policy:source:isbn"
+	TagPriorityHigh  = "policy:priority:high"
+	TagPriorityLow   = "policy:priority:low"
 )
 
 // BookPolicy holds the processing flags derived from a book's tags.

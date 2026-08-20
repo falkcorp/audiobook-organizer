@@ -1,6 +1,7 @@
 // file: internal/dedup/unified/compose_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e1fb3967-2f53-41fd-ac9d-0cbcb3b03668
+// last-edited: 2026-08-20
 
 package unified
 
@@ -176,7 +177,7 @@ func TestComposeScore_CapRespected(t *testing.T) {
 		sig(SigExactAcoustID, 0.99),
 		sig(SigISBNASIN, 0.98),
 		sig(SigMetaSrcHash, 0.97),
-		sig(SigDuration, 0.0), // supporting: +4
+		sig(SigDuration, 0.0),   // supporting: +4
 		sig(SigFolderPath, 0.0), // supporting: +3
 	}
 

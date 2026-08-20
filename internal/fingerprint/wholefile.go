@@ -1,7 +1,7 @@
 // file: internal/fingerprint/wholefile.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c4d5e6f7-a8b9-4c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-06-15
+// last-edited: 2026-08-20
 
 package fingerprint
 
@@ -186,7 +186,6 @@ func middleSliceFrames(fp []byte) []byte {
 	}
 	return fp[start:end]
 }
-
 
 // canonical base64 chromaprint string (with the standard 4-byte
 // version-1 header). Useful when interoperating with code paths that still

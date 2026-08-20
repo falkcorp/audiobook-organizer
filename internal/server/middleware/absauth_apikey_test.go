@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth_apikey_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d3b8a71-9e64-4c02-b1f7-8a06d2e93c45
-// last-edited: 2026-08-03
+// last-edited: 2026-08-20
 
 package middleware
 
@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/gin-gonic/gin"
 )
 
@@ -102,7 +102,6 @@ func TestABSAPIKey_ReachesABSSurface(t *testing.T) {
 	}
 }
 
-
 // A revoked key must not become a back door just because it is pointed at ABS.
 func TestABSAPIKey_RevokedRejected(t *testing.T) {
 	h := newAPIKeyHarness(t)
@@ -168,4 +167,3 @@ func TestABSAPIKey_NonPrefixedTokenNotTreatedAsKey(t *testing.T) {
 		t.Fatalf("a non-abk_ bearer must not authenticate via the API-key path, got %d", w.Code)
 	}
 }
-

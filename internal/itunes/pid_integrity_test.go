@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_integrity_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c9a3e714-0d62-4b58-9f21-6e4a2c8b1d70
-// last-edited: 2026-07-24
+// last-edited: 2026-08-20
 
 package itunes
 
@@ -63,7 +63,7 @@ func TestComputeMergeOrphanCensus(t *testing.T) {
 			"b_s":  {ID: "b_s", IsPrimaryVersion: &notPrimary},
 			"b_j":  {ID: "b_j", IsPrimaryVersion: &notPrimary, MarkedForDeletion: &del},
 			"b_hp": {ID: "b_hp", IsPrimaryVersion: &primary},
-			"b_m":  {ID: "b_m", IsPrimaryVersion: &notPrimary, MarkedForDeletion: &del,
+			"b_m": {ID: "b_m", IsPrimaryVersion: &notPrimary, MarkedForDeletion: &del,
 				MergedIntoBookID: strptr("b_winner")},
 		},
 	}

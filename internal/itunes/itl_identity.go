@@ -1,7 +1,7 @@
 // file: internal/itunes/itl_identity.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4f8a2b1c-9d3e-4c7a-b5f6-1e2d3c4b5a69
-// last-edited: 2026-07-03
+// last-edited: 2026-08-20
 //
 // Library identity fingerprinting for the ITLSafetyContract (SPEC 3 / K13–K14).
 //
@@ -56,12 +56,12 @@ const libraryPIDFileOffset = 0x34
 
 // LibraryIdentity is the persisted fingerprint of a known-good library state.
 type LibraryIdentity struct {
-	SchemaVersion int       `json:"schema_version"`
-	LibraryPID    string    `json:"library_pid"` // 16 lowercase hex chars
-	TrackCount    int       `json:"track_count"`
-	PlaylistCount int       `json:"playlist_count"`
-	SampleStride  int       `json:"sample_stride"`
-	PIDSample     []string  `json:"pid_sample"` // evenly-spaced track PIDs, payload order
+	SchemaVersion int      `json:"schema_version"`
+	LibraryPID    string   `json:"library_pid"` // 16 lowercase hex chars
+	TrackCount    int      `json:"track_count"`
+	PlaylistCount int      `json:"playlist_count"`
+	SampleStride  int      `json:"sample_stride"`
+	PIDSample     []string `json:"pid_sample"` // evenly-spaced track PIDs, payload order
 	// FileSHA256 is the hex SHA-256 of the exact ON-DISK bytes our last
 	// successful write produced (Tier 4 / K17): a mismatch on the next read
 	// means an external writer (iTunes) touched the file in between, so the

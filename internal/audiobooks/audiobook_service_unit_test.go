@@ -1,7 +1,7 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-07
+// last-edited: 2026-08-20
 
 package audiobooks
 
@@ -972,12 +972,11 @@ func TestGetAudiobooks_DescriptionFilter_CheapFilterShortCircuits(t *testing.T) 
 
 	got, err := svc.GetAudiobooks(context.Background(), 0, 0, "", nil, nil, ListFilters{
 		FieldFilters: []FieldFilter{
-			{Field: "title", Value: "Target"},                 // cheap
-			{Field: "description", Value: "matching"},         // stripped
+			{Field: "title", Value: "Target"},         // cheap
+			{Field: "description", Value: "matching"}, // stripped
 		},
 	})
 	assert.NoError(t, err)
 	assert.Len(t, got, 1)
 	assert.Equal(t, "rightTitle", got[0].ID)
 }
-

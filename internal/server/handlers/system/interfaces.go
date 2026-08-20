@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/interfaces.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7a91ad40-5c96-4423-ad24-715acb791cf8
-// last-edited: 2026-08-18
+// last-edited: 2026-08-20
 
 // Narrow dependency interfaces for the system domain handlers (health, status,
 // announcements, storage, logs, activity-log, reset/factory-reset, config
@@ -22,18 +22,18 @@ import (
 
 // SystemStatsStore reads and invalidates the cached library-wide statistics.
 type SystemStatsStore interface {
-	CountAuthors() (int, error)      // StatsStore
-	CountSeries() (int, error)       // StatsStore
-	InvalidateLibraryStats() // StatsStore
+	CountAuthors() (int, error) // StatsStore
+	CountSeries() (int, error)  // StatsStore
+	InvalidateLibraryStats()    // StatsStore
 	// dashboard
-	GetDashboardStats() (*database.DashboardStats, error)        // StatsStore
+	GetDashboardStats() (*database.DashboardStats, error) // StatsStore
 }
 
 // SystemBookStore reads books for the system dashboard and factory-reset paths.
 type SystemBookStore interface {
 	// health metrics
-	CountPrimaryBooks() (int, error) // BookStore
-	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)           // BookStore
+	CountPrimaryBooks() (int, error)                                // BookStore
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error) // BookStore
 }
 
 // SystemAuthorStore reads authors and their book links.
@@ -50,13 +50,13 @@ type SystemAuthorStore interface {
 type SystemAuditReader interface {
 	// activity log
 	GetSystemActivityLogs(source string, limit int) ([]database.SystemActivityLog, error) // SystemActivityStore
-	GetRecentOperations(limit int) ([]database.Operation, error) // OperationStore
+	GetRecentOperations(limit int) ([]database.Operation, error)                          // OperationStore
 }
 
 // SystemLifecycleStore resets the store — the factory-reset path.
 type SystemLifecycleStore interface {
 	// reset / factory-reset
-	Reset() error            // LifecycleStore
+	Reset() error // LifecycleStore
 }
 
 // SystemHashBlocklistStore manages the do-not-import hash blocklist.

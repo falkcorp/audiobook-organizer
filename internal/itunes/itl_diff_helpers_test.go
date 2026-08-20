@@ -1,6 +1,7 @@
 // file: internal/itunes/itl_diff_helpers_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e2f3a4b5-c6d7-8e9f-0a1b-2c3d4e5f6a7b
+// last-edited: 2026-08-20
 //
 // Tests for itl_diff_helpers.go: msdh container inventory and playlist
 // membership diff. Fixtures are built using the existing synthetic LE
@@ -108,7 +109,10 @@ func TestCollectMsdhInventory_NonLE(t *testing.T) {
 }
 
 func TestCollectMsdhInventory_BlockTypeName(t *testing.T) {
-	cases := []struct{ bt int; want string }{
+	cases := []struct {
+		bt   int
+		want string
+	}{
 		{1, "track-list"},
 		{2, "playlist-list"},
 		{9, "album-list"},

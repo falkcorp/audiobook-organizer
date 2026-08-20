@@ -1,6 +1,7 @@
 // file: internal/itunes/mhoh_encoding_table_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b7e1fa2-9c4d-4e58-b6f0-2a8d5c9f1e3b
+// last-edited: 2026-08-20
 
 package itunes
 
@@ -129,10 +130,10 @@ func TestMhohEncodingTable_AllowedAt24Contains(t *testing.T) {
 // (version 12.13.10.3, 94,575 tracks, audited 2026-06-09).
 func TestMhohEncodingTable_CriticalTypes(t *testing.T) {
 	tests := []struct {
-		hohmType    uint32
-		name        string
-		wantAt24    []uint32
-		minCount    int
+		hohmType uint32
+		name     string
+		wantAt24 []uint32
+		minCount int
 	}{
 		// 0x02 Name: Latin-1 (1) and UTF-16LE (3) observed; 94,575 tracks.
 		{0x02, "Name", []uint32{1, 3}, 90000},

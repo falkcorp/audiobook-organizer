@@ -1,7 +1,7 @@
 // file: internal/audiobooks/update_service.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: b2c3d4e5-f6g7-h8i9-j0k1-l2m3n4o5p6q7
-// last-edited: 2026-08-18
+// last-edited: 2026-08-20
 
 package audiobooks
 
@@ -19,7 +19,6 @@ import (
 // call (GetBookByID) -- a strict subset -- and NewAudiobookUpdateService
 // forwards db straight into NewAudiobookService below, so the second
 // declaration only ever restated audiobookStore under another name.
-
 
 type AudiobookUpdateService struct {
 	db               audiobookStore
