@@ -1,5 +1,5 @@
 // file: internal/dedup/auto_resolve_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2f4b8c19-7a03-4d56-9e18-5c0d7f2a6b91
 // last-edited: 2026-08-20
 
@@ -16,6 +16,7 @@ package dedup
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -86,6 +87,63 @@ func TestAutoResolveEligible(t *testing.T) {
 		c.ScoreBreakdown.Suppressors = []string{"series_volume_differs"}
 		if ok, _ := engine.autoResolveEligible(c, bookA, bookB); ok {
 			t.Fatal("expected not eligible with suppressors")
+		}
+	})
+
+	// --- The suppressor GAP ---
+	//
+	// The case above writes Suppressors straight into the fixture, so it passes
+	// even when the guard is doing nothing useful: no production path populates
+	// that field. unified.ComposeScore is its only writer and every live caller
+	// passes nil, and the scan DELETES a suppressed pair rather than scoring it,
+	// so a stored breakdown always carries an empty list.
+	//
+	// These cases reproduce the shape of real data — stored list EMPTY, books
+	// genuinely suppressed — which makes PairEligibility the only thing that can
+	// refuse. They fail if the live check is removed.
+	t.Run("rejects a version-group pair whose stored suppressors are empty", func(t *testing.T) {
+		vg := "vg-1"
+		a := arPlausibleBook("A", "Same Book")
+		b := arPlausibleBook("B", "Same Book")
+		a.VersionGroupID = &vg
+		b.VersionGroupID = &vg
+
+		c := base()
+		if len(c.ScoreBreakdown.Suppressors) != 0 {
+			t.Fatalf("fixture must leave the stored list empty to cover the gap, got %v",
+				c.ScoreBreakdown.Suppressors)
+		}
+		ok, reason := engine.autoResolveEligible(c, a, b)
+		if ok {
+			t.Fatal("expected not eligible: both books are in the same version group")
+		}
+		if !strings.Contains(reason, "version_group_same") {
+			t.Fatalf("expected version_group_same in the refusal reason, got %q", reason)
+		}
+	})
+
+	t.Run("rejects distinct series volumes whose stored suppressors are empty", func(t *testing.T) {
+		a := arPlausibleBook("A", "Wheel of Time 3")
+		b := arPlausibleBook("B", "Wheel of Time 4")
+
+		c := base()
+		if len(c.ScoreBreakdown.Suppressors) != 0 {
+			t.Fatalf("fixture must leave the stored list empty to cover the gap, got %v",
+				c.ScoreBreakdown.Suppressors)
+		}
+		ok, reason := engine.autoResolveEligible(c, a, b)
+		if ok {
+			t.Fatal("expected not eligible: the two books are distinct series volumes")
+		}
+		if !strings.Contains(reason, "series_volume_differs") {
+			t.Fatalf("expected series_volume_differs in the refusal reason, got %q", reason)
+		}
+	})
+
+	t.Run("still accepts an unsuppressed pair once the live check runs", func(t *testing.T) {
+		ok, reason := engine.autoResolveEligible(base(), bookA, bookB)
+		if !ok {
+			t.Fatalf("live eligibility must not refuse a clean pair, got: %s", reason)
 		}
 	})
 
