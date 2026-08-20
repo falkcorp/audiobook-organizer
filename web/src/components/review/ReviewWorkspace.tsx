@@ -1,21 +1,29 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-08-20
 //
 // The unified review workspace: one screen for dedup, metadata apply, and the
 // review queue.
 //
-// LANE DEFAULT
+// WHICH LANE OPENS
 //
-// `LANE_ORDER` opens with `dupes` because the lane switcher lists widest-scope
-// work first, but the spine's renderers are metadata-shaped and the dedup lane
-// is not ported yet. Defaulting to `LANE_ORDER[0]` would therefore land `/review`
-// on a lane that cannot render anything -- a blank screen on the first paint of
-// the feature. So the default is `metadata`, and the two unported lanes render
-// an explicit panel saying where their surface still lives rather than an empty
-// spine. `lanes/index.ts` already makes the argument: a fallback lane is a blank
-// screen with no explanation.
+// The URL decides, then `metadata` as the fallback. `LANE_ORDER` opens with
+// `dupes` because the switcher lists widest-scope work first, but display order
+// is not a default: metadata is the lane with something to show on a library
+// nobody has deep-linked into.
+//
+// This used to be a bare `useState('metadata')`, which quietly broke the dupes
+// lane's own entry point. A `?book=` link arrived, the workspace opened on
+// metadata, and `useDupesLane(..., lane === 'dupes', ...)` therefore stayed
+// inactive -- so the server-side entity filter the link exists to trigger never
+// ran. The lane tests all clicked their way in and never saw it.
+//
+// Seeded once at mount, deliberately NOT mirrored back. A tab click that wrote
+// `?lane=` would make lane state derive from a param the click itself sets, and
+// the lane's gated fetch would fire twice per switch -- the exact defect just
+// removed from DupesPanel. `?lane=` is how you ARRIVE at a lane, not a running
+// record of the one you are on.
 //
 // NO LEGACY TOGGLE
 //
@@ -111,10 +119,29 @@ function exportRowsAsCsv(
   return rows.length;
 }
 
+/**
+ * The lane to open on, read from the URL once at mount.
+ *
+ * `?lane=` is explicit and wins. `?book=` and `?band=` are the dupes lane's own
+ * filters, so a link carrying either is a link to that lane even when it does
+ * not say so -- which is what makes the deep link from a book's status alert
+ * work without every producer having to spell the lane out.
+ *
+ * An unrecognised `?lane=` falls back rather than throwing: a stale bookmark
+ * should land somewhere useful, not on a blank screen.
+ */
+function initialLaneFrom(params: URLSearchParams): ReviewLane {
+  const named = params.get('lane');
+  if (named && (LANE_ORDER as string[]).includes(named)) return named as ReviewLane;
+  if (params.get('book') || params.get('band')) return 'dupes';
+  return 'metadata';
+}
+
 export function ReviewWorkspace() {
   const { toast } = useToast();
-  // NOT LANE_ORDER[0] -- see the note at the top of the file.
-  const [lane, setLane] = useState<ReviewLane>('metadata');
+  const [searchParams] = useSearchParams();
+  // Seeded from the URL, not synced to it -- see the note at the top of the file.
+  const [lane, setLane] = useState<ReviewLane>(() => initialLaneFrom(searchParams));
   const [viewMode, setViewMode] = useState<SpineViewMode>('compact');
 
   const metadata = useMetadataLane(toast, lane === 'metadata');
@@ -124,13 +151,12 @@ export function ReviewWorkspace() {
   // FIRST render. Passing them down beats letting the panel sync them up: an
   // effect-based sync made every ?book= deep link fetch the whole unfiltered
   // set before correcting itself.
-  const [dupesSearchParams] = useSearchParams();
   const dupesUrlFilters = useMemo(
     () => ({
-      band: dupesSearchParams.get('band') as DedupBand | null,
-      entityId: dupesSearchParams.get('book'),
+      band: searchParams.get('band') as DedupBand | null,
+      entityId: searchParams.get('book'),
     }),
-    [dupesSearchParams],
+    [searchParams],
   );
   const dupes = useDupesLane(toast, lane === 'dupes', dupesUrlFilters);
   // Expansion is a view concern and the two lanes key it on different id types,
