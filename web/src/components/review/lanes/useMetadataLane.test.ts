@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-08-20
 //
@@ -103,11 +103,32 @@ describe('summary reflects what the server says is reviewable', () => {
     expect(result.current.summary.unreviewable_by_cause).toBeUndefined();
   });
 
+  it('carries the stale count through', async () => {
+    // Stale rows are reviewable and counted in `total` -- this is a caveat on
+    // what is already in the list, not a shortfall. On production 5,771 of
+    // 5,774 reviewable rows were past the TTL and nothing said so.
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+      ...reviewPayload([makeResult('b1')]),
+      stale: 5771,
+    } as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.summary.stale).toBe(5771);
+  });
+
+  it('defaults stale to 0 when the server omits it', async () => {
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
+      reviewPayload([makeResult('b1')]) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+    );
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.summary.stale).toBe(0);
+  });
+
   it('defaults unreviewable to 0 when the server omits it', async () => {
     vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload([makeResult('b1')]) as Awaited<
-        ReturnType<typeof api.getCachedReviewResults>
-      >
+      reviewPayload([makeResult('b1')]) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
     );
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));

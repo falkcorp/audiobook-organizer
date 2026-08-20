@@ -58,6 +58,15 @@ type CandidateResult struct {
 	Candidate *metafetch.MetadataCandidate `json:"candidate,omitempty"`
 	Status    string                       `json:"status"` // "matched", "no_match", "error"
 	Error     string                       `json:"error_message,omitempty"`
+	// FetchedAt is when the cached candidate was written, and IsFresh whether
+	// that is still inside database.MetadataCacheTTL.
+	//
+	// Both are pointers so a path that is not serving from cache omits them
+	// entirely. That matters: absent means "this result has no age", which is
+	// not the same claim as "this result is stale", and a reviewer acting on a
+	// three-month-old candidate needs to be able to tell those apart.
+	FetchedAt *time.Time `json:"fetched_at,omitempty"`
+	IsFresh   *bool      `json:"is_fresh,omitempty"`
 }
 
 // BatchFetchRequest is the JSON body for the batch candidate fetch handler.

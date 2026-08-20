@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-08-20
 //
@@ -223,6 +223,8 @@ export interface MetadataLaneSummary {
   total: number;
   /** Cache rows that exist but cannot be reviewed. */
   unreviewable: number;
+  /** Reviewable rows whose cached candidate is past the server's TTL. */
+  stale: number;
   /**
    * The same total split by cause. Optional because a server that predates the
    * split omits it, and "no breakdown available" is a different claim from
@@ -353,6 +355,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     errors: 0,
     total: 0,
     unreviewable: 0,
+    stale: 0,
   });
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -408,6 +411,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           errors: data.errors ?? 0,
           total: tc,
           unreviewable: data.unreviewable ?? 0,
+          stale: data.stale ?? 0,
           // Left undefined rather than zero-filled when the server omits it:
           // "no breakdown available" and "every cause is zero" are different
           // claims, and the rail renders them differently.

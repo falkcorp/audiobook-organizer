@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-08-20
 
@@ -312,7 +312,15 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	}
 
 	var matched, noMatch, applied int
+	// stale counts every reviewable row past the TTL, not just the ones on this
+	// page, so the rail can state the size of the problem rather than whatever
+	// fraction of it happens to be visible.
+	staleCutoff := time.Now().Add(-database.MetadataCacheTTL)
+	var stale int
 	for _, r := range reviewable {
+		if !r.sum.FetchedAt.After(staleCutoff) {
+			stale++
+		}
 		switch r.status {
 		case "no_match":
 			noMatch++
@@ -339,6 +347,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	// BuildCandidateBookInfo runs for the PAGE only. It is the one genuinely
 	// per-row-expensive call here, and a paginated caller must not pay for rows
 	// it did not ask for.
+	reviewFreshCutoff := time.Now().Add(-database.MetadataCacheTTL)
 	results := make([]metabatch.CandidateResult, 0, len(page))
 	for i := range page {
 		book := lookupBook(page[i].sum.BookID)
@@ -346,10 +355,19 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 			continue
 		}
 		cand := page[i].cand
+		// Age travels with the row. MetadataCacheTTL's contract is that stale
+		// entries stay readable and the UI flags them -- but this endpoint sent
+		// no age at all, so the review surface could not honour it. On the live
+		// library that meant 5,771 of 5,774 reviewable rows were past the TTL
+		// and every one of them was presented as though freshly fetched.
+		fetchedAt := page[i].sum.FetchedAt
+		isFresh := fetchedAt.After(reviewFreshCutoff)
 		results = append(results, metabatch.CandidateResult{
 			Book:      metabatch.BuildCandidateBookInfo(h.store, book),
 			Candidate: &cand,
 			Status:    page[i].status,
+			FetchedAt: &fetchedAt,
+			IsFresh:   &isFresh,
 		})
 	}
 
@@ -374,6 +392,10 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		// nothing about what to DO; knowing 3,354 of it is rows whose book is
 		// gone points straight at a reaper, and the rest at a refetch.
 		"unreviewable": orphaned + noCandidates + decodeErrors,
+		// Reviewable rows whose cached candidate is past MetadataCacheTTL. They
+		// are still returned -- staleness is informational, per the TTL's
+		// contract -- but a reviewer applying month-old metadata should be told.
+		"stale": stale,
 		"unreviewable_by_cause": gin.H{
 			// The book the row points at no longer resolves. Only a cleanup
 			// pass fixes these; refetching cannot.
