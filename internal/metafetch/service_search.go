@@ -514,7 +514,10 @@ func (mfs *Service) searchMetadataForBook(
 			if baseTier == "f1" {
 				baseWordCount = len(searchWords)
 			}
-			score := ApplyNonBaseAdjustments(baseScore, r, baseWordCount)
+			adjusted, adjSteps := ApplyNonBaseAdjustmentsWithBreakdown(baseScore, r, baseWordCount)
+			rec := newScoreRecorder(baseScore, baseTierLabel(baseTier), baseTierDetail(baseTier))
+			rec.adopt(adjSteps, adjusted)
+			score := rec.score
 
 			// Tier-specific minimum on the adjusted score. F1 path filters at <= 0
 			// (preserves original behavior); embedding path uses the configured
@@ -534,12 +537,15 @@ func (mfs *Service) searchMetadataForBook(
 					rAuthorLower := strings.ToLower(r.Author)
 					bAuthorLower := strings.ToLower(bookAuthor)
 					if strings.Contains(rAuthorLower, bAuthorLower) || strings.Contains(bAuthorLower, rAuthorLower) {
-						score *= 1.5 // Strong boost for author match
+						rec.mul("author", "Author match", 1.5,
+							"The result's author matches the book's known author.")
 					} else {
-						score *= 0.7 // Penalize non-matching authors
+						rec.mul("author", "Author mismatch", 0.7,
+							"The result names a different author than the book.")
 					}
 				} else {
-					score *= 0.75 // Penalize results missing author when we know the book's author
+					rec.mul("author", "Author missing", 0.75,
+						"The book's author is known but the result does not name one.")
 				}
 			}
 
@@ -548,7 +554,8 @@ func (mfs *Service) searchMetadataForBook(
 				rNarrLower := strings.ToLower(r.Narrator)
 				bNarrLower := strings.ToLower(bookNarrator)
 				if strings.Contains(rNarrLower, bNarrLower) || strings.Contains(bNarrLower, rNarrLower) {
-					score *= 1.3 // Boost for narrator match
+					rec.mul("narrator_match", "Narrator match", 1.3,
+						"The result's narrator matches the book's known narrator.")
 				}
 			}
 
@@ -557,25 +564,34 @@ func (mfs *Service) searchMetadataForBook(
 				rSeriesLower := strings.ToLower(r.Series)
 				sSeriesLower := strings.ToLower(searchSeries)
 				if strings.Contains(rSeriesLower, sSeriesLower) || strings.Contains(sSeriesLower, rSeriesLower) {
-					score *= scoringKnobs().SeriesNameMatchBoost // Boost for series match
+					rec.mul("series", "Series match", scoringKnobs().SeriesNameMatchBoost,
+						"The result belongs to the same series as the search.")
 				}
 			}
 
 			// Audiobook-specific scoring: boost results with narrator info,
 			// penalize sparse results from non-audiobook sources
 			if r.Narrator != "" {
-				score *= 1.15 // Results with narrator are more likely correct audiobook matches
+				rec.mul("narrator_present", "Has narrator", 1.15,
+					"The result names a narrator, so it is more likely an audiobook edition.")
 			} else {
-				score *= 0.85 // Penalize results without narrator info (likely non-audiobook sources)
+				rec.mul("narrator_present", "No narrator", 0.85,
+					"The result names no narrator, typical of a print or ebook record.")
 			}
 
 			var transcriptionBoosted bool
 			if !th.empty() {
-				score, transcriptionBoosted = transcriptionBoost(score, r, th)
+				var boosted float64
+				boosted, transcriptionBoosted = transcriptionBoost(rec.score, r, th)
+				rec.mulResult("transcription", "Transcription match", boosted,
+					"The result agrees with the title/author/narrator heard in the book's own audio intro.")
 			}
 
 			// Duration-based scoring: compare candidate runtime vs. local file duration.
-			score *= durationScoreMultiplier(bookDurationSec, r.DurationSec)
+			rec.mul("duration", "Runtime comparison",
+				durationScoreMultiplier(bookDurationSec, r.DurationSec),
+				durationStepDetail(bookDurationSec, r.DurationSec))
+			score = rec.score
 
 			durationDelta := 0
 			if bookDurationSec > 0 && r.DurationSec > 0 {
@@ -600,6 +616,7 @@ func (mfs *Service) searchMetadataForBook(
 				Language:             r.Language,
 				Source:               src.Name(),
 				Score:                score,
+				ScoreBreakdown:       rec.breakdown(),
 				DurationSec:          r.DurationSec,
 				DurationDeltaSec:     durationDelta,
 				DurationScore:        computeDurationScore(bookDurationSec, r.DurationSec),
@@ -645,9 +662,17 @@ func (mfs *Service) searchMetadataForBook(
 		if err == nil && result != nil {
 			key := strings.ToLower(result.Title + "|" + result.Author)
 			if !seen[key] {
-				score := ScoreOneResult(*result, searchWords)
+				score, asinBd := ScoreOneResultWithBreakdown(*result, searchWords)
+				asinRec := &scoreRecorder{score: score, steps: asinBd.Steps}
 				if score <= 0 {
-					score = 1.0 // Direct ASIN match always scores high
+					// Direct ASIN match always scores high. This OVERWRITES the
+					// pipeline result rather than adjusting it, so it is recorded
+					// as a replace -- a reviewer seeing 1.0 needs to know the
+					// title/author evidence was bypassed, not that it was strong.
+					asinRec.replace("asin_match", "Direct ASIN match", 1.0,
+						"This result was matched by ASIN, which is authoritative, so the "+
+							"title/author score was overridden.")
+					score = asinRec.score
 				}
 				asinDurationDelta := 0
 				if bookDurationSec > 0 && result.DurationSec > 0 {
@@ -656,7 +681,10 @@ func (mfs *Service) searchMetadataForBook(
 						asinDurationDelta = -asinDurationDelta
 					}
 				}
-				score *= durationScoreMultiplier(bookDurationSec, result.DurationSec)
+				asinRec.mul("duration", "Runtime comparison",
+					durationScoreMultiplier(bookDurationSec, result.DurationSec),
+					durationStepDetail(bookDurationSec, result.DurationSec))
+				score = asinRec.score
 				candidates = append(candidates, MetadataCandidate{
 					Title:                result.Title,
 					Author:               result.Author,
@@ -672,6 +700,7 @@ func (mfs *Service) searchMetadataForBook(
 					Language:             result.Language,
 					Source:               "Audnexus (Audible)",
 					Score:                score,
+					ScoreBreakdown:       asinRec.breakdown(),
 					DurationSec:          result.DurationSec,
 					DurationDeltaSec:     asinDurationDelta,
 					DurationScore:        computeDurationScore(bookDurationSec, result.DurationSec),

@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.62.0
+// version: 2.63.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-08-20
 
@@ -2893,6 +2893,27 @@ export interface MetadataResult {
   language?: string;
 }
 
+/** MetadataScoreStep mirrors metafetch.ScoreStep. `op` is the same vocabulary as
+ *  WaterfallStep in components/review/evidence/types.ts -- keep the three in sync. */
+export interface MetadataScoreStep {
+  id: string;
+  label: string;
+  op: 'base' | 'multiply' | 'add' | 'replace';
+  /** The base value, the multiplier, the addend, or the replacement, per `op`. */
+  operand: number;
+  /** Running total AFTER this step. For display; recompute from `operand` to verify. */
+  running: number;
+  detail?: string;
+  /** True when the operand was clamped by a configured cap. */
+  capped?: boolean;
+}
+
+/** MetadataScoreBreakdown mirrors metafetch.ScoreBreakdown. */
+export interface MetadataScoreBreakdown {
+  score: number;
+  steps: MetadataScoreStep[];
+}
+
 export interface MetadataCandidate {
   title: string;
   author: string;
@@ -2927,16 +2948,31 @@ export interface MetadataCandidate {
    *  >50% -> -10, >100% -> -20. Zero when either side lacks a duration.
    *
    *  The backend has always serialized this (`duration_score`); it was simply
-   *  never declared here, so nothing could read it. It is currently the ONLY
-   *  per-signal contribution the metadata lane exposes -- every other component
-   *  of `score` (title/author F1 base, compilation and length penalties, the
-   *  rich-metadata bonus) is a local intermediate that is collapsed into the
-   *  total before serialization. See docs/evidence-panel-audit.md. */
+   *  never declared here, so nothing could read it.
+   *
+   *  NOTE: this is a signal SUMMARY, not a contribution to `score`. The duration
+   *  signal reaches `score` as a MULTIPLIER (durationScoreMultiplier), while this
+   *  field is the separate additive band above. Do not add it to anything -- use
+   *  `score_breakdown` for the actual derivation. */
   duration_score?: number;
   /** True when duration_delta_sec exceeds 600s. Makes the threshold the review
    *  UI already draws a warning chip at explicit in the payload rather than
    *  re-derived on the client. */
   duration_mismatch?: boolean;
+  /** The ordered derivation of `score`, for the evidence panel. Replaying the
+   *  steps reproduces `score`; the backend asserts this as a property over the
+   *  real search path rather than trusting it.
+   *
+   *  Shaped as a WATERFALL, not as weights, because the metadata pipeline is
+   *  `(base x factors) + terms` and can be REPLACED outright by an LLM rerank or
+   *  a direct ASIN match. A multiplicative factor has no share of a total, so
+   *  there is nothing here to drive a stacked contribution bar -- attempting one
+   *  would render segments that sum to nothing meaningful while looking
+   *  complete. See docs/evidence-panel-audit.md.
+   *
+   *  Absent when the candidate came from a path that records no derivation;
+   *  absence means "not recorded", never "the score was zero". */
+  score_breakdown?: MetadataScoreBreakdown;
   /** Audible category ladder node names, e.g. "Science Fiction". Audible-sourced
    *  candidates only; applied as book_tags on apply. */
   category_tags?: string[];

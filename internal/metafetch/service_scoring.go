@@ -971,9 +971,11 @@ func (mfs *Service) RerankTopK(
 			// No spread in the original window — every candidate rescales
 			// to the same point.
 			candidates[i].Score = origMax
+			recordRerank(&candidates[i], normFinal, origMin, origMax)
 			continue
 		}
 		candidates[i].Score = origMin + normFinal*(origMax-origMin)
+		recordRerank(&candidates[i], normFinal, origMin, origMax)
 	}
 
 	// Resort the full list so the reranked top-K is in correct order against

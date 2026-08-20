@@ -1,5 +1,5 @@
 <!-- file: docs/evidence-panel-audit.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 4e8b2f65-9a13-47d0-8c52-6b0f1d94a3e7 -->
 <!-- last-edited: 2026-08-20 -->
 
@@ -171,3 +171,57 @@ still worth shipping, but then it must not drive a contribution bar.
 
 Committing the Go struct before step 2 risks a second backend change plus an adapter
 rewrite, which is why the order matters more than it looks.
+
+## Addendum 2 — the score a reviewer sees is not the score the scorer returns
+
+Both the audit and its first addendum reasoned about `ScoreOneResult`. That is not
+the number the review UI displays. `MetadataCandidate.Score` is the scorer's output
+put through several more layers in `service_search.go`, and it can be discarded
+entirely:
+
+```
+base (F1 or embedding — ScoreBaseCandidates picks the tier)
+  → compilation penalty     (×)   ┐
+  → length penalty          (×)   ├ ApplyNonBaseAdjustments
+  → rich-metadata bonus     (+)   ┘
+  → author match / mismatch / missing   (× 1.5 / 0.7 / 0.75)
+  → narrator match                      (× 1.3)
+  → series match                        (× SeriesNameMatchBoost)
+  → narrator present / absent           (× 1.15 / 0.85)
+  → transcription boost                 (×)
+  → duration multiplier                 (×)
+  → LLM rerank                          (REPLACES the value outright)
+```
+
+Instrumenting only `ScoreOneResult` and wiring it to the panel would have shipped a
+derivation covering roughly the first third of that chain while presenting it as the
+explanation of the displayed number — the same "looks complete, isn't" defect this
+document has now rejected three times, each time arriving from a different direction.
+
+Three consequences worth recording:
+
+1. **`replace` is a fourth operation.** Rerank does not scale or offset the pipeline
+   score; it substitutes a verdict. So does a direct ASIN match, which overrides a
+   zero score with 1.0. Both are recorded as `replace`. Expressing either as a
+   multiply by `new/old` would recompose correctly while showing the reviewer a
+   factor — "×3.71" — that corresponds to no real signal.
+
+2. **A reranked score is not a function of this candidate's evidence.** The rescale
+   window `[origMin, origMax]` is read from *other* candidates in the result set
+   (`bestScore` and the last candidate in the ambiguous range). The step's detail
+   therefore names the window explicitly, because a row that hid it would be
+   misleading in a way the reviewer could not detect.
+
+3. **Base provenance matters.** `ScoreBaseCandidates` returns either an embedding
+   cosine or an F1 overlap, with a tier name. Labelling the embedding path
+   "Title/author match" would be simply false, so the tier is carried into the base
+   step's label and detail.
+
+### Acceptance gate
+
+`TestSearchPath_BreakdownExplainsEveryCandidateScore` drives the real search path
+with a mock source and asserts, for every candidate emitted, that replaying the
+recorded steps reproduces `candidate.Score`, and that each step's displayed running
+total equals the prefix replay. That last check matters independently: a correct
+final total with a wrong intermediate still misleads, and recomposition alone would
+not catch it because it recomputes from `operand`.

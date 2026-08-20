@@ -7,8 +7,10 @@ package metafetch
 
 import (
 	"math"
+	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
@@ -150,5 +152,148 @@ func TestBreakdown_ZeroBaseIsExplained(t *testing.T) {
 func TestBreakdown_EmptyIsNotConsistent(t *testing.T) {
 	if (ScoreBreakdown{Score: 0}).IsConsistent(1e-12) {
 		t.Fatal("an empty breakdown must not report as consistent")
+	}
+}
+
+// --- Search-path integration -------------------------------------------------
+//
+// The tests above prove ScoreOneResult's breakdown recomposes. That is NOT the
+// number a reviewer sees. MetadataCandidate.Score carries several more layers
+// (author, narrator, series, transcription, duration) and can be REPLACED
+// outright by the LLM reranker or by a direct ASIN match.
+//
+// So the real acceptance gate is here: for every candidate the search path
+// actually emits, replaying its recorded steps must reproduce its Score. If this
+// fails, the evidence panel would present a derivation of a number the pipeline
+// did not use.
+
+func intPtr(v int) *int { return &v }
+
+func assertBreakdownExplainsScore(t *testing.T, c MetadataCandidate) {
+	t.Helper()
+	if c.ScoreBreakdown == nil {
+		t.Fatalf("%q: candidate from the search path has no breakdown", c.Title)
+	}
+	if got := RecomposeScore(c.ScoreBreakdown.Steps); math.Abs(got-c.Score) > 1e-12 {
+		t.Fatalf("%q: steps recompose to %.15f but Score is %.15f\nsteps=%+v",
+			c.Title, got, c.Score, c.ScoreBreakdown.Steps)
+	}
+	if c.ScoreBreakdown.Score != c.Score {
+		t.Fatalf("%q: breakdown.Score=%.15f, candidate.Score=%.15f",
+			c.Title, c.ScoreBreakdown.Score, c.Score)
+	}
+	for i := range c.ScoreBreakdown.Steps {
+		want := RecomposeScore(c.ScoreBreakdown.Steps[:i+1])
+		if got := c.ScoreBreakdown.Steps[i].Running; math.Abs(got-want) > 1e-12 {
+			t.Fatalf("%q step %d (%s): Running=%.15f, prefix replay=%.15f",
+				c.Title, i, c.ScoreBreakdown.Steps[i].ID, got, want)
+		}
+	}
+}
+
+func TestSearchPath_BreakdownExplainsEveryCandidateScore(t *testing.T) {
+	transcribed := "Mistborn The Final Empire"
+	cases := []struct {
+		name    string
+		book    *database.Book
+		results []metadata.BookMetadata
+	}{
+		{
+			name: "narrator present and absent, author match and mismatch",
+			book: &database.Book{ID: "b1", Title: "Mistborn"},
+			results: []metadata.BookMetadata{
+				{Title: "Mistborn", Author: "Brandon Sanderson", Narrator: "Michael Kramer"},
+				{Title: "Mistborn", Author: "Someone Else"},
+				{Title: "Mistborn: The Complete Collection", Author: "Brandon Sanderson",
+					Description: "d", CoverURL: "c", ISBN: "9780765311788"},
+			},
+		},
+		{
+			name: "transcription hints drive a multiplier",
+			book: &database.Book{ID: "b2", Title: "Mistborn", TranscribedTitle: &transcribed},
+			results: []metadata.BookMetadata{
+				{Title: "Mistborn The Final Empire", Author: "Brandon Sanderson", Narrator: "Kramer"},
+				{Title: "Mistborn Well of Ascension", Author: "Brandon Sanderson"},
+			},
+		},
+		{
+			name: "duration comparison, matching and diverging",
+			book: &database.Book{ID: "b3", Title: "Mistborn", Duration: intPtr(86400)},
+			results: []metadata.BookMetadata{
+				{Title: "Mistborn", Author: "Brandon Sanderson", DurationSec: 86000},
+				{Title: "Mistborn", Author: "Brandon Sanderson", DurationSec: 3600},
+				{Title: "Mistborn", Author: "Brandon Sanderson"}, // unknown runtime
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			book := tc.book
+			svc := NewService(&database.MockStore{
+				GetBookByIDFunc: func(id string) (*database.Book, error) { return book, nil },
+			})
+			svc.SetOverrideSources([]metadata.MetadataSource{
+				&mockMetadataSource{name: "test-source", results: tc.results},
+			})
+
+			resp, err := svc.SearchMetadataForBook(book.ID, book.Title)
+			if err != nil {
+				t.Fatalf("search failed: %v", err)
+			}
+			if len(resp.Results) == 0 {
+				t.Fatal("expected at least one candidate")
+			}
+			for _, c := range resp.Results {
+				assertBreakdownExplainsScore(t, c)
+			}
+		})
+	}
+}
+
+// TestRecordRerank_ReplacesRatherThanScales pins the one op that is not an
+// adjustment. The reranker substitutes its own judgement; recording it as a
+// multiply would recompose correctly while telling the reviewer that some
+// signal was worth a factor it never had.
+func TestRecordRerank_ReplacesRatherThanScales(t *testing.T) {
+	c := MetadataCandidate{
+		Title: "Mistborn",
+		Score: 0.9,
+		ScoreBreakdown: &ScoreBreakdown{
+			Score: 0.4,
+			Steps: []ScoreStep{{
+				ID: "base", Label: "Title/author match", Op: ScoreOpBase,
+				Operand: 0.4, Running: 0.4,
+			}},
+		},
+	}
+	recordRerank(&c, 0.75, 0.2, 1.1)
+
+	last := c.ScoreBreakdown.Steps[len(c.ScoreBreakdown.Steps)-1]
+	if last.Op != ScoreOpReplace {
+		t.Fatalf("rerank recorded as %q, want %q", last.Op, ScoreOpReplace)
+	}
+	if last.Operand != 0.9 {
+		t.Fatalf("replace operand = %v, want the candidate's final score 0.9", last.Operand)
+	}
+	if got := RecomposeScore(c.ScoreBreakdown.Steps); got != 0.9 {
+		t.Fatalf("recompose after replace = %v, want 0.9", got)
+	}
+	// The window bounds must be visible, because they come from OTHER candidates.
+	if !strings.Contains(last.Detail, "0.200") || !strings.Contains(last.Detail, "1.100") {
+		t.Fatalf("rerank detail must name the rescale window, got %q", last.Detail)
+	}
+}
+
+// TestRecomposeScore_ReplaceResetsTotal is the unit-level guard on the new op.
+func TestRecomposeScore_ReplaceResetsTotal(t *testing.T) {
+	steps := []ScoreStep{
+		{ID: "base", Op: ScoreOpBase, Operand: 0.5, Running: 0.5},
+		{ID: "x", Op: ScoreOpMultiply, Operand: 4, Running: 2},
+		{ID: "r", Op: ScoreOpReplace, Operand: 0.3, Running: 0.3},
+		{ID: "y", Op: ScoreOpAdd, Operand: 0.1, Running: 0.4},
+	}
+	if got := RecomposeScore(steps); math.Abs(got-0.4) > 1e-12 {
+		t.Fatalf("recompose=%v, want 0.4 (replace must discard prior total)", got)
 	}
 }
