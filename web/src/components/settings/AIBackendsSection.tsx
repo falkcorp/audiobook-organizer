@@ -1,5 +1,5 @@
 // file: web/src/components/settings/AIBackendsSection.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9e1f2a3b-4c5d-6e7f-8a9b-0c1d2e3f4a5b
 // last-edited: 2026-08-19
 
@@ -89,7 +89,13 @@ export function AIBackendsSection({ config, onChange }: AIBackendsSectionProps) 
       <Typography variant="h6" gutterBottom>
         AI Backends
       </Typography>
-      <Typography variant="body2" color="text.secondary" mb={2}>
+      <Typography
+        variant="body2"
+        sx={{
+          color: 'text.secondary',
+          mb: 2,
+        }}
+      >
         Choose which backend serves embeddings and LLM/chat requests, independently.
       </Typography>
 
@@ -209,7 +215,14 @@ export function AIBackendsSection({ config, onChange }: AIBackendsSectionProps) 
         {status && (
           <Grid size={12}>
             <Stack spacing={1}>
-              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                }}
+              >
                 <Chip size="small" label={`Embedding: ${status.embedding_mode}`} />
                 <Chip size="small" label={`LLM: ${status.llm_mode}`} />
                 <Chip
@@ -226,7 +239,14 @@ export function AIBackendsSection({ config, onChange }: AIBackendsSectionProps) 
               {[status.embedding_model, status.llm_model]
                 .filter((m): m is api.AIBackendModelStatus => !!m)
                 .map((m) => (
-                  <Stack key={m.name} direction="row" spacing={1} alignItems="center">
+                  <Stack
+                    key={m.name}
+                    direction="row"
+                    spacing={1}
+                    sx={{
+                      alignItems: 'center',
+                    }}
+                  >
                     <Typography variant="body2">{m.name}</Typography>
                     <Chip
                       size="small"

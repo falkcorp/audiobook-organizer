@@ -1,5 +1,5 @@
 // file: web/src/components/bookdetail/BookDetailInfoTab.tsx
-// version: 1.1.2
+// version: 1.1.3
 // guid: e5f6a7b8-c9d0-1234-efab-345678901234
 // last-edited: 2026-08-19
 
@@ -118,7 +118,13 @@ export const BookDetailInfoTab = ({
         {singleSelectedId && segmentTags ? (
           <>
             {segmentTagsLoading && <LinearProgress sx={{ mb: 2 }} />}
-            <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+            <Typography
+              variant="subtitle2"
+              gutterBottom
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               File-specific info for: {segmentTags.file_path.split('/').pop()}
             </Typography>
             <Grid container spacing={2}>
@@ -177,8 +183,10 @@ export const BookDetailInfoTab = ({
                     >
                       <Typography
                         variant="caption"
-                        color="text.secondary"
-                        sx={{ textTransform: 'uppercase' }}
+                        sx={{
+                          color: 'text.secondary',
+                          textTransform: 'uppercase',
+                        }}
                       >
                         {item.label}
                       </Typography>
@@ -292,8 +300,11 @@ export const BookDetailInfoTab = ({
                     >
                       <Typography
                         variant="caption"
-                        color="text.secondary"
-                        sx={{ textTransform: 'uppercase', letterSpacing: 0.5 }}
+                        sx={{
+                          color: 'text.secondary',
+                          textTransform: 'uppercase',
+                          letterSpacing: 0.5,
+                        }}
                       >
                         {item.label}
                       </Typography>
@@ -337,7 +348,13 @@ export const BookDetailInfoTab = ({
 
       {/* Star rating widget — RATE-2 */}
       <Paper sx={{ p: 3, mb: 3 }}>
-        <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+        <Typography
+          variant="subtitle1"
+          gutterBottom
+          sx={{
+            fontWeight: 600,
+          }}
+        >
           Your Rating
         </Typography>
         <Stack spacing={2}>
@@ -358,7 +375,12 @@ export const BookDetailInfoTab = ({
               </Typography>
               <Rating value={value} onChange={onChange} precision={0.5} max={5} />
               {value != null && (
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   {value.toFixed(1)} / 5
                 </Typography>
               )}
@@ -386,12 +408,24 @@ export const BookDetailInfoTab = ({
       {/* Tags section — Audible Categories + Your Labels (CAT-1 / PR #548) */}
       {detailedTags.length > 0 && (
         <Paper sx={{ p: 3, mb: 3 }}>
-          <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+          <Typography
+            variant="subtitle1"
+            gutterBottom
+            sx={{
+              fontWeight: 600,
+            }}
+          >
             Tags
           </Typography>
           {detailedTags.filter((t) => t.source !== 'user').length > 0 && (
             <>
-              <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+              <Typography
+                variant="subtitle2"
+                gutterBottom
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 Audible Categories
               </Typography>
               <Box
@@ -418,7 +452,13 @@ export const BookDetailInfoTab = ({
           )}
           {detailedTags.filter((t) => t.source === 'user').length > 0 && (
             <>
-              <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+              <Typography
+                variant="subtitle2"
+                gutterBottom
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 Your Labels
               </Typography>
               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>

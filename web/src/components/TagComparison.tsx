@@ -1,5 +1,5 @@
 // file: web/src/components/TagComparison.tsx
-// version: 1.5.1
+// version: 1.5.2
 // guid: cfed2692-76f6-47b0-bc84-cc2a4075e554
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -213,7 +213,15 @@ export const TagComparison = ({
     <Box>
       {/* Dynamic tag badges — click to toggle column visibility */}
       {/* Tags visible in the table below are shown as hidden badges; clicking shows them */}
-      <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
+      <Stack
+        direction="row"
+        spacing={0.5}
+        useFlexGap
+        sx={{
+          flexWrap: 'wrap',
+          mb: 1,
+        }}
+      >
         {tagEntries.map(([key, tagValues]) => {
           const isVisible = !hiddenTags.has(key);
           const fileVal = tagValues.file_value;
@@ -285,7 +293,14 @@ export const TagComparison = ({
         )}
 
         {/* Comparison dropdown */}
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
+        <Stack
+          direction="row"
+          spacing={1}
+          sx={{
+            alignItems: 'center',
+            mb: 2,
+          }}
+        >
           {otherVersions.length > 0 && (
             <FormControl size="small" sx={{ minWidth: 280 }}>
               <InputLabel>Compare against</InputLabel>
@@ -317,12 +332,19 @@ export const TagComparison = ({
           <Stack
             direction="row"
             spacing={0.5}
-            flexWrap="wrap"
             useFlexGap
-            alignItems="center"
-            sx={{ mb: 1 }}
+            sx={{
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              mb: 1,
+            }}
           >
-            <Typography variant="caption" color="text.secondary">
+            <Typography
+              variant="caption"
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               {hiddenTags.size} hidden:
             </Typography>
             {Array.from(hiddenTags).map((tag) => (
@@ -389,7 +411,13 @@ export const TagComparison = ({
                         colWidths[colIdx] ? { width: colWidths[colIdx] } : {},
                       ]}
                     >
-                      <Stack direction="row" alignItems="center" spacing={0.5}>
+                      <Stack
+                        direction="row"
+                        spacing={0.5}
+                        sx={{
+                          alignItems: 'center',
+                        }}
+                      >
                         <span>{TAG_LABELS[tagName] || tagName}</span>
                         <Tooltip title={`Hide "${TAG_LABELS[tagName] || tagName}"`}>
                           <IconButton
@@ -492,7 +520,13 @@ export const TagComparison = ({
           </Box>
         )}
         {visibleTagEntries.length === 0 && !loading && tagEntries.length === 0 && (
-          <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+              py: 2,
+            }}
+          >
             No tag data available.
           </Typography>
         )}

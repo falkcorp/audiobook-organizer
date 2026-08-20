@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/DedupAIReviewTab.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-08-19
 import { useState, useEffect } from 'react';
@@ -231,7 +231,12 @@ function AIAuthorPipelinePage() {
       {/* No scan loaded */}
       {!scan && !loading && (
         <Paper sx={{ p: 4, mx: 2, textAlign: 'center' }}>
-          <Typography variant="body1" color="text.secondary">
+          <Typography
+            variant="body1"
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             Run a scan to discover author duplicates using multi-pass AI analysis, or load a
             previous scan from history.
           </Typography>
@@ -299,7 +304,13 @@ function AIAuthorPipelinePage() {
               <Button variant="outlined" size="small" onClick={() => setSelected(new Set())}>
                 Clear Selection
               </Button>
-              <Typography variant="body2" color="text.secondary" sx={{ ml: 'auto' }}>
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                  ml: 'auto',
+                }}
+              >
                 {selected.size} of {filteredResults.filter((r) => !r.applied).length} selected
               </Typography>
             </Paper>
@@ -358,10 +369,20 @@ function AIAuthorPipelinePage() {
                     }
                   />
                   <Box sx={{ flex: 1 }}>
-                    <Typography variant="body2" fontWeight="bold">
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        fontWeight: 'bold',
+                      }}
+                    >
                       {result.suggestion.canonical_name}
                     </Typography>
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       {result.suggestion.reason}
                     </Typography>
                   </Box>
@@ -378,7 +399,13 @@ function AIAuthorPipelinePage() {
           ))}
           {/* No results for this filter */}
           {filteredResults.length === 0 && (
-            <Typography color="text.secondary" sx={{ p: 2, textAlign: 'center' }}>
+            <Typography
+              sx={{
+                color: 'text.secondary',
+                p: 2,
+                textAlign: 'center',
+              }}
+            >
               No results matching this filter.
             </Typography>
           )}
@@ -387,7 +414,12 @@ function AIAuthorPipelinePage() {
       {/* Scan complete but no results */}
       {scan?.status === 'complete' && results.length === 0 && (
         <Paper sx={{ p: 4, mx: 2, textAlign: 'center' }}>
-          <Typography variant="body1" color="text.secondary">
+          <Typography
+            variant="body1"
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             Scan complete — no duplicate authors found.
           </Typography>
         </Paper>
@@ -428,17 +460,33 @@ function AIAuthorPipelinePage() {
               }}
             >
               <CardContent sx={{ py: 1, '&:last-child': { pb: 1 } }}>
-                <Typography variant="body2" fontWeight="bold">
+                <Typography
+                  variant="body2"
+                  sx={{
+                    fontWeight: 'bold',
+                  }}
+                >
                   Scan #{s.id} — {s.status}
                 </Typography>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   {new Date(s.created_at).toLocaleString()} · {s.author_count} authors · {s.mode}
                 </Typography>
               </CardContent>
             </Card>
           ))}
           {scans.length === 0 && (
-            <Typography color="text.secondary">No scan history yet.</Typography>
+            <Typography
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
+              No scan history yet.
+            </Typography>
           )}
         </Box>
       </Drawer>
@@ -467,7 +515,13 @@ export function AIReviewTab() {
       {aiSub === 'authors' && <AIAuthorPipelinePage />}
       {aiSub === 'books' && (
         <Box sx={{ p: 4, textAlign: 'center' }}>
-          <Typography color="text.secondary">Book deduplication coming soon.</Typography>
+          <Typography
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
+            Book deduplication coming soon.
+          </Typography>
         </Box>
       )}
     </Box>

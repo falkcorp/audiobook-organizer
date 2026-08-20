@@ -1,5 +1,5 @@
 // file: web/src/App.tsx
-// version: 1.23.1
+// version: 1.23.2
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-08-19
 import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
@@ -189,7 +189,12 @@ function App() {
           zIndex: theme.zIndex.drawer + 9999,
         })}
       >
-        <Stack spacing={3} alignItems="center">
+        <Stack
+          spacing={3}
+          sx={{
+            alignItems: 'center',
+          }}
+        >
           <CircularProgress color="inherit" size={60} />
           <Typography variant="h5">Server Shutting Down</Typography>
           <Typography variant="body1" sx={{ opacity: 0.8 }}>

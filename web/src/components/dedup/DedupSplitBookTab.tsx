@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/DedupSplitBookTab.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 // last-edited: 2026-08-19
 // Split-book backfill review tab (MAYDEPLOY-G3).
@@ -98,7 +98,13 @@ function CandidateRow({ candidate, expanded, onToggle, onMergeRequest, merging }
           <Chip size="small" color="primary" label={bookCount} />
         </TableCell>
         <TableCell align="right">
-          <Stack direction="row" spacing={1} justifyContent="flex-end">
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              justifyContent: 'flex-end',
+            }}
+          >
             <Button
               size="small"
               variant="contained"
@@ -125,7 +131,14 @@ function CandidateRow({ candidate, expanded, onToggle, onMergeRequest, merging }
               <Typography variant="subtitle2" gutterBottom>
                 Books in cluster ({bookCount})
               </Typography>
-              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              <Stack
+                direction="row"
+                spacing={1}
+                useFlexGap
+                sx={{
+                  flexWrap: 'wrap',
+                }}
+              >
                 {(candidate.book_ids ?? []).map((bid, idx) => (
                   <Link
                     key={bid}
@@ -257,12 +270,19 @@ export function DedupSplitBookTab() {
         <Stack
           direction={{ xs: 'column', sm: 'row' }}
           spacing={2}
-          alignItems={{ xs: 'flex-start', sm: 'center' }}
-          justifyContent="space-between"
+          sx={{
+            alignItems: { xs: 'flex-start', sm: 'center' },
+            justifyContent: 'space-between',
+          }}
         >
           <Box>
             <Typography variant="h6">Split-book candidates</Typography>
-            <Typography variant="body2" color="text.secondary">
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               Clusters of one-Book-per-chapter rows that look like a single audiobook split across
               many records.
             </Typography>
@@ -310,7 +330,12 @@ export function DedupSplitBookTab() {
           </Box>
         ) : candidates.length === 0 ? (
           <Box sx={{ p: 4, textAlign: 'center' }}>
-            <Typography variant="body2" color="text.secondary">
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               No split-book candidates. Click <strong>Trigger Scan</strong> to detect
               chapter-cluster patterns in the library.
             </Typography>
@@ -369,7 +394,12 @@ export function DedupSplitBookTab() {
               files re-parented to the keep book.
             </Typography>
             <Box sx={{ mt: 2 }}>
-              <Typography variant="caption" color="text.secondary">
+              <Typography
+                variant="caption"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 Parent folder
               </Typography>
               <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
@@ -377,13 +407,23 @@ export function DedupSplitBookTab() {
               </Typography>
             </Box>
             <Box sx={{ mt: 1 }}>
-              <Typography variant="caption" color="text.secondary">
+              <Typography
+                variant="caption"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 Suggested title
               </Typography>
               <Typography variant="body2">{confirmCandidate?.suggested_title}</Typography>
             </Box>
             <Box sx={{ mt: 1 }}>
-              <Typography variant="caption" color="text.secondary">
+              <Typography
+                variant="caption"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 Keep book (earliest ULID)
               </Typography>
               <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>

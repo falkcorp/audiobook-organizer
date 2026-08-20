@@ -1,5 +1,5 @@
 // file: web/src/components/library/LibraryBookGrid.tsx
-// version: 1.9.1
+// version: 1.9.2
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-08-19
 
@@ -296,7 +296,16 @@ export const LibraryBookGrid = ({
         )}
 
         {/* Select All bar — always visible */}
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 0.5, mt: -0.5, mb: -1 }}>
+        <Stack
+          direction="row"
+          spacing={1}
+          sx={{
+            alignItems: 'center',
+            px: 0.5,
+            mt: -0.5,
+            mb: -1,
+          }}
+        >
           <FormControlLabel
             control={
               <Checkbox
@@ -307,7 +316,12 @@ export const LibraryBookGrid = ({
               />
             }
             label={
-              <Typography variant="body2" color="text.secondary">
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 Select All
               </Typography>
             }
@@ -380,10 +394,21 @@ export const LibraryBookGrid = ({
 
         {audiobooks.length === 0 && !loading && searchQuery ? (
           <Paper sx={{ p: 4, textAlign: 'center' }}>
-            <Typography variant="h6" color="text.secondary">
+            <Typography
+              variant="h6"
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               No results for "{searchQuery}"
             </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+                mt: 1,
+              }}
+            >
               Try a different search term or clear the search to see all books.
             </Typography>
             <Button variant="outlined" sx={{ mt: 2 }} onClick={() => setSearchQuery('')}>
@@ -425,9 +450,11 @@ export const LibraryBookGrid = ({
           <Stack
             direction={{ xs: 'column', sm: 'row' }}
             spacing={2}
-            alignItems="center"
-            justifyContent="center"
-            mt={4}
+            sx={{
+              alignItems: 'center',
+              justifyContent: 'center',
+              mt: 4,
+            }}
           >
             <TextField
               select

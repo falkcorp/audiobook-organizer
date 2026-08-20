@@ -1,5 +1,5 @@
 // file: web/src/components/system/QuotaTab.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: 0f1a2b3c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
 
 import { useEffect, useState } from 'react';
@@ -78,7 +78,14 @@ export function QuotaTab() {
 
   if (loading) {
     return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="320px">
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          minHeight: '320px',
+        }}
+      >
         <CircularProgress />
       </Box>
     );
@@ -104,7 +111,14 @@ export function QuotaTab() {
 
   return (
     <Box>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
+      <Stack
+        direction="row"
+        sx={{
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          mb: 2,
+        }}
+      >
         <Typography variant="h6">Quota Information</Typography>
         <Button
           variant="outlined"
@@ -122,7 +136,14 @@ export function QuotaTab() {
         <Grid size={12}>
           <Card>
             <CardContent>
-              <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
+              <Stack
+                direction="row"
+                sx={{
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  mb: 2,
+                }}
+              >
                 <Typography variant="h6">System-wide Quota</Typography>
                 <Chip
                   label={quota.systemQuotaEnabled ? 'Enabled' : 'Disabled'}
@@ -131,7 +152,13 @@ export function QuotaTab() {
                 />
               </Stack>
 
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                  mb: 2,
+                }}
+              >
                 Path: {quota.path}
               </Typography>
 
@@ -148,12 +175,28 @@ export function QuotaTab() {
                     </Alert>
                   )}
 
-                  <Stack direction="row" justifyContent="space-between" mb={1}>
-                    <Typography variant="body2" color="text.secondary">
+                  <Stack
+                    direction="row"
+                    sx={{
+                      justifyContent: 'space-between',
+                      mb: 1,
+                    }}
+                  >
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       {formatBytes(quota.systemQuotaUsed)} used of{' '}
                       {formatBytes(quota.systemQuotaLimit)}
                     </Typography>
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       {percentage.toFixed(1)}%
                     </Typography>
                   </Stack>
@@ -163,15 +206,31 @@ export function QuotaTab() {
                     color={progressColor}
                     sx={{ height: 10, borderRadius: 1, mb: 2 }}
                   />
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     Maximum disk usage is limited to {quota.systemQuotaPercent}% of total available
                     space.
                   </Typography>
                 </>
               ) : (
-                <Stack direction="row" spacing={1} alignItems="center">
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  sx={{
+                    alignItems: 'center',
+                  }}
+                >
                   <CheckIcon color="success" />
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     Disk quota is disabled. Available storage is unrestricted.
                   </Typography>
                 </Stack>
@@ -186,7 +245,12 @@ export function QuotaTab() {
               <Typography variant="h6" gutterBottom>
                 Per-user Quotas
               </Typography>
-              <Typography variant="body2" color="text.secondary">
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 {quota.userQuotasEnabled
                   ? 'Per-user quotas are enabled. Detailed per-user usage reporting is not yet available in this view.'
                   : 'Per-user quotas are disabled.'}

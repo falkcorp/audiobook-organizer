@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/DedupSeriesTab.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678902
 // last-edited: 2026-08-19
 import { useState, useEffect, useCallback } from 'react';
@@ -303,7 +303,13 @@ export function SeriesDedupTab() {
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-        <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+            flexGrow: 1,
+          }}
+        >
           Detects series with identical names (ignoring case). Often caused by reimports creating
           series with/without author links. Total series: {totalSeries}.
         </Typography>
@@ -377,7 +383,12 @@ export function SeriesDedupTab() {
         <Paper sx={{ p: 4, textAlign: 'center' }}>
           <CheckCircleIcon sx={{ fontSize: 48, color: 'success.main', mb: 1 }} />
           <Typography variant="h6">No duplicate series found</Typography>
-          <Typography variant="body2" color="text.secondary">
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             {totalSeries} unique series in library.
           </Typography>
         </Paper>
@@ -413,7 +424,12 @@ export function SeriesDedupTab() {
                           disabled={busy}
                           size="small"
                         />
-                        <Typography variant="subtitle1" fontWeight="bold">
+                        <Typography
+                          variant="subtitle1"
+                          sx={{
+                            fontWeight: 'bold',
+                          }}
+                        >
                           {cleanDisplayTitle(group.name)}
                         </Typography>
                         <Chip
@@ -590,8 +606,12 @@ export function SeriesDedupTab() {
                                 <Box sx={{ px: 1 }}>
                                   <Typography
                                     variant="caption"
-                                    color="text.secondary"
-                                    sx={{ display: 'block', mb: 0.5, fontWeight: 'bold' }}
+                                    sx={{
+                                      color: 'text.secondary',
+                                      display: 'block',
+                                      mb: 0.5,
+                                      fontWeight: 'bold',
+                                    }}
                                   >
                                     {authorLabel}
                                   </Typography>
@@ -709,13 +729,13 @@ export function SeriesDedupTab() {
                                           </Typography>
                                           <Typography
                                             variant="caption"
-                                            color="text.secondary"
+                                            noWrap
                                             sx={{
+                                              color: 'text.secondary',
                                               display: 'block',
                                               fontSize: '0.6rem',
                                               lineHeight: 1.1,
                                             }}
-                                            noWrap
                                           >
                                             {authorLabel}
                                           </Typography>
@@ -757,7 +777,13 @@ export function SeriesDedupTab() {
                     <Box sx={{ px: 2, pb: 2 }}>
                       {validationResults[groupKey]?.length ? (
                         <>
-                          <Typography variant="caption" color="text.secondary" gutterBottom>
+                          <Typography
+                            variant="caption"
+                            gutterBottom
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             Found {validationResults[groupKey].length} result(s) from metadata
                             sources:
                           </Typography>
@@ -797,7 +823,13 @@ export function SeriesDedupTab() {
                                   <Typography variant="body2" noWrap>
                                     {r.title}
                                   </Typography>
-                                  <Typography variant="caption" color="text.secondary" noWrap>
+                                  <Typography
+                                    variant="caption"
+                                    noWrap
+                                    sx={{
+                                      color: 'text.secondary',
+                                    }}
+                                  >
                                     {r.author}
                                     {r.series
                                       ? ` — Series: ${r.series}${r.series_position ? ` #${r.series_position}` : ''}`
@@ -810,7 +842,12 @@ export function SeriesDedupTab() {
                           </Stack>
                         </>
                       ) : validationResults[groupKey] ? (
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: 'text.secondary',
+                          }}
+                        >
                           No results found from metadata sources.
                         </Typography>
                       ) : null}
@@ -905,11 +942,21 @@ export function SeriesDedupTab() {
               gap: 2,
             }}
           >
-            <Typography variant="caption" color="text.secondary">
+            <Typography
+              variant="caption"
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               {floatingCovers.length} cover(s) — click to dismiss
             </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Typography variant="caption" color="text.secondary">
+              <Typography
+                variant="caption"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 Size:
               </Typography>
               <input
@@ -921,7 +968,12 @@ export function SeriesDedupTab() {
                 onChange={(e) => setBubbleSize(Number(e.target.value))}
                 style={{ width: 100, accentColor: '#90caf9' }}
               />
-              <Typography variant="caption" color="text.secondary">
+              <Typography
+                variant="caption"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 {bubbleSize}px
               </Typography>
               <IconButton size="small" onClick={() => setFloatingCovers([])}>
@@ -952,8 +1004,11 @@ export function SeriesDedupTab() {
                 </Typography>
                 <Typography
                   variant="caption"
-                  color="text.secondary"
-                  sx={{ display: 'block', fontSize: '0.65rem' }}
+                  sx={{
+                    color: 'text.secondary',
+                    display: 'block',
+                    fontSize: '0.65rem',
+                  }}
                 >
                   {cover.author}
                 </Typography>

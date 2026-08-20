@@ -1,5 +1,5 @@
 // file: web/src/components/settings/PathsSettingsTab.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8c9d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-08-19
 
@@ -78,19 +78,21 @@ export function PathsSettingsTab(props: PathsSettingsTabProps) {
             props.libraryPathError ||
             'Main library directory where organized audiobooks are stored. Import paths are configured below.'
           }
-          InputProps={{
-            endAdornment: (
-              <InputAdornment position="end">
-                <Button
-                  variant="outlined"
-                  size="small"
-                  startIcon={<FolderOpenIcon />}
-                  onClick={props.handleBrowseLibraryPath}
-                >
-                  Browse Server
-                </Button>
-              </InputAdornment>
-            ),
+          slotProps={{
+            input: {
+              endAdornment: (
+                <InputAdornment position="end">
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    startIcon={<FolderOpenIcon />}
+                    onClick={props.handleBrowseLibraryPath}
+                  >
+                    Browse Server
+                  </Button>
+                </InputAdornment>
+              ),
+            },
           }}
         />
         <Alert severity="info" sx={{ mt: 1 }}>
@@ -214,10 +216,22 @@ export function PathsSettingsTab(props: PathsSettingsTabProps) {
       {/* Protected Paths Section */}
       <Grid size={12}>
         <Paper sx={{ p: 3, mb: 3 }}>
-          <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+          <Typography
+            variant="subtitle1"
+            gutterBottom
+            sx={{
+              fontWeight: 600,
+            }}
+          >
             Protected Paths
           </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+              mb: 2,
+            }}
+          >
             Paths that the organizer will never move or delete files from. One path per line. These
             are typically your Deluge download directories.
           </Typography>

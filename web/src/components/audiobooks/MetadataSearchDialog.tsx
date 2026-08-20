@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/MetadataSearchDialog.tsx
-// version: 1.10.1
+// version: 1.10.2
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 
 import { useCallback, useEffect, useState, useRef } from 'react';
@@ -314,21 +314,45 @@ export function MetadataSearchDialog({
             if (book.cover_url) setPreviewCover(book.cover_url);
           }}
         >
-          <Stack direction="row" spacing={2} alignItems="flex-start">
+          <Stack
+            direction="row"
+            spacing={2}
+            sx={{
+              alignItems: 'flex-start',
+            }}
+          >
             {book.cover_url && (
               <Avatar src={book.cover_url} variant="rounded" sx={{ width: 48, height: 64 }}>
                 {book.title?.[0]}
               </Avatar>
             )}
             <Box sx={{ flex: 1, minWidth: 0 }}>
-              <Typography variant="subtitle1" fontWeight="bold" noWrap>
+              <Typography
+                variant="subtitle1"
+                noWrap
+                sx={{
+                  fontWeight: 'bold',
+                }}
+              >
                 {book.title || 'Untitled'}
               </Typography>
-              <Typography variant="body2" color="text.secondary">
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 {book.author_name || 'Unknown author'}
                 {book.narrator ? ` — Narrated by ${book.narrator}` : ''}
               </Typography>
-              <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 0.5 }}>
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{
+                  flexWrap: 'wrap',
+                  mt: 0.5,
+                }}
+              >
                 {book.duration != null && book.duration > 0 && (
                   <Chip
                     label={`${Math.floor(book.duration / 3600)}h ${Math.floor((book.duration % 3600) / 60)}m`}
@@ -363,9 +387,12 @@ export function MetadataSearchDialog({
               {book.file_path && (
                 <Typography
                   variant="caption"
-                  color="text.secondary"
                   noWrap
-                  sx={{ display: 'block', mt: 0.5 }}
+                  sx={{
+                    color: 'text.secondary',
+                    display: 'block',
+                    mt: 0.5,
+                  }}
                 >
                   {book.file_path.split('/').slice(-2).join('/')}
                 </Typography>
@@ -381,26 +408,28 @@ export function MetadataSearchDialog({
           onKeyDown={handleKeyDown}
           placeholder="Search by title, ISBN, or Audible ASIN..."
           sx={{ mt: 1, mb: 1 }}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon />
-              </InputAdornment>
-            ),
-            endAdornment: (
-              <InputAdornment position="end">
-                <IconButton
-                  onClick={handleRefresh}
-                  disabled={loading}
-                  title="Bypass cache — re-fetch from all metadata sources"
-                >
-                  <RefreshIcon />
-                </IconButton>
-                <IconButton onClick={handleSearch} disabled={loading}>
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
                   <SearchIcon />
-                </IconButton>
-              </InputAdornment>
-            ),
+                </InputAdornment>
+              ),
+              endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton
+                    onClick={handleRefresh}
+                    disabled={loading}
+                    title="Bypass cache — re-fetch from all metadata sources"
+                  >
+                    <RefreshIcon />
+                  </IconButton>
+                  <IconButton onClick={handleSearch} disabled={loading}>
+                    <SearchIcon />
+                  </IconButton>
+                </InputAdornment>
+              ),
+            },
           }}
         />
 
@@ -476,7 +505,13 @@ export function MetadataSearchDialog({
         )}
 
         {!loading && results.length === 0 && (
-          <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
+          <Typography
+            sx={{
+              color: 'text.secondary',
+              py: 4,
+              textAlign: 'center',
+            }}
+          >
             No results found. Try a different search query, or paste an Audible ASIN (e.g.
             B0XXXXXXXXX).
           </Typography>
@@ -504,9 +539,22 @@ export function MetadataSearchDialog({
         )}
         {!loading && Object.keys(sourcesFailed).length > 0 && (
           <Box sx={{ mb: 2, p: 1.5, bgcolor: 'warning.main', borderRadius: 1, opacity: 0.85 }}>
-            <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{
+                alignItems: 'center',
+                mb: 0.5,
+              }}
+            >
               <WarningAmberIcon fontSize="small" sx={{ color: 'warning.contrastText' }} />
-              <Typography variant="body2" fontWeight="bold" sx={{ color: 'warning.contrastText' }}>
+              <Typography
+                variant="body2"
+                sx={{
+                  fontWeight: 'bold',
+                  color: 'warning.contrastText',
+                }}
+              >
                 {Object.keys(sourcesFailed).length} of {sourcesTried.length} sources failed
               </Typography>
             </Stack>
@@ -531,9 +579,11 @@ export function MetadataSearchDialog({
               <Stack
                 direction="row"
                 spacing={0.5}
-                alignItems="center"
-                sx={{ mb: 1 }}
-                flexWrap="wrap"
+                sx={{
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  mb: 1,
+                }}
               >
                 <Chip
                   label="All"
@@ -578,7 +628,13 @@ export function MetadataSearchDialog({
                   p: 2,
                 }}
               >
-                <Stack direction="row" spacing={2} alignItems="flex-start">
+                <Stack
+                  direction="row"
+                  spacing={2}
+                  sx={{
+                    alignItems: 'flex-start',
+                  }}
+                >
                   <Avatar
                     src={candidate.cover_url}
                     variant="rounded"
@@ -595,21 +651,42 @@ export function MetadataSearchDialog({
                     {candidate.title?.[0] || '?'}
                   </Avatar>
                   <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <Typography variant="subtitle1" fontWeight="bold" noWrap>
+                    <Typography
+                      variant="subtitle1"
+                      noWrap
+                      sx={{
+                        fontWeight: 'bold',
+                      }}
+                    >
                       {candidate.title}
                     </Typography>
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       {candidate.author}
                       {candidate.year ? ` (${candidate.year})` : ''}
                     </Typography>
                     {candidate.series && (
-                      <Typography variant="body2" color="text.secondary">
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: 'text.secondary',
+                        }}
+                      >
                         Series: {candidate.series}
                         {candidate.series_position ? ` · Book ${candidate.series_position}` : ''}
                       </Typography>
                     )}
                     {candidate.narrator && (
-                      <Typography variant="body2" color="text.secondary">
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: 'text.secondary',
+                        }}
+                      >
                         Narrator: {candidate.narrator}
                       </Typography>
                     )}

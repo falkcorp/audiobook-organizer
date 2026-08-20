@@ -1,5 +1,5 @@
 // file: web/src/components/library/LibraryToolbar.tsx
-// version: 1.5.1
+// version: 1.5.2
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-08-19
 
@@ -175,7 +175,14 @@ export const LibraryToolbar = ({
           />
         ) : (
           /* Library actions mode */
-          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+              flexWrap: 'wrap',
+            }}
+          >
             <Typography variant="h6" sx={{ mr: 1 }}>
               Library
             </Typography>
@@ -322,7 +329,13 @@ export const LibraryToolbar = ({
       {/* Active operations progress (always visible) */}
       {activeOrganizeOp && activeOrganizeOp.status !== 'completed' && (
         <Box sx={{ mb: 1 }}>
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+            }}
+          >
             <LinearProgress
               variant="determinate"
               value={
@@ -334,13 +347,13 @@ export const LibraryToolbar = ({
             />
             <Typography
               variant="caption"
-              color="text.secondary"
+              onClick={() => navigate(`/activity?op=${activeOrganizeOp.id}`)}
               sx={{
+                color: 'text.secondary',
                 cursor: 'pointer',
                 '&:hover': { textDecoration: 'underline' },
                 whiteSpace: 'nowrap',
               }}
-              onClick={() => navigate(`/activity?op=${activeOrganizeOp.id}`)}
             >
               Organizing: {activeOrganizeOp.progress}/{activeOrganizeOp.total}
             </Typography>
@@ -356,7 +369,13 @@ export const LibraryToolbar = ({
       )}
       {activeScanOp && activeScanOp.status !== 'completed' && (
         <Box sx={{ mb: 1 }}>
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+            }}
+          >
             <LinearProgress
               variant={activeScanOp.total > 0 ? 'determinate' : 'indeterminate'}
               value={
@@ -366,13 +385,13 @@ export const LibraryToolbar = ({
             />
             <Typography
               variant="caption"
-              color="text.secondary"
+              onClick={() => navigate(`/activity?op=${activeScanOp.id}`)}
               sx={{
+                color: 'text.secondary',
                 cursor: 'pointer',
                 '&:hover': { textDecoration: 'underline' },
                 whiteSpace: 'nowrap',
               }}
-              onClick={() => navigate(`/activity?op=${activeScanOp.id}`)}
             >
               {activeScanOp.total > 0
                 ? `Scanning: ${activeScanOp.progress}/${activeScanOp.total}`
@@ -398,7 +417,13 @@ export const LibraryToolbar = ({
           <Divider sx={{ mb: 2 }} />
           {systemStatus && (
             <>
-              <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+              <Typography
+                variant="subtitle2"
+                gutterBottom
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 Storage
               </Typography>
               <Typography variant="body2">{libraryBookCount} books in Library</Typography>
@@ -413,7 +438,13 @@ export const LibraryToolbar = ({
                 {(importSizeBytes / (1024 * 1024 * 1024)).toFixed(1)} GB Scanned
               </Typography>
               <Divider sx={{ my: 2 }} />
-              <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+              <Typography
+                variant="subtitle2"
+                gutterBottom
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 Library Path
               </Typography>
               <Typography variant="body2" sx={{ wordBreak: 'break-all' }}>

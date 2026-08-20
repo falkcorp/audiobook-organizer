@@ -1,5 +1,5 @@
 // file: web/src/components/bookdetail/BookDetailVersionGroup.tsx
-// version: 1.2.1
+// version: 1.2.2
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
 // last-edited: 2026-08-19
 import {
@@ -28,7 +28,7 @@ import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
 import TransformIcon from '@mui/icons-material/Transform';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlineOutlined';
 import type { Book, BookFile, BookSegment, BookTags } from '../../services/api';
 import * as api from '../../services/api';
 import { TagComparison } from '../TagComparison';
@@ -55,7 +55,13 @@ const HashChainLink = ({ label, value }: { label: string; value?: string }) => {
   const shown = hasValue ? value.slice(0, 12) : '—';
   const content = (
     <Box component="span" sx={{ display: 'inline-flex', flexDirection: 'column', minWidth: 0 }}>
-      <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.2 }}>
+      <Typography
+        variant="caption"
+        sx={{
+          color: 'text.secondary',
+          lineHeight: 1.2,
+        }}
+      >
         {label}
       </Typography>
       <Typography
@@ -226,7 +232,15 @@ export const BookDetailVersionGroup = ({
         ) : (
           <StarBorderIcon fontSize="small" sx={{ mr: 1, opacity: 0.4 }} />
         )}
-        <Typography variant="subtitle1" fontWeight="bold" sx={{ flex: 1, minWidth: 0 }} noWrap>
+        <Typography
+          variant="subtitle1"
+          noWrap
+          sx={{
+            fontWeight: 'bold',
+            flex: 1,
+            minWidth: 0,
+          }}
+        >
           {fmt}
           {representative.codec ? ` (${representative.codec})` : ''}
           {trayLabel !== fmt && (
@@ -239,19 +253,38 @@ export const BookDetailVersionGroup = ({
             </Typography>
           )}
         </Typography>
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ ml: 2, flexShrink: 0 }}>
+        <Stack
+          direction="row"
+          spacing={1}
+          sx={{
+            alignItems: 'center',
+            ml: 2,
+            flexShrink: 0,
+          }}
+        >
           <Chip
             label={`${totalFiles} file${totalFiles !== 1 ? 's' : ''}`}
             size="small"
             variant="outlined"
           />
           {totalSize > 0 && (
-            <Typography variant="body2" color="text.secondary">
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               {formatBytes(totalSize)}
             </Typography>
           )}
           {totalDuration > 0 && (
-            <Typography variant="body2" color="text.secondary" sx={{ minWidth: 50 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+                minWidth: 50,
+              }}
+            >
               {formatDuration(totalDuration)}
             </Typography>
           )}
@@ -319,7 +352,15 @@ export const BookDetailVersionGroup = ({
               ]}
             >
               {/* Version action buttons */}
-              <Stack direction="row" spacing={1} sx={{ mb: 2 }} flexWrap="wrap" useFlexGap>
+              <Stack
+                direction="row"
+                spacing={1}
+                useFlexGap
+                sx={{
+                  flexWrap: 'wrap',
+                  mb: 2,
+                }}
+              >
                 {!isPrimary && versions.length > 1 && (
                   <Button
                     size="small"
@@ -405,10 +446,12 @@ export const BookDetailVersionGroup = ({
                   <Stack
                     direction="row"
                     spacing={1}
-                    alignItems="center"
-                    flexWrap="wrap"
                     useFlexGap
-                    sx={{ mb: 1 }}
+                    sx={{
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      mb: 1,
+                    }}
                   >
                     <Typography variant="subtitle2">Overall Metadata</Typography>
                     <Chip
@@ -438,12 +481,19 @@ export const BookDetailVersionGroup = ({
                         >
                           <Stack
                             direction="row"
-                            alignItems="center"
-                            justifyContent="space-between"
                             spacing={1}
-                            sx={{ mb: 0.5 }}
+                            sx={{
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              mb: 0.5,
+                            }}
                           >
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                color: 'text.secondary',
+                              }}
+                            >
                               {entry.label}
                             </Typography>
                             {entry.differsFromDb && (
@@ -454,7 +504,12 @@ export const BookDetailVersionGroup = ({
                             {entry.fileValue}
                           </Typography>
                           {entry.differsFromDb && (
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                color: 'text.secondary',
+                              }}
+                            >
                               DB: {entry.storedValue}
                             </Typography>
                           )}
@@ -478,8 +533,11 @@ export const BookDetailVersionGroup = ({
               {vSegs.length === 0 && (
                 <Typography
                   variant="body2"
-                  color="text.secondary"
-                  sx={{ mt: 2, fontStyle: 'italic' }}
+                  sx={{
+                    color: 'text.secondary',
+                    mt: 2,
+                    fontStyle: 'italic',
+                  }}
                 >
                   No files found for this version.
                 </Typography>
@@ -493,8 +551,20 @@ export const BookDetailVersionGroup = ({
                   const someSelected = isCurrentBook && selectedSegmentIds.size > 0 && !allSelected;
                   return (
                     <Box sx={{ mt: 2 }}>
-                      <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 1 }}>
-                        <Typography variant="subtitle2" color="text.secondary">
+                      <Stack
+                        direction="row"
+                        spacing={2}
+                        sx={{
+                          alignItems: 'center',
+                          mb: 1,
+                        }}
+                      >
+                        <Typography
+                          variant="subtitle2"
+                          sx={{
+                            color: 'text.secondary',
+                          }}
+                        >
                           Files ({vSegs.length})
                         </Typography>
                         {isCurrentBook && vSegs.length > 1 && (
@@ -514,8 +584,13 @@ export const BookDetailVersionGroup = ({
                         <Stack
                           direction="row"
                           spacing={1}
-                          alignItems="center"
-                          sx={{ mb: 1, p: 1, bgcolor: 'action.selected', borderRadius: 1 }}
+                          sx={{
+                            alignItems: 'center',
+                            mb: 1,
+                            p: 1,
+                            bgcolor: 'action.selected',
+                            borderRadius: 1,
+                          }}
                         >
                           <Typography variant="body2">
                             {selectedSegmentIds.size} selected
@@ -632,7 +707,13 @@ export const BookDetailVersionGroup = ({
                                     </TableCell>
                                   )}
                                   <TableCell>
-                                    <Stack direction="row" alignItems="center" spacing={0.5}>
+                                    <Stack
+                                      direction="row"
+                                      spacing={0.5}
+                                      sx={{
+                                        alignItems: 'center',
+                                      }}
+                                    >
                                       {isMissing && (
                                         <Tooltip title={`Missing: ${seg.file_path}`}>
                                           <ErrorOutlineIcon color="error" fontSize="small" />
@@ -711,7 +792,13 @@ export const BookDetailVersionGroup = ({
                   versions have no hash data and are out of scope. */}
               {isCurrent && bookFiles.length > 0 && (
                 <Box sx={{ mt: 2 }} data-testid="hash-chain-section">
-                  <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
+                  <Typography
+                    variant="subtitle2"
+                    sx={{
+                      color: 'text.secondary',
+                      mb: 1,
+                    }}
+                  >
                     Hash Chain
                   </Typography>
                   <Stack spacing={1}>
@@ -735,8 +822,6 @@ export const BookDetailVersionGroup = ({
                         <Stack
                           direction="row"
                           spacing={1.5}
-                          alignItems="flex-start"
-                          flexWrap="wrap"
                           useFlexGap
                           divider={
                             <Box
@@ -746,6 +831,10 @@ export const BookDetailVersionGroup = ({
                               →
                             </Box>
                           }
+                          sx={{
+                            alignItems: 'flex-start',
+                            flexWrap: 'wrap',
+                          }}
                         >
                           {HASH_CHAIN_LINKS.map((link) => (
                             <HashChainLink key={link.key} label={link.label} value={f[link.key]} />

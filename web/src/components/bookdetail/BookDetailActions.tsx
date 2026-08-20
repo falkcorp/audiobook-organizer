@@ -1,5 +1,5 @@
 // file: web/src/components/bookdetail/BookDetailActions.tsx
-// version: 1.0.2
+// version: 1.0.3
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-08-19
 
@@ -75,8 +75,20 @@ export const BookDetailActions = ({
 }: BookDetailActionsProps) => {
   return (
     <Paper sx={{ p: 2, mb: 3 }}>
-      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} justifyContent="space-between">
-        <Stack direction="row" spacing={1} flexWrap="wrap">
+      <Stack
+        direction={{ xs: 'column', md: 'row' }}
+        spacing={2}
+        sx={{
+          justifyContent: 'space-between',
+        }}
+      >
+        <Stack
+          direction="row"
+          spacing={1}
+          sx={{
+            flexWrap: 'wrap',
+          }}
+        >
           <Button
             variant="outlined"
             startIcon={<HistoryIcon />}
@@ -117,9 +129,11 @@ export const BookDetailActions = ({
         <Stack
           direction="row"
           spacing={1}
-          flexWrap="wrap"
-          justifyContent="flex-end"
-          alignItems="center"
+          sx={{
+            flexWrap: 'wrap',
+            justifyContent: 'flex-end',
+            alignItems: 'center',
+          }}
         >
           <Tooltip title="Refresh book data">
             <IconButton onClick={onRefresh} disabled={loading || actionLoading} size="small">

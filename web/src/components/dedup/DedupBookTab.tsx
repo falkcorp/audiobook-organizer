@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/DedupBookTab.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 71F51230-1BB6-4864-A1EB-120EE776D673
 // last-edited: 2026-08-19
 
@@ -170,7 +170,13 @@ export function DedupBookTab() {
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-        <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+            flexGrow: 1,
+          }}
+        >
           Detects books with identical titles and authors at different file paths.
         </Typography>
         <Stack direction="row" spacing={1}>
@@ -258,7 +264,12 @@ export function DedupBookTab() {
                         disabled={busy}
                         size="small"
                       />
-                      <Typography variant="subtitle1" fontWeight="bold">
+                      <Typography
+                        variant="subtitle1"
+                        sx={{
+                          fontWeight: 'bold',
+                        }}
+                      >
                         {cleanDisplayTitle(group[0]?.title || 'Unknown')}
                       </Typography>
                       <Chip

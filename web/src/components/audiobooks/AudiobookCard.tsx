@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/AudiobookCard.tsx
-// version: 1.14.1
+// version: 1.14.2
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-08-19
 import React from 'react';
@@ -165,9 +165,6 @@ export const AudiobookCard: React.FC<AudiobookCardProps> = ({
           <Checkbox
             checked={selected}
             onClick={handleSelectToggle}
-            inputProps={{
-              'aria-label': `Select ${audiobook.title || 'audiobook'}`,
-            }}
             sx={{
               position: 'absolute',
               top: 8,
@@ -175,6 +172,11 @@ export const AudiobookCard: React.FC<AudiobookCardProps> = ({
               bgcolor: 'background.paper',
               borderRadius: 1,
               zIndex: 1,
+            }}
+            slotProps={{
+              input: {
+                'aria-label': `Select ${audiobook.title || 'audiobook'}`,
+              },
             }}
           />
         )}
@@ -235,22 +237,38 @@ export const AudiobookCard: React.FC<AudiobookCardProps> = ({
 
         <Typography
           variant="body2"
-          color="text.secondary"
           noWrap
           title={audiobook.author || 'Unknown Author'}
+          sx={{
+            color: 'text.secondary',
+          }}
         >
           {audiobook.author || 'Unknown Author'}
         </Typography>
 
         {audiobook.series && (
-          <Typography variant="caption" color="text.secondary" noWrap sx={{ mt: 0.5 }}>
+          <Typography
+            variant="caption"
+            noWrap
+            sx={{
+              color: 'text.secondary',
+              mt: 0.5,
+            }}
+          >
             {audiobook.series}
             {audiobook.series_number && ` #${audiobook.series_number}`}
           </Typography>
         )}
 
         {audiobook.narrator && (
-          <Typography variant="caption" color="text.secondary" noWrap sx={{ mt: 0.5 }}>
+          <Typography
+            variant="caption"
+            noWrap
+            sx={{
+              color: 'text.secondary',
+              mt: 0.5,
+            }}
+          >
             Narrated by: {audiobook.narrator}
           </Typography>
         )}
@@ -273,9 +291,11 @@ export const AudiobookCard: React.FC<AudiobookCardProps> = ({
                   <Typography
                     key={col.id}
                     variant="caption"
-                    color="text.secondary"
                     noWrap
                     title={`${col.label}: ${value}`}
+                    sx={{
+                      color: 'text.secondary',
+                    }}
                   >
                     <strong>{col.label}:</strong> {value}
                   </Typography>

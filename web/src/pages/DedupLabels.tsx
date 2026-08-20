@@ -1,5 +1,5 @@
 // file: web/src/pages/DedupLabels.tsx
-// version: 1.4.1
+// version: 1.4.2
 // guid: 7e3a1c92-4b60-4d85-9f21-6a5e0c9d3f58
 // last-edited: 2026-08-19
 
@@ -126,13 +126,17 @@ function BookCell({
         <Tooltip
           title={path}
           placement="bottom-start"
-          componentsProps={{ tooltip: { sx: { maxWidth: 600 } } }}
+          slotProps={{ tooltip: { sx: { maxWidth: 600 } } }}
         >
           <Typography
             variant="caption"
-            color="text.secondary"
-            sx={{ fontFamily: 'monospace', fontSize: '0.65rem', display: 'block' }}
             noWrap
+            sx={{
+              color: 'text.secondary',
+              fontFamily: 'monospace',
+              fontSize: '0.65rem',
+              display: 'block',
+            }}
           >
             {formatPath(path, pathVars)}
           </Typography>
@@ -171,7 +175,13 @@ function SuspiciousQueue({
 }) {
   return (
     <Box>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+      <Typography
+        variant="body2"
+        sx={{
+          color: 'text.secondary',
+          mb: 2,
+        }}
+      >
         Rule-sourced <code>not_dup</code> labels carrying duplicate-shaped evidence (shared
         ASIN/path, CERTAIN/HIGH band, cosine&nbsp;≥&nbsp;0.95, or the ms/sec duration-ratio
         signature). Each override becomes a permanent human gold label.
@@ -202,7 +212,13 @@ function SuspiciousQueue({
             ) : rows.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={5} align="center">
-                  <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                      py: 2,
+                    }}
+                  >
                     No suspicious labels in the queue.
                   </Typography>
                 </TableCell>
@@ -248,7 +264,13 @@ function SuspiciousQueue({
                     </Stack>
                   </TableCell>
                   <TableCell align="center">
-                    <Stack direction="row" spacing={1} justifyContent="center">
+                    <Stack
+                      direction="row"
+                      spacing={1}
+                      sx={{
+                        justifyContent: 'center',
+                      }}
+                    >
                       <Button
                         size="small"
                         color="success"
@@ -436,7 +458,12 @@ export default function DedupLabels() {
         defaultWidth: 220,
         sortValue: (r) => r.label_reason || '',
         render: (r) => (
-          <Typography variant="caption" color="text.secondary">
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             {r.label_reason}
           </Typography>
         ),
@@ -514,7 +541,13 @@ export default function DedupLabels() {
       <Typography variant="h4" gutterBottom>
         Dedup Gold Dataset
       </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+      <Typography
+        variant="body2"
+        sx={{
+          color: 'text.secondary',
+          mb: 2,
+        }}
+      >
         Labeled duplicate-candidate examples the classifier trains and validates on. Human overrides
         become gold (<code>label_source=human</code>) and take precedence.
       </Typography>
@@ -644,7 +677,13 @@ export default function DedupLabels() {
                 ) : rows.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={visibleColumns.length} align="center">
-                      <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: 'text.secondary',
+                          py: 2,
+                        }}
+                      >
                         No labeled examples for this filter.
                       </Typography>
                     </TableCell>
@@ -668,7 +707,14 @@ export default function DedupLabels() {
             </Table>
           </TableContainer>
 
-          <Stack direction="row" spacing={2} alignItems="center" sx={{ mt: 2 }}>
+          <Stack
+            direction="row"
+            spacing={2}
+            sx={{
+              alignItems: 'center',
+              mt: 2,
+            }}
+          >
             <Button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE))}>
               Prev
             </Button>

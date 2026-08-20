@@ -1,5 +1,5 @@
 // file: web/src/components/settings/AutoUpdateSection.tsx
-// version: 1.0.2
+// version: 1.0.3
 // guid: f8e2d4c6-b3a1-4f7e-9c2d-5a8b6e3f1d90
 // last-edited: 2026-08-19
 
@@ -85,7 +85,13 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
 
       <Grid container spacing={2}>
         <Grid size={12}>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+              mb: 1,
+            }}
+          >
             Current version: <strong>{updateInfo?.current_version || 'loading...'}</strong>
           </Typography>
           {updateInfo?.update_available && (
@@ -173,7 +179,9 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
               }))
             }
             size="small"
-            inputProps={{ min: 1 }}
+            slotProps={{
+              htmlInput: { min: 1 },
+            }}
           />
         </Grid>
 
@@ -232,7 +240,13 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
         </Grid>
 
         <Grid size={12}>
-          <Stack direction="row" spacing={2} alignItems="center">
+          <Stack
+            direction="row"
+            spacing={2}
+            sx={{
+              alignItems: 'center',
+            }}
+          >
             <Button variant="outlined" onClick={handleCheck} disabled={checking}>
               {checking ? <CircularProgress size={20} sx={{ mr: 1 }} /> : null}
               Check Now
@@ -249,7 +263,12 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
               </Button>
             )}
             {updateInfo?.last_checked && (
-              <Typography variant="caption" color="text.secondary">
+              <Typography
+                variant="caption"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 Last checked: {new Date(updateInfo.last_checked).toLocaleString()}
               </Typography>
             )}

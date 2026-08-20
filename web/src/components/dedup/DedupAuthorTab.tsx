@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/DedupAuthorTab.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-08-19
 import { useState, useEffect, useCallback } from 'react';
@@ -61,15 +61,24 @@ export function RoleDetails({ roles }: { roles: SuggestionRoles }) {
               Author: {roles.author.name}
             </Typography>
             {roles.author.variants && roles.author.variants.length > 0 && (
-              <Typography variant="caption" display="block" color="text.secondary">
+              <Typography
+                variant="caption"
+                sx={{
+                  display: 'block',
+                  color: 'text.secondary',
+                }}
+              >
                 Variants: {roles.author.variants.join(', ')}
               </Typography>
             )}
             {roles.author.reason && (
               <Typography
                 variant="caption"
-                display="block"
-                sx={{ fontStyle: 'italic', color: 'text.secondary' }}
+                sx={{
+                  display: 'block',
+                  fontStyle: 'italic',
+                  color: 'text.secondary',
+                }}
               >
                 &ldquo;{roles.author.reason}&rdquo;
               </Typography>
@@ -87,8 +96,11 @@ export function RoleDetails({ roles }: { roles: SuggestionRoles }) {
             {roles.narrator.reason && (
               <Typography
                 variant="caption"
-                display="block"
-                sx={{ fontStyle: 'italic', color: 'text.secondary' }}
+                sx={{
+                  display: 'block',
+                  fontStyle: 'italic',
+                  color: 'text.secondary',
+                }}
               >
                 &ldquo;{roles.narrator.reason}&rdquo;
               </Typography>
@@ -106,8 +118,11 @@ export function RoleDetails({ roles }: { roles: SuggestionRoles }) {
             {roles.publisher.reason && (
               <Typography
                 variant="caption"
-                display="block"
-                sx={{ fontStyle: 'italic', color: 'text.secondary' }}
+                sx={{
+                  display: 'block',
+                  fontStyle: 'italic',
+                  color: 'text.secondary',
+                }}
               >
                 &ldquo;{roles.publisher.reason}&rdquo;
               </Typography>
@@ -175,7 +190,13 @@ function AuthorBooksPopover({
           <CircularProgress size={24} />
         </Box>
       ) : books.length === 0 ? (
-        <Typography sx={{ p: 2 }} variant="body2" color="text.secondary">
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+            p: 2,
+          }}
+        >
           No books found
         </Typography>
       ) : (
@@ -227,11 +248,23 @@ function AuthorBooksPopover({
                 </Box>
               )}
               <Box sx={{ overflow: 'hidden' }}>
-                <Typography variant="body2" noWrap fontWeight="medium">
+                <Typography
+                  variant="body2"
+                  noWrap
+                  sx={{
+                    fontWeight: 'medium',
+                  }}
+                >
                   {cleanDisplayTitle(book.title)}
                 </Typography>
                 {book.author_name && (
-                  <Typography variant="caption" color="text.secondary" noWrap>
+                  <Typography
+                    variant="caption"
+                    noWrap
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     {book.author_name}
                   </Typography>
                 )}
@@ -490,7 +523,13 @@ export function AuthorDedupTab() {
       )}
 
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-        <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+            flexGrow: 1,
+          }}
+        >
           Uses structured name comparison to detect author name variants like &quot;James S. A.
           Corey&quot; vs &quot;James S.A. Corey&quot;.
         </Typography>
@@ -596,7 +635,12 @@ export function AuthorDedupTab() {
                         </>
                       ) : (
                         <>
-                          <Typography variant="subtitle1" fontWeight="bold">
+                          <Typography
+                            variant="subtitle1"
+                            sx={{
+                              fontWeight: 'bold',
+                            }}
+                          >
                             {cleanDisplayTitle(group.canonical.name)}
                           </Typography>
                           <Tooltip title="Edit canonical name">
@@ -647,7 +691,13 @@ export function AuthorDedupTab() {
                     {group.split_names && group.split_names.length > 1 ? (
                       <>
                         <Divider sx={{ my: 1 }} />
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            color: 'text.secondary',
+                            mb: 1,
+                          }}
+                        >
                           Composite author — will split into:
                         </Typography>
                         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
@@ -697,7 +747,12 @@ export function AuthorDedupTab() {
                             mb: 1,
                           }}
                         >
-                          <Typography variant="body2" color="text.secondary">
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             Merge target:
                           </Typography>
                           <Chip
@@ -706,10 +761,21 @@ export function AuthorDedupTab() {
                             size="small"
                             variant="outlined"
                           />
-                          <Typography variant="body2" color="text.secondary" sx={{ mx: 0.5 }}>
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              color: 'text.secondary',
+                              mx: 0.5,
+                            }}
+                          >
                             ←
                           </Typography>
-                          <Typography variant="body2" color="text.secondary">
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             {
                               group.variants.filter(
                                 (v) => !removedVariants.has(`${group.canonical.id}:${v.id}`)
@@ -821,7 +887,12 @@ export function AuthorDedupTab() {
                           {authorValidation[key] && (
                             <Box sx={{ mt: 1 }}>
                               {authorValidation[key].results.length === 0 ? (
-                                <Typography variant="caption" color="text.secondary">
+                                <Typography
+                                  variant="caption"
+                                  sx={{
+                                    color: 'text.secondary',
+                                  }}
+                                >
                                   No external matches found
                                 </Typography>
                               ) : (

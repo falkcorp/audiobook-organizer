@@ -1,5 +1,5 @@
 // file: web/src/components/BatchToolbar.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b5c6d7e8f9a0b
 // last-edited: 2026-08-19
 
@@ -51,7 +51,15 @@ export const BatchToolbar = ({
   }
 
   return (
-    <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" sx={{ width: '100%' }}>
+    <Stack
+      direction="row"
+      spacing={1}
+      sx={{
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        width: '100%',
+      }}
+    >
       <Chip label={`${selectedCount} selected`} size="small" color="primary" />
       <Button size="small" variant="outlined" onClick={onBatchEditClick} disabled={!selectedCount}>
         Batch Edit

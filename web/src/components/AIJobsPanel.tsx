@@ -1,5 +1,5 @@
 // file: web/src/components/AIJobsPanel.tsx
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 
 import { useEffect, useState, useRef } from 'react';
@@ -83,9 +83,21 @@ export function AIJobsPanel() {
 
   return (
     <Paper sx={{ p: 2, mt: 3 }}>
-      <Stack direction="row" alignItems="baseline" spacing={2} sx={{ mb: 1 }}>
+      <Stack
+        direction="row"
+        spacing={2}
+        sx={{
+          alignItems: 'baseline',
+          mb: 1,
+        }}
+      >
         <Typography variant="h6">AI Jobs</Typography>
-        <Typography variant="body2" color="text.secondary">
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+          }}
+        >
           {inFlight} in flight · {jobs.length} recent
         </Typography>
       </Stack>
@@ -111,7 +123,12 @@ export function AIJobsPanel() {
             {jobs.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7}>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     No AI jobs recorded yet.
                   </Typography>
                 </TableCell>

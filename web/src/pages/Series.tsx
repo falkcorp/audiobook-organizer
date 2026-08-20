@@ -1,5 +1,5 @@
 // file: web/src/pages/Series.tsx
-// version: 1.5.1
+// version: 1.5.2
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
@@ -90,7 +90,12 @@ const seriesColumns: ColumnDef<SeriesType>[] = [
     sortable: true,
     sortValue: (s) => s.name.toLowerCase(),
     render: (s) => (
-      <Typography variant="body2" fontWeight={500}>
+      <Typography
+        variant="body2"
+        sx={{
+          fontWeight: 500,
+        }}
+      >
         {s.name}
       </Typography>
     ),
@@ -104,7 +109,12 @@ const seriesColumns: ColumnDef<SeriesType>[] = [
     sortable: true,
     sortValue: (s) => (s.author_name ?? '').toLowerCase(),
     render: (s) => (
-      <Typography variant="body2" color="text.secondary">
+      <Typography
+        variant="body2"
+        sx={{
+          color: 'text.secondary',
+        }}
+      >
         {s.author_name ?? '-'}
       </Typography>
     ),
@@ -305,7 +315,13 @@ function SeriesRow({
                             </Typography>
                           </TableCell>
                           <TableCell>
-                            <Typography variant="body2" color="text.secondary" noWrap>
+                            <Typography
+                              variant="body2"
+                              noWrap
+                              sx={{
+                                color: 'text.secondary',
+                              }}
+                            >
                               {book.author_name ?? '-'}
                             </Typography>
                           </TableCell>
@@ -319,9 +335,11 @@ function SeriesRow({
                             <Tooltip title={book.file_path || ''}>
                               <Typography
                                 variant="body2"
-                                color="text.secondary"
                                 noWrap
-                                sx={{ maxWidth: 300 }}
+                                sx={{
+                                  color: 'text.secondary',
+                                  maxWidth: 300,
+                                }}
                               >
                                 {book.file_path
                                   ? book.file_path.split('/').slice(-2).join('/')
@@ -760,7 +778,13 @@ export function Series() {
         )}
       </Box>
 
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+      <Typography
+        variant="body2"
+        sx={{
+          color: 'text.secondary',
+          mb: 1,
+        }}
+      >
         {filtered.length} series{filter !== 'all' && ` (${seriesList.length} total)`}
       </Typography>
 
@@ -815,7 +839,11 @@ export function Series() {
             {paged.length === 0 && (
               <TableRow>
                 <TableCell colSpan={totalCols} align="center" sx={{ py: 4 }}>
-                  <Typography color="text.secondary">
+                  <Typography
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     {search ? 'No matching series' : 'No series found'}
                   </Typography>
                 </TableCell>
@@ -886,10 +914,20 @@ export function Series() {
                 control={<Radio />}
                 label={
                   <Box>
-                    <Typography variant="body1" fontWeight={500}>
+                    <Typography
+                      variant="body1"
+                      sx={{
+                        fontWeight: 500,
+                      }}
+                    >
                       {s.name}
                     </Typography>
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       {s.author_name ? `by ${s.author_name} — ` : ''}
                       {s.book_count ?? 0} book{(s.book_count ?? 0) !== 1 ? 's' : ''} (ID: {s.id})
                     </Typography>
@@ -977,7 +1015,13 @@ export function Series() {
                 </ListItem>
               ))}
               {splitBooks.length === 0 && (
-                <Typography color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>
+                <Typography
+                  sx={{
+                    color: 'text.secondary',
+                    py: 2,
+                    textAlign: 'center',
+                  }}
+                >
                   No books in this series
                 </Typography>
               )}
@@ -1097,7 +1141,13 @@ export function Series() {
           </Box>
           <Divider sx={{ mb: 1 }} />
           {history.length === 0 ? (
-            <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
+            <Typography
+              sx={{
+                color: 'text.secondary',
+                py: 4,
+                textAlign: 'center',
+              }}
+            >
               No actions yet
             </Typography>
           ) : (
@@ -1151,7 +1201,9 @@ export function Series() {
                   <ListItemText
                     primary={entry.description}
                     secondary={entry.timestamp.toLocaleTimeString()}
-                    primaryTypographyProps={{ variant: 'body2' }}
+                    slotProps={{
+                      primary: { variant: 'body2' },
+                    }}
                   />
                 </ListItem>
               ))}

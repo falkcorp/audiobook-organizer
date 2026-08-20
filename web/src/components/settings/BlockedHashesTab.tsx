@@ -1,5 +1,5 @@
 // file: web/src/components/settings/BlockedHashesTab.tsx
-// version: 1.0.1
+// version: 1.0.2
 
 import { useEffect, useState } from 'react';
 import {
@@ -156,7 +156,12 @@ export default function BlockedHashesTab() {
             <BlockIcon sx={{ verticalAlign: 'middle', mr: 1 }} />
             Blocked File Hashes
           </Typography>
-          <Typography variant="body2" color="text.secondary">
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             Files with these hashes will be skipped during import to prevent reimporting deleted or
             unwanted audiobooks.
           </Typography>
@@ -177,10 +182,22 @@ export default function BlockedHashesTab() {
       ) : hashes.length === 0 ? (
         <Paper sx={{ p: 3, textAlign: 'center' }}>
           <BlockIcon sx={{ fontSize: 48, color: 'text.secondary', mb: 2 }} />
-          <Typography variant="h6" color="text.secondary" gutterBottom>
+          <Typography
+            variant="h6"
+            gutterBottom
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             No Blocked Hashes
           </Typography>
-          <Typography variant="body2" color="text.secondary" paragraph>
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+              marginBottom: '16px',
+            }}
+          >
             When you delete an audiobook and choose to prevent reimporting, its file hash will
             appear here.
           </Typography>
@@ -203,7 +220,13 @@ export default function BlockedHashesTab() {
               {hashes.map((hash) => (
                 <TableRow key={hash.hash}>
                   <TableCell>
-                    <Typography variant="body2" fontFamily="monospace" title={hash.hash}>
+                    <Typography
+                      variant="body2"
+                      title={hash.hash}
+                      sx={{
+                        fontFamily: 'monospace',
+                      }}
+                    >
                       {truncateHash(hash.hash)}
                     </Typography>
                   </TableCell>
@@ -230,7 +253,13 @@ export default function BlockedHashesTab() {
       <Dialog open={addDialogOpen} onClose={() => setAddDialogOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>Block File Hash</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" color="text.secondary" paragraph>
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+              marginBottom: '16px',
+            }}
+          >
             Enter the SHA256 hash of a file you want to prevent from being imported. This is
             typically used for files you've deleted and don't want to reimport.
           </Typography>
@@ -242,10 +271,12 @@ export default function BlockedHashesTab() {
             margin="normal"
             placeholder="e.g., a3f5b2c1d4e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2"
             helperText="64 hexadecimal characters"
-            inputProps={{
-              pattern: '[a-fA-F0-9]{64}',
-              maxLength: 64,
-              style: { fontFamily: 'monospace' },
+            slotProps={{
+              htmlInput: {
+                pattern: '[a-fA-F0-9]{64}',
+                maxLength: 64,
+                style: { fontFamily: 'monospace' },
+              },
             }}
           />
           <TextField
@@ -279,8 +310,13 @@ export default function BlockedHashesTab() {
           {selectedHash && (
             <Typography
               variant="body2"
-              fontFamily="monospace"
-              sx={{ mt: 2, p: 1, bgcolor: 'grey.100', borderRadius: 1 }}
+              sx={{
+                fontFamily: 'monospace',
+                mt: 2,
+                p: 1,
+                bgcolor: 'grey.100',
+                borderRadius: 1,
+              }}
             >
               {selectedHash}
             </Typography>

@@ -1,5 +1,5 @@
 // file: web/src/components/bookdetail/BookDetailHeader.tsx
-// version: 1.0.2
+// version: 1.0.3
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-08-19
 
@@ -62,11 +62,25 @@ export const BookDetailHeader = ({
 
   return (
     <>
-      <Stack direction="row" alignItems="center" spacing={2} mb={3} flexWrap="wrap">
+      <Stack
+        direction="row"
+        spacing={2}
+        sx={{
+          alignItems: 'center',
+          mb: 3,
+          flexWrap: 'wrap',
+        }}
+      >
         <Button startIcon={<ArrowBackIcon />} variant="text" onClick={onBack}>
           Back to Library
         </Button>
-        <Stack direction="row" spacing={2} alignItems="center">
+        <Stack
+          direction="row"
+          spacing={2}
+          sx={{
+            alignItems: 'center',
+          }}
+        >
           {coverError ? (
             <Avatar
               sx={{
@@ -99,7 +113,14 @@ export const BookDetailHeader = ({
             />
           )}
           <Stack spacing={0.5}>
-            <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                flexWrap: 'wrap',
+              }}
+            >
               <Typography variant="h4" component="h1">
                 {book.title || 'Untitled'}
               </Typography>
@@ -135,14 +156,26 @@ export const BookDetailHeader = ({
               )}
               <ReadStatusChip bookId={book.id} />
             </Box>
-            <Typography variant="subtitle1" color="text.secondary">
+            <Typography
+              variant="subtitle1"
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               {book.authors && book.authors.length > 0
                 ? `By ${book.authors.map((a) => a.name).join(' & ')}`
                 : book.author_name
                   ? `By ${book.author_name}`
                   : 'Unknown Author'}
             </Typography>
-            <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 0.5 }}>
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{
+                flexWrap: 'wrap',
+                mt: 0.5,
+              }}
+            >
               <Chip
                 icon={<AccessTimeIcon />}
                 label={`Created ${formatDateTime(book.created_at)}`}

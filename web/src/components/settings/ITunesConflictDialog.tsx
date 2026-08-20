@@ -1,5 +1,5 @@
 // file: web/src/components/settings/ITunesConflictDialog.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: g2f3a4b5-c6d7-8901-ghij-k1l2m3n4o5p6
 
 import React from 'react';
@@ -126,13 +126,25 @@ export function ITunesConflictDialog({
                       <TableCell>{conflict.fieldName}</TableCell>
                       <TableCell>
                         <Typography variant="caption">{conflict.itunesVersion}</Typography>
-                        <Typography variant="caption" color="textSecondary" display="block">
+                        <Typography
+                          variant="caption"
+                          color="textSecondary"
+                          sx={{
+                            display: 'block',
+                          }}
+                        >
                           Modified: {conflict.itunesModified}
                         </Typography>
                       </TableCell>
                       <TableCell>
                         <Typography variant="caption">{conflict.organizerVersion}</Typography>
-                        <Typography variant="caption" color="textSecondary" display="block">
+                        <Typography
+                          variant="caption"
+                          color="textSecondary"
+                          sx={{
+                            display: 'block',
+                          }}
+                        >
                           Modified: {conflict.organizerModified}
                         </Typography>
                       </TableCell>

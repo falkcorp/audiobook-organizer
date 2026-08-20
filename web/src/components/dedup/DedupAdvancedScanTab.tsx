@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/DedupAdvancedScanTab.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-08-19
 import { useState, useEffect, useCallback, useMemo } from 'react';
@@ -148,7 +148,13 @@ export function BookDedupScanTab() {
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-        <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+            flexGrow: 1,
+          }}
+        >
           Advanced duplicate detection using file hashes, folder structure, and fuzzy title/author
           matching.
         </Typography>
@@ -194,7 +200,13 @@ export function BookDedupScanTab() {
         <Paper sx={{ p: 4, textAlign: 'center' }}>
           <ContentCopyIcon sx={{ fontSize: 48, color: 'text.secondary', mb: 1 }} />
           <Typography variant="h6">No scan results yet</Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+              mb: 2,
+            }}
+          >
             Click &quot;Run Scan&quot; to detect duplicate books using hashes, folder structure, and
             metadata matching.
           </Typography>
@@ -214,7 +226,13 @@ export function BookDedupScanTab() {
             <Tab value="low" label={`Low (${confidenceCounts.low})`} />
           </Tabs>
 
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+              mb: 2,
+            }}
+          >
             {totalDuplicates} total duplicates across {groups.length} groups
           </Typography>
 
@@ -231,11 +249,21 @@ export function BookDedupScanTab() {
               <Card key={group.group_key} variant="outlined">
                 <CardContent>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                    <Typography variant="subtitle1" fontWeight="bold">
+                    <Typography
+                      variant="subtitle1"
+                      sx={{
+                        fontWeight: 'bold',
+                      }}
+                    >
                       {cleanDisplayTitle(group.books[0]?.title || 'Unknown')}
                     </Typography>
                     {group.books[0]?.author_name && (
-                      <Typography variant="body2" color="text.secondary">
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: 'text.secondary',
+                        }}
+                      >
                         by {group.books[0].author_name}
                       </Typography>
                     )}
@@ -253,7 +281,12 @@ export function BookDedupScanTab() {
                           'error' | 'warning' | 'info' | 'default'
                       }
                     />
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       {group.reason}
                     </Typography>
                   </Box>

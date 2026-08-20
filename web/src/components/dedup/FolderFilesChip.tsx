@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/FolderFilesChip.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4a1c8e92-6d35-4b70-9f28-1e7a5c3d2b69
 // last-edited: 2026-08-19
 
@@ -108,13 +108,23 @@ export function FolderFilesChip({ bookId, label = 'Files' }: FolderFilesChipProp
           {loading && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 1 }}>
               <CircularProgress size={16} />
-              <Typography variant="body2" color="text.secondary">
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 Loading files…
               </Typography>
             </Box>
           )}
           {error && (
-            <Typography variant="body2" color="error.main">
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'error.main',
+              }}
+            >
               {error}
             </Typography>
           )}
@@ -144,7 +154,12 @@ export function FolderFilesChip({ bookId, label = 'Files' }: FolderFilesChipProp
                         </Typography>
                       </Tooltip>
                       {meta && (
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: 'text.secondary',
+                          }}
+                        >
                           {meta}
                         </Typography>
                       )}

@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/AudiobookGrid.tsx
-// version: 1.8.1
+// version: 1.8.2
 // guid: 9b0c1d2e-3f4a-5b6c-7d8e-9f0a1b2c3d4e
 // last-edited: 2026-08-19
 
@@ -48,17 +48,29 @@ export const AudiobookGrid: React.FC<AudiobookGridProps> = ({
   if (audiobooks.length === 0) {
     return (
       <Box
-        display="flex"
-        justifyContent="center"
-        alignItems="center"
-        minHeight="400px"
-        flexDirection="column"
-        gap={2}
+        sx={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          minHeight: '400px',
+          flexDirection: 'column',
+          gap: 2,
+        }}
       >
-        <Typography variant="h6" color="text.secondary">
+        <Typography
+          variant="h6"
+          sx={{
+            color: 'text.secondary',
+          }}
+        >
           No audiobooks found
         </Typography>
-        <Typography variant="body2" color="text.secondary">
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+          }}
+        >
           Try adjusting your filters or add audiobooks to your library
         </Typography>
       </Box>

@@ -1,5 +1,5 @@
 // file: web/src/components/system/MaintenanceTab.tsx
-// version: 1.9.1
+// version: 1.9.2
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
 // last-edited: 2026-08-19
 import { useEffect, useState, useCallback, useRef } from 'react';
@@ -197,7 +197,6 @@ function MaintenanceWindowCard() {
             label="Start hour (0-23)"
             type="number"
             size="small"
-            inputProps={{ min: 0, max: 23 }}
             value={config.window_start}
             onChange={(e) =>
               setConfig((c) => ({
@@ -206,12 +205,14 @@ function MaintenanceWindowCard() {
               }))
             }
             sx={{ width: 155 }}
+            slotProps={{
+              htmlInput: { min: 0, max: 23 },
+            }}
           />
           <TextField
             label="End hour (0-23)"
             type="number"
             size="small"
-            inputProps={{ min: 0, max: 23 }}
             value={config.window_end}
             onChange={(e) =>
               setConfig((c) => ({
@@ -220,6 +221,9 @@ function MaintenanceWindowCard() {
               }))
             }
             sx={{ width: 155 }}
+            slotProps={{
+              htmlInput: { min: 0, max: 23 },
+            }}
           />
           <Button variant="outlined" onClick={handleSave} disabled={saving}>
             {saving ? 'Saving…' : 'Save'}
@@ -302,7 +306,14 @@ function ChapterConsolidationCard() {
           </Alert>
         )}
 
-        <Stack direction="row" spacing={2} flexWrap="wrap" sx={{ mb: 2 }}>
+        <Stack
+          direction="row"
+          spacing={2}
+          sx={{
+            flexWrap: 'wrap',
+            mb: 2,
+          }}
+        >
           <Button
             variant="outlined"
             startIcon={scanning ? <CircularProgress size={14} /> : undefined}
@@ -472,52 +483,103 @@ function SHADuplicateCard() {
             <Typography variant="subtitle2" gutterBottom>
               Hash Coverage
             </Typography>
-            <Stack direction="row" spacing={3} flexWrap="wrap" useFlexGap>
+            <Stack
+              direction="row"
+              spacing={3}
+              useFlexGap
+              sx={{
+                flexWrap: 'wrap',
+              }}
+            >
               <Box>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   Total files
                 </Typography>
-                <Typography variant="body2" fontWeight="bold">
+                <Typography
+                  variant="body2"
+                  sx={{
+                    fontWeight: 'bold',
+                  }}
+                >
                   {stats.total_book_files.toLocaleString()}
                 </Typography>
               </Box>
               <Box>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   With hash
                 </Typography>
-                <Typography variant="body2" fontWeight="bold">
+                <Typography
+                  variant="body2"
+                  sx={{
+                    fontWeight: 'bold',
+                  }}
+                >
                   {stats.with_file_hash.toLocaleString()} (
                   {pct(stats.with_file_hash, stats.total_book_files)})
                 </Typography>
               </Box>
               <Box>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   Missing hash
                 </Typography>
                 <Typography
                   variant="body2"
-                  fontWeight="bold"
                   color={stats.missing_file_hash > 0 ? 'warning.main' : 'success.main'}
+                  sx={{
+                    fontWeight: 'bold',
+                  }}
                 >
                   {stats.missing_file_hash.toLocaleString()}
                 </Typography>
               </Box>
               <Box>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   With orig hash
                 </Typography>
-                <Typography variant="body2" fontWeight="bold">
+                <Typography
+                  variant="body2"
+                  sx={{
+                    fontWeight: 'bold',
+                  }}
+                >
                   {stats.with_original_hash.toLocaleString()}
                 </Typography>
               </Box>
               <Box>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   Books (no files)
                 </Typography>
                 <Typography
                   variant="body2"
-                  fontWeight="bold"
                   color={stats.books_with_no_files > 0 ? 'warning.main' : 'text.primary'}
+                  sx={{
+                    fontWeight: 'bold',
+                  }}
                 >
                   {stats.books_with_no_files.toLocaleString()} /{' '}
                   {stats.total_books.toLocaleString()}
@@ -527,7 +589,14 @@ function SHADuplicateCard() {
 
             {(stats.by_library?.length ?? 0) > 1 && (
               <Box sx={{ mt: 1.5 }}>
-                <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
+                <Typography
+                  variant="caption"
+                  gutterBottom
+                  sx={{
+                    color: 'text.secondary',
+                    display: 'block',
+                  }}
+                >
                   By Library
                 </Typography>
                 {stats.by_library.map((lib) => (
@@ -535,8 +604,10 @@ function SHADuplicateCard() {
                     key={lib.path}
                     direction="row"
                     spacing={1}
-                    alignItems="center"
-                    sx={{ mb: 0.5 }}
+                    sx={{
+                      alignItems: 'center',
+                      mb: 0.5,
+                    }}
                   >
                     <Typography
                       variant="caption"
@@ -550,7 +621,12 @@ function SHADuplicateCard() {
                     >
                       {lib.path.split('/').pop() || lib.path}
                     </Typography>
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       {lib.with_hash}/{lib.total_files} hashed
                     </Typography>
                     {lib.missing_hash > 0 && (
@@ -568,7 +644,15 @@ function SHADuplicateCard() {
           </Box>
         )}
 
-        <Stack direction="row" spacing={2} sx={{ mb: 2 }} flexWrap="wrap" useFlexGap>
+        <Stack
+          direction="row"
+          spacing={2}
+          useFlexGap
+          sx={{
+            flexWrap: 'wrap',
+            mb: 2,
+          }}
+        >
           <Button
             variant="outlined"
             startIcon={scanning ? <CircularProgress size={14} /> : undefined}
@@ -705,7 +789,13 @@ function AcoustIDFingerprintCard() {
             <Typography variant="h4" gutterBottom>
               {pct}%
             </Typography>
-            <Typography variant="body2" color="text.secondary" gutterBottom>
+            <Typography
+              variant="body2"
+              gutterBottom
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               {stats.with_fingerprint.toLocaleString()} / {stats.total_files.toLocaleString()} files
               fingerprinted
             </Typography>
@@ -717,7 +807,12 @@ function AcoustIDFingerprintCard() {
           </>
         ) : (
           !loading && (
-            <Typography variant="body2" color="text.secondary">
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               No data available
             </Typography>
           )
@@ -837,49 +932,103 @@ function MetadataHashDuplicateCard() {
             <Typography variant="subtitle2" gutterBottom>
               Metadata Hash Coverage
             </Typography>
-            <Stack direction="row" spacing={3} flexWrap="wrap" useFlexGap>
+            <Stack
+              direction="row"
+              spacing={3}
+              useFlexGap
+              sx={{
+                flexWrap: 'wrap',
+              }}
+            >
               <Box>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   Total books
                 </Typography>
-                <Typography variant="body2" fontWeight="bold">
+                <Typography
+                  variant="body2"
+                  sx={{
+                    fontWeight: 'bold',
+                  }}
+                >
                   {stats.total_books.toLocaleString()}
                 </Typography>
               </Box>
               <Box>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   With metadata hash
                 </Typography>
-                <Typography variant="body2" fontWeight="bold">
+                <Typography
+                  variant="body2"
+                  sx={{
+                    fontWeight: 'bold',
+                  }}
+                >
                   {stats.with_metadata_hash.toLocaleString()} (
                   {pct(stats.with_metadata_hash, stats.total_books)})
                 </Typography>
               </Box>
               <Box>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   Missing metadata hash
                 </Typography>
                 <Typography
                   variant="body2"
-                  fontWeight="bold"
                   color={stats.missing_metadata_hash > 0 ? 'warning.main' : 'success.main'}
+                  sx={{
+                    fontWeight: 'bold',
+                  }}
                 >
                   {stats.missing_metadata_hash.toLocaleString()}
                 </Typography>
               </Box>
               <Box>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   Has ASIN/ISBN
                 </Typography>
-                <Typography variant="body2" fontWeight="bold">
+                <Typography
+                  variant="body2"
+                  sx={{
+                    fontWeight: 'bold',
+                  }}
+                >
                   {stats.with_asin_or_isbn.toLocaleString()}
                 </Typography>
               </Box>
               <Box>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   Missing hash but has ID
                 </Typography>
-                <Typography variant="body2" fontWeight="bold">
+                <Typography
+                  variant="body2"
+                  sx={{
+                    fontWeight: 'bold',
+                  }}
+                >
                   {stats.missing_hash_has_id.toLocaleString()}
                 </Typography>
               </Box>
@@ -887,7 +1036,14 @@ function MetadataHashDuplicateCard() {
 
             {(stats.by_library?.length ?? 0) > 1 && (
               <Box sx={{ mt: 1.5 }}>
-                <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
+                <Typography
+                  variant="caption"
+                  gutterBottom
+                  sx={{
+                    color: 'text.secondary',
+                    display: 'block',
+                  }}
+                >
                   By Library
                 </Typography>
                 {stats.by_library.map((lib) => (
@@ -895,8 +1051,10 @@ function MetadataHashDuplicateCard() {
                     key={lib.path}
                     direction="row"
                     spacing={1}
-                    alignItems="center"
-                    sx={{ mb: 0.5 }}
+                    sx={{
+                      alignItems: 'center',
+                      mb: 0.5,
+                    }}
                   >
                     <Typography
                       variant="caption"
@@ -910,7 +1068,12 @@ function MetadataHashDuplicateCard() {
                     >
                       {lib.path.split('/').pop() || lib.path}
                     </Typography>
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       {lib.with_metadata_hash}/{lib.total_books} hashed
                     </Typography>
                     {lib.missing_metadata_hash > 0 && (
@@ -1054,10 +1217,20 @@ function ManualFixesCard() {
                 sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}
               >
                 <Box sx={{ flex: 1 }}>
-                  <Typography variant="body2" fontWeight="medium">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      fontWeight: 'medium',
+                    }}
+                  >
                     {job.id}
                   </Typography>
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     {job.description}
                   </Typography>
                 </Box>
@@ -1205,7 +1378,13 @@ export function MaintenanceTab() {
     <Box>
       <OptimizeLibraryCard />
 
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+      <Typography
+        variant="body2"
+        sx={{
+          color: 'text.secondary',
+          mb: 2,
+        }}
+      >
         Configure and manually trigger background tasks. Tasks marked "Maint. Window" run
         automatically during the scheduled maintenance window.
       </Typography>
@@ -1252,7 +1431,12 @@ export function MaintenanceTab() {
                           {task.description}
                         </Typography>
                       </Box>
-                      <Typography variant="caption" color="text.secondary">
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          color: 'text.secondary',
+                        }}
+                      >
                         {task.name}
                         {task.last_run &&
                           ` · Last run: ${new Date(task.last_run).toLocaleString()}`}
@@ -1297,7 +1481,9 @@ export function MaintenanceTab() {
                               if (val > 0) handleIntervalChange(task.name, val);
                             }}
                             sx={{ width: 120 }}
-                            inputProps={{ min: 1 }}
+                            slotProps={{
+                              htmlInput: { min: 1 },
+                            }}
                           />
                         )}
 

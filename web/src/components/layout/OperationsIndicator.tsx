@@ -1,5 +1,5 @@
 // file: web/src/components/layout/OperationsIndicator.tsx
-// version: 4.0.2
+// version: 4.0.3
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
 
 import { useState } from 'react';
@@ -168,8 +168,8 @@ function SectionHeader({
       )}
       <Typography
         variant="caption"
-        color="text.secondary"
         sx={{
+          color: 'text.secondary',
           textTransform: 'uppercase',
           fontSize: '0.65rem',
           letterSpacing: '0.08em',
@@ -286,8 +286,12 @@ export function OperationsIndicator() {
           {empty && (
             <Typography
               variant="body2"
-              color="text.secondary"
-              sx={{ px: 2, py: 3, textAlign: 'center' }}
+              sx={{
+                color: 'text.secondary',
+                px: 2,
+                py: 3,
+                textAlign: 'center',
+              }}
             >
               No operations
             </Typography>
@@ -329,12 +333,22 @@ export function OperationsIndicator() {
                           mb: 0.5,
                         }}
                       >
-                        <Typography variant="body2" fontWeight="bold">
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            fontWeight: 'bold',
+                          }}
+                        >
                           {formatOperationType(op.type)}
                         </Typography>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                           {elapsed && (
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                color: 'text.secondary',
+                              }}
+                            >
                               {elapsed}
                             </Typography>
                           )}
@@ -388,8 +402,10 @@ export function OperationsIndicator() {
                       >
                         <Typography
                           variant="caption"
-                          color="text.secondary"
-                          sx={{ fontFamily: 'monospace' }}
+                          sx={{
+                            color: 'text.secondary',
+                            fontFamily: 'monospace',
+                          }}
                         >
                           {op.total > 0 ? (
                             <>
@@ -401,7 +417,13 @@ export function OperationsIndicator() {
                           )}
                         </Typography>
                         {eta && (
-                          <Typography variant="caption" color="text.secondary" fontStyle="italic">
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: 'text.secondary',
+                              fontStyle: 'italic',
+                            }}
+                          >
                             {eta}
                           </Typography>
                         )}
@@ -428,8 +450,11 @@ export function OperationsIndicator() {
                       {details.olType && (
                         <Typography
                           variant="caption"
-                          color="info.main"
-                          sx={{ display: 'block', mb: 0.25 }}
+                          sx={{
+                            color: 'info.main',
+                            display: 'block',
+                            mb: 0.25,
+                          }}
                         >
                           {details.olType}: {details.olRecords} records
                         </Typography>
@@ -438,10 +463,12 @@ export function OperationsIndicator() {
                       {details.currentTitle && (
                         <Typography
                           variant="caption"
-                          color="primary.main"
-                          display="block"
                           noWrap
                           title={details.currentTitle}
+                          sx={{
+                            color: 'primary.main',
+                            display: 'block',
+                          }}
                         >
                           {details.currentTitle}
                         </Typography>
@@ -481,10 +508,20 @@ export function OperationsIndicator() {
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       <HourglassEmptyIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
                       <Box>
-                        <Typography variant="body2" fontWeight="bold">
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            fontWeight: 'bold',
+                          }}
+                        >
                           {formatOperationType(op.type)}
                         </Typography>
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: 'text.secondary',
+                          }}
+                        >
                           Waiting to start…
                         </Typography>
                       </Box>
@@ -547,7 +584,14 @@ export function OperationsIndicator() {
                         },
                       }}
                     >
-                      <Typography variant="caption" fontWeight="bold" noWrap sx={{ flex: 1 }}>
+                      <Typography
+                        variant="caption"
+                        noWrap
+                        sx={{
+                          fontWeight: 'bold',
+                          flex: 1,
+                        }}
+                      >
                         {formatOperationType(op.type)}
                       </Typography>
                       <Chip

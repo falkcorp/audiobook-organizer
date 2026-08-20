@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/DedupReconcileTab.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
 // last-edited: 2026-08-19
 
@@ -168,13 +168,26 @@ export function ReconcileTab() {
 
   return (
     <Box>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+      <Typography
+        variant="body2"
+        sx={{
+          color: 'text.secondary',
+          mb: 2,
+        }}
+      >
         Scan the library to find books whose file paths no longer exist on disk, then match them
         against untracked audio files by hash or filename. Scans run in the background — you can
         refresh the page and results will persist.
       </Typography>
 
-      <Stack direction="row" spacing={2} sx={{ mb: 2 }} alignItems="center">
+      <Stack
+        direction="row"
+        spacing={2}
+        sx={{
+          alignItems: 'center',
+          mb: 2,
+        }}
+      >
         <Button
           variant="contained"
           startIcon={scanning ? <CircularProgress size={16} /> : <SearchIcon />}
@@ -184,7 +197,12 @@ export function ReconcileTab() {
           {scanning ? 'Scanning...' : 'Scan for Broken Links'}
         </Button>
         {lastScanTime && (
-          <Typography variant="caption" color="text.secondary">
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             Last scan: {new Date(lastScanTime).toLocaleString()}
           </Typography>
         )}
@@ -202,13 +220,23 @@ export function ReconcileTab() {
                     scanProgress.total > 0 ? (scanProgress.progress / scanProgress.total) * 100 : 0
                   }
                 />
-                <Typography variant="body2" color="text.secondary">
+                <Typography
+                  variant="body2"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   {scanProgress.message}
                 </Typography>
               </>
             )}
             {!scanProgress && <LinearProgress />}
-            <Typography variant="caption" color="text.secondary">
+            <Typography
+              variant="caption"
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               You can navigate away and come back — results will be saved.
             </Typography>
           </Stack>
@@ -228,7 +256,15 @@ export function ReconcileTab() {
 
       {preview && (
         <>
-          <Stack direction="row" spacing={2} sx={{ mb: 2 }} flexWrap="wrap" useFlexGap>
+          <Stack
+            direction="row"
+            spacing={2}
+            useFlexGap
+            sx={{
+              flexWrap: 'wrap',
+              mb: 2,
+            }}
+          >
             <Chip
               label={`${preview.broken_records.length} broken records`}
               color={preview.broken_records.length > 0 ? 'error' : 'success'}
@@ -245,9 +281,11 @@ export function ReconcileTab() {
             <Paper sx={{ p: 2, mb: 2 }}>
               <Stack
                 direction="row"
-                justifyContent="space-between"
-                alignItems="center"
-                sx={{ mb: 1 }}
+                sx={{
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  mb: 1,
+                }}
               >
                 <Typography variant="h6">Matches ({preview.matches.length})</Typography>
                 <Stack direction="row" spacing={1}>
@@ -289,14 +327,27 @@ export function ReconcileTab() {
                 return (
                   <Card key={m.book_id} variant="outlined" sx={{ mb: 1 }}>
                     <CardContent sx={{ pb: 1 }}>
-                      <Stack direction="row" spacing={1} alignItems="flex-start">
+                      <Stack
+                        direction="row"
+                        spacing={1}
+                        sx={{
+                          alignItems: 'flex-start',
+                        }}
+                      >
                         <Checkbox
                           checked={selected.has(m.book_id)}
                           onChange={() => toggleMatch(m.book_id)}
                           sx={{ mt: -0.5 }}
                         />
                         <Box sx={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
-                          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
+                          <Stack
+                            direction="row"
+                            spacing={1}
+                            sx={{
+                              alignItems: 'center',
+                              mb: 0.5,
+                            }}
+                          >
                             <Typography variant="subtitle2">{m.book_title}</Typography>
                             <Chip
                               label={matchTypeLabel(m.match_type)}
@@ -313,8 +364,12 @@ export function ReconcileTab() {
                           {hasCommon && (
                             <Typography
                               variant="body2"
-                              color="text.secondary"
-                              sx={{ fontFamily: 'monospace', fontSize: '0.7rem', opacity: 0.6 }}
+                              sx={{
+                                color: 'text.secondary',
+                                fontFamily: 'monospace',
+                                fontSize: '0.7rem',
+                                opacity: 0.6,
+                              }}
                             >
                               {commonPrefix}/
                             </Typography>
@@ -357,7 +412,13 @@ export function ReconcileTab() {
               <Typography variant="h6" sx={{ mb: 1 }}>
                 Unmatched Books ({preview.unmatched_books.length})
               </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                  mb: 1,
+                }}
+              >
                 These books have missing files and no matching file was found on disk.
               </Typography>
               {preview.unmatched_books.map((b: ReconcileBrokenRecord) => (
@@ -366,9 +427,12 @@ export function ReconcileTab() {
                     <Typography variant="subtitle2">{b.title}</Typography>
                     <Typography
                       variant="body2"
-                      color="text.secondary"
                       noWrap
-                      sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}
+                      sx={{
+                        color: 'text.secondary',
+                        fontFamily: 'monospace',
+                        fontSize: '0.75rem',
+                      }}
                     >
                       {b.file_path}
                     </Typography>

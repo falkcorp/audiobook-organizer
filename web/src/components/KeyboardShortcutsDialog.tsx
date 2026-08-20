@@ -1,5 +1,5 @@
 // file: web/src/components/KeyboardShortcutsDialog.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 
 import React from 'react';
@@ -39,7 +39,13 @@ export const KeyboardShortcutsDialog: React.FC<KeyboardShortcutsDialogProps> = (
         {categories.map((category, ci) => (
           <Box key={category} sx={{ mb: 2 }}>
             {ci > 0 && <Divider sx={{ mb: 2 }} />}
-            <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
+            <Typography
+              variant="subtitle2"
+              sx={{
+                color: 'text.secondary',
+                mb: 1,
+              }}
+            >
               {category}
             </Typography>
             {SHORTCUTS.filter((s) => s.category === category).map((shortcut) => (

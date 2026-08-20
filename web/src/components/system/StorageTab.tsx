@@ -1,5 +1,5 @@
 // file: web/src/components/system/StorageTab.tsx
-// version: 1.4.1
+// version: 1.4.2
 // guid: 9e0f1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b
 // last-edited: 2026-08-19
 import { useState, useEffect } from 'react';
@@ -86,7 +86,14 @@ export function StorageTab() {
 
   if (loading) {
     return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          minHeight: '400px',
+        }}
+      >
         <CircularProgress />
       </Box>
     );
@@ -94,7 +101,14 @@ export function StorageTab() {
 
   if (error) {
     return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          minHeight: '400px',
+        }}
+      >
         <Typography color="error">{error}</Typography>
       </Box>
     );
@@ -106,7 +120,14 @@ export function StorageTab() {
 
   return (
     <Box>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
+      <Stack
+        direction="row"
+        sx={{
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          mb: 2,
+        }}
+      >
         <Typography variant="h6">Library Storage</Typography>
         <Button
           variant="outlined"
@@ -123,7 +144,14 @@ export function StorageTab() {
         <Grid size={12}>
           <Card>
             <CardContent>
-              <Stack direction="row" spacing={2} alignItems="center" mb={2}>
+              <Stack
+                direction="row"
+                spacing={2}
+                sx={{
+                  alignItems: 'center',
+                  mb: 2,
+                }}
+              >
                 <LibraryIcon color="primary" />
                 <Typography variant="h6">Library Summary</Typography>
               </Stack>
@@ -135,7 +163,12 @@ export function StorageTab() {
                   }}
                 >
                   <Box>
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       Total Library Size
                     </Typography>
                     <Typography variant="h5">{formatBytes(storage.totalLibrarySize)}</Typography>
@@ -148,7 +181,12 @@ export function StorageTab() {
                   }}
                 >
                   <Box>
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       Total Books
                     </Typography>
                     <Typography variant="h5">{storage.bookCount.toLocaleString()}</Typography>
@@ -161,7 +199,12 @@ export function StorageTab() {
                   }}
                 >
                   <Box>
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       Import Folders
                     </Typography>
                     <Typography variant="h5">{storage.folderCount}</Typography>
@@ -176,15 +219,25 @@ export function StorageTab() {
         <Grid size={12}>
           <Card>
             <CardContent>
-              <Stack direction="row" spacing={2} alignItems="center" mb={2}>
+              <Stack
+                direction="row"
+                spacing={2}
+                sx={{
+                  alignItems: 'center',
+                  mb: 2,
+                }}
+              >
                 <FolderIcon color="primary" />
                 <Typography variant="h6">Import Folders</Typography>
               </Stack>
               {storage.folders.length === 0 ? (
                 <Typography
                   variant="body2"
-                  color="text.secondary"
-                  sx={{ py: 2, textAlign: 'center' }}
+                  sx={{
+                    color: 'text.secondary',
+                    py: 2,
+                    textAlign: 'center',
+                  }}
                 >
                   No import folders configured. Add folders in Settings or Library page.
                 </Typography>
@@ -204,20 +257,45 @@ export function StorageTab() {
                   >
                     <Stack
                       direction="row"
-                      justifyContent="space-between"
-                      alignItems="center"
-                      mb={0.5}
+                      sx={{
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        mb: 0.5,
+                      }}
                     >
                       <Box sx={{ flex: 1, mr: 2 }}>
-                        <Typography variant="body2" fontWeight="medium" noWrap>
+                        <Typography
+                          variant="body2"
+                          noWrap
+                          sx={{
+                            fontWeight: 'medium',
+                          }}
+                        >
                           {folder.name || folder.path}
                         </Typography>
-                        <Typography variant="caption" color="text.secondary" noWrap>
+                        <Typography
+                          variant="caption"
+                          noWrap
+                          sx={{
+                            color: 'text.secondary',
+                          }}
+                        >
                           {folder.path}
                         </Typography>
                       </Box>
-                      <Stack direction="row" spacing={2} alignItems="center">
-                        <Typography variant="body2" color="text.secondary">
+                      <Stack
+                        direction="row"
+                        spacing={2}
+                        sx={{
+                          alignItems: 'center',
+                        }}
+                      >
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            color: 'text.secondary',
+                          }}
+                        >
                           {folder.book_count} {folder.book_count === 1 ? 'book' : 'books'}
                         </Typography>
                         <Typography
@@ -247,14 +325,27 @@ export function StorageTab() {
           <Grid size={12}>
             <Card>
               <CardContent>
-                <Stack direction="row" spacing={2} alignItems="center" mb={2}>
+                <Stack
+                  direction="row"
+                  spacing={2}
+                  sx={{
+                    alignItems: 'center',
+                    mb: 2,
+                  }}
+                >
                   <StorageIcon color="primary" />
                   <Typography variant="h6">DB Path Distribution</Typography>
                   <Tooltip title="Shows where books are actually stored in the database. If a path here doesn't match your import folders, those books may have been auto-organized or moved.">
                     <InfoIcon fontSize="small" color="action" />
                   </Tooltip>
                 </Stack>
-                <Typography variant="body2" color="text.secondary" mb={2}>
+                <Typography
+                  variant="body2"
+                  sx={{
+                    color: 'text.secondary',
+                    mb: 2,
+                  }}
+                >
                   Top path prefixes in the database vs your configured import folders. Mismatches
                   indicate books that were organized away or are stored under a different root.
                 </Typography>
@@ -267,8 +358,10 @@ export function StorageTab() {
                       <Stack
                         key={i}
                         direction="row"
-                        justifyContent="space-between"
-                        alignItems="center"
+                        sx={{
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                        }}
                       >
                         <Typography
                           variant="body2"
@@ -277,7 +370,13 @@ export function StorageTab() {
                         >
                           {p.prefix}
                         </Typography>
-                        <Stack direction="row" spacing={1} alignItems="center">
+                        <Stack
+                          direction="row"
+                          spacing={1}
+                          sx={{
+                            alignItems: 'center',
+                          }}
+                        >
                           <Chip
                             label={`${p.book_count.toLocaleString()} books`}
                             size="small"

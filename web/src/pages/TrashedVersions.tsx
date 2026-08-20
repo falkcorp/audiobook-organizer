@@ -1,5 +1,5 @@
 // file: web/src/pages/TrashedVersions.tsx
-// version: 1.1.2
+// version: 1.1.3
 // guid: 6f4a5b3c-7d8e-4a70-b8c5-3d7e0f1b9a99
 
 import { useCallback, useEffect, useState } from 'react';
@@ -41,7 +41,12 @@ const COLUMNS: ColumnDef<BookVersion>[] = [
     defaultWidth: 140,
     sortable: true,
     render: (v) => (
-      <Typography variant="caption" fontFamily="monospace">
+      <Typography
+        variant="caption"
+        sx={{
+          fontFamily: 'monospace',
+        }}
+      >
         {v.book_id.slice(0, 12)}…
       </Typography>
     ),
@@ -158,7 +163,14 @@ export default function TrashedVersions() {
 
   return (
     <Box sx={{ p: 3 }}>
-      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
+      <Stack
+        direction="row"
+        sx={{
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          mb: 2,
+        }}
+      >
         <Typography variant="h4">Version Management</Typography>
         <ColumnPicker
           columns={allColumns}
@@ -181,9 +193,19 @@ export default function TrashedVersions() {
       </Tabs>
 
       {loading ? (
-        <Typography color="text.secondary">Loading...</Typography>
+        <Typography
+          sx={{
+            color: 'text.secondary',
+          }}
+        >
+          Loading...
+        </Typography>
       ) : versions.length === 0 ? (
-        <Typography color="text.secondary">
+        <Typography
+          sx={{
+            color: 'text.secondary',
+          }}
+        >
           {tab === 'trash' ? 'No trashed versions.' : 'No purged versions.'}
         </Typography>
       ) : (

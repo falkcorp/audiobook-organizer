@@ -1,5 +1,5 @@
 // file: web/src/pages/FileManager.tsx
-// version: 1.3.1
+// version: 1.3.2
 // guid: 4a5b6c7d-8e9f-0a1b-2c3d-4e5f6a7b8c9d
 
 import { useState, useCallback, useRef, useEffect } from 'react';
@@ -165,7 +165,14 @@ export function FileManager() {
 
   return (
     <Box>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          mb: 3,
+        }}
+      >
         <Typography variant="h4">File Manager</Typography>
         <Stack direction="row" spacing={2}>
           <Button variant="outlined" startIcon={<FolderOpenIcon />} onClick={handleBrowseFolder}>

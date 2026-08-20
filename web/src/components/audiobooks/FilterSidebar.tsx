@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/FilterSidebar.tsx
-// version: 1.7.1
+// version: 1.7.2
 // guid: 2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b
 
 import React from 'react';
@@ -74,8 +74,21 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
   return (
     <Drawer anchor="right" open={open} onClose={onClose}>
       <Box sx={{ width: 320, p: 3 }}>
-        <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
-          <Box display="flex" alignItems="center" gap={1}>
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            mb: 2,
+          }}
+        >
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+            }}
+          >
             <FilterListIcon />
             <Typography variant="h6">Filters</Typography>
             {getActiveFilterCount() > 0 && (
@@ -224,9 +237,9 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
                 options={tagOptions}
                 value={selectedTags}
                 onChange={(_e, value) => onTagsChange(value)}
-                renderTags={(value, getTagProps) =>
+                renderValue={(value, getItemProps) =>
                   value.map((tag, index) => {
-                    const { key, ...rest } = getTagProps({ index });
+                    const { key, ...rest } = getItemProps({ index });
                     return (
                       <Chip
                         key={key}
@@ -254,7 +267,12 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
                       >
                         <span>{formatTagLabel(option)}</span>
                         {tagInfo && (
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             ({tagInfo.count})
                           </Typography>
                         )}
@@ -272,8 +290,11 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
               {selectedTags.length > 0 && (
                 <Typography
                   variant="caption"
-                  color="text.secondary"
-                  sx={{ mt: 0.5, display: 'block' }}
+                  sx={{
+                    color: 'text.secondary',
+                    mt: 0.5,
+                    display: 'block',
+                  }}
                 >
                   Books must have ALL selected tags
                 </Typography>
@@ -291,7 +312,13 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
               />
             }
             label={
-              <Box display="flex" alignItems="center" gap={0.5}>
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 0.5,
+                }}
+              >
                 <Typography variant="body2">Show Failed</Typography>
                 <Chip label=".failed/" size="small" color="error" variant="outlined" />
               </Box>
@@ -327,9 +354,20 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
           </FormControl>
 
           <Box sx={{ mt: 2 }}>
-            <Box display="flex" justifyContent="space-between" mb={1}>
+            <Box
+              sx={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                mb: 1,
+              }}
+            >
               <Typography variant="body2">Coverage %</Typography>
-              <Typography variant="caption" color="text.secondary">
+              <Typography
+                variant="caption"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 {filters.coveragePercentMin ?? 0}% - {filters.coveragePercentMax ?? 100}%
               </Typography>
             </Box>

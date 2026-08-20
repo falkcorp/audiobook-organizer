@@ -1,5 +1,5 @@
 // file: web/src/components/bookdetail/WhisperIntroPanel.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
 // last-edited: 2026-08-19
 import { useState } from 'react';
@@ -50,7 +50,12 @@ export function WhisperIntroPanel({ book }: Props) {
       <AccordionSummary expandIcon={<ExpandMoreIcon />}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <MicIcon fontSize="small" color="action" />
-          <Typography variant="subtitle1" fontWeight={600}>
+          <Typography
+            variant="subtitle1"
+            sx={{
+              fontWeight: 600,
+            }}
+          >
             Whisper Intro
           </Typography>
           {isShort && (
@@ -62,7 +67,14 @@ export function WhisperIntroPanel({ book }: Props) {
             <Chip label="parsed" size="small" color="success" variant="outlined" />
           )}
           {transcribedAt && (
-            <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto', pr: 1 }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: 'text.secondary',
+                ml: 'auto',
+                pr: 1,
+              }}
+            >
               {transcribedAt}
             </Typography>
           )}
@@ -84,8 +96,13 @@ export function WhisperIntroPanel({ book }: Props) {
           >
             <Typography
               variant="caption"
-              color="text.secondary"
-              sx={{ display: 'block', mb: 0.5, textTransform: 'uppercase', letterSpacing: 0.5 }}
+              sx={{
+                color: 'text.secondary',
+                display: 'block',
+                mb: 0.5,
+                textTransform: 'uppercase',
+                letterSpacing: 0.5,
+              }}
             >
               Raw Transcript
             </Typography>
@@ -117,8 +134,11 @@ export function WhisperIntroPanel({ book }: Props) {
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
             <Typography
               variant="caption"
-              color="text.secondary"
-              sx={{ textTransform: 'uppercase', letterSpacing: 0.5 }}
+              sx={{
+                color: 'text.secondary',
+                textTransform: 'uppercase',
+                letterSpacing: 0.5,
+              }}
             >
               Extracted
             </Typography>
@@ -132,8 +152,11 @@ export function WhisperIntroPanel({ book }: Props) {
                   <Box key={label} sx={{ display: 'flex', gap: 1.5, alignItems: 'baseline' }}>
                     <Typography
                       variant="body2"
-                      color="text.secondary"
-                      sx={{ width: 64, flexShrink: 0 }}
+                      sx={{
+                        color: 'text.secondary',
+                        width: 64,
+                        flexShrink: 0,
+                      }}
                     >
                       {label}
                     </Typography>

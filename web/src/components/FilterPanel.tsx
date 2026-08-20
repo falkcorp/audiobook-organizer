@@ -1,5 +1,5 @@
 // file: web/src/components/FilterPanel.tsx
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5c7d8e9f-0a1b-2c3d-4e5f-6a7b8c9d0e1f
 // last-edited: 2026-08-19
 
@@ -35,8 +35,18 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   onSortChange,
 }) => {
   return (
-    <Box display="flex" gap={1} alignItems="center">
-      <Box flex={1}>
+    <Box
+      sx={{
+        display: 'flex',
+        gap: 1,
+        alignItems: 'center',
+      }}
+    >
+      <Box
+        sx={{
+          flex: 1,
+        }}
+      >
         <SearchBar
           value={searchQuery}
           onChange={onSearchChange}

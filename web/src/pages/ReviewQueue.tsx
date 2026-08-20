@@ -1,5 +1,5 @@
 // file: web/src/pages/ReviewQueue.tsx
-// version: 2.3.1
+// version: 2.3.2
 // guid: 4c8f2a17-5e93-4d60-a1b8-7f3c6d9e0a52
 // last-edited: 2026-08-19
 import { useEffect, useMemo, useState } from 'react';
@@ -28,7 +28,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import AlbumIcon from '@mui/icons-material/Album';
-import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutlineOutlined';
 import * as api from '../services/api';
 import { type Book, type ReviewItem } from '../services/api';
 import { useReviewStore } from '../stores/useReviewStore';
@@ -108,11 +108,25 @@ function MemberRow({
         <AlbumIcon fontSize="small" />
       </Avatar>
       <Box sx={{ minWidth: 0, flex: 1 }}>
-        <Typography variant="body2" fontWeight={600} noWrap title={title}>
+        <Typography
+          variant="body2"
+          noWrap
+          title={title}
+          sx={{
+            fontWeight: 600,
+          }}
+        >
           {title}
         </Typography>
         {(book?.author_name || book?.series_name) && (
-          <Typography variant="caption" color="text.secondary" noWrap display="block">
+          <Typography
+            variant="caption"
+            noWrap
+            sx={{
+              color: 'text.secondary',
+              display: 'block',
+            }}
+          >
             {book?.author_name}
             {book?.series_name && (
               <>
@@ -123,7 +137,15 @@ function MemberRow({
             )}
           </Typography>
         )}
-        <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }} flexWrap="wrap" useFlexGap>
+        <Stack
+          direction="row"
+          spacing={0.5}
+          useFlexGap
+          sx={{
+            flexWrap: 'wrap',
+            mt: 0.5,
+          }}
+        >
           {(hasDisc || hasTrack) && (
             <Chip
               size="small"
@@ -144,7 +166,7 @@ function MemberRow({
           <Tooltip
             title={entry.filePath}
             placement="bottom-start"
-            componentsProps={{ tooltip: { sx: { maxWidth: 600 } } }}
+            slotProps={{ tooltip: { sx: { maxWidth: 600 } } }}
           >
             <Typography
               variant="caption"
@@ -201,13 +223,26 @@ function RecommendationPanel({
         </Typography>
       )}
       {!reason && (
-        <Typography variant="body2" color="text.secondary" sx={{ mb: facts.length ? 1 : 0 }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+            mb: facts.length ? 1 : 0,
+          }}
+        >
           This hold predates evidence-backed recommendations. Re-run the regroup scan to refresh it,
           or decide it here.
         </Typography>
       )}
       {facts.length > 0 ? (
-        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+        <Stack
+          direction="row"
+          spacing={0.5}
+          useFlexGap
+          sx={{
+            flexWrap: 'wrap',
+          }}
+        >
           {facts.map((f) => (
             <Tooltip key={f.label} title={f.hint} placement="top">
               <Chip
@@ -220,7 +255,12 @@ function RecommendationPanel({
           ))}
         </Stack>
       ) : (
-        <Typography variant="caption" color="text.secondary">
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'text.secondary',
+          }}
+        >
           No evidence recorded for this hold.
         </Typography>
       )}
@@ -314,7 +354,18 @@ function ItemActions({
 }) {
   const spec = actionSpec(action);
   return (
-    <Stack direction="row" spacing={1.5} alignItems="flex-start" flexWrap="wrap" useFlexGap sx={sx}>
+    <Stack
+      direction="row"
+      spacing={1.5}
+      useFlexGap
+      sx={[
+        {
+          alignItems: 'flex-start',
+          flexWrap: 'wrap',
+        },
+        ...(Array.isArray(sx) ? sx : [sx]),
+      ]}
+    >
       {withSelector ? (
         <ActionSelector
           value={action}
@@ -425,7 +476,13 @@ function MemberFilesDetail({ item }: { item: ReviewItem }) {
             <strong>Proposed title:</strong> {title}
           </Typography>
         )}
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack
+          direction="row"
+          spacing={1}
+          sx={{
+            alignItems: 'center',
+          }}
+        >
           {members !== undefined && (
             <Typography variant="body2">
               <strong>Members:</strong> {members} file{members === 1 ? '' : 's'}
@@ -586,7 +643,13 @@ export function ReviewQueue() {
       <Typography variant="h4" gutterBottom>
         Review Queue
       </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+      <Typography
+        variant="body2"
+        sx={{
+          color: 'text.secondary',
+          mb: 3,
+        }}
+      >
         Items the system has flagged for a human decision, grouped by type. Approve or reject a
         whole group, or expand a group to act on individual items.
       </Typography>
@@ -600,7 +663,12 @@ export function ReviewQueue() {
           <Typography variant="h6" gutterBottom>
             Nothing to review 🎉
           </Typography>
-          <Typography variant="body2" color="text.secondary">
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             When the system flags something for a decision, it will show up here.
           </Typography>
         </Paper>
@@ -663,7 +731,13 @@ export function ReviewQueue() {
                     </Typography>
                     <Stack spacing={0.5}>
                       {bulkSkips.skipped.map((s) => (
-                        <Typography key={s.id} variant="caption" display="block">
+                        <Typography
+                          key={s.id}
+                          variant="caption"
+                          sx={{
+                            display: 'block',
+                          }}
+                        >
                           <code>{s.id}</code>
                           {s.action ? ` · ${labelForAction(s.action) || s.action}` : ''} —{' '}
                           {s.reason}
@@ -690,8 +764,11 @@ export function ReviewQueue() {
                         <Stack
                           direction="row"
                           spacing={1}
-                          alignItems="center"
-                          sx={{ flexGrow: 1, minWidth: 0 }}
+                          sx={{
+                            alignItems: 'center',
+                            flexGrow: 1,
+                            minWidth: 0,
+                          }}
                         >
                           <Typography variant="body2" noWrap sx={{ flexGrow: 1, minWidth: 0 }}>
                             {item.summary || item.folder_ref || item.id}

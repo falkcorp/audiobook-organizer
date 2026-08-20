@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/BulkMetadataSearchDialog.tsx
-// version: 1.5.1
+// version: 1.5.2
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-08-19
 
@@ -400,7 +400,13 @@ export function BulkMetadataSearchDialog({
       <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
         <DialogTitle>Search Metadata</DialogTitle>
         <DialogContent>
-          <Typography color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>
+          <Typography
+            sx={{
+              color: 'text.secondary',
+              py: 3,
+              textAlign: 'center',
+            }}
+          >
             All {books.length} book(s) already have metadata applied.
             <br />
             <Button size="small" onClick={() => handleToggleSkipApplied(false)} sx={{ mt: 1 }}>
@@ -428,7 +434,13 @@ export function BulkMetadataSearchDialog({
             Search Metadata — Book {currentIndex + 1} of {filteredBooks.length}
             {skipApplied && alreadyAppliedCount > 0 ? ` (${alreadyAppliedCount} filtered)` : ''}
           </Typography>
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+            }}
+          >
             {appliedCount > 0 && (
               <Chip
                 icon={<CheckCircleIcon />}
@@ -464,21 +476,45 @@ export function BulkMetadataSearchDialog({
             if (currentBook.cover_url) setPreviewCover(currentBook.cover_url);
           }}
         >
-          <Stack direction="row" spacing={2} alignItems="flex-start">
+          <Stack
+            direction="row"
+            spacing={2}
+            sx={{
+              alignItems: 'flex-start',
+            }}
+          >
             {currentBook.cover_url && (
               <Avatar src={currentBook.cover_url} variant="rounded" sx={{ width: 48, height: 64 }}>
                 {currentBook.title?.[0]}
               </Avatar>
             )}
             <Box sx={{ flex: 1, minWidth: 0 }}>
-              <Typography variant="subtitle1" fontWeight="bold" noWrap>
+              <Typography
+                variant="subtitle1"
+                noWrap
+                sx={{
+                  fontWeight: 'bold',
+                }}
+              >
                 {currentBook.title || 'Untitled'}
               </Typography>
-              <Typography variant="body2" color="text.secondary">
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 {currentBook.author || 'Unknown author'}
                 {currentBook.narrator ? ` — Narrated by ${currentBook.narrator}` : ''}
               </Typography>
-              <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 0.5 }}>
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{
+                  flexWrap: 'wrap',
+                  mt: 0.5,
+                }}
+              >
                 {currentBook.format && (
                   <Chip
                     label={currentBook.format.toUpperCase()}
@@ -521,8 +557,12 @@ export function BulkMetadataSearchDialog({
               {currentBook.file_path && (
                 <Typography
                   variant="caption"
-                  color="text.secondary"
-                  sx={{ display: 'block', mt: 0.5, wordBreak: 'break-all' }}
+                  sx={{
+                    color: 'text.secondary',
+                    display: 'block',
+                    mt: 0.5,
+                    wordBreak: 'break-all',
+                  }}
                 >
                   File: {currentBook.file_path}
                 </Typography>
@@ -531,8 +571,11 @@ export function BulkMetadataSearchDialog({
                 currentBook.original_filename !== currentBook.file_path?.split('/').pop() && (
                   <Typography
                     variant="caption"
-                    color="text.secondary"
-                    sx={{ display: 'block', wordBreak: 'break-all' }}
+                    sx={{
+                      color: 'text.secondary',
+                      display: 'block',
+                      wordBreak: 'break-all',
+                    }}
                   >
                     Original: {currentBook.original_filename}
                   </Typography>
@@ -540,8 +583,11 @@ export function BulkMetadataSearchDialog({
               {currentBook.itunes_path && (
                 <Typography
                   variant="caption"
-                  color="info.main"
-                  sx={{ display: 'block', wordBreak: 'break-all' }}
+                  sx={{
+                    color: 'info.main',
+                    display: 'block',
+                    wordBreak: 'break-all',
+                  }}
                 >
                   iTunes: {currentBook.itunes_path}
                 </Typography>
@@ -592,7 +638,12 @@ export function BulkMetadataSearchDialog({
                             </Typography>
                           </Tooltip>
                           {meta && (
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                color: 'text.secondary',
+                              }}
+                            >
                               {meta}
                             </Typography>
                           )}
@@ -619,19 +670,21 @@ export function BulkMetadataSearchDialog({
           }}
           placeholder="Search by title, ISBN, or ASIN..."
           sx={{ mb: 1 }}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon />
-              </InputAdornment>
-            ),
-            endAdornment: (
-              <InputAdornment position="end">
-                <IconButton onClick={handleSearch} disabled={loading} size="small">
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
                   <SearchIcon />
-                </IconButton>
-              </InputAdornment>
-            ),
+                </InputAdornment>
+              ),
+              endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton onClick={handleSearch} disabled={loading} size="small">
+                    <SearchIcon />
+                  </IconButton>
+                </InputAdornment>
+              ),
+            },
           }}
         />
         <Button
@@ -681,7 +734,14 @@ export function BulkMetadataSearchDialog({
         </Collapse>
 
         {/* Toggles and undo */}
-        <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 1 }}>
+        <Stack
+          direction="row"
+          spacing={2}
+          sx={{
+            alignItems: 'center',
+            mb: 1,
+          }}
+        >
           <Tooltip title="Write applied metadata to audio file tags (MP3/M4B/M4A)">
             <FormControlLabel
               control={
@@ -729,7 +789,13 @@ export function BulkMetadataSearchDialog({
         )}
 
         {!loading && results.length === 0 && (
-          <Typography color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>
+          <Typography
+            sx={{
+              color: 'text.secondary',
+              py: 3,
+              textAlign: 'center',
+            }}
+          >
             No results found. Try a different query or paste an Audible ASIN.
           </Typography>
         )}
@@ -743,9 +809,11 @@ export function BulkMetadataSearchDialog({
               <Stack
                 direction="row"
                 spacing={0.5}
-                alignItems="center"
-                sx={{ mb: 1 }}
-                flexWrap="wrap"
+                sx={{
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  mb: 1,
+                }}
               >
                 <Chip
                   label="All"
@@ -782,7 +850,13 @@ export function BulkMetadataSearchDialog({
             )
             .map((candidate, idx) => (
               <Box key={idx} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
-                <Stack direction="row" spacing={2} alignItems="flex-start">
+                <Stack
+                  direction="row"
+                  spacing={2}
+                  sx={{
+                    alignItems: 'flex-start',
+                  }}
+                >
                   <Avatar
                     src={candidate.cover_url}
                     variant="rounded"
@@ -799,21 +873,42 @@ export function BulkMetadataSearchDialog({
                     {candidate.title?.[0] || '?'}
                   </Avatar>
                   <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <Typography variant="body1" fontWeight="bold" noWrap>
+                    <Typography
+                      variant="body1"
+                      noWrap
+                      sx={{
+                        fontWeight: 'bold',
+                      }}
+                    >
                       {candidate.title}
                     </Typography>
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       {candidate.author}
                       {candidate.year ? ` (${candidate.year})` : ''}
                     </Typography>
                     {candidate.series && (
-                      <Typography variant="body2" color="text.secondary">
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: 'text.secondary',
+                        }}
+                      >
                         Series: {candidate.series}
                         {candidate.series_position ? ` · Book ${candidate.series_position}` : ''}
                       </Typography>
                     )}
                     {candidate.narrator && (
-                      <Typography variant="body2" color="text.secondary">
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: 'text.secondary',
+                        }}
+                      >
                         Narrator: {candidate.narrator}
                       </Typography>
                     )}

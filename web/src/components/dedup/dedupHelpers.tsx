@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/dedupHelpers.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: 8C089ABB-8110-41B2-A660-7064FB18C63A
 // last-edited: 2026-08-19
 
@@ -32,7 +32,13 @@ export function OperationProgress({
     <Paper sx={{ p: 2, mb: 2 }}>
       <Stack spacing={1}>
         {label && (
-          <Typography variant="caption" color="text.secondary" fontWeight="bold">
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.secondary',
+              fontWeight: 'bold',
+            }}
+          >
             {label}
           </Typography>
         )}

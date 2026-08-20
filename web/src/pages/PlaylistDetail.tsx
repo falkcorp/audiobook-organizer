@@ -1,5 +1,5 @@
 // file: web/src/pages/PlaylistDetail.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7a5b6c4d-8e9f-4a70-b8c5-3d7e0f1b9a99
 
 import { useCallback, useEffect, useState } from 'react';
@@ -129,7 +129,9 @@ export default function PlaylistDetail() {
               setDirty(true);
             }}
             variant="standard"
-            inputProps={{ style: { fontSize: '1.5rem', fontWeight: 'bold' } }}
+            slotProps={{
+              htmlInput: { style: { fontSize: '1.5rem', fontWeight: 'bold' } },
+            }}
           />
           <Chip
             label={playlist.type}

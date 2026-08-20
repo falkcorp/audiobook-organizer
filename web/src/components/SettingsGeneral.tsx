@@ -1,5 +1,5 @@
 // file: web/src/components/SettingsGeneral.tsx
-// version: 1.0.3
+// version: 1.0.4
 // guid: 72ebd6f3-7436-4f24-8233-205c50dd05fb
 // last-edited: 2026-08-19
 
@@ -225,19 +225,21 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
             'Main library directory where organized audiobooks are ' +
               'stored. Import paths are configured in File Manager.'
           }
-          InputProps={{
-            endAdornment: (
-              <InputAdornment position="end">
-                <Button
-                  variant="outlined"
-                  size="small"
-                  startIcon={<FolderOpenIcon />}
-                  onClick={props.handleBrowseLibraryPath}
-                >
-                  Browse Server
-                </Button>
-              </InputAdornment>
-            ),
+          slotProps={{
+            input: {
+              endAdornment: (
+                <InputAdornment position="end">
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    startIcon={<FolderOpenIcon />}
+                    onClick={props.handleBrowseLibraryPath}
+                  >
+                    Browse Server
+                  </Button>
+                </InputAdornment>
+              ),
+            },
           }}
         />
         <Alert severity="info" sx={{ mt: 1 }}>
@@ -264,7 +266,14 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
           <MenuItem value="symlink">Symbolic Link (fast, but fragile)</MenuItem>
           <MenuItem value="copy">Copy (slow, uses double space, safest)</MenuItem>
         </TextField>
-        <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'text.secondary',
+            mt: 1,
+            display: 'block',
+          }}
+        >
           Auto mode tries methods in order of efficiency: Reflink (CoW clone) → Hard Link → Copy as
           fallback.
         </Typography>
@@ -326,7 +335,13 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
             </Button>
           </Stack>
           {props.extensionsError && <Alert severity="error">{props.extensionsError}</Alert>}
-          <Stack direction="row" spacing={1} flexWrap="wrap">
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              flexWrap: 'wrap',
+            }}
+          >
             {props.settings.supportedExtensions.map((extension) => (
               <Chip
                 key={extension}
@@ -363,7 +378,13 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
             </Button>
           </Stack>
           {props.excludePatternError && <Alert severity="error">{props.excludePatternError}</Alert>}
-          <Stack direction="row" spacing={1} flexWrap="wrap">
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              flexWrap: 'wrap',
+            }}
+          >
             {props.settings.excludePatterns.map((pattern) => (
               <Chip
                 key={pattern}
@@ -407,8 +428,8 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
         >
           <Typography
             variant="caption"
-            color="text.secondary"
             sx={{
+              color: 'text.secondary',
               wordBreak: 'break-word',
               display: 'block',
               fontWeight: 'bold',
@@ -419,15 +440,19 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
           </Typography>
           <Typography
             variant="caption"
-            color="text.secondary"
-            sx={{ wordBreak: 'break-word', display: 'block', mb: 1 }}
+            sx={{
+              color: 'text.secondary',
+              wordBreak: 'break-word',
+              display: 'block',
+              mb: 1,
+            }}
           >
             {generateExample(props.settings.folderNamingPattern, exampleWithSeries, true)}
           </Typography>
           <Typography
             variant="caption"
-            color="text.secondary"
             sx={{
+              color: 'text.secondary',
               wordBreak: 'break-word',
               display: 'block',
               fontWeight: 'bold',
@@ -438,8 +463,11 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
           </Typography>
           <Typography
             variant="caption"
-            color="text.secondary"
-            sx={{ wordBreak: 'break-word', display: 'block' }}
+            sx={{
+              color: 'text.secondary',
+              wordBreak: 'break-word',
+              display: 'block',
+            }}
           >
             {generateExample(props.settings.folderNamingPattern, exampleNoSeries, true)}
           </Typography>
@@ -470,8 +498,8 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
         >
           <Typography
             variant="caption"
-            color="text.secondary"
             sx={{
+              color: 'text.secondary',
               wordBreak: 'break-word',
               display: 'block',
               fontWeight: 'bold',
@@ -482,15 +510,19 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
           </Typography>
           <Typography
             variant="caption"
-            color="text.secondary"
-            sx={{ wordBreak: 'break-word', display: 'block', mb: 1 }}
+            sx={{
+              color: 'text.secondary',
+              wordBreak: 'break-word',
+              display: 'block',
+              mb: 1,
+            }}
           >
             {generateExample(props.settings.fileNamingPattern, exampleWithSeries, false)}
           </Typography>
           <Typography
             variant="caption"
-            color="text.secondary"
             sx={{
+              color: 'text.secondary',
               wordBreak: 'break-word',
               display: 'block',
               fontWeight: 'bold',
@@ -501,9 +533,11 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
           </Typography>
           <Typography
             variant="caption"
-            color="text.secondary"
-            display="block"
-            sx={{ wordBreak: 'break-word' }}
+            sx={{
+              color: 'text.secondary',
+              display: 'block',
+              wordBreak: 'break-word',
+            }}
           >
             {generateExample(props.settings.fileNamingPattern, exampleNoSeries, false).replace(
               '.m4b',
@@ -531,7 +565,13 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
         <Typography variant="h6" gutterBottom>
           Smart Apply Pipeline
         </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+            mb: 2,
+          }}
+        >
           Controls how metadata is applied to files when using the smart apply pipeline. Where files
           land on disk is set by the folder and file naming patterns above — this pipeline uses
           those same two patterns, so a book never moves twice.
@@ -745,7 +785,14 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
             {props.backupNotice.message}
           </Alert>
         )}
-        <Stack direction="row" spacing={2} alignItems="center" mb={2}>
+        <Stack
+          direction="row"
+          spacing={2}
+          sx={{
+            alignItems: 'center',
+            mb: 2,
+          }}
+        >
           <Button
             variant="contained"
             onClick={props.handleCreateBackup}
@@ -756,7 +803,13 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
           {props.createBackupInProgress && <CircularProgress size={20} />}
         </Stack>
         {props.backupsLoading ? (
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+            }}
+          >
             <CircularProgress size={18} />
             <Typography variant="body2">Loading backups...</Typography>
           </Stack>
@@ -771,7 +824,13 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
                 </ListItemIcon>
                 <ListItemText
                   primary={
-                    <Stack direction="row" spacing={1} alignItems="center">
+                    <Stack
+                      direction="row"
+                      spacing={1}
+                      sx={{
+                        alignItems: 'center',
+                      }}
+                    >
                       <Typography variant="body2">{backup.filename}</Typography>
                       {(backup.auto || backup.trigger === 'schedule') && (
                         <Chip label="Auto" size="small" color="info" />
@@ -845,11 +904,14 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
             label="Maximum Disk Usage"
             value={props.settings.diskQuotaPercent}
             onChange={(e) => props.handleChange('diskQuotaPercent', parseInt(e.target.value) || 0)}
-            InputProps={{
-              endAdornment: <InputAdornment position="end">%</InputAdornment>,
-            }}
-            inputProps={{ min: 1, max: 100 }}
             helperText={'Maximum percentage of disk space the library can use'}
+            slotProps={{
+              input: {
+                endAdornment: <InputAdornment position="end">%</InputAdornment>,
+              },
+
+              htmlInput: { min: 1, max: 100 },
+            }}
           />
         </Grid>
       )}
@@ -881,11 +943,14 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
             onChange={(e) =>
               props.handleChange('defaultUserQuotaGB', parseInt(e.target.value) || 0)
             }
-            InputProps={{
-              endAdornment: <InputAdornment position="end">GB</InputAdornment>,
-            }}
-            inputProps={{ min: 1, max: 10000 }}
             helperText="Storage limit per user"
+            slotProps={{
+              input: {
+                endAdornment: <InputAdornment position="end">GB</InputAdornment>,
+              },
+
+              htmlInput: { min: 1, max: 10000 },
+            }}
           />
         </Grid>
       )}

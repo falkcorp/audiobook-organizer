@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/BulkRatingDialog.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
 import React, { useState } from 'react';
@@ -98,7 +98,12 @@ export const BulkRatingDialog: React.FC<BulkRatingDialogProps> = ({
       </DialogTitle>
       <DialogContent>
         <Stack spacing={3} sx={{ mt: 1 }}>
-          <Typography variant="body2" color="text.secondary">
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             Set ratings for all selected books. Leave a dimension blank to keep each book's existing
             value.
           </Typography>
@@ -153,7 +158,12 @@ export const BulkRatingDialog: React.FC<BulkRatingDialogProps> = ({
 
           {loading && progress && (
             <Box>
-              <Typography variant="caption" color="text.secondary">
+              <Typography
+                variant="caption"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 Rating {progress.completed} / {progress.total}...
               </Typography>
               <LinearProgress

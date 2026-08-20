@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/FileInfoCompare.tsx
-// version: 1.2.1
+// version: 1.2.2
 // guid: e4d5f6a7-b8c9-0123-defa-ed4567890123
 // last-edited: 2026-08-19
 
@@ -22,8 +22,8 @@ function BookFilesColumn({ book, label, pathVars }: BookFilesColumnProps) {
     <Box sx={{ flex: 1, minWidth: 0 }}>
       <Typography
         variant="caption"
-        color="text.secondary"
         sx={{
+          color: 'text.secondary',
           fontWeight: 600,
           textTransform: 'uppercase',
           letterSpacing: 0.5,
@@ -33,15 +33,38 @@ function BookFilesColumn({ book, label, pathVars }: BookFilesColumnProps) {
       >
         {label}
       </Typography>
-      <Typography variant="body2" fontWeight={600} noWrap title={book.title}>
+      <Typography
+        variant="body2"
+        noWrap
+        title={book.title}
+        sx={{
+          fontWeight: 600,
+        }}
+      >
         {book.title}
       </Typography>
       {book.author_name && (
-        <Typography variant="caption" color="text.secondary" noWrap display="block">
+        <Typography
+          variant="caption"
+          noWrap
+          sx={{
+            color: 'text.secondary',
+            display: 'block',
+          }}
+        >
           {book.author_name}
         </Typography>
       )}
-      <Stack direction="row" spacing={0.5} sx={{ mt: 0.5, mb: 1 }} flexWrap="wrap" useFlexGap>
+      <Stack
+        direction="row"
+        spacing={0.5}
+        useFlexGap
+        sx={{
+          flexWrap: 'wrap',
+          mt: 0.5,
+          mb: 1,
+        }}
+      >
         {book.format && <Chip label={book.format.toUpperCase()} size="small" />}
         {book.duration != null && (
           <Chip label={formatDuration(book.duration)} size="small" variant="outlined" />
@@ -56,7 +79,7 @@ function BookFilesColumn({ book, label, pathVars }: BookFilesColumnProps) {
               key={f.id ?? f.file_path}
               title={f.file_path}
               placement="bottom-start"
-              componentsProps={{ tooltip: { sx: { maxWidth: 600 } } }}
+              slotProps={{ tooltip: { sx: { maxWidth: 600 } } }}
             >
               <Box
                 sx={{
@@ -76,22 +99,42 @@ function BookFilesColumn({ book, label, pathVars }: BookFilesColumnProps) {
                 </Typography>
                 <Stack direction="row" spacing={0.5} sx={{ mt: 0.25 }}>
                   {f.format && (
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       {f.format.toUpperCase()}
                     </Typography>
                   )}
                   {f.bitrate != null && (
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       {f.bitrate}kbps
                     </Typography>
                   )}
                   {f.file_size != null && (
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       {formatBytes(f.file_size)}
                     </Typography>
                   )}
                   {f.duration != null && (
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       {formatDuration(f.duration)}
                     </Typography>
                   )}
@@ -101,7 +144,13 @@ function BookFilesColumn({ book, label, pathVars }: BookFilesColumnProps) {
           ))}
         </Stack>
       ) : (
-        <Typography variant="caption" color="text.disabled" fontStyle="italic">
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'text.disabled',
+            fontStyle: 'italic',
+          }}
+        >
           No file records
         </Typography>
       )}

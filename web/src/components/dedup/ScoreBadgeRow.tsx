@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/ScoreBadgeRow.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: c2b3d4e5-f6a7-8901-bcde-cb2345678901
 // last-edited: 2026-08-19
 
@@ -43,7 +43,15 @@ export function ScoreBadgeRow({ band, score, layer, similarity }: ScoreBadgeRowP
         : '';
 
   return (
-    <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
+    <Stack
+      direction="row"
+      spacing={0.5}
+      useFlexGap
+      sx={{
+        alignItems: 'center',
+        flexWrap: 'wrap',
+      }}
+    >
       {bandCfg && (
         <Tooltip title={bandCfg.description}>
           <Chip label={bandCfg.label} size="small" color={bandCfg.color} variant="filled" />

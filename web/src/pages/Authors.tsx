@@ -1,5 +1,5 @@
 // file: web/src/pages/Authors.tsx
-// version: 1.5.1
+// version: 1.5.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -85,7 +85,12 @@ const authorColumns: ColumnDef<api.AuthorWithCount>[] = [
     sortValue: (a) => a.name.toLowerCase(),
     render: (a) => (
       <Box>
-        <Typography variant="body2" fontWeight={500}>
+        <Typography
+          variant="body2"
+          sx={{
+            fontWeight: 500,
+          }}
+        >
           {a.name}
         </Typography>
         {(a.aliases?.length ?? 0) > 0 && (
@@ -276,7 +281,12 @@ function AuthorRow({
               {loadingBooks ? (
                 <CircularProgress size={20} />
               ) : books.length === 0 ? (
-                <Typography variant="body2" color="text.secondary">
+                <Typography
+                  variant="body2"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   No books found.
                 </Typography>
               ) : (
@@ -308,7 +318,13 @@ function AuthorRow({
                           </Typography>
                         </TableCell>
                         <TableCell>
-                          <Typography variant="body2" color="text.secondary" noWrap>
+                          <Typography
+                            variant="body2"
+                            noWrap
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             {book.series_name ?? '-'}
                           </Typography>
                         </TableCell>
@@ -322,9 +338,11 @@ function AuthorRow({
                           <Tooltip title={book.file_path || ''}>
                             <Typography
                               variant="body2"
-                              color="text.secondary"
                               noWrap
-                              sx={{ maxWidth: 300 }}
+                              sx={{
+                                color: 'text.secondary',
+                                maxWidth: 300,
+                              }}
                             >
                               {book.file_path ? book.file_path.split('/').slice(-2).join('/') : '-'}
                             </Typography>
@@ -723,12 +741,24 @@ export function Authors() {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       <Typography variant="h4">Authors</Typography>
-      <Typography variant="body2" color="text.secondary">
+      <Typography
+        variant="body2"
+        sx={{
+          color: 'text.secondary',
+        }}
+      >
         Manage authors, aliases, and merge duplicates. {authors.length} total authors.
       </Typography>
 
       {/* Toolbar */}
-      <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
+      <Stack
+        direction="row"
+        spacing={2}
+        sx={{
+          alignItems: 'center',
+          flexWrap: 'wrap',
+        }}
+      >
         <TextField
           size="small"
           placeholder="Search authors..."
@@ -795,7 +825,12 @@ export function Authors() {
         )}
       </Stack>
 
-      <Typography variant="body2" color="text.secondary">
+      <Typography
+        variant="body2"
+        sx={{
+          color: 'text.secondary',
+        }}
+      >
         {filtered.length} author{filtered.length !== 1 ? 's' : ''} shown
       </Typography>
 
@@ -835,7 +870,13 @@ export function Authors() {
             {paged.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={totalCols} align="center">
-                  <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                      py: 4,
+                    }}
+                  >
                     {search ? 'No authors match your search.' : 'No authors found.'}
                   </Typography>
                 </TableCell>
@@ -946,7 +987,12 @@ export function Authors() {
           </FormControl>
           {typeof mergeCanonical === 'number' && (
             <Box sx={{ mt: 2 }}>
-              <Typography variant="body2" color="text.secondary">
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 Will merge into &quot;{selectedAuthors.find((a) => a.id === mergeCanonical)?.name}
                 &quot;:
               </Typography>
@@ -1046,7 +1092,13 @@ export function Authors() {
         <DialogTitle>Manage Aliases for &quot;{aliasDialog?.name}&quot;</DialogTitle>
         <DialogContent>
           {aliases.length === 0 ? (
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+                mb: 2,
+              }}
+            >
               No aliases yet.
             </Typography>
           ) : (
@@ -1060,7 +1112,13 @@ export function Authors() {
               ))}
             </Box>
           )}
-          <Stack direction="row" spacing={1} alignItems="flex-end">
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'flex-end',
+            }}
+          >
             <TextField
               size="small"
               label="Alias Name"
@@ -1151,7 +1209,13 @@ export function Authors() {
           </Box>
           <Divider sx={{ mb: 1 }} />
           {history.length === 0 ? (
-            <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
+            <Typography
+              sx={{
+                color: 'text.secondary',
+                py: 4,
+                textAlign: 'center',
+              }}
+            >
               No actions yet
             </Typography>
           ) : (
@@ -1206,7 +1270,9 @@ export function Authors() {
                   <ListItemText
                     primary={entry.description}
                     secondary={entry.timestamp.toLocaleTimeString()}
-                    primaryTypographyProps={{ variant: 'body2' }}
+                    slotProps={{
+                      primary: { variant: 'body2' },
+                    }}
                   />
                 </ListItem>
               ))}

@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/VersionsPanel.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5e3f4a2b-6c7d-4a70-b8c5-3d7e0f1b9a99
 
 import { useCallback, useEffect, useState } from 'react';
@@ -77,7 +77,16 @@ export default function VersionsPanel({ bookId }: VersionsPanelProps) {
     [bookId, load]
   );
 
-  if (loading) return <Typography color="text.secondary">Loading versions...</Typography>;
+  if (loading)
+    return (
+      <Typography
+        sx={{
+          color: 'text.secondary',
+        }}
+      >
+        Loading versions...
+      </Typography>
+    );
   if (versions.length === 0) return null;
 
   return (
@@ -116,7 +125,12 @@ export default function VersionsPanel({ bookId }: VersionsPanelProps) {
             <ListItemText
               primary={
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <Typography variant="body2" fontWeight="bold">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      fontWeight: 'bold',
+                    }}
+                  >
                     {v.format?.toUpperCase()}
                   </Typography>
                   <Chip
@@ -125,7 +139,12 @@ export default function VersionsPanel({ bookId }: VersionsPanelProps) {
                     color={STATUS_COLORS[v.status] || 'default'}
                   />
                   {v.source && (
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       via {v.source}
                     </Typography>
                   )}

@@ -1,5 +1,5 @@
 // file: web/src/components/common/FilterTagBar.tsx
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7c4f8d12-3b6e-4a5c-9d1e-8f2a3b4c5d6e
 // last-edited: 2026-08-19
 
@@ -71,11 +71,25 @@ export function FilterTagBar({
       }}
     >
       {!hideLabel && (
-        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'text.secondary',
+            fontWeight: 600,
+          }}
+        >
           {label}
         </Typography>
       )}
-      <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ flex: 1 }}>
+      <Stack
+        direction="row"
+        spacing={0.75}
+        useFlexGap
+        sx={{
+          flexWrap: 'wrap',
+          flex: 1,
+        }}
+      >
         {tags.map((tag) => (
           <Chip
             key={tag.id}

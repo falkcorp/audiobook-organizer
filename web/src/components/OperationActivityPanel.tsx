@@ -1,5 +1,5 @@
 // file: web/src/components/OperationActivityPanel.tsx
-// version: 1.3.2
+// version: 1.3.3
 // guid: f7a1e2c3-9b4d-4e5a-8c6f-1d3b5a7e9c0f
 
 import { useCallback, useEffect, useState, useRef, useMemo } from 'react';
@@ -97,7 +97,13 @@ function EntryRow({ entry }: EntryRowProps) {
         py: 0.75,
       }}
     >
-      <Stack direction="row" spacing={1} alignItems="center">
+      <Stack
+        direction="row"
+        spacing={1}
+        sx={{
+          alignItems: 'center',
+        }}
+      >
         <Typography
           variant="caption"
           sx={{
@@ -257,7 +263,13 @@ export function OperationActivityPanel({ operationId, limit }: OperationActivity
           bgcolor: 'action.hover',
         }}
       >
-        <Stack direction="row" spacing={1.5} alignItems="center">
+        <Stack
+          direction="row"
+          spacing={1.5}
+          sx={{
+            alignItems: 'center',
+          }}
+        >
           <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
             {operationType}
           </Typography>
@@ -266,11 +278,22 @@ export function OperationActivityPanel({ operationId, limit }: OperationActivity
             label={status === 'queued' ? 'pending' : status}
             color={statusColor(status)}
           />
-          <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.secondary',
+              fontFamily: 'monospace',
+            }}
+          >
             {operationId.slice(0, 12)}
           </Typography>
           <Box sx={{ flexGrow: 1 }} />
-          <Typography variant="caption" color="text.secondary">
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             {total} {total === 1 ? 'entry' : 'entries'}
           </Typography>
           <Tooltip title="Copy log to clipboard">
@@ -305,7 +328,14 @@ export function OperationActivityPanel({ operationId, limit }: OperationActivity
           </Typography>
         </Box>
       ) : entries.length === 0 ? (
-        <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+            py: 4,
+            textAlign: 'center',
+          }}
+        >
           No activity recorded for this operation yet.
         </Typography>
       ) : (

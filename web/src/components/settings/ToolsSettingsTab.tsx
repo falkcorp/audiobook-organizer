@@ -1,5 +1,5 @@
 // file: web/src/components/settings/ToolsSettingsTab.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: a9b0c1d2-e3f4-5678-abcd-678901234567
 // last-edited: 2026-08-19
 
@@ -20,7 +20,14 @@ export function ToolsSettingsTab() {
 
   return (
     <Box>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          mb: 2,
+        }}
+      >
         <Typography variant="h6">External Tools</Typography>
         <Button size="small" variant="outlined" onClick={toggleAdvanced}>
           {showAdvanced ? 'Hide Advanced' : 'Show Advanced'}
@@ -52,7 +59,13 @@ export function ToolsSettingsTab() {
       {showAdvanced && (
         <>
           <Divider sx={{ my: 2 }} />
-          <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+          <Typography
+            variant="subtitle2"
+            gutterBottom
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             Advanced
           </Typography>
           <TextField

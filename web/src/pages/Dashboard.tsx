@@ -1,5 +1,5 @@
 // file: web/src/pages/Dashboard.tsx
-// version: 1.14.4
+// version: 1.14.5
 // guid: 2f3a4b5c-6d7e-8f9a-0b1c-2d3e4f5a6b7c
 // last-edited: 2026-08-19
 
@@ -291,9 +291,20 @@ export function Dashboard() {
     <Card>
       <CardActionArea onClick={onClick} disabled={!onClick}>
         <CardContent>
-          <Box display="flex" alignItems="center" justifyContent="space-between">
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            }}
+          >
             <Box>
-              <Typography color="text.secondary" gutterBottom>
+              <Typography
+                gutterBottom
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 {title}
               </Typography>
               {loading ? (
@@ -305,7 +316,12 @@ export function Dashboard() {
                     {suffix}
                   </Typography>
                   {subtitle && (
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       {subtitle}
                     </Typography>
                   )}
@@ -511,11 +527,27 @@ export function Dashboard() {
             ) : (
               <>
                 <Box sx={{ mb: 2 }}>
-                  <Box display="flex" justifyContent="space-between" mb={1}>
-                    <Typography variant="body2" color="text.secondary">
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      mb: 1,
+                    }}
+                  >
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       Total Size
                     </Typography>
-                    <Typography variant="body2" fontWeight="medium">
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        fontWeight: 'medium',
+                      }}
+                    >
                       {(stats?.disk_used_gb ?? 0).toFixed(1)} GB /{' '}
                       {(stats?.disk_total_gb ?? 0).toFixed(1)} GB
                     </Typography>
@@ -527,15 +559,29 @@ export function Dashboard() {
                   />
                   <Typography
                     variant="caption"
-                    color="text.secondary"
-                    sx={{ mt: 0.5, display: 'block' }}
+                    sx={{
+                      color: 'text.secondary',
+                      mt: 0.5,
+                      display: 'block',
+                    }}
                   >
                     {(stats?.disk_usage_percent ?? 0).toFixed(0)}% of disk used
                   </Typography>
                 </Box>
-                <Box display="flex" alignItems="center" gap={1}>
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1,
+                  }}
+                >
                   <StorageIcon color="action" />
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     System storage healthy
                   </Typography>
                 </Box>
@@ -561,14 +607,25 @@ export function Dashboard() {
                 <Skeleton variant="text" width="70%" />
               </Box>
             ) : operations.length === 0 ? (
-              <Typography variant="body2" color="text.secondary">
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 No recent operations
               </Typography>
             ) : (
               <List dense>
                 {operations.map((op) => (
                   <ListItem key={op.id} sx={{ px: 0 }}>
-                    <Box display="flex" alignItems="center" width="100%">
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        width: '100%',
+                      }}
+                    >
                       {getStatusIcon(op.status)}
                       <ListItemText
                         primary={op.message}
@@ -614,7 +671,13 @@ export function Dashboard() {
       <Dialog open={organizeDialogOpen} onClose={() => setOrganizeDialogOpen(false)}>
         <DialogTitle>Organize All Scanned Books</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+              mb: 2,
+            }}
+          >
             This will organize all books currently scanned but not yet imported to the library.
           </Typography>
           <FormControlLabel

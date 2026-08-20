@@ -1,5 +1,5 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.54.1
+// version: 1.54.2
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 // last-edited: 2026-08-19
 
@@ -957,7 +957,13 @@ export function Settings() {
             <Typography variant="h6" color="error" gutterBottom>
               Danger Zone
             </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+                mb: 2,
+              }}
+            >
               Permanently delete all data including audiobooks, authors, series, settings, and
               metadata cache. This cannot be undone.
             </Typography>
@@ -1126,7 +1132,13 @@ export function Settings() {
       <Dialog open={browserOpen} onClose={handleBrowserCancel} maxWidth="md" fullWidth>
         <DialogTitle>Browse Server Filesystem</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" color="text.secondary" gutterBottom>
+          <Typography
+            variant="body2"
+            gutterBottom
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             Select the library path where organized audiobooks will be stored.
           </Typography>
           <Box sx={{ mt: 2 }}>
@@ -1258,7 +1270,12 @@ export function Settings() {
               ))}
             </List>
           ) : (
-            <Typography variant="body2" color="text.secondary">
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               No errors recorded.
             </Typography>
           )}

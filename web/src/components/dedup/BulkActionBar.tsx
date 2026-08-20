@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/BulkActionBar.tsx
-// version: 1.0.2
+// version: 1.0.3
 // guid: b7a8c9d0-e1f2-3456-abcd-ba7890123456
 // last-edited: 2026-08-19
 
@@ -77,7 +77,12 @@ export function BulkActionBar({
         }}
         data-testid="bulk-action-bar"
       >
-        <Typography variant="body2" fontWeight={600}>
+        <Typography
+          variant="body2"
+          sx={{
+            fontWeight: 600,
+          }}
+        >
           {selectedCount} selected
         </Typography>
 
