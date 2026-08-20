@@ -51,15 +51,21 @@ import { QueueRail } from './QueueRail';
 import { ActionBar } from './ActionBar';
 import { CompareSpine, type SpineViewMode } from './spine/CompareSpine';
 import { DupesPanel } from './DupesPanel';
+import { RegroupPanel } from './RegroupPanel';
 import { useDupesLane } from './lanes/useDupesLane';
 import { useMetadataLane } from './lanes/useMetadataLane';
+import { useRegroupLane } from './lanes/useRegroupLane';
 import { LANES, LANE_ORDER } from './lanes';
 import type { ReviewLane } from './reviewActions';
 
-/** Where each unported lane's surface still lives, so the panel can point at it. */
-const UNPORTED: Partial<Record<ReviewLane, { where: string; href: string }>> = {
-  regroup: { where: 'the Dedup page', href: '/dedup' },
-};
+/**
+ * Where an unported lane's surface still lives, so the panel can point at it.
+ *
+ * Empty: all three lanes render here now. Kept rather than deleted because it is
+ * the mechanism a FOURTH lane would use on the way in, and re-deriving it costs
+ * more than the four lines it occupies.
+ */
+const UNPORTED: Partial<Record<ReviewLane, { where: string; href: string }>> = {};
 
 /**
  * Builds a CSV from the rows currently loaded.
@@ -130,6 +136,7 @@ export function ReviewWorkspace() {
   // Expansion is a view concern and the two lanes key it on different id types,
   // so it is not shared state.
   const [dupesExpandedId, setDupesExpandedId] = useState<number | null>(null);
+  const regroup = useRegroupLane(toast, lane === 'regroup');
 
   const unmatchedCount = useMemo(
     () => metadata.results.filter((r) => r.status === 'no_match' || r.status === 'error').length,
@@ -380,7 +387,9 @@ export function ReviewWorkspace() {
         </ToggleButtonGroup>
       </Box>
 
-      {lane === 'dupes' ? (
+      {lane === 'regroup' ? (
+        <RegroupPanel regroup={regroup} />
+      ) : lane === 'dupes' ? (
         <DupesPanel
           dupes={dupes}
           viewMode={viewMode}

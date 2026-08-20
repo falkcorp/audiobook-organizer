@@ -6184,13 +6184,21 @@ export async function getReviewCount(): Promise<ReviewCount> {
   return { count: data.count ?? 0, byKind: data.byKind ?? {} };
 }
 
-export async function getReviewItems(filter: ReviewItemsFilter = {}): Promise<ReviewItemsPage> {
+export async function getReviewItems(
+  filter: ReviewItemsFilter = {},
+  // apiFetch has always accepted a signal; this function simply never plumbed
+  // one through, so a lane that switched away kept its request running with no
+  // way to cancel it. Same gap, same fix as getDedupCandidates.
+  opts?: { signal?: AbortSignal }
+): Promise<ReviewItemsPage> {
   const params = new URLSearchParams();
   params.set('status', filter.status ?? 'pending');
   if (filter.kind) params.set('kind', filter.kind);
   if (filter.limit !== undefined) params.set('limit', String(filter.limit));
   if (filter.offset !== undefined) params.set('offset', String(filter.offset));
-  const response = await apiFetch(`${API_BASE}/review/items?${params.toString()}`);
+  const response = await apiFetch(`${API_BASE}/review/items?${params.toString()}`, {
+    signal: opts?.signal,
+  });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to fetch review items');
   }

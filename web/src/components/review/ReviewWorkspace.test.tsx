@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
 // last-edited: 2026-08-20
 
@@ -54,6 +54,14 @@ beforeEach(() => {
   });
   vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [], total: 0 });
   vi.mocked(api.getDedupStats).mockResolvedValue({ stats: [] });
+  vi.mocked(api.getReviewItems).mockResolvedValue({
+    items: [],
+    count: 0,
+    limit: 500,
+    offset: 0,
+    total: 0,
+  });
+  vi.mocked(api.getReviewCount).mockResolvedValue({ count: 0, byKind: {} });
 });
 
 describe('lane default', () => {
@@ -67,21 +75,19 @@ describe('lane default', () => {
     expect(screen.queryByTestId('lane-unported-dupes')).not.toBeInTheDocument();
   });
 
-  it('explains an unported lane instead of showing an empty spine', async () => {
-    // regroup, not dupes -- dupes now renders. This test outlives the port
-    // because SOME lane is unported until the last one lands, and the failure
-    // it guards against ("nothing here", with no next step) is the same one.
+  it('renders the regroup lane -- no lane points at an old surface any more', async () => {
+    // This replaces the "explains an unported lane" test, which has run out of
+    // subject: regroup was the last one. What it guarded against -- a lane that
+    // renders nothing and offers no next step -- is now guarded by asserting the
+    // lane actually renders.
     const user = userEvent.setup();
     renderWorkspace();
     await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
 
     await user.click(screen.getByTestId('lane-tab-regroup'));
 
-    const panel = await screen.findByTestId('lane-unported-regroup');
-    expect(panel).toBeInTheDocument();
-    // It must say where the surface actually is; "nothing here" with no next
-    // step is the failure this replaces.
-    expect(panel).toHaveTextContent(/Dedup page/i);
+    expect(await screen.findByTestId('regroup-rail')).toBeInTheDocument();
+    expect(screen.queryByTestId('lane-unported-regroup')).not.toBeInTheDocument();
     expect(screen.queryByTestId('compare-spine')).not.toBeInTheDocument();
   });
 
@@ -127,7 +133,7 @@ describe('lane default', () => {
     await waitFor(() => expect(api.getCachedReviewResults).toHaveBeenCalledTimes(1));
 
     await user.click(screen.getByTestId('lane-tab-regroup'));
-    await screen.findByTestId('lane-unported-regroup');
+    await screen.findByTestId('regroup-rail');
 
     expect(api.getCachedReviewResults).toHaveBeenCalledTimes(1);
   });
