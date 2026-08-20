@@ -1,6 +1,7 @@
 // file: cmd/dedup_bench_types.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
+// last-edited: 2026-08-20
 
 //go:build bench
 
@@ -13,7 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/server"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 )
 
 // TestConfig describes a single test run configuration.
@@ -94,7 +95,7 @@ func extractAuthorData(store database.AuthorReader) (*AuthorData, error) {
 }
 
 // buildGroupsInput converts heuristic groups to AI input format.
-func buildGroupsInput(groups []server.AuthorDedupGroup, data *AuthorData) []ai.AuthorDedupInput {
+func buildGroupsInput(groups []dedup.AuthorDedupGroup, data *AuthorData) []ai.AuthorDedupInput {
 	inputs := make([]ai.AuthorDedupInput, 0, len(groups))
 	for i, g := range groups {
 		variants := make([]string, 0, len(g.Variants))

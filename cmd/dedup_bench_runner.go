@@ -1,5 +1,5 @@
 // file: cmd/dedup_bench_runner.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d4e5f6a7-b8c9-0123-defa-456789012345
 // last-edited: 2026-08-20
 
@@ -19,7 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/server"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
@@ -32,7 +32,7 @@ func executeBenchRun(
 	apiKey string,
 	tc TestConfig,
 	data *AuthorData,
-	groups []server.AuthorDedupGroup,
+	groups []dedup.AuthorDedupGroup,
 	mode string,
 	runDir string,
 	chunkSize int,

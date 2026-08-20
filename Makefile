@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.21.0
+# version: 2.22.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-08-18
+# last-edited: 2026-08-20
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -22,7 +22,7 @@ BACKUP_DIR  ?= $(CURDIR)/backups
         web-install web-build web-dev web-test web-lint web-lint-memory \
         test test-short test-all test-all-short test-nightly test-frontend test-e2e test-e2e-demo \
         coverage coverage-check coverage-check-short ci \
-        vet mocks mocks-check staticcheck oplint sdkguard \
+        vet mocks mocks-check staticcheck oplint sdkguard bench-check \
         docker docker-run docker-stop \
         release-dry-run release-snapshot version \
         build-mtls-bridge build-mtls-bridge-windows \
@@ -59,6 +59,7 @@ help:
 	@echo "  make coverage       - Generate coverage report"
 	@echo "  make coverage-check - Verify 30% coverage threshold"
 	@echo "  make sdkguard       - Assert pkg/plugin/sdk has no unexpected internal/ deps"
+	@echo "  make bench-check    - Typecheck the //go:build bench code"
 	@echo "  make ci             - Fast CI: short tests + coverage (prop tests skipped)"
 	@echo ""
 	@echo "Docker:"
@@ -364,6 +365,29 @@ sdkguard:
 	@go run ./tools/cmd/sdkguard/main.go
 	@echo "✅ SDK guard passed"
 
+## bench-check: Typecheck the //go:build bench code (nothing else did)
+#
+# Deliberately NOT the same as build-bench above, despite the near-identical
+# name. build-bench links a real binary from the root package, so it is scoped
+# to what main can reach and it writes ./$(BINARY) as a side effect — both are
+# wrong for a gate. This target compiles ./... with no -o, so it typechecks
+# every package carrying the tag whether or not main imports it. Today those
+# sets happen to coincide (cmd and internal/server are the only two packages
+# with bench-tagged files, and build-bench reaches both), so build-bench WOULD
+# have caught the breakage below — it simply never ran anywhere.
+#
+# -gcflags=-e defeats Go's ~10-error cap so a breakage lists every call site in
+# one run instead of dribbling them out across pushes.
+#
+# Why this exists at all: the bench files went four months without compiling.
+# b6fe7c5a moved AuthorDedupGroup and FindDuplicateAuthors out of internal/
+# server on 2026-04-18, updated internal/server/bench.go, and missed four call
+# sites in cmd/. No build, local or CI, touched the tag until 2026-08-20.
+bench-check:
+	@echo "🔍 Typechecking bench-tagged code..."
+	@go build -tags bench -gcflags=-e ./...
+	@echo "✅ Bench check passed"
+
 ## test-all: Run all tests (backend full + frontend)
 test-all: test web-test
 
@@ -516,7 +540,7 @@ coverage-check-short:
 	echo "✅ Coverage $$coverage% meets floor $$floor%"
 
 ## ci: Fast CI check (short tests — prop tests skipped; use test-nightly for full suite)
-ci: mocks-check staticcheck sdkguard test-all-short coverage-check-short
+ci: mocks-check staticcheck sdkguard bench-check test-all-short coverage-check-short
 	@echo "✅ All CI checks passed!"
 
 ## build-mtls-bridge: Build the mTLS bridge binary (macOS)

@@ -1,5 +1,5 @@
 // file: cmd/dedup_bench_batch.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f6a7b8c9-d0e1-2345-fabc-678901234567
 // last-edited: 2026-08-20
 
@@ -19,7 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/server"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 )
@@ -42,7 +42,7 @@ func submitBatchJobs(
 	apiKey string,
 	configs []TestConfig,
 	data *AuthorData,
-	groups []server.AuthorDedupGroup,
+	groups []dedup.AuthorDedupGroup,
 	modes []string,
 	runDir string,
 	chunkSize int,

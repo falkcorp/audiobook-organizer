@@ -1,26 +1,48 @@
 // file: tools/cmd/sdkguard/main.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: e8f9a0b1-c2d3-4567-e890-f12345678901
-// last-edited: 2026-05-15
+// last-edited: 2026-08-20
 
 // Package main implements sdkguard, a CI tool that asserts pkg/plugin/sdk has
 // no unexpected internal/ dependencies.
 //
 // The SDK is a stable public contract backed by type aliases into
-// internal/operations/registry and internal/auth. Those "allowed internals" are
-// part of the SDK's own implementation contract and are explicitly whitelisted.
-// Any OTHER internal/ import appearing in the dependency tree of pkg/plugin/sdk
-// is a violation — it means a new internal dependency was added without review.
+// internal/operations/registry and internal/auth. The guard enforces two
+// separate, complementary rules:
+//
+//	Tier 1 — ROOTS (a hard contract).
+//	  Every internal/ package the SDK imports DIRECTLY must be in allowedRoots.
+//	  A new direct import means the SDK's own surface grew, which always
+//	  requires a human decision. This cannot be silenced by regenerating
+//	  anything; someone has to edit allowedRoots and say why.
+//
+//	Tier 2 — CLOSURE RATCHET (a review trigger).
+//	  The full transitive set of internal/ packages reachable from the SDK
+//	  must match the committed snapshot in internal-deps.txt exactly, in both
+//	  directions. Transitive growth is not inherently wrong — it is invisible
+//	  to SDK consumers, since it is a link-time detail rather than part of the
+//	  public surface — but it should never land unnoticed.
+//
+// Why a snapshot rather than a flat allowlist: the previous version of this
+// tool kept one hand-maintained list and treated any entry not on it as a
+// violation. Because transitive deps of already-approved packages land through
+// PRs that never touch this file, the list drifted behind reality and the gate
+// sat red for 33 days (internal/audioutil since 2026-07-18, internal/syncapi/
+// progress since 07-30, internal/cache since 08-11) without anyone noticing.
+// A ratchet fixes that: the remedy for legitimate growth is `-update`, which
+// rewrites a tracked file, so the change lands in the PR diff where a reviewer
+// sees it instead of in a stderr message nobody reads.
 //
 // Usage:
 //
 //	go run ./tools/cmd/sdkguard/main.go            # check pkg/plugin/sdk
+//	go run ./tools/cmd/sdkguard/main.go -update    # accept current deps
 //	go run ./tools/cmd/sdkguard/main.go -module=./pkg/plugin/sdk/...
 //
 // Exit codes:
 //
 //	0 — all clear
-//	1 — one or more forbidden internal/ packages found in the dep tree
+//	1 — a tier-1 root violation or a tier-2 snapshot mismatch
 //	2 — usage / invocation error
 package main
 
@@ -29,82 +51,258 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
 )
 
-// module is the Go pattern passed to `go list -deps`.
+// defaultModule is the Go pattern passed to `go list`.
 const defaultModule = "./pkg/plugin/sdk/..."
 
-// allowedInternals lists the internal/ packages that are part of the SDK's
-// stable backplane. These are the type-alias targets (internal/operations/registry,
-// internal/auth) and their own transitive dependencies. Any internal/ package
-// NOT in this set is a forbidden accretion.
+// defaultSnapshot is the tracked file holding the accepted internal/ closure.
+const defaultSnapshot = "tools/cmd/sdkguard/internal-deps.txt"
+
+// modulePrefix identifies project-local internal packages.
+const modulePrefix = "github.com/falkcorp/audiobook-organizer/internal/"
+
+// allowedRoots lists the internal/ packages pkg/plugin/sdk may import DIRECTLY.
+// These are the SDK's intentional backplane: the type-alias targets and the
+// service registry that plugin authors are documented to reach through.
 //
-// To update this list: run `go list -deps ./pkg/plugin/sdk/... | grep '/internal/'`
-// and verify each entry is an approved backplane package, then add it here.
-var allowedInternals = map[string]bool{
+// Adding an entry here widens the SDK's own contract. Do not add one to silence
+// a failure — a direct import that is not on this list is the tool working.
+// Transitive dependencies of these roots do NOT belong here; they are governed
+// by the internal-deps.txt snapshot instead.
+var allowedRoots = map[string]bool{
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry": true,
 	"github.com/falkcorp/audiobook-organizer/internal/auth":                true,
-	"github.com/falkcorp/audiobook-organizer/internal/models":              true,
 	"github.com/falkcorp/audiobook-organizer/internal/database":            true,
-	"github.com/falkcorp/audiobook-organizer/internal/metrics":             true,
-	"github.com/falkcorp/audiobook-organizer/internal/util":                true,
-	"github.com/falkcorp/audiobook-organizer/internal/fingerprint":         true,
-	"github.com/falkcorp/audiobook-organizer/internal/matcher":             true,
-	// Added to allow pkg/plugin/sdk to reference the service registry backplane
-	// which is part of the SDK's supported stable surface.
-	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry": true,
+	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry":     true,
+}
+
+// defaultHeader is written when the snapshot file does not yet exist.
+var defaultHeader = []string{
+	"# file: tools/cmd/sdkguard/internal-deps.txt",
+	"# version: 1.0.0",
+	"# guid: 3f2a7c48-9d1e-4b60-8a55-c07e19b4d2f3",
+	"# last-edited: 2026-08-20",
+	"#",
+	"# Accepted transitive internal/ dependency closure of pkg/plugin/sdk.",
+	"# Generated by: go run ./tools/cmd/sdkguard/main.go -update",
+	"#",
+	"# This file is a RATCHET, not an allowlist. sdkguard fails if the real",
+	"# closure differs from this list in either direction. Regenerating it is",
+	"# the correct fix for legitimate dependency growth -- the point is that the",
+	"# growth shows up as a diff here, in code review, rather than silently.",
+	"#",
+	"# Bump the version line above when you regenerate.",
+	"",
 }
 
 func main() {
 	moduleFlag := flag.String("module", defaultModule, "Go package pattern to inspect")
+	snapshotFlag := flag.String("snapshot", defaultSnapshot, "path to the accepted internal-dep snapshot")
+	updateFlag := flag.Bool("update", false, "rewrite the snapshot to match the current closure")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: sdkguard [-module=<pattern>]\n\n")
+		fmt.Fprintf(os.Stderr, "usage: sdkguard [-module=<pattern>] [-snapshot=<path>] [-update]\n\n")
 		fmt.Fprintf(os.Stderr, "Asserts that pkg/plugin/sdk has no unexpected internal/ dependencies.\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 
-	violations, err := run(*moduleFlag)
+	ok, err := run(*moduleFlag, *snapshotFlag, *updateFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sdkguard: error: %v\n", err)
 		os.Exit(2)
 	}
-
-	if len(violations) > 0 {
-		fmt.Fprintf(os.Stderr, "sdkguard: FAIL — forbidden internal/ packages in %s dep tree:\n\n", *moduleFlag)
-		for _, v := range violations {
-			fmt.Fprintf(os.Stderr, "  %s\n", v)
-		}
-		fmt.Fprintf(os.Stderr, "\nTo fix: remove the import or add it to the allowedInternals list in\n")
-		fmt.Fprintf(os.Stderr, "tools/cmd/sdkguard/main.go (with a comment explaining why it is allowed).\n")
+	if !ok {
 		os.Exit(1)
 	}
-
-	fmt.Printf("sdkguard: OK — %s has no forbidden internal/ dependencies\n", *moduleFlag)
 }
 
-// run shells out to `go list -deps <module>` and scans the output for
-// project-local internal/ packages not on the allowlist. It returns a slice
-// of violation strings (one per forbidden package).
-func run(module string) ([]string, error) {
-	cmd := exec.Command("go", "list", "-deps", module)
+// run performs both tiers of the check. It returns false (without an error) when
+// the code under inspection violates a rule, and a non-nil error only when the
+// check itself could not be carried out.
+func run(module, snapshotPath string, update bool) (bool, error) {
+	direct, err := directInternalImports(module)
+	if err != nil {
+		return false, err
+	}
+	closure, err := transitiveInternalDeps(module)
+	if err != nil {
+		return false, err
+	}
+
+	// Tier 1: direct imports must all be approved roots. Checked first and never
+	// suppressed by -update, because this is the SDK's own surface changing.
+	var rootViolations []string
+	for _, pkg := range direct {
+		if !allowedRoots[pkg] {
+			rootViolations = append(rootViolations, pkg)
+		}
+	}
+	if len(rootViolations) > 0 {
+		fmt.Fprintf(os.Stderr, "sdkguard: FAIL — %s directly imports internal packages that are not approved roots:\n\n", module)
+		for _, v := range rootViolations {
+			fmt.Fprintf(os.Stderr, "  %s\n", v)
+		}
+		fmt.Fprintf(os.Stderr, "\nThis widens the SDK's public contract. Either drop the import, or add it to\n")
+		fmt.Fprintf(os.Stderr, "allowedRoots in tools/cmd/sdkguard/main.go with a comment explaining why SDK\n")
+		fmt.Fprintf(os.Stderr, "consumers are meant to reach it. Do not add it just to make this pass.\n")
+		return false, nil
+	}
+
+	header, want, err := readSnapshot(snapshotPath)
+	if err != nil {
+		return false, err
+	}
+
+	if update {
+		if err := writeSnapshot(snapshotPath, header, closure); err != nil {
+			return false, err
+		}
+		fmt.Printf("sdkguard: wrote %s (%d internal packages)\n", snapshotPath, len(closure))
+		fmt.Printf("sdkguard: review the diff and bump the version line before committing\n")
+		return true, nil
+	}
+
+	// Tier 2: the closure must match the snapshot in both directions. A removed
+	// entry matters as much as an added one -- a stale snapshot is a gate that
+	// has stopped describing reality, which is how the previous version rotted.
+	added := missingFrom(closure, want)
+	removed := missingFrom(want, closure)
+	if len(added) == 0 && len(removed) == 0 {
+		fmt.Printf("sdkguard: OK — %s internal deps match %s (%d packages)\n", module, snapshotPath, len(closure))
+		return true, nil
+	}
+
+	fmt.Fprintf(os.Stderr, "sdkguard: FAIL — %s internal dep closure does not match %s:\n\n", module, snapshotPath)
+	for _, p := range added {
+		fmt.Fprintf(os.Stderr, "  + %s  (new, not in snapshot)\n", p)
+	}
+	for _, p := range removed {
+		fmt.Fprintf(os.Stderr, "  - %s  (in snapshot, no longer a dependency)\n", p)
+	}
+	fmt.Fprintf(os.Stderr, "\nIf this growth is intended, accept it with:\n")
+	fmt.Fprintf(os.Stderr, "\n    go run ./tools/cmd/sdkguard/main.go -update\n\n")
+	fmt.Fprintf(os.Stderr, "and commit the resulting %s change so it is visible in review.\n", snapshotPath)
+	return false, nil
+}
+
+// directInternalImports returns the sorted, deduplicated set of project-local
+// internal/ packages imported directly by the inspected packages.
+func directInternalImports(module string) ([]string, error) {
+	out, err := goList("-f", "{{range .Imports}}{{println .}}{{end}}", module)
+	if err != nil {
+		return nil, err
+	}
+	return filterInternal(out), nil
+}
+
+// transitiveInternalDeps returns the sorted, deduplicated set of project-local
+// internal/ packages reachable from the inspected packages.
+func transitiveInternalDeps(module string) ([]string, error) {
+	out, err := goList("-deps", module)
+	if err != nil {
+		return nil, err
+	}
+	return filterInternal(out), nil
+}
+
+// goList shells out to `go list` and returns its stdout split into lines.
+func goList(args ...string) ([]string, error) {
+	cmd := exec.Command("go", append([]string{"list"}, args...)...)
 	cmd.Env = os.Environ()
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("go list -deps %s: %w\n%s", module, err, string(out))
+		return nil, fmt.Errorf("go list %s: %w\n%s", strings.Join(args, " "), err, string(out))
 	}
+	return strings.Split(string(out), "\n"), nil
+}
 
-	const modulePrefix = "github.com/falkcorp/audiobook-organizer/internal/"
-	var violations []string
-	for _, line := range strings.Split(string(out), "\n") {
+// filterInternal keeps only project-local internal/ packages, deduplicated and sorted.
+func filterInternal(lines []string) []string {
+	seen := make(map[string]bool)
+	var pkgs []string
+	for _, line := range lines {
 		pkg := strings.TrimSpace(line)
-		if !strings.HasPrefix(pkg, modulePrefix) {
+		if !strings.HasPrefix(pkg, modulePrefix) || seen[pkg] {
 			continue
 		}
-		if !allowedInternals[pkg] {
-			violations = append(violations, pkg)
+		seen[pkg] = true
+		pkgs = append(pkgs, pkg)
+	}
+	sort.Strings(pkgs)
+	return pkgs
+}
+
+// readSnapshot parses the tracked snapshot, returning its leading comment block
+// (preserved verbatim on -update) and the package list. A missing file is not an
+// error: it yields the default header and an empty list, so the first -update
+// bootstraps the file and a plain check reports every package as newly added.
+func readSnapshot(path string) (header, pkgs []string, err error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return defaultHeader, nil, nil
+		}
+		return nil, nil, fmt.Errorf("read snapshot %s: %w", path, err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	inHeader := true
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if inHeader && (trimmed == "" || strings.HasPrefix(trimmed, "#")) {
+			header = append(header, line)
+			continue
+		}
+		inHeader = false
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		pkgs = append(pkgs, trimmed)
+	}
+	sort.Strings(pkgs)
+	if len(header) == 0 {
+		header = defaultHeader
+	}
+	return header, pkgs, nil
+}
+
+// writeSnapshot rewrites the snapshot, preserving the existing header block.
+func writeSnapshot(path string, header, pkgs []string) error {
+	var b strings.Builder
+	for _, line := range header {
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	for _, pkg := range pkgs {
+		b.WriteString(pkg)
+		b.WriteString("\n")
+	}
+	if dir := filepath.Dir(path); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create %s: %w", dir, err)
 		}
 	}
-	return violations, nil
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		return fmt.Errorf("write snapshot %s: %w", path, err)
+	}
+	return nil
+}
+
+// missingFrom returns the entries of a that do not appear in b.
+func missingFrom(a, b []string) []string {
+	inB := make(map[string]bool, len(b))
+	for _, p := range b {
+		inB[p] = true
+	}
+	var out []string
+	for _, p := range a {
+		if !inB[p] {
+			out = append(out, p)
+		}
+	}
+	return out
 }

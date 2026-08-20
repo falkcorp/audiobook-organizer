@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.4.0
+# version: 3.5.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-08-12
+# last-edited: 2026-08-20
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -141,6 +141,82 @@ jobs:
 
       - name: Check interface width against baseline
         run: bash scripts/check-interface-width.sh
+
+  # Project-specific: the two checks that nothing was running.
+  #
+  # Both gates below existed only in the local Makefile (`make sdkguard`, and
+  # `sdkguard` as a prerequisite of `make ci`). Neither appeared in any workflow
+  # — before this job, `grep -rn 'sdkguard' .github/workflows/` matched only
+  # prose inside comments. The result was a gate that had been failing for 33
+  # days on a green main: internal/audioutil leaked into the SDK dep tree on
+  # 2026-07-18, internal/syncapi/progress on 07-30, internal/cache on 08-11, and
+  # every "Continuous Integration ✅" in between was reporting on a run that
+  # never executed the check.
+  #
+  # The bench build is the same failure with a different mechanism: nine
+  # cmd/dedup_bench_*.go files plus internal/server/bench.go sit behind
+  # `//go:build bench`, so `go build ./...` and `make ci` both skip them. On
+  # 2026-04-18, b6fe7c5a "refactor: extract internal/dedup package from server"
+  # moved AuthorDedupGroup/FindDuplicateAuthors out of internal/server, updated
+  # internal/server/bench.go, and missed all four cmd/ call sites. Nothing
+  # compiled them, so the tree did not build under -tags bench for the next four
+  # months and no run ever said so.
+  #
+  # ⚠️ THIS JOB REPORTS BUT DOES NOT BLOCK — same caveat as the interface-width
+  # ratchet above. Read 2026-08-20, main's required checks are exactly "Minimal
+  # CI / Minimal CI Summary", "Require changelog fragment", and "TODO Fragment
+  # Headers". This job is none of them, so a PR that re-breaks either check goes
+  # red here and merges anyway. Making it binding means adding "SDK Deps & Bench
+  # Build" to the required-checks list, which is a branch-protection change and
+  # therefore a human action — not something to work around by smuggling these
+  # steps into an unrelated job that happens to already be required.
+  sdk-deps-and-bench:
+    name: SDK Deps & Bench Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOEXPERIMENT: jsonv2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+
+      - name: Set up Go (no built-in cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26'
+          cache: false
+
+      - name: Restore Go cache (manual)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.26-
+            ${{ runner.os }}-go-
+
+      - name: Install system packages
+        run: sudo apt-get update && sudo apt-get install -y libtag1-dev
+
+      # Fails in BOTH directions against tools/cmd/sdkguard/internal-deps.txt: a
+      # new internal package in the SDK's dep tree, or a stale entry that is no
+      # longer a dependency. The fix for legitimate growth is
+      # `go run ./tools/cmd/sdkguard/main.go -update`, which rewrites that
+      # tracked file so the change is reviewable in the PR diff.
+      - name: SDK internal-dependency ratchet
+        run: make sdkguard
+
+      # Both steps invoke the same make targets a contributor runs locally,
+      # rather than restating the commands here. That is the point of the whole
+      # change: `make ci` gained bench-check alongside sdkguard, so local and CI
+      # enforce one contract and neither can drift into checking less than the
+      # other. See the Makefile for why bench-check is not `build-bench`.
+      - name: Typecheck bench-tagged code
+        run: make bench-check
 
   # Project-specific: verify mockery mocks are not stale
   mocks-check:
