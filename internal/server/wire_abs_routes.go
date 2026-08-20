@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-08-19
+// last-edited: 2026-08-20
 
 package server
 
@@ -512,7 +512,7 @@ func (s *Server) wireABSRoutes() {
 	// an always-on per-request line is journal noise outside a diagnostic window.
 	// Registered FIRST so it observes every request, including ones the identity
 	// middleware then rejects — a request that 401s is exactly the one worth seeing.
-	if strings.TrimSpace(os.Getenv(servermiddleware.ABSAuthProbeEnvVar)) != "" {
+	if config.AppConfig.ABSAuthProbeEnabled {
 		absGroup.Use(servermiddleware.ABSAuthProbe())
 		slog.Warn("abs: auth probe ENABLED — every ABS request logs which credentials it carried. " +
 			"Credential VALUES are never logged (booleans and lengths only), but this is verbose; " +

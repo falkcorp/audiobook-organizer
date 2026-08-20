@@ -1,6 +1,7 @@
 // file: internal/ai/openai_parser_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
+// last-edited: 2026-08-20
 
 package ai
 
@@ -1579,8 +1580,13 @@ func TestParseAudiobook_WithFakeServer(t *testing.T) {
 	defer server.Close()
 
 	// Point OPENAI_BASE_URL to our fake server
+	origBaseURL := config.AppConfig.OpenAIBaseURL
 	os.Setenv("OPENAI_BASE_URL", server.URL)
-	defer os.Unsetenv("OPENAI_BASE_URL")
+	config.InitConfig()
+	defer func() {
+		os.Unsetenv("OPENAI_BASE_URL")
+		config.Mutate(func(c *config.Config) { c.OpenAIBaseURL = origBaseURL })
+	}()
 
 	parser := NewOpenAIParser(nil, "fake-key", true)
 	ctx := context.Background()
@@ -1652,8 +1658,13 @@ func TestParseAudiobook_MinimalContext(t *testing.T) {
 	}))
 	defer server.Close()
 
+	origBaseURL := config.AppConfig.OpenAIBaseURL
 	os.Setenv("OPENAI_BASE_URL", server.URL)
-	defer os.Unsetenv("OPENAI_BASE_URL")
+	config.InitConfig()
+	defer func() {
+		os.Unsetenv("OPENAI_BASE_URL")
+		config.Mutate(func(c *config.Config) { c.OpenAIBaseURL = origBaseURL })
+	}()
 
 	parser := NewOpenAIParser(nil, "fake-key", true)
 	ctx := context.Background()
@@ -1778,7 +1789,12 @@ func TestOpenAIParser_UsesConfiguredModels(t *testing.T) {
 			}))
 			defer srv.Close()
 
+			origBaseURL := config.AppConfig.OpenAIBaseURL
 			t.Setenv("OPENAI_BASE_URL", srv.URL)
+			config.InitConfig()
+			t.Cleanup(func() {
+				config.Mutate(func(c *config.Config) { c.OpenAIBaseURL = origBaseURL })
+			})
 
 			p := NewOpenAIParser(tt.cfg, "test-api-key", true)
 			if err := tt.invoke(p, srv); err != nil {

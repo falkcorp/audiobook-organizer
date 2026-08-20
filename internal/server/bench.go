@@ -1,7 +1,7 @@
 // file: internal/server/bench.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 5e6f7a8b-9c0d-1234-ef01-555555555555
-// last-edited: 2026-07-03
+// last-edited: 2026-08-20
 
 //go:build bench
 
@@ -392,11 +392,7 @@ type benchAuthorData struct {
 }
 
 func benchAPIKey() string {
-	key := os.Getenv("OPENAI_API_KEY")
-	if key == "" {
-		key = config.AppConfig.OpenAIAPIKey
-	}
-	return key
+	return config.AppConfig.OpenAIAPIKey
 }
 
 func benchOpenAIClient() (*openai.Client, error) {
@@ -405,7 +401,7 @@ func benchOpenAIClient() (*openai.Client, error) {
 		return nil, fmt.Errorf("OPENAI_API_KEY not set")
 	}
 	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
-	if baseURL := os.Getenv("OPENAI_BASE_URL"); baseURL != "" {
+	if baseURL := config.AppConfig.OpenAIBaseURL; baseURL != "" {
 		opts = append(opts, option.WithBaseURL(baseURL))
 	}
 	client := openai.NewClient(opts...)

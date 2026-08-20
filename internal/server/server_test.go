@@ -752,7 +752,6 @@ func TestExportMetadata(t *testing.T) {
 
 func TestBulkFetchMetadataRespectsOverridesAndMissingFields(t *testing.T) {
 	server, cleanup := setupTestServer(t)
-	useOnlyOpenLibrary(t)
 	defer cleanup()
 
 	tempDir := t.TempDir()
@@ -801,11 +800,7 @@ func TestBulkFetchMetadataRespectsOverridesAndMissingFields(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
-	originalBaseURL := os.Getenv("OPENLIBRARY_BASE_URL")
-	require.NoError(t, os.Setenv("OPENLIBRARY_BASE_URL", mockServer.URL))
-	t.Cleanup(func() {
-		_ = os.Setenv("OPENLIBRARY_BASE_URL", originalBaseURL)
-	})
+	useOnlyOpenLibrary(t, mockServer.URL)
 
 	// Act: bulk fetch metadata for both books.
 	payload := map[string]any{

@@ -1,6 +1,7 @@
 // file: cmd/dedup_bench_crossval.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3c4d5e6f-7a8b-9012-cdef-333333333333
+// last-edited: 2026-08-20
 
 //go:build bench
 
@@ -87,11 +88,8 @@ For "reviews": only include entries where you disagree or want to modify.
 For "missed": include any obvious duplicates or issues that model A completely missed.`
 
 func runDedupBenchCrossval(cmd *cobra.Command, args []string) error {
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		config.InitConfig()
-		apiKey = config.AppConfig.OpenAIAPIKey
-	}
+	config.InitConfig()
+	apiKey := config.AppConfig.OpenAIAPIKey
 	if apiKey == "" {
 		return fmt.Errorf("OPENAI_API_KEY env var required")
 	}

@@ -1,7 +1,7 @@
 // file: internal/transcribe/remote.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
-// last-edited: 2026-07-01
+// last-edited: 2026-08-20
 
 package transcribe
 
@@ -15,9 +15,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
 
 // wavJob pairs a book ID with its local WAV path for a transcription request.
@@ -94,15 +95,9 @@ func transcribeRemoteBatched(ctx context.Context, remoteURL string, jobs map[str
 	total := len(jobs)
 	done := 0
 
-	// WHISPER_BATCH_SLEEP_MS: milliseconds to pause between sub-batches so the
+	// WhisperBatchSleepMS: milliseconds to pause between sub-batches so the
 	// GPU can shed heat. Defaults to 8000ms (8s). Set to 0 to disable.
-	batchSleepMs := 8000
-	if v := os.Getenv("WHISPER_BATCH_SLEEP_MS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			batchSleepMs = n
-		}
-	}
-	batchSleep := time.Duration(batchSleepMs) * time.Millisecond
+	batchSleep := time.Duration(config.AppConfig.WhisperBatchSleepMS) * time.Millisecond
 
 	for start := 0; start < len(ordered); start += whisperBatchSize {
 		end := start + whisperBatchSize

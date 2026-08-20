@@ -1,7 +1,7 @@
 // file: internal/metadata/openlibrary_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-07-13
+// last-edited: 2026-08-20
 
 package metadata
 
@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
 
 func TestNewOpenLibraryClient(t *testing.T) {
@@ -26,13 +28,26 @@ func TestNewOpenLibraryClient(t *testing.T) {
 	}
 }
 
+// TestNewOpenLibraryClientUsesEnvBaseURL locks the 2026-08-20 os.Getenv-to-viper
+// consolidation: OPENLIBRARY_BASE_URL now flows through
+// config.AppConfig.MetadataSources (viper.BindEnv), not a live os.Getenv read, so
+// the env var only takes effect once InitConfig() (re)populates AppConfig — same
+// as every other viper-bound setting in this repo. Restores the pre-test
+// MetadataSources afterward so this doesn't leak a closed httptest URL into
+// later tests in this package.
 func TestNewOpenLibraryClientUsesEnvBaseURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
+	original := config.AppConfig.MetadataSources
+	t.Cleanup(func() {
+		config.Mutate(func(c *config.Config) { c.MetadataSources = original })
+	})
+
 	t.Setenv("OPENLIBRARY_BASE_URL", server.URL)
+	config.InitConfig()
 
 	client := NewOpenLibraryClient()
 	if client.baseURL != server.URL {

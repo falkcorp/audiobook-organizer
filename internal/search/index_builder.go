@@ -1,7 +1,7 @@
 // file: internal/search/index_builder.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8a1c2f4d-5b3e-4f70-b7d6-2e8d0f1b9a57
-// last-edited: 2026-08-18
+// last-edited: 2026-08-20
 //
 // Helpers that project a database.Book (with its author, series,
 // and tag relations resolved) into a BookDocument ready for
@@ -12,11 +12,9 @@
 package search
 
 import (
-	"os"
-	"strconv"
-	"sync"
 	"unicode/utf8"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
@@ -42,23 +40,13 @@ type indexBuilderStore interface {
 // disables truncation entirely (full description indexed).
 const defaultDescriptionMaxChars = 500
 
-var (
-	descriptionMaxCharsOnce sync.Once
-	descriptionMaxChars     int
-)
-
 // descriptionLimit returns the configured max-rune limit for the
-// description field, loading from the environment on first call.
+// description field, from config.AppConfig.BleveDescriptionMaxChars.
 func descriptionLimit() int {
-	descriptionMaxCharsOnce.Do(func() {
-		descriptionMaxChars = defaultDescriptionMaxChars
-		if v := os.Getenv("BLEVE_DESCRIPTION_MAX_CHARS"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-				descriptionMaxChars = n
-			}
-		}
-	})
-	return descriptionMaxChars
+	if n := config.AppConfig.BleveDescriptionMaxChars; n >= 0 {
+		return n
+	}
+	return defaultDescriptionMaxChars
 }
 
 // truncateForIndex returns the first n UTF-8 runes of s. n == 0

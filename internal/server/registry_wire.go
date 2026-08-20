@@ -273,6 +273,7 @@ func init() {
 					LibraryWritePath:    cfg.ITunes.LibraryWritePath,
 					AutoWriteBack:       cfg.ITunes.AutoWriteBack,
 					ITLWriteBackEnabled: cfg.ITunes.WriteBackEnabled,
+					WriteBackDryRun:     cfg.ITunes.WriteBackDryRun,
 				},
 				AudiobookRoot: cfg.RootDir,
 				ReportDir:     filepath.Join(cfg.RootDir, "reports"),

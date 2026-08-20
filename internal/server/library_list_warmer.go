@@ -1,7 +1,7 @@
 // file: internal/server/library_list_warmer.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 7e8d9a0b-1c2d-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-08-19
+// last-edited: 2026-08-20
 
 // Pre-warms svc.audiobookService.listCache by firing the queries the UI
 // is most likely to hit on first load — library page (first few pages,
@@ -16,13 +16,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"os"
 	"runtime"
 	"runtime/debug"
 	"strconv"
 	"time"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
@@ -40,30 +40,23 @@ func readHeapAllocMB() uint64 {
 // trickle is allowed to grow heap by. Production measurement (full-library
 // library, ~13GB baseline): a single trickle query allocates ~1.8GB
 // transient before GC. Default 4096 (4GB) gives one-query headroom +
-// GC reclaim buffer. Tunable via LIST_WARMER_HEAP_DELTA_MB.
+// GC reclaim buffer. Tunable via config.AppConfig.ListWarmerHeapDeltaMB
+// (LIST_WARMER_HEAP_DELTA_MB env var, with LIST_WARMER_MAX_HEAP_MB accepted
+// as a legacy alias — see viper.BindEnv in InitConfig).
 func warmerMemoryDeltaMB() uint64 {
-	if v := os.Getenv("LIST_WARMER_HEAP_DELTA_MB"); v != "" {
-		if n, err := strconv.ParseUint(v, 10, 64); err == nil && n > 0 {
-			return n
-		}
-	}
-	// Back-compat: the old var name now also means "delta", with sane min.
-	if v := os.Getenv("LIST_WARMER_MAX_HEAP_MB"); v != "" {
-		if n, err := strconv.ParseUint(v, 10, 64); err == nil && n >= 256 {
-			return n
-		}
+	if n := config.AppConfig.ListWarmerHeapDeltaMB; n > 0 {
+		return uint64(n)
 	}
 	return 4096
 }
 
 // warmerTrickleInterval is the gap between trickle ticks. Default 10s
 // → ~30 min to drain a 180-query backlog. Tunable via
-// LIST_WARMER_TRICKLE_INTERVAL_MS.
+// config.AppConfig.ListWarmerTrickleIntervalMS (LIST_WARMER_TRICKLE_INTERVAL_MS
+// env var).
 func warmerTrickleInterval() time.Duration {
-	if v := os.Getenv("LIST_WARMER_TRICKLE_INTERVAL_MS"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 500 {
-			return time.Duration(n) * time.Millisecond
-		}
+	if n := config.AppConfig.ListWarmerTrickleIntervalMS; n >= 500 {
+		return time.Duration(n) * time.Millisecond
 	}
 	return 10 * time.Second
 }

@@ -1,6 +1,7 @@
 // file: cmd/dedup_bench_pass2.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 2b3c4d5e-6f7a-8901-bcde-222222222222
+// last-edited: 2026-08-20
 
 //go:build bench
 
@@ -69,11 +70,8 @@ INITIALS FORMATTING: Always use spaces after periods in initials: "C. B. Lee" no
 Return ONLY valid JSON: {"suggestions": [{"group_index": N, "action": "merge|split|rename|skip|alias|reclassify", "canonical_name": "Correct Name", "reason": "brief explanation using book title evidence", "confidence": "high|medium|low", "roles": {"author": {"name": "Name", "variants": ["V1"], "reason": "why"}, "narrator": {"name": "Name", "ids": [], "reason": "why"}, "publisher": {"name": "Name", "ids": [], "reason": "why"}}}]}`
 
 func runDedupBenchPass2(cmd *cobra.Command, args []string) error {
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		config.InitConfig()
-		apiKey = config.AppConfig.OpenAIAPIKey
-	}
+	config.InitConfig()
+	apiKey := config.AppConfig.OpenAIAPIKey
 	if apiKey == "" {
 		return fmt.Errorf("OPENAI_API_KEY env var required")
 	}
@@ -338,7 +336,7 @@ func newInsecureClient() *http.Client {
 // submitSingleBatch submits a single request as a batch job.
 func submitSingleBatch(ctx context.Context, apiKey, model, systemPrompt, userPrompt, customID, runDir string) error {
 	clientOpts := []option.RequestOption{option.WithAPIKey(apiKey)}
-	if baseURL := os.Getenv("OPENAI_BASE_URL"); baseURL != "" {
+	if baseURL := config.AppConfig.OpenAIBaseURL; baseURL != "" {
 		clientOpts = append(clientOpts, option.WithBaseURL(baseURL))
 	}
 	client := openai.NewClient(clientOpts...)

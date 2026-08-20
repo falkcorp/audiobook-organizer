@@ -1,6 +1,7 @@
 // file: cmd/dedup_bench_status.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 1a2b3c4d-5e6f-7890-abcd-111111111111
+// last-edited: 2026-08-20
 
 //go:build bench
 
@@ -9,7 +10,6 @@ package cmd
 import (
 	"fmt"
 	"log/slog"
-	"os"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/openai/openai-go/v3"
@@ -25,17 +25,14 @@ var dedupBenchStatusCmd = &cobra.Command{
 }
 
 func runDedupBenchStatus(cmd *cobra.Command, args []string) error {
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		config.InitConfig()
-		apiKey = config.AppConfig.OpenAIAPIKey
-	}
+	config.InitConfig()
+	apiKey := config.AppConfig.OpenAIAPIKey
 	if apiKey == "" {
 		return fmt.Errorf("OPENAI_API_KEY env var required")
 	}
 
 	clientOpts := []option.RequestOption{option.WithAPIKey(apiKey)}
-	if baseURL := os.Getenv("OPENAI_BASE_URL"); baseURL != "" {
+	if baseURL := config.AppConfig.OpenAIBaseURL; baseURL != "" {
 		clientOpts = append(clientOpts, option.WithBaseURL(baseURL))
 	}
 	client := openai.NewClient(clientOpts...)

@@ -1,7 +1,7 @@
 // file: internal/ai/embedding_client.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-03
+// last-edited: 2026-08-20
 
 package ai
 
@@ -13,11 +13,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 )
@@ -107,12 +107,13 @@ const defaultEmbeddingModel = "text-embedding-3-large"
 
 // NewEmbeddingClient creates a new embedding client using the given API key,
 // with the default model (text-embedding-3-large) and the base URL taken from
-// the OPENAI_BASE_URL env (if set). Preserved for backward compatibility; new
-// callers that need an explicit model or a per-client base URL (e.g. a local
-// Ollama endpoint) should use NewEmbeddingClientWithOptions. The returned
-// client has no cache wired up — call WithCache to enable content-hash caching.
+// config.AppConfig.OpenAIBaseURL (if set). Preserved for backward
+// compatibility; new callers that need an explicit model or a per-client base
+// URL (e.g. a local Ollama endpoint) should use NewEmbeddingClientWithOptions.
+// The returned client has no cache wired up — call WithCache to enable
+// content-hash caching.
 func NewEmbeddingClient(apiKey string) *EmbeddingClient {
-	return NewEmbeddingClientWithOptions(apiKey, defaultEmbeddingModel, os.Getenv("OPENAI_BASE_URL"))
+	return NewEmbeddingClientWithOptions(apiKey, defaultEmbeddingModel, config.AppConfig.OpenAIBaseURL)
 }
 
 // NewEmbeddingClientWithOptions creates an embedding client pinned to an

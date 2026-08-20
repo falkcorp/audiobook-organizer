@@ -1,7 +1,7 @@
 // file: internal/metadata/audnexus.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-a3b4c5d6e7f8
-// last-edited: 2026-07-13
+// last-edited: 2026-08-20
 
 package metadata
 
@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -30,10 +29,7 @@ type AudnexusClient struct {
 
 // NewAudnexusClient creates a new Audnexus API client.
 func NewAudnexusClient() *AudnexusClient {
-	baseURL := os.Getenv("AUDNEXUS_BASE_URL")
-	if baseURL == "" {
-		baseURL = "https://api.audnex.us"
-	}
+	baseURL := resolveBaseURL("audnexus", "https://api.audnex.us")
 	return &AudnexusClient{
 		httpClient: providerhttp.Client("audnexus"),
 		baseURL:    strings.TrimRight(baseURL, "/"),

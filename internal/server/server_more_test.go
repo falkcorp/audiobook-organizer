@@ -1,7 +1,7 @@
 // file: internal/server/server_more_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 18a6b0a3-7e78-4e0f-8b8e-0e4c1dbde6de
-// last-edited: 2026-08-16
+// last-edited: 2026-08-20
 
 //go:build !windows
 
@@ -159,7 +159,6 @@ func TestImportMetadataEndpoint(t *testing.T) {
 
 func TestSearchAndFetchMetadata(t *testing.T) {
 	server, cleanup := setupTestServer(t)
-	useOnlyOpenLibrary(t)
 	defer cleanup()
 
 	mux := http.NewServeMux()
@@ -182,7 +181,7 @@ func TestSearchAndFetchMetadata(t *testing.T) {
 	})
 	openLibrary := httptest.NewServer(mux)
 	defer openLibrary.Close()
-	t.Setenv("OPENLIBRARY_BASE_URL", openLibrary.URL)
+	useOnlyOpenLibrary(t, openLibrary.URL)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/metadata/search", nil)
 	w := httptest.NewRecorder()

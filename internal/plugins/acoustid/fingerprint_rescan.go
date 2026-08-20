@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/fingerprint_rescan.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a7b8c9d0-e1f2-3456-def0-123456789abc
-// last-edited: 2026-08-19
+// last-edited: 2026-08-20
 
 package acoustid
 
@@ -13,11 +13,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -293,12 +293,11 @@ func writeIneligibleReport(opID string, entries []ineligibleEntry) (string, erro
 }
 
 // fpRescanWorkers returns the number of parallel fpcalc workers for rescan.
-// Tunable via FP_PARALLEL_WORKERS env var; defaults to 4.
+// Tunable via config.AppConfig.FPParallelWorkers (FP_PARALLEL_WORKERS env
+// var); defaults to 4.
 func fpRescanWorkers() int {
-	if v := os.Getenv("FP_PARALLEL_WORKERS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 32 {
-			return n
-		}
+	if n := config.AppConfig.FPParallelWorkers; n >= 1 && n <= 32 {
+		return n
 	}
 	return 4
 }

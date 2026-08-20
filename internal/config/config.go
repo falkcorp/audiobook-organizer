@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.79.0
+// version: 1.80.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-08-16
+// last-edited: 2026-08-20
 
 package config
 
@@ -35,6 +35,9 @@ type MetadataSource struct {
 	Priority     int               `json:"priority"`
 	RequiresAuth bool              `json:"requires_auth"`
 	Credentials  map[string]string `json:"credentials"`
+	// BaseURL overrides the provider client's default API base URL, e.g. for
+	// self-hosted mirrors or test doubles. Empty means "use the client's built-in default."
+	BaseURL string `json:"base_url,omitempty" mapstructure:"base_url"`
 }
 
 // DownloadClientConfig represents download client connection settings.
@@ -191,6 +194,11 @@ type DedupConfig struct {
 	// unchanged for the legacy model and any not-yet-calibrated model. Populate
 	// via the dedup.calibrate-embedding-thresholds report (owner-reviewed).
 	EmbeddingThresholdsByModel map[string]EmbeddingModelThresholds `json:"embedding_thresholds_by_model,omitempty" mapstructure:"embedding_thresholds_by_model"`
+	// ChromemLazy skips the eager HydrateChromem at startup when true (default
+	// false / eager). FindSimilar then falls back to the SQLite linear-scan
+	// path instead of the chromem ANN index — trades ~6GB heap for slower
+	// (50-200ms vs <10ms) similarity queries. See internal/dedup/lifecycle.go.
+	ChromemLazy bool `json:"chromem_lazy" mapstructure:"chromem_lazy"`
 }
 
 // EmbeddingModelThresholds is a per-model override of the book cosine-similarity
@@ -236,16 +244,20 @@ type DedupBoilerplateConfig struct {
 
 // ITunesConfig holds all settings for the iTunes sync and write-back subsystem.
 type ITunesConfig struct {
-	SyncEnabled      bool            `json:"sync_enabled"       mapstructure:"sync_enabled"`
-	SyncInterval     int             `json:"sync_interval"      mapstructure:"sync_interval"`
-	WriteBackEnabled bool            `json:"write_back_enabled" mapstructure:"write_back_enabled"`
-	LibraryWritePath string          `json:"library_write_path" mapstructure:"library_write_path"`
-	LibraryReadPath  string          `json:"library_read_path"  mapstructure:"library_read_path"`
-	AutoWriteBack    bool            `json:"auto_write_back"    mapstructure:"auto_write_back"`
-	PathTrimEnabled  bool            `json:"path_trim_enabled"  mapstructure:"path_trim_enabled"`
-	WindowsRootPath  string          `json:"windows_root_path"  mapstructure:"windows_root_path"`
-	MediaRoot        string          `json:"media_root"         mapstructure:"media_root"`
-	PathMappings     []ITunesPathMap `json:"path_mappings"      mapstructure:"path_mappings"`
+	SyncEnabled      bool   `json:"sync_enabled"       mapstructure:"sync_enabled"`
+	SyncInterval     int    `json:"sync_interval"      mapstructure:"sync_interval"`
+	WriteBackEnabled bool   `json:"write_back_enabled" mapstructure:"write_back_enabled"`
+	LibraryWritePath string `json:"library_write_path" mapstructure:"library_write_path"`
+	LibraryReadPath  string `json:"library_read_path"  mapstructure:"library_read_path"`
+	AutoWriteBack    bool   `json:"auto_write_back"    mapstructure:"auto_write_back"`
+	// WriteBackDryRun logs every write-back flush in detail but performs no
+	// write to disk. Meant to be toggled via ITUNES_WRITEBACK_DRYRUN + a
+	// service restart to diagnose a suspicious enqueue pattern without risk.
+	WriteBackDryRun bool            `json:"write_back_dry_run" mapstructure:"write_back_dry_run"`
+	PathTrimEnabled bool            `json:"path_trim_enabled"  mapstructure:"path_trim_enabled"`
+	WindowsRootPath string          `json:"windows_root_path"  mapstructure:"windows_root_path"`
+	MediaRoot       string          `json:"media_root"         mapstructure:"media_root"`
+	PathMappings    []ITunesPathMap `json:"path_mappings"      mapstructure:"path_mappings"`
 
 	// Libraries is the explicit 4-state library model (Original/AO x .itl/.xml)
 	// plus the PointedAt/ImportSource mode facts. Inert until populated: when empty,
@@ -550,9 +562,63 @@ type Config struct {
 
 	// AcoustIDAPIKey is the acoustid.org client ID used by the
 	// acoustid.lookup-online op. Persisted to the settings DB (masked
-	// in API responses). Falls back to the ACOUSTID_API_KEY env var
-	// when empty, for compatibility with the original env-only setup.
+	// in API responses). Also settable via the ACOUSTID_API_KEY env var
+	// (viper.BindEnv, see InitConfig) so ops-only deployments don't need
+	// to touch the settings DB.
 	AcoustIDAPIKey string `json:"acoustid_api_key"`
+
+	// FPParallelWorkers is the number of parallel fpcalc workers used by the
+	// acoustid.fingerprint-rescan op. Bounds-checked to [1,32] at read time;
+	// falls back to 4 outside that range. See internal/plugins/acoustid.
+	FPParallelWorkers int `json:"fp_parallel_workers" mapstructure:"fp_parallel_workers"`
+
+	// WhisperClipCacheDir overrides where the intro-transcribe job caches
+	// extracted 90s WAV clips. Empty resolves to {RootDir}/.wav-cache.
+	WhisperClipCacheDir string `json:"whisper_clip_cache_dir" mapstructure:"whisper_clip_cache_dir"`
+	// WhisperBatchSleepMS is the pause (ms) between remote-Whisper sub-batches
+	// so the GPU can shed heat. 0 disables the pause.
+	WhisperBatchSleepMS int `json:"whisper_batch_sleep_ms" mapstructure:"whisper_batch_sleep_ms"`
+
+	// OpenAIBaseURL overrides the OpenAI API base URL for every OpenAI cloud
+	// API caller app-wide: the OpenAI parser (internal/ai/openai_parser.go),
+	// the embedding client (internal/ai/embedding_client.go), the dedup-bench
+	// CLI tools, and internal/server/bench.go. Distinct from
+	// AIBackend.LocalBaseURL, which is a local LLM/embedding endpoint, not an
+	// OpenAI cloud API override.
+	OpenAIBaseURL string `json:"openai_base_url" mapstructure:"openai_base_url"`
+
+	// ABSAuthProbeEnabled turns on a verbose per-request diagnostic logging
+	// which credentials each Audiobookshelf client sends. Off by default —
+	// ABS routes are polled every 15-20s, so an always-on line is noise
+	// outside a diagnostic window.
+	ABSAuthProbeEnabled bool `json:"abs_auth_probe_enabled" mapstructure:"abs_auth_probe_enabled"`
+	// ABSItunesPositionBackfillUserID pins the one-time iTunes-position
+	// backfill job to a specific user ID instead of the default
+	// single-user/earliest-created-user resolution. An ID matching no user
+	// is a hard error, not a silent fallback.
+	ABSItunesPositionBackfillUserID string `json:"abs_itunes_position_backfill_user_id" mapstructure:"abs_itunes_position_backfill_user_id"`
+
+	// OTelExporterOTLPEndpoint is the OpenTelemetry OTLP exporter endpoint.
+	// Empty (the default) disables OpenTelemetry entirely.
+	OTelExporterOTLPEndpoint string `json:"otel_exporter_otlp_endpoint" mapstructure:"otel_exporter_otlp_endpoint"`
+
+	// ListWarmerHeapDeltaMB caps how many MB above the post-eager-hydrate
+	// baseline heap the library-list cache warmer's trickle phase may grow
+	// heap by before backing off. Also read from the legacy
+	// LIST_WARMER_MAX_HEAP_MB env var name for back-compat (same setting,
+	// old name — see internal/server/library_list_warmer.go).
+	ListWarmerHeapDeltaMB int `json:"list_warmer_heap_delta_mb" mapstructure:"list_warmer_heap_delta_mb"`
+	// ListWarmerTrickleIntervalMS is the gap (ms) between library-list cache
+	// warmer trickle ticks.
+	ListWarmerTrickleIntervalMS int `json:"list_warmer_trickle_interval_ms" mapstructure:"list_warmer_trickle_interval_ms"`
+
+	// LibraryCountsCacheMinIntervalSeconds bounds how often the primary-book
+	// count cache (CountPrimaryBooks) is allowed to re-scan the library.
+	LibraryCountsCacheMinIntervalSeconds int `json:"library_counts_cache_min_interval_seconds" mapstructure:"library_counts_cache_min_interval_seconds"`
+
+	// BleveDescriptionMaxChars caps how many runes of a book's description
+	// are indexed into the Bleve full-text search index.
+	BleveDescriptionMaxChars int `json:"bleve_description_max_chars" mapstructure:"bleve_description_max_chars"`
 
 	// Per-feature OpenAI model selection. Default to gpt-5-mini for all three
 	// to preserve historical behavior. See spec docs/superpowers/specs/2026-04-27-per-feature-llm-model-knob-design.md.
@@ -1054,6 +1120,45 @@ func InitConfig() {
 	viper.SetDefault("enable_ai_parsing", true)
 	viper.SetDefault("openai_api_key", "")
 	viper.SetDefault("acoustid_api_key", "")
+	viper.BindEnv("acoustid_api_key", "ACOUSTID_API_KEY") //nolint:errcheck
+
+	// 2026-08-20 os.Getenv-to-viper consolidation: previously ad-hoc
+	// os.Getenv() reads scattered across their respective packages.
+	viper.SetDefault("fp_parallel_workers", 4)
+	viper.SetDefault("whisper_clip_cache_dir", "")
+	viper.SetDefault("whisper_batch_sleep_ms", 8000)
+	viper.SetDefault("openai_base_url", "")
+	viper.SetDefault("abs_auth_probe_enabled", false)
+	viper.SetDefault("abs_itunes_position_backfill_user_id", "")
+	viper.SetDefault("otel_exporter_otlp_endpoint", "")
+	viper.SetDefault("list_warmer_heap_delta_mb", 4096)
+	viper.SetDefault("list_warmer_trickle_interval_ms", 10000)
+	viper.SetDefault("library_counts_cache_min_interval_seconds", 600)
+	viper.SetDefault("bleve_description_max_chars", 500)
+	// Metadata-provider base URL overrides, backfilled onto MetadataSources[i].BaseURL
+	// below (viper.BindEnv doesn't address slice elements directly).
+	viper.SetDefault("audible_base_url", "")
+	viper.SetDefault("openlibrary_base_url", "")
+	viper.SetDefault("audnexus_base_url", "")
+	viper.SetDefault("google_books_base_url", "")
+	viper.BindEnv("fp_parallel_workers", "FP_PARALLEL_WORKERS")                                   //nolint:errcheck
+	viper.BindEnv("whisper_clip_cache_dir", "WHISPER_CLIP_CACHE_DIR")                             //nolint:errcheck
+	viper.BindEnv("whisper_batch_sleep_ms", "WHISPER_BATCH_SLEEP_MS")                             //nolint:errcheck
+	viper.BindEnv("openai_base_url", "OPENAI_BASE_URL")                                            //nolint:errcheck
+	viper.BindEnv("abs_auth_probe_enabled", "ABS_AUTH_PROBE")                                     //nolint:errcheck
+	viper.BindEnv("abs_itunes_position_backfill_user_id", "ABS_ITUNES_POSITION_BACKFILL_USER_ID") //nolint:errcheck
+	viper.BindEnv("otel_exporter_otlp_endpoint", "OTEL_EXPORTER_OTLP_ENDPOINT")                   //nolint:errcheck
+	// LIST_WARMER_MAX_HEAP_MB is a legacy alias for the same setting — viper
+	// checks env var names in the order given, so the current name wins when
+	// both are set.
+	viper.BindEnv("list_warmer_heap_delta_mb", "LIST_WARMER_HEAP_DELTA_MB", "LIST_WARMER_MAX_HEAP_MB")      //nolint:errcheck
+	viper.BindEnv("list_warmer_trickle_interval_ms", "LIST_WARMER_TRICKLE_INTERVAL_MS")                     //nolint:errcheck
+	viper.BindEnv("library_counts_cache_min_interval_seconds", "LIBRARY_COUNTS_CACHE_MIN_INTERVAL_SECONDS") //nolint:errcheck
+	viper.BindEnv("bleve_description_max_chars", "BLEVE_DESCRIPTION_MAX_CHARS")                             //nolint:errcheck
+	viper.BindEnv("audible_base_url", "AUDIBLE_BASE_URL")                                                   //nolint:errcheck
+	viper.BindEnv("openlibrary_base_url", "OPENLIBRARY_BASE_URL")                                           //nolint:errcheck
+	viper.BindEnv("audnexus_base_url", "AUDNEXUS_BASE_URL")                                                 //nolint:errcheck
+	viper.BindEnv("google_books_base_url", "GOOGLE_BOOKS_BASE_URL")                                         //nolint:errcheck
 
 	// Per-feature model defaults — gpt-5-mini preserves historical behavior.
 	// dedup_review_model has moved to dedup.review_model (nested DedupConfig).
@@ -1214,6 +1319,7 @@ func InitConfig() {
 	viper.SetDefault("itunes.library_write_path", "")
 	viper.SetDefault("itunes.library_read_path", "")
 	viper.SetDefault("itunes.auto_write_back", false)
+	viper.SetDefault("itunes.write_back_dry_run", false)
 	viper.SetDefault("itunes.path_trim_enabled", false)
 	viper.SetDefault("itunes.windows_root_path", "")
 	viper.SetDefault("itunes.media_root", "")
@@ -1221,6 +1327,7 @@ func InitConfig() {
 	viper.BindEnv("itunes.sync_interval", "ITUNES_SYNC_INTERVAL")           //nolint:errcheck
 	viper.BindEnv("itunes.write_back_enabled", "ITUNES_WRITE_BACK_ENABLED") //nolint:errcheck
 	viper.BindEnv("itunes.auto_write_back", "ITUNES_AUTO_WRITE_BACK")       //nolint:errcheck
+	viper.BindEnv("itunes.write_back_dry_run", "ITUNES_WRITEBACK_DRYRUN")   //nolint:errcheck
 
 	// Auto-update defaults
 	viper.SetDefault("auto_update.enabled", false)
@@ -1317,6 +1424,8 @@ func InitConfig() {
 	viper.SetDefault("dedup.embeddings_enabled", true)              // opt-out: set false on no-internet boxes
 	viper.SetDefault("dedup.llm_auto_merge_high_confidence", false) // opt-in
 	viper.SetDefault("dedup.on_import_via_scheduler", false)        // opt-in — keep eager path until M4 confirmed
+	viper.SetDefault("dedup.chromem_lazy", false)
+	viper.BindEnv("dedup.chromem_lazy", "DEDUP_CHROMEM_LAZY") //nolint:errcheck
 
 	// Dedup boilerplate-blocklist extras (nested under "dedup_boilerplate.*",
 	// INIT-4 T5). Empty by default — the compiled-in blocklist in
@@ -1457,12 +1566,24 @@ func InitConfig() {
 			GoogleBooksAPIKey: viper.GetString("google_books_api_key"),
 
 			// AI parsing
-			EnableAIParsing:     viper.GetBool("enable_ai_parsing"),
-			OpenAIAPIKey:        viper.GetString("openai_api_key"),
-			AcoustIDAPIKey:      viper.GetString("acoustid_api_key"),
-			MetadataReviewModel: viper.GetString("metadata_review_model"),
-			FilenameParseModel:  viper.GetString("filename_parse_model"),
-			CoverArtModel:       viper.GetString("cover_art_model"),
+			EnableAIParsing: viper.GetBool("enable_ai_parsing"),
+			OpenAIAPIKey:    viper.GetString("openai_api_key"),
+			AcoustIDAPIKey:  viper.GetString("acoustid_api_key"),
+
+			FPParallelWorkers:                    viper.GetInt("fp_parallel_workers"),
+			WhisperClipCacheDir:                  viper.GetString("whisper_clip_cache_dir"),
+			WhisperBatchSleepMS:                  viper.GetInt("whisper_batch_sleep_ms"),
+			OpenAIBaseURL:                        viper.GetString("openai_base_url"),
+			ABSAuthProbeEnabled:                  viper.GetBool("abs_auth_probe_enabled"),
+			ABSItunesPositionBackfillUserID:      viper.GetString("abs_itunes_position_backfill_user_id"),
+			OTelExporterOTLPEndpoint:             viper.GetString("otel_exporter_otlp_endpoint"),
+			ListWarmerHeapDeltaMB:                viper.GetInt("list_warmer_heap_delta_mb"),
+			ListWarmerTrickleIntervalMS:          viper.GetInt("list_warmer_trickle_interval_ms"),
+			LibraryCountsCacheMinIntervalSeconds: viper.GetInt("library_counts_cache_min_interval_seconds"),
+			BleveDescriptionMaxChars:             viper.GetInt("bleve_description_max_chars"),
+			MetadataReviewModel:                  viper.GetString("metadata_review_model"),
+			FilenameParseModel:                   viper.GetString("filename_parse_model"),
+			CoverArtModel:                        viper.GetString("cover_art_model"),
 
 			// Performance
 			ConcurrentScans:                  viper.GetInt("concurrent_scans"),
@@ -1565,6 +1686,7 @@ func InitConfig() {
 				LibraryWritePath: viper.GetString("itunes.library_write_path"),
 				LibraryReadPath:  viper.GetString("itunes.library_read_path"),
 				AutoWriteBack:    viper.GetBool("itunes.auto_write_back"),
+				WriteBackDryRun:  viper.GetBool("itunes.write_back_dry_run"),
 				PathTrimEnabled:  viper.GetBool("itunes.path_trim_enabled"),
 				WindowsRootPath:  viper.GetString("itunes.windows_root_path"),
 				MediaRoot:        viper.GetString("itunes.media_root"),
@@ -1644,6 +1766,7 @@ func InitConfig() {
 				AutoResolveEnabled:         viper.GetBool("dedup.auto_resolve_enabled"),
 				OnImportViaScheduler:       viper.GetBool("dedup.on_import_via_scheduler"),
 				ReviewModel:                viper.GetString("dedup.review_model"),
+				ChromemLazy:                viper.GetBool("dedup.chromem_lazy"),
 				Signals: DedupSignalConfig{
 					BandCertainMin: viper.GetFloat64("dedup.signals.band_certain_min"),
 					BandHighMin:    viper.GetFloat64("dedup.signals.band_high_min"),
@@ -1828,6 +1951,26 @@ func InitConfig() {
 					RequiresAuth: false,
 					Credentials:  make(map[string]string),
 				},
+			}
+		}
+
+		// Provider *_BASE_URL env vars (viper.BindEnv above) backfill BaseURL for
+		// any source that doesn't already have one set — whether c.MetadataSources
+		// came from the hardcoded defaults above or from a persisted/config-file
+		// value that predates the BaseURL field. A source with an explicit BaseURL
+		// already set (e.g. from the config blob) is left untouched.
+		providerBaseURLEnv := map[string]string{
+			"audible":      viper.GetString("audible_base_url"),
+			"openlibrary":  viper.GetString("openlibrary_base_url"),
+			"audnexus":     viper.GetString("audnexus_base_url"),
+			"google-books": viper.GetString("google_books_base_url"),
+		}
+		for i := range c.MetadataSources {
+			if c.MetadataSources[i].BaseURL != "" {
+				continue
+			}
+			if v := providerBaseURLEnv[c.MetadataSources[i].ID]; v != "" {
+				c.MetadataSources[i].BaseURL = v
 			}
 		}
 

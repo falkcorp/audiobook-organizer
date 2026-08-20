@@ -1,7 +1,7 @@
 // file: internal/dedup/lifecycle.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3e4f5a6b-7c8d-9e0f-a1b2-c3d4e5f60718
-// last-edited: 2026-08-19
+// last-edited: 2026-08-20
 
 // Lifecycle methods on *dedup.Engine that the serviceregistry container
 // picks up via interface satisfaction. PostInit subscribes to lifecycle
@@ -17,11 +17,10 @@ package dedup
 import (
 	"context"
 	"log/slog"
-	"os"
-	"strconv"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
@@ -45,15 +44,7 @@ const defaultHydrationStopTimeout = 5 * time.Second
 // queries are rare (operator-triggered scans, dedup-on-import), so the
 // memory savings dominate for memory-constrained deployments.
 func dedupChromemLazy() bool {
-	v := os.Getenv("DEDUP_CHROMEM_LAZY")
-	if v == "" {
-		return false
-	}
-	b, err := strconv.ParseBool(v)
-	if err != nil {
-		return false
-	}
-	return b
+	return config.AppConfig.Dedup.ChromemLazy
 }
 
 // stopTimeout returns the effective join-timeout for Stop().  Tests can

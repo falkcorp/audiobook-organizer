@@ -1,6 +1,6 @@
 // file: internal/ai/register.go
-// version: 1.4.0
-// last-edited: 2026-07-03
+// version: 1.5.0
+// last-edited: 2026-08-20
 
 // Service registry registrations for the AI cluster (W4).
 //
@@ -17,7 +17,6 @@ package ai
 
 import (
 	"log/slog"
-	"os"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -66,7 +65,7 @@ func init() {
 				}
 				baseURL := cfg.Embedding.BaseURL
 				if baseURL == "" {
-					baseURL = os.Getenv("OPENAI_BASE_URL")
+					baseURL = cfg.OpenAIBaseURL
 				}
 				client = NewEmbeddingClientWithOptions(cfg.OpenAIAPIKey, cfg.Embedding.Model, baseURL)
 			}
