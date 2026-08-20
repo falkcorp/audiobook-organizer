@@ -1,15 +1,25 @@
 // file: web/vite.config.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9a8b7c6d-5e4f-3a2b-1c0d-9e8f7a6b5c4d
 // last-edited: 2026-08-19
 
 import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+import react, { reactCompilerPreset } from '@vitejs/plugin-react';
+import babel from '@rolldown/plugin-babel';
 import path from 'path';
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    // React Compiler 1.0, via the babel path. plugin-react 6 also exposes a
+    // native `compiler: true` option backed by the Rust oxc port, but that is
+    // documented as experimental; babel-plugin-react-compiler is the stable 1.0
+    // release. Passing the plugin through react()'s own `babel` option is a
+    // silent no-op under rolldown -- it builds cleanly and emits nothing -- so
+    // the @rolldown/plugin-babel wiring below is required, not optional.
+    babel({ presets: [reactCompilerPreset()] }),
+  ],
   resolve: {
     // import.meta.dirname rather than __dirname: vite 8 warns that __dirname is
     // unsupported by configLoader: 'native', which is slated to become the default.
