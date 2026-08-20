@@ -1,5 +1,5 @@
 # file: .github/workflows/e2e.yml
-# version: 1.4.1
+# version: 1.4.2
 # guid: 6a2f47c9-1e83-4d05-b7f6-92c4a0d81b3e
 # last-edited: 2026-08-20
 
@@ -194,7 +194,6 @@ jobs:
           # workflow injections, so it is avoided uniformly.
           EVENT_NAME: ${{ github.event_name }}
           INPUT_PROJECTS: ${{ inputs.projects }}
-          INPUT_UPDATE_SNAPSHOTS: ${{ inputs.update_snapshots }}
         run: |
           cd web
           if [ "$EVENT_NAME" = "pull_request" ] || \
@@ -221,6 +220,7 @@ jobs:
           CI: 'true'
           EVENT_NAME: ${{ github.event_name }}
           INPUT_PROJECTS: ${{ inputs.projects }}
+          INPUT_UPDATE_SNAPSHOTS: ${{ inputs.update_snapshots }}
         run: |
           cd web
           # Array, not a string. A plain string would have to be left unquoted
