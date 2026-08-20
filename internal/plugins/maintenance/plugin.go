@@ -61,6 +61,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.purgeEmptyAuthorsDef(),
 		p.missingFileAuditDef(),
 		p.missingFileRepairDef(),
+		p.missingFileRepointDef(),
 		p.seriesNormalizeDef(),
 		p.seriesPruneDef(),
 		p.resolveProductionAuthorsDef(),
