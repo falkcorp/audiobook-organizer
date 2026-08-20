@@ -1,33 +1,21 @@
 // file: web/src/stores/useAppStore.ts
-// version: 1.5.0
+// version: 2.0.0
 // guid: 1e2f3a4b-5c6d-7e8f-9a0b-1c2d3e4f5a6b
-// last-edited: 2026-07-03
+// last-edited: 2026-08-20
 
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
-import { STORAGE_KEYS } from '../lib/storageKeys';
-
-type ThemeMode = 'dark' | 'light';
 
 // error/warning notifications persist (no auto-remove timer), so without a
 // cap the array grows unboundedly over a long session. Drop the oldest
 // entry once the cap is reached.
 const MAX_NOTIFICATIONS = 100;
 
-function readStoredThemeMode(): ThemeMode {
-  if (typeof window === 'undefined') {
-    return 'dark';
-  }
-  const stored = window.localStorage.getItem(STORAGE_KEYS.APP_THEME_MODE);
-  return stored === 'light' || stored === 'dark' ? stored : 'dark';
-}
-
-function persistThemeMode(mode: ThemeMode): void {
-  if (typeof window === 'undefined') {
-    return;
-  }
-  window.localStorage.setItem(STORAGE_KEYS.APP_THEME_MODE, mode);
-}
+// Colour mode used to live here. It now belongs to MUI's CSS-variable theme,
+// which reads and writes STORAGE_KEYS.APP_THEME_MODE itself -- see main.tsx,
+// which passes that key as `modeStorageKey`, and TopBar, which toggles through
+// `useColorScheme()`. Keeping a second copy in this store would let the two
+// disagree, which is exactly the bug CSS variables remove.
 
 interface Notification {
   id: string;
@@ -41,11 +29,6 @@ interface AppState {
   // Loading states
   isLoading: boolean;
   setLoading: (loading: boolean) => void;
-
-  // Theme preferences
-  themeMode: ThemeMode;
-  setThemeMode: (mode: ThemeMode) => void;
-  toggleThemeMode: () => void;
 
   // Notifications
   notifications: Notification[];
@@ -69,19 +52,6 @@ export const useAppStore = create<AppState>()(
       // Loading states
       isLoading: false,
       setLoading: (loading) => set({ isLoading: loading }),
-
-      // Theme preferences
-      themeMode: readStoredThemeMode(),
-      setThemeMode: (mode) => {
-        persistThemeMode(mode);
-        set({ themeMode: mode });
-      },
-      toggleThemeMode: () =>
-        set((state) => {
-          const nextMode = state.themeMode === 'dark' ? 'light' : 'dark';
-          persistThemeMode(nextMode);
-          return { themeMode: nextMode };
-        }),
 
       // Notifications
       notifications: [],

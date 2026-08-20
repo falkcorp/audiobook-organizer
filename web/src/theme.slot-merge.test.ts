@@ -1,11 +1,11 @@
 // file: web/src/theme.slot-merge.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a91c7e4-2f83-4d16-b0a7-9c3e5d8f241b
 // last-edited: 2026-08-20
 
 import { describe, expect, it } from 'vitest';
 import resolveProps from '@mui/utils/resolveProps';
-import { createAppTheme } from './theme';
+import { appTheme } from './theme';
 
 // The stuck-modal mitigation in theme.ts lives in MuiDrawer.defaultProps as
 // `slotProps.transition.exit === false`. Whether it actually reaches a Drawer
@@ -30,7 +30,7 @@ import { createAppTheme } from './theme';
 // `slots`/`components` and to top-level props, not to `slotProps`.
 
 describe('MuiDrawer default slotProps merging', () => {
-  const drawerDefaults = createAppTheme('dark').components?.MuiDrawer?.defaultProps ?? {};
+  const drawerDefaults = appTheme.components?.MuiDrawer?.defaultProps ?? {};
 
   it('still carries the stuck-modal mitigation', () => {
     // Guards the premise of every assertion below: if someone removes the

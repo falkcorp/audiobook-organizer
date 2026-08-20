@@ -1,14 +1,14 @@
 // file: web/src/test/renderWithProviders.tsx
-// version: 1.1.2
-// last-edited: 2026-08-19
+// version: 1.2.0
+// last-edited: 2026-08-20
 
 import React from 'react';
 import { render, type RenderOptions } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { ThemeProvider } from '@mui/material';
-import { createAppTheme } from '../theme';
+import { appTheme } from '../theme';
 
-const testTheme = createAppTheme('dark');
+const testTheme = appTheme;
 
 interface ProviderOptions extends Omit<RenderOptions, 'wrapper'> {
   /** Initial URL entries for MemoryRouter (default: ['/']) */

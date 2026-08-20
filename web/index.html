@@ -1,4 +1,8 @@
 <!doctype html>
+<!-- file: web/index.html -->
+<!-- version: 1.0.0 -->
+<!-- guid: 9d4f2c81-5e73-4a60-b8c9-1f37a5e0d2b4 -->
+<!-- last-edited: 2026-08-20 -->
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -6,6 +10,30 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Audiobook Organizer - Manage your audiobook library" />
     <title>Audiobook Organizer</title>
+    <script>
+      // Set the colour scheme before the first paint. Without this the document
+      // renders in the default scheme until React mounts and MUI reads storage,
+      // which shows as a light flash on a dark-mode load.
+      //
+      // Kept deliberately in sync with three things in the app: the attribute
+      // matches `cssVariables.colorSchemeSelector` in theme.ts, the storage key
+      // matches `modeStorageKey` in main.tsx (STORAGE_KEYS.APP_THEME_MODE), and
+      // the fallback matches `defaultColorScheme`. Change one, change all four.
+      (function () {
+        try {
+          var stored = localStorage.getItem("app-theme-mode");
+          var scheme =
+            stored === "light" || stored === "dark"
+              ? stored
+              : window.matchMedia("(prefers-color-scheme: light)").matches && stored === "system"
+                ? "light"
+                : "dark";
+          document.documentElement.setAttribute("data-mui-color-scheme", scheme);
+        } catch (e) {
+          // Private mode or storage disabled: fall through to the theme default.
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

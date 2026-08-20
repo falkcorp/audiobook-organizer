@@ -1,5 +1,5 @@
 // file: web/src/components/layout/TopBar.tsx
-// version: 1.7.1
+// version: 1.8.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 
 import { useEffect, useRef, useState } from 'react';
@@ -19,8 +19,8 @@ import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
 import SearchIcon from '@mui/icons-material/Search';
 import SettingsIcon from '@mui/icons-material/Settings';
+import { useColorScheme } from '@mui/material/styles';
 import { eventSourceManager } from '../../services/eventSourceManager';
-import { useAppStore } from '../../stores/useAppStore';
 import { OperationsIndicator } from './OperationsIndicator';
 import { UserMenu } from './UserMenu';
 
@@ -40,8 +40,13 @@ export function TopBar({ onMenuClick, drawerWidth }: TopBarProps) {
   const lastStateRef = useRef(connectionState);
   const timeoutRef = useRef<number | null>(null);
   const isUnmountedRef = useRef(false);
-  const themeMode = useAppStore((state) => state.themeMode);
-  const toggleThemeMode = useAppStore((state) => state.toggleThemeMode);
+  // Mode is owned by MUI now rather than the app store, so the toggle and the
+  // CSS variables can never disagree. `mode` is undefined on the very first
+  // render before MUI reads storage; treat that as dark, matching
+  // defaultColorScheme.
+  const { mode, setMode } = useColorScheme();
+  const isDark = mode !== 'light';
+  const toggleThemeMode = () => setMode(isDark ? 'light' : 'dark');
 
   useEffect(() => {
     const unsubscribe = eventSourceManager.subscribe(
@@ -188,7 +193,7 @@ export function TopBar({ onMenuClick, drawerWidth }: TopBarProps) {
         </Tooltip>
         <Tooltip title="Toggle color mode">
           <IconButton color="inherit" aria-label="toggle color mode" onClick={toggleThemeMode}>
-            {themeMode === 'dark' ? <Brightness7Icon /> : <Brightness4Icon />}
+            {isDark ? <Brightness7Icon /> : <Brightness4Icon />}
           </IconButton>
         </Tooltip>
         <UserMenu />
