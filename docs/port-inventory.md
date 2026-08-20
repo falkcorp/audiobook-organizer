@@ -1,5 +1,5 @@
 <!-- file: docs/port-inventory.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3e7b2f18-64a0-4c95-b1d7-8f2e5c0a9b43 -->
 <!-- last-edited: 2026-08-20 -->
 
@@ -67,6 +67,23 @@ changes the containing layout, and layout is where these silently stop working.
 `fetchIdRef` and `applyWatchAliveRef` are the two that look like dead weight and are not.
 Both exist because the dialog fires overlapping async work; the workspace fires more of it,
 not less.
+
+### Derivations (behaviour, not state — the two most likely to be silently rewritten)
+
+Both are pure functions of `rowStates` and were **lifted** into
+`web/src/components/review/spine/rowState.ts`, not reimplemented. Each contains an
+asymmetry that reads as an oversight and is not:
+
+- [x] `getRowSx` (:720) — `applied` and `skipped` get a background; **`rejected`
+      deliberately does not**. A rejected row carries a "Rejected — click to undo" chip,
+      and dimming the row would bury the undo affordance.
+- [x] `isRowActionable` (:734) — **`skipped` stays actionable**. Skip means "not now", so
+      the reviewer can return to it in the same session. The simplifying rewrite
+      (`state !== undefined`) compiles, reads better, and makes every skip permanent with
+      no error anywhere.
+
+Covered by `spine/rowState.test.ts`, which asserts both asymmetries directly so that
+changing either is a deliberate act rather than a tidy-up.
 
 ---
 
