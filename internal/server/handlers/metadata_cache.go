@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-08-20
 
@@ -315,10 +315,19 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	// stale counts every reviewable row past the TTL, not just the ones on this
 	// page, so the rail can state the size of the problem rather than whatever
 	// fraction of it happens to be visible.
-	staleCutoff := time.Now().Add(-database.MetadataCacheTTL)
+	//
+	// ONE clock read, used both here and for the per-row is_fresh flag below.
+	// Reading time.Now() twice for one predicate lets a row sitting on the
+	// boundary be counted stale by the summary and reported fresh by its own
+	// flag -- "the chip says 5,771 but I count 5,772 icons", from a race no
+	// test can reproduce because both reads land in the same millisecond under
+	// test. The two loops read the same FetchedAt (page is a slice of
+	// reviewable), so a single cutoff makes them structurally unable to
+	// disagree.
+	freshCutoff := time.Now().Add(-database.MetadataCacheTTL)
 	var stale int
 	for _, r := range reviewable {
-		if !r.sum.FetchedAt.After(staleCutoff) {
+		if !r.sum.FetchedAt.After(freshCutoff) {
 			stale++
 		}
 		switch r.status {
@@ -347,7 +356,6 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	// BuildCandidateBookInfo runs for the PAGE only. It is the one genuinely
 	// per-row-expensive call here, and a paginated caller must not pay for rows
 	// it did not ask for.
-	reviewFreshCutoff := time.Now().Add(-database.MetadataCacheTTL)
 	results := make([]metabatch.CandidateResult, 0, len(page))
 	for i := range page {
 		book := lookupBook(page[i].sum.BookID)
@@ -361,7 +369,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		// library that meant 5,771 of 5,774 reviewable rows were past the TTL
 		// and every one of them was presented as though freshly fetched.
 		fetchedAt := page[i].sum.FetchedAt
-		isFresh := fetchedAt.After(reviewFreshCutoff)
+		isFresh := fetchedAt.After(freshCutoff)
 		results = append(results, metabatch.CandidateResult{
 			Book:      metabatch.BuildCandidateBookInfo(h.store, book),
 			Candidate: &cand,
