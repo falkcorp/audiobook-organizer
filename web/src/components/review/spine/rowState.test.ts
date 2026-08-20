@@ -1,11 +1,12 @@
 // file: web/src/components/review/spine/rowState.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: a80c5f34-7d16-4e92-b503-6c1f9a27e408
 // last-edited: 2026-08-20
 
 import { describe, expect, it } from 'vitest';
 import {
   RUNTIME_WARN_THRESHOLD_SEC,
+  isDecided,
   formatDuration,
   formatFileSize,
   getRowSx,
@@ -33,10 +34,25 @@ describe('isRowActionable', () => {
     expect(isRowActionable('rejected')).toBe(false);
   });
 
-  it('treats an undecided row and an errored row as actionable', () => {
+  it('treats both undecided representations as actionable', () => {
+    // 'pending' is explicit and `undefined` is absent; neither is a decision.
     expect(isRowActionable(undefined)).toBe(true);
-    // An error is a failed attempt, not a decision -- retrying is the point.
-    expect(isRowActionable('error')).toBe(true);
+    expect(isRowActionable('pending')).toBe(true);
+  });
+});
+
+describe('isDecided', () => {
+  it('does not count a seeded pending row as decided', () => {
+    // The dialog seeds 'pending' for every row on fetch, so `state !== undefined`
+    // -- the obvious test -- reports the entire page decided the moment it loads.
+    expect(isDecided('pending')).toBe(false);
+    expect(isDecided(undefined)).toBe(false);
+  });
+
+  it('counts the three real outcomes', () => {
+    expect(isDecided('applied')).toBe(true);
+    expect(isDecided('rejected')).toBe(true);
+    expect(isDecided('skipped')).toBe(true);
   });
 });
 
@@ -65,7 +81,7 @@ describe('getRowSx', () => {
       'applied',
       'rejected',
       'skipped',
-      'error',
+      'pending',
       undefined,
     ];
     for (const state of states) {

@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/rowState.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d17c69b-0e83-4a25-91f6-7b2c8a034e51
 // last-edited: 2026-08-20
 //
@@ -17,10 +17,20 @@
 import type { SxProps, Theme } from '@mui/material/styles';
 
 /**
- * Per-row outcome. `undefined` means "not yet decided", which is a distinct
- * fourth state and not a default worth collapsing into one of these.
+ * Per-row outcome, matching `rowStates` in MetadataReviewDialog (:221).
+ *
+ * `'pending'` is an EXPLICIT undecided state, not a synonym for absent. It is
+ * seeded for every fetched row (:310) and is what both undo paths write back:
+ * un-rejecting and un-skipping set `'pending'` rather than deleting the key.
+ * Modelling undo as a deletion would work until something iterates the map to
+ * count decided rows.
+ *
+ * `'error'` is deliberately NOT here. The dialog uses that string for toast
+ * severities and for `CandidateResult.status`, never for a row state -- an easy
+ * one to fold in by pattern-matching on the surrounding code, and it would
+ * produce a state that no branch ever sets and every comparison silently misses.
  */
-export type RowState = 'applied' | 'rejected' | 'skipped' | 'error';
+export type RowState = 'pending' | 'applied' | 'rejected' | 'skipped';
 
 /** Provider chip colours, keyed by candidate `source`. */
 export const SOURCE_COLORS: Record<
@@ -73,6 +83,17 @@ export function getRowSx(state: RowState | undefined): SxProps<Theme> {
  */
 export function isRowActionable(state: RowState | undefined): boolean {
   return state !== 'applied' && state !== 'rejected';
+}
+
+/**
+ * Whether a row has been decided. `'pending'` and `undefined` are both "no".
+ *
+ * Exists so callers stop writing `state !== undefined`, which counts every
+ * seeded row as decided -- the dialog seeds `'pending'` for the whole page on
+ * fetch, so that test would report every row decided the moment it loaded.
+ */
+export function isDecided(state: RowState | undefined): boolean {
+  return state === 'applied' || state === 'rejected' || state === 'skipped';
 }
 
 /** `3h 20m`, or `20m` under an hour. */
