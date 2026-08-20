@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
-// last-edited: 2026-08-11
+// last-edited: 2026-08-20
 
 // Package deduphandler hosts the dedup-domain HTTP handlers extracted from the
 // server package: dedup candidate / cluster / series listing, merge / dismiss /
@@ -124,6 +124,9 @@ func New(
 //	band        — filter by unified scoring band: CERTAIN|HIGH|MEDIUM|REVIEW
 //	             (T016 extension; empty = no filter; pre-T015 rows without
 //	             a stored band will not match any non-empty band filter)
+//	entity_id   — restrict to candidates where EITHER side of the pair is this
+//	             entity ("this book's duplicates"). Filtered at scan level, so
+//	             "total" reflects the whole matching set, not one page.
 //	include_breakdown=true — include score_breakdown (full signal array)
 //	                         in each row; default false (payload savings)
 //	limit (int, default 50), offset (int) — pagination
@@ -165,6 +168,12 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 	// totals are accurate even on large datasets.
 	if v := c.Query("band"); v != "" {
 		filter.Band = v
+	}
+	// entity_id backs the ?book= deep link. Before this existed the frontend
+	// filtered the loaded page client-side, so arriving for a book whose
+	// candidate sat on page 2 showed an empty list under a banner naming it.
+	if v := c.Query("entity_id"); v != "" {
+		filter.EntityID = v
 	}
 	includeBreakdown := c.Query("include_breakdown") == "true"
 	// include_books surfaces the full book objects (title/author/path/metadata)

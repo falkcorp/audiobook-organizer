@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.11.1
-// last-edited: 2026-08-19
+// version: 2.12.0
+// last-edited: 2026-08-20
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -176,9 +176,15 @@ type CandidateFilter struct {
 	// Empty means no band filter. The filter is evaluated on the stored Band
 	// field (set by the T015/T016 unified pipeline); pre-T015 rows with an
 	// empty band will not match any non-empty Band filter.
-	Band   string
-	Limit  int
-	Offset int
+	Band string
+	// EntityID restricts results to candidates where EITHER side of the pair
+	// is this entity — the "show me this book's duplicates" view behind the
+	// ?book= deep link. Filtered at scan level (like Band) rather than
+	// in-handler (like both_unmatched), because the id lives on the candidate
+	// itself, so pagination totals stay accurate.
+	EntityID string
+	Limit    int
+	Offset   int
 }
 
 // CandidateStat holds a count for one grouping.
@@ -982,6 +988,11 @@ func matchesCandidateFilter(c DedupCandidate, f CandidateFilter, checkStatus boo
 		return false
 	}
 	if f.Band != "" && c.Band != f.Band {
+		return false
+	}
+	// Either side matches: a candidate is a duplicate OF this entity whichever
+	// position the pair-ordering happened to put it in.
+	if f.EntityID != "" && c.EntityAID != f.EntityID && c.EntityBID != f.EntityID {
 		return false
 	}
 	return true
