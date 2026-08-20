@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-08-20
 //
@@ -69,6 +69,38 @@ describe('summary reflects what the server says is reviewable', () => {
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.summary.unreviewable).toBe(8532);
+  });
+
+  it('carries the by-cause breakdown through', async () => {
+    // The total alone cannot say what to do about itself: an orphaned row can
+    // only be reaped, a candidateless one can be refetched. The lane must hand
+    // the rail the split, not just the sum.
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+      ...reviewPayload([makeResult('b1')]),
+      unreviewable: 8532,
+      unreviewable_by_cause: { orphaned: 3354, no_candidates: 5178, decode_errors: 0 },
+    } as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.summary.unreviewable_by_cause).toEqual({
+      orphaned: 3354,
+      no_candidates: 5178,
+      decode_errors: 0,
+    });
+  });
+
+  it('leaves the breakdown undefined when the server omits it', async () => {
+    // Not zero-filled: "no breakdown available" and "every cause is zero" are
+    // different claims, and the rail renders them differently.
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+      ...reviewPayload([makeResult('b1')]),
+      unreviewable: 8532,
+    } as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.summary.unreviewable_by_cause).toBeUndefined();
   });
 
   it('defaults unreviewable to 0 when the server omits it', async () => {

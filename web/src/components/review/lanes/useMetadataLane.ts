@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-08-20
 //
@@ -211,6 +211,26 @@ export function candidateKey(c: MetadataCandidate): string {
  * the strict preset sets three at once, and the "reset to page 1" effect wants
  * one dependency rather than eleven. The dialog had both problems.
  */
+/**
+ * The rail's counts. Named rather than inlined because the hook's state and the
+ * hook's return type have to stay the same shape -- when this was written twice
+ * they drifted, and only the compiler noticed.
+ */
+export interface MetadataLaneSummary {
+  matched: number;
+  no_match: number;
+  errors: number;
+  total: number;
+  /** Cache rows that exist but cannot be reviewed. */
+  unreviewable: number;
+  /**
+   * The same total split by cause. Optional because a server that predates the
+   * split omits it, and "no breakdown available" is a different claim from
+   * "every cause is zero".
+   */
+  unreviewable_by_cause?: { orphaned: number; no_candidates: number; decode_errors: number };
+}
+
 export interface MetadataFilters {
   sourceFilter: string | null;
   confidenceThreshold: number;
@@ -264,7 +284,7 @@ export interface MetadataLane {
   rows: CandidateResult[];
 
   sourceCounts: Record<string, number>;
-  summary: { matched: number; no_match: number; errors: number; total: number; unreviewable: number };
+  summary: MetadataLaneSummary;
 
   page: number;
   totalPages: number;
@@ -327,7 +347,13 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     () => (ungrouped.page === requestedPage ? ungrouped.ids : EMPTY_IDS),
     [ungrouped, requestedPage]
   );
-  const [summary, setSummary] = useState({ matched: 0, no_match: 0, errors: 0, total: 0, unreviewable: 0 });
+  const [summary, setSummary] = useState<MetadataLaneSummary>({
+    matched: 0,
+    no_match: 0,
+    errors: 0,
+    total: 0,
+    unreviewable: 0,
+  });
   const [refreshKey, setRefreshKey] = useState(0);
 
   // Discards out-of-order responses. Without it a slow page-1 fetch that
@@ -382,6 +408,10 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           errors: data.errors ?? 0,
           total: tc,
           unreviewable: data.unreviewable ?? 0,
+          // Left undefined rather than zero-filled when the server omits it:
+          // "no breakdown available" and "every cause is zero" are different
+          // claims, and the rail renders them differently.
+          unreviewable_by_cause: data.unreviewable_by_cause,
         });
         setLoading(false);
       })

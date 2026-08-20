@@ -1,5 +1,5 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
 // last-edited: 2026-08-20
 //
@@ -99,7 +99,14 @@ const SWITCHES: Array<{ key: keyof MetadataFilters; label: string; help?: string
 export interface QueueRailProps {
   loading: boolean;
   rows: CandidateResult[];
-  summary: { matched: number; no_match: number; errors: number; total: number; unreviewable: number };
+  summary: {
+    matched: number;
+    no_match: number;
+    errors: number;
+    total: number;
+    unreviewable: number;
+    unreviewable_by_cause?: { orphaned: number; no_candidates: number; decode_errors: number };
+  };
   sourceCounts: Record<string, number>;
   filters: MetadataFilters;
   setFilters: (patch: Partial<MetadataFilters>) => void;
@@ -115,6 +122,43 @@ export interface QueueRailProps {
   isSelected: (id: string) => boolean;
   onToggleSelect: (id: string) => void;
   onRefresh: () => void;
+}
+
+/**
+ * Describe WHY rows are unreviewable, not just how many.
+ *
+ * The causes call for opposite remedies -- a row whose book is gone can only be
+ * reaped, a row with no stored candidate can be refetched -- so a reader given
+ * only the total has no way to tell which they are looking at. On production
+ * that total read 8,532 and said nothing about the 3,354/5,178 split inside it.
+ *
+ * A server that does not send the breakdown falls back to naming the causes
+ * without counting them, which is exactly what this tooltip said before.
+ */
+export function unreviewableReason(byCause?: {
+  orphaned: number;
+  no_candidates: number;
+  decode_errors: number;
+}): string {
+  if (!byCause) {
+    return 'Cache entries with no candidate stored, or whose book no longer exists. Nothing here can be reviewed.';
+  }
+  const parts: string[] = [];
+  if (byCause.orphaned > 0) {
+    parts.push(
+      `${byCause.orphaned.toLocaleString()} whose book no longer exists \u2014 only a cleanup pass clears these`
+    );
+  }
+  if (byCause.no_candidates > 0) {
+    parts.push(
+      `${byCause.no_candidates.toLocaleString()} with no candidate stored \u2014 a refetch would fill these in`
+    );
+  }
+  if (byCause.decode_errors > 0) {
+    parts.push(`${byCause.decode_errors.toLocaleString()} whose stored candidate will not decode`);
+  }
+  if (parts.length === 0) return 'Nothing here can be reviewed.';
+  return `Nothing here can be reviewed: ${parts.join('; ')}.`;
 }
 
 export function QueueRail({
@@ -164,7 +208,7 @@ export function QueueRail({
             // `total` counts only what a reviewer can act on. This says what the
             // cache holds that they cannot, so the difference is stated rather
             // than left as a silent shortfall.
-            <Tooltip title="Cache entries with no candidate stored, or whose book no longer exists. Nothing here can be reviewed.">
+            <Tooltip title={unreviewableReason(summary.unreviewable_by_cause)}>
               <Chip
                 size="small"
                 variant="outlined"

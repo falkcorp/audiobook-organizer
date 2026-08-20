@@ -273,3 +273,83 @@ func TestGetCacheReviewResults_CountsOnlyReviewableRows(t *testing.T) {
 	// discovered by subtracting two numbers that never agreed.
 	assert.Equal(t, 2, body.Data.Unreviewable)
 }
+
+// TestGetCacheReviewResults_UnreviewableSplitByCause pins the breakdown that
+// replaced a bare subtraction.
+//
+// `unreviewable` used to be `total - len(reviewable)`. The number was right and
+// useless: on production it read 8,532 with nothing to say about what caused it,
+// even though each of the three `continue` statements that drops a row knows
+// exactly why it fired. The causes call for opposite remedies — an orphaned row
+// can only be reaped, a candidateless one can be refetched — so collapsing them
+// into one integer threw away the part an operator needs.
+//
+// The fixture puts one row in each cause and one reviewable row beside them.
+func TestGetCacheReviewResults_UnreviewableSplitByCause(t *testing.T) {
+	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	svc := handlersmocks.NewMockMetadataCacheFetchService(t)
+
+	ids := []string{"ok", "gone", "empty", "bad"}
+	summaries := make([]metafetch.MetadataCacheSummary, 0, len(ids))
+	for _, id := range ids {
+		summaries = append(summaries, metafetch.MetadataCacheSummary{BookID: id})
+	}
+	svc.EXPECT().ListCachedSummaries(mock.Anything).Return(summaries, nil)
+
+	// "gone" resolves to no book at all — the orphan cause.
+	books := []database.Book{{ID: "ok"}, {ID: "empty"}, {ID: "bad"}}
+	store.EXPECT().GetBooksByIDs(mock.Anything).Return(books, nil)
+	store.EXPECT().GetBookByID("gone").Return(nil, nil).Maybe()
+	store.EXPECT().GetBookFiles(mock.Anything).Return(nil, nil).Maybe()
+
+	raw, err := json.Marshal(map[string]any{"title": "T"})
+	require.NoError(t, err)
+
+	svc.EXPECT().GetCachedCandidates("ok").
+		Return(&metafetch.MetadataCandidateCache{Candidates: []json.RawMessage{raw}}, true, nil)
+	// Cached, but holding nothing — the refetchable cause.
+	svc.EXPECT().GetCachedCandidates("empty").
+		Return(&metafetch.MetadataCandidateCache{}, true, nil)
+	// Cached and non-empty, but the payload will not decode — the repair cause.
+	svc.EXPECT().GetCachedCandidates("bad").
+		Return(&metafetch.MetadataCandidateCache{
+			Candidates: []json.RawMessage{json.RawMessage(`{"title":`)},
+		}, true, nil)
+
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	c, w := reviewCtx("limit=0&offset=0")
+	h.GetCacheReviewResults(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var body struct {
+		Data struct {
+			Results      []map[string]any `json:"results"`
+			TotalCount   int              `json:"total_count"`
+			Errors       int              `json:"errors"`
+			Unreviewable int              `json:"unreviewable"`
+			ByCause      struct {
+				Orphaned     int `json:"orphaned"`
+				NoCandidates int `json:"no_candidates"`
+				DecodeErrors int `json:"decode_errors"`
+			} `json:"unreviewable_by_cause"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+
+	require.Len(t, body.Data.Results, 1, "only \"ok\" is reviewable")
+	assert.Equal(t, 1, body.Data.TotalCount)
+
+	// Each cause is attributed to the row that actually caused it.
+	assert.Equal(t, 1, body.Data.ByCause.Orphaned, "\"gone\" has no book")
+	assert.Equal(t, 1, body.Data.ByCause.NoCandidates, "\"empty\" has no stored candidate")
+	assert.Equal(t, 1, body.Data.ByCause.DecodeErrors, "\"bad\" will not unmarshal")
+	assert.Equal(t, 1, body.Data.Errors, "decode failures are still reported on their own")
+
+	// The identity that makes the breakdown trustworthy: every dropped row is
+	// counted once and only once, so the causes sum to the total, and the total
+	// still equals what the old subtraction produced.
+	byCause := body.Data.ByCause.Orphaned + body.Data.ByCause.NoCandidates + body.Data.ByCause.DecodeErrors
+	assert.Equal(t, body.Data.Unreviewable, byCause, "causes must account for every unreviewable row")
+	assert.Equal(t, len(summaries)-body.Data.TotalCount, body.Data.Unreviewable,
+		"unreviewable must still equal total minus reviewable")
+}
