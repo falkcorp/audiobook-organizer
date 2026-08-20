@@ -47,11 +47,27 @@
 // allow-list (exact_file, exact_acoustid, isbn_asin, metadata_hash), which
 // excludes metadata_fuzzy and the embedding kinds. Since this op is what GIVES
 // these pre-T015 rows a Band and a breakdown at all — and a nil breakdown is
-// itself an auto-resolve refusal reason — the count of CERTAIN rows with <2
-// allow-listed kinds is the number an operator needs before running apply=true.
-// The distinct-kind count comes from dedup.DistinctAutoResolvePrimaryKinds, the
+// itself an auto-resolve refusal reason — an apply=true run CREATES auto-merge
+// eligibility that did not exist, which is what the CERTAIN split is for. The
+// distinct-kind count comes from dedup.DistinctAutoResolvePrimaryKinds, the
 // same function the eligibility check calls, so the report cannot drift from
 // the gate.
+//
+// SCOPE OF THAT NUMBER — it is the corroboration clause evaluated ALONE, and
+// is neither an upper nor a lower bound on eligibility. autoResolveEligible
+// refuses independently on active suppressors, implausible audio on either
+// side, and conflicting identifiers (all of which would shrink it), and it
+// accepts a "0"/"1" row outright when the pair carries a whole-book-signature
+// true_dup label (which would grow it). None of those inputs are reachable
+// from this op: its entire store surface is ListCandidates +
+// UpdateCandidateScore, and widening it to tighten a reported number is a
+// worse trade than reporting the number with its scope stated.
+//
+// Note also that the rescore path composes with NIL suppressors
+// (rescore.go: ComposeScore(signals, nil, …)), so every breakdown this op
+// writes carries an empty Suppressors list. A "certain_with_suppressors"
+// counter here would be a structural zero, not a measurement — and the
+// suppressor guard in autoResolveEligible passes vacuously on these rows.
 //
 // Dry-run (report only, 10 sample pairs logged) is the default.
 // {"apply":true} writes.
@@ -120,6 +136,12 @@ func bandKey(band string) string {
 // misattribute exactly those rows — the ones worth looking at. The key space is
 // bounded by the fixed signal-kind list, so there is no cap and nothing is
 // silently dropped.
+//
+// Deliberate asymmetry with certain_primary_kind_counts: this key lists EVERY
+// distinct kind present, including zero-confidence supporting signals (a
+// duration match contributes its configured boost regardless of Confidence),
+// whereas DistinctAutoResolvePrimaryKinds ignores Confidence == 0. So a set may
+// name a kind that counted toward the score but not toward corroboration.
 func signalSetKey(signals []unified.Signal) string {
 	seen := make(map[string]bool, len(signals))
 	kinds := make([]string, 0, len(signals))
@@ -182,9 +204,11 @@ type breakdownBackfillReport struct {
 	// CertainPrimaryKindCounts buckets CERTAIN pairs by how many DISTINCT
 	// auto-resolve primary signal kinds they carry ("0"/"1"/"2+"), using
 	// dedup.DistinctAutoResolvePrimaryKinds — the same rule
-	// autoResolveEligible enforces. Only the "2+" bucket can ever auto-merge;
-	// the "0" and "1" buckets are CERTAIN pairs that dedup.auto-resolve would
-	// still refuse, which is what makes this the risk-relevant split.
+	// autoResolveEligible enforces. This is the CORROBORATION CLAUSE ALONE:
+	// the "2+" bucket is not an upper bound (the other guards refuse
+	// independently) nor a lower bound ("0"/"1" rows carrying a
+	// whole-book-signature true_dup label are eligible anyway). See the
+	// package doc for why the op does not evaluate the rest.
 	CertainPrimaryKindCounts map[string]int `json:"certain_primary_kind_counts"`
 
 	// CertainSignalSets counts CERTAIN pairs by their full distinct signal
