@@ -1,5 +1,5 @@
 # file: .github/workflows/e2e.yml
-# version: 1.4.2
+# version: 1.4.3
 # guid: 6a2f47c9-1e83-4d05-b7f6-92c4a0d81b3e
 # last-edited: 2026-08-20
 
@@ -85,9 +85,10 @@ on:
           only be produced on a Linux runner -- a developer on macOS cannot
           regenerate them locally, which is why this switch exists rather than
           a "just run it with --update-snapshots" note in a README.
-          The job still fails on purpose when snapshots change, so a
-          regeneration can never be mistaken for a green run; download the
-          artifact and commit the files deliberately.
+          NOTE: the run goes GREEN even when goldens change -- Playwright
+          rewrites them in place and reports the tests as passing. A green tick
+          here means "the goldens were overwritten", NOT "the suite passes".
+          Always diff the artifact before committing it.
         required: false
         type: boolean
         default: false
@@ -242,12 +243,12 @@ jobs:
           echo "Running with: ${PROJECTS[*]}"
           UPDATE=()
           if [ "$INPUT_UPDATE_SNAPSHOTS" = "true" ]; then
-            # Deliberately still exits non-zero when anything changed. A
-            # regeneration run that reported success would be indistinguishable
-            # from a passing suite, and the next person would trust a green tick
-            # that only means "the goldens were overwritten".
+            # This run reports SUCCESS even when goldens change: Playwright
+            # rewrites them in place and passes. So a green tick here only means
+            # they were overwritten -- it is not evidence the suite passes, and
+            # must not be read as one. Diff the artifact before committing.
             UPDATE=(--update-snapshots)
-            echo "::warning::Regenerating goldens. This run is EXPECTED to fail if any changed; download the updated-snapshots artifact and commit the files."
+            echo "::warning::Regenerating goldens. A green result only means they were rewritten; download the updated-snapshots artifact and diff it before committing."
           fi
           npx playwright test -c tests/e2e/playwright.config.ts "${PROJECTS[@]}" "${UPDATE[@]}" --reporter=line
 
