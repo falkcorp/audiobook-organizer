@@ -646,6 +646,11 @@ export function AuthorDedupTab() {
                           <Tooltip title="Edit canonical name">
                             <IconButton
                               size="small"
+                              // Explicit rather than relying on Tooltip to
+                              // supply the accessible name: that behaviour is
+                              // MUI's to change, and it did change the analogous
+                              // icon `data-testid` in v9.
+                              aria-label="Edit canonical name"
                               onClick={() => {
                                 setEditingCanonicalId(group.canonical.id);
                                 setEditingCanonicalName(group.canonical.name);

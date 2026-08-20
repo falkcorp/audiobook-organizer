@@ -1,7 +1,7 @@
 # file: .github/dependency-review-config.yml
-# version: 1.2.0
+# version: 1.3.0
 # guid: dep-review-cfg-2025-12-07
-# last-edited: 2026-08-12
+# last-edited: 2026-08-20
 
 # Dependency Review Configuration
 # This file configures the dependency-review-action for automated security scanning
@@ -54,6 +54,22 @@ allow-dependencies-licenses:
   - pkg:golang/golang.org/x/sys
   - pkg:golang/golang.org/x/text
   - pkg:golang/golang.org/x/time
+  # Two npm packages, both surfaced by the MUI 9 / React 19 toolchain upgrade.
+  # Same narrow-fix reasoning as the golang.org/x block above: each carries a
+  # permissive license that simply is not in allow-licenses, and adding either
+  # license to that list would widen the policy for EVERY ecosystem to buy one
+  # package. Listed without versions so the entry survives routine bumps.
+  #
+  #   caniuse-lite  CC-BY-4.0      Browser-support DATA, not code -- the tables
+  #                                browserslist compiles against. CC-BY-4.0
+  #                                requires attribution and nothing else; there
+  #                                is no copyleft obligation to propagate.
+  #   lru-cache     BlueOak-1.0.0  A modern permissive license (Blue Oak Council
+  #                                model, OSI-approved), functionally MIT-like
+  #                                with an explicit patent grant. Pulled in
+  #                                transitively; not a direct dependency.
+  - pkg:npm/caniuse-lite
+  - pkg:npm/lru-cache
 
 # Deny specific packages
 # deny-packages:

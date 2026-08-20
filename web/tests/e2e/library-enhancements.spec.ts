@@ -219,28 +219,19 @@ test.describe('Column Customization', () => {
     const titleHeader = page.locator('th').filter({ hasText: 'Title' });
     await titleHeader.click();
 
-    // Verify a sort indicator (arrow icon) appears
-    // ArrowUpwardIcon or ArrowDownwardIcon rendered as SVG
-    await expect(
-      titleHeader.locator('svg[data-testid="ArrowUpwardIcon"], svg[data-testid="ArrowDownwardIcon"]')
-    ).toBeVisible({ timeout: 5000 });
+    // Verify the column reports itself as sorted. This reads `aria-sort`, the
+    // standard attribute for a sortable header, rather than MUI's internal icon
+    // `data-testid` -- which v9 emits only in development, and which tested the
+    // glyph rather than the state it stands for.
+    const sortedAfterFirstClick = await titleHeader.getAttribute('aria-sort');
+    expect(['ascending', 'descending']).toContain(sortedAfterFirstClick);
 
     // Click again to reverse sort direction
-    const firstArrow = await titleHeader
-      .locator('svg[data-testid="ArrowUpwardIcon"]')
-      .count();
     await titleHeader.click();
-
-    // If it was ascending, it should now be descending (or vice versa)
-    if (firstArrow > 0) {
-      await expect(
-        titleHeader.locator('svg[data-testid="ArrowDownwardIcon"]')
-      ).toBeVisible({ timeout: 5000 });
-    } else {
-      await expect(
-        titleHeader.locator('svg[data-testid="ArrowUpwardIcon"]')
-      ).toBeVisible({ timeout: 5000 });
-    }
+    await expect(titleHeader).toHaveAttribute(
+      'aria-sort',
+      sortedAfterFirstClick === 'ascending' ? 'descending' : 'ascending'
+    );
   });
 
   test('reset columns to defaults', async ({ page }) => {

@@ -330,10 +330,15 @@ export function ServerFileBrowser({
               }}
               autoFocus
             />
-            <IconButton size="small" color="primary" onClick={handleSavePath}>
+            <IconButton
+              size="small"
+              color="primary"
+              onClick={handleSavePath}
+              aria-label="Save path"
+            >
               <CheckIcon />
             </IconButton>
-            <IconButton size="small" onClick={handleCancelEdit}>
+            <IconButton size="small" onClick={handleCancelEdit} aria-label="Cancel editing path">
               <EditIcon />
             </IconButton>
           </Stack>
@@ -353,12 +358,17 @@ export function ServerFileBrowser({
                   variant="body1"
                   onClick={() => navigateToPath(index)}
                   sx={{ cursor: 'pointer' }}
+                  // The root crumb renders as an icon with no text, so without
+                  // this the button has no accessible name at all. The label
+                  // goes on the button rather than the svg: an aria-label on a
+                  // decorative child does not reliably name its parent.
+                  aria-label={index === 0 ? 'Filesystem root' : undefined}
                 >
                   {index === 0 ? <HomeIcon fontSize="small" /> : part}
                 </Link>
               ))}
             </Breadcrumbs>
-            <IconButton size="small" onClick={handleEditPath}>
+            <IconButton size="small" onClick={handleEditPath} aria-label="Edit path">
               <EditIcon />
             </IconButton>
           </Stack>

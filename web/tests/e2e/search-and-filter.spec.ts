@@ -255,11 +255,7 @@ test.describe('Search and Filter Functionality', () => {
     ).not.toBeVisible();
 
     // WHEN: User clicks "X" (clear search) button
-    await page
-      .locator('button', {
-        has: page.locator('svg[data-testid="ClearIcon"]'),
-      })
-      .click();
+    await page.getByRole('button', { name: 'Clear search' }).click();
 
     // THEN: Search input is cleared
     await expect(searchInput).toHaveValue('');

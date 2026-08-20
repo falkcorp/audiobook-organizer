@@ -220,6 +220,13 @@ export const MetadataEditDialog: React.FC<MetadataEditDialogProps> = ({
               size="small"
               onClick={() => toggleLock(field)}
               aria-label={`${locked ? 'Unlock' : 'Lock'} ${label}`}
+              // This is a toggle, so its state belongs in aria-pressed rather
+              // than only in the icon it happens to render. Screen readers
+              // announce pressed/not pressed; without it the state is carried
+              // solely by a glyph, which is also why the e2e suite was asserting
+              // on MUI's internal icon `data-testid` -- an affordance MUI 9
+              // stopped emitting in production builds.
+              aria-pressed={locked}
               sx={[
                 {
                   mt: '10px',

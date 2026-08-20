@@ -413,6 +413,20 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                     pr: 2,
                   }}
                   onClick={() => handleSortClick(col)}
+                  // The standard ARIA for a sortable column. Before this, sort
+                  // state was carried ONLY by which arrow glyph rendered, so it
+                  // was invisible to assistive tech and the e2e suite had to
+                  // assert on MUI's internal icon `data-testid` -- which v9
+                  // emits only in development builds.
+                  aria-sort={
+                    col.sortable
+                      ? isActiveSortCol
+                        ? sortOrder === 'asc'
+                          ? 'ascending'
+                          : 'descending'
+                        : 'none'
+                      : undefined
+                  }
                 >
                   <Box
                     sx={{
