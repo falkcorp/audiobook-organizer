@@ -1,6 +1,7 @@
 // file: web/src/components/settings/OpenLibraryDumps.tsx
-// version: 2.2.2
+// version: 2.2.3
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
+// last-edited: 2026-08-19
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -147,7 +148,7 @@ export function OpenLibraryDumps() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadType, setUploadType] = useState('editions');
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval>>();
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isUnmountedRef = useRef(false);
 
@@ -204,7 +205,7 @@ export function OpenLibraryDumps() {
       }, 3000);
     } else if (pollRef.current) {
       clearInterval(pollRef.current);
-      pollRef.current = undefined;
+      pollRef.current = null;
     }
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
