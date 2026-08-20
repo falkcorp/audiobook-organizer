@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-08-19
+// last-edited: 2026-08-20
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -159,6 +159,12 @@ type StoreProvider interface {
 	// PlaylistStore serves runITunesPlaylistImport, which forwards into
 	// internal/itunes/service.
 	PlaylistStore() database.UserPlaylistStore
+	// MetadataCacheStore serves runMetadataCacheReap. The metadata-candidate
+	// cache is a separate keyspace ("metadata_cache:<book_id>") with its own
+	// four-method interface, and OpsStore names none of them -- so the reaper
+	// gets its own accessor rather than widening the 53-method common path for
+	// one caller.
+	MetadataCacheStore() database.MetadataCacheStore
 }
 
 // MetadataRunners runs the metadata enrichment and write-back operations.
