@@ -1,9 +1,10 @@
 // file: web/src/components/bookdetail/BookDetailStatusAlerts.tsx
-// version: 1.0.2
+// version: 1.1.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-08-19
+// last-edited: 2026-08-20
 
-import { Alert, Box, Button, Stack, Tooltip } from '@mui/material';
+import { Alert, Box, Button, Link, Stack, Tooltip } from '@mui/material';
+import { Link as RouterLink } from 'react-router-dom';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import type { Book } from '../../services/api';
 import { formatDateTime } from './bookDetailUtils';
@@ -101,9 +102,20 @@ export const BookDetailStatusAlerts = ({
           ⚠ This book shares its metadata source with{' '}
           <strong>{book.metadata_source_hash_duplicate_count}</strong> other book
           {(book.metadata_source_hash_duplicate_count ?? 0) === 1 ? '' : 's'} — possible duplicate.{' '}
-          <a href="/dedup/candidates" style={{ color: 'inherit', fontWeight: 'bold' }}>
+          {/*
+            Three things were wrong with the `<a href="/dedup/candidates">` this
+            replaces. The route was never registered, so the link 404'd. It was a
+            raw anchor, so even a live route would have reloaded the whole SPA.
+            And it carried no book id, so "View duplicates" for THIS book would
+            have opened every duplicate in the library.
+          */}
+          <Link
+            component={RouterLink}
+            to={`/review?lane=dupes&book=${encodeURIComponent(book.id)}`}
+            sx={{ color: 'inherit', fontWeight: 'bold' }}
+          >
             View duplicates
-          </a>
+          </Link>
         </Alert>
       )}
     </>
