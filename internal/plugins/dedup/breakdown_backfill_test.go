@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/breakdown_backfill_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: db53792e-6046-4acd-ba6c-1857084924cc
-// last-edited: 2026-07-17
+// last-edited: 2026-08-20
 
 // Tests for dedup.breakdown-backfill. A fake pairScorer (shared with the
 // rescore-labeled-examples tests) stands in for the real Engine so the op's
@@ -14,10 +14,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/models"
 )
@@ -295,5 +297,197 @@ func TestBreakdownBackfill_ParallelManyGroups(t *testing.T) {
 		if got == nil || got.ScoreBreakdown == nil {
 			t.Fatalf("candidate %d (pair %d): breakdown not persisted", id, i)
 		}
+	}
+}
+
+// --- Band histogram -------------------------------------------------------
+
+// perPairScorer returns a different canned result per B-side ID, so one run can
+// produce several bands and several signal-set shapes. fakePairScorer returns
+// ONE canned score for every pair, which cannot distinguish a working histogram
+// from one that files every row into a single bucket.
+type perPairScorer struct {
+	byOther map[string]*unified.UnifiedDedupScore // nil value ⇒ zero-signal pair
+}
+
+func (p *perPairScorer) ScorePairsForBook(_ context.Context, aID string, inputs []dedupengine.RescorePairInput) ([]dedupengine.RescorePairResult, error) {
+	out := make([]dedupengine.RescorePairResult, 0, len(inputs))
+	for _, in := range inputs {
+		sc, ok := p.byOther[in.OtherID]
+		if !ok || sc == nil {
+			out = append(out, dedupengine.RescorePairResult{OtherID: in.OtherID})
+			continue
+		}
+		cp := *sc
+		cp.Pair = [2]string{aID, in.OtherID}
+		out = append(out, dedupengine.RescorePairResult{
+			OtherID: in.OtherID, Score: &cp, NumSignals: len(cp.Signals),
+		})
+	}
+	return out, nil
+}
+
+// reportCapturingReporter records the JSON report payload the op logs, so a
+// test can assert on the whole struct instead of on the summary substring.
+type reportCapturingReporter struct {
+	capturingReporter
+	report string
+}
+
+func (r *reportCapturingReporter) Log(_ slog.Level, msg string, attrs ...slog.Attr) error {
+	if msg != "Breakdown-backfill report (JSON)" {
+		return nil
+	}
+	for _, a := range attrs {
+		if a.Key == "report" {
+			r.report = a.Value.String()
+		}
+	}
+	return nil
+}
+
+// TestBreakdownBackfill_BandHistogram proves the dry-run report carries a band
+// histogram and the CERTAIN-band risk split, and that the split is keyed on the
+// AUTO-RESOLVE primary-kind allow-list rather than on "any non-supporting
+// signal": the certain3 pair carries two primary-by-noisy-OR kinds
+// (metadata_fuzzy + embedding_high) that dedup.auto-resolve does NOT accept as
+// corroboration, so it must land in the "0" bucket.
+func TestBreakdownBackfill_BandHistogram(t *testing.T) {
+	pebble := newPebbleForISBNIndexTest(t)
+	es := database.NewEmbeddingStore(pebble.DB())
+
+	mk := func(score float64, band string, sigs ...models.Signal) *unified.UnifiedDedupScore {
+		return &unified.UnifiedDedupScore{Score: score, Band: band, Signals: sigs, Formula: "test"}
+	}
+	scorer := &perPairScorer{byOther: map[string]*unified.UnifiedDedupScore{
+		// CERTAIN, one signal, one primary kind → "1"
+		"hB1": mk(100, unified.BandCertain, models.Signal{Kind: unified.SigExactFile, Confidence: 1.0}),
+		// CERTAIN, two primary kinds → "2+" (the only auto-mergeable shape)
+		"hB2": mk(99, unified.BandCertain,
+			models.Signal{Kind: unified.SigExactFile, Confidence: 1.0},
+			models.Signal{Kind: unified.SigISBNASIN, Confidence: 0.98}),
+		// CERTAIN with NO auto-resolve primary kind → "0"
+		"hB3": mk(98, unified.BandCertain,
+			models.Signal{Kind: unified.SigMetaFuzzy, Confidence: 0.85},
+			models.Signal{Kind: unified.SigEmbedHigh, Confidence: 0.90},
+			models.Signal{Kind: unified.SigDuration, Confidence: 0}),
+		"hB4": mk(92, unified.BandHigh, models.Signal{Kind: unified.SigMetaFuzzy, Confidence: 0.85}),
+		"hB5": mk(80, unified.BandMedium, models.Signal{Kind: unified.SigMetaFuzzy, Confidence: 0.80}),
+		"hB6": mk(65, unified.BandReview, models.Signal{Kind: unified.SigEmbedMedium, Confidence: 0.65}),
+		"hB7": mk(4, "", models.Signal{Kind: unified.SigDuration, Confidence: 0}), // below the REVIEW floor
+		"hB8": nil,                                                                // zero-signal: scored nothing, so it has no band
+	}}
+
+	for i := 1; i <= 8; i++ {
+		seedCandidate(t, es, database.DedupCandidate{
+			EntityAID: fmt.Sprintf("hA%d", i), EntityBID: fmt.Sprintf("hB%d", i), Layer: "exact",
+		})
+	}
+
+	rep := &reportCapturingReporter{}
+	if err := runBreakdownBackfillWith(context.Background(), scorer, es, json.RawMessage(`{}`), rep); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if rep.report == "" {
+		t.Fatal("op did not log the JSON report")
+	}
+
+	var got breakdownBackfillReport
+	if err := json.Unmarshal([]byte(rep.report), &got); err != nil {
+		t.Fatalf("unmarshal report %q: %v", rep.report, err)
+	}
+
+	wantBands := map[string]int{
+		unified.BandCertain: 3, unified.BandHigh: 1, unified.BandMedium: 1,
+		unified.BandReview: 1, breakdownBackfillBelowBandKey: 1,
+	}
+	for band, want := range wantBands {
+		if got.BandCounts[band] != want {
+			t.Errorf("band_counts[%s] = %d, want %d (full: %v)", band, got.BandCounts[band], want, got.BandCounts)
+		}
+	}
+	if len(got.BandCounts) != len(wantBands) {
+		t.Errorf("band_counts has extra buckets: %v", got.BandCounts)
+	}
+
+	// Reconciliation: every scored pair is banded exactly once, and the
+	// zero-signal pair is counted separately and banded nowhere.
+	total := 0
+	for _, v := range got.BandCounts {
+		total += v
+	}
+	if total != got.WouldBackfill {
+		t.Errorf("band_counts sum = %d, want would_backfill = %d", total, got.WouldBackfill)
+	}
+	if got.ZeroSignal != 1 {
+		t.Errorf("zero_signal = %d, want 1", got.ZeroSignal)
+	}
+
+	if got.CertainSignalsEq1 != 1 {
+		t.Errorf("certain_signals_eq_1 = %d, want 1", got.CertainSignalsEq1)
+	}
+	wantPrimary := map[string]int{"0": 1, "1": 1, "2+": 1}
+	for bucket, want := range wantPrimary {
+		if got.CertainPrimaryKindCounts[bucket] != want {
+			t.Errorf("certain_primary_kind_counts[%s] = %d, want %d (full: %v)",
+				bucket, got.CertainPrimaryKindCounts[bucket], want, got.CertainPrimaryKindCounts)
+		}
+	}
+
+	wantSets := map[string]int{
+		"exact_file":                             1,
+		"exact_file+isbn_asin":                   1,
+		"duration+embedding_high+metadata_fuzzy": 1,
+	}
+	for set, want := range wantSets {
+		if got.CertainSignalSets[set] != want {
+			t.Errorf("certain_signal_sets[%s] = %d, want %d (full: %v)",
+				set, got.CertainSignalSets[set], want, got.CertainSignalSets)
+		}
+	}
+	if len(got.CertainSignalSets) != len(wantSets) {
+		t.Errorf("certain_signal_sets has extra keys: %v", got.CertainSignalSets)
+	}
+
+	// The human-readable summary must carry the same numbers, including the
+	// zero buckets, so an operator reading the progress line is not left
+	// guessing whether a missing band was measured or dropped.
+	for _, want := range []string{"CERTAIN=3", "HIGH=1", "MEDIUM=1", "REVIEW=1", "BELOW=1",
+		"certain_1sig=1", "certain_primary[0]=1", "certain_primary[2+]=1"} {
+		if !strings.Contains(rep.lastMsg, want) {
+			t.Errorf("summary missing %q; got %q", want, rep.lastMsg)
+		}
+	}
+}
+
+// TestBreakdownBackfill_HistogramCountedOnApply proves the histogram is filled
+// on an apply=true run too — counting it inside the dry-run arm would make a
+// real apply report an all-zero histogram that reads as a regression.
+func TestBreakdownBackfill_HistogramCountedOnApply(t *testing.T) {
+	pebble := newPebbleForISBNIndexTest(t)
+	es := database.NewEmbeddingStore(pebble.DB())
+
+	scorer := &perPairScorer{byOther: map[string]*unified.UnifiedDedupScore{
+		"apB1": {Score: 100, Band: unified.BandCertain, Formula: "test",
+			Signals: []models.Signal{{Kind: unified.SigExactFile, Confidence: 1.0}}},
+	}}
+	seedCandidate(t, es, database.DedupCandidate{EntityAID: "apA1", EntityBID: "apB1", Layer: "exact"})
+
+	rep := &reportCapturingReporter{}
+	if err := runBreakdownBackfillWith(context.Background(), scorer, es, json.RawMessage(`{"apply":true}`), rep); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	var got breakdownBackfillReport
+	if err := json.Unmarshal([]byte(rep.report), &got); err != nil {
+		t.Fatalf("unmarshal report: %v", err)
+	}
+	if !got.Apply || got.Backfilled != 1 {
+		t.Fatalf("expected an applied run with backfilled=1, got apply=%v backfilled=%d", got.Apply, got.Backfilled)
+	}
+	if got.BandCounts[unified.BandCertain] != 1 {
+		t.Errorf("apply run band_counts[CERTAIN] = %d, want 1 (full: %v)", got.BandCounts[unified.BandCertain], got.BandCounts)
+	}
+	if got.CertainSignalSets["exact_file"] != 1 {
+		t.Errorf("apply run certain_signal_sets = %v, want exact_file:1", got.CertainSignalSets)
 	}
 }

@@ -1,7 +1,7 @@
 // file: internal/dedup/auto_resolve_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f4b8c19-7a03-4d56-9e18-5c0d7f2a6b91
-// last-edited: 2026-07-13
+// last-edited: 2026-08-20
 
 // Tests for the Tier-1 (Band CERTAIN) auto-resolution pass:
 // Engine.AutoResolveCertain, autoResolveEligible, and UnmergeAuto.
@@ -466,4 +466,50 @@ func arHasTag(ss []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestDistinctAutoResolvePrimaryKinds pins the corroboration rule the exported
+// helper publishes, because a REPORTING caller (dedup.breakdown-backfill's band
+// histogram) now decides risk with it: only the four allow-listed kinds count,
+// weaker-but-still-primary kinds (metadata_fuzzy, embedding_*, lsh_acoustid) do
+// not, zero-confidence signals do not, repeats collapse, and the order is
+// stable so audit strings and histogram keys do not depend on map iteration.
+func TestDistinctAutoResolvePrimaryKinds(t *testing.T) {
+	sig := func(k unified.SignalKind, conf float64) unified.Signal {
+		return unified.Signal{Kind: k, Confidence: conf}
+	}
+	tests := []struct {
+		name    string
+		signals []unified.Signal
+		want    []unified.SignalKind
+	}{
+		{"two allow-listed kinds", []unified.Signal{
+			sig(unified.SigISBNASIN, 0.98), sig(unified.SigExactFile, 1.0),
+		}, []unified.SignalKind{unified.SigExactFile, unified.SigISBNASIN}},
+		{"weak primaries do not corroborate", []unified.Signal{
+			sig(unified.SigMetaFuzzy, 0.85), sig(unified.SigEmbedHigh, 0.94), sig(unified.SigLSHAcoustID, 0.95),
+		}, nil},
+		{"supporting kinds do not corroborate", []unified.Signal{
+			sig(unified.SigDuration, 0.5), sig(unified.SigFolderPath, 0.5),
+		}, nil},
+		{"zero confidence does not count", []unified.Signal{
+			sig(unified.SigExactFile, 0), sig(unified.SigISBNASIN, 0.98),
+		}, []unified.SignalKind{unified.SigISBNASIN}},
+		{"repeats collapse to one kind", []unified.Signal{
+			sig(unified.SigExactFile, 1.0), sig(unified.SigExactFile, 0.99),
+		}, []unified.SignalKind{unified.SigExactFile}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DistinctAutoResolvePrimaryKinds(tc.signals)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("got %v, want %v (order matters)", got, tc.want)
+				}
+			}
+		})
+	}
 }
