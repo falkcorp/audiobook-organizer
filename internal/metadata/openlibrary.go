@@ -1,7 +1,7 @@
 // file: internal/metadata/openlibrary.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-07-13
+// last-edited: 2026-08-20
 
 package metadata
 
@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
@@ -30,11 +29,7 @@ type OpenLibraryClient struct {
 
 // NewOpenLibraryClient creates a new Open Library API client
 func NewOpenLibraryClient() *OpenLibraryClient {
-	baseURL := os.Getenv("OPENLIBRARY_BASE_URL")
-	if baseURL == "" {
-		baseURL = "https://openlibrary.org"
-	}
-	return NewOpenLibraryClientWithBaseURL(baseURL)
+	return NewOpenLibraryClientWithBaseURL(resolveBaseURL("openlibrary", "https://openlibrary.org"))
 }
 
 // NewOpenLibraryClientWithBaseURL creates a client with a custom base URL.

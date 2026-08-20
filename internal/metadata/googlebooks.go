@@ -1,6 +1,7 @@
 // file: internal/metadata/googlebooks.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-f2a3b4c5d6e7
+// last-edited: 2026-08-20
 
 package metadata
 
@@ -11,7 +12,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
@@ -27,10 +27,7 @@ type GoogleBooksClient struct {
 
 // NewGoogleBooksClient creates a new Google Books API client.
 func NewGoogleBooksClient(apiKey string) *GoogleBooksClient {
-	baseURL := os.Getenv("GOOGLE_BOOKS_BASE_URL")
-	if baseURL == "" {
-		baseURL = "https://www.googleapis.com/books/v1"
-	}
+	baseURL := resolveBaseURL("google-books", "https://www.googleapis.com/books/v1")
 	return &GoogleBooksClient{
 		httpClient: providerhttp.Client("googlebooks"),
 		baseURL:    strings.TrimRight(baseURL, "/"),

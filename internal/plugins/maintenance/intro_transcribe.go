@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.21.0
+// version: 3.22.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-08-19
+// last-edited: 2026-08-20
 
 package maintenance
 
@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
@@ -970,7 +971,7 @@ func nthAudioFile(store bookFileLister, book database.Book, n int) (path, cacheK
 // Env WHISPER_CLIP_CACHE_DIR overrides. Default: {rootDir}/.wav-cache.
 // rootDir must not be empty; callers should pass p.deps.RootDir().
 func wavCacheDir(rootDir string) string {
-	if d := os.Getenv("WHISPER_CLIP_CACHE_DIR"); d != "" {
+	if d := config.AppConfig.WhisperClipCacheDir; d != "" {
 		return d
 	}
 	return filepath.Join(rootDir, ".wav-cache")

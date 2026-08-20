@@ -4,8 +4,6 @@
 
 package telemetry
 
-import "os"
-
 // Config holds OpenTelemetry configuration.
 type Config struct {
 	ExporterEndpoint string
@@ -13,12 +11,14 @@ type Config struct {
 	Enabled          bool
 }
 
-// LoadConfig reads OTEL configuration from environment.
-func LoadConfig(serviceName string) *Config {
-	endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+// LoadConfig builds the OTEL config for serviceName from the given exporter
+// endpoint (config.AppConfig.OTelExporterOTLPEndpoint / OTEL_EXPORTER_OTLP_ENDPOINT
+// at the caller). Telemetry stays free of an internal/config import; the caller
+// owns config resolution. Empty endpoint disables OTEL.
+func LoadConfig(serviceName, exporterEndpoint string) *Config {
 	return &Config{
-		ExporterEndpoint: endpoint,
+		ExporterEndpoint: exporterEndpoint,
 		ServiceName:      serviceName,
-		Enabled:          endpoint != "",
+		Enabled:          exporterEndpoint != "",
 	}
 }

@@ -100,6 +100,7 @@ func New(deps Deps) (*Service, error) {
 		AutoWriteBack:       deps.Config.AutoWriteBack,
 		ITLWriteBackEnabled: deps.Config.ITLWriteBackEnabled,
 		LibraryWritePath:    deps.Config.LibraryWritePath,
+		WriteBackDryRun:     deps.Config.WriteBackDryRun,
 	}, deps.Store)
 
 	// SPEC 3 §4: wire the iTunes-in-use precondition. File-activity on the

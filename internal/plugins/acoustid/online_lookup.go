@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/online_lookup.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6e7f8091-a2b3-c4d5-e6f7-08192a3b4c5d
-// last-edited: 2026-07-06
+// last-edited: 2026-08-20
 
 package acoustid
 
@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/acoustid"
@@ -72,13 +71,10 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 		return fmt.Errorf("database store not available")
 	}
 
-	// Prefer the persisted setting (set via PUT /api/v1/config from the
-	// AcousticDedup tab). Fall back to env so the original env-only
-	// setup still works.
+	// The persisted setting (set via PUT /api/v1/config from the AcousticDedup
+	// tab) and the ACOUSTID_API_KEY env var both flow into this one field via
+	// viper.BindEnv (see InitConfig) — no separate env fallback needed here.
 	apiKey := config.AppConfig.AcoustIDAPIKey
-	if apiKey == "" {
-		apiKey = os.Getenv("ACOUSTID_API_KEY")
-	}
 	if apiKey == "" {
 		return fmt.Errorf("AcoustID API key is not configured; set it on the AcoustID Dedup page or via the ACOUSTID_API_KEY env var")
 	}

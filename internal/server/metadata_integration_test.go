@@ -1,6 +1,7 @@
 // file: internal/server/metadata_integration_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a7b8c9d0-e1f2-3456-abcd-789012345ef0
+// last-edited: 2026-08-20
 
 package server
 
@@ -8,7 +9,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -20,19 +20,21 @@ import (
 )
 
 // useOnlyOpenLibrary sets config to only use Open Library as metadata source,
-// returning a cleanup function to restore the original config.
-func useOnlyOpenLibrary(t *testing.T) {
+// pointed at baseURL, and returns a cleanup function to restore the original
+// config. baseURL is set directly on the MetadataSource rather than via
+// t.Setenv + config.InitConfig(): InitConfig would rebuild MetadataSources
+// from viper defaults and discard this single-source override.
+func useOnlyOpenLibrary(t *testing.T, baseURL string) {
 	t.Helper()
 	orig := config.AppConfig.MetadataSources
 	config.AppConfig.MetadataSources = []config.MetadataSource{
-		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1},
+		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1, BaseURL: baseURL},
 	}
 	t.Cleanup(func() { config.AppConfig.MetadataSources = orig })
 }
 
 func TestMetadataFetch_WithMockAPI(t *testing.T) {
 	env, cleanup := testutil.SetupIntegration(t)
-	useOnlyOpenLibrary(t)
 	defer cleanup()
 
 	mockServer := testutil.MockOpenLibraryServer(t, map[string]string{
@@ -40,7 +42,7 @@ func TestMetadataFetch_WithMockAPI(t *testing.T) {
 	})
 	defer mockServer.Close()
 
-	t.Setenv("OPENLIBRARY_BASE_URL", mockServer.URL)
+	useOnlyOpenLibrary(t, mockServer.URL)
 
 	author, err := env.Store.CreateAuthor("J.R.R. Tolkien")
 	require.NoError(t, err)
@@ -67,7 +69,6 @@ func TestMetadataFetch_WithMockAPI(t *testing.T) {
 
 func TestMetadataFetch_FallbackToAuthorSearch(t *testing.T) {
 	env, cleanup := testutil.SetupIntegration(t)
-	useOnlyOpenLibrary(t)
 	defer cleanup()
 
 	callCount := 0
@@ -86,7 +87,7 @@ func TestMetadataFetch_FallbackToAuthorSearch(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
-	t.Setenv("OPENLIBRARY_BASE_URL", mockServer.URL)
+	useOnlyOpenLibrary(t, mockServer.URL)
 
 	author, err := env.Store.CreateAuthor("J.R.R. Tolkien")
 	require.NoError(t, err)
@@ -109,7 +110,6 @@ func TestMetadataFetch_FallbackToAuthorSearch(t *testing.T) {
 
 func TestMetadataFetch_NotFound(t *testing.T) {
 	env, cleanup := testutil.SetupIntegration(t)
-	useOnlyOpenLibrary(t)
 	defer cleanup()
 
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -118,8 +118,7 @@ func TestMetadataFetch_NotFound(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
-	os.Setenv("OPENLIBRARY_BASE_URL", mockServer.URL)
-	defer os.Unsetenv("OPENLIBRARY_BASE_URL")
+	useOnlyOpenLibrary(t, mockServer.URL)
 
 	book := &database.Book{
 		Title:    "Completely Unknown Book XYZ123",

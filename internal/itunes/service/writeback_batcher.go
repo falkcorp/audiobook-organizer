@@ -45,18 +45,6 @@ import (
 // cap — it's purely a circuit breaker.
 const MaxRemovesPerFlush = 50
 
-// dryRunEnabled returns true when ITUNES_WRITEBACK_DRYRUN is set to
-// a truthy value. Checked at flush time so it can be toggled without
-// a process restart by editing the systemd unit / env file and
-// kicking the service.
-func dryRunEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("ITUNES_WRITEBACK_DRYRUN"))) {
-	case "1", "true", "yes", "on":
-		return true
-	}
-	return false
-}
-
 // WriteBackBatcherConfig is the tiny config surface the batcher needs.
 // Deliberately not using config.AppConfig directly — this makes the
 // batcher movable to a package that doesn't import internal/config
@@ -66,6 +54,11 @@ type WriteBackBatcherConfig struct {
 	AutoWriteBack       bool
 	ITLWriteBackEnabled bool
 	LibraryWritePath    string
+	// WriteBackDryRun logs every flush in detail but performs no write to
+	// disk. Mirrors config.AppConfig.ITunes.WriteBackDryRun (env
+	// ITUNES_WRITEBACK_DRYRUN); toggled via UpdateConfig like the other
+	// fields here, so a restart applies a changed env value same as before.
+	WriteBackDryRun bool
 }
 
 // WriteBackStore is what the ITL write-back batcher reads and marks.
@@ -108,6 +101,7 @@ type WriteBackBatcher struct {
 	autoWriteBack       bool
 	itlWriteBackEnabled bool
 	libraryWritePath    string
+	writeBackDryRun     bool
 
 	// store is the narrow database surface used by the flush goroutine
 	// and the EnqueueRemove best-effort tombstone marker. May be nil
@@ -145,6 +139,7 @@ func NewWriteBackBatcher(delay time.Duration, cfg WriteBackBatcherConfig, store 
 		autoWriteBack:       cfg.AutoWriteBack,
 		itlWriteBackEnabled: cfg.ITLWriteBackEnabled,
 		libraryWritePath:    cfg.LibraryWritePath,
+		writeBackDryRun:     cfg.WriteBackDryRun,
 		store:               store,
 	}
 }
@@ -156,6 +151,7 @@ func (b *WriteBackBatcher) UpdateConfig(cfg WriteBackBatcherConfig) {
 	b.autoWriteBack = cfg.AutoWriteBack
 	b.itlWriteBackEnabled = cfg.ITLWriteBackEnabled
 	b.libraryWritePath = cfg.LibraryWritePath
+	b.writeBackDryRun = cfg.WriteBackDryRun
 	b.cfgMu.Unlock()
 }
 
@@ -182,6 +178,13 @@ func (b *WriteBackBatcher) flushEnabled() (bool, string) {
 	b.cfgMu.RLock()
 	defer b.cfgMu.RUnlock()
 	return b.itlWriteBackEnabled, b.libraryWritePath
+}
+
+// dryRunEnabled returns the current WriteBackDryRun value under RLock.
+func (b *WriteBackBatcher) dryRunEnabled() bool {
+	b.cfgMu.RLock()
+	defer b.cfgMu.RUnlock()
+	return b.writeBackDryRun
 }
 
 // Enqueue adds a book ID to the pending location-update batch.
@@ -334,7 +337,7 @@ func (b *WriteBackBatcher) flush() {
 		return
 	}
 
-	dryRun := dryRunEnabled()
+	dryRun := b.dryRunEnabled()
 
 	store := b.store
 	if store == nil {

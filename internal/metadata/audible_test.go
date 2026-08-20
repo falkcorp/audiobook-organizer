@@ -1,7 +1,7 @@
 // file: internal/metadata/audible_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b8c7d6e5-f4a3-2b1c-0d9e-8f7a6b5c4d3e
-// last-edited: 2026-07-13
+// last-edited: 2026-08-20
 
 package metadata
 
@@ -12,12 +12,39 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
 
 func TestAudibleClient_Name(t *testing.T) {
 	c := NewAudibleClient()
 	if c.Name() != "Audible" {
 		t.Errorf("expected 'Audible', got %q", c.Name())
+	}
+}
+
+// TestNewAudibleClientUsesEnvBaseURL locks the 2026-08-20 os.Getenv-to-viper
+// consolidation: AUDIBLE_BASE_URL now flows through
+// config.AppConfig.MetadataSources (viper.BindEnv), not a live os.Getenv read, so
+// the env var only takes effect once InitConfig() (re)populates AppConfig. See
+// the identical guard in openlibrary_test.go.
+func TestNewAudibleClientUsesEnvBaseURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	original := config.AppConfig.MetadataSources
+	t.Cleanup(func() {
+		config.Mutate(func(c *config.Config) { c.MetadataSources = original })
+	})
+
+	t.Setenv("AUDIBLE_BASE_URL", server.URL)
+	config.InitConfig()
+
+	client := NewAudibleClient()
+	if client.baseURL != server.URL {
+		t.Errorf("Expected baseURL to use env %s, got %s", server.URL, client.baseURL)
 	}
 }
 

@@ -1,7 +1,7 @@
 // file: internal/ai/openai_parser.go
-// version: 13.7.0
+// version: 13.9.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-07-03
+// last-edited: 2026-08-20
 
 package ai
 
@@ -12,7 +12,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
@@ -91,15 +90,24 @@ func (p *OpenAIParser) metadataReviewModel() string {
 	return p.fallbackModel()
 }
 
-// NewOpenAIParser creates a new OpenAI parser using the process-wide
-// OPENAI_BASE_URL env (if set) and the OpenAI default model. Preserved for
-// backward compatibility with existing callers; new callers that need a
-// per-client base URL / model (e.g. a local Ollama backend) should use
-// NewOpenAIParserWithBaseURL, which never consults OPENAI_BASE_URL.
+// NewOpenAIParser creates a new OpenAI parser using cfg.OpenAIBaseURL (if
+// set) and the OpenAI default model. Preserved for backward compatibility
+// with existing callers; new callers that need a per-client base URL / model
+// (e.g. a local Ollama backend) should use NewOpenAIParserWithBaseURL, which
+// never consults cfg.OpenAIBaseURL.
 //
-// cfg may be nil; when provided, per-feature model fields override the default.
+// cfg may be nil; when provided, per-feature model fields override the
+// default. baseURL always falls back to the process-wide
+// config.AppConfig.OpenAIBaseURL when cfg is nil or cfg.OpenAIBaseURL is
+// unset — OPENAI_BASE_URL was historically a process-wide env var read
+// unconditionally regardless of which cfg instance a caller passed, and this
+// preserves that behavior now that it is viper-bound instead of read live.
 func NewOpenAIParser(cfg *config.Config, apiKey string, enabled bool) *OpenAIParser {
-	return NewOpenAIParserWithBaseURL(cfg, apiKey, os.Getenv("OPENAI_BASE_URL"), defaultModel, enabled)
+	baseURL := config.AppConfig.OpenAIBaseURL
+	if cfg != nil && cfg.OpenAIBaseURL != "" {
+		baseURL = cfg.OpenAIBaseURL
+	}
+	return NewOpenAIParserWithBaseURL(cfg, apiKey, baseURL, defaultModel, enabled)
 }
 
 // NewOpenAIParserWithBaseURL creates an OpenAI parser pinned to an explicit

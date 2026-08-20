@@ -1,7 +1,7 @@
 // file: internal/metadata/audible.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a9b8c7d6-e5f4-3a2b-1c0d-9e8f7a6b5c4d
-// last-edited: 2026-07-13
+// last-edited: 2026-08-20
 
 package metadata
 
@@ -13,7 +13,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 
@@ -29,10 +28,7 @@ type AudibleClient struct {
 
 // NewAudibleClient creates a new Audible API client.
 func NewAudibleClient() *AudibleClient {
-	baseURL := os.Getenv("AUDIBLE_BASE_URL")
-	if baseURL == "" {
-		baseURL = "https://api.audible.com/1.0"
-	}
+	baseURL := resolveBaseURL("audible", "https://api.audible.com/1.0")
 	return &AudibleClient{
 		httpClient: providerhttp.Client("audible"),
 		baseURL:    strings.TrimRight(baseURL, "/"),

@@ -1,7 +1,7 @@
 // file: internal/config/config_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-07-13
+// last-edited: 2026-08-20
 
 package config
 
@@ -636,4 +636,19 @@ func TestInitConfig_AutoUpdateFromEnv(t *testing.T) {
 	snap := Snapshot()
 	assert.True(t, snap.AutoUpdate.Enabled)
 	assert.Equal(t, "beta", snap.AutoUpdate.Channel)
+}
+
+// TestInitConfig_AcoustIDAPIKeyFromEnv locks the 2026-08-20 os.Getenv-to-viper
+// consolidation: ACOUSTID_API_KEY now flows through viper.BindEnv into
+// AppConfig.AcoustIDAPIKey rather than a live os.Getenv read at each call site
+// (internal/plugins/acoustid/online_lookup.go).
+func TestInitConfig_AcoustIDAPIKeyFromEnv(t *testing.T) {
+	viper.Reset()
+	InitConfig()
+	assert.Equal(t, "", Snapshot().AcoustIDAPIKey)
+
+	t.Setenv("ACOUSTID_API_KEY", "test-acoustid-key")
+	viper.Reset()
+	InitConfig()
+	assert.Equal(t, "test-acoustid-key", Snapshot().AcoustIDAPIKey)
 }

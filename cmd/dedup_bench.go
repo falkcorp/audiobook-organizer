@@ -1,7 +1,7 @@
 // file: cmd/dedup_bench.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-17
+// last-edited: 2026-08-20
 
 //go:build bench
 
@@ -80,10 +80,7 @@ func init() {
 func runDedupBench(cmd *cobra.Command, args []string) error {
 	config.InitConfig()
 
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		apiKey = config.AppConfig.OpenAIAPIKey
-	}
+	apiKey := config.AppConfig.OpenAIAPIKey
 	if apiKey == "" && !benchDryRun {
 		return fmt.Errorf("OPENAI_API_KEY env var required")
 	}
@@ -196,11 +193,8 @@ func runDedupBench(cmd *cobra.Command, args []string) error {
 func runDedupBenchCheck(cmd *cobra.Command, args []string) error {
 	runDir := args[0]
 
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		config.InitConfig()
-		apiKey = config.AppConfig.OpenAIAPIKey
-	}
+	config.InitConfig()
+	apiKey := config.AppConfig.OpenAIAPIKey
 	if apiKey == "" {
 		return fmt.Errorf("OPENAI_API_KEY env var required")
 	}
@@ -217,7 +211,7 @@ func runDedupBenchCheck(cmd *cobra.Command, args []string) error {
 	}
 
 	clientOpts := []option.RequestOption{option.WithAPIKey(apiKey)}
-	if baseURL := os.Getenv("OPENAI_BASE_URL"); baseURL != "" {
+	if baseURL := config.AppConfig.OpenAIBaseURL; baseURL != "" {
 		clientOpts = append(clientOpts, option.WithBaseURL(baseURL))
 	}
 	client := openai.NewClient(clientOpts...)

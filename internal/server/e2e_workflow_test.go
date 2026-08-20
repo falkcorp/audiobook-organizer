@@ -1,7 +1,7 @@
 // file: internal/server/e2e_workflow_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c9d0e1f2-a3b4-5678-cdef-901234567012
-// last-edited: 2026-07-07
+// last-edited: 2026-08-20
 
 package server
 
@@ -135,7 +135,6 @@ func TestE2E_ITunesImportOrganizeWriteBack(t *testing.T) {
 
 func TestE2E_ScanAndFetchMetadata(t *testing.T) {
 	env, cleanup := testutil.SetupIntegration(t)
-	useOnlyOpenLibrary(t)
 	defer cleanup()
 
 	// Mock OpenLibrary
@@ -143,7 +142,7 @@ func TestE2E_ScanAndFetchMetadata(t *testing.T) {
 		"search.json": testutil.OpenLibraryHobbitResponse,
 	})
 	defer mockServer.Close()
-	t.Setenv("OPENLIBRARY_BASE_URL", mockServer.URL)
+	useOnlyOpenLibrary(t, mockServer.URL)
 
 	// Create audiobook file
 	env.CopyFixture("test_sample.m4b", env.ImportDir, "The Hobbit.m4b")

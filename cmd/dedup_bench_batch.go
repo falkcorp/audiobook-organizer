@@ -1,6 +1,7 @@
 // file: cmd/dedup_bench_batch.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: f6a7b8c9-d0e1-2345-fabc-678901234567
+// last-edited: 2026-08-20
 
 //go:build bench
 
@@ -17,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -46,7 +48,7 @@ func submitBatchJobs(
 	chunkSize int,
 ) ([]BatchJobInfo, error) {
 	clientOpts := []option.RequestOption{option.WithAPIKey(apiKey)}
-	if baseURL := os.Getenv("OPENAI_BASE_URL"); baseURL != "" {
+	if baseURL := config.AppConfig.OpenAIBaseURL; baseURL != "" {
 		clientOpts = append(clientOpts, option.WithBaseURL(baseURL))
 	}
 	client := openai.NewClient(clientOpts...)

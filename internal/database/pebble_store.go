@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.134.0
+// version: 1.135.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-08-19
+// last-edited: 2026-08-20
 
 package database
 
@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -187,13 +186,37 @@ const defaultLibraryCountsMinIntervalSeconds = 600 // 10 minutes
 // ticker stops re-scanning the whole library on every tick.
 const primaryCountCacheTTL = 30 * time.Second
 
-func getLibraryCountsMinIntervalSeconds() int {
-	if s := os.Getenv("LIBRARY_COUNTS_CACHE_MIN_INTERVAL_SECONDS"); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v >= 0 {
-			return v
-		}
+// libraryCountsMinIntervalSeconds holds the effective value, defaulting to
+// defaultLibraryCountsMinIntervalSeconds until SetLibraryCountsCacheMinInterval
+// is called.
+//
+// A setter rather than reading config.AppConfig directly, because
+// internal/config already imports internal/database — reading config here
+// would be an import cycle. The dependency has to point this way (see the
+// same pattern in memdb_sort_indexers.go's SetEnabledSortIndexes).
+var (
+	libraryCountsMinIntervalMu  sync.RWMutex
+	libraryCountsMinIntervalSec = defaultLibraryCountsMinIntervalSeconds
+)
+
+// SetLibraryCountsCacheMinInterval overrides how often the primary-book count
+// cache (CountPrimaryBooks) is allowed to re-scan the library. Negative
+// values are ignored. Call during startup wiring, from
+// config.AppConfig.LibraryCountsCacheMinIntervalSeconds
+// (LIBRARY_COUNTS_CACHE_MIN_INTERVAL_SECONDS env var).
+func SetLibraryCountsCacheMinInterval(seconds int) {
+	if seconds < 0 {
+		return
 	}
-	return defaultLibraryCountsMinIntervalSeconds
+	libraryCountsMinIntervalMu.Lock()
+	libraryCountsMinIntervalSec = seconds
+	libraryCountsMinIntervalMu.Unlock()
+}
+
+func getLibraryCountsMinIntervalSeconds() int {
+	libraryCountsMinIntervalMu.RLock()
+	defer libraryCountsMinIntervalMu.RUnlock()
+	return libraryCountsMinIntervalSec
 }
 
 // SetRootDir updates the organized-library root used when computing LibraryStats

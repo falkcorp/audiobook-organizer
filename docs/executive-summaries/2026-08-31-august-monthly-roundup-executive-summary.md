@@ -375,6 +375,51 @@ fire is worth knowing about before anyone turns that switch on.
 
 ---
 
+## 10. August 20: one setting, one way of reading it
+
+**What it was.** A full inventory of the program's 565 configuration options,
+finished earlier the same day, turned up something specific: 25 places across
+the backend were reading a setting straight from the operating system's
+environment at the moment they needed it, instead of through the one shared
+system every other setting already goes through, which reads each setting
+once when the program starts and remembers the answer. A setting read the
+live way can disagree with itself mid-run depending on which piece of code
+happens to ask first, and it also means the same knob can be spelled two
+different ways in two different files with no way to tell from the outside.
+
+**Why it mattered.** Nothing was on fire — this was a consistency problem, not
+an outage. But it is exactly the kind of gap that produces one later: a
+metadata-lookup web address overridden for a test in one file quietly having
+no effect on a sibling file that still reads the environment its own way, or
+a dry-run safety switch for the iTunes write-back feature that a test
+believed it had turned on, while the code path it was testing never looked at
+that switch at all. Both of those were real, found only because fixing the
+live reads broke the tests that had been (accidentally) relying on the old
+behavior.
+
+**The fix.** All 25 call sites now read from the shared, once-at-startup
+settings system, matching how every other option in the program already
+works. Two of them could not simply add the usual import — one because doing
+so would have created a circular dependency between two core packages, the
+other because that file is deliberately kept independent so it can be moved
+to a separate add-on system later — so each was given the same kind of
+narrow, purpose-built accessor already used elsewhere in the codebase for
+that exact situation, rather than bending the rule to fit. A stray override
+address for the AI provider was also widened in scope: it had been named as
+if it only mattered to an internal benchmarking tool, but it turned out to
+also control the address the production AI features actually call. Fixing
+the live-environment reads surfaced eleven tests that had been quietly
+passing for the wrong reason — they set an environment variable and expected
+an immediate effect that the new, correct code path no longer provides
+without an explicit refresh — and all eleven were corrected to ask for that
+refresh explicitly, the same way the shared settings system already expects.
+The example file developers copy from when adding new settings was also
+cleaned up: four entries that had never done anything (documented for years,
+read by no code) were removed, and every setting introduced by this change
+was documented in their place.
+
+---
+
 ## Themes worth carrying into next month
 
 1. **A silent fallback is worse than a loud failure.** The transcription outage, the

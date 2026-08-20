@@ -1,6 +1,7 @@
 // file: internal/server/pipeline_integration_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b1c2d3e4-f5a6-7890-abcd-ef1234567890
+// last-edited: 2026-08-20
 
 package server
 
@@ -58,20 +59,17 @@ func TestPipeline_ImportThenFetchMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, book.ID)
 
-	// 3. Configure metadata sources — only Open Library
-	config.AppConfig.MetadataSources = []config.MetadataSource{
-		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1},
-	}
-	config.AppConfig.WriteBackMetadata = false
-
-	// 4. Start mock Open Library server
+	// 3. Start mock Open Library server
 	olServer := testutil.MockOpenLibraryServer(t, map[string]string{
 		"search.json": testutil.OpenLibraryHobbitResponse,
 	})
 	defer olServer.Close()
 
-	// 5. Set env var so the client uses our mock
-	t.Setenv("OPENLIBRARY_BASE_URL", olServer.URL)
+	// 4. Configure metadata sources — only Open Library, pointed at the mock
+	config.AppConfig.MetadataSources = []config.MetadataSource{
+		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1, BaseURL: olServer.URL},
+	}
+	config.AppConfig.WriteBackMetadata = false
 
 	// 6. Call FetchMetadataForBook
 	svc := metafetch.NewService(env.Store)
@@ -105,19 +103,11 @@ func TestPipeline_FetchMetadata_MultiSourceFallback(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// 2. Configure two sources
-	config.AppConfig.MetadataSources = []config.MetadataSource{
-		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1},
-		{ID: "google-books", Name: "Google Books", Enabled: true, Priority: 2},
-	}
-	config.AppConfig.WriteBackMetadata = false
-
-	// 3. Mock Open Library returns 500
+	// 2. Mock Open Library returns 500
 	olServer := mockHTTPServer(t, nil, http.StatusInternalServerError)
 	defer olServer.Close()
-	t.Setenv("OPENLIBRARY_BASE_URL", olServer.URL)
 
-	// 4. Mock Google Books returns valid Dune response
+	// 3. Mock Google Books returns valid Dune response
 	duneGoogleResponse := `{
 		"totalItems": 1,
 		"items": [{
@@ -138,7 +128,13 @@ func TestPipeline_FetchMetadata_MultiSourceFallback(t *testing.T) {
 		"volumes": duneGoogleResponse,
 	}, 0)
 	defer gbServer.Close()
-	t.Setenv("GOOGLE_BOOKS_BASE_URL", gbServer.URL)
+
+	// 4. Configure both sources, pointed at their mocks
+	config.AppConfig.MetadataSources = []config.MetadataSource{
+		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1, BaseURL: olServer.URL},
+		{ID: "google-books", Name: "Google Books", Enabled: true, Priority: 2, BaseURL: gbServer.URL},
+	}
+	config.AppConfig.WriteBackMetadata = false
 
 	// 5. Call FetchMetadataForBook
 	svc := metafetch.NewService(env.Store)
@@ -175,13 +171,7 @@ func TestPipeline_ChapterTitle_StillFindsBook(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// 2. Configure Open Library
-	config.AppConfig.MetadataSources = []config.MetadataSource{
-		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1},
-	}
-	config.AppConfig.WriteBackMetadata = false
-
-	// 3. Mock server: title-only search with stripped chapter prefix should match.
+	// 2. Mock server: title-only search with stripped chapter prefix should match.
 	// The service strips " - Chapter 3" via stripChapterFromTitle, then
 	// searches by title "The Hobbit" (no author in query).
 	callCount := 0
@@ -201,7 +191,12 @@ func TestPipeline_ChapterTitle_StillFindsBook(t *testing.T) {
 		_, _ = w.Write([]byte(testutil.OpenLibraryEmptyResponse))
 	}))
 	defer olServer.Close()
-	t.Setenv("OPENLIBRARY_BASE_URL", olServer.URL)
+
+	// 3. Configure Open Library, pointed at the mock
+	config.AppConfig.MetadataSources = []config.MetadataSource{
+		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1, BaseURL: olServer.URL},
+	}
+	config.AppConfig.WriteBackMetadata = false
 
 	// 4. Call FetchMetadataForBook
 	svc := metafetch.NewService(env.Store)
@@ -232,26 +227,24 @@ func TestPipeline_FetchMetadata_NoResults_AllSources(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// 2. Configure sources
-	config.AppConfig.MetadataSources = []config.MetadataSource{
-		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1},
-		{ID: "google-books", Name: "Google Books", Enabled: true, Priority: 2},
-	}
-	config.AppConfig.WriteBackMetadata = false
-
-	// 3. All mock sources return empty
+	// 2. All mock sources return empty
 	olServer := testutil.MockOpenLibraryServer(t, map[string]string{
 		"search.json": testutil.OpenLibraryEmptyResponse,
 	})
 	defer olServer.Close()
-	t.Setenv("OPENLIBRARY_BASE_URL", olServer.URL)
 
 	gbEmptyResponse := `{"totalItems": 0, "items": []}`
 	gbServer := mockHTTPServer(t, map[string]string{
 		"volumes": gbEmptyResponse,
 	}, 0)
 	defer gbServer.Close()
-	t.Setenv("GOOGLE_BOOKS_BASE_URL", gbServer.URL)
+
+	// 3. Configure sources, pointed at their mocks
+	config.AppConfig.MetadataSources = []config.MetadataSource{
+		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1, BaseURL: olServer.URL},
+		{ID: "google-books", Name: "Google Books", Enabled: true, Priority: 2, BaseURL: gbServer.URL},
+	}
+	config.AppConfig.WriteBackMetadata = false
 
 	// 4. Call FetchMetadataForBook
 	svc := metafetch.NewService(env.Store)

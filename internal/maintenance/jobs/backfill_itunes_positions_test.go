@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_itunes_positions_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5577372a-b3ed-4283-9217-345d654e2a57
-// last-edited: 2026-07-30
+// last-edited: 2026-08-20
 
 // Package jobs_test — coverage for the backfill-itunes-positions maintenance
 // job. The owner is migrating off iTunes/Apple Books and their existing
@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
@@ -372,7 +373,12 @@ func TestResolveITunesPositionBackfillUser_EnvOverrideWins(t *testing.T) {
 	newPositionUser(t, store, "first")
 	second := newPositionUser(t, store, "second")
 
+	original := config.AppConfig.ABSItunesPositionBackfillUserID
+	t.Cleanup(func() {
+		config.Mutate(func(c *config.Config) { c.ABSItunesPositionBackfillUserID = original })
+	})
 	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, second.ID)
+	config.InitConfig()
 	got, err := jobs.ResolveITunesPositionBackfillUser(store)
 	require.NoError(t, err)
 	require.Equal(t, second.ID, got)
@@ -382,7 +388,12 @@ func TestResolveITunesPositionBackfillUser_RejectsUnknownOverride(t *testing.T) 
 	store := newSyncPebbleStore(t)
 	newPositionUser(t, store, "first")
 
+	original := config.AppConfig.ABSItunesPositionBackfillUserID
+	t.Cleanup(func() {
+		config.Mutate(func(c *config.Config) { c.ABSItunesPositionBackfillUserID = original })
+	})
 	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, "no-such-user")
+	config.InitConfig()
 	_, err := jobs.ResolveITunesPositionBackfillUser(store)
 	require.Error(t, err, "an unknown override must fail loudly, not silently fall back")
 }
@@ -391,7 +402,12 @@ func TestResolveITunesPositionBackfillUser_SingleUser(t *testing.T) {
 	store := newSyncPebbleStore(t)
 	only := newPositionUser(t, store, "solo")
 
+	original := config.AppConfig.ABSItunesPositionBackfillUserID
+	t.Cleanup(func() {
+		config.Mutate(func(c *config.Config) { c.ABSItunesPositionBackfillUserID = original })
+	})
 	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, "")
+	config.InitConfig()
 	got, err := jobs.ResolveITunesPositionBackfillUser(store)
 	require.NoError(t, err)
 	require.Equal(t, only.ID, got)

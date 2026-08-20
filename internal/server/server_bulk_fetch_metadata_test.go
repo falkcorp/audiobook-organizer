@@ -1,7 +1,7 @@
 // file: internal/server/server_bulk_fetch_metadata_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b1c0d9e-8f7a-6b5c-4d3e-2f1a0b9c8d7e
-// last-edited: 2026-01-24
+// last-edited: 2026-08-20
 
 package server
 
@@ -22,7 +22,6 @@ import (
 
 func TestBulkFetchMetadata_MixedResults(t *testing.T) {
 	server, cleanup := setupTestServer(t)
-	useOnlyOpenLibrary(t)
 	defer cleanup()
 
 	// Stub OpenLibrary.
@@ -51,7 +50,7 @@ func TestBulkFetchMetadata_MixedResults(t *testing.T) {
 	})
 	ol := httptest.NewServer(mux)
 	defer ol.Close()
-	t.Setenv("OPENLIBRARY_BASE_URL", ol.URL)
+	useOnlyOpenLibrary(t, ol.URL)
 
 	// Book that should update (has missing publisher/language/year/isbn/author).
 	tempFile := filepath.Join(t.TempDir(), "bulk1.m4b")
@@ -118,7 +117,6 @@ func TestBulkFetchMetadata_MixedResults(t *testing.T) {
 
 func TestBulkFetchMetadata_OnlyMissingFalse_AllowsOverwrite(t *testing.T) {
 	server, cleanup := setupTestServer(t)
-	useOnlyOpenLibrary(t)
 	defer cleanup()
 
 	// Stub OpenLibrary with a different publisher.
@@ -141,7 +139,7 @@ func TestBulkFetchMetadata_OnlyMissingFalse_AllowsOverwrite(t *testing.T) {
 	})
 	ol := httptest.NewServer(mux)
 	defer ol.Close()
-	t.Setenv("OPENLIBRARY_BASE_URL", ol.URL)
+	useOnlyOpenLibrary(t, ol.URL)
 
 	tempFile := filepath.Join(t.TempDir(), "bulk-overwrite.m4b")
 	require.NoError(t, os.WriteFile(tempFile, []byte("audio"), 0o644))

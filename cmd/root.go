@@ -1,7 +1,7 @@
 // file: cmd/root.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-07-01
+// last-edited: 2026-08-20
 
 package cmd
 
@@ -242,7 +242,7 @@ var serveCmd = &cobra.Command{
 		fmt.Printf("Using database: %s (%s)\n", config.AppConfig.DatabasePath, config.AppConfig.DatabaseType)
 
 		// Initialize OpenTelemetry (optional; disabled if OTEL_EXPORTER_OTLP_ENDPOINT not set)
-		otelCfg := telemetry.LoadConfig("audiobook-organizer")
+		otelCfg := telemetry.LoadConfig("audiobook-organizer", config.AppConfig.OTelExporterOTLPEndpoint)
 		otelShutdown, err := telemetry.InitOTEL(context.Background(), otelCfg)
 		if err != nil {
 			return fmt.Errorf("failed to initialize OpenTelemetry: %w", err)
@@ -497,6 +497,10 @@ func initConfig() {
 	if unknown := database.SetEnabledSortIndexes(config.AppConfig.EnabledSortIndexes); len(unknown) > 0 {
 		fmt.Printf("Warning: unknown enabled_sort_indexes entries ignored: %v\n", unknown)
 	}
+
+	// Same import-cycle constraint as SetEnabledSortIndexes above:
+	// internal/database can't import internal/config directly.
+	database.SetLibraryCountsCacheMinInterval(config.AppConfig.LibraryCountsCacheMinIntervalSeconds)
 }
 
 func printMetadataField(label, value string) {

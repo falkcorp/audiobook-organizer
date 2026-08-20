@@ -1,7 +1,7 @@
 // file: internal/server/server_ai_integration_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6d5c4b3a-2918-1706-f5e4-d3c2b1a09f8e
-// last-edited: 2026-04-23
+// last-edited: 2026-08-20
 
 package server
 
@@ -67,7 +67,7 @@ func TestAIEndpoints_WithStubbedOpenAI(t *testing.T) {
 	// (AppConfig is fully restored by defer cleanup() from setupTestServer.)
 	config.AppConfig.EnableAIParsing = true
 	config.AppConfig.OpenAIAPIKey = "test-key"
-	t.Setenv("OPENAI_BASE_URL", openAI.URL+"/v1")
+	config.AppConfig.OpenAIBaseURL = openAI.URL + "/v1"
 
 	// 1) POST /ai/parse-filename should succeed.
 	parseBody := bytes.NewBufferString(`{"filename":"The Hobbit - J.R.R. Tolkien"}`)

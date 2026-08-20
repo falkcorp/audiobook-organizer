@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_itunes_positions.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 19a97553-68fc-4ef6-a326-cc9e694d8698
-// last-edited: 2026-08-17
+// last-edited: 2026-08-20
 
 package jobs
 
@@ -10,12 +10,12 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"os"
 	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -106,7 +106,7 @@ func ResolveITunesPositionBackfillUser(store userLister) (string, error) {
 		return "", fmt.Errorf("no users exist — there is no account to migrate iTunes positions onto")
 	}
 
-	if override := strings.TrimSpace(os.Getenv(ITunesPositionBackfillUserIDEnv)); override != "" {
+	if override := strings.TrimSpace(config.AppConfig.ABSItunesPositionBackfillUserID); override != "" {
 		for _, u := range users {
 			if u.ID == override {
 				return u.ID, nil

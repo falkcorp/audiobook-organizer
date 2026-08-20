@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_transport_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7f2b4a8d-9c3e-4d15-b6a2-0e8f1c5d7a93
-// last-edited: 2026-08-07
+// last-edited: 2026-08-20
 
 package maintenance
 
@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 )
@@ -29,7 +30,12 @@ func transportTestFixture(t *testing.T, bookID, fileHash string) (*database.Mock
 	t.Helper()
 
 	cacheDir := t.TempDir()
+	origCacheDir := config.AppConfig.WhisperClipCacheDir
 	t.Setenv("WHISPER_CLIP_CACHE_DIR", cacheDir)
+	config.InitConfig()
+	t.Cleanup(func() {
+		config.Mutate(func(c *config.Config) { c.WhisperClipCacheDir = origCacheDir })
+	})
 	clip := cachedClipPath(cacheDir, fileHash)
 	if err := os.WriteFile(clip, []byte("RIFF fake wav"), 0o644); err != nil {
 		t.Fatalf("write cached clip: %v", err)

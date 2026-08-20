@@ -21,6 +21,7 @@ type Config struct {
 	ImportConcurrency   int
 	AutoWriteBack       bool // mirror of config.AppConfig.ITunes.AutoWriteBack
 	ITLWriteBackEnabled bool // mirror of config.AppConfig.ITunes.WriteBackEnabled
+	WriteBackDryRun     bool // mirror of config.AppConfig.ITunes.WriteBackDryRun
 }
 
 // PathMapping is a single ITunesPath → OrganizedPath transform applied

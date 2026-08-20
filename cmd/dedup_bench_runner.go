@@ -1,6 +1,7 @@
 // file: cmd/dedup_bench_runner.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: d4e5f6a7-b8c9-0123-defa-456789012345
+// last-edited: 2026-08-20
 
 //go:build bench
 
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -100,7 +102,7 @@ func executeBenchRun(
 
 	// Create OpenAI client
 	clientOpts := []option.RequestOption{option.WithAPIKey(apiKey)}
-	if baseURL := os.Getenv("OPENAI_BASE_URL"); baseURL != "" {
+	if baseURL := config.AppConfig.OpenAIBaseURL; baseURL != "" {
 		clientOpts = append(clientOpts, option.WithBaseURL(baseURL))
 	}
 	client := openai.NewClient(clientOpts...)
