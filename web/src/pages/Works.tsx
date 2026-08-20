@@ -1,5 +1,5 @@
 // file: web/src/pages/Works.tsx
-// version: 1.2.1
+// version: 1.2.2
 // guid: 4b5c6d7e-8f9a-0b1c-2d3e-4f5a6b7c8d9e
 
 import { useCallback, useEffect, useState } from 'react';
@@ -139,12 +139,23 @@ export function Works() {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <Stack direction="row" alignItems="center" justifyContent="space-between">
+      <Stack
+        direction="row"
+        sx={{
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}
+      >
         <Box>
           <Typography variant="h4" gutterBottom>
             Works
           </Typography>
-          <Typography variant="body2" color="text.secondary">
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             Logical title-level groupings across editions and narrations.
           </Typography>
         </Box>

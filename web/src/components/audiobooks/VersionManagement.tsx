@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/VersionManagement.tsx
-// version: 1.1.4
+// version: 1.1.5
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
 
 import { useState, useEffect } from 'react';
@@ -213,7 +213,13 @@ export function VersionManagement({
     <>
       <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
         <DialogTitle>
-          <Stack direction="row" alignItems="center" spacing={1}>
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+            }}
+          >
             <CompareIcon />
             <Typography variant="h6">Manage Versions</Typography>
           </Stack>
@@ -245,7 +251,14 @@ export function VersionManagement({
                     {index > 0 && <Divider />}
                     <ListItem>
                       <Box sx={{ width: '100%' }}>
-                        <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+                        <Stack
+                          direction="row"
+                          spacing={1}
+                          sx={{
+                            alignItems: 'center',
+                            mb: 1,
+                          }}
+                        >
                           <IconButton
                             size="small"
                             onClick={() => handleSetPrimary(version.id)}
@@ -299,7 +312,13 @@ export function VersionManagement({
                         </Stack>
 
                         {version.version_notes && (
-                          <Typography variant="body2" color="text.secondary" sx={{ ml: 5 }}>
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              color: 'text.secondary',
+                              ml: 5,
+                            }}
+                          >
                             <InfoIcon
                               sx={{
                                 fontSize: 14,
@@ -313,8 +332,11 @@ export function VersionManagement({
 
                         <Typography
                           variant="caption"
-                          color="text.secondary"
-                          sx={{ ml: 5, display: 'block' }}
+                          sx={{
+                            color: 'text.secondary',
+                            ml: 5,
+                            display: 'block',
+                          }}
                         >
                           {version.file_path}
                         </Typography>
@@ -344,7 +366,13 @@ export function VersionManagement({
       <Dialog open={linkDialogOpen} onClose={() => setLinkDialogOpen(false)}>
         <DialogTitle>Link Version</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+              mb: 2,
+            }}
+          >
             Search for an audiobook to link as another version. This is useful for different
             qualities, formats, or editions of the same book.
           </Typography>
@@ -358,7 +386,14 @@ export function VersionManagement({
             placeholder="Search audiobooks"
           />
           {searchLoading && (
-            <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 2 }}>
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{
+                alignItems: 'center',
+                mt: 2,
+              }}
+            >
               <CircularProgress size={16} />
               <Typography variant="body2">Searching...</Typography>
             </Stack>
@@ -417,7 +452,12 @@ export function VersionManagement({
       <Dialog open={Boolean(unlinkTarget)} onClose={() => setUnlinkTarget(null)}>
         <DialogTitle>Unlink Version</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" color="text.secondary">
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             Unlink <strong>{unlinkTarget?.title || 'this audiobook'}</strong> from this version
             group?
           </Typography>

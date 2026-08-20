@@ -1,5 +1,5 @@
 // file: web/src/components/settings/MetadataSettingsTab.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9e0f1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b
 // last-edited: 2026-08-19
 import { Dispatch, SetStateAction } from 'react';
@@ -367,7 +367,13 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
                       </Grid>
                       {source.id === 'google-books' && (
                         <Grid size={12}>
-                          <Typography variant="caption" color="text.secondary" component="div">
+                          <Typography
+                            variant="caption"
+                            component="div"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             Setup (2 clicks): <strong>1.</strong>{' '}
                             <a
                               href={
@@ -398,7 +404,13 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
                       )}
                       {source.id === 'hardcover' && (
                         <Grid size={12}>
-                          <Typography variant="caption" color="text.secondary" component="div">
+                          <Typography
+                            variant="caption"
+                            component="div"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             Get your API key from{' '}
                             <a
                               href="https://hardcover.app/account/api"
@@ -442,7 +454,13 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
           Open Library Data Dumps
         </Typography>
         <Divider sx={{ mb: 2 }} />
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+            mb: 2,
+          }}
+        >
           Download Open Library data dumps for fast, offline metadata lookups. Dumps are ~12GB total
           and enable near-instant ISBN and title searches without API rate limits.
         </Typography>
@@ -458,7 +476,13 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
           Database Maintenance
         </Typography>
         <Divider sx={{ mb: 2 }} />
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+            mb: 2,
+          }}
+        >
           Split compound author/narrator names (e.g. &quot;Author A &amp; Author B&quot;) into
           separate records for better matching and display.
         </Typography>

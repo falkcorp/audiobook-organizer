@@ -1,5 +1,5 @@
 // file: web/src/pages/Login.tsx
-// version: 1.3.1
+// version: 1.3.2
 // guid: 9a3f2c1d-4b5e-6f70-8a9b-0c1d2e3f4a5b
 
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
@@ -136,7 +136,12 @@ export function Login() {
           <Typography variant="h4" gutterBottom>
             {mode === 'setup' ? 'Create Admin Account' : 'Login'}
           </Typography>
-          <Typography variant="body2" color="text.secondary">
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             {mode === 'setup'
               ? 'First run detected. Create your first admin account.'
               : 'Sign in to access audiobook organizer.'}
@@ -152,13 +157,15 @@ export function Login() {
             id="username"
             type="text"
             autoComplete="username"
-            inputProps={{
-              autoCapitalize: 'none',
-              autoCorrect: 'off',
-              spellCheck: false,
-            }}
             required
             fullWidth
+            slotProps={{
+              htmlInput: {
+                autoCapitalize: 'none',
+                autoCorrect: 'off',
+                spellCheck: false,
+              },
+            }}
           />
 
           {mode === 'setup' && (
@@ -170,12 +177,14 @@ export function Login() {
               id="email"
               type="email"
               autoComplete="email"
-              inputProps={{
-                autoCapitalize: 'none',
-                autoCorrect: 'off',
-                spellCheck: false,
-              }}
               fullWidth
+              slotProps={{
+                htmlInput: {
+                  autoCapitalize: 'none',
+                  autoCorrect: 'off',
+                  spellCheck: false,
+                },
+              }}
             />
           )}
 

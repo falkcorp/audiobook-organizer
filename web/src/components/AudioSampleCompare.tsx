@@ -1,5 +1,5 @@
 // file: web/src/components/AudioSampleCompare.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
 
 import { useState, useRef, useCallback } from 'react';
@@ -122,28 +122,55 @@ function SamplePlayer({ book, src, label, selected, onSelect }: PlayerProps) {
       ]}
     >
       <Stack spacing={1}>
-        <Stack direction="row" alignItems="center" justifyContent="space-between">
-          <Typography variant="caption" color="text.secondary" fontWeight={600}>
+        <Stack
+          direction="row"
+          sx={{
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.secondary',
+              fontWeight: 600,
+            }}
+          >
             {label}
           </Typography>
           {selected && <Chip label="Selected" size="small" color="primary" />}
         </Stack>
 
-        <Typography variant="body2" fontWeight={600} noWrap title={book.title}>
+        <Typography
+          variant="body2"
+          noWrap
+          title={book.title}
+          sx={{
+            fontWeight: 600,
+          }}
+        >
           {book.title}
         </Typography>
         {book.authors && (
-          <Typography variant="caption" color="text.secondary" noWrap>
+          <Typography
+            variant="caption"
+            noWrap
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             {book.authors}
           </Typography>
         )}
         {book.filePath && (
           <Typography
             variant="caption"
-            color="text.disabled"
             noWrap
             title={book.filePath}
-            sx={{ fontSize: '0.65rem' }}
+            sx={{
+              color: 'text.disabled',
+              fontSize: '0.65rem',
+            }}
           >
             {book.filePath}
           </Typography>
@@ -222,8 +249,19 @@ export function AudioSampleCompare({ open, bookA, bookB, onClose, onKeep }: Prop
       <DialogContent>
         <Stack spacing={2}>
           {/* Position selector */}
-          <Stack direction="row" alignItems="center" spacing={1}>
-            <Typography variant="body2" color="text.secondary">
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+            }}
+          >
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               Sample position:
             </Typography>
             <ToggleButtonGroup
@@ -242,13 +280,23 @@ export function AudioSampleCompare({ open, bookA, bookB, onClose, onKeep }: Prop
               </Button>
             </Tooltip>
             {position === 'random' && (
-              <Typography variant="caption" color="text.secondary">
+              <Typography
+                variant="caption"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 @{startA}s
               </Typography>
             )}
           </Stack>
 
-          <Typography variant="caption" color="text.secondary">
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             Click a player to select it as the version to keep, then confirm below.
           </Typography>
 

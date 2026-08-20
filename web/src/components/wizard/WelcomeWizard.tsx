@@ -1,5 +1,5 @@
 // file: web/src/components/wizard/WelcomeWizard.tsx
-// version: 1.5.1
+// version: 1.5.2
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-08-19
 
@@ -329,7 +329,10 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
 
   return (
     <>
-      <Dialog open={open} maxWidth="md" fullWidth disableEscapeKeyDown>
+      {/* No onClose: the wizard is dismissible only through its own actions.
+          MUI 9 removed disableEscapeKeyDown, but with no onClose handler there
+          is nothing for Escape to call, so the behaviour is unchanged. */}
+      <Dialog open={open} maxWidth="md" fullWidth>
         <DialogTitle>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <SettingsIcon />
@@ -355,7 +358,13 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
               <Typography variant="h6" gutterBottom>
                 Set Your Library Path
               </Typography>
-              <Typography variant="body2" color="text.secondary" paragraph>
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                  marginBottom: '16px',
+                }}
+              >
                 This is where your organized audiobooks will be stored. The app will create a
                 structured folder hierarchy here based on your naming patterns.
               </Typography>
@@ -367,14 +376,16 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
                 onChange={(e) => setLibraryPath(e.target.value)}
                 placeholder="/path/to/audiobooks/library"
                 sx={{ mb: 2 }}
-                InputProps={{
-                  endAdornment: (
-                    <InputAdornment position="end">
-                      <Button variant="outlined" size="small" onClick={handleOpenLibraryBrowser}>
-                        Browse
-                      </Button>
-                    </InputAdornment>
-                  ),
+                slotProps={{
+                  input: {
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        <Button variant="outlined" size="small" onClick={handleOpenLibraryBrowser}>
+                          Browse
+                        </Button>
+                      </InputAdornment>
+                    ),
+                  },
                 }}
               />
 
@@ -391,7 +402,13 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
               <Typography variant="h6" gutterBottom>
                 Set up AI &amp; fingerprinting tools
               </Typography>
-              <Typography variant="body2" color="text.secondary" mb={2}>
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                  mb: 2,
+                }}
+              >
                 These tools power local AI deduplication and audio fingerprint matching. Recommended
                 installs everything automatically.
               </Typography>
@@ -407,7 +424,12 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
                     label={
                       <Stack>
                         <Typography>Install recommended tools</Typography>
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: 'text.secondary',
+                          }}
+                        >
                           Ollama (local AI, ~5GB) + fpcalc (fingerprinting, ~2MB)
                         </Typography>
                       </Stack>
@@ -436,7 +458,13 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
               <Typography variant="h6" gutterBottom>
                 AI-Powered Metadata (Optional)
               </Typography>
-              <Typography variant="body2" color="text.secondary" paragraph>
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                  marginBottom: '16px',
+                }}
+              >
                 Enable AI-powered author name parsing and metadata enhancement with OpenAI. This is
                 optional and can be configured later in Settings.
               </Typography>
@@ -486,7 +514,13 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
               <Typography variant="h6" gutterBottom>
                 Import from iTunes Library
               </Typography>
-              <Typography variant="body2" color="text.secondary" paragraph>
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                  marginBottom: '16px',
+                }}
+              >
                 If you have audiobooks in iTunes/Apple Books, you can import them automatically.
                 Point to your iTunes Library.xml file to get started.
               </Typography>
@@ -506,23 +540,25 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
                       }
                     }}
                     sx={{ mb: 1 }}
-                    InputProps={{
-                      endAdornment: (
-                        <InputAdornment position="end">
-                          <Button size="small" onClick={handleOpenITunesBrowser}>
-                            Browse
-                          </Button>
-                          <Button
-                            size="small"
-                            variant="contained"
-                            disabled={!iTunesPathSelection.trim() || iTunesValidating}
-                            onClick={handleConfirmITunesPath}
-                            sx={{ ml: 1 }}
-                          >
-                            Use
-                          </Button>
-                        </InputAdornment>
-                      ),
+                    slotProps={{
+                      input: {
+                        endAdornment: (
+                          <InputAdornment position="end">
+                            <Button size="small" onClick={handleOpenITunesBrowser}>
+                              Browse
+                            </Button>
+                            <Button
+                              size="small"
+                              variant="contained"
+                              disabled={!iTunesPathSelection.trim() || iTunesValidating}
+                              onClick={handleConfirmITunesPath}
+                              sx={{ ml: 1 }}
+                            >
+                              Use
+                            </Button>
+                          </InputAdornment>
+                        ),
+                      },
                     }}
                   />
                 </Box>
@@ -612,7 +648,13 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
                   <Typography variant="subtitle2" sx={{ mb: 1 }}>
                     Path Mapping
                   </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                      mb: 1.5,
+                    }}
+                  >
                     Map each iTunes path prefix to its local equivalent on this server.
                   </Typography>
                   {pathMappings.map((mapping, idx) => (
@@ -623,7 +665,13 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
                       >
                         {mapping.from}
                       </Typography>
-                      <Stack direction="row" spacing={1} alignItems="flex-start">
+                      <Stack
+                        direction="row"
+                        spacing={1}
+                        sx={{
+                          alignItems: 'flex-start',
+                        }}
+                      >
                         <TextField
                           fullWidth
                           size="small"
@@ -738,7 +786,13 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
               <Typography variant="h6" gutterBottom>
                 Add Import Folders
               </Typography>
-              <Typography variant="body2" color="text.secondary" paragraph>
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                  marginBottom: '16px',
+                }}
+              >
                 Import folders are watched locations where the scanner looks for new audiobooks.
                 Files found here will be scanned and organized into your library path.
               </Typography>

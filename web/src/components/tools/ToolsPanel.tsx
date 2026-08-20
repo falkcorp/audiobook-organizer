@@ -1,5 +1,5 @@
 // file: web/src/components/tools/ToolsPanel.tsx
-// version: 1.0.2
+// version: 1.0.3
 // guid: f8a9b0c1-d2e3-4567-fabc-567890123456
 // last-edited: 2026-08-19
 
@@ -57,9 +57,21 @@ export function ToolsPanel({ mode: _mode }: ToolsPanelProps) {
       {tools.map((tool) => (
         <Card key={tool.name} variant="outlined">
           <CardContent>
-            <Stack direction="row" alignItems="center" spacing={1} mb={1}>
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{
+                alignItems: 'center',
+                mb: 1,
+              }}
+            >
               <Tooltip title={TOOL_TOOLTIPS[tool.name] ?? ''}>
-                <Typography variant="subtitle1" fontWeight="bold">
+                <Typography
+                  variant="subtitle1"
+                  sx={{
+                    fontWeight: 'bold',
+                  }}
+                >
                   {tool.name}
                 </Typography>
               </Tooltip>
@@ -72,7 +84,13 @@ export function ToolsPanel({ mode: _mode }: ToolsPanelProps) {
             </Stack>
 
             {tool.resolved_path && (
-              <Typography variant="caption" color="text.secondary" display="block">
+              <Typography
+                variant="caption"
+                sx={{
+                  color: 'text.secondary',
+                  display: 'block',
+                }}
+              >
                 {tool.resolved_path}
               </Typography>
             )}

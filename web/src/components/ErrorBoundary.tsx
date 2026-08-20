@@ -1,10 +1,10 @@
 // file: web/src/components/ErrorBoundary.tsx
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 
 import { Component, ReactNode, ErrorInfo } from 'react';
 import { Box, Typography, Button, Paper } from '@mui/material';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlineOutlined';
 
 interface Props {
   children: ReactNode;
@@ -58,7 +58,13 @@ export class ErrorBoundary extends Component<Props, State> {
             <Typography variant="h5" gutterBottom>
               Something went wrong
             </Typography>
-            <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
+            <Typography
+              variant="body1"
+              sx={{
+                color: 'text.secondary',
+                mb: 3,
+              }}
+            >
               {this.state.error?.message || 'An unexpected error occurred'}
             </Typography>
             <Button variant="contained" onClick={this.handleReset}>

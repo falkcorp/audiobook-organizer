@@ -1,5 +1,5 @@
 // file: web/src/components/library/LibrarySoftDeletedSection.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: 26804E8D-51BA-462C-9BBE-45ED69E17B9F
 // last-edited: 2026-08-19
 
@@ -50,13 +50,21 @@ export function LibrarySoftDeletedSection({
     <Paper sx={{ p: 2, mt: 3 }}>
       <Stack
         direction="row"
-        alignItems="center"
-        justifyContent="space-between"
         spacing={2}
-        sx={{ cursor: 'pointer' }}
         onClick={onToggleExpanded}
+        sx={{
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          cursor: 'pointer',
+        }}
       >
-        <Stack direction="row" alignItems="center" spacing={1}>
+        <Stack
+          direction="row"
+          spacing={1}
+          sx={{
+            alignItems: 'center',
+          }}
+        >
           <ExpandMoreIcon
             sx={[
               {
@@ -73,7 +81,13 @@ export function LibrarySoftDeletedSection({
           />
           <Typography variant="h6">Soft-Deleted Books</Typography>
         </Stack>
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack
+          direction="row"
+          spacing={1}
+          sx={{
+            alignItems: 'center',
+          }}
+        >
           <Chip
             label={`${softDeletedCount} ${softDeletedCount === 1 ? 'item' : 'items'}`}
             color={softDeletedCount > 0 ? 'warning' : 'default'}
@@ -145,16 +159,31 @@ export function LibrarySoftDeletedSection({
                       primary={book.title || 'Untitled'}
                       secondary={
                         <Stack spacing={0.5}>
-                          <Typography variant="body2" color="text.secondary">
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             {book.author || 'Unknown Author'}
                           </Typography>
                           {deletedAt && (
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                color: 'text.secondary',
+                              }}
+                            >
                               Soft deleted at {deletedAt.toLocaleString()}
                             </Typography>
                           )}
                           {book.file_path && (
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                color: 'text.secondary',
+                              }}
+                            >
                               {book.file_path}
                             </Typography>
                           )}

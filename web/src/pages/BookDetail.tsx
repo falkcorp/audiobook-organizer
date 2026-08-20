@@ -1,5 +1,5 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.54.1
+// version: 1.54.2
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
 // last-edited: 2026-08-19
 
@@ -984,7 +984,14 @@ export const BookDetail = () => {
 
   if (loading) {
     return (
-      <Box display="flex" alignItems="center" justifyContent="center" height="100%">
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '100%',
+        }}
+      >
         <CircularProgress />
       </Box>
     );
@@ -992,7 +999,11 @@ export const BookDetail = () => {
 
   if (!book) {
     return (
-      <Box p={3}>
+      <Box
+        sx={{
+          p: 3,
+        }}
+      >
         <Alert severity="error">Audiobook not found.</Alert>
         <Button
           startIcon={<ArrowBackIcon />}
@@ -1012,7 +1023,13 @@ export const BookDetail = () => {
   const isSoftDeleted = book.marked_for_deletion ?? false;
 
   return (
-    <Box p={3} sx={{ height: '100%', overflowY: 'auto' }}>
+    <Box
+      sx={{
+        p: 3,
+        height: '100%',
+        overflowY: 'auto',
+      }}
+    >
       {actionLoading && (
         <LinearProgress sx={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999 }} />
       )}

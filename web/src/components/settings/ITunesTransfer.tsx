@@ -1,5 +1,5 @@
 // file: web/src/components/settings/ITunesTransfer.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -254,7 +254,13 @@ export function ITunesTransfer() {
             <Typography variant="subtitle1" gutterBottom>
               Download Current Library
             </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+                mb: 1,
+              }}
+            >
               Download the current ITL file from the server for backup or editing.
             </Typography>
             <Button
@@ -274,12 +280,24 @@ export function ITunesTransfer() {
             <Typography variant="subtitle1" gutterBottom>
               Upload Library
             </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+                mb: 1,
+              }}
+            >
               Upload an ITL file to validate or install as the active library. Installing creates an
               automatic backup of the current file.
             </Typography>
 
-            <Stack direction="row" spacing={2} alignItems="center">
+            <Stack
+              direction="row"
+              spacing={2}
+              sx={{
+                alignItems: 'center',
+              }}
+            >
               <Button variant="outlined" component="label" startIcon={<CloudUploadIcon />}>
                 Choose File
                 <input
@@ -352,7 +370,13 @@ export function ITunesTransfer() {
 
           {/* Backups Section */}
           <Box>
-            <Stack direction="row" justifyContent="space-between" alignItems="center">
+            <Stack
+              direction="row"
+              sx={{
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
               <Typography variant="subtitle1">
                 <HistoryIcon fontSize="small" sx={{ verticalAlign: 'middle', mr: 0.5 }} />
                 Backups
@@ -365,7 +389,13 @@ export function ITunesTransfer() {
             {backupsLoading && <LinearProgress sx={{ mt: 1 }} />}
 
             {!backupsLoading && backups.length === 0 && (
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                  mt: 1,
+                }}
+              >
                 No backups found. Backups are created automatically when uploading or restoring.
               </Typography>
             )}

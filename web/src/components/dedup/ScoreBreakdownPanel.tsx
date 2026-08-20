@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/ScoreBreakdownPanel.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: d3c4e5f6-a7b8-9012-cdef-dc3456789012
 // last-edited: 2026-08-19
 // ScoreBreakdownPanel renders a stacked bar visualization of the per-signal
@@ -53,7 +53,13 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
   if (!breakdown.signals || breakdown.signals.length === 0) {
     return (
       <Box sx={{ p: 1 }}>
-        <Typography variant="body2" color="text.secondary" fontStyle="italic">
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+            fontStyle: 'italic',
+          }}
+        >
           {breakdown.skipped_reason ?? 'No signal data available (pre-pipeline candidate).'}
         </Typography>
       </Box>
@@ -65,8 +71,20 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
   return (
     <Box data-testid="score-breakdown-panel">
       {/* Score + band header */}
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
-        <Typography variant="subtitle2" fontWeight={700}>
+      <Stack
+        direction="row"
+        spacing={1}
+        sx={{
+          alignItems: 'center',
+          mb: 1.5,
+        }}
+      >
+        <Typography
+          variant="subtitle2"
+          sx={{
+            fontWeight: 700,
+          }}
+        >
           Score: {breakdown.score.toFixed(1)}
         </Typography>
         <Chip
@@ -83,7 +101,13 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
           }
         />
         {breakdown.formula && (
-          <Typography variant="caption" color="text.disabled" sx={{ ml: 'auto' }}>
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.disabled',
+              ml: 'auto',
+            }}
+          >
             {breakdown.formula}
           </Typography>
         )}
@@ -94,7 +118,13 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
         title={
           <Box>
             {withShares.map((s) => (
-              <Typography key={s.kind} variant="caption" display="block">
+              <Typography
+                key={s.kind}
+                variant="caption"
+                sx={{
+                  display: 'block',
+                }}
+              >
                 {SIGNAL_LABELS[s.kind] ?? s.kind}: {(s.share * 100).toFixed(1)}%
               </Typography>
             ))}
@@ -138,7 +168,13 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
       <Stack spacing={0.75}>
         {withShares.map((s) => (
           <Tooltip key={s.kind} title={s.evidence || s.kind} placement="left">
-            <Stack direction="row" spacing={1} alignItems="center">
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{
+                alignItems: 'center',
+              }}
+            >
               <Box
                 sx={{
                   width: 10,
@@ -153,15 +189,18 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
               </Typography>
               <Typography
                 variant="caption"
-                color="text.secondary"
-                sx={{ fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}
+                sx={{
+                  color: 'text.secondary',
+                  fontVariantNumeric: 'tabular-nums',
+                  flexShrink: 0,
+                }}
               >
                 {(s.value * 100).toFixed(0)}%
               </Typography>
               <Typography
                 variant="caption"
-                color="text.disabled"
                 sx={{
+                  color: 'text.disabled',
                   fontVariantNumeric: 'tabular-nums',
                   flexShrink: 0,
                   minWidth: 36,

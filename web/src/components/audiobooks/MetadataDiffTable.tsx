@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/MetadataDiffTable.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8f6a7b5c-9d0e-4a70-b8c5-3d7e0f1b9a99
 //
 // Side-by-side metadata diff for dedup cluster cards (backlog 1.5).
@@ -59,7 +59,13 @@ export default function MetadataDiffTable({ bookA, bookB }: MetadataDiffTablePro
 
   if (diffs.length === 0) {
     return (
-      <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>
+      <Typography
+        variant="body2"
+        sx={{
+          color: 'text.secondary',
+          py: 1,
+        }}
+      >
         No metadata differences detected.
       </Typography>
     );
@@ -79,7 +85,12 @@ export default function MetadataDiffTable({ bookA, bookB }: MetadataDiffTablePro
           {diffs.map((d) => (
             <TableRow key={d.label}>
               <TableCell>
-                <Typography variant="caption" fontWeight="bold">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    fontWeight: 'bold',
+                  }}
+                >
                   {d.label}
                 </Typography>
               </TableCell>

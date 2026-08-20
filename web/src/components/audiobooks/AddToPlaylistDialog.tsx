@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/AddToPlaylistDialog.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3c1d2e0f-4a5b-4a70-b8c5-3d7e0f1b9a99
 
 import { useCallback, useEffect, useState } from 'react';
@@ -111,7 +111,12 @@ export default function AddToPlaylistDialog({ open, onClose, bookIds }: AddToPla
           </List>
         )}
         {playlists.length === 0 && (
-          <Typography color="text.secondary" sx={{ mb: 2 }}>
+          <Typography
+            sx={{
+              color: 'text.secondary',
+              mb: 2,
+            }}
+          >
             No static playlists yet.
           </Typography>
         )}

@@ -1,5 +1,5 @@
 // file: web/src/components/bookdetail/BookDetailDialogs.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
 // last-edited: 2026-08-19
 import {
@@ -208,8 +208,13 @@ export const BookDetailDialogs = ({
           />
           <Typography
             variant="caption"
-            color="text.secondary"
-            sx={{ ml: 4, display: 'block', mt: -0.5, mb: 1 }}
+            sx={{
+              color: 'text.secondary',
+              ml: 4,
+              display: 'block',
+              mt: -0.5,
+              mb: 1,
+            }}
           >
             Block hash prevents this exact file from being re-imported by remembering its unique
             fingerprint.
@@ -364,7 +369,12 @@ export const BookDetailDialogs = ({
 
                     {step.files && step.files.length > 0 && (
                       <Box sx={{ mt: 0.5 }}>
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: 'text.secondary',
+                          }}
+                        >
                           Files to copy: {step.files.join(', ')}
                         </Typography>
                       </Box>
@@ -495,7 +505,13 @@ export const BookDetailDialogs = ({
                 </li>
               ))}
           </Box>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+              mt: 2,
+            }}
+          >
             A backup of each file is created before writing and removed on success. The original
             file is restored automatically if writing fails.
           </Typography>
@@ -523,7 +539,13 @@ export const BookDetailDialogs = ({
             the library? All associated files and metadata will be removed.
           </Typography>
           {book.marked_for_deletion_at && (
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+                mt: 1,
+              }}
+            >
               Soft deleted on {formatDateTime(book.marked_for_deletion_at)}.
             </Typography>
           )}
@@ -564,7 +586,12 @@ export const BookDetailDialogs = ({
           <Typography variant="body1" gutterBottom>
             This audiobook was updated by another user while you were editing.
           </Typography>
-          <Typography variant="body2" color="text.secondary">
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             Reload to fetch the latest data, or overwrite to save your changes anyway.
           </Typography>
         </DialogContent>

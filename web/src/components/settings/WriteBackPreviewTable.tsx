@@ -1,5 +1,5 @@
 // file: web/src/components/settings/WriteBackPreviewTable.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: e8a9b0c1-d2e3-4f5a-6b7c-8d9e0f1a2b3c
 // last-edited: 2026-08-19
 
@@ -168,8 +168,21 @@ export function WriteBackPreviewTable({
 
   return (
     <Box>
-      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.5 }}>
-        <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
+      <Stack
+        direction="row"
+        spacing={1}
+        sx={{
+          alignItems: 'center',
+          mb: 0.5,
+        }}
+      >
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'text.secondary',
+            flex: 1,
+          }}
+        >
           Drag column edges to resize · Click a header to sort
         </Typography>
         <ColumnPicker

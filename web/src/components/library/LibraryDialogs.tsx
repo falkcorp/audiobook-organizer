@@ -1,5 +1,5 @@
 // file: web/src/components/library/LibraryDialogs.tsx
-// version: 1.6.1
+// version: 1.6.2
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
 // last-edited: 2026-08-19
 import React from 'react';
@@ -730,7 +730,12 @@ export const LibraryDialogs = ({
           The file for <strong>{duplicateDialog?.duplicate.title || 'this audiobook'}</strong>{' '}
           matches an existing audiobook.
         </Typography>
-        <Typography variant="body2" color="text.secondary">
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+          }}
+        >
           Existing: {duplicateDialog?.existing.title || 'Unknown audiobook'}
         </Typography>
       </DialogContent>
@@ -802,7 +807,14 @@ export const LibraryDialogs = ({
             }
           }}
         />
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'text.secondary',
+            display: 'block',
+            mt: 1,
+          }}
+        >
           Click files to add or remove them from the import list.
         </Typography>
         {importFilePaths.length > 0 && (
@@ -882,9 +894,21 @@ export const LibraryDialogs = ({
         />
         {manualImportInProgress && (
           <Box sx={{ mt: 2 }}>
-            <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{
+                alignItems: 'center',
+                mb: 1,
+              }}
+            >
               <CircularProgress size={18} />
-              <Typography variant="body2" color="text.secondary">
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 {manualImportOp?.progress_message ||
                   manualImportOp?.current_phase ||
                   'Waiting for progress...'}
@@ -905,8 +929,11 @@ export const LibraryDialogs = ({
             {(manualImportOp?.progress_total ?? 0) > 0 && (
               <Typography
                 variant="caption"
-                color="text.secondary"
-                sx={{ mt: 0.5, display: 'block' }}
+                sx={{
+                  color: 'text.secondary',
+                  mt: 0.5,
+                  display: 'block',
+                }}
               >
                 {Math.round(
                   ((manualImportOp?.progress_current ?? 0) /
@@ -1205,7 +1232,13 @@ export const LibraryDialogs = ({
           onClick={() => setImportPathsExpanded(!importPathsExpanded)}
         >
           <Typography variant="h6">Import Paths ({importPaths.length})</Typography>
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+            }}
+          >
             <Button
               size="small"
               variant="outlined"

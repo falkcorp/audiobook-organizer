@@ -1,5 +1,5 @@
 // file: web/src/components/bookdetail/BookDetailFilesTab.tsx
-// version: 1.0.2
+// version: 1.0.3
 // guid: a7b8c9d0-e1f2-3456-abcd-567890123456
 // last-edited: 2026-08-19
 
@@ -131,7 +131,13 @@ export const BookDetailFilesTab = ({
           </Button>
         ) : (
           <Stack spacing={1} sx={{ maxWidth: 400 }}>
-            <Stack direction="row" alignItems="center" justifyContent="space-between">
+            <Stack
+              direction="row"
+              sx={{
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
               <Typography variant="caption">Search for a book to link as a version</Typography>
               <Button size="small" onClick={() => onSetLinkSearchOpen(false)}>
                 Cancel
@@ -197,13 +203,26 @@ export const BookDetailFilesTab = ({
       {/* iTunes link info panel */}
       {itunesLinked && (
         <Alert severity="info" variant="outlined" icon={false} sx={{ mt: 1 }}>
-          <Stack direction="row" spacing={3} flexWrap="wrap" useFlexGap alignItems="center">
+          <Stack
+            direction="row"
+            spacing={3}
+            useFlexGap
+            sx={{
+              flexWrap: 'wrap',
+              alignItems: 'center',
+            }}
+          >
             <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>
               iTunes Linked
             </Typography>
             {book.itunes_persistent_id && (
               <Box>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   PID
                 </Typography>
                 <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
@@ -212,14 +231,24 @@ export const BookDetailFilesTab = ({
               </Box>
             )}
             <Box>
-              <Typography variant="caption" color="text.secondary">
+              <Typography
+                variant="caption"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 Tracks Mapped
               </Typography>
               <Typography variant="body2">{itunesPidCount}</Typography>
             </Box>
             {book.itunes_date_added && (
               <Box>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   Date Added
                 </Typography>
                 <Typography variant="body2">
@@ -229,7 +258,12 @@ export const BookDetailFilesTab = ({
             )}
             {book.itunes_play_count != null && book.itunes_play_count > 0 && (
               <Box>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   Play Count
                 </Typography>
                 <Typography variant="body2">{book.itunes_play_count}</Typography>
@@ -237,7 +271,12 @@ export const BookDetailFilesTab = ({
             )}
             {book.itunes_last_played && (
               <Box>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   Last Played
                 </Typography>
                 <Typography variant="body2">
@@ -247,7 +286,12 @@ export const BookDetailFilesTab = ({
             )}
             {book.itunes_rating != null && book.itunes_rating > 0 && (
               <Box>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   Rating
                 </Typography>
                 <Typography variant="body2">
@@ -258,7 +302,12 @@ export const BookDetailFilesTab = ({
             )}
             {book.itunes_bookmark != null && book.itunes_bookmark > 0 && (
               <Box>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   Bookmark
                 </Typography>
                 <Typography variant="body2">
@@ -268,7 +317,12 @@ export const BookDetailFilesTab = ({
             )}
             {book.itunes_import_source && (
               <Box>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   Import Source
                 </Typography>
                 <Typography variant="body2">{book.itunes_import_source}</Typography>
@@ -276,7 +330,12 @@ export const BookDetailFilesTab = ({
             )}
             {book.file_path && (
               <Box sx={{ flex: '1 1 100%' }}>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   File Path
                 </Typography>
                 <Typography
@@ -290,7 +349,12 @@ export const BookDetailFilesTab = ({
             {/* Per-track file paths from external_id_map (when no book-level file_path or when multi-track) */}
             {itunesExternalIDs.length > 0 && itunesExternalIDs.some((e) => e.file_path) && (
               <Box sx={{ flex: '1 1 100%' }}>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   iTunes Track Files
                 </Typography>
                 {[...itunesExternalIDs]
@@ -312,10 +376,23 @@ export const BookDetailFilesTab = ({
             {/* Track PIDs when multiple tracks mapped */}
             {itunesExternalIDs.length > 1 && (
               <Box sx={{ flex: '1 1 100%' }}>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   Track PIDs ({itunesExternalIDs.length})
                 </Typography>
-                <Stack direction="row" flexWrap="wrap" spacing={0.5} useFlexGap sx={{ mt: 0.25 }}>
+                <Stack
+                  direction="row"
+                  spacing={0.5}
+                  useFlexGap
+                  sx={{
+                    flexWrap: 'wrap',
+                    mt: 0.25,
+                  }}
+                >
                   {[...itunesExternalIDs]
                     .sort((a, b) => (a.track_number ?? Infinity) - (b.track_number ?? Infinity))
                     .map((e) => (
@@ -343,7 +420,13 @@ export const BookDetailFilesTab = ({
 
       {/* Change Log */}
       <Paper sx={{ p: 2, mt: 2 }} data-testid="changelog-section">
-        <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1 }}>
+        <Typography
+          variant="subtitle1"
+          sx={{
+            fontWeight: 'bold',
+            mb: 1,
+          }}
+        >
           Change Log
         </Typography>
         <ChangeLog

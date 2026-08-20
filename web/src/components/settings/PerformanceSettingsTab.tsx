@@ -1,5 +1,5 @@
 // file: web/src/components/settings/PerformanceSettingsTab.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: a7b8c9d0-e1f2-3456-abcd-567890123456
 // last-edited: 2026-08-19
 
@@ -58,8 +58,10 @@ export function PerformanceSettingsTab({ settings, handleChange }: PerformanceSe
           label="Concurrent Scans"
           value={settings.concurrentScans}
           onChange={(e) => handleChange('concurrentScans', parseInt(e.target.value) || 1)}
-          inputProps={{ min: 1, max: 16 }}
           helperText="Number of folders to scan simultaneously"
+          slotProps={{
+            htmlInput: { min: 1, max: 16 },
+          }}
         />
       </Grid>
 
@@ -97,8 +99,10 @@ export function PerformanceSettingsTab({ settings, handleChange }: PerformanceSe
             label="Cache Size (items)"
             value={settings.cacheSize}
             onChange={(e) => handleChange('cacheSize', parseInt(e.target.value) || 100)}
-            inputProps={{ min: 100, max: 10000 }}
             helperText="Number of audiobook records to cache in memory"
+            slotProps={{
+              htmlInput: { min: 100, max: 10000 },
+            }}
           />
         </Grid>
       )}
@@ -115,8 +119,10 @@ export function PerformanceSettingsTab({ settings, handleChange }: PerformanceSe
           label="Metadata fetch cache TTL (days)"
           value={settings.metadataFetchCacheTTLDays}
           onChange={(e) => handleChange('metadataFetchCacheTTLDays', parseInt(e.target.value) || 0)}
-          inputProps={{ min: 0, max: 365 }}
           helperText="How long to keep Audible/Audnexus API results before re-fetching. 0 = never expire."
+          slotProps={{
+            htmlInput: { min: 0, max: 365 },
+          }}
         />
       </Grid>
 
@@ -130,7 +136,13 @@ export function PerformanceSettingsTab({ settings, handleChange }: PerformanceSe
           }
           label="Invalidate list cache on book update"
         />
-        <Typography variant="caption" color="text.secondary" display="block">
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'text.secondary',
+            display: 'block',
+          }}
+        >
           When off (default), metadata fetches and write-back operations keep the library list cache
           warm. Turn on only if you need the library page to reflect every individual book update
           immediately.
@@ -150,11 +162,14 @@ export function PerformanceSettingsTab({ settings, handleChange }: PerformanceSe
             label="Memory Limit"
             value={settings.memoryLimitPercent}
             onChange={(e) => handleChange('memoryLimitPercent', parseInt(e.target.value) || 1)}
-            InputProps={{
-              endAdornment: <InputAdornment position="end">%</InputAdornment>,
-            }}
-            inputProps={{ min: 1, max: 90 }}
             helperText="Maximum percentage of system memory to use"
+            slotProps={{
+              input: {
+                endAdornment: <InputAdornment position="end">%</InputAdornment>,
+              },
+
+              htmlInput: { min: 1, max: 90 },
+            }}
           />
         </Grid>
       )}
@@ -172,11 +187,14 @@ export function PerformanceSettingsTab({ settings, handleChange }: PerformanceSe
             label="Memory Limit"
             value={settings.memoryLimitMB}
             onChange={(e) => handleChange('memoryLimitMB', parseInt(e.target.value) || 128)}
-            InputProps={{
-              endAdornment: <InputAdornment position="end">MB</InputAdornment>,
-            }}
-            inputProps={{ min: 128, max: 16384 }}
             helperText="Absolute memory limit in megabytes"
+            slotProps={{
+              input: {
+                endAdornment: <InputAdornment position="end">MB</InputAdornment>,
+              },
+
+              htmlInput: { min: 128, max: 16384 },
+            }}
           />
         </Grid>
       )}
@@ -186,7 +204,13 @@ export function PerformanceSettingsTab({ settings, handleChange }: PerformanceSe
         <Typography variant="subtitle1" gutterBottom>
           Lifecycle &amp; Retention
         </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+            mb: 1,
+          }}
+        >
           Control how long soft-deleted books remain before automatic purge runs.
         </Typography>
       </Grid>
@@ -203,8 +227,10 @@ export function PerformanceSettingsTab({ settings, handleChange }: PerformanceSe
           label="Auto-Purge After (days)"
           value={settings.purgeSoftDeletedAfterDays}
           onChange={(e) => handleChange('purgeSoftDeletedAfterDays', parseInt(e.target.value) || 0)}
-          inputProps={{ min: 0, max: 365 }}
           helperText="Set to 0 to disable automatic purge"
+          slotProps={{
+            htmlInput: { min: 0, max: 365 },
+          }}
         />
       </Grid>
       <Grid
@@ -222,7 +248,14 @@ export function PerformanceSettingsTab({ settings, handleChange }: PerformanceSe
           }
           label="Delete files from disk during purge"
         />
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 4 }}>
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'text.secondary',
+            display: 'block',
+            ml: 4,
+          }}
+        >
           Disable to keep files on disk while clearing database records.
         </Typography>
       </Grid>
@@ -271,7 +304,14 @@ export function PerformanceSettingsTab({ settings, handleChange }: PerformanceSe
           <MenuItem value="text">Text (human-readable)</MenuItem>
           <MenuItem value="json">JSON (structured)</MenuItem>
         </TextField>
-        <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'text.secondary',
+            mt: 1,
+            display: 'block',
+          }}
+        >
           JSON logging is recommended for log aggregation and analysis tools
         </Typography>
       </Grid>
@@ -286,7 +326,14 @@ export function PerformanceSettingsTab({ settings, handleChange }: PerformanceSe
           }
           label="Enable JSON structured logging to separate file"
         />
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 4 }}>
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'text.secondary',
+            display: 'block',
+            ml: 4,
+          }}
+        >
           Creates a separate .json log file in addition to the main log
         </Typography>
       </Grid>

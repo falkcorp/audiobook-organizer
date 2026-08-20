@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/MetadataReviewDialog.tsx
-// version: 1.19.1
+// version: 1.19.2
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
 // last-edited: 2026-08-19
 
@@ -775,7 +775,14 @@ export function MetadataReviewDialog({
           <Box sx={{ flex: 1 }}>
             <Stack spacing={1.5}>
               {group.results.map((r) => (
-                <Stack key={r.book.id} direction="row" spacing={1} alignItems="flex-start">
+                <Stack
+                  key={r.book.id}
+                  direction="row"
+                  spacing={1}
+                  sx={{
+                    alignItems: 'flex-start',
+                  }}
+                >
                   <Tooltip title="Separate from group">
                     <IconButton size="small" onClick={() => handleUngroup(r.book.id)}>
                       <CloseIcon fontSize="small" />
@@ -787,10 +794,21 @@ export function MetadataReviewDialog({
                     sx={{ width: 40, height: 50 }}
                   />
                   <Box sx={{ minWidth: 0 }}>
-                    <Typography variant="body2" fontWeight="bold">
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        fontWeight: 'bold',
+                      }}
+                    >
                       {r.book.title}
                     </Typography>
-                    <Stack direction="row" spacing={0.5} flexWrap="wrap">
+                    <Stack
+                      direction="row"
+                      spacing={0.5}
+                      sx={{
+                        flexWrap: 'wrap',
+                      }}
+                    >
                       {r.book.format && <Chip label={r.book.format} size="small" />}
                       {r.book.duration_seconds && (
                         <Typography variant="caption">
@@ -805,17 +823,22 @@ export function MetadataReviewDialog({
                     </Stack>
                     <Typography
                       variant="caption"
-                      display="block"
-                      sx={{ wordBreak: 'break-all', color: 'text.secondary' }}
+                      sx={{
+                        display: 'block',
+                        wordBreak: 'break-all',
+                        color: 'text.secondary',
+                      }}
                     >
                       {r.book.file_path}
                     </Typography>
                     {r.book.itunes_path && (
                       <Typography
                         variant="caption"
-                        color="info.main"
-                        display="block"
-                        sx={{ wordBreak: 'break-all' }}
+                        sx={{
+                          color: 'info.main',
+                          display: 'block',
+                          wordBreak: 'break-all',
+                        }}
                       >
                         iTunes: {r.book.itunes_path}
                       </Typography>
@@ -837,7 +860,13 @@ export function MetadataReviewDialog({
 
           {/* Right: shared candidate */}
           <Box sx={{ flex: 1 }}>
-            <Stack direction="row" spacing={1} alignItems="flex-start">
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{
+                alignItems: 'flex-start',
+              }}
+            >
               <Avatar
                 src={c.cover_url || ''}
                 variant="rounded"
@@ -845,12 +874,22 @@ export function MetadataReviewDialog({
                 onClick={() => c.cover_url && setPreviewCover(c.cover_url)}
               />
               <Box sx={{ minWidth: 0, flex: 1 }}>
-                <Typography variant="body2" fontWeight="bold">
+                <Typography
+                  variant="body2"
+                  sx={{
+                    fontWeight: 'bold',
+                  }}
+                >
                   {c.title}
                 </Typography>
                 <Typography variant="body2">{c.author}</Typography>
                 {c.narrator && (
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     Narrated by {c.narrator}
                   </Typography>
                 )}
@@ -861,12 +900,22 @@ export function MetadataReviewDialog({
                   </Typography>
                 )}
                 {c.year && (
-                  <Typography variant="caption" display="block">
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      display: 'block',
+                    }}
+                  >
                     {c.year}
                   </Typography>
                 )}
                 {c.publisher && (
-                  <Typography variant="caption" display="block">
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      display: 'block',
+                    }}
+                  >
                     {c.publisher}
                   </Typography>
                 )}
@@ -932,15 +981,15 @@ export function MetadataReviewDialog({
       <Box key={bookId}>
         <Stack
           direction="row"
-          alignItems="center"
           spacing={1}
+          onClick={() => setExpandedId(isExpanded ? null : bookId)}
           sx={{
+            alignItems: 'center',
             p: 1,
             cursor: 'pointer',
             '&:hover': { bgcolor: 'action.hover' },
             ...getRowSx(bookId),
           }}
-          onClick={() => setExpandedId(isExpanded ? null : bookId)}
         >
           <Checkbox
             size="small"
@@ -1093,7 +1142,13 @@ export function MetadataReviewDialog({
               <Typography variant="subtitle2" gutterBottom>
                 Current
               </Typography>
-              <Stack direction="row" spacing={1} alignItems="flex-start">
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{
+                  alignItems: 'flex-start',
+                }}
+              >
                 <Avatar
                   src={r.book.cover_url || ''}
                   variant="rounded"
@@ -1101,18 +1156,33 @@ export function MetadataReviewDialog({
                   onClick={() => r.book.cover_url && setPreviewCover(r.book.cover_url)}
                 />
                 <Box>
-                  <Typography variant="body2" fontWeight="bold">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      fontWeight: 'bold',
+                    }}
+                  >
                     {r.book.title}
                   </Typography>
                   <Typography variant="body2">{r.book.author}</Typography>
                   {r.book.format && <Chip label={r.book.format} size="small" sx={{ mt: 0.5 }} />}
                   {r.book.duration_seconds && (
-                    <Typography variant="caption" display="block">
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        display: 'block',
+                      }}
+                    >
                       {formatDuration(r.book.duration_seconds)}
                     </Typography>
                   )}
                   {r.book.file_size_bytes && (
-                    <Typography variant="caption" display="block">
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        display: 'block',
+                      }}
+                    >
                       {formatFileSize(r.book.file_size_bytes)}
                     </Typography>
                   )}
@@ -1122,9 +1192,11 @@ export function MetadataReviewDialog({
                   {r.book.itunes_path && (
                     <Typography
                       variant="caption"
-                      color="info.main"
-                      display="block"
-                      sx={{ wordBreak: 'break-all' }}
+                      sx={{
+                        color: 'info.main',
+                        display: 'block',
+                        wordBreak: 'break-all',
+                      }}
                     >
                       iTunes: {r.book.itunes_path}
                     </Typography>
@@ -1136,7 +1208,13 @@ export function MetadataReviewDialog({
               <Typography variant="subtitle2" gutterBottom>
                 Proposed
               </Typography>
-              <Stack direction="row" spacing={1} alignItems="flex-start">
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{
+                  alignItems: 'flex-start',
+                }}
+              >
                 <Avatar
                   src={r.candidate.cover_url || ''}
                   variant="rounded"
@@ -1148,12 +1226,22 @@ export function MetadataReviewDialog({
                   onClick={() => r.candidate?.cover_url && setPreviewCover(r.candidate.cover_url)}
                 />
                 <Box>
-                  <Typography variant="body2" fontWeight="bold">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      fontWeight: 'bold',
+                    }}
+                  >
                     {r.candidate.title}
                   </Typography>
                   <Typography variant="body2">{r.candidate.author}</Typography>
                   {r.candidate.narrator && (
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       Narrated by {r.candidate.narrator}
                     </Typography>
                   )}
@@ -1166,12 +1254,22 @@ export function MetadataReviewDialog({
                     </Typography>
                   )}
                   {r.candidate.year && (
-                    <Typography variant="caption" display="block">
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        display: 'block',
+                      }}
+                    >
                       {r.candidate.year}
                     </Typography>
                   )}
                   {r.candidate.publisher && (
-                    <Typography variant="caption" display="block">
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        display: 'block',
+                      }}
+                    >
                       {r.candidate.publisher}
                     </Typography>
                   )}
@@ -1236,7 +1334,13 @@ export function MetadataReviewDialog({
         <Stack direction="row" spacing={2}>
           {/* Left: current book info */}
           <Box sx={{ flex: 1 }}>
-            <Stack direction="row" spacing={1} alignItems="flex-start">
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{
+                alignItems: 'flex-start',
+              }}
+            >
               <Checkbox
                 size="small"
                 checked={selectedIds.has(bookId)}
@@ -1250,18 +1354,33 @@ export function MetadataReviewDialog({
                 onClick={() => r.book.cover_url && setPreviewCover(r.book.cover_url)}
               />
               <Box sx={{ minWidth: 0 }}>
-                <Typography variant="body2" fontWeight="bold">
+                <Typography
+                  variant="body2"
+                  sx={{
+                    fontWeight: 'bold',
+                  }}
+                >
                   {r.book.title}
                 </Typography>
                 <Typography variant="body2">{r.book.author}</Typography>
                 {r.book.format && <Chip label={r.book.format} size="small" sx={{ mt: 0.5 }} />}
                 {r.book.duration_seconds && (
-                  <Typography variant="caption" display="block">
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      display: 'block',
+                    }}
+                  >
                     {formatDuration(r.book.duration_seconds)}
                   </Typography>
                 )}
                 {r.book.file_size_bytes && (
-                  <Typography variant="caption" display="block">
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      display: 'block',
+                    }}
+                  >
                     {formatFileSize(r.book.file_size_bytes)}
                   </Typography>
                 )}
@@ -1271,9 +1390,11 @@ export function MetadataReviewDialog({
                 {r.book.itunes_path && (
                   <Typography
                     variant="caption"
-                    color="info.main"
-                    display="block"
-                    sx={{ wordBreak: 'break-all' }}
+                    sx={{
+                      color: 'info.main',
+                      display: 'block',
+                      wordBreak: 'break-all',
+                    }}
                   >
                     iTunes: {r.book.itunes_path}
                   </Typography>
@@ -1285,7 +1406,13 @@ export function MetadataReviewDialog({
           {/* Right: proposed match */}
           <Box sx={{ flex: 1 }}>
             {r.candidate ? (
-              <Stack direction="row" spacing={1} alignItems="flex-start">
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{
+                  alignItems: 'flex-start',
+                }}
+              >
                 <Avatar
                   src={r.candidate.cover_url || ''}
                   variant="rounded"
@@ -1297,12 +1424,22 @@ export function MetadataReviewDialog({
                   onClick={() => r.candidate?.cover_url && setPreviewCover(r.candidate.cover_url)}
                 />
                 <Box sx={{ minWidth: 0, flex: 1 }}>
-                  <Typography variant="body2" fontWeight="bold">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      fontWeight: 'bold',
+                    }}
+                  >
                     {r.candidate.title}
                   </Typography>
                   <Typography variant="body2">{r.candidate.author}</Typography>
                   {r.candidate.narrator && (
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       Narrated by {r.candidate.narrator}
                     </Typography>
                   )}
@@ -1315,21 +1452,43 @@ export function MetadataReviewDialog({
                     </Typography>
                   )}
                   {r.candidate.year && (
-                    <Typography variant="caption" display="block">
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        display: 'block',
+                      }}
+                    >
                       {r.candidate.year}
                     </Typography>
                   )}
                   {r.candidate.publisher && (
-                    <Typography variant="caption" display="block">
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        display: 'block',
+                      }}
+                    >
                       {r.candidate.publisher}
                     </Typography>
                   )}
                   {(r.candidate.duration_sec ?? 0) > 0 && (
-                    <Typography variant="caption" display="block">
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        display: 'block',
+                      }}
+                    >
                       Duration: {formatDuration(r.candidate.duration_sec!)}
                     </Typography>
                   )}
-                  <Stack direction="row" spacing={0.5} flexWrap="wrap" sx={{ mt: 0.5 }}>
+                  <Stack
+                    direction="row"
+                    spacing={0.5}
+                    sx={{
+                      flexWrap: 'wrap',
+                      mt: 0.5,
+                    }}
+                  >
                     <Chip
                       label={`${Math.round(r.candidate.score * 100)}%`}
                       size="small"
@@ -1444,7 +1603,6 @@ export function MetadataReviewDialog({
           if (reason === 'backdropClick' || reason === 'escapeKeyDown') return;
           handleClose();
         }}
-        disableEscapeKeyDown
         maxWidth="xl"
         fullWidth
       >
@@ -1452,7 +1610,13 @@ export function MetadataReviewDialog({
           sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
         >
           <span>Review Metadata Matches &mdash; {summary.total} books</span>
-          <Stack direction="row" spacing={0.5} alignItems="center">
+          <Stack
+            direction="row"
+            spacing={0.5}
+            sx={{
+              alignItems: 'center',
+            }}
+          >
             <Tooltip title="Reload current page from server">
               <IconButton
                 onClick={() => setRefreshKey((k) => k + 1)}
@@ -1480,7 +1644,15 @@ export function MetadataReviewDialog({
           ) : (
             <>
               {/* Stats chips */}
-              <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mb: 2, rowGap: 1 }}>
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{
+                  flexWrap: 'wrap',
+                  mb: 2,
+                  rowGap: 1,
+                }}
+              >
                 {totalSummary ? (
                   <>
                     <Chip
@@ -1551,7 +1723,14 @@ export function MetadataReviewDialog({
               />
 
               {/* Confidence slider */}
-              <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 2 }}>
+              <Stack
+                direction="row"
+                spacing={2}
+                sx={{
+                  alignItems: 'center',
+                  mb: 2,
+                }}
+              >
                 <Typography variant="body2" sx={{ whiteSpace: 'nowrap' }}>
                   Min confidence: {confidenceThreshold}%
                 </Typography>
@@ -1585,7 +1764,14 @@ export function MetadataReviewDialog({
               </Stack>
 
               {/* Title regex filter */}
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{
+                  alignItems: 'center',
+                  mb: 2,
+                }}
+              >
                 <TextField
                   size="small"
                   placeholder="Filter by title regex (e.g. Boxcar Children)"
@@ -1594,7 +1780,9 @@ export function MetadataReviewDialog({
                   error={titleFilter !== '' && titleRegex === null}
                   helperText={titleFilter !== '' && titleRegex === null ? 'Invalid regex' : ''}
                   sx={{ flex: 1, maxWidth: 500 }}
-                  inputProps={{ 'aria-label': 'filter by title regex' }}
+                  slotProps={{
+                    htmlInput: { 'aria-label': 'filter by title regex' },
+                  }}
                 />
                 {titleRegex && titleFilteredPendingIds.length > 0 && (
                   <Tooltip
@@ -1621,7 +1809,15 @@ export function MetadataReviewDialog({
               </Stack>
 
               {/* View toggle + hide filters */}
-              <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 2 }} flexWrap="wrap">
+              <Stack
+                direction="row"
+                spacing={2}
+                sx={{
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  mb: 2,
+                }}
+              >
                 <ToggleButtonGroup
                   size="small"
                   value={viewMode}
@@ -1780,16 +1976,29 @@ export function MetadataReviewDialog({
               {(filteredResults.length > 0 || totalCount > 0) && (
                 <Stack
                   direction="row"
-                  justifyContent="space-between"
-                  alignItems="center"
-                  sx={{ mb: 1 }}
+                  sx={{
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    mb: 1,
+                  }}
                 >
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     {filteredResults.length < results.length
                       ? `${pageResults.length} on page ${serverPage} of ${totalPages} · ${filteredResults.length} visible of ${totalCount} total`
                       : `${pageResults.length} on page ${serverPage} of ${totalPages} · ${totalCount} total`}
                   </Typography>
-                  <Stack direction="row" spacing={1} alignItems="center">
+                  <Stack
+                    direction="row"
+                    spacing={1}
+                    sx={{
+                      alignItems: 'center',
+                    }}
+                  >
                     <Pagination
                       count={totalPages}
                       page={serverPage}
@@ -1827,8 +2036,11 @@ export function MetadataReviewDialog({
                 {filteredResults.length === 0 ? (
                   <Typography
                     variant="body2"
-                    color="text.secondary"
-                    sx={{ p: 2, textAlign: 'center' }}
+                    sx={{
+                      color: 'text.secondary',
+                      p: 2,
+                      textAlign: 'center',
+                    }}
                   >
                     No results match current filters
                   </Typography>

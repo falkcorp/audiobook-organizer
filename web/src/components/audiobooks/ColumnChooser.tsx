@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/ColumnChooser.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: d4e5f6a7-b8c9-4d0e-1f2a-3b4c5d6e7f80
 
 import React, { useState } from 'react';
@@ -58,9 +58,12 @@ export const ColumnChooser: React.FC<ColumnChooserProps> = ({
                 {catIdx > 0 && <Divider sx={{ my: 1 }} />}
                 <Typography
                   variant="caption"
-                  color="text.secondary"
-                  fontWeight="bold"
-                  sx={{ display: 'block', mb: 0.5 }}
+                  sx={{
+                    color: 'text.secondary',
+                    fontWeight: 'bold',
+                    display: 'block',
+                    mb: 0.5,
+                  }}
                 >
                   {category}
                 </Typography>

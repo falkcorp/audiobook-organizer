@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/UnifiedDedupTab.tsx
-// version: 1.10.0
+// version: 1.10.1
 // guid: c8b9d0e1-f2a3-4567-bcde-cb8901234567
 // last-edited: 2026-08-19
 // UnifiedDedupTab is the T017 single surface that replaces the separate Books /
@@ -62,7 +62,7 @@ import {
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import ClearIcon from '@mui/icons-material/Clear';
-import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutlineOutlined';
 import * as api from '../../services/api';
 import type { Book, DedupCandidate, DedupBand, DedupStats } from '../../services/api';
 import { useOperationsStore } from '../../stores/useOperationsStore';
@@ -180,7 +180,14 @@ function renderBookCard(book: Book | null | undefined, id: string, opts: BookCar
   const isGarbageTitle =
     !title || title.toUpperCase() === 'TITLE' || /^[0-9A-Z]{26}$/.test(title.trim());
   return (
-    <Stack direction="row" alignItems="stretch" spacing={1.5} sx={{ minWidth: 0 }}>
+    <Stack
+      direction="row"
+      spacing={1.5}
+      sx={{
+        alignItems: 'stretch',
+        minWidth: 0,
+      }}
+    >
       {/* Cover — left-anchored, full row height */}
       <Box
         sx={{
@@ -208,13 +215,29 @@ function renderBookCard(book: Book | null | undefined, id: string, opts: BookCar
       <Stack spacing={0.4} sx={{ minWidth: 0, flex: 1 }}>
         {/* Badges row — only rendered when supplied (Book A) */}
         {opts.badgesNode && (
-          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap alignItems="center">
+          <Stack
+            direction="row"
+            spacing={0.5}
+            useFlexGap
+            sx={{
+              flexWrap: 'wrap',
+              alignItems: 'center',
+            }}
+          >
             {opts.badgesNode}
           </Stack>
         )}
 
         {/* Title + inline quality + recommended chips */}
-        <Stack direction="row" alignItems="center" flexWrap="wrap" spacing={0.5} useFlexGap>
+        <Stack
+          direction="row"
+          spacing={0.5}
+          useFlexGap
+          sx={{
+            alignItems: 'center',
+            flexWrap: 'wrap',
+          }}
+        >
           {missing ? (
             <Typography variant="body1" sx={{ color: 'error.main', fontStyle: 'italic' }}>
               (missing book — {id.slice(-8)})
@@ -864,10 +887,12 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
       <Stack
         direction="row"
         spacing={1}
-        sx={{ mb: 2 }}
-        alignItems="center"
-        flexWrap="wrap"
         useFlexGap
+        sx={{
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          mb: 2,
+        }}
       >
         <Tooltip title="Scan for new duplicate candidates (embed + exact + similarity matching)">
           <span>
@@ -974,12 +999,18 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           sx={{ minWidth: 280 }}
-          InputProps={{
-            endAdornment: searchQuery ? (
-              <IconButton size="small" onClick={() => setSearchQuery('')} aria-label="clear search">
-                <ClearIcon fontSize="small" />
-              </IconButton>
-            ) : null,
+          slotProps={{
+            input: {
+              endAdornment: searchQuery ? (
+                <IconButton
+                  size="small"
+                  onClick={() => setSearchQuery('')}
+                  aria-label="clear search"
+                >
+                  <ClearIcon fontSize="small" />
+                </IconButton>
+              ) : null,
+            },
           }}
         />
         <Tooltip title="Show only pairs where NEITHER book has matched metadata — both are low-quality and need manual matching.">
@@ -1012,7 +1043,11 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
         </Box>
       ) : filteredCandidates.length === 0 ? (
         <Paper sx={{ p: 4, textAlign: 'center' }}>
-          <Typography color="text.secondary">
+          <Typography
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             No candidates found for the current filter.
           </Typography>
         </Paper>
@@ -1147,7 +1182,14 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
                           })}
                         </TableCell>
                         <TableCell sx={{ verticalAlign: 'top' }}>
-                          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                          <Stack
+                            direction="row"
+                            spacing={0.5}
+                            useFlexGap
+                            sx={{
+                              flexWrap: 'wrap',
+                            }}
+                          >
                             {c.status === 'pending' && (
                               <>
                                 <Tooltip title="Keep Book A, merge B into it">
@@ -1279,8 +1321,10 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
                 <Stack
                   direction="row"
                   spacing={2}
-                  alignItems="center"
-                  justifyContent="space-between"
+                  sx={{
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}
                 >
                   <Typography variant="body2">{shortcut.action}</Typography>
                   <Chip
@@ -1326,7 +1370,13 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
                 <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                   {opt.label}
                 </Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'normal' }}>
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                    whiteSpace: 'normal',
+                  }}
+                >
                   {opt.desc}
                 </Typography>
               </Button>

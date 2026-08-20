@@ -1,5 +1,5 @@
 // file: web/src/components/settings/EmbeddingSettingsSection.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-08-19
 
@@ -27,7 +27,11 @@ export function EmbeddingSettingsSection({ config, onChange }: EmbeddingSettings
         Embedding Settings
       </Typography>
 
-      <Box mb={2}>
+      <Box
+        sx={{
+          mb: 2,
+        }}
+      >
         <Link href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">
           Download the latest Ollama
         </Link>
@@ -76,7 +80,9 @@ export function EmbeddingSettingsSection({ config, onChange }: EmbeddingSettings
             onChange={(e) => onChange({ dimensions: Number(e.target.value) })}
             helperText="Vector dimensions"
             size="small"
-            inputProps={{ min: 1 }}
+            slotProps={{
+              htmlInput: { min: 1 },
+            }}
           />
         </Grid>
 

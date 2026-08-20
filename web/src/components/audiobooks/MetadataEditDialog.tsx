@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/MetadataEditDialog.tsx
-// version: 2.2.1
+// version: 2.2.2
 // guid: 4a5b6c7d-8e9f-0a1b-2c3d-4e5f6a7b8c9d
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -342,18 +342,32 @@ export const MetadataEditDialog: React.FC<MetadataEditDialogProps> = ({
       onClose={onClose}
       maxWidth="md"
       fullWidth
-      PaperProps={{
-        sx: { minHeight: '70vh', maxHeight: '90vh' },
+      slotProps={{
+        paper: {
+          sx: { minHeight: '70vh', maxHeight: '90vh' },
+        },
       }}
     >
       <DialogTitle sx={{ pb: 1 }}>
-        <Stack direction="row" alignItems="center" spacing={1}>
+        <Stack
+          direction="row"
+          spacing={1}
+          sx={{
+            alignItems: 'center',
+          }}
+        >
           <Typography variant="h6" component="span">
             Edit Metadata
           </Typography>
           {loadingStates && <CircularProgress size={16} />}
         </Stack>
-        <Typography variant="caption" color="text.disabled" display="block">
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'text.disabled',
+            display: 'block',
+          }}
+        >
           Edited fields are automatically locked to prevent overwrites from future fetches.
         </Typography>
       </DialogTitle>

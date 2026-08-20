@@ -1,5 +1,5 @@
 // file: web/src/components/settings/APIKeysTab.tsx
-// version: 1.2.1
+// version: 1.2.2
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
 // last-edited: 2026-08-19
 import { useState, useEffect, useRef } from 'react';
@@ -203,12 +203,25 @@ export function APIKeysTab() {
 
   return (
     <Box>
-      <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2}>
+      <Stack
+        direction="row"
+        sx={{
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          mb: 2,
+        }}
+      >
         <Typography variant="h6">
           <VpnKeyIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
           API Keys
         </Typography>
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack
+          direction="row"
+          spacing={1}
+          sx={{
+            alignItems: 'center',
+          }}
+        >
           <FormControlLabel
             control={
               <Switch
@@ -253,7 +266,12 @@ export function APIKeysTab() {
               {keys.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={showAll ? 9 : 8} align="center">
-                    <Typography color="text.secondary" variant="body2">
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       No API keys yet
                     </Typography>
                   </TableCell>
@@ -289,23 +307,45 @@ export function APIKeysTab() {
                     >
                       <TableCell>
                         <Tooltip title={k.description || ''} placement="top">
-                          <Typography variant="body2" fontWeight={500}>
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              fontWeight: 500,
+                            }}
+                          >
                             {k.name}
                           </Typography>
                         </Tooltip>
                       </TableCell>
                       <TableCell>
-                        <Typography variant="caption" fontFamily="monospace" color="text.secondary">
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            fontFamily: 'monospace',
+                            color: 'text.secondary',
+                          }}
+                        >
                           {k.identifier}
                         </Typography>
                       </TableCell>
                       <TableCell>
-                        <Stack direction="row" spacing={0.5} flexWrap="wrap">
+                        <Stack
+                          direction="row"
+                          spacing={0.5}
+                          sx={{
+                            flexWrap: 'wrap',
+                          }}
+                        >
                           {(k.scopes ?? []).map((s) => (
                             <Chip key={s} label={s} size="small" variant="outlined" />
                           ))}
                           {(k.scopes ?? []).length === 0 && (
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                color: 'text.secondary',
+                              }}
+                            >
                               none
                             </Typography>
                           )}
@@ -335,7 +375,12 @@ export function APIKeysTab() {
                             size="small"
                           />
                         ) : (
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             Never
                           </Typography>
                         )}
@@ -349,7 +394,13 @@ export function APIKeysTab() {
                         </TableCell>
                       )}
                       <TableCell align="right">
-                        <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                        <Stack
+                          direction="row"
+                          spacing={0.5}
+                          sx={{
+                            justifyContent: 'flex-end',
+                          }}
+                        >
                           {k.status !== 'revoked' && (
                             <Tooltip title={k.status === 'active' ? 'Deactivate' : 'Activate'}>
                               <IconButton size="small" onClick={() => handleToggleStatus(k)}>
@@ -421,7 +472,12 @@ export function APIKeysTab() {
                       />
                     }
                     label={
-                      <Typography variant="caption" fontFamily="monospace">
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          fontFamily: 'monospace',
+                        }}
+                      >
                         {s}
                       </Typography>
                     }
@@ -470,9 +526,12 @@ export function APIKeysTab() {
             }}
           >
             <Typography
-              fontFamily="monospace"
-              fontSize="0.8rem"
-              sx={{ wordBreak: 'break-all', flex: 1 }}
+              sx={{
+                fontFamily: 'monospace',
+                fontSize: '0.8rem',
+                wordBreak: 'break-all',
+                flex: 1,
+              }}
             >
               {createdToken}
             </Typography>

@@ -1,5 +1,5 @@
 // file: web/src/components/CacheStatsPanel.tsx
-// version: 1.1.3
+// version: 1.1.4
 // guid: b5c8d9ea-1f2g-3h4i-5j6k-7l8m9n0o1p2q
 
 import { useEffect, useState, useRef } from 'react';
@@ -112,11 +112,23 @@ export function CacheStatsPanel() {
 
   return (
     <Paper sx={{ p: 2, mt: 3 }}>
-      <Stack direction="row" justifyContent="space-between" alignItems="baseline" sx={{ mb: 2 }}>
+      <Stack
+        direction="row"
+        sx={{
+          justifyContent: 'space-between',
+          alignItems: 'baseline',
+          mb: 2,
+        }}
+      >
         <Stack>
           <Typography variant="h6">Cache Stats</Typography>
           {stats?.generated_at && (
-            <Typography variant="caption" color="text.secondary">
+            <Typography
+              variant="caption"
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               Generated: {new Date(stats.generated_at).toLocaleString()}
             </Typography>
           )}
@@ -158,7 +170,12 @@ export function CacheStatsPanel() {
             {!stats || !stats.caches?.length ? (
               <TableRow>
                 <TableCell colSpan={10}>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     No cache stats available.
                   </Typography>
                 </TableCell>
@@ -179,7 +196,12 @@ export function CacheStatsPanel() {
                         color={getHitRateColor(cache.hit_rate)}
                       />
                     ) : (
-                      <Typography variant="body2" color="text.secondary">
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: 'text.secondary',
+                        }}
+                      >
                         —
                       </Typography>
                     )}

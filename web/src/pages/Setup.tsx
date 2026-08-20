@@ -1,5 +1,5 @@
 // file: web/src/pages/Setup.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0f8a9b4c-1d2e-4a70-b8c5-3d7e0f1b9a99
 
 import React, { useState } from 'react';
@@ -65,7 +65,13 @@ export default function Setup() {
           <Typography variant="h4" gutterBottom>
             Welcome to Audiobook Organizer
           </Typography>
-          <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
+          <Typography
+            variant="body1"
+            sx={{
+              color: 'text.secondary',
+              mb: 3,
+            }}
+          >
             Create your admin account to get started.
           </Typography>
 
@@ -93,13 +99,15 @@ export default function Setup() {
               id="username"
               type="text"
               autoComplete="username"
-              inputProps={{
-                autoCapitalize: 'none',
-                autoCorrect: 'off',
-                spellCheck: false,
-              }}
               required
               autoFocus
+              slotProps={{
+                htmlInput: {
+                  autoCapitalize: 'none',
+                  autoCorrect: 'off',
+                  spellCheck: false,
+                },
+              }}
             />
             <TextField
               fullWidth
@@ -111,10 +119,12 @@ export default function Setup() {
               id="email"
               type="email"
               autoComplete="email"
-              inputProps={{
-                autoCapitalize: 'none',
-                autoCorrect: 'off',
-                spellCheck: false,
+              slotProps={{
+                htmlInput: {
+                  autoCapitalize: 'none',
+                  autoCorrect: 'off',
+                  spellCheck: false,
+                },
               }}
             />
             <TextField

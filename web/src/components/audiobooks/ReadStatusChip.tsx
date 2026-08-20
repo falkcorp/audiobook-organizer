@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/ReadStatusChip.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7c5d6e1f-8a9b-4a70-b8c5-3d7e0f1b9a99
 
 import React, { useCallback, useEffect, useState } from 'react';
@@ -110,7 +110,12 @@ export default function ReadStatusChip({ bookId, compact }: ReadStatusChipProps)
         ))}
         {state?.status_manual && (
           <MenuItem onClick={() => handleSelect('auto')}>
-            <Typography variant="body2" color="text.secondary">
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               Reset to auto-detected
             </Typography>
           </MenuItem>

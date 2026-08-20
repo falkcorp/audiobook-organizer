@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/LoadingWithCancel.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f8c4a1d-6b3e-4d7a-9c5f-8e1b3a6d2f4c
-// last-edited: 2026-07-11
+// last-edited: 2026-08-19
 
 import { useEffect, useState } from 'react';
 import { Box, CircularProgress, Button, Typography } from '@mui/material';
@@ -26,17 +26,24 @@ export function LoadingWithCancel({ onCancel }: LoadingWithCancelProps) {
 
   return (
     <Box
-      display="flex"
-      flexDirection="column"
-      justifyContent="center"
-      alignItems="center"
-      minHeight="400px"
-      gap={2}
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'center',
+        alignItems: 'center',
+        minHeight: '400px',
+        gap: 2,
+      }}
     >
       <CircularProgress />
       {slow && onCancel && (
         <>
-          <Typography variant="body2" color="text.secondary">
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             Still loading&hellip;
           </Typography>
           <Button variant="outlined" size="small" onClick={onCancel}>

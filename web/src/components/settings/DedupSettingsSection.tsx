@@ -1,5 +1,5 @@
 // file: web/src/components/settings/DedupSettingsSection.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-08-19
 
@@ -100,7 +100,9 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
             value={config.book_high_threshold}
             onChange={(e) => onChange({ book_high_threshold: Number(e.target.value) })}
             size="small"
-            inputProps={{ min: 0, max: 1, step: 0.01 }}
+            slotProps={{
+              htmlInput: { min: 0, max: 1, step: 0.01 },
+            }}
           />
         </Grid>
 
@@ -117,7 +119,9 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
             value={config.book_low_threshold}
             onChange={(e) => onChange({ book_low_threshold: Number(e.target.value) })}
             size="small"
-            inputProps={{ min: 0, max: 1, step: 0.01 }}
+            slotProps={{
+              htmlInput: { min: 0, max: 1, step: 0.01 },
+            }}
           />
         </Grid>
 
@@ -134,7 +138,9 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
             value={config.author_high_threshold}
             onChange={(e) => onChange({ author_high_threshold: Number(e.target.value) })}
             size="small"
-            inputProps={{ min: 0, max: 1, step: 0.01 }}
+            slotProps={{
+              htmlInput: { min: 0, max: 1, step: 0.01 },
+            }}
           />
         </Grid>
 
@@ -151,7 +157,9 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
             value={config.author_low_threshold}
             onChange={(e) => onChange({ author_low_threshold: Number(e.target.value) })}
             size="small"
-            inputProps={{ min: 0, max: 1, step: 0.01 }}
+            slotProps={{
+              htmlInput: { min: 0, max: 1, step: 0.01 },
+            }}
           />
         </Grid>
 
@@ -188,7 +196,9 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
               onChange({ signals: { ...config.signals, band_certain_min: Number(e.target.value) } })
             }
             size="small"
-            inputProps={{ min: 0, max: 1, step: 0.01 }}
+            slotProps={{
+              htmlInput: { min: 0, max: 1, step: 0.01 },
+            }}
           />
         </Grid>
 
@@ -207,7 +217,9 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
               onChange({ signals: { ...config.signals, band_high_min: Number(e.target.value) } })
             }
             size="small"
-            inputProps={{ min: 0, max: 1, step: 0.01 }}
+            slotProps={{
+              htmlInput: { min: 0, max: 1, step: 0.01 },
+            }}
           />
         </Grid>
 
@@ -226,7 +238,9 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
               onChange({ signals: { ...config.signals, band_medium_min: Number(e.target.value) } })
             }
             size="small"
-            inputProps={{ min: 0, max: 1, step: 0.01 }}
+            slotProps={{
+              htmlInput: { min: 0, max: 1, step: 0.01 },
+            }}
           />
         </Grid>
 
@@ -245,7 +259,9 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
               onChange({ signals: { ...config.signals, band_review_min: Number(e.target.value) } })
             }
             size="small"
-            inputProps={{ min: 0, max: 1, step: 0.01 }}
+            slotProps={{
+              htmlInput: { min: 0, max: 1, step: 0.01 },
+            }}
           />
         </Grid>
 
@@ -271,7 +287,9 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
               onChange({ signals: { ...config.signals, duration_boost: Number(e.target.value) } })
             }
             size="small"
-            inputProps={{ min: 0, max: 1, step: 0.01 }}
+            slotProps={{
+              htmlInput: { min: 0, max: 1, step: 0.01 },
+            }}
           />
         </Grid>
 
@@ -292,7 +310,9 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
               })
             }
             size="small"
-            inputProps={{ min: 0, max: 1, step: 0.01 }}
+            slotProps={{
+              htmlInput: { min: 0, max: 1, step: 0.01 },
+            }}
           />
         </Grid>
       </Grid>

@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/DedupAcousticTab.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678902
 // last-edited: 2026-08-19
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -63,25 +63,49 @@ export function AcousticBookMetadata({ book, filePath }: { book: Book; filePath?
     <Box sx={{ minWidth: 0 }}>
       <Typography
         variant="body2"
-        fontWeight={600}
-        sx={{ cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}
         onClick={() => navigate(`/library/${book.id}`)}
         noWrap
+        sx={{
+          fontWeight: 600,
+          cursor: 'pointer',
+          '&:hover': { textDecoration: 'underline' },
+        }}
       >
         {book.title || <em style={{ opacity: 0.5 }}>Untitled</em>}
       </Typography>
       {book.author_name && (
-        <Typography variant="caption" color="text.secondary" noWrap>
+        <Typography
+          variant="caption"
+          noWrap
+          sx={{
+            color: 'text.secondary',
+          }}
+        >
           {book.author_name}
         </Typography>
       )}
       {book.series_name && (
-        <Typography variant="caption" color="text.secondary" noWrap display="block">
+        <Typography
+          variant="caption"
+          noWrap
+          sx={{
+            color: 'text.secondary',
+            display: 'block',
+          }}
+        >
           {book.series_name}
           {book.series_position ? ` · Book ${book.series_position}` : ''}
         </Typography>
       )}
-      <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }} flexWrap="wrap" useFlexGap>
+      <Stack
+        direction="row"
+        spacing={0.5}
+        useFlexGap
+        sx={{
+          flexWrap: 'wrap',
+          mt: 0.5,
+        }}
+      >
         {book.format && <Chip label={book.format.toUpperCase()} size="small" />}
         {book.duration && (
           <Chip label={formatDuration(book.duration)} size="small" variant="outlined" />
@@ -90,8 +114,8 @@ export function AcousticBookMetadata({ book, filePath }: { book: Book; filePath?
       {filePath && (
         <Typography
           variant="caption"
-          color="text.secondary"
           sx={{
+            color: 'text.secondary',
             display: 'block',
             mt: 0.5,
             wordBreak: 'break-all',
@@ -112,12 +136,23 @@ export function AcousticBookCard({ book, label }: { book: Book; label: string })
     <Box sx={{ flex: 1, minWidth: 0 }}>
       <Typography
         variant="caption"
-        color="text.secondary"
-        sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}
+        sx={{
+          color: 'text.secondary',
+          fontWeight: 600,
+          textTransform: 'uppercase',
+          letterSpacing: 0.5,
+        }}
       >
         {label}
       </Typography>
-      <Stack direction="row" spacing={1.5} sx={{ mt: 0.5 }} alignItems="flex-start">
+      <Stack
+        direction="row"
+        spacing={1.5}
+        sx={{
+          alignItems: 'flex-start',
+          mt: 0.5,
+        }}
+      >
         <Avatar
           src={bookCoverSrc(book)}
           variant="rounded"
@@ -222,7 +257,14 @@ function AcousticComparePanel({ initialA = '', initialB = '' }: AcousticCompareP
       <Typography variant="subtitle1" sx={{ mb: 1.5, fontWeight: 600 }}>
         Fingerprint Comparison
       </Typography>
-      <Stack direction="row" spacing={2} sx={{ mb: 2 }} alignItems="flex-start">
+      <Stack
+        direction="row"
+        spacing={2}
+        sx={{
+          alignItems: 'flex-start',
+          mb: 2,
+        }}
+      >
         <TextField
           label="Book A ID"
           size="small"
@@ -275,8 +317,12 @@ function AcousticComparePanel({ initialA = '', initialB = '' }: AcousticCompareP
             >
               <Typography
                 variant="caption"
-                color="text.secondary"
-                sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}
+                sx={{
+                  color: 'text.secondary',
+                  fontWeight: 600,
+                  textTransform: 'uppercase',
+                  letterSpacing: 0.5,
+                }}
               >
                 Book A
               </Typography>
@@ -328,8 +374,12 @@ function AcousticComparePanel({ initialA = '', initialB = '' }: AcousticCompareP
             >
               <Typography
                 variant="caption"
-                color="text.secondary"
-                sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}
+                sx={{
+                  color: 'text.secondary',
+                  fontWeight: 600,
+                  textTransform: 'uppercase',
+                  letterSpacing: 0.5,
+                }}
               >
                 Book B
               </Typography>
@@ -370,7 +420,14 @@ function AcousticComparePanel({ initialA = '', initialB = '' }: AcousticCompareP
           <CoverLightbox open={lightboxOpen} src={lightboxSrc} onClose={handleCloseLightbox} />
 
           {/* Similarity score */}
-          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+              mb: 2,
+            }}
+          >
             <Chip
               label={
                 hasAnySegments
@@ -389,7 +446,12 @@ function AcousticComparePanel({ initialA = '', initialB = '' }: AcousticCompareP
               icon={<GraphicEqIcon />}
             />
             {!hasAnySegments && (
-              <Typography variant="caption" color="text.secondary">
+              <Typography
+                variant="caption"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 Run "Fingerprint Books" first to populate segment data
               </Typography>
             )}
@@ -868,10 +930,12 @@ export function AcousticDedupTab() {
       <Stack
         direction="row"
         spacing={2}
-        alignItems="center"
-        sx={{ mb: 1 }}
-        flexWrap="wrap"
         useFlexGap
+        sx={{
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          mb: 1,
+        }}
       >
         <Typography variant="h6">Acoustic Duplicates</Typography>
 
@@ -930,7 +994,14 @@ export function AcousticDedupTab() {
         </IconButton>
       </Stack>
 
-      <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
+      <Typography
+        variant="caption"
+        sx={{
+          color: 'text.secondary',
+          mb: 2,
+          display: 'block',
+        }}
+      >
         Workflow: <strong>Fingerprint Books</strong> (reads audio, ~hours) →{' '}
         <strong>Find Acoustic Duplicates</strong> (compares hashes, seconds). Merge direction:
         prefer the book with richer metadata (ASIN/ISBN → cover → sane title).
@@ -940,7 +1011,15 @@ export function AcousticDedupTab() {
           DB via PUT /api/v1/config; the server-side op reads from
           AppConfig.AcoustIDAPIKey before falling back to env. */}
       <Paper variant="outlined" sx={{ mb: 2, p: 1.5 }}>
-        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+        <Stack
+          direction="row"
+          spacing={1}
+          useFlexGap
+          sx={{
+            alignItems: 'center',
+            flexWrap: 'wrap',
+          }}
+        >
           <Typography variant="body2" sx={{ fontWeight: 500, minWidth: 0 }}>
             AcoustID.org API key
           </Typography>
@@ -953,7 +1032,9 @@ export function AcousticDedupTab() {
             value={acoustidKey}
             onChange={(e) => setAcoustidKey(e.target.value)}
             sx={{ flex: 1, minWidth: 280 }}
-            inputProps={{ autoComplete: 'off' }}
+            slotProps={{
+              htmlInput: { autoComplete: 'off' },
+            }}
           />
           <Button
             variant="outlined"
@@ -964,7 +1045,14 @@ export function AcousticDedupTab() {
             {acoustidKeySaving ? 'Saving…' : 'Save'}
           </Button>
         </Stack>
-        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'text.secondary',
+            mt: 0.5,
+            display: 'block',
+          }}
+        >
           Required for "Look Up on AcoustID.org". Stored in the settings database (masked when read
           back). Falls back to ACOUSTID_API_KEY env var if unset.
         </Typography>
@@ -997,8 +1085,8 @@ export function AcousticDedupTab() {
             <Stack
               direction="row"
               spacing={1}
-              alignItems="center"
               sx={{
+                alignItems: 'center',
                 px: 2,
                 py: 1,
                 bgcolor: 'action.selected',
@@ -1113,7 +1201,14 @@ export function AcousticDedupTab() {
                       <TableCell sx={{ verticalAlign: 'top', minWidth: 280 }}>
                         <Stack spacing={0.5}>
                           {renderBookCell(c.entity_a_id)}
-                          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                          <Stack
+                            direction="row"
+                            spacing={0.5}
+                            useFlexGap
+                            sx={{
+                              flexWrap: 'wrap',
+                            }}
+                          >
                             {qualityChip(qA)}
                             {recommendA && (
                               <Chip label="★ Recommended keep" size="small" color="primary" />
@@ -1124,7 +1219,14 @@ export function AcousticDedupTab() {
                       <TableCell sx={{ verticalAlign: 'top', minWidth: 280 }}>
                         <Stack spacing={0.5}>
                           {renderBookCell(c.entity_b_id)}
-                          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                          <Stack
+                            direction="row"
+                            spacing={0.5}
+                            useFlexGap
+                            sx={{
+                              flexWrap: 'wrap',
+                            }}
+                          >
                             {qualityChip(qB)}
                             {recommendB && (
                               <Chip label="★ Recommended keep" size="small" color="primary" />
@@ -1140,7 +1242,14 @@ export function AcousticDedupTab() {
                         />
                       </TableCell>
                       <TableCell>
-                        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                        <Stack
+                          direction="row"
+                          spacing={0.5}
+                          useFlexGap
+                          sx={{
+                            flexWrap: 'wrap',
+                          }}
+                        >
                           <Tooltip title="Keep Book A, merge B into it">
                             <Button
                               size="small"

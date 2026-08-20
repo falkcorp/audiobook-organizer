@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/AudiobookList.tsx
-// version: 2.9.1
+// version: 2.9.2
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-08-19
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -339,17 +339,29 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
   if (audiobooks.length === 0) {
     return (
       <Box
-        display="flex"
-        justifyContent="center"
-        alignItems="center"
-        minHeight="400px"
-        flexDirection="column"
-        gap={2}
+        sx={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          minHeight: '400px',
+          flexDirection: 'column',
+          gap: 2,
+        }}
       >
-        <Typography variant="h6" color="text.secondary">
+        <Typography
+          variant="h6"
+          sx={{
+            color: 'text.secondary',
+          }}
+        >
           No audiobooks found
         </Typography>
-        <Typography variant="body2" color="text.secondary">
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+          }}
+        >
           Try adjusting your filters or add audiobooks to your library
         </Typography>
       </Box>
@@ -372,8 +384,10 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                     checked={allSelected}
                     indeterminate={someSelected && !allSelected}
                     onChange={onSelectAll}
-                    inputProps={{
-                      'aria-label': 'Select all books on page',
+                    slotProps={{
+                      input: {
+                        'aria-label': 'Select all books on page',
+                      },
                     }}
                   />
                 )}
@@ -453,15 +467,22 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                     <MenuItem disabled sx={{ py: 0.5 }}>
                       <Typography
                         variant="overline"
-                        color="text.secondary"
-                        sx={{ lineHeight: 1.5 }}
+                        sx={{
+                          color: 'text.secondary',
+                          lineHeight: 1.5,
+                        }}
                       >
                         Quick Filters
                       </Typography>
                     </MenuItem>
                     {quickQueries.length === 0 && !quickQueriesLoaded && (
                       <MenuItem disabled>
-                        <Typography variant="body2" color="text.disabled">
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            color: 'text.disabled',
+                          }}
+                        >
                           Loading...
                         </Typography>
                       </MenuItem>
@@ -482,7 +503,12 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                         </MenuItem>
                       ) : (
                         <MenuItem key={q.id} disabled sx={{ pl: 3 }}>
-                          <Typography variant="body2" color="text.disabled">
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              color: 'text.disabled',
+                            }}
+                          >
                             {q.label} (0)
                           </Typography>
                         </MenuItem>
@@ -496,7 +522,13 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                 {onToggleColumn && visibleColumnIds && (
                   <>
                     <MenuItem disabled sx={{ py: 1 }}>
-                      <Typography variant="caption" fontWeight="bold" color="text.secondary">
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          fontWeight: 'bold',
+                          color: 'text.secondary',
+                        }}
+                      >
                         COLUMNS
                       </Typography>
                     </MenuItem>
@@ -509,7 +541,13 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                       return (
                         <Box key={category}>
                           <MenuItem disabled sx={{ py: 0.75, pl: 2 }}>
-                            <Typography variant="body2" fontWeight="600" color="text.primary">
+                            <Typography
+                              variant="body2"
+                              sx={{
+                                fontWeight: '600',
+                                color: 'text.primary',
+                              }}
+                            >
                               {category}
                             </Typography>
                           </MenuItem>
@@ -595,8 +633,10 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                             onToggleSelect(audiobook, event as unknown as React.MouseEvent);
                           }}
                           onChange={() => {}}
-                          inputProps={{
-                            'aria-label': `Select ${audiobook.title || 'audiobook'}`,
+                          slotProps={{
+                            input: {
+                              'aria-label': `Select ${audiobook.title || 'audiobook'}`,
+                            },
                           }}
                         />
                       )}
@@ -614,7 +654,13 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                         whiteSpace: 'nowrap',
                       }}
                     >
-                      <Typography variant="body2" color="text.secondary" noWrap>
+                      <Typography
+                        variant="body2"
+                        noWrap
+                        sx={{
+                          color: 'text.secondary',
+                        }}
+                      >
                         {formatCellValue(col, audiobook)}
                       </Typography>
                     </TableCell>
@@ -664,12 +710,25 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                           </Typography>
 
                           {isLoadingFiles ? (
-                            <Box display="flex" justifyContent="center" p={2}>
+                            <Box
+                              sx={{
+                                display: 'flex',
+                                justifyContent: 'center',
+                                p: 2,
+                              }}
+                            >
                               <CircularProgress size={24} />
                             </Box>
                           ) : fetchError ? (
                             // Fix #6: show error UI with Retry button instead of silent spinner/empty list
-                            <Box display="flex" alignItems="center" gap={1} p={1}>
+                            <Box
+                              sx={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 1,
+                                p: 1,
+                              }}
+                            >
                               <Typography variant="body2" color="error">
                                 Failed to load files: {fetchError}
                               </Typography>
@@ -683,7 +742,12 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                               </Button>
                             </Box>
                           ) : files.length === 0 ? (
-                            <Typography variant="body2" color="text.secondary">
+                            <Typography
+                              variant="body2"
+                              sx={{
+                                color: 'text.secondary',
+                              }}
+                            >
                               No files found
                             </Typography>
                           ) : (
@@ -714,8 +778,11 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                                     </Typography>
                                     <Typography
                                       variant="caption"
-                                      color="text.secondary"
-                                      sx={{ display: 'block', wordBreak: 'break-word' }}
+                                      sx={{
+                                        color: 'text.secondary',
+                                        display: 'block',
+                                        wordBreak: 'break-word',
+                                      }}
                                     >
                                       {file.file_path}
                                     </Typography>
@@ -767,8 +834,11 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                                     />
                                     <Typography
                                       variant="caption"
-                                      color="text.secondary"
-                                      sx={{ minWidth: 80, textAlign: 'right' }}
+                                      sx={{
+                                        color: 'text.secondary',
+                                        minWidth: 80,
+                                        textAlign: 'right',
+                                      }}
                                     >
                                       {formatFileSize(file.file_size)}
                                     </Typography>

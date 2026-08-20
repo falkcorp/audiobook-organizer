@@ -1,5 +1,5 @@
 // file: web/src/components/system/SystemInfoTab.tsx
-// version: 1.6.1
+// version: 1.6.2
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 
 import { useState, useEffect } from 'react';
@@ -152,7 +152,14 @@ export function SystemInfoTab() {
 
   if (loading) {
     return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          minHeight: '400px',
+        }}
+      >
         <CircularProgress />
       </Box>
     );
@@ -160,7 +167,14 @@ export function SystemInfoTab() {
 
   if (error) {
     return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          minHeight: '400px',
+        }}
+      >
         <Typography color="error">{error}</Typography>
       </Box>
     );
@@ -172,8 +186,21 @@ export function SystemInfoTab() {
 
   return (
     <Box>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
-        <Stack direction="row" spacing={2} alignItems="center">
+      <Stack
+        direction="row"
+        sx={{
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          mb: 2,
+        }}
+      >
+        <Stack
+          direction="row"
+          spacing={2}
+          sx={{
+            alignItems: 'center',
+          }}
+        >
           <Typography variant="h6">System Information</Typography>
           <Chip label={`v${info.version}`} size="small" color="primary" />
         </Stack>
@@ -197,23 +224,46 @@ export function SystemInfoTab() {
         >
           <Card>
             <CardContent>
-              <Stack direction="row" spacing={2} alignItems="center" mb={2}>
+              <Stack
+                direction="row"
+                spacing={2}
+                sx={{
+                  alignItems: 'center',
+                  mb: 2,
+                }}
+              >
                 <ComputerIcon color="primary" />
                 <Typography variant="h6">Operating System</Typography>
               </Stack>
               <Stack spacing={1.5}>
                 <Box>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     Platform
                   </Typography>
-                  <Stack direction="row" alignItems="center" spacing={1}>
+                  <Stack
+                    direction="row"
+                    spacing={1}
+                    sx={{
+                      alignItems: 'center',
+                    }}
+                  >
                     <Typography variant="body1">{getOSIcon()}</Typography>
                     <Typography variant="body1">{info.os.version}</Typography>
                   </Stack>
                 </Box>
                 <Divider />
                 <Box>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     Architecture
                   </Typography>
                   <Typography variant="body1">{info.os.arch}</Typography>
@@ -232,34 +282,61 @@ export function SystemInfoTab() {
         >
           <Card>
             <CardContent>
-              <Stack direction="row" spacing={2} alignItems="center" mb={2}>
+              <Stack
+                direction="row"
+                spacing={2}
+                sx={{
+                  alignItems: 'center',
+                  mb: 2,
+                }}
+              >
                 <MemoryIcon color="primary" />
                 <Typography variant="h6">Memory</Typography>
               </Stack>
               <Stack spacing={1.5}>
                 <Box>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     App Memory System
                   </Typography>
                   <Typography variant="body1">{formatBytes(info.memory.total)}</Typography>
                 </Box>
                 <Divider />
                 <Box>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     Used by App
                   </Typography>
                   <Typography variant="body1">{formatBytes(info.memory.used)}</Typography>
                 </Box>
                 <Divider />
                 <Box>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     Heap Allocated
                   </Typography>
                   <Typography variant="body1">{formatBytes(info.memory.heapAlloc)}</Typography>
                 </Box>
                 <Divider />
                 <Box>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     Heap System
                   </Typography>
                   <Typography variant="body1">{formatBytes(info.memory.heapSys)}</Typography>
@@ -278,13 +355,25 @@ export function SystemInfoTab() {
         >
           <Card>
             <CardContent>
-              <Stack direction="row" spacing={2} alignItems="center" mb={2}>
+              <Stack
+                direction="row"
+                spacing={2}
+                sx={{
+                  alignItems: 'center',
+                  mb: 2,
+                }}
+              >
                 <ComputerIcon color="primary" />
                 <Typography variant="h6">CPU</Typography>
               </Stack>
               <Stack spacing={1.5}>
                 <Box>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     Available Cores
                   </Typography>
                   <Typography variant="body1">{info.cpu.cores}</Typography>
@@ -303,20 +392,37 @@ export function SystemInfoTab() {
         >
           <Card>
             <CardContent>
-              <Stack direction="row" spacing={2} alignItems="center" mb={2}>
+              <Stack
+                direction="row"
+                spacing={2}
+                sx={{
+                  alignItems: 'center',
+                  mb: 2,
+                }}
+              >
                 <TimerIcon color="primary" />
                 <Typography variant="h6">Uptime</Typography>
               </Stack>
               <Stack spacing={1.5}>
                 <Box>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     Application
                   </Typography>
                   <Typography variant="body1">{formatUptime(info.uptime.appSeconds)}</Typography>
                 </Box>
                 <Divider />
                 <Box>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     System
                   </Typography>
                   <Typography variant="body1">{formatUptime(info.uptime.systemSeconds)}</Typography>
@@ -335,20 +441,37 @@ export function SystemInfoTab() {
         >
           <Card>
             <CardContent>
-              <Stack direction="row" spacing={2} alignItems="center" mb={2}>
+              <Stack
+                direction="row"
+                spacing={2}
+                sx={{
+                  alignItems: 'center',
+                  mb: 2,
+                }}
+              >
                 <CodeIcon color="primary" />
                 <Typography variant="h6">Runtime</Typography>
               </Stack>
               <Stack spacing={1.5}>
                 <Box>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     Go Version
                   </Typography>
                   <Typography variant="body1">{info.runtime.goVersion}</Typography>
                 </Box>
                 <Divider />
                 <Box>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     Goroutines
                   </Typography>
                   <Typography variant="body1">{info.runtime.numGoroutines}</Typography>
@@ -362,7 +485,14 @@ export function SystemInfoTab() {
         <Grid size={12}>
           <Card>
             <CardContent>
-              <Stack direction="row" spacing={2} alignItems="center" mb={2}>
+              <Stack
+                direction="row"
+                spacing={2}
+                sx={{
+                  alignItems: 'center',
+                  mb: 2,
+                }}
+              >
                 <StorageIcon color="primary" />
                 <Typography variant="h6">Library & Storage</Typography>
               </Stack>
@@ -375,7 +505,12 @@ export function SystemInfoTab() {
                   }}
                 >
                   <Box>
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       Library Size
                     </Typography>
                     <Typography variant="h6">{formatBytes(info.database.size)}</Typography>
@@ -389,7 +524,12 @@ export function SystemInfoTab() {
                   }}
                 >
                   <Box>
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       Books
                     </Typography>
                     <Typography variant="h6">{info.database.books.toLocaleString()}</Typography>
@@ -403,7 +543,12 @@ export function SystemInfoTab() {
                   }}
                 >
                   <Box>
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
                       Import Paths
                     </Typography>
                     <Typography variant="h6">{info.database.folderCount}</Typography>

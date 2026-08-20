@@ -1,5 +1,5 @@
 // file: web/src/components/settings/MetadataScoringSection.tsx
-// version: 1.2.1
+// version: 1.2.2
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-08-19
 
@@ -80,7 +80,9 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
         }
         helperText={helperText}
         size="small"
-        inputProps={min !== undefined ? { min, step } : { step }}
+        slotProps={{
+          htmlInput: min !== undefined ? { min, step } : { step },
+        }}
       />
     </Grid>
   );
@@ -127,7 +129,9 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
                   onChange({ [key]: next } as Partial<api.MetadataScoringConfig>);
                 }}
                 size="small"
-                inputProps={{ step }}
+                slotProps={{
+                  htmlInput: { step },
+                }}
               />
             </Grid>
           ))}
@@ -174,7 +178,9 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
             onChange={(e) => onChange({ embedding_min_score: Number(e.target.value) })}
             helperText="Minimum embedding score (0–1)"
             size="small"
-            inputProps={{ min: 0, max: 1, step: 0.01 }}
+            slotProps={{
+              htmlInput: { min: 0, max: 1, step: 0.01 },
+            }}
           />
         </Grid>
 
@@ -192,7 +198,9 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
             onChange={(e) => onChange({ embedding_best_match: Number(e.target.value) })}
             helperText="Best-match threshold (0–1)"
             size="small"
-            inputProps={{ min: 0, max: 1, step: 0.01 }}
+            slotProps={{
+              htmlInput: { min: 0, max: 1, step: 0.01 },
+            }}
           />
         </Grid>
 
@@ -227,7 +235,9 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
             onChange={(e) => onChange({ llm_rerank_epsilon: Number(e.target.value) })}
             helperText="Tie-break tolerance"
             size="small"
-            inputProps={{ min: 0, step: 0.01 }}
+            slotProps={{
+              htmlInput: { min: 0, step: 0.01 },
+            }}
           />
         </Grid>
 
@@ -245,7 +255,9 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
             onChange={(e) => onChange({ llm_rerank_top_k: Number(e.target.value) })}
             helperText="Number of candidates sent to LLM"
             size="small"
-            inputProps={{ min: 1 }}
+            slotProps={{
+              htmlInput: { min: 1 },
+            }}
           />
         </Grid>
 
@@ -367,7 +379,13 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
       <Typography variant="subtitle1" gutterBottom>
         Duration tier values
       </Typography>
-      <Typography variant="body2" color="text.secondary" gutterBottom>
+      <Typography
+        variant="body2"
+        gutterBottom
+        sx={{
+          color: 'text.secondary',
+        }}
+      >
         Tier edges are fixed in code; only the multiplier and score values are editable.
       </Typography>
       <Grid container spacing={2}>

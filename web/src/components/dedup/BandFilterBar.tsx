@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/BandFilterBar.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: b1a2c3d4-e5f6-7890-abcd-ba1234567890
-// last-edited: 2026-06-10
+// last-edited: 2026-08-19
 
 // BandFilterBar renders four band chips (CERTAIN, HIGH, MEDIUM, REVIEW) with
 // per-band candidate counts fetched from /api/v1/dedup/stats. Each chip is
@@ -64,10 +64,12 @@ export function BandFilterBar({ selected, counts, loading, onChange }: BandFilte
     <Stack
       direction="row"
       spacing={1}
-      sx={{ mb: 2 }}
-      flexWrap="wrap"
       useFlexGap
       data-testid="band-filter-bar"
+      sx={{
+        flexWrap: 'wrap',
+        mb: 2,
+      }}
     >
       {/* All chip */}
       <Chip

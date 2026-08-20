@@ -1,5 +1,5 @@
 // file: web/src/pages/Users.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4d2e3f1a-5b6c-4a70-b8c5-3d7e0f1b9a99
 
 import { useCallback, useEffect, useState, useRef } from 'react';
@@ -233,9 +233,11 @@ export default function Users() {
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                         <Typography
                           variant="caption"
-                          fontFamily="monospace"
                           noWrap
-                          sx={{ maxWidth: 200 }}
+                          sx={{
+                            fontFamily: 'monospace',
+                            maxWidth: 200,
+                          }}
                         >
                           {inv.token.slice(0, 16)}...
                         </Typography>
@@ -311,7 +313,9 @@ function CreateInviteDialog({
           onChange={(e) => setRoleId(e.target.value)}
           margin="normal"
           select
-          SelectProps={{ native: true }}
+          slotProps={{
+            select: { native: true },
+          }}
         >
           <option value="admin">Admin</option>
           <option value="editor">Editor</option>

@@ -1,5 +1,5 @@
 // file: web/src/components/settings/DelugeSettingsTab.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4f2a3b1c-5d6e-4a70-b8c5-3d7e0f1b9a99
 
 import { useCallback, useEffect, useState } from 'react';
@@ -104,7 +104,13 @@ export default function DelugeSettingsTab() {
       <Typography variant="h6" gutterBottom>
         Deluge Integration
       </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+      <Typography
+        variant="body2"
+        sx={{
+          color: 'text.secondary',
+          mb: 2,
+        }}
+      >
         Connect to your Deluge Web UI to automatically update torrent storage paths when books are
         reorganized, version-swapped, or undone.
       </Typography>
@@ -199,12 +205,24 @@ export default function DelugeSettingsTab() {
                     </TableCell>
                     <TableCell>{Math.round(t.progress)}%</TableCell>
                     <TableCell>
-                      <Typography variant="caption" fontFamily="monospace" noWrap>
+                      <Typography
+                        variant="caption"
+                        noWrap
+                        sx={{
+                          fontFamily: 'monospace',
+                        }}
+                      >
                         {t.save_path}
                       </Typography>
                     </TableCell>
                     <TableCell>
-                      <Typography variant="caption" fontFamily="monospace" noWrap>
+                      <Typography
+                        variant="caption"
+                        noWrap
+                        sx={{
+                          fontFamily: 'monospace',
+                        }}
+                      >
                         {t.hash?.slice(0, 12)}...
                       </Typography>
                     </TableCell>
@@ -217,10 +235,22 @@ export default function DelugeSettingsTab() {
       )}
 
       <Box sx={{ mt: 3 }}>
-        <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+        <Typography
+          variant="subtitle1"
+          gutterBottom
+          sx={{
+            fontWeight: 600,
+          }}
+        >
           Bulk Import
         </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+            mb: 2,
+          }}
+        >
           Import all pending Deluge files (those with a torrent hash but not yet copied to the
           library).
         </Typography>

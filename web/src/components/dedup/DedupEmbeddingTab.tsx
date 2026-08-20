@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/DedupEmbeddingTab.tsx
-// version: 1.3.1
+// version: 1.3.2
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567891
 // last-edited: 2026-08-19
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -664,7 +664,12 @@ export function EmbeddingDedupTab() {
     const book = bookDetails.get(id);
     if (!book) {
       return (
-        <Typography variant="body2" color="text.secondary">
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+          }}
+        >
           Book #{id}
         </Typography>
       );
@@ -715,14 +720,14 @@ export function EmbeddingDedupTab() {
       <Box sx={{ minWidth: 0, position: 'relative' }}>
         <Stack
           direction="row"
-          alignItems="stretch"
           spacing={1.5}
+          onClick={() => navigate(`/library/${book.id}`)}
           sx={{
+            alignItems: 'stretch',
             cursor: 'pointer',
             minWidth: 0,
             '&:hover .dedup-side-title': { textDecoration: 'underline' },
           }}
-          onClick={() => navigate(`/library/${book.id}`)}
         >
           {book.cover_url && (
             <Box
@@ -745,10 +750,12 @@ export function EmbeddingDedupTab() {
           <Stack spacing={0.35} sx={{ minWidth: 0, flex: 1 }}>
             <Stack
               direction="row"
-              alignItems="center"
               spacing={0.5}
               useFlexGap
               sx={[
+                {
+                  alignItems: 'center',
+                },
                 {
                   minWidth: 0,
                 },
@@ -759,15 +766,17 @@ export function EmbeddingDedupTab() {
                   : {
                       pr: 0,
                     },
-              ]} // leave room for the button
+              ]}
             >
               <Typography
                 className="dedup-side-title"
                 variant="body2"
-                fontWeight="medium"
                 noWrap
                 title={book.title}
-                sx={{ minWidth: 0 }}
+                sx={{
+                  fontWeight: 'medium',
+                  minWidth: 0,
+                }}
               >
                 {cleanDisplayTitle(book.title)}
               </Typography>
@@ -792,7 +801,14 @@ export function EmbeddingDedupTab() {
               )}
             </Stack>
             {book.author_name && (
-              <Typography variant="caption" color="text.secondary" noWrap title={book.author_name}>
+              <Typography
+                variant="caption"
+                noWrap
+                title={book.author_name}
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 {book.author_name}
               </Typography>
             )}
@@ -801,14 +817,18 @@ export function EmbeddingDedupTab() {
                 title={tooltipContent}
                 enterDelay={300}
                 placement="bottom-start"
-                componentsProps={{ tooltip: { sx: { maxWidth: 'none' } } }}
+                slotProps={{ tooltip: { sx: { maxWidth: 'none' } } }}
               >
                 <Typography
                   variant="caption"
-                  color="text.disabled"
                   noWrap
-                  sx={{ display: 'block', fontFamily: 'monospace', fontSize: '0.7rem' }}
                   onClick={(e) => e.stopPropagation()}
+                  sx={{
+                    color: 'text.disabled',
+                    display: 'block',
+                    fontFamily: 'monospace',
+                    fontSize: '0.7rem',
+                  }}
                 >
                   {shortPath}
                   {extraCount > 0 && (
@@ -910,7 +930,14 @@ export function EmbeddingDedupTab() {
           visually with the primary actions despite being a once-in-a-
           while task — moved into the More menu so it's still reachable
           but doesn't fight for attention. */}
-      <Stack direction="row" spacing={1} sx={{ mb: 2 }} alignItems="center">
+      <Stack
+        direction="row"
+        spacing={1}
+        sx={{
+          alignItems: 'center',
+          mb: 2,
+        }}
+      >
         <Tooltip title="Re-embed any stale books, then re-run exact + similarity matching to find new duplicate candidates. This is the standard 'find dupes again' button.">
           <span>
             <Button
@@ -975,7 +1002,13 @@ export function EmbeddingDedupTab() {
           >
             <Box>
               <Typography variant="body2">Force Re-embed All</Typography>
-              <Typography variant="caption" color="text.secondary" display="block">
+              <Typography
+                variant="caption"
+                sx={{
+                  color: 'text.secondary',
+                  display: 'block',
+                }}
+              >
                 Regenerate embeddings for every book. Only needed once after adding an OpenAI key —
                 Find Duplicates already re-embeds stale books on its own.
               </Typography>
@@ -1158,7 +1191,11 @@ export function EmbeddingDedupTab() {
               <CircularProgress />
             </Box>
           ) : seriesSummary.length === 0 ? (
-            <Typography color="text.secondary">
+            <Typography
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               No series with pending same-series clusters right now.
             </Typography>
           ) : (
@@ -1179,10 +1216,21 @@ export function EmbeddingDedupTab() {
                     }}
                   >
                     <Box sx={{ minWidth: 0, flex: 1 }}>
-                      <Typography variant="body2" fontWeight="medium" noWrap>
+                      <Typography
+                        variant="body2"
+                        noWrap
+                        sx={{
+                          fontWeight: 'medium',
+                        }}
+                      >
                         {row.series_name || `(series #${row.series_id})`}
                       </Typography>
-                      <Typography variant="caption" color="text.secondary">
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          color: 'text.secondary',
+                        }}
+                      >
                         {row.cluster_count} cluster{row.cluster_count === 1 ? '' : 's'} ·{' '}
                         {row.book_count} book{row.book_count === 1 ? '' : 's'} ·{' '}
                         {row.candidate_count} candidate{row.candidate_count === 1 ? '' : 's'}
@@ -1216,7 +1264,15 @@ export function EmbeddingDedupTab() {
           previous Tabs + secondary chip-toggle row below was redundant
           with this control and was removed — active filters now show
           up below as removable tags via FilterTagBar. */}
-      <Stack direction="row" spacing={1} sx={{ mb: 2 }} flexWrap="wrap" useFlexGap>
+      <Stack
+        direction="row"
+        spacing={1}
+        useFlexGap
+        sx={{
+          flexWrap: 'wrap',
+          mb: 2,
+        }}
+      >
         <Chip
           label={`${pendingCount} pending`}
           size="small"
@@ -1346,18 +1402,24 @@ export function EmbeddingDedupTab() {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           sx={{ minWidth: 280 }}
-          InputProps={{
-            endAdornment: searchQuery ? (
-              <IconButton size="small" onClick={() => setSearchQuery('')} aria-label="clear search">
-                <ClearIcon fontSize="small" />
-              </IconButton>
-            ) : null,
-          }}
           helperText={
             searchQuery
               ? `${clusters.length} of ${allClusters.length} on page match`
               : 'Searches the current page only'
           }
+          slotProps={{
+            input: {
+              endAdornment: searchQuery ? (
+                <IconButton
+                  size="small"
+                  onClick={() => setSearchQuery('')}
+                  aria-label="clear search"
+                >
+                  <ClearIcon fontSize="small" />
+                </IconButton>
+              ) : null,
+            },
+          }}
         />
       </Box>
 
@@ -1373,7 +1435,11 @@ export function EmbeddingDedupTab() {
         </Box>
       ) : candidates.length === 0 ? (
         <Paper sx={{ p: 4, textAlign: 'center' }}>
-          <Typography color="text.secondary">
+          <Typography
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             No candidates found matching the current filters.
           </Typography>
         </Paper>
@@ -1393,14 +1459,26 @@ export function EmbeddingDedupTab() {
                 <Card key={cluster.key} variant="outlined">
                   <CardContent sx={{ pb: 1 }}>
                     {/* Top info row: layer, similarity, cluster size */}
-                    <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                    <Stack
+                      direction="row"
+                      spacing={1}
+                      sx={{
+                        alignItems: 'center',
+                        mb: 1,
+                      }}
+                    >
                       <Chip
                         label={cluster.layer}
                         size="small"
                         color={LAYER_COLORS[cluster.layer] || 'default'}
                       />
                       {cluster.maxSimilarity != null && (
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: 'text.secondary',
+                          }}
+                        >
                           {(cluster.maxSimilarity * 100).toFixed(1)}%
                         </Typography>
                       )}
@@ -1422,14 +1500,18 @@ export function EmbeddingDedupTab() {
                     <Stack
                       direction={isLargeCluster ? 'column' : 'row'}
                       spacing={isLargeCluster ? 1 : 2}
-                      alignItems="stretch"
                       divider={
                         <Divider
                           orientation={isLargeCluster ? 'horizontal' : 'vertical'}
                           flexItem
                         />
                       }
-                      sx={isLargeCluster ? undefined : { overflowX: 'auto' }}
+                      sx={[
+                        {
+                          alignItems: 'stretch',
+                        },
+                        isLargeCluster ? false : { overflowX: 'auto' },
+                      ]}
                     >
                       {cluster.bookIds.map((bookId) => (
                         <Box
@@ -1452,8 +1534,12 @@ export function EmbeddingDedupTab() {
                     {cluster.llmInfo && (
                       <Typography
                         variant="caption"
-                        color="text.secondary"
-                        sx={{ mt: 0.5, display: 'block', fontStyle: 'italic' }}
+                        sx={{
+                          color: 'text.secondary',
+                          mt: 0.5,
+                          display: 'block',
+                          fontStyle: 'italic',
+                        }}
                       >
                         LLM: {cluster.llmInfo}
                       </Typography>

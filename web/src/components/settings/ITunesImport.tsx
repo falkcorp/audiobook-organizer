@@ -1,5 +1,5 @@
 // file: web/src/components/settings/ITunesImport.tsx
-// version: 1.20.1
+// version: 1.20.2
 // guid: 4eb9b74d-7192-497b-849a-092833ae63a4
 // last-edited: 2026-08-19
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -508,7 +508,13 @@ export function ITunesImport() {
     <Card>
       <CardHeader title="iTunes Library Import" />
       <CardContent>
-        <Typography variant="body2" color="text.secondary" gutterBottom>
+        <Typography
+          variant="body2"
+          gutterBottom
+          sx={{
+            color: 'text.secondary',
+          }}
+        >
           Import your iTunes Library.xml with play counts, ratings, and bookmarks preserved.
         </Typography>
 
@@ -532,12 +538,14 @@ export function ITunesImport() {
             fullWidth
             placeholder="/Users/username/Music/iTunes/iTunes Music Library.xml"
             helperText="Path to iTunes Library.xml or Music Library.xml"
-            InputProps={{
-              endAdornment: (
-                <Button startIcon={<FolderOpenIcon />} onClick={handleBrowseFile}>
-                  Browse
-                </Button>
-              ),
+            slotProps={{
+              input: {
+                endAdornment: (
+                  <Button startIcon={<FolderOpenIcon />} onClick={handleBrowseFile}>
+                    Browse
+                  </Button>
+                ),
+              },
             }}
           />
         </Box>
@@ -554,12 +562,14 @@ export function ITunesImport() {
             fullWidth
             placeholder="/path/to/iTunes Library.itl"
             helperText="Path to iTunes Library.itl binary file. When set, organize automatically writes back file locations to iTunes."
-            InputProps={{
-              endAdornment: (
-                <Button startIcon={<FolderOpenIcon />} onClick={handleBrowseItl}>
-                  Browse
-                </Button>
-              ),
+            slotProps={{
+              input: {
+                endAdornment: (
+                  <Button startIcon={<FolderOpenIcon />} onClick={handleBrowseItl}>
+                    Browse
+                  </Button>
+                ),
+              },
             }}
           />
         </Box>
@@ -568,7 +578,13 @@ export function ITunesImport() {
           <Typography variant="subtitle2" gutterBottom>
             Path Mapping (for cross-platform imports)
           </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+              mb: 1,
+            }}
+          >
             Map iTunes file prefixes to local paths. Validate to auto-detect, or add manually.
           </Typography>
           {settings.pathMappings.map((mapping, idx) => (
@@ -798,7 +814,14 @@ export function ITunesImport() {
 
         {importStatus && (
           <Paper variant="outlined" sx={{ mt: 3, p: 2 }}>
-            <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
+            <Stack
+              direction="row"
+              sx={{
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                mb: 1,
+              }}
+            >
               <Typography variant="subtitle2">Import Progress</Typography>
               {importing && (
                 <Button
@@ -825,8 +848,19 @@ export function ITunesImport() {
               sx={{ height: 8, borderRadius: 1, mb: 1 }}
             />
 
-            <Stack direction="row" justifyContent="space-between" alignItems="center">
-              <Typography variant="body2" color="text.secondary">
+            <Stack
+              direction="row"
+              sx={{
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 {importStatus.progress}% complete
                 {importStatus.processed !== undefined && importStatus.total_books !== undefined && (
                   <>
@@ -837,17 +871,32 @@ export function ITunesImport() {
               </Typography>
               <Stack direction="row" spacing={1}>
                 {importStatus.imported !== undefined && importStatus.imported > 0 && (
-                  <Typography variant="caption" color="success.main">
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: 'success.main',
+                    }}
+                  >
                     {importStatus.imported} imported
                   </Typography>
                 )}
                 {importStatus.skipped !== undefined && importStatus.skipped > 0 && (
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     {importStatus.skipped} skipped
                   </Typography>
                 )}
                 {importStatus.failed !== undefined && importStatus.failed > 0 && (
-                  <Typography variant="caption" color="error.main">
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: 'error.main',
+                    }}
+                  >
                     {importStatus.failed} failed
                   </Typography>
                 )}
@@ -858,11 +907,13 @@ export function ITunesImport() {
             {importStatus.message && (
               <Typography
                 variant="caption"
-                color="text.secondary"
-                display="block"
                 noWrap
                 title={importStatus.message}
-                sx={{ mt: 0.5 }}
+                sx={{
+                  color: 'text.secondary',
+                  display: 'block',
+                  mt: 0.5,
+                }}
               >
                 {importStatus.message}
               </Typography>
@@ -903,7 +954,13 @@ export function ITunesImport() {
             Use these buttons for manual sync control. Choose which direction takes precedence.
           </Typography>
 
-          <Stack direction="row" spacing={2} flexWrap="wrap">
+          <Stack
+            direction="row"
+            spacing={2}
+            sx={{
+              flexWrap: 'wrap',
+            }}
+          >
             <Button
               variant="contained"
               color="primary"
@@ -985,7 +1042,9 @@ export function ITunesImport() {
                 <ListItem key={path}>
                   <ListItemText
                     primary={path}
-                    primaryTypographyProps={{ variant: 'body2', noWrap: true }}
+                    slotProps={{
+                      primary: { variant: 'body2', noWrap: true },
+                    }}
                   />
                 </ListItem>
               ))}
@@ -1012,11 +1071,21 @@ export function ITunesImport() {
               {writeBackResult && (
                 <Alert severity={writeBackResult.success ? 'success' : 'warning'}>
                   <Typography variant="body2">{writeBackResult.message}</Typography>
-                  <Typography variant="caption" display="block">
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      display: 'block',
+                    }}
+                  >
                     Updated {writeBackResult.updated_count} entries
                   </Typography>
                   {writeBackResult.backup_path && (
-                    <Typography variant="caption" display="block">
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        display: 'block',
+                      }}
+                    >
                       Backup created at {writeBackResult.backup_path}
                     </Typography>
                   )}
@@ -1030,7 +1099,13 @@ export function ITunesImport() {
                   clicking Sync. */}
               <Alert severity="info" icon={false} sx={{ '& .MuiAlert-message': { width: '100%' } }}>
                 <Stack spacing={0.5}>
-                  <Stack direction="row" spacing={1} alignItems="baseline">
+                  <Stack
+                    direction="row"
+                    spacing={1}
+                    sx={{
+                      alignItems: 'baseline',
+                    }}
+                  >
                     <Typography variant="caption" sx={{ fontWeight: 600, minWidth: 110 }}>
                       Reading from:
                     </Typography>
@@ -1041,7 +1116,13 @@ export function ITunesImport() {
                       {configuredReadPath || '(not configured — set in Settings → Paths)'}
                     </Typography>
                   </Stack>
-                  <Stack direction="row" spacing={1} alignItems="baseline">
+                  <Stack
+                    direction="row"
+                    spacing={1}
+                    sx={{
+                      alignItems: 'baseline',
+                    }}
+                  >
                     <Typography variant="caption" sx={{ fontWeight: 600, minWidth: 110 }}>
                       Writing to:
                     </Typography>
@@ -1053,7 +1134,12 @@ export function ITunesImport() {
                         '(not configured — write-back will fail until set in Settings → Paths)'}
                     </Typography>
                   </Stack>
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     Write-back always targets the .itl binary — iTunes ignores Library.xml for
                     inbound changes.
                   </Typography>
@@ -1126,7 +1212,12 @@ export function ITunesImport() {
                 <Stack spacing={2}>
                   <Paper variant="outlined" sx={{ p: 3, textAlign: 'center' }}>
                     {syncAllCount === null ? (
-                      <Typography variant="body1" color="text.secondary">
+                      <Typography
+                        variant="body1"
+                        sx={{
+                          color: 'text.secondary',
+                        }}
+                      >
                         Click "Preview All" to see how many books have different paths.
                       </Typography>
                     ) : (
@@ -1135,7 +1226,13 @@ export function ITunesImport() {
                       </Typography>
                     )}
                   </Paper>
-                  <Stack direction="row" spacing={2} justifyContent="center">
+                  <Stack
+                    direction="row"
+                    spacing={2}
+                    sx={{
+                      justifyContent: 'center',
+                    }}
+                  >
                     <Button
                       variant="outlined"
                       onClick={handlePreviewAll}
@@ -1180,16 +1277,24 @@ export function ITunesImport() {
                     placeholder="Search by title, author, or path..."
                     value={browseSearch}
                     onChange={(e) => handleBrowseSearchChange(e.target.value)}
-                    InputProps={{
-                      startAdornment: (
-                        <InputAdornment position="start">
-                          <SearchIcon />
-                        </InputAdornment>
-                      ),
-                    }}
                     fullWidth
+                    slotProps={{
+                      input: {
+                        startAdornment: (
+                          <InputAdornment position="start">
+                            <SearchIcon />
+                          </InputAdornment>
+                        ),
+                      },
+                    }}
                   />
-                  <Stack direction="row" spacing={1} alignItems="center">
+                  <Stack
+                    direction="row"
+                    spacing={1}
+                    sx={{
+                      alignItems: 'center',
+                    }}
+                  >
                     <Button
                       size="small"
                       onClick={() => {
@@ -1207,7 +1312,13 @@ export function ITunesImport() {
                     <Button size="small" onClick={() => setBrowseSelected(new Set())}>
                       Deselect All
                     </Button>
-                    <Typography variant="body2" color="text.secondary" sx={{ ml: 'auto' }}>
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.secondary',
+                        ml: 'auto',
+                      }}
+                    >
                       {browseSelected.size.toLocaleString()} selected
                     </Typography>
                   </Stack>
@@ -1293,7 +1404,13 @@ export function ITunesImport() {
                         {browseItems.length === 0 && !browseLoading && (
                           <TableRow>
                             <TableCell colSpan={5} align="center">
-                              <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
+                              <Typography
+                                variant="body2"
+                                sx={{
+                                  color: 'text.secondary',
+                                  py: 2,
+                                }}
+                              >
                                 {browseTotal === 0
                                   ? 'No books with iTunes IDs found.'
                                   : 'Loading...'}

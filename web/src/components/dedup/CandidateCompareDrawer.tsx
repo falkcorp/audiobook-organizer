@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/CandidateCompareDrawer.tsx
-// version: 1.5.1
+// version: 1.5.2
 // guid: a6f7b8c9-d0e1-2345-fabc-af6789012345
 // last-edited: 2026-08-19
 // CandidateCompareDrawer is a right-side Drawer that shows a full side-by-side
@@ -140,8 +140,10 @@ function MetadataCompareRow({ id, label, left, right }: MetadataCompareRowProps)
     >
       <Typography
         variant="caption"
-        fontWeight={700}
         color={different ? 'inherit' : 'text.secondary'}
+        sx={{
+          fontWeight: 700,
+        }}
       >
         {label}
       </Typography>
@@ -197,8 +199,22 @@ function MetadataComparePanel({ bookA, bookB, signals }: MetadataComparePanelPro
 
   return (
     <Stack spacing={1.5} data-testid="metadata-compare-panel">
-      <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
-        <Typography variant="caption" fontWeight={700} color="text.secondary">
+      <Stack
+        direction="row"
+        spacing={0.75}
+        useFlexGap
+        sx={{
+          alignItems: 'center',
+          flexWrap: 'wrap',
+        }}
+      >
+        <Typography
+          variant="caption"
+          sx={{
+            fontWeight: 700,
+            color: 'text.secondary',
+          }}
+        >
           Signals fired
         </Typography>
         {signals.length > 0 ? (
@@ -213,7 +229,13 @@ function MetadataComparePanel({ bookA, bookB, signals }: MetadataComparePanelPro
             </Tooltip>
           ))
         ) : (
-          <Typography variant="caption" color="text.disabled" fontStyle="italic">
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.disabled',
+              fontStyle: 'italic',
+            }}
+          >
             No signal data available.
           </Typography>
         )}
@@ -228,10 +250,22 @@ function MetadataComparePanel({ bookA, bookB, signals }: MetadataComparePanelPro
         }}
       >
         <Box />
-        <Typography variant="caption" color="text.secondary" fontWeight={700}>
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'text.secondary',
+            fontWeight: 700,
+          }}
+        >
           Book A
         </Typography>
-        <Typography variant="caption" color="text.secondary" fontWeight={700}>
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'text.secondary',
+            fontWeight: 700,
+          }}
+        >
           Book B
         </Typography>
       </Box>
@@ -373,8 +407,10 @@ export function CandidateCompareDrawer({
       anchor="right"
       open={candidateId != null}
       onClose={onClose}
-      PaperProps={{ sx: { width: { xs: '100%', sm: 640, md: 780 }, p: 0 } }}
       data-testid="candidate-compare-drawer"
+      slotProps={{
+        paper: { sx: { width: { xs: '100%', sm: 640, md: 780 }, p: 0 } },
+      }}
     >
       {/* Header */}
       <Box
@@ -388,7 +424,13 @@ export function CandidateCompareDrawer({
           gap: 1,
         }}
       >
-        <Typography variant="subtitle1" fontWeight={600} sx={{ flex: 1 }}>
+        <Typography
+          variant="subtitle1"
+          sx={{
+            fontWeight: 600,
+            flex: 1,
+          }}
+        >
           Candidate #{candidateId}
         </Typography>
         {candidate && (
@@ -417,7 +459,15 @@ export function CandidateCompareDrawer({
         {data && !loading && (
           <>
             {/* Action bar */}
-            <Stack direction="row" spacing={1} sx={{ mb: 2 }} flexWrap="wrap" useFlexGap>
+            <Stack
+              direction="row"
+              spacing={1}
+              useFlexGap
+              sx={{
+                flexWrap: 'wrap',
+                mb: 2,
+              }}
+            >
               {candidate?.status === 'pending' && (
                 <>
                   <Tooltip title="Merge — auto-pick primary">
@@ -521,7 +571,12 @@ export function CandidateCompareDrawer({
 
             {activeTab === 0 && bookA && bookB && <FileInfoCompare bookA={bookA} bookB={bookB} />}
             {activeTab === 0 && (!bookA || !bookB) && (
-              <Typography color="text.secondary" variant="body2">
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 Book details unavailable.
               </Typography>
             )}
@@ -530,7 +585,13 @@ export function CandidateCompareDrawer({
               <ScoreBreakdownPanel breakdown={candidate.score_breakdown} />
             )}
             {activeTab === 1 && !candidate?.score_breakdown && (
-              <Typography color="text.secondary" variant="body2" fontStyle="italic">
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                  fontStyle: 'italic',
+                }}
+              >
                 No score breakdown available (pre-T015 candidate — run rescore to backfill).
               </Typography>
             )}
@@ -543,7 +604,12 @@ export function CandidateCompareDrawer({
               />
             )}
             {activeTab === 2 && (!bookA || !bookB) && (
-              <Typography color="text.secondary" variant="body2">
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 Book metadata unavailable.
               </Typography>
             )}
@@ -568,7 +634,13 @@ export function CandidateCompareDrawer({
                   />
                 )}
                 {!fpLoading && !fpData && (
-                  <Typography color="text.secondary" variant="body2" fontStyle="italic">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary',
+                      fontStyle: 'italic',
+                    }}
+                  >
                     No fingerprint data — run acoustid.scan to generate fingerprints first.
                   </Typography>
                 )}

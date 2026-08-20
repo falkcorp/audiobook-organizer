@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/FingerprintCanvas.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: c7d8e9f0-a1b2-4c3d-8e4f-5a6b7c8d9e0f
 // last-edited: 2026-08-19
 // FingerprintCanvas renders a chromaprint base64 fingerprint as a visual
@@ -134,8 +134,8 @@ export function FingerprintCanvas({
         {label && (
           <Typography
             variant="caption"
-            color="text.secondary"
             sx={{
+              color: 'text.secondary',
               fontWeight: 600,
               textTransform: 'uppercase',
               letterSpacing: 0.5,
@@ -163,7 +163,13 @@ export function FingerprintCanvas({
           />
         </Box>
         {isEmpty && (
-          <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6rem' }}>
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.disabled',
+              fontSize: '0.6rem',
+            }}
+          >
             No data
           </Typography>
         )}
@@ -269,8 +275,11 @@ export function FingerprintPair({ hashA, hashB, width = 180, rows = 48 }: Finger
       {simPct != null && (
         <Typography
           variant="caption"
-          color="text.secondary"
-          sx={{ textAlign: 'center', display: 'block' }}
+          sx={{
+            color: 'text.secondary',
+            textAlign: 'center',
+            display: 'block',
+          }}
         >
           Visual similarity:{' '}
           <Box
@@ -297,8 +306,8 @@ export function FingerprintPair({ hashA, hashB, width = 180, rows = 48 }: Finger
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, alignItems: 'flex-start' }}>
           <Typography
             variant="caption"
-            color="text.secondary"
             sx={{
+              color: 'text.secondary',
               fontWeight: 600,
               textTransform: 'uppercase',
               letterSpacing: 0.5,
@@ -332,8 +341,8 @@ export function FingerprintPair({ hashA, hashB, width = 180, rows = 48 }: Finger
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, alignItems: 'flex-start' }}>
           <Typography
             variant="caption"
-            color="text.secondary"
             sx={{
+              color: 'text.secondary',
               fontWeight: 600,
               textTransform: 'uppercase',
               letterSpacing: 0.5,

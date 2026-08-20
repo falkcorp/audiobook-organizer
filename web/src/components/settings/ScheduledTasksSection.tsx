@@ -1,5 +1,5 @@
 // file: web/src/components/settings/ScheduledTasksSection.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: e5f6a7b8-c9d0-1234-efab-345678901234
 // last-edited: 2026-08-19
 
@@ -37,7 +37,13 @@ function TaskRow({
       <Typography variant="subtitle2" gutterBottom>
         {label}
       </Typography>
-      <Grid container spacing={2} alignItems="center">
+      <Grid
+        container
+        spacing={2}
+        sx={{
+          alignItems: 'center',
+        }}
+      >
         <Grid
           size={{
             xs: 12,
@@ -64,7 +70,9 @@ function TaskRow({
             value={interval}
             onChange={(e) => onIntervalChange(Number(e.target.value))}
             size="small"
-            inputProps={{ min: 1 }}
+            slotProps={{
+              htmlInput: { min: 1 },
+            }}
           />
         </Grid>
         {hasOnStartup && onStartupChange && (

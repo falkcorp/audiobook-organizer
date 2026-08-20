@@ -1,5 +1,5 @@
 // file: web/src/pages/Playlists.tsx
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2b0c1d6e-3f4a-4a70-b8c5-3d7e0f1b9a99
 
 import { useCallback, useEffect, useState } from 'react';
@@ -92,9 +92,21 @@ export default function Playlists() {
       </Tabs>
 
       {loading ? (
-        <Typography color="text.secondary">Loading...</Typography>
+        <Typography
+          sx={{
+            color: 'text.secondary',
+          }}
+        >
+          Loading...
+        </Typography>
       ) : playlists.length === 0 ? (
-        <Typography color="text.secondary">No playlists yet. Create one to get started.</Typography>
+        <Typography
+          sx={{
+            color: 'text.secondary',
+          }}
+        >
+          No playlists yet. Create one to get started.
+        </Typography>
       ) : (
         <List>
           {playlists.map((pl) => (
@@ -123,7 +135,12 @@ export default function Playlists() {
                         color={pl.type === 'smart' ? 'primary' : 'default'}
                       />
                       {pl.book_ids && (
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: 'text.secondary',
+                          }}
+                        >
                           {pl.book_ids.length} books
                         </Typography>
                       )}

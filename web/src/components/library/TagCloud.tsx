@@ -1,5 +1,5 @@
 // file: web/src/components/library/TagCloud.tsx
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7e6c9a1d-3f2b-4c8e-9a5d-1b6f8e2c4d9a
 // last-edited: 2026-08-19
 import { useMemo, useState } from 'react';
@@ -130,10 +130,12 @@ export function TagCloud({ availableTags, selectedTags, onTagsChange }: TagCloud
     <Box sx={{ p: 1.5, border: 1, borderColor: 'divider', borderRadius: 1 }}>
       <Stack
         direction="row"
-        alignItems="center"
-        justifyContent="space-between"
-        sx={{ cursor: 'pointer' }}
         onClick={() => setExpandedPersisted(!expanded)}
+        sx={{
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          cursor: 'pointer',
+        }}
       >
         <Typography variant="subtitle2">
           Browse by Tag{!expanded && sortedTags.length > 0 ? ` (${sortedTags.length})` : ''}

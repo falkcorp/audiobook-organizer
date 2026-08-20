@@ -1,5 +1,5 @@
 // file: web/src/components/common/ServerFileBrowser.tsx
-// version: 1.6.1
+// version: 1.6.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
 import { useState, useEffect, useCallback, MouseEvent } from 'react';
@@ -286,8 +286,20 @@ export function ServerFileBrowser({
           bgcolor: 'background.paper',
         }}
       >
-        <Stack direction="row" alignItems="center" spacing={2} mb={1}>
-          <Typography variant="subtitle2" color="text.secondary">
+        <Stack
+          direction="row"
+          spacing={2}
+          sx={{
+            alignItems: 'center',
+            mb: 1,
+          }}
+        >
+          <Typography
+            variant="subtitle2"
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             Current Path:
           </Typography>
           {diskInfo && (
@@ -299,7 +311,13 @@ export function ServerFileBrowser({
         </Stack>
 
         {editingPath ? (
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+            }}
+          >
             <TextField
               fullWidth
               size="small"
@@ -320,7 +338,13 @@ export function ServerFileBrowser({
             </IconButton>
           </Stack>
         ) : (
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+            }}
+          >
             <Breadcrumbs separator={<NavigateNextIcon fontSize="small" />} sx={{ flex: 1 }}>
               {pathParts.map((part, index) => (
                 <Link
@@ -342,8 +366,10 @@ export function ServerFileBrowser({
         <Stack
           direction={{ xs: 'column', md: 'row' }}
           spacing={2}
-          alignItems={{ xs: 'stretch', md: 'center' }}
-          sx={{ mt: 2 }}
+          sx={{
+            alignItems: { xs: 'stretch', md: 'center' },
+            mt: 2,
+          }}
         >
           <TextField
             size="small"
@@ -372,7 +398,13 @@ export function ServerFileBrowser({
 
       {/* Loading State */}
       {loading && (
-        <Box display="flex" justifyContent="center" py={4}>
+        <Box
+          sx={{
+            display: 'flex',
+            justifyContent: 'center',
+            py: 4,
+          }}
+        >
           <CircularProgress />
         </Box>
       )}
@@ -453,8 +485,17 @@ export function ServerFileBrowser({
       </Menu>
 
       {/* Help Text */}
-      <Box mt={2}>
-        <Typography variant="caption" color="text.secondary">
+      <Box
+        sx={{
+          mt: 2,
+        }}
+      >
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'text.secondary',
+          }}
+        >
           {allowDirSelect && allowFileSelect
             ? 'Click folders to navigate. Current folder is automatically selected. Double-click items to explicitly select.'
             : allowDirSelect

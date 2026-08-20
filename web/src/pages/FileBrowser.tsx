@@ -1,5 +1,5 @@
 // file: web/src/pages/FileBrowser.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2c1d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
 
 import { useState } from 'react';
@@ -36,9 +36,11 @@ export function FileBrowser() {
       <Stack
         direction={{ xs: 'column', sm: 'row' }}
         spacing={2}
-        alignItems={{ xs: 'flex-start', sm: 'center' }}
-        justifyContent="space-between"
-        mb={2}
+        sx={{
+          alignItems: { xs: 'flex-start', sm: 'center' },
+          justifyContent: 'space-between',
+          mb: 2,
+        }}
       >
         <Typography variant="h4">File Browser</Typography>
         <Button

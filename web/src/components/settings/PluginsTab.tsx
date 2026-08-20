@@ -1,5 +1,5 @@
 // file: web/src/components/settings/PluginsTab.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: d5e6f7a8-b9c0-1d2e-3f4a-5b6c7d8e9f0a
 
 import { useEffect, useState, useCallback } from 'react';
@@ -128,20 +128,47 @@ function PluginRow({ plugin: p, onRefresh }: { plugin: PluginInfo; onRefresh: ()
     <>
       <TableRow hover>
         <TableCell>
-          <Stack direction="row" alignItems="center" spacing={1}>
-            <Typography variant="body2" fontWeight="medium">
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+            }}
+          >
+            <Typography
+              variant="body2"
+              sx={{
+                fontWeight: 'medium',
+              }}
+            >
               {p.name}
             </Typography>
-            <Typography variant="caption" color="text.secondary">
+            <Typography
+              variant="caption"
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               v{p.version}
             </Typography>
           </Stack>
-          <Typography variant="caption" color="text.secondary">
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             {p.id}
           </Typography>
         </TableCell>
         <TableCell>
-          <Stack direction="row" spacing={0.5} flexWrap="wrap">
+          <Stack
+            direction="row"
+            spacing={0.5}
+            sx={{
+              flexWrap: 'wrap',
+            }}
+          >
             {p.capabilities.map((cap) => (
               <Chip key={cap} label={cap} size="small" />
             ))}
@@ -151,7 +178,13 @@ function PluginRow({ plugin: p, onRefresh }: { plugin: PluginInfo; onRefresh: ()
           <HealthBadge health={p.health} />
         </TableCell>
         <TableCell>
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+            }}
+          >
             <Button
               size="small"
               variant={p.enabled ? 'outlined' : 'contained'}
@@ -239,7 +272,14 @@ export default function PluginsTab() {
 
   return (
     <Box>
-      <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2}>
+      <Stack
+        direction="row"
+        sx={{
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          mb: 2,
+        }}
+      >
         <Typography variant="h6">Plugins</Typography>
         <IconButton onClick={load} disabled={loading} title="Refresh">
           <RefreshIcon />
@@ -253,7 +293,13 @@ export default function PluginsTab() {
       )}
 
       {loading ? (
-        <Box display="flex" justifyContent="center" py={4}>
+        <Box
+          sx={{
+            display: 'flex',
+            justifyContent: 'center',
+            py: 4,
+          }}
+        >
           <CircularProgress />
         </Box>
       ) : plugins.length === 0 ? (

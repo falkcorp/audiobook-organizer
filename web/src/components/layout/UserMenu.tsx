@@ -1,5 +1,5 @@
 // file: web/src/components/layout/UserMenu.tsx
-// version: 1.0.2
+// version: 1.0.3
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
 import { useState } from 'react';
@@ -156,7 +156,12 @@ export function UserMenu() {
       >
         <Box sx={{ px: 2, py: 1 }}>
           <Typography variant="subtitle2">{username}</Typography>
-          <Typography variant="caption" color="text.secondary">
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             {auth.user.email || 'No email set'}
           </Typography>
         </Box>
@@ -189,7 +194,13 @@ export function UserMenu() {
       {/* Profile dialog */}
       <Dialog open={dialogMode === 'profile'} onClose={closeDialog} maxWidth="xs" fullWidth>
         <DialogTitle>
-          <Stack direction="row" alignItems="center" spacing={1}>
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+            }}
+          >
             <AccountCircleIcon />
             <span>Edit profile</span>
           </Stack>
@@ -227,7 +238,13 @@ export function UserMenu() {
       {/* Change password dialog */}
       <Dialog open={dialogMode === 'password'} onClose={closeDialog} maxWidth="xs" fullWidth>
         <DialogTitle>
-          <Stack direction="row" alignItems="center" spacing={1}>
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+            }}
+          >
             <LockIcon />
             <span>Change password</span>
           </Stack>

@@ -1,5 +1,5 @@
 // file: web/src/components/BatchActivityEntry.tsx
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7e3a1f9c-4b82-4d5e-a6c8-2f0d8e7b3a91
 
 import React, { useState } from 'react';
@@ -188,8 +188,11 @@ export function BatchActivityEntry({ entry, tierColor }: BatchActivityEntryProps
               {(details?.truncated || hiddenCount > 0) && (
                 <Typography
                   variant="caption"
-                  color="text.secondary"
-                  sx={{ pt: 0.5, display: 'block' }}
+                  sx={{
+                    color: 'text.secondary',
+                    pt: 0.5,
+                    display: 'block',
+                  }}
                 >
                   … and{' '}
                   {hiddenCount > 0

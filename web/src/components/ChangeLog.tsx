@@ -1,5 +1,5 @@
 // file: web/src/components/ChangeLog.tsx
-// version: 1.5.1
+// version: 1.5.2
 // guid: 00f575de-ecea-45b7-9aa5-d6dbbc3f21f6
 
 import { useCallback, useEffect, useState } from 'react';
@@ -120,9 +120,11 @@ export const ChangeLog = ({ bookId, refreshKey, onRevert, onCompareSnapshot }: C
     return (
       <Typography
         variant="body2"
-        color="text.secondary"
-        sx={{ py: 2 }}
         data-testid="changelog-empty"
+        sx={{
+          color: 'text.secondary',
+          py: 2,
+        }}
       >
         No changes recorded yet.
       </Typography>
@@ -165,14 +167,26 @@ export const ChangeLog = ({ bookId, refreshKey, onRevert, onCompareSnapshot }: C
           {/* Timestamp */}
           <Typography
             variant="caption"
-            color="text.secondary"
-            sx={{ minWidth: 140, flexShrink: 0, pt: 0.25 }}
+            sx={{
+              color: 'text.secondary',
+              minWidth: 140,
+              flexShrink: 0,
+              pt: 0.25,
+            }}
           >
             {formatTimestamp(entry.timestamp)}
           </Typography>
 
           {/* Icon + summary */}
-          <Stack direction="row" spacing={1} alignItems="center" sx={{ flex: 1, minWidth: 0 }}>
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+              flex: 1,
+              minWidth: 0,
+            }}
+          >
             <Typography variant="body2" sx={{ flexShrink: 0 }}>
               {TYPE_ICONS[entry.type] || '\u2022'}
             </Typography>
@@ -180,7 +194,13 @@ export const ChangeLog = ({ bookId, refreshKey, onRevert, onCompareSnapshot }: C
               <Typography variant="body2" sx={{ fontWeight: 500 }}>
                 {TYPE_LABELS[entry.type] || entry.type}
               </Typography>
-              <Typography variant="body2" color="text.secondary" noWrap>
+              <Typography
+                variant="body2"
+                noWrap
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 {entry.summary}
               </Typography>
             </Box>

@@ -1,5 +1,5 @@
 // file: web/src/components/MetadataHistory.tsx
-// version: 1.3.2
+// version: 1.3.3
 // guid: 8e3a7b2c-5d1f-4a9e-b6c0-2f8d4e7a1b3c
 
 import { useCallback, useEffect, useState } from 'react';
@@ -197,7 +197,13 @@ export const MetadataHistory = ({
         <DialogTitle>Metadata Change History</DialogTitle>
         <DialogContent dividers>
           {loading && (
-            <Box display="flex" justifyContent="center" py={3}>
+            <Box
+              sx={{
+                display: 'flex',
+                justifyContent: 'center',
+                py: 3,
+              }}
+            >
               <CircularProgress />
             </Box>
           )}
@@ -231,9 +237,20 @@ export const MetadataHistory = ({
                         sx={isSearch ? { bgcolor: 'action.hover' } : undefined}
                       >
                         <TableCell>
-                          <Typography variant="body2" fontWeight={500}>
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              fontWeight: 500,
+                            }}
+                          >
                             {isSearch ? (
-                              <Stack direction="row" spacing={0.5} alignItems="center">
+                              <Stack
+                                direction="row"
+                                spacing={0.5}
+                                sx={{
+                                  alignItems: 'center',
+                                }}
+                              >
                                 <SearchIcon fontSize="small" color="action" />
                                 <span>Search</span>
                               </Stack>
@@ -244,20 +261,27 @@ export const MetadataHistory = ({
                         </TableCell>
                         <TableCell>
                           {isSearch ? (
-                            <Typography variant="body2" color="text.secondary">
+                            <Typography
+                              variant="body2"
+                              sx={{
+                                color: 'text.secondary',
+                              }}
+                            >
                               {parseJsonValue(record.new_value)}
                             </Typography>
                           ) : (
                             <Stack
                               direction="row"
                               spacing={0.5}
-                              alignItems="center"
-                              flexWrap="wrap"
+                              sx={{
+                                alignItems: 'center',
+                                flexWrap: 'wrap',
+                              }}
                             >
                               <Typography
                                 variant="body2"
-                                color="text.secondary"
                                 sx={{
+                                  color: 'text.secondary',
                                   maxWidth: 120,
                                   overflow: 'hidden',
                                   textOverflow: 'ellipsis',
@@ -289,12 +313,22 @@ export const MetadataHistory = ({
                           />
                         </TableCell>
                         <TableCell>
-                          <Typography variant="body2" color="text.secondary">
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             {record.source || '—'}
                           </Typography>
                         </TableCell>
                         <TableCell>
-                          <Typography variant="body2" color="text.secondary">
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             {new Date(record.changed_at).toLocaleString()}
                           </Typography>
                         </TableCell>
@@ -328,7 +362,14 @@ export const MetadataHistory = ({
           )}
           {/* Version Snapshots Section */}
           <Box sx={{ mt: 3 }}>
-            <Stack direction="row" alignItems="center" spacing={1} mb={1}>
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{
+                alignItems: 'center',
+                mb: 1,
+              }}
+            >
               <RestoreIcon fontSize="small" />
               <Typography variant="h6">Version Snapshots</Typography>
               {cowVersions.length > 5 && (
@@ -344,7 +385,13 @@ export const MetadataHistory = ({
               )}
             </Stack>
             {cowLoading && (
-              <Box display="flex" justifyContent="center" py={2}>
+              <Box
+                sx={{
+                  display: 'flex',
+                  justifyContent: 'center',
+                  py: 2,
+                }}
+              >
                 <CircularProgress size={24} />
               </Box>
             )}

@@ -1,5 +1,5 @@
 // file: web/src/components/settings/MaintenanceSettingsSection.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-08-19
 
@@ -143,7 +143,9 @@ export function MaintenanceSettingsSection({ config, onChange }: MaintenanceSett
             onChange={(e) => onChange({ acoustid_nightly_limit: Number(e.target.value) })}
             helperText="Max AcoustID lookups per maintenance window"
             size="small"
-            inputProps={{ min: 0 }}
+            slotProps={{
+              htmlInput: { min: 0 },
+            }}
           />
         </Grid>
       </Grid>

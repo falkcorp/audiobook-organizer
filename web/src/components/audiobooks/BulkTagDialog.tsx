@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/BulkTagDialog.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: c4d5e6f7-a8b9-4c0d-1e2f-3a4b5c6d7e8f
 
 import React, { useState } from 'react';
@@ -102,9 +102,9 @@ export const BulkTagDialog: React.FC<BulkTagDialogProps> = ({
               onChange={(_e, value) => setAddTags(value.map((v) => v.trim().toLowerCase()))}
               inputValue={addInput}
               onInputChange={(_e, value) => setAddInput(value)}
-              renderTags={(value, getTagProps) =>
+              renderValue={(value, getItemProps) =>
                 value.map((tag, index) => {
-                  const { key, ...rest } = getTagProps({ index });
+                  const { key, ...rest } = getItemProps({ index });
                   return (
                     <Chip
                       key={key}
@@ -145,9 +145,9 @@ export const BulkTagDialog: React.FC<BulkTagDialogProps> = ({
               onChange={(_e, value) => setRemoveTags(value.map((v) => v.trim().toLowerCase()))}
               inputValue={removeInput}
               onInputChange={(_e, value) => setRemoveInput(value)}
-              renderTags={(value, getTagProps) =>
+              renderValue={(value, getItemProps) =>
                 value.map((tag, index) => {
-                  const { key, ...rest } = getTagProps({ index });
+                  const { key, ...rest } = getItemProps({ index });
                   return (
                     <Chip
                       key={key}

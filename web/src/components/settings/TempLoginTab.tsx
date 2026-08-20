@@ -1,5 +1,5 @@
 // file: web/src/components/settings/TempLoginTab.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6c7d8e9f-0a1b-2c3d-4e5f-6a7b8c9d0e1f
 // last-edited: 2026-08-19
 
@@ -102,7 +102,13 @@ export function TempLoginTab() {
       <Typography variant="h6" gutterBottom>
         Temp Login URL
       </Typography>
-      <Typography variant="body2" color="text.secondary" gutterBottom>
+      <Typography
+        variant="body2"
+        gutterBottom
+        sx={{
+          color: 'text.secondary',
+        }}
+      >
         Generate a single-use URL that signs the target user in for 24 hours when opened. URL is
         valid for 15 minutes and can only be used once.
       </Typography>
@@ -143,13 +149,22 @@ export function TempLoginTab() {
               URL for <strong>{result.user.username}</strong> — opens a {result.session_ttl_hours}h
               session.
             </Typography>
-            <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }}>
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{
+                alignItems: 'center',
+                mt: 1,
+              }}
+            >
               <TextField
                 value={result.login_url}
                 fullWidth
                 size="small"
-                InputProps={{ readOnly: true }}
                 onFocus={(e) => (e.target as HTMLInputElement).select()}
+                slotProps={{
+                  input: { readOnly: true },
+                }}
               />
               <Tooltip title="Copy URL">
                 <IconButton onClick={handleCopy} size="small">
@@ -157,7 +172,14 @@ export function TempLoginTab() {
                 </IconButton>
               </Tooltip>
             </Stack>
-            <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: 'text.secondary',
+                mt: 1,
+                display: 'block',
+              }}
+            >
               {expiresMessage}
             </Typography>
           </Alert>

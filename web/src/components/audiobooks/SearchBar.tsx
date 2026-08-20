@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/SearchBar.tsx
-// version: 2.6.1
+// version: 2.6.2
 // guid: 1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -26,7 +26,7 @@ import {
   Clear as ClearIcon,
   GridView as GridViewIcon,
   ViewList as ViewListIcon,
-  HelpOutline as HelpIcon,
+  HelpOutlineOutlined as HelpIcon,
   Close as CloseIcon,
   ArrowUpward as ArrowUpwardIcon,
   ArrowDownward as ArrowDownwardIcon,
@@ -234,8 +234,20 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   const options = useMemo(() => buildOptions(value, recentSearches), [value, recentSearches]);
 
   return (
-    <Box display="flex" flexDirection="column" gap={1}>
-      <Box display="flex" gap={2} alignItems="center">
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 1,
+      }}
+    >
+      <Box
+        sx={{
+          display: 'flex',
+          gap: 2,
+          alignItems: 'center',
+        }}
+      >
         <Autocomplete
           freeSolo
           fullWidth
@@ -249,35 +261,39 @@ export const SearchBar: React.FC<SearchBarProps> = ({
               {...params}
               placeholder={placeholder}
               onKeyDown={handleKeyDown}
-              InputProps={{
-                ...params.InputProps,
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon />
-                  </InputAdornment>
-                ),
-                endAdornment: (
-                  <>
-                    {value && (
-                      <InputAdornment position="end">
-                        <IconButton size="small" onClick={handleClear}>
-                          <ClearIcon />
-                        </IconButton>
-                      </InputAdornment>
-                    )}
-                    <InputAdornment position="end">
-                      <Tooltip title="Search help">
-                        <IconButton
-                          size="small"
-                          ref={helpAnchorRef}
-                          onClick={() => setHelpOpen(!helpOpen)}
-                        >
-                          <HelpIcon />
-                        </IconButton>
-                      </Tooltip>
+              slotProps={{
+                ...params.slotProps,
+
+                input: {
+                  ...params.slotProps.input,
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon />
                     </InputAdornment>
-                  </>
-                ),
+                  ),
+                  endAdornment: (
+                    <>
+                      {value && (
+                        <InputAdornment position="end">
+                          <IconButton size="small" onClick={handleClear}>
+                            <ClearIcon />
+                          </IconButton>
+                        </InputAdornment>
+                      )}
+                      <InputAdornment position="end">
+                        <Tooltip title="Search help">
+                          <IconButton
+                            size="small"
+                            ref={helpAnchorRef}
+                            onClick={() => setHelpOpen(!helpOpen)}
+                          >
+                            <HelpIcon />
+                          </IconButton>
+                        </Tooltip>
+                      </InputAdornment>
+                    </>
+                  ),
+                },
               }}
             />
           )}
@@ -335,7 +351,13 @@ export const SearchBar: React.FC<SearchBarProps> = ({
       </Box>
 
       {parsed.fieldFilters.length > 0 && (
-        <Box display="flex" gap={0.5} flexWrap="wrap">
+        <Box
+          sx={{
+            display: 'flex',
+            gap: 0.5,
+            flexWrap: 'wrap',
+          }}
+        >
           {parsed.fieldFilters.map((filter, index) => {
             const label = `${filter.negated ? 'NOT ' : ''}${filter.field}:${filter.quoted ? `"${filter.value}"` : filter.value}`;
             return (
@@ -368,8 +390,20 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             overflowY: 'auto',
           }}
         >
-          <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-            <Typography variant="subtitle1" fontWeight="bold">
+          <Box
+            sx={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              mb: 1,
+            }}
+          >
+            <Typography
+              variant="subtitle1"
+              sx={{
+                fontWeight: 'bold',
+              }}
+            >
               Search Syntax
             </Typography>
             <IconButton size="small" onClick={() => setHelpOpen(false)}>
@@ -377,7 +411,13 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             </IconButton>
           </Box>
 
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+              mb: 1.5,
+            }}
+          >
             Type free text to search titles, or use field filters:
           </Typography>
 
@@ -405,16 +445,34 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                 >
                   {h.example}
                 </Typography>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   {h.desc}
                 </Typography>
               </Box>
             ))}
           </Box>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5, mb: 0.5 }}>
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+              mt: 1.5,
+              mb: 0.5,
+            }}
+          >
             Available fields:
           </Typography>
-          <Box display="flex" gap={0.5} flexWrap="wrap">
+          <Box
+            sx={{
+              display: 'flex',
+              gap: 0.5,
+              flexWrap: 'wrap',
+            }}
+          >
             {SEARCH_FIELDS.map((f) => (
               <Chip
                 key={f}
@@ -429,10 +487,23 @@ export const SearchBar: React.FC<SearchBarProps> = ({
 
           {recentSearches.length > 0 && (
             <>
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5, mb: 0.5 }}>
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                  mt: 1.5,
+                  mb: 0.5,
+                }}
+              >
                 Recent searches:
               </Typography>
-              <Box display="flex" gap={0.5} flexWrap="wrap">
+              <Box
+                sx={{
+                  display: 'flex',
+                  gap: 0.5,
+                  flexWrap: 'wrap',
+                }}
+              >
                 {recentSearches.slice(0, 8).map((s) => (
                   <Chip
                     key={s}

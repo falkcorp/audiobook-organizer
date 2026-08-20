@@ -1,5 +1,5 @@
 // file: web/src/components/settings/OpenLibraryDumps.tsx
-// version: 2.2.4
+// version: 2.2.5
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-08-19
 
@@ -54,7 +54,12 @@ function DownloadStatusChip({ dl }: { dl?: OLDownloadProgress }) {
     return (
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
         <CircularProgress size={14} />
-        <Typography variant="caption" color="text.secondary">
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'text.secondary',
+          }}
+        >
           {formatBytes(dl.downloaded)}
           {pct !== null ? ` (${pct}%)` : ''}
         </Typography>
@@ -345,7 +350,12 @@ export function OpenLibraryDumps() {
       </Stack>
 
       <Box sx={{ mt: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
-        <Typography variant="body2" color="text.secondary">
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+          }}
+        >
           Manual upload:
         </Typography>
         <FormControl size="small" sx={{ minWidth: 120 }}>
@@ -369,7 +379,12 @@ export function OpenLibraryDumps() {
             value={uploadProgress}
             sx={{ flexGrow: 1, maxWidth: 300 }}
           />
-          <Typography variant="caption" color="text.secondary">
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.secondary',
+            }}
+          >
             {uploadProgress}%
           </Typography>
         </Box>

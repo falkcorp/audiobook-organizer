@@ -1,5 +1,5 @@
 // file: web/src/pages/Diagnostics.tsx
-// version: 1.5.1
+// version: 1.5.2
 // last-edited: 2026-08-19
 // guid: f2323fc4-b3e7-4298-9ec5-759447cbd643
 
@@ -322,7 +322,13 @@ export function Diagnostics() {
       <Typography variant="h4" gutterBottom>
         Diagnostics
       </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+      <Typography
+        variant="body2"
+        sx={{
+          color: 'text.secondary',
+          mb: 3,
+        }}
+      >
         Export library data for analysis or submit to AI for automated suggestions.
       </Typography>
 
@@ -371,7 +377,13 @@ export function Diagnostics() {
             >
               <CardActionArea onClick={() => setSelectedCategory(cat.id)}>
                 <CardContent>
-                  <Stack direction="row" spacing={2} alignItems="center">
+                  <Stack
+                    direction="row"
+                    spacing={2}
+                    sx={{
+                      alignItems: 'center',
+                    }}
+                  >
                     <Box
                       sx={[
                         selectedCategory === cat.id
@@ -386,10 +398,20 @@ export function Diagnostics() {
                       {cat.icon}
                     </Box>
                     <Box>
-                      <Typography variant="subtitle1" fontWeight="bold">
+                      <Typography
+                        variant="subtitle1"
+                        sx={{
+                          fontWeight: 'bold',
+                        }}
+                      >
                         {cat.label}
                       </Typography>
-                      <Typography variant="body2" color="text.secondary">
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: 'text.secondary',
+                        }}
+                      >
                         {cat.description}
                       </Typography>
                     </Box>
@@ -434,8 +456,20 @@ export function Diagnostics() {
       {/* Progress */}
       {isRunning && (
         <Box sx={{ mb: 3 }}>
-          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-            <Typography variant="body2" color="text.secondary">
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+              mb: 1,
+            }}
+          >
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               {operationType === 'export' ? 'Generating export...' : 'AI analysis in progress...'}
             </Typography>
             <Chip size="small" label={operationStatus} color="info" variant="outlined" />
@@ -449,9 +483,22 @@ export function Diagnostics() {
       {/* AI Results Panel */}
       {aiResults && (
         <Box sx={{ mt: 2 }}>
-          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
+          <Stack
+            direction="row"
+            sx={{
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              mb: 2,
+            }}
+          >
             <Typography variant="h6">AI Suggestions ({aiResults.suggestions.length})</Typography>
-            <Stack direction="row" spacing={2} alignItems="center">
+            <Stack
+              direction="row"
+              spacing={2}
+              sx={{
+                alignItems: 'center',
+              }}
+            >
               <FormControlLabel
                 control={
                   <Switch
@@ -491,14 +538,31 @@ export function Diagnostics() {
           )}
 
           {groupedSuggestions.length === 0 && (
-            <Typography color="text.secondary">No suggestions found.</Typography>
+            <Typography
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
+              No suggestions found.
+            </Typography>
           )}
 
           {groupedSuggestions.map(([action, suggestions]) => (
             <Accordion key={action} defaultExpanded>
               <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <Typography variant="subtitle1" fontWeight="bold">
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  sx={{
+                    alignItems: 'center',
+                  }}
+                >
+                  <Typography
+                    variant="subtitle1"
+                    sx={{
+                      fontWeight: 'bold',
+                    }}
+                  >
                     {actionLabels[action] || action}
                   </Typography>
                   <Chip size="small" label={suggestions.length} />
@@ -533,12 +597,23 @@ export function Diagnostics() {
                         />
                         <Box sx={{ flex: 1, minWidth: 0 }}>
                           <Typography variant="body2">{s.reason}</Typography>
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             Books: {s.book_ids.join(', ')}
                             {s.primary_id && ` | Primary: ${s.primary_id}`}
                           </Typography>
                           {s.fix && (
-                            <Typography variant="caption" color="text.secondary" component="div">
+                            <Typography
+                              variant="caption"
+                              component="div"
+                              sx={{
+                                color: 'text.secondary',
+                              }}
+                            >
                               Fix: {JSON.stringify(s.fix)}
                             </Typography>
                           )}
@@ -584,7 +659,12 @@ export function Diagnostics() {
             if (!dbHealth && !dbHealthLoading) fetchDBHealth();
           }}
         >
-          <Typography variant="h6" fontWeight="bold">
+          <Typography
+            variant="h6"
+            sx={{
+              fontWeight: 'bold',
+            }}
+          >
             Database Health
           </Typography>
         </AccordionSummary>
@@ -609,7 +689,13 @@ export function Diagnostics() {
                 {/* SQLite main store tables */}
                 {dbHealth.sqlite && (
                   <Paper variant="outlined" sx={{ p: 2 }}>
-                    <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
+                    <Typography
+                      variant="subtitle2"
+                      gutterBottom
+                      sx={{
+                        fontWeight: 'bold',
+                      }}
+                    >
                       SQLite — Main Store ({(dbHealth.sqlite.size_bytes / 1024 / 1024).toFixed(1)}{' '}
                       MB)
                     </Typography>
@@ -637,18 +723,34 @@ export function Diagnostics() {
                 {/* PebbleDB main store */}
                 {dbHealth.pebble && (
                   <Paper variant="outlined" sx={{ p: 2 }}>
-                    <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
+                    <Typography
+                      variant="subtitle2"
+                      gutterBottom
+                      sx={{
+                        fontWeight: 'bold',
+                      }}
+                    >
                       PebbleDB — Main Store
                     </Typography>
                     <Stack direction="row" spacing={4}>
                       <Box>
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: 'text.secondary',
+                          }}
+                        >
                           Keys
                         </Typography>
                         <Typography>{dbHealth.pebble.key_count.toLocaleString()}</Typography>
                       </Box>
                       <Box>
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: 'text.secondary',
+                          }}
+                        >
                           Size
                         </Typography>
                         <Typography>
@@ -668,12 +770,23 @@ export function Diagnostics() {
                     }}
                   >
                     <Paper variant="outlined" sx={{ p: 2 }}>
-                      <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
+                      <Typography
+                        variant="subtitle2"
+                        gutterBottom
+                        sx={{
+                          fontWeight: 'bold',
+                        }}
+                      >
                         Embeddings DB
                       </Typography>
                       <Stack spacing={0.5}>
                         <Box>
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             Vectors
                           </Typography>
                           <Typography>
@@ -681,7 +794,12 @@ export function Diagnostics() {
                           </Typography>
                         </Box>
                         <Box>
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             Size
                           </Typography>
                           <Typography>
@@ -698,18 +816,34 @@ export function Diagnostics() {
                     }}
                   >
                     <Paper variant="outlined" sx={{ p: 2 }}>
-                      <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
+                      <Typography
+                        variant="subtitle2"
+                        gutterBottom
+                        sx={{
+                          fontWeight: 'bold',
+                        }}
+                      >
                         AI Scans DB
                       </Typography>
                       <Stack spacing={0.5}>
                         <Box>
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             Jobs
                           </Typography>
                           <Typography>{dbHealth.ai_scans.job_count.toLocaleString()}</Typography>
                         </Box>
                         <Box>
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             Pending
                           </Typography>
                           <Typography>
@@ -717,7 +851,12 @@ export function Diagnostics() {
                           </Typography>
                         </Box>
                         <Box>
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             Size
                           </Typography>
                           <Typography>
@@ -734,12 +873,23 @@ export function Diagnostics() {
                     }}
                   >
                     <Paper variant="outlined" sx={{ p: 2 }}>
-                      <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
+                      <Typography
+                        variant="subtitle2"
+                        gutterBottom
+                        sx={{
+                          fontWeight: 'bold',
+                        }}
+                      >
                         Metadata Cache
                       </Typography>
                       <Stack spacing={0.5}>
                         <Box>
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             Total entries
                           </Typography>
                           <Typography>
@@ -747,13 +897,23 @@ export function Diagnostics() {
                           </Typography>
                         </Box>
                         <Box>
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             TTL
                           </Typography>
                           <Typography>{dbHealth.metadata_cache.ttl_days} days</Typography>
                         </Box>
                         <Box>
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             Expired
                           </Typography>
                           <Typography>

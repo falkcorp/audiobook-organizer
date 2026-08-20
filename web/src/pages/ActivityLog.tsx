@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.21.1
+// version: 2.21.2
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-08-19
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -774,7 +774,13 @@ export default function ActivityLog() {
 
   // Shared filter controls (used in both mobile collapsed and desktop layouts)
   const tierChips = (
-    <Stack direction="row" spacing={1} flexWrap="wrap">
+    <Stack
+      direction="row"
+      spacing={1}
+      sx={{
+        flexWrap: 'wrap',
+      }}
+    >
       {['audit', 'change', 'debug', 'digest'].map((tier) => (
         <Chip
           key={tier}
@@ -865,7 +871,13 @@ export default function ActivityLog() {
           }}
         >
           {sources.length === 0 ? (
-            <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+                p: 1,
+              }}
+            >
               No sources found.
             </Typography>
           ) : (
@@ -875,14 +887,7 @@ export default function ActivityLog() {
                 <Stack
                   key={s.source}
                   direction="row"
-                  alignItems="center"
                   spacing={1}
-                  sx={{
-                    px: 1,
-                    py: 0.5,
-                    cursor: 'pointer',
-                    '&:hover': { bgcolor: 'action.hover' },
-                  }}
                   onClick={() => {
                     setExcludedSources((prev) => {
                       const next = new Set(prev);
@@ -893,6 +898,13 @@ export default function ActivityLog() {
                       }
                       return next;
                     });
+                  }}
+                  sx={{
+                    alignItems: 'center',
+                    px: 1,
+                    py: 0.5,
+                    cursor: 'pointer',
+                    '&:hover': { bgcolor: 'action.hover' },
                   }}
                 >
                   <input
@@ -925,7 +937,12 @@ export default function ActivityLog() {
                   >
                     {s.source}
                   </Typography>
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
                     {s.count}
                   </Typography>
                 </Stack>
@@ -964,7 +981,14 @@ export default function ActivityLog() {
   return (
     <Box sx={{ height: '100%', overflow: 'auto', p: 2 }}>
       {/* Header */}
-      <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 2 }}>
+      <Stack
+        direction="row"
+        spacing={2}
+        sx={{
+          alignItems: 'center',
+          mb: 2,
+        }}
+      >
         <TimelineIcon />
         <Typography variant="h4" sx={{ flexGrow: 1 }}>
           Activity
@@ -1013,8 +1037,21 @@ export default function ActivityLog() {
       {/* Pinned Operations Section */}
       {showOpsSection && (
         <Paper sx={{ p: 2, mb: 2 }}>
-          <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
-            <Stack direction="row" alignItems="center" spacing={1}>
+          <Stack
+            direction="row"
+            sx={{
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              mb: 1,
+            }}
+          >
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{
+                alignItems: 'center',
+              }}
+            >
               <Typography variant="h6">Active Operations ({activeOps.length})</Typography>
               <Tooltip title={pinned ? 'Unpin section' : 'Pin section'}>
                 <IconButton
@@ -1052,7 +1089,12 @@ export default function ActivityLog() {
           </Stack>
 
           {activeOps.length === 0 ? (
-            <Typography variant="body2" color="text.secondary">
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               No active operations.
             </Typography>
           ) : (
@@ -1167,11 +1209,19 @@ export default function ActivityLog() {
                     >
                       <Stack
                         direction="row"
-                        justifyContent="space-between"
-                        alignItems="center"
-                        sx={{ mb: 0.5 }}
+                        sx={{
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          mb: 0.5,
+                        }}
                       >
-                        <Stack direction="row" spacing={1} alignItems="center">
+                        <Stack
+                          direction="row"
+                          spacing={1}
+                          sx={{
+                            alignItems: 'center',
+                          }}
+                        >
                           {depth > 0 && (
                             <Typography
                               variant="caption"
@@ -1202,7 +1252,12 @@ export default function ActivityLog() {
                               {effectiveCollapsed ? '▸' : '▾'}
                             </Typography>
                           )}
-                          <Typography variant="subtitle2" fontWeight="bold">
+                          <Typography
+                            variant="subtitle2"
+                            sx={{
+                              fontWeight: 'bold',
+                            }}
+                          >
                             {op.displayName || op.def_id || op.type.replace(/_/g, ' ')}
                           </Typography>
                           <Chip
@@ -1221,7 +1276,13 @@ export default function ActivityLog() {
                             }
                           />
                         </Stack>
-                        <Stack direction="row" spacing={0.5} alignItems="center">
+                        <Stack
+                          direction="row"
+                          spacing={0.5}
+                          sx={{
+                            alignItems: 'center',
+                          }}
+                        >
                           <Tooltip title="Refresh this operation">
                             <IconButton
                               size="small"
@@ -1266,8 +1327,10 @@ export default function ActivityLog() {
                       {op.status === 'queued' ? (
                         <Typography
                           variant="caption"
-                          color="text.secondary"
-                          sx={{ fontStyle: 'italic' }}
+                          sx={{
+                            color: 'text.secondary',
+                            fontStyle: 'italic',
+                          }}
                         >
                           Waiting to start…
                         </Typography>
@@ -1296,7 +1359,12 @@ export default function ActivityLog() {
                               }
                               sx={{ height: 6, borderRadius: 1, mb: 0.5 }}
                             />
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                color: 'text.secondary',
+                              }}
+                            >
                               {op.progress.toLocaleString()} / {op.total.toLocaleString()} ({pct}%)
                             </Typography>
                           </Box>
@@ -1321,7 +1389,12 @@ export default function ActivityLog() {
                             value={pctBar}
                             sx={{ height: 6, borderRadius: 1, mb: 0.5 }}
                           />
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
                             {op.progress.toLocaleString()} / {op.total.toLocaleString()} ({pct}%)
                           </Typography>
                         </Box>
@@ -1332,10 +1405,12 @@ export default function ActivityLog() {
                       )}
                       <Typography
                         variant="caption"
-                        color="text.secondary"
-                        display="block"
                         noWrap
                         title={op.message}
+                        sx={{
+                          color: 'text.secondary',
+                          display: 'block',
+                        }}
                       >
                         {op.message}
                       </Typography>
@@ -1343,10 +1418,13 @@ export default function ActivityLog() {
                         <Tooltip title={op.current_item} placement="bottom-start">
                           <Typography
                             variant="caption"
-                            color="text.disabled"
-                            display="block"
                             noWrap
-                            sx={{ fontStyle: 'italic', fontSize: '0.75rem' }}
+                            sx={{
+                              color: 'text.disabled',
+                              display: 'block',
+                              fontStyle: 'italic',
+                              fontSize: '0.75rem',
+                            }}
                           >
                             {op.current_item}
                           </Typography>
@@ -1370,11 +1448,21 @@ export default function ActivityLog() {
                           onClick={(e) => e.stopPropagation()}
                         >
                           {!opLogsLoaded ? (
-                            <Typography variant="caption" color="grey.500">
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                color: 'grey.500',
+                              }}
+                            >
                               Loading logs...
                             </Typography>
                           ) : opLogs.length === 0 ? (
-                            <Typography variant="caption" color="grey.500">
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                color: 'grey.500',
+                              }}
+                            >
                               No logs recorded for this operation.
                             </Typography>
                           ) : (
@@ -1424,7 +1512,13 @@ export default function ActivityLog() {
             />
 
             {/* Toggle row */}
-            <Stack direction="row" alignItems="center" justifyContent="space-between">
+            <Stack
+              direction="row"
+              sx={{
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
               <Button
                 size="small"
                 variant="outlined"
@@ -1443,8 +1537,19 @@ export default function ActivityLog() {
               >
                 Filters
               </Button>
-              <Stack direction="row" alignItems="center" spacing={1}>
-                <Typography variant="caption" color="text.secondary">
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{
+                  alignItems: 'center',
+                }}
+              >
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
                   {total} entries
                 </Typography>
                 {hasActiveFilters && (
@@ -1505,9 +1610,14 @@ export default function ActivityLog() {
                     if (!sinceFilter) (e.target as HTMLInputElement).type = 'datetime-local';
                   }}
                   onChange={(e) => setSinceFilter(e.target.value)}
-                  InputLabelProps={{ shrink: true }}
-                  InputProps={
-                    sinceFilter
+                  helperText={
+                    sinceFilter === defaultSince
+                      ? `Default: last ${DEFAULT_SINCE_HOURS}h — clear for all history`
+                      : undefined
+                  }
+                  fullWidth
+                  slotProps={{
+                    input: sinceFilter
                       ? {
                           endAdornment: (
                             <IconButton size="small" onClick={() => setSinceFilter('')}>
@@ -1515,14 +1625,10 @@ export default function ActivityLog() {
                             </IconButton>
                           ),
                         }
-                      : undefined
-                  }
-                  helperText={
-                    sinceFilter === defaultSince
-                      ? `Default: last ${DEFAULT_SINCE_HOURS}h — clear for all history`
-                      : undefined
-                  }
-                  fullWidth
+                      : undefined,
+
+                    inputLabel: { shrink: true },
+                  }}
                 />
 
                 <TextField
@@ -1535,9 +1641,9 @@ export default function ActivityLog() {
                     if (!untilFilter) (e.target as HTMLInputElement).type = 'datetime-local';
                   }}
                   onChange={(e) => setUntilFilter(e.target.value)}
-                  InputLabelProps={{ shrink: true }}
-                  InputProps={
-                    untilFilter
+                  fullWidth
+                  slotProps={{
+                    input: untilFilter
                       ? {
                           endAdornment: (
                             <IconButton size="small" onClick={() => setUntilFilter('')}>
@@ -1545,9 +1651,10 @@ export default function ActivityLog() {
                             </IconButton>
                           ),
                         }
-                      : undefined
-                  }
-                  fullWidth
+                      : undefined,
+
+                    inputLabel: { shrink: true },
+                  }}
                 />
 
                 {/* Sources */}
@@ -1558,7 +1665,13 @@ export default function ActivityLog() {
                   <Typography variant="caption" sx={{ display: 'block', mb: 0.5, fontWeight: 500 }}>
                     Outcome
                   </Typography>
-                  <Stack direction="row" spacing={0.5} flexWrap="wrap">
+                  <Stack
+                    direction="row"
+                    spacing={0.5}
+                    sx={{
+                      flexWrap: 'wrap',
+                    }}
+                  >
                     {['outcome:ok', 'outcome:warn', 'outcome:error', 'outcome:skip'].map((tag) => {
                       const { color, sx, label } = tagChipProps(tag);
                       return (
@@ -1586,7 +1699,13 @@ export default function ActivityLog() {
                   <Typography variant="caption" sx={{ display: 'block', mb: 0.5, fontWeight: 500 }}>
                     Action
                   </Typography>
-                  <Stack direction="row" spacing={0.5} flexWrap="wrap">
+                  <Stack
+                    direction="row"
+                    spacing={0.5}
+                    sx={{
+                      flexWrap: 'wrap',
+                    }}
+                  >
                     {[
                       'action:metadata-apply',
                       'action:tag-write',
@@ -1660,7 +1779,9 @@ export default function ActivityLog() {
                       }}
                       onClick={(e) => e.stopPropagation()}
                       sx={{ width: 120 }}
-                      InputProps={{ inputProps: { min: 0 } }}
+                      slotProps={{
+                        input: { inputProps: { min: 0 } },
+                      }}
                     />
                   </MenuItem>
                 </Menu>
@@ -1680,7 +1801,14 @@ export default function ActivityLog() {
           /* ---- Desktop layout (unchanged) ---- */
           <Stack spacing={1.5}>
             {/* Row 1: Search + tier chips */}
-            <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
+            <Stack
+              direction="row"
+              spacing={2}
+              sx={{
+                alignItems: 'center',
+                flexWrap: 'wrap',
+              }}
+            >
               <TextField
                 size="small"
                 placeholder="Search summaries..."
@@ -1692,7 +1820,14 @@ export default function ActivityLog() {
             </Stack>
 
             {/* Row 2: Type, Level, dates, sources */}
-            <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
+            <Stack
+              direction="row"
+              spacing={2}
+              sx={{
+                alignItems: 'center',
+                flexWrap: 'wrap',
+              }}
+            >
               <TextField
                 select
                 size="small"
@@ -1734,9 +1869,14 @@ export default function ActivityLog() {
                   if (!sinceFilter) (e.target as HTMLInputElement).type = 'datetime-local';
                 }}
                 onChange={(e) => setSinceFilter(e.target.value)}
-                InputLabelProps={{ shrink: true }}
-                InputProps={
-                  sinceFilter
+                helperText={
+                  sinceFilter === defaultSince
+                    ? `Default: last ${DEFAULT_SINCE_HOURS}h — clear for all history`
+                    : undefined
+                }
+                sx={{ minWidth: 180 }}
+                slotProps={{
+                  input: sinceFilter
                     ? {
                         endAdornment: (
                           <IconButton size="small" onClick={() => setSinceFilter('')}>
@@ -1744,14 +1884,10 @@ export default function ActivityLog() {
                           </IconButton>
                         ),
                       }
-                    : undefined
-                }
-                helperText={
-                  sinceFilter === defaultSince
-                    ? `Default: last ${DEFAULT_SINCE_HOURS}h — clear for all history`
-                    : undefined
-                }
-                sx={{ minWidth: 180 }}
+                    : undefined,
+
+                  inputLabel: { shrink: true },
+                }}
               />
 
               <TextField
@@ -1764,9 +1900,9 @@ export default function ActivityLog() {
                   if (!untilFilter) (e.target as HTMLInputElement).type = 'datetime-local';
                 }}
                 onChange={(e) => setUntilFilter(e.target.value)}
-                InputLabelProps={{ shrink: true }}
-                InputProps={
-                  untilFilter
+                sx={{ minWidth: 180 }}
+                slotProps={{
+                  input: untilFilter
                     ? {
                         endAdornment: (
                           <IconButton size="small" onClick={() => setUntilFilter('')}>
@@ -1774,9 +1910,10 @@ export default function ActivityLog() {
                           </IconButton>
                         ),
                       }
-                    : undefined
-                }
-                sx={{ minWidth: 180 }}
+                    : undefined,
+
+                  inputLabel: { shrink: true },
+                }}
               />
 
               {/* Sources dropdown */}
@@ -1821,14 +1958,27 @@ export default function ActivityLog() {
                     }}
                     onClick={(e) => e.stopPropagation()}
                     sx={{ width: 120 }}
-                    InputProps={{ inputProps: { min: 0 } }}
+                    slotProps={{
+                      input: { inputProps: { min: 0 } },
+                    }}
                   />
                 </MenuItem>
               </Menu>
             </Stack>
             {/* Row 3: Active filter summary */}
-            <Stack direction="row" spacing={1} alignItems="center">
-              <Typography variant="caption" color="text.secondary">
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{
+                alignItems: 'center',
+              }}
+            >
+              <Typography
+                variant="caption"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 {total} entries
               </Typography>
               {hasActiveFilters && (
@@ -1908,7 +2058,12 @@ export default function ActivityLog() {
           </Box>
         ) : entries.length === 0 ? (
           <Box data-testid="activity-empty" sx={{ py: 4, textAlign: 'center' }}>
-            <Typography variant="body2" color="text.secondary">
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
               {operationId
                 ? 'No activity entries for this operation (pre-migration).'
                 : sinceFilter
@@ -2034,7 +2189,13 @@ export default function ActivityLog() {
                               />
                             </TableCell>
                             <TableCell>
-                              <Stack direction="row" spacing={0.5} flexWrap="wrap">
+                              <Stack
+                                direction="row"
+                                spacing={0.5}
+                                sx={{
+                                  flexWrap: 'wrap',
+                                }}
+                              >
                                 {Object.entries(counts)
                                   .slice(0, 6)
                                   .map(([type, count]) => (
@@ -2062,8 +2223,12 @@ export default function ActivityLog() {
                                   {isLegacyDigest && (
                                     <Typography
                                       variant="caption"
-                                      color="text.secondary"
-                                      sx={{ display: 'block', mb: 1, fontStyle: 'italic' }}
+                                      sx={{
+                                        color: 'text.secondary',
+                                        display: 'block',
+                                        mb: 1,
+                                        fontStyle: 'italic',
+                                      }}
                                     >
                                       Pre-2026-05-20 digest — per-item timestamps and tags
                                       unavailable (source rows already compacted away)
@@ -2074,9 +2239,11 @@ export default function ActivityLog() {
                                       key={idx}
                                       direction="row"
                                       spacing={1}
-                                      alignItems="center"
-                                      flexWrap="wrap"
                                       sx={[
+                                        {
+                                          alignItems: 'center',
+                                          flexWrap: 'wrap',
+                                        },
                                         {
                                           py: 0.5,
                                           borderBottom: '1px solid',
@@ -2094,8 +2261,11 @@ export default function ActivityLog() {
                                       {item.timestamp && (
                                         <Typography
                                           variant="caption"
-                                          color="text.secondary"
-                                          sx={{ fontFamily: 'monospace', minWidth: 70 }}
+                                          sx={{
+                                            color: 'text.secondary',
+                                            fontFamily: 'monospace',
+                                            minWidth: 70,
+                                          }}
                                         >
                                           {formatItemTime(item.timestamp)}
                                         </Typography>
@@ -2143,8 +2313,10 @@ export default function ActivityLog() {
                                       )}
                                       <Typography
                                         variant="body2"
-                                        color="text.secondary"
-                                        sx={{ flex: 1 }}
+                                        sx={{
+                                          color: 'text.secondary',
+                                          flex: 1,
+                                        }}
                                       >
                                         {item.summary}
                                       </Typography>
@@ -2168,12 +2340,23 @@ export default function ActivityLog() {
                                         />
                                       )}
                                       {item.details && (
-                                        <Typography variant="caption" color="error.main">
+                                        <Typography
+                                          variant="caption"
+                                          sx={{
+                                            color: 'error.main',
+                                          }}
+                                        >
                                           {item.details}
                                         </Typography>
                                       )}
                                       {displayTags(item.tags).length > 0 && (
-                                        <Stack direction="row" spacing={0.5} flexWrap="wrap">
+                                        <Stack
+                                          direction="row"
+                                          spacing={0.5}
+                                          sx={{
+                                            flexWrap: 'wrap',
+                                          }}
+                                        >
                                           {displayTags(item.tags).map((tag) => {
                                             const { color, sx: tagSx, label } = tagChipProps(tag);
                                             return (
@@ -2207,8 +2390,11 @@ export default function ActivityLog() {
                                   {details?.truncated && (
                                     <Typography
                                       variant="caption"
-                                      color="text.secondary"
-                                      sx={{ pt: 1, display: 'block' }}
+                                      sx={{
+                                        color: 'text.secondary',
+                                        pt: 1,
+                                        display: 'block',
+                                      }}
                                     >
                                       … and {details.truncated_count?.toLocaleString()} more entries
                                       not shown
@@ -2284,7 +2470,12 @@ export default function ActivityLog() {
                         </TableCell>
                         {!isMobile && (
                           <TableCell>
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                color: 'text.secondary',
+                              }}
+                            >
                               {entry.source}
                             </Typography>
                           </TableCell>
@@ -2292,7 +2483,13 @@ export default function ActivityLog() {
                         {!isMobile && (
                           <TableCell>
                             {displayTags(entry.tags).length > 0 ? (
-                              <Stack direction="row" spacing={0.5} flexWrap="wrap">
+                              <Stack
+                                direction="row"
+                                spacing={0.5}
+                                sx={{
+                                  flexWrap: 'wrap',
+                                }}
+                              >
                                 {displayTags(entry.tags).map((tag) => {
                                   const { color, sx, label } = tagChipProps(tag);
                                   return (
@@ -2342,10 +2539,12 @@ export default function ActivityLog() {
 
         <Stack
           direction="row"
-          justifyContent="center"
-          alignItems="center"
           spacing={2}
-          sx={{ py: 2 }}
+          sx={{
+            justifyContent: 'center',
+            alignItems: 'center',
+            py: 2,
+          }}
         >
           {totalPages > 1 && (
             <Pagination

@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/RelocateFileDialog.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
 import { useState } from 'react';
@@ -72,7 +72,13 @@ export function RelocateFileDialog({
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
       <DialogTitle>Relocate Missing File</DialogTitle>
       <DialogContent>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+            mb: 1,
+          }}
+        >
           Current (broken) path:
         </Typography>
         <Typography

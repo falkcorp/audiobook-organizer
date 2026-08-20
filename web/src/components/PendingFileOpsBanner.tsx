@@ -1,5 +1,5 @@
 // file: web/src/components/PendingFileOpsBanner.tsx
-// version: 1.0.3
+// version: 1.0.4
 // guid: 6c1e8b3d-2a47-4f5d-9e0c-b8a4d2f6e7a3
 // last-edited: 2026-08-19
 //
@@ -86,13 +86,21 @@ export function PendingFileOpsBanner({ operations }: Props): JSX.Element | null 
               <Typography variant="body2" sx={{ flex: 1 }} noWrap>
                 {op.book_title || op.book_id}
               </Typography>
-              <Typography variant="caption" color="text.secondary">
+              <Typography
+                variant="caption"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
                 {formatOpType(op.op_type)}
               </Typography>
               <Typography
                 variant="caption"
-                color="text.secondary"
-                sx={{ minWidth: 32, textAlign: 'right' }}
+                sx={{
+                  color: 'text.secondary',
+                  minWidth: 32,
+                  textAlign: 'right',
+                }}
               >
                 {timeAgo(op.started_at)}
               </Typography>
