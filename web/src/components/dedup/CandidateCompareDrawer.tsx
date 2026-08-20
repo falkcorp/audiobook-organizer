@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/CandidateCompareDrawer.tsx
-// version: 1.5.0
+// version: 1.5.1
 // guid: a6f7b8c9-d0e1-2345-fabc-af6789012345
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 // CandidateCompareDrawer is a right-side Drawer that shows a full side-by-side
 // comparison of the two books in a dedup candidate, plus the score breakdown.
 // It fetches the breakdown data on open via GET /api/v1/dedup/candidates/:id/breakdown.
@@ -113,24 +113,36 @@ function MetadataCompareRow({ id, label, left, right }: MetadataCompareRowProps)
     <Box
       data-testid={`metadata-row-${id}`}
       data-different={different ? 'true' : 'false'}
-      sx={[{
-        display: 'grid',
-        gridTemplateColumns: { xs: '1fr', sm: '140px minmax(0, 1fr) minmax(0, 1fr)' },
-        gap: { xs: 0.75, sm: 1 },
-        alignItems: 'stretch',
-        p: 1,
-        borderRadius: 1
-      }, different ? {
-        bgcolor: 'warning.light'
-      } : {
-        bgcolor: 'transparent'
-      }, different ? {
-        color: 'warning.contrastText'
-      } : {
-        color: 'inherit'
-      }]}
+      sx={[
+        {
+          display: 'grid',
+          gridTemplateColumns: { xs: '1fr', sm: '140px minmax(0, 1fr) minmax(0, 1fr)' },
+          gap: { xs: 0.75, sm: 1 },
+          alignItems: 'stretch',
+          p: 1,
+          borderRadius: 1,
+        },
+        different
+          ? {
+              bgcolor: 'warning.light',
+            }
+          : {
+              bgcolor: 'transparent',
+            },
+        different
+          ? {
+              color: 'warning.contrastText',
+            }
+          : {
+              color: 'inherit',
+            },
+      ]}
     >
-      <Typography variant="caption" fontWeight={700} color={different ? 'inherit' : 'text.secondary'}>
+      <Typography
+        variant="caption"
+        fontWeight={700}
+        color={different ? 'inherit' : 'text.secondary'}
+      >
         {label}
       </Typography>
       <Typography variant="body2" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
@@ -311,9 +323,15 @@ export function CandidateCompareDrawer({
     setFpLoading(true);
     api
       .compareAcoustID(bA.id, bB.id)
-      .then((resp) => { if (!ctrl.signal.aborted) setFpData(resp); })
-      .catch(() => { /* non-critical: fingerprint view stays empty */ })
-      .finally(() => { if (!ctrl.signal.aborted) setFpLoading(false); });
+      .then((resp) => {
+        if (!ctrl.signal.aborted) setFpData(resp);
+      })
+      .catch(() => {
+        /* non-critical: fingerprint view stays empty */
+      })
+      .finally(() => {
+        if (!ctrl.signal.aborted) setFpLoading(false);
+      });
     return () => ctrl.abort();
   }, [activeTab, data, fpData, fpLoading]);
 
@@ -374,11 +392,7 @@ export function CandidateCompareDrawer({
           Candidate #{candidateId}
         </Typography>
         {candidate && (
-          <ScoreBadgeRow
-            band={candidate.band}
-            score={candidate.score}
-            layer={candidate.layer}
-          />
+          <ScoreBadgeRow band={candidate.band} score={candidate.score} layer={candidate.layer} />
         )}
         <Tooltip title="Close">
           <IconButton size="small" onClick={onClose} aria-label="close drawer">
@@ -413,11 +427,7 @@ export function CandidateCompareDrawer({
                         color="primary"
                         size="small"
                         startIcon={
-                          actionLoading === 'merge' ? (
-                            <CircularProgress size={14} />
-                          ) : (
-                            <MergeIcon />
-                          )
+                          actionLoading === 'merge' ? <CircularProgress size={14} /> : <MergeIcon />
                         }
                         disabled={actionLoading != null}
                         onClick={() => handleMerge()}
@@ -509,9 +519,7 @@ export function CandidateCompareDrawer({
               <Tab label="Fingerprint" data-testid="drawer-tab-fingerprint" />
             </Tabs>
 
-            {activeTab === 0 && bookA && bookB && (
-              <FileInfoCompare bookA={bookA} bookB={bookB} />
-            )}
+            {activeTab === 0 && bookA && bookB && <FileInfoCompare bookA={bookA} bookB={bookB} />}
             {activeTab === 0 && (!bookA || !bookB) && (
               <Typography color="text.secondary" variant="body2">
                 Book details unavailable.
@@ -541,7 +549,15 @@ export function CandidateCompareDrawer({
             )}
 
             {activeTab === 3 && (
-              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, pt: 1 }}>
+              <Box
+                sx={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: 2,
+                  pt: 1,
+                }}
+              >
                 {fpLoading && <CircularProgress size={32} />}
                 {!fpLoading && fpData && fpData.segment_scores.length > 0 && (
                   <FingerprintPair

@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/FilterSidebar.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, within } from '@testing-library/react';
@@ -50,9 +50,7 @@ describe('FilterSidebar', () => {
   describe('filter selection', () => {
     it('calls onFiltersChange when author is selected', () => {
       const onFiltersChange = vi.fn();
-      renderWithProviders(
-        <FilterSidebar {...defaultProps({ onFiltersChange })} />
-      );
+      renderWithProviders(<FilterSidebar {...defaultProps({ onFiltersChange })} />);
 
       // Open the Author select
       const authorSelect = screen.getByLabelText('Author');
@@ -69,24 +67,18 @@ describe('FilterSidebar', () => {
 
     it('calls onFiltersChange when genre is selected', () => {
       const onFiltersChange = vi.fn();
-      renderWithProviders(
-        <FilterSidebar {...defaultProps({ onFiltersChange })} />
-      );
+      renderWithProviders(<FilterSidebar {...defaultProps({ onFiltersChange })} />);
 
       fireEvent.mouseDown(screen.getByLabelText('Genre'));
       const listbox = within(screen.getByRole('listbox'));
       fireEvent.click(listbox.getByText('Fantasy'));
 
-      expect(onFiltersChange).toHaveBeenCalledWith(
-        expect.objectContaining({ genre: 'Fantasy' })
-      );
+      expect(onFiltersChange).toHaveBeenCalledWith(expect.objectContaining({ genre: 'Fantasy' }));
     });
 
     it('calls onFiltersChange when library state is selected', () => {
       const onFiltersChange = vi.fn();
-      renderWithProviders(
-        <FilterSidebar {...defaultProps({ onFiltersChange })} />
-      );
+      renderWithProviders(<FilterSidebar {...defaultProps({ onFiltersChange })} />);
 
       fireEvent.mouseDown(screen.getByLabelText('Library State'));
       const listbox = within(screen.getByRole('listbox'));
@@ -133,9 +125,7 @@ describe('FilterSidebar', () => {
     });
 
     it('does not show count chip when no filters are active', () => {
-      renderWithProviders(
-        <FilterSidebar {...defaultProps({ filters: {} })} />
-      );
+      renderWithProviders(<FilterSidebar {...defaultProps({ filters: {} })} />);
       // No count chip should be present (there's no "0" chip)
       expect(screen.queryByText('0')).not.toBeInTheDocument();
     });
@@ -158,9 +148,7 @@ describe('FilterSidebar', () => {
     });
 
     it('does not render tags section when onTagsChange is absent', () => {
-      renderWithProviders(
-        <FilterSidebar {...defaultProps({ onTagsChange: undefined })} />
-      );
+      renderWithProviders(<FilterSidebar {...defaultProps({ onTagsChange: undefined })} />);
       expect(screen.queryByText('Tags')).not.toBeInTheDocument();
     });
 
@@ -174,17 +162,13 @@ describe('FilterSidebar', () => {
           })}
         />
       );
-      expect(
-        screen.getByText('Books must have ALL selected tags')
-      ).toBeInTheDocument();
+      expect(screen.getByText('Books must have ALL selected tags')).toBeInTheDocument();
     });
   });
 
   describe('closed state', () => {
     it('does not render content when closed', () => {
-      renderWithProviders(
-        <FilterSidebar {...defaultProps({ open: false })} />
-      );
+      renderWithProviders(<FilterSidebar {...defaultProps({ open: false })} />);
       // MUI Drawer hides content when closed
       expect(screen.queryByText('Filters')).not.toBeInTheDocument();
     });

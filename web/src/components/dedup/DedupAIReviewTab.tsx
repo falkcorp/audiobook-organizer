@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupAIReviewTab.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
@@ -48,7 +48,10 @@ function AIAuthorPipelinePage() {
     const detail = await api.getAIScan(newScan.id);
     setScan(detail);
     // Refresh scan list
-    api.listAIScans().then(setScans).catch(() => {});
+    api
+      .listAIScans()
+      .then(setScans)
+      .catch(() => {});
   });
 
   const startScan = async () => {
@@ -57,7 +60,10 @@ function AIAuthorPipelinePage() {
 
   // Load scan list on mount
   useEffect(() => {
-    api.listAIScans().then(setScans).catch(() => {});
+    api
+      .listAIScans()
+      .then(setScans)
+      .catch(() => {});
   }, []);
 
   // Poll active scan status
@@ -75,7 +81,9 @@ function AIAuthorPipelinePage() {
             clearInterval(interval);
           }
         }
-      } catch { /* ignore polling errors */ }
+      } catch {
+        /* ignore polling errors */
+      }
     }, 5000);
     return () => {
       mounted = false;
@@ -112,14 +120,14 @@ function AIAuthorPipelinePage() {
     }
   };
 
-  const filteredResults = agreementFilter === 'all'
-    ? results
-    : results.filter(r => r.agreement === agreementFilter);
+  const filteredResults =
+    agreementFilter === 'all' ? results : results.filter((r) => r.agreement === agreementFilter);
 
   const toggleSelect = (id: number) => {
-    setSelected(prev => {
+    setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -131,7 +139,9 @@ function AIAuthorPipelinePage() {
         <Button
           variant="contained"
           onClick={startScan}
-          disabled={loading || (scan != null && scan.status !== 'complete' && scan.status !== 'failed')}
+          disabled={
+            loading || (scan != null && scan.status !== 'complete' && scan.status !== 'failed')
+          }
           startIcon={<AutoAwesomeIcon />}
         >
           Run Scan
@@ -153,52 +163,63 @@ function AIAuthorPipelinePage() {
       )}
 
       {/* Active Scan Status */}
-      {scan && scan.status !== 'complete' && scan.status !== 'failed' && scan.status !== 'canceled' && (
-        <Paper
-          elevation={3}
-          sx={{
-            position: 'sticky',
-            top: 0,
-            zIndex: 10,
-            mx: 2,
-            mb: 2,
-            p: 2,
-            borderRadius: 2,
-          }}
-        >
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Typography variant="subtitle2">Scan #{scan.id} — {scan.status}</Typography>
-            <Box sx={{ display: 'flex', gap: 1 }}>
-              {(scan.phases || []).map(phase => (
-                <Chip
-                  key={phase.phase_type}
-                  label={`${phase.phase_type.replace('_', ' ')}: ${phase.status}`}
-                  color={phase.status === 'complete' ? 'success' : phase.status === 'failed' ? 'error' : 'default'}
-                  size="small"
-                />
-              ))}
+      {scan &&
+        scan.status !== 'complete' &&
+        scan.status !== 'failed' &&
+        scan.status !== 'canceled' && (
+          <Paper
+            elevation={3}
+            sx={{
+              position: 'sticky',
+              top: 0,
+              zIndex: 10,
+              mx: 2,
+              mb: 2,
+              p: 2,
+              borderRadius: 2,
+            }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Typography variant="subtitle2">
+                Scan #{scan.id} — {scan.status}
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1 }}>
+                {(scan.phases || []).map((phase) => (
+                  <Chip
+                    key={phase.phase_type}
+                    label={`${phase.phase_type.replace('_', ' ')}: ${phase.status}`}
+                    color={
+                      phase.status === 'complete'
+                        ? 'success'
+                        : phase.status === 'failed'
+                          ? 'error'
+                          : 'default'
+                    }
+                    size="small"
+                  />
+                ))}
+              </Box>
+              <Box sx={{ flex: 1 }} />
+              <Button
+                variant="outlined"
+                color="error"
+                size="small"
+                onClick={async () => {
+                  try {
+                    await api.cancelAIScan(scan.id);
+                    const updated = await api.getAIScan(scan.id);
+                    setScan(updated);
+                  } catch (e: unknown) {
+                    setError(e instanceof Error ? e.message : 'Failed to cancel scan');
+                  }
+                }}
+              >
+                Cancel Scan
+              </Button>
             </Box>
-            <Box sx={{ flex: 1 }} />
-            <Button
-              variant="outlined"
-              color="error"
-              size="small"
-              onClick={async () => {
-                try {
-                  await api.cancelAIScan(scan.id);
-                  const updated = await api.getAIScan(scan.id);
-                  setScan(updated);
-                } catch (e: unknown) {
-                  setError(e instanceof Error ? e.message : 'Failed to cancel scan');
-                }
-              }}
-            >
-              Cancel Scan
-            </Button>
-          </Box>
-          <LinearProgress sx={{ mt: 1 }} />
-        </Paper>
-      )}
+            <LinearProgress sx={{ mt: 1 }} />
+          </Paper>
+        )}
 
       {/* Canceled scan message */}
       {scan && scan.status === 'canceled' && (
@@ -211,13 +232,16 @@ function AIAuthorPipelinePage() {
       {!scan && !loading && (
         <Paper sx={{ p: 4, mx: 2, textAlign: 'center' }}>
           <Typography variant="body1" color="text.secondary">
-            Run a scan to discover author duplicates using multi-pass AI analysis, or load a previous scan from history.
+            Run a scan to discover author duplicates using multi-pass AI analysis, or load a
+            previous scan from history.
           </Typography>
         </Paper>
       )}
 
       {loading && !scan && (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box>
+        <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+          <CircularProgress />
+        </Box>
       )}
 
       {/* Scan failed */}
@@ -233,10 +257,22 @@ function AIAuthorPipelinePage() {
           {/* Filter Tabs */}
           <Tabs value={agreementFilter} onChange={(_, v) => setAgreementFilter(v)} sx={{ mb: 2 }}>
             <Tab value="all" label={`All (${results.length})`} />
-            <Tab value="agreed" label={`Agreed (${results.filter(r => r.agreement === 'agreed').length})`} />
-            <Tab value="groups_only" label={`Groups Only (${results.filter(r => r.agreement === 'groups_only').length})`} />
-            <Tab value="full_only" label={`Full Only (${results.filter(r => r.agreement === 'full_only').length})`} />
-            <Tab value="disagreed" label={`Disagreed (${results.filter(r => r.agreement === 'disagreed').length})`} />
+            <Tab
+              value="agreed"
+              label={`Agreed (${results.filter((r) => r.agreement === 'agreed').length})`}
+            />
+            <Tab
+              value="groups_only"
+              label={`Groups Only (${results.filter((r) => r.agreement === 'groups_only').length})`}
+            />
+            <Tab
+              value="full_only"
+              label={`Full Only (${results.filter((r) => r.agreement === 'full_only').length})`}
+            />
+            <Tab
+              value="disagreed"
+              label={`Disagreed (${results.filter((r) => r.agreement === 'disagreed').length})`}
+            />
           </Tabs>
 
           {/* Floating Apply Bar */}
@@ -264,14 +300,18 @@ function AIAuthorPipelinePage() {
                 Clear Selection
               </Button>
               <Typography variant="body2" color="text.secondary" sx={{ ml: 'auto' }}>
-                {selected.size} of {filteredResults.filter(r => !r.applied).length} selected
+                {selected.size} of {filteredResults.filter((r) => !r.applied).length} selected
               </Typography>
             </Paper>
           )}
 
           {/* Result Cards */}
-          {filteredResults.map(result => (
-            <Card key={result.id} sx={{ mb: 1, opacity: result.applied ? 0.5 : 1 }} variant="outlined">
+          {filteredResults.map((result) => (
+            <Card
+              key={result.id}
+              sx={{ mb: 1, opacity: result.applied ? 0.5 : 1 }}
+              variant="outlined"
+            >
               <CardContent sx={{ py: 1, '&:last-child': { pb: 1 } }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <Checkbox
@@ -283,12 +323,40 @@ function AIAuthorPipelinePage() {
                   <Chip
                     label={result.agreement}
                     size="small"
-                    color={result.agreement === 'agreed' ? 'success' : result.agreement === 'disagreed' ? 'error' : 'default'}
+                    color={
+                      result.agreement === 'agreed'
+                        ? 'success'
+                        : result.agreement === 'disagreed'
+                          ? 'error'
+                          : 'default'
+                    }
                   />
-                  <Chip label={result.suggestion.action} size="small" variant="outlined"
-                    color={result.suggestion.action === 'merge' ? 'primary' : result.suggestion.action === 'rename' ? 'warning' : result.suggestion.action === 'alias' ? 'info' : 'default'} />
-                  <Chip label={result.suggestion.confidence} size="small" variant="outlined"
-                    color={result.suggestion.confidence === 'high' ? 'success' : result.suggestion.confidence === 'medium' ? 'warning' : 'error'} />
+                  <Chip
+                    label={result.suggestion.action}
+                    size="small"
+                    variant="outlined"
+                    color={
+                      result.suggestion.action === 'merge'
+                        ? 'primary'
+                        : result.suggestion.action === 'rename'
+                          ? 'warning'
+                          : result.suggestion.action === 'alias'
+                            ? 'info'
+                            : 'default'
+                    }
+                  />
+                  <Chip
+                    label={result.suggestion.confidence}
+                    size="small"
+                    variant="outlined"
+                    color={
+                      result.suggestion.confidence === 'high'
+                        ? 'success'
+                        : result.suggestion.confidence === 'medium'
+                          ? 'warning'
+                          : 'error'
+                    }
+                  />
                   <Box sx={{ flex: 1 }}>
                     <Typography variant="body2" fontWeight="bold">
                       {result.suggestion.canonical_name}
@@ -327,24 +395,37 @@ function AIAuthorPipelinePage() {
       {/* Scan History Drawer */}
       <Drawer anchor="right" open={historyOpen} onClose={() => setHistoryOpen(false)}>
         <Box sx={{ width: 400, p: 2 }}>
-          <Typography variant="h6" gutterBottom>Scan History</Typography>
-          {scans.map(s => (
+          <Typography variant="h6" gutterBottom>
+            Scan History
+          </Typography>
+          {scans.map((s) => (
             <Card
               key={s.id}
-              sx={[{
-                mb: 1,
-                cursor: 'pointer'
-              }, scan?.id === s.id ? {
-                border: 2
-              } : {
-                border: null
-              }, scan?.id === s.id ? {
-                borderColor: 'primary.main'
-              } : {
-                borderColor: null
-              }]}
+              sx={[
+                {
+                  mb: 1,
+                  cursor: 'pointer',
+                },
+                scan?.id === s.id
+                  ? {
+                      border: 2,
+                    }
+                  : {
+                      border: null,
+                    },
+                scan?.id === s.id
+                  ? {
+                      borderColor: 'primary.main',
+                    }
+                  : {
+                      borderColor: null,
+                    },
+              ]}
               variant="outlined"
-              onClick={() => { loadScan(s.id); setHistoryOpen(false); }}
+              onClick={() => {
+                loadScan(s.id);
+                setHistoryOpen(false);
+              }}
             >
               <CardContent sx={{ py: 1, '&:last-child': { pb: 1 } }}>
                 <Typography variant="body2" fontWeight="bold">
@@ -375,7 +456,11 @@ export function AIReviewTab() {
   };
   return (
     <Box>
-      <Tabs value={aiSub} onChange={(_, v) => setAiSub(v)} sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}>
+      <Tabs
+        value={aiSub}
+        onChange={(_, v) => setAiSub(v)}
+        sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
+      >
         <Tab value="authors" label="Authors" icon={<PersonIcon />} iconPosition="start" />
         <Tab value="books" label="Books" icon={<MenuBookIcon />} iconPosition="start" />
       </Tabs>

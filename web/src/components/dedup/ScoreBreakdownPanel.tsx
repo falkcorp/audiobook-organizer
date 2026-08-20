@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/ScoreBreakdownPanel.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: d3c4e5f6-a7b8-9012-cdef-dc3456789012
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 // ScoreBreakdownPanel renders a stacked bar visualization of the per-signal
 // score contributions for a dedup candidate. Signal contributions are
 // computed client-side from the stored signal values and weights.
@@ -76,10 +76,10 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
             breakdown.band === 'CERTAIN'
               ? 'error'
               : breakdown.band === 'HIGH'
-              ? 'warning'
-              : breakdown.band === 'MEDIUM'
-              ? 'info'
-              : 'default'
+                ? 'warning'
+                : breakdown.band === 'MEDIUM'
+                  ? 'info'
+                  : 'default'
           }
         />
         {breakdown.formula && (
@@ -116,14 +116,19 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
           {withShares.map((s) => (
             <Box
               key={s.kind}
-              sx={[{
-                width: `${s.share * 100}%`,
-                bgcolor: SIGNAL_COLORS[s.kind] ?? '#9e9e9e'
-              }, s.share > 0 ? {
-                minWidth: 2
-              } : {
-                minWidth: 0
-              }]}
+              sx={[
+                {
+                  width: `${s.share * 100}%`,
+                  bgcolor: SIGNAL_COLORS[s.kind] ?? '#9e9e9e',
+                },
+                s.share > 0
+                  ? {
+                      minWidth: 2,
+                    }
+                  : {
+                      minWidth: 0,
+                    },
+              ]}
             />
           ))}
         </Box>
@@ -132,11 +137,7 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
       {/* Signal rows */}
       <Stack spacing={0.75}>
         {withShares.map((s) => (
-          <Tooltip
-            key={s.kind}
-            title={s.evidence || s.kind}
-            placement="left"
-          >
+          <Tooltip key={s.kind} title={s.evidence || s.kind} placement="left">
             <Stack direction="row" spacing={1} alignItems="center">
               <Box
                 sx={{
@@ -160,7 +161,12 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
               <Typography
                 variant="caption"
                 color="text.disabled"
-                sx={{ fontVariantNumeric: 'tabular-nums', flexShrink: 0, minWidth: 36, textAlign: 'right' }}
+                sx={{
+                  fontVariantNumeric: 'tabular-nums',
+                  flexShrink: 0,
+                  minWidth: 36,
+                  textAlign: 'right',
+                }}
               >
                 w={s.weight.toFixed(2)}
               </Typography>

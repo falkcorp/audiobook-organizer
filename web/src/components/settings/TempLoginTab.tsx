@@ -1,7 +1,7 @@
 // file: web/src/components/settings/TempLoginTab.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6c7d8e9f-0a1b-2c3d-4e5f-6a7b8c9d0e1f
-// last-edited: 2026-06-22
+// last-edited: 2026-08-19
 
 // Settings tab: pick a user, mint a 15-min single-use login URL,
 // copy it to the clipboard. Useful for signing yourself in on a new
@@ -56,9 +56,7 @@ export function TempLoginTab() {
         }
       } catch (err) {
         if (cancelled) return;
-        setUsersError(
-          err instanceof Error ? err.message : 'Failed to load users'
-        );
+        setUsersError(err instanceof Error ? err.message : 'Failed to load users');
       }
     })();
     return () => {
@@ -105,8 +103,8 @@ export function TempLoginTab() {
         Temp Login URL
       </Typography>
       <Typography variant="body2" color="text.secondary" gutterBottom>
-        Generate a single-use URL that signs the target user in for 24 hours
-        when opened. URL is valid for 15 minutes and can only be used once.
+        Generate a single-use URL that signs the target user in for 24 hours when opened. URL is
+        valid for 15 minutes and can only be used once.
       </Typography>
 
       {usersError && (
@@ -132,11 +130,7 @@ export function TempLoginTab() {
         </TextField>
 
         <Box>
-          <Button
-            variant="contained"
-            onClick={handleMint}
-            disabled={!selectedUserID || loading}
-          >
+          <Button variant="contained" onClick={handleMint} disabled={!selectedUserID || loading}>
             {loading ? <CircularProgress size={20} /> : 'Generate Login URL'}
           </Button>
         </Box>
@@ -146,7 +140,8 @@ export function TempLoginTab() {
         {result && (
           <Alert severity="success" sx={{ flexDirection: 'column', alignItems: 'stretch' }}>
             <Typography variant="body2" gutterBottom>
-              URL for <strong>{result.user.username}</strong> — opens a {result.session_ttl_hours}h session.
+              URL for <strong>{result.user.username}</strong> — opens a {result.session_ttl_hours}h
+              session.
             </Typography>
             <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }}>
               <TextField

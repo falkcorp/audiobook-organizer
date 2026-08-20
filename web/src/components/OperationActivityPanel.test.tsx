@@ -1,5 +1,5 @@
 // file: web/src/components/OperationActivityPanel.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: c2e4a7b9-5d1f-4823-9a06-7b3e8c1d4f2a
 
 import { render, screen, waitFor } from '@testing-library/react';
@@ -31,9 +31,7 @@ describe('OperationActivityPanel', () => {
     render(<OperationActivityPanel operationId="op-1" />);
 
     await waitFor(() => {
-      expect(
-        screen.getByText(/No activity recorded for this operation yet/),
-      ).toBeInTheDocument();
+      expect(screen.getByText(/No activity recorded for this operation yet/)).toBeInTheDocument();
     });
   });
 
@@ -74,9 +72,7 @@ describe('OperationActivityPanel', () => {
   });
 
   it('renders error state on fetch failure', async () => {
-    vi.mocked(activityApi.fetchOperationActivity).mockRejectedValue(
-      new Error('Network down'),
-    );
+    vi.mocked(activityApi.fetchOperationActivity).mockRejectedValue(new Error('Network down'));
 
     render(<OperationActivityPanel operationId="op-3" />);
 

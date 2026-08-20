@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupEmbeddingTab.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567891
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -222,7 +222,9 @@ export function EmbeddingDedupTab() {
   const [splitSelections, setSplitSelections] = useState<Map<string, Set<string>>>(new Map());
   const [pageMerging, setPageMerging] = useState(false);
   const [bulkMerging, setBulkMerging] = useState(false);
-  const [compareCluster, setCompareCluster] = useState<{ a: SampleBook; b: SampleBook } | null>(null);
+  const [compareCluster, setCompareCluster] = useState<{ a: SampleBook; b: SampleBook } | null>(
+    null
+  );
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isUnmountedRef = useRef(false);
 
@@ -281,8 +283,12 @@ export function EmbeddingDedupTab() {
     }
   }, [statusFilter, layerFilter, page, rowsPerPage]);
 
-  useEffect(() => { loadStats(); }, [loadStats]);
-  useEffect(() => { loadCandidates(); }, [loadCandidates]);
+  useEffect(() => {
+    loadStats();
+  }, [loadStats]);
+  useEffect(() => {
+    loadCandidates();
+  }, [loadCandidates]);
 
   // Cleanup scan/LLM timeouts on unmount
   useEffect(() => {
@@ -634,12 +640,20 @@ export function EmbeddingDedupTab() {
   // aggregate ACROSS statuses so "10 exact" means "10 exact-layer candidates
   // of any status", matching the existing semantics users have seen. Status
   // counts only count rows in that specific status bucket.
-  const pendingCount = stats.filter(s => s.status === 'pending').reduce((sum, s) => sum + s.count, 0);
-  const mergedCount = stats.filter(s => s.status === 'merged').reduce((sum, s) => sum + s.count, 0);
-  const dismissedCount = stats.filter(s => s.status === 'dismissed').reduce((sum, s) => sum + s.count, 0);
-  const exactCount = stats.filter(s => s.layer === 'exact').reduce((sum, s) => sum + s.count, 0);
-  const embeddingCount = stats.filter(s => s.layer === 'embedding').reduce((sum, s) => sum + s.count, 0);
-  const llmCount = stats.filter(s => s.layer === 'llm').reduce((sum, s) => sum + s.count, 0);
+  const pendingCount = stats
+    .filter((s) => s.status === 'pending')
+    .reduce((sum, s) => sum + s.count, 0);
+  const mergedCount = stats
+    .filter((s) => s.status === 'merged')
+    .reduce((sum, s) => sum + s.count, 0);
+  const dismissedCount = stats
+    .filter((s) => s.status === 'dismissed')
+    .reduce((sum, s) => sum + s.count, 0);
+  const exactCount = stats.filter((s) => s.layer === 'exact').reduce((sum, s) => sum + s.count, 0);
+  const embeddingCount = stats
+    .filter((s) => s.layer === 'embedding')
+    .reduce((sum, s) => sum + s.count, 0);
+  const llmCount = stats.filter((s) => s.layer === 'llm').reduce((sum, s) => sum + s.count, 0);
 
   // renderBookSide takes the cluster it belongs to so the per-side
   // "Not a duplicate" button can scope its dismiss to that cluster's
@@ -681,7 +695,12 @@ export function EmbeddingDedupTab() {
             <Typography
               key={idx}
               variant="caption"
-              sx={{ display: 'block', fontFamily: 'monospace', fontSize: '0.7rem', whiteSpace: 'pre' }}
+              sx={{
+                display: 'block',
+                fontFamily: 'monospace',
+                fontSize: '0.7rem',
+                whiteSpace: 'pre',
+              }}
             >
               {truncateAudiobookPath(p)}
             </Typography>
@@ -729,13 +748,18 @@ export function EmbeddingDedupTab() {
               alignItems="center"
               spacing={0.5}
               useFlexGap
-              sx={[{
-                minWidth: 0
-              }, isMultiWay ? {
-                pr: 3
-              } : {
-                pr: 0
-              }]} // leave room for the button
+              sx={[
+                {
+                  minWidth: 0,
+                },
+                isMultiWay
+                  ? {
+                      pr: 3,
+                    }
+                  : {
+                      pr: 0,
+                    },
+              ]} // leave room for the button
             >
               <Typography
                 className="dedup-side-title"
@@ -807,17 +831,22 @@ export function EmbeddingDedupTab() {
                   handleMergeCluster(cluster, id);
                 }}
                 disabled={anyActionBusy}
-                sx={[{
-                  position: 'absolute',
-                  top: -4,
-                  padding: '2px',
-                  color: 'text.disabled',
-                  '&:hover': { color: 'warning.main' }
-                }, isMultiWay ? {
-                  right: 22
-                } : {
-                  right: -4
-                }]}
+                sx={[
+                  {
+                    position: 'absolute',
+                    top: -4,
+                    padding: '2px',
+                    color: 'text.disabled',
+                    '&:hover': { color: 'warning.main' },
+                  },
+                  isMultiWay
+                    ? {
+                        right: 22,
+                      }
+                    : {
+                        right: -4,
+                      },
+                ]}
               >
                 {actionLoading === `${cluster.key}:primary:${id}` ? (
                   <CircularProgress size={14} />
@@ -947,9 +976,8 @@ export function EmbeddingDedupTab() {
             <Box>
               <Typography variant="body2">Force Re-embed All</Typography>
               <Typography variant="caption" color="text.secondary" display="block">
-                Regenerate embeddings for every book. Only needed once
-                after adding an OpenAI key — Find Duplicates already
-                re-embeds stale books on its own.
+                Regenerate embeddings for every book. Only needed once after adding an OpenAI key —
+                Find Duplicates already re-embeds stale books on its own.
               </Typography>
             </Box>
           </MenuItem>
@@ -959,7 +987,9 @@ export function EmbeddingDedupTab() {
           color="warning"
           startIcon={bulkMerging ? <CircularProgress size={16} /> : <MergeIcon />}
           onClick={() => setBulkMergeOpen(true)}
-          disabled={scanning || bulkMerging || pageMerging || total === 0 || statusFilter !== 'pending'}
+          disabled={
+            scanning || bulkMerging || pageMerging || total === 0 || statusFilter !== 'pending'
+          }
           size="small"
           title={statusFilter !== 'pending' ? 'Switch to Pending filter to enable bulk merge' : ''}
         >
@@ -970,9 +1000,19 @@ export function EmbeddingDedupTab() {
           color="primary"
           startIcon={pageMerging ? <CircularProgress size={16} /> : <MergeIcon />}
           onClick={() => setPageMergeOpen(true)}
-          disabled={scanning || bulkMerging || pageMerging || clusters.length === 0 || statusFilter !== 'pending'}
+          disabled={
+            scanning ||
+            bulkMerging ||
+            pageMerging ||
+            clusters.length === 0 ||
+            statusFilter !== 'pending'
+          }
           size="small"
-          title={statusFilter !== 'pending' ? 'Switch to Pending filter to enable page merge' : 'Merge only clusters visible on this page'}
+          title={
+            statusFilter !== 'pending'
+              ? 'Switch to Pending filter to enable page merge'
+              : 'Merge only clusters visible on this page'
+          }
         >
           Merge Page ({clusters.filter((c) => c.hasPending).length})
         </Button>
@@ -1002,10 +1042,20 @@ export function EmbeddingDedupTab() {
           open={Boolean(exportMenuAnchor)}
           onClose={() => setExportMenuAnchor(null)}
         >
-          <MenuItem onClick={() => { handleExport('csv'); setExportMenuAnchor(null); }}>
+          <MenuItem
+            onClick={() => {
+              handleExport('csv');
+              setExportMenuAnchor(null);
+            }}
+          >
             Download as CSV
           </MenuItem>
-          <MenuItem onClick={() => { handleExport('json'); setExportMenuAnchor(null); }}>
+          <MenuItem
+            onClick={() => {
+              handleExport('json');
+              setExportMenuAnchor(null);
+            }}
+          >
             Download as JSON
           </MenuItem>
         </Menu>
@@ -1041,13 +1091,12 @@ export function EmbeddingDedupTab() {
           <DialogContentText>
             You are about to merge <strong>{total}</strong> candidate
             {total === 1 ? '' : 's'} matching the current filter
-            {layerFilter ? ` (layer: ${layerFilter})` : ''}. Each candidate
-            becomes a version group; this is irreversible.
+            {layerFilter ? ` (layer: ${layerFilter})` : ''}. Each candidate becomes a version group;
+            this is irreversible.
           </DialogContentText>
           <DialogContentText sx={{ mt: 2 }}>
-            <strong>Warning:</strong> Bulk merging trusts the scorer entirely.
-            Review a sample first if you are not confident in the current
-            filter's precision.
+            <strong>Warning:</strong> Bulk merging trusts the scorer entirely. Review a sample first
+            if you are not confident in the current filter's precision.
           </DialogContentText>
         </DialogContent>
         <DialogActions>
@@ -1066,16 +1115,14 @@ export function EmbeddingDedupTab() {
         <DialogTitle>Merge clusters on this page?</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            You are about to merge{' '}
-            <strong>{clusters.filter((c) => c.hasPending).length}</strong>{' '}
-            cluster{clusters.filter((c) => c.hasPending).length === 1 ? '' : 's'}{' '}
-            currently visible on this page. Each cluster becomes one version
-            group; this is irreversible.
+            You are about to merge <strong>{clusters.filter((c) => c.hasPending).length}</strong>{' '}
+            cluster{clusters.filter((c) => c.hasPending).length === 1 ? '' : 's'} currently visible
+            on this page. Each cluster becomes one version group; this is irreversible.
           </DialogContentText>
           <DialogContentText sx={{ mt: 2 }}>
-            Off-page candidates matching the same filter are <strong>not</strong>{' '}
-            touched — use Merge Filtered for that. This lets you commit a
-            reviewed subset without also merging everything the filter catches.
+            Off-page candidates matching the same filter are <strong>not</strong> touched — use
+            Merge Filtered for that. This lets you commit a reviewed subset without also merging
+            everything the filter catches.
           </DialogContentText>
         </DialogContent>
         <DialogActions>
@@ -1101,14 +1148,15 @@ export function EmbeddingDedupTab() {
         <DialogTitle>Merge clusters by series</DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ mb: 2 }}>
-            Each row below is a series that has pending duplicate
-            clusters entirely within it. Click a row to merge every
-            cluster in that series — each becomes its own version
-            group. Cross-series candidates (pairs where the two sides
-            belong to different series) are not touched.
+            Each row below is a series that has pending duplicate clusters entirely within it. Click
+            a row to merge every cluster in that series — each becomes its own version group.
+            Cross-series candidates (pairs where the two sides belong to different series) are not
+            touched.
           </DialogContentText>
           {seriesMergeLoading ? (
-            <Box sx={{ textAlign: 'center', py: 3 }}><CircularProgress /></Box>
+            <Box sx={{ textAlign: 'center', py: 3 }}>
+              <CircularProgress />
+            </Box>
           ) : seriesSummary.length === 0 ? (
             <Typography color="text.secondary">
               No series with pending same-series clusters right now.
@@ -1174,7 +1222,10 @@ export function EmbeddingDedupTab() {
           size="small"
           color="warning"
           variant={statusFilter === 'pending' ? 'filled' : 'outlined'}
-          onClick={() => { setStatusFilter('pending'); setPage(0); }}
+          onClick={() => {
+            setStatusFilter('pending');
+            setPage(0);
+          }}
           sx={{ cursor: 'pointer' }}
         />
         <Chip
@@ -1182,7 +1233,10 @@ export function EmbeddingDedupTab() {
           size="small"
           color="success"
           variant={statusFilter === 'merged' ? 'filled' : 'outlined'}
-          onClick={() => { setStatusFilter('merged'); setPage(0); }}
+          onClick={() => {
+            setStatusFilter('merged');
+            setPage(0);
+          }}
           sx={{ cursor: 'pointer' }}
         />
         <Chip
@@ -1190,7 +1244,10 @@ export function EmbeddingDedupTab() {
           size="small"
           color="default"
           variant={statusFilter === 'dismissed' ? 'filled' : 'outlined'}
-          onClick={() => { setStatusFilter('dismissed'); setPage(0); }}
+          onClick={() => {
+            setStatusFilter('dismissed');
+            setPage(0);
+          }}
           sx={{ cursor: 'pointer' }}
         />
         <Chip
@@ -1198,7 +1255,10 @@ export function EmbeddingDedupTab() {
           size="small"
           color="error"
           variant={layerFilter === 'exact' ? 'filled' : 'outlined'}
-          onClick={() => { setLayerFilter(layerFilter === 'exact' ? '' : 'exact'); setPage(0); }}
+          onClick={() => {
+            setLayerFilter(layerFilter === 'exact' ? '' : 'exact');
+            setPage(0);
+          }}
           sx={{ cursor: 'pointer' }}
         />
         <Chip
@@ -1206,7 +1266,10 @@ export function EmbeddingDedupTab() {
           size="small"
           color="primary"
           variant={layerFilter === 'embedding' ? 'filled' : 'outlined'}
-          onClick={() => { setLayerFilter(layerFilter === 'embedding' ? '' : 'embedding'); setPage(0); }}
+          onClick={() => {
+            setLayerFilter(layerFilter === 'embedding' ? '' : 'embedding');
+            setPage(0);
+          }}
           sx={{ cursor: 'pointer' }}
         />
         <Chip
@@ -1214,7 +1277,10 @@ export function EmbeddingDedupTab() {
           size="small"
           color="secondary"
           variant={layerFilter === 'llm' ? 'filled' : 'outlined'}
-          onClick={() => { setLayerFilter(layerFilter === 'llm' ? '' : 'llm'); setPage(0); }}
+          onClick={() => {
+            setLayerFilter(layerFilter === 'llm' ? '' : 'llm');
+            setPage(0);
+          }}
           sx={{ cursor: 'pointer' }}
         />
         <Chip label={`${total} showing`} size="small" variant="outlined" />
@@ -1233,9 +1299,12 @@ export function EmbeddingDedupTab() {
                 statusFilter === 'pending'
                   ? 'warning'
                   : statusFilter === 'merged'
-                  ? 'success'
-                  : 'default',
-              onRemove: () => { setStatusFilter(''); setPage(0); },
+                    ? 'success'
+                    : 'default',
+              onRemove: () => {
+                setStatusFilter('');
+                setPage(0);
+              },
             });
           }
           if (layerFilter) {
@@ -1243,7 +1312,10 @@ export function EmbeddingDedupTab() {
               id: `layer:${layerFilter}`,
               label: `Layer: ${layerFilter}`,
               color: LAYER_COLORS[layerFilter] || 'default',
-              onRemove: () => { setLayerFilter(''); setPage(0); },
+              onRemove: () => {
+                setLayerFilter('');
+                setPage(0);
+              },
             });
           }
           if (searchQuery.trim()) {
@@ -1276,11 +1348,7 @@ export function EmbeddingDedupTab() {
           sx={{ minWidth: 280 }}
           InputProps={{
             endAdornment: searchQuery ? (
-              <IconButton
-                size="small"
-                onClick={() => setSearchQuery('')}
-                aria-label="clear search"
-              >
+              <IconButton size="small" onClick={() => setSearchQuery('')} aria-label="clear search">
                 <ClearIcon fontSize="small" />
               </IconButton>
             ) : null,
@@ -1293,13 +1361,21 @@ export function EmbeddingDedupTab() {
         />
       </Box>
 
-      {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
+          {error}
+        </Alert>
+      )}
 
       {loading ? (
-        <Box sx={{ textAlign: 'center', py: 4 }}><CircularProgress /></Box>
+        <Box sx={{ textAlign: 'center', py: 4 }}>
+          <CircularProgress />
+        </Box>
       ) : candidates.length === 0 ? (
         <Paper sx={{ p: 4, textAlign: 'center' }}>
-          <Typography color="text.secondary">No candidates found matching the current filters.</Typography>
+          <Typography color="text.secondary">
+            No candidates found matching the current filters.
+          </Typography>
         </Paper>
       ) : (
         <>
@@ -1317,12 +1393,7 @@ export function EmbeddingDedupTab() {
                 <Card key={cluster.key} variant="outlined">
                   <CardContent sx={{ pb: 1 }}>
                     {/* Top info row: layer, similarity, cluster size */}
-                    <Stack
-                      direction="row"
-                      spacing={1}
-                      alignItems="center"
-                      sx={{ mb: 1 }}
-                    >
+                    <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
                       <Chip
                         label={cluster.layer}
                         size="small"
@@ -1366,7 +1437,11 @@ export function EmbeddingDedupTab() {
                           sx={
                             isLargeCluster
                               ? { minWidth: 0 }
-                              : { flex: 1, minWidth: 0, maxWidth: `${100 / cluster.bookIds.length}%` }
+                              : {
+                                  flex: 1,
+                                  minWidth: 0,
+                                  maxWidth: `${100 / cluster.bookIds.length}%`,
+                                }
                           }
                         >
                           {renderBookSide(bookId, cluster)}
@@ -1424,9 +1499,11 @@ export function EmbeddingDedupTab() {
                             color="error"
                             variant="outlined"
                             startIcon={
-                              actionLoading === `${cluster.key}:split`
-                                ? <CircularProgress size={14} />
-                                : <CloseIcon />
+                              actionLoading === `${cluster.key}:split` ? (
+                                <CircularProgress size={14} />
+                              ) : (
+                                <CloseIcon />
+                              )
                             }
                             onClick={() => handleRemoveSelectedFromCluster(cluster)}
                             disabled={actionLoading != null}
@@ -1456,7 +1533,10 @@ export function EmbeddingDedupTab() {
             page={page}
             onPageChange={(_, p) => setPage(p)}
             rowsPerPage={rowsPerPage}
-            onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
+            onRowsPerPageChange={(e) => {
+              setRowsPerPage(parseInt(e.target.value, 10));
+              setPage(0);
+            }}
             rowsPerPageOptions={[10, 25, 50, 100, 250, 500, 1000]}
           />
         </>

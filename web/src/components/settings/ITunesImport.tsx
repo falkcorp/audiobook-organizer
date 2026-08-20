@@ -1,7 +1,7 @@
 // file: web/src/components/settings/ITunesImport.tsx
-// version: 1.20.0
+// version: 1.20.1
 // guid: 4eb9b74d-7192-497b-849a-092833ae63a4
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
@@ -124,12 +124,10 @@ export function ITunesImport() {
     }
   }, [settings]);
 
-  const [validationResult, setValidationResult] =
-    useState<ITunesValidateResponse | null>(null);
+  const [validationResult, setValidationResult] = useState<ITunesValidateResponse | null>(null);
   const [validating, setValidating] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [importStatus, setImportStatus] =
-    useState<ITunesImportStatus | null>(null);
+  const [importStatus, setImportStatus] = useState<ITunesImportStatus | null>(null);
   const [showMissingFiles, setShowMissingFiles] = useState(false);
   const [writeBackOpen, setWriteBackOpen] = useState(false);
   const [writeBackIds, setWriteBackIds] = useState('');
@@ -138,8 +136,7 @@ export function ITunesImport() {
     severity: 'error' | 'warning' | 'success';
     message: string;
   } | null>(null);
-  const [writeBackResult, setWriteBackResult] =
-    useState<ITunesWriteBackResponse | null>(null);
+  const [writeBackResult, setWriteBackResult] = useState<ITunesWriteBackResponse | null>(null);
   const [writeBackBackup, setWriteBackBackup] = useState(true);
   const [writeBackLibraryPath, setWriteBackLibraryPath] = useState(settings.libraryPath || '');
   // Configured paths sourced from server config — purely informational
@@ -247,8 +244,7 @@ export function ITunesImport() {
       if (cancelled) return;
       const running = ops.find(
         (op) =>
-          op.type === 'itunes_import' &&
-          !['completed', 'failed', 'canceled'].includes(op.status)
+          op.type === 'itunes_import' && !['completed', 'failed', 'canceled'].includes(op.status)
       );
       if (running) {
         setImporting(true);
@@ -256,7 +252,9 @@ export function ITunesImport() {
       }
     };
     detectRunningImport();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [browseTarget, setBrowseTarget] = useState<'xml' | 'itl' | null>(null);
@@ -294,8 +292,7 @@ export function ITunesImport() {
         }));
       }
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'Validation failed';
+      const message = err instanceof Error ? err.message : 'Validation failed';
       toast(message, 'error');
     } finally {
       setValidating(false);
@@ -336,18 +333,21 @@ export function ITunesImport() {
 
   /* handleOpenWriteBack removed — write-back is now automatic via ITL path */
 
-  const loadBrowseBooks = useCallback(async (search: string, page: number, rowsPerPage: number) => {
-    setBrowseLoading(true);
-    try {
-      const result = await getITunesBooks(search || undefined, rowsPerPage, page * rowsPerPage);
-      setBrowseItems(result.items || []);
-      setBrowseTotal(result.count);
-    } catch (err) {
-      toast(err instanceof Error ? err.message : 'Failed to load books', 'error');
-    } finally {
-      setBrowseLoading(false);
-    }
-  }, [toast]);
+  const loadBrowseBooks = useCallback(
+    async (search: string, page: number, rowsPerPage: number) => {
+      setBrowseLoading(true);
+      try {
+        const result = await getITunesBooks(search || undefined, rowsPerPage, page * rowsPerPage);
+        setBrowseItems(result.items || []);
+        setBrowseTotal(result.count);
+      } catch (err) {
+        toast(err instanceof Error ? err.message : 'Failed to load books', 'error');
+      } finally {
+        setBrowseLoading(false);
+      }
+    },
+    [toast]
+  );
 
   // Auto-load browse data when switching to browse tab
   useEffect(() => {
@@ -399,7 +399,10 @@ export function ITunesImport() {
       const result = await previewITunesWriteBack(undefined, ids);
       setPreviewItems(result.items || []);
       if (result.items.length === 0) {
-        setWriteBackNotice({ severity: 'warning', message: 'No books found with iTunes persistent IDs for those IDs.' });
+        setWriteBackNotice({
+          severity: 'warning',
+          message: 'No books found with iTunes persistent IDs for those IDs.',
+        });
       }
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Preview failed', 'error');
@@ -463,8 +466,7 @@ export function ITunesImport() {
           pollTimeoutRef.current = window.setTimeout(poll, 2000);
         }
       } catch (err) {
-        const message =
-          err instanceof Error ? err.message : 'Failed to get import status';
+        const message = err instanceof Error ? err.message : 'Failed to get import status';
         if (!pollingUnmountedRef.current) {
           toast(message, 'error');
           setImporting(false);
@@ -490,7 +492,7 @@ export function ITunesImport() {
       }
 
       setShowConflictDialog(false);
-  
+
       // Refresh sync status
       if (importStatus?.operation_id) {
         await pollImportStatus(importStatus.operation_id);
@@ -507,13 +509,13 @@ export function ITunesImport() {
       <CardHeader title="iTunes Library Import" />
       <CardContent>
         <Typography variant="body2" color="text.secondary" gutterBottom>
-          Import your iTunes Library.xml with play counts, ratings, and
-          bookmarks preserved.
+          Import your iTunes Library.xml with play counts, ratings, and bookmarks preserved.
         </Typography>
 
         {libraryChanged && (
           <Alert severity="warning" sx={{ mt: 2 }}>
-            iTunes library has been modified since last import. Consider re-importing to pick up changes.
+            iTunes library has been modified since last import. Consider re-importing to pick up
+            changes.
           </Alert>
         )}
 
@@ -639,21 +641,29 @@ export function ITunesImport() {
                 }))
               }
             >
-              <Tooltip title="Import all metadata (titles, authors, play counts, ratings, bookmarks) but mark files as already in their final location. Use this if your iTunes library folder structure is how you want it." placement="right" arrow>
+              <Tooltip
+                title="Import all metadata (titles, authors, play counts, ratings, bookmarks) but mark files as already in their final location. Use this if your iTunes library folder structure is how you want it."
+                placement="right"
+                arrow
+              >
                 <FormControlLabel
                   value="organized"
                   control={<Radio />}
                   label="Files already organized"
                 />
               </Tooltip>
-              <Tooltip title="Import all metadata into the database but leave files where they are. You can organize them later from the Library page. Good for previewing what will be imported before moving anything." placement="right" arrow>
-                <FormControlLabel
-                  value="import"
-                  control={<Radio />}
-                  label="Import metadata only"
-                />
+              <Tooltip
+                title="Import all metadata into the database but leave files where they are. You can organize them later from the Library page. Good for previewing what will be imported before moving anything."
+                placement="right"
+                arrow
+              >
+                <FormControlLabel value="import" control={<Radio />} label="Import metadata only" />
               </Tooltip>
-              <Tooltip title="Import all metadata AND move/rename files into the organized folder structure (Author/Series/Title). Files are copied to the root directory. Skips files that are already organized." placement="right" arrow>
+              <Tooltip
+                title="Import all metadata AND move/rename files into the organized folder structure (Author/Series/Title). Files are copied to the root directory. Skips files that are already organized."
+                placement="right"
+                arrow
+              >
                 <FormControlLabel
                   value="organize"
                   control={<Radio />}
@@ -664,7 +674,11 @@ export function ITunesImport() {
           </FormControl>
 
           <Box sx={{ mt: 2 }}>
-            <Tooltip title="Don't move files during organize — only update the database with their current locations." placement="right" arrow>
+            <Tooltip
+              title="Don't move files during organize — only update the database with their current locations."
+              placement="right"
+              arrow
+            >
               <FormControlLabel
                 control={
                   <Checkbox
@@ -683,7 +697,11 @@ export function ITunesImport() {
           </Box>
 
           <Box>
-            <Tooltip title="Convert iTunes playlist memberships into tags on each audiobook." placement="right" arrow>
+            <Tooltip
+              title="Convert iTunes playlist memberships into tags on each audiobook."
+              placement="right"
+              arrow
+            >
               <FormControlLabel
                 control={
                   <Checkbox
@@ -702,7 +720,11 @@ export function ITunesImport() {
           </Box>
 
           <Box>
-            <Tooltip title="Skip audiobooks that already exist in the library (matched by file path or file hash). Uncheck to re-import and overwrite existing entries." placement="right" arrow>
+            <Tooltip
+              title="Skip audiobooks that already exist in the library (matched by file path or file hash). Uncheck to re-import and overwrite existing entries."
+              placement="right"
+              arrow
+            >
               <FormControlLabel
                 control={
                   <Checkbox
@@ -739,7 +761,10 @@ export function ITunesImport() {
           >
             <AlertTitle>Validation Results</AlertTitle>
             <Typography variant="body2">
-              Found <strong>{validationResult.audiobook_count || validationResult.audiobook_tracks}</strong>{' '}
+              Found{' '}
+              <strong>
+                {validationResult.audiobook_count || validationResult.audiobook_tracks}
+              </strong>{' '}
               audiobooks ({validationResult.audiobook_tracks} tracks across{' '}
               {validationResult.files_found} files found,
               {` ${validationResult.files_missing} missing`})
@@ -753,11 +778,7 @@ export function ITunesImport() {
               Estimated import time: {validationResult.estimated_import_time}
             </Typography>
             {validationResult.files_missing > 0 && (
-              <Button
-                size="small"
-                onClick={() => setShowMissingFiles(true)}
-                sx={{ mt: 1 }}
-              >
+              <Button size="small" onClick={() => setShowMissingFiles(true)} sx={{ mt: 1 }}>
                 View Missing Files
               </Button>
             )}
@@ -778,9 +799,7 @@ export function ITunesImport() {
         {importStatus && (
           <Paper variant="outlined" sx={{ mt: 3, p: 2 }}>
             <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
-              <Typography variant="subtitle2">
-                Import Progress
-              </Typography>
+              <Typography variant="subtitle2">Import Progress</Typography>
               {importing && (
                 <Button
                   size="small"
@@ -809,10 +828,10 @@ export function ITunesImport() {
             <Stack direction="row" justifyContent="space-between" alignItems="center">
               <Typography variant="body2" color="text.secondary">
                 {importStatus.progress}% complete
-                {importStatus.processed !== undefined &&
-                  importStatus.total_books !== undefined && (
+                {importStatus.processed !== undefined && importStatus.total_books !== undefined && (
                   <>
-                    {' '}&mdash; {importStatus.processed} / {importStatus.total_books} books
+                    {' '}
+                    &mdash; {importStatus.processed} / {importStatus.total_books} books
                   </>
                 )}
               </Typography>
@@ -853,8 +872,7 @@ export function ITunesImport() {
               <Alert severity="success" sx={{ mt: 2 }}>
                 <AlertTitle>Import Complete</AlertTitle>
                 <Typography variant="body2">
-                  Imported <strong>{importStatus.imported ?? 0}</strong>{' '}
-                  audiobooks
+                  Imported <strong>{importStatus.imported ?? 0}</strong> audiobooks
                   {importStatus.skipped !== undefined && importStatus.skipped > 0
                     ? `, skipped ${importStatus.skipped}`
                     : ''}
@@ -957,15 +975,18 @@ export function ITunesImport() {
           <DialogContent>
             {(validationResult?.files_missing ?? 0) > 100 && (
               <Alert severity="info" sx={{ mb: 2 }}>
-                Showing first 100 of {validationResult?.files_missing} missing files.
-                If these paths are from a different OS, use the Path Mapping fields above
-                to translate them to local paths.
+                Showing first 100 of {validationResult?.files_missing} missing files. If these paths
+                are from a different OS, use the Path Mapping fields above to translate them to
+                local paths.
               </Alert>
             )}
             <List dense>
               {validationResult?.missing_paths?.map((path) => (
                 <ListItem key={path}>
-                  <ListItemText primary={path} primaryTypographyProps={{ variant: 'body2', noWrap: true }} />
+                  <ListItemText
+                    primary={path}
+                    primaryTypographyProps={{ variant: 'body2', noWrap: true }}
+                  />
                 </ListItem>
               ))}
             </List>
@@ -986,15 +1007,11 @@ export function ITunesImport() {
             <Stack spacing={2} sx={{ mt: 1 }}>
               {writeBackLoading && <LinearProgress />}
               {writeBackNotice && (
-                <Alert severity={writeBackNotice.severity}>
-                  {writeBackNotice.message}
-                </Alert>
+                <Alert severity={writeBackNotice.severity}>{writeBackNotice.message}</Alert>
               )}
               {writeBackResult && (
                 <Alert severity={writeBackResult.success ? 'success' : 'warning'}>
-                  <Typography variant="body2">
-                    {writeBackResult.message}
-                  </Typography>
+                  <Typography variant="body2">{writeBackResult.message}</Typography>
                   <Typography variant="caption" display="block">
                     Updated {writeBackResult.updated_count} entries
                   </Typography>
@@ -1017,7 +1034,10 @@ export function ITunesImport() {
                     <Typography variant="caption" sx={{ fontWeight: 600, minWidth: 110 }}>
                       Reading from:
                     </Typography>
-                    <Typography variant="caption" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                    <Typography
+                      variant="caption"
+                      sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}
+                    >
                       {configuredReadPath || '(not configured — set in Settings → Paths)'}
                     </Typography>
                   </Stack>
@@ -1025,12 +1045,17 @@ export function ITunesImport() {
                     <Typography variant="caption" sx={{ fontWeight: 600, minWidth: 110 }}>
                       Writing to:
                     </Typography>
-                    <Typography variant="caption" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                      {configuredWritePath || '(not configured — write-back will fail until set in Settings → Paths)'}
+                    <Typography
+                      variant="caption"
+                      sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}
+                    >
+                      {configuredWritePath ||
+                        '(not configured — write-back will fail until set in Settings → Paths)'}
                     </Typography>
                   </Stack>
                   <Typography variant="caption" color="text.secondary">
-                    Write-back always targets the .itl binary — iTunes ignores Library.xml for inbound changes.
+                    Write-back always targets the .itl binary — iTunes ignores Library.xml for
+                    inbound changes.
                   </Typography>
                 </Stack>
               </Alert>
@@ -1043,7 +1068,11 @@ export function ITunesImport() {
                 }
                 label="Create backup before writing"
               />
-              <Tabs value={writeBackMode} onChange={(_e, v) => setWriteBackMode(v)} sx={{ borderBottom: 1, borderColor: 'divider' }}>
+              <Tabs
+                value={writeBackMode}
+                onChange={(_e, v) => setWriteBackMode(v)}
+                sx={{ borderBottom: 1, borderColor: 'divider' }}
+              >
                 <Tab label="Enter IDs" />
                 <Tab label="Sync All" />
                 <Tab label="Browse & Select" />
@@ -1072,9 +1101,10 @@ export function ITunesImport() {
                     <Button
                       variant="contained"
                       onClick={() => {
-                        const ids = previewItems.length > 0
-                          ? previewItems.map((item) => item.book_id)
-                          : parseWriteBackIds(writeBackIds);
+                        const ids =
+                          previewItems.length > 0
+                            ? previewItems.map((item) => item.book_id)
+                            : parseWriteBackIds(writeBackIds);
                         handleConfirmAndWriteBack(ids);
                       }}
                       disabled={writeBackLoading || !writeBackIds.trim()}
@@ -1116,9 +1146,14 @@ export function ITunesImport() {
                     <Button
                       variant="contained"
                       onClick={() => {
-                        const ids = previewItems.filter((item) => item.path_differs).map((item) => item.book_id);
+                        const ids = previewItems
+                          .filter((item) => item.path_differs)
+                          .map((item) => item.book_id);
                         if (ids.length === 0) {
-                          setWriteBackNotice({ severity: 'warning', message: 'No path changes to sync.' });
+                          setWriteBackNotice({
+                            severity: 'warning',
+                            message: 'No path changes to sync.',
+                          });
                           return;
                         }
                         handleConfirmAndWriteBack(ids);
@@ -1183,8 +1218,13 @@ export function ITunesImport() {
                         <TableRow>
                           <TableCell padding="checkbox">
                             <Checkbox
-                              indeterminate={browseSelected.size > 0 && browseSelected.size < browseItems.length}
-                              checked={browseItems.length > 0 && browseItems.every((item) => browseSelected.has(item.book_id))}
+                              indeterminate={
+                                browseSelected.size > 0 && browseSelected.size < browseItems.length
+                              }
+                              checked={
+                                browseItems.length > 0 &&
+                                browseItems.every((item) => browseSelected.has(item.book_id))
+                              }
                               onChange={(e) => {
                                 if (e.target.checked) {
                                   setBrowseSelected((prev) => {
@@ -1231,8 +1271,17 @@ export function ITunesImport() {
                             </TableCell>
                             <TableCell>{item.title}</TableCell>
                             <TableCell>{item.author}</TableCell>
-                            <TableCell sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              <Tooltip title={item.local_path}><span>{item.local_path}</span></Tooltip>
+                            <TableCell
+                              sx={{
+                                maxWidth: 200,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              <Tooltip title={item.local_path}>
+                                <span>{item.local_path}</span>
+                              </Tooltip>
                             </TableCell>
                             <TableCell>
                               <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
@@ -1245,7 +1294,9 @@ export function ITunesImport() {
                           <TableRow>
                             <TableCell colSpan={5} align="center">
                               <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
-                                {browseTotal === 0 ? 'No books with iTunes IDs found.' : 'Loading...'}
+                                {browseTotal === 0
+                                  ? 'No books with iTunes IDs found.'
+                                  : 'Loading...'}
                               </Typography>
                             </TableCell>
                           </TableRow>
@@ -1293,7 +1344,8 @@ export function ITunesImport() {
           <DialogTitle>Confirm Write-Back</DialogTitle>
           <DialogContent>
             <Typography>
-              This will update {pendingWriteBackIds.length} book path{pendingWriteBackIds.length !== 1 ? 's' : ''} in your iTunes library (.itl).
+              This will update {pendingWriteBackIds.length} book path
+              {pendingWriteBackIds.length !== 1 ? 's' : ''} in your iTunes library (.itl).
               {writeBackBackup ? ' A backup will be created first.' : ' No backup will be created.'}
             </Typography>
           </DialogContent>
@@ -1323,7 +1375,8 @@ export function ITunesImport() {
           <DialogTitle>Library Modified</DialogTitle>
           <DialogContent>
             <Typography>
-              The iTunes library has been modified since your last import. Writing back now may overwrite those external changes.
+              The iTunes library has been modified since your last import. Writing back now may
+              overwrite those external changes.
             </Typography>
           </DialogContent>
           <DialogActions>
@@ -1378,12 +1431,13 @@ export function ITunesImport() {
           </DialogActions>
         </Dialog>
 
-        <Dialog open={forceSyncToITunesConfirmOpen} onClose={() => setForceSyncToITunesConfirmOpen(false)}>
+        <Dialog
+          open={forceSyncToITunesConfirmOpen}
+          onClose={() => setForceSyncToITunesConfirmOpen(false)}
+        >
           <DialogTitle>Force Sync to iTunes</DialogTitle>
           <DialogContent>
-            <Typography>
-              Force sync to iTunes will overwrite iTunes changes. Continue?
-            </Typography>
+            <Typography>Force sync to iTunes will overwrite iTunes changes. Continue?</Typography>
           </DialogContent>
           <DialogActions>
             <Button onClick={() => setForceSyncToITunesConfirmOpen(false)}>Cancel</Button>
@@ -1401,13 +1455,22 @@ export function ITunesImport() {
           </DialogActions>
         </Dialog>
         {/* File browser dialog for selecting XML/ITL paths */}
-        <Dialog open={browseTarget !== null} onClose={() => setBrowseTarget(null)} maxWidth="md" fullWidth>
+        <Dialog
+          open={browseTarget !== null}
+          onClose={() => setBrowseTarget(null)}
+          maxWidth="md"
+          fullWidth
+        >
           <DialogTitle>
-            {browseTarget === 'itl' ? 'Select iTunes Library ITL File' : 'Select iTunes Library XML File'}
+            {browseTarget === 'itl'
+              ? 'Select iTunes Library ITL File'
+              : 'Select iTunes Library XML File'}
           </DialogTitle>
           <DialogContent sx={{ height: 500, p: 0 }}>
             <ServerFileBrowser
-              initialPath={browseTarget === 'itl' ? (settings.itlPath || '/') : (settings.libraryPath || '/')}
+              initialPath={
+                browseTarget === 'itl' ? settings.itlPath || '/' : settings.libraryPath || '/'
+              }
               showFiles
               allowFileSelect
               allowDirSelect={false}

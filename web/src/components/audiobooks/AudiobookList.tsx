@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/AudiobookList.tsx
-// version: 2.9.0
+// version: 2.9.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Table,
@@ -133,7 +133,8 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
     // Lazy-load quick-query counts on first open (or re-open after close).
     // Session-level cache: once loaded, counts stay until the component unmounts.
     if (!quickQueriesLoaded) {
-      api.getQuickQueries()
+      api
+        .getQuickQueries()
         .then((items) => {
           setQuickQueries(items);
           setQuickQueriesLoaded(true);
@@ -165,9 +166,7 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
   const handleFileUpdate = (bookId: string, updatedFile: BookFile) => {
     setFilesCache((prev) => ({
       ...prev,
-      [bookId]: (prev[bookId] || []).map((f) =>
-        f.id === updatedFile.id ? updatedFile : f
-      ),
+      [bookId]: (prev[bookId] || []).map((f) => (f.id === updatedFile.id ? updatedFile : f)),
     }));
   };
 
@@ -253,9 +252,21 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
         abortControllersRef.current[bookId]?.abort();
         delete abortControllersRef.current[bookId];
         // Fix #3: clean up cache, errors, and loading state on collapse
-        setFilesCache((fc) => { const n = { ...fc }; delete n[bookId]; return n; });
-        setFetchErrors((fe) => { const n = { ...fe }; delete n[bookId]; return n; });
-        setLoadingFiles((lf) => { const n = { ...lf }; delete n[bookId]; return n; });
+        setFilesCache((fc) => {
+          const n = { ...fc };
+          delete n[bookId];
+          return n;
+        });
+        setFetchErrors((fe) => {
+          const n = { ...fe };
+          delete n[bookId];
+          return n;
+        });
+        setLoadingFiles((lf) => {
+          const n = { ...lf };
+          delete n[bookId];
+          return n;
+        });
         return { ...prev, [bookId]: false };
       } else {
         // Fetch files if not already loading
@@ -294,9 +305,15 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
 
   // Fix #4: check all 7 acoustid segments, not just seg0
   const hasFingerprint = (file: BookFile): boolean =>
-    !!(file.acoustid_seg0 || file.acoustid_seg1 || file.acoustid_seg2 ||
-       file.acoustid_seg3 || file.acoustid_seg4 || file.acoustid_seg5 ||
-       file.acoustid_seg6);
+    !!(
+      file.acoustid_seg0 ||
+      file.acoustid_seg1 ||
+      file.acoustid_seg2 ||
+      file.acoustid_seg3 ||
+      file.acoustid_seg4 ||
+      file.acoustid_seg5 ||
+      file.acoustid_seg6
+    );
 
   const getFingerprinterStatusColor = (file: BookFile): 'success' | 'default' => {
     return hasFingerprint(file) ? 'success' : 'default';
@@ -422,11 +439,7 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
 
             {/* Header actions column (kebab menu) */}
             <TableCell width={50} sx={{ textAlign: 'center' }}>
-              <IconButton
-                size="small"
-                onClick={handleHeaderMenuClick}
-                aria-label="Header actions"
-              >
+              <IconButton size="small" onClick={handleHeaderMenuClick} aria-label="Header actions">
                 <MoreVertIcon />
               </IconButton>
               <Menu
@@ -438,16 +451,22 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                 {onFiltersChange && (
                   <>
                     <MenuItem disabled sx={{ py: 0.5 }}>
-                      <Typography variant="overline" color="text.secondary" sx={{ lineHeight: 1.5 }}>
+                      <Typography
+                        variant="overline"
+                        color="text.secondary"
+                        sx={{ lineHeight: 1.5 }}
+                      >
                         Quick Filters
                       </Typography>
                     </MenuItem>
                     {quickQueries.length === 0 && !quickQueriesLoaded && (
                       <MenuItem disabled>
-                        <Typography variant="body2" color="text.disabled">Loading...</Typography>
+                        <Typography variant="body2" color="text.disabled">
+                          Loading...
+                        </Typography>
                       </MenuItem>
                     )}
-                    {quickQueries.map((q) => (
+                    {quickQueries.map((q) =>
                       q.count > 0 ? (
                         <MenuItem
                           key={q.id}
@@ -468,7 +487,7 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                           </Typography>
                         </MenuItem>
                       )
-                    ))}
+                    )}
                     <Divider />
                   </>
                 )}
@@ -484,7 +503,9 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                     {Array.from(
                       new Map(activeColumns.map((col) => [col.category, col])).keys()
                     ).map((category) => {
-                      const colsInCategory = activeColumns.filter((col) => col.category === category);
+                      const colsInCategory = activeColumns.filter(
+                        (col) => col.category === category
+                      );
                       return (
                         <Box key={category}>
                           <MenuItem disabled sx={{ py: 0.75, pl: 2 }}>
@@ -533,14 +554,19 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                 <TableRow
                   hover
                   onClick={() => handleRowClick(audiobook)}
-                  sx={[{
-                    contentVisibility: 'auto',
-                    containIntrinsicSize: '1px 52px'
-                  }, onClick ? {
-                    cursor: 'pointer'
-                  } : {
-                    cursor: 'default'
-                  }]}
+                  sx={[
+                    {
+                      contentVisibility: 'auto',
+                      containIntrinsicSize: '1px 52px',
+                    },
+                    onClick
+                      ? {
+                          cursor: 'pointer',
+                        }
+                      : {
+                          cursor: 'default',
+                        },
+                  ]}
                 >
                   {/* Expand cell */}
                   <TableCell padding="checkbox" sx={{ width: 50 }}>
@@ -577,57 +603,60 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                     </TableCell>
                   )}
 
-              {/* Dynamic data cells */}
-              {activeColumns.map((col) => (
-                <TableCell
-                  key={col.id}
-                  sx={{
-                    maxWidth: columnWidths?.[col.id] ?? col.defaultWidth,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  <Typography variant="body2" color="text.secondary" noWrap>
-                    {formatCellValue(col, audiobook)}
-                  </Typography>
-                </TableCell>
-              ))}
-
-              {/* Actions cell */}
-              <TableCell width={50} sx={{ textAlign: 'center' }}>
-                {hasActions && (
-                  <>
-                    <IconButton size="small" onClick={(e) => handleMenuClick(e, audiobook.id)}>
-                      <MoreVertIcon />
-                    </IconButton>
-                    <Menu
-                      anchorEl={anchorEls[audiobook.id] || null}
-                      open={Boolean(anchorEls[audiobook.id])}
-                      onClose={() => handleClose(audiobook.id)}
+                  {/* Dynamic data cells */}
+                  {activeColumns.map((col) => (
+                    <TableCell
+                      key={col.id}
+                      sx={{
+                        maxWidth: columnWidths?.[col.id] ?? col.defaultWidth,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
                     >
-                      {onEdit && (
-                        <MenuItem onClick={() => handleEdit(audiobook)}>
-                          <EditIcon sx={{ mr: 1 }} fontSize="small" />
-                          Edit
-                        </MenuItem>
-                      )}
-                      {onDelete && (
-                        <MenuItem onClick={() => handleDelete(audiobook)}>
-                          <DeleteIcon sx={{ mr: 1 }} fontSize="small" />
-                          Delete
-                        </MenuItem>
-                      )}
-                    </Menu>
-                  </>
-                )}
-              </TableCell>
-            </TableRow>
+                      <Typography variant="body2" color="text.secondary" noWrap>
+                        {formatCellValue(col, audiobook)}
+                      </Typography>
+                    </TableCell>
+                  ))}
+
+                  {/* Actions cell */}
+                  <TableCell width={50} sx={{ textAlign: 'center' }}>
+                    {hasActions && (
+                      <>
+                        <IconButton size="small" onClick={(e) => handleMenuClick(e, audiobook.id)}>
+                          <MoreVertIcon />
+                        </IconButton>
+                        <Menu
+                          anchorEl={anchorEls[audiobook.id] || null}
+                          open={Boolean(anchorEls[audiobook.id])}
+                          onClose={() => handleClose(audiobook.id)}
+                        >
+                          {onEdit && (
+                            <MenuItem onClick={() => handleEdit(audiobook)}>
+                              <EditIcon sx={{ mr: 1 }} fontSize="small" />
+                              Edit
+                            </MenuItem>
+                          )}
+                          {onDelete && (
+                            <MenuItem onClick={() => handleDelete(audiobook)}>
+                              <DeleteIcon sx={{ mr: 1 }} fontSize="small" />
+                              Delete
+                            </MenuItem>
+                          )}
+                        </Menu>
+                      </>
+                    )}
+                  </TableCell>
+                </TableRow>
 
                 {/* Expanded files rows */}
                 {isExpanded && (
                   <TableRow sx={{ bgcolor: 'background.default' }}>
-                    <TableCell colSpan={hasSelection ? activeColumns.length + 3 : activeColumns.length + 2} sx={{ p: 0 }}>
+                    <TableCell
+                      colSpan={hasSelection ? activeColumns.length + 3 : activeColumns.length + 2}
+                      sx={{ p: 0 }}
+                    >
                       <Collapse in={isExpanded} timeout="auto" unmountOnExit>
                         <Box sx={{ p: 2 }}>
                           <Typography variant="subtitle2" sx={{ mb: 1.5, fontWeight: 600 }}>
@@ -644,7 +673,12 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                               <Typography variant="body2" color="error">
                                 Failed to load files: {fetchError}
                               </Typography>
-                              <Button size="small" variant="outlined" color="error" onClick={() => fetchFiles(audiobook.id)}>
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                color="error"
+                                onClick={() => fetchFiles(audiobook.id)}
+                              >
                                 Retry
                               </Button>
                             </Box>
@@ -670,18 +704,38 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                                   }}
                                 >
                                   <Box sx={{ minWidth: 0 }}>
-                                    <Typography variant="body2" sx={{ fontWeight: 500, wordBreak: 'break-word' }}>
-                                      {file.original_filename || file.file_path.split('/').pop() || 'Unknown'}
+                                    <Typography
+                                      variant="body2"
+                                      sx={{ fontWeight: 500, wordBreak: 'break-word' }}
+                                    >
+                                      {file.original_filename ||
+                                        file.file_path.split('/').pop() ||
+                                        'Unknown'}
                                     </Typography>
-                                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', wordBreak: 'break-word' }}>
+                                    <Typography
+                                      variant="caption"
+                                      color="text.secondary"
+                                      sx={{ display: 'block', wordBreak: 'break-word' }}
+                                    >
                                       {file.file_path}
                                     </Typography>
                                   </Box>
 
-                                  <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexShrink: 0 }}>
+                                  <Box
+                                    sx={{
+                                      display: 'flex',
+                                      gap: 1,
+                                      alignItems: 'center',
+                                      flexShrink: 0,
+                                    }}
+                                  >
                                     <Chip
                                       icon={getFingerprinterStatusIcon(file)}
-                                      label={hasFingerprint(file) ? '✓ Fingerprinted' : '✗ Not Fingerprinted'}
+                                      label={
+                                        hasFingerprint(file)
+                                          ? '✓ Fingerprinted'
+                                          : '✗ Not Fingerprinted'
+                                      }
                                       color={getFingerprinterStatusColor(file)}
                                       variant="outlined"
                                       size="small"
@@ -694,9 +748,13 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                                           onChange={async (e) => {
                                             const newValue = e.target.checked;
                                             try {
-                                              const updated = await api.patchBookFile(audiobook.id, file.id, {
-                                                skip_scan: newValue,
-                                              });
+                                              const updated = await api.patchBookFile(
+                                                audiobook.id,
+                                                file.id,
+                                                {
+                                                  skip_scan: newValue,
+                                                }
+                                              );
                                               handleFileUpdate(audiobook.id, updated);
                                             } catch (err) {
                                               console.error('Failed to update skip_scan:', err);
@@ -707,7 +765,11 @@ export const AudiobookList: React.FC<AudiobookListProps> = ({
                                       label="Skip"
                                       sx={{ ml: 0.5 }}
                                     />
-                                    <Typography variant="caption" color="text.secondary" sx={{ minWidth: 80, textAlign: 'right' }}>
+                                    <Typography
+                                      variant="caption"
+                                      color="text.secondary"
+                                      sx={{ minWidth: 80, textAlign: 'right' }}
+                                    >
                                       {formatFileSize(file.file_size)}
                                     </Typography>
                                   </Box>

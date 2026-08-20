@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/ReadStatusChip.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor } from '@testing-library/react';
@@ -26,11 +26,7 @@ vi.mock('../../services/readingApi', () => ({
   clearBookStatus: vi.fn(),
 }));
 
-import {
-  getBookState,
-  setBookStatus,
-  clearBookStatus,
-} from '../../services/readingApi';
+import { getBookState, setBookStatus, clearBookStatus } from '../../services/readingApi';
 
 const mockGetBookState = vi.mocked(getBookState);
 const mockSetBookStatus = vi.mocked(setBookStatus);
@@ -51,9 +47,7 @@ describe('ReadStatusChip', () => {
     });
 
     it('shows "Finished" for a finished book', async () => {
-      mockGetBookState.mockResolvedValue(
-        buildBookState({ book_id: 'book-1', status: 'finished' })
-      );
+      mockGetBookState.mockResolvedValue(buildBookState({ book_id: 'book-1', status: 'finished' }));
       renderWithProviders(<ReadStatusChip bookId="book-1" />);
       await waitFor(() => {
         expect(screen.getByText('Finished')).toBeInTheDocument();
@@ -83,9 +77,7 @@ describe('ReadStatusChip', () => {
 
   describe('compact mode', () => {
     it('hides the label text in compact mode', async () => {
-      mockGetBookState.mockResolvedValue(
-        buildBookState({ book_id: 'book-1', status: 'finished' })
-      );
+      mockGetBookState.mockResolvedValue(buildBookState({ book_id: 'book-1', status: 'finished' }));
       renderWithProviders(<ReadStatusChip bookId="book-1" compact />);
       await waitFor(() => {
         // The chip should be rendered but without label text
@@ -134,9 +126,7 @@ describe('ReadStatusChip', () => {
       fireEvent.click(screen.getByText('Unstarted'));
       // Find "Finished" in the menu items (not the chip)
       const menuItems = screen.getAllByRole('menuitem');
-      const finishedItem = menuItems.find((item) =>
-        item.textContent?.includes('Finished')
-      );
+      const finishedItem = menuItems.find((item) => item.textContent?.includes('Finished'));
       expect(finishedItem).toBeDefined();
       fireEvent.click(finishedItem!);
 

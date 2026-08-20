@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/ScoreBadgeRow.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: c2b3d4e5-f6a7-8901-bcde-cb2345678901
-// last-edited: 2026-06-19
+// last-edited: 2026-08-19
 
 // ScoreBadgeRow renders a compact row of band + score chips for a candidate.
 // Used inside the candidate table and the comparison drawer header.
@@ -49,9 +49,7 @@ export function ScoreBadgeRow({ band, score, layer, similarity }: ScoreBadgeRowP
           <Chip label={bandCfg.label} size="small" color={bandCfg.color} variant="filled" />
         </Tooltip>
       )}
-      {band && !bandCfg && (
-        <Chip label={String(band)} size="small" variant="outlined" />
-      )}
+      {band && !bandCfg && <Chip label={String(band)} size="small" variant="outlined" />}
       {scoreLabel && (
         <Tooltip title={scoreTooltip}>
           <Chip label={scoreLabel} size="small" variant="outlined" color="default" />
@@ -59,12 +57,7 @@ export function ScoreBadgeRow({ band, score, layer, similarity }: ScoreBadgeRowP
       )}
       {/* Only show layer when it's something non-obvious (not "exact") */}
       {layer && layer !== 'exact' && layer in NOTABLE_LAYER_COLORS && (
-        <Chip
-          label={layer}
-          size="small"
-          color={NOTABLE_LAYER_COLORS[layer]}
-          variant="outlined"
-        />
+        <Chip label={layer} size="small" color={NOTABLE_LAYER_COLORS[layer]} variant="outlined" />
       )}
     </Stack>
   );

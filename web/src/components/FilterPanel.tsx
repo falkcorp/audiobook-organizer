@@ -1,17 +1,11 @@
 // file: web/src/components/FilterPanel.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5c7d8e9f-0a1b-2c3d-4e5f-6a7b8c9d0e1f
-// last-edited: 2026-05-20
+// last-edited: 2026-08-19
 
 import React from 'react';
-import {
-  Box,
-  IconButton,
-  Tooltip,
-} from '@mui/material';
-import {
-  Info as InfoIcon,
-} from '@mui/icons-material';
+import { Box, IconButton, Tooltip } from '@mui/material';
+import { Info as InfoIcon } from '@mui/icons-material';
 import { SearchBar, ViewMode, type SortOption } from './audiobooks/SearchBar';
 import type { ParsedSearch } from '../utils/searchParser';
 

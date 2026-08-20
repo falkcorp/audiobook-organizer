@@ -1,6 +1,6 @@
 // file: web/src/test/renderWithProviders.tsx
-// version: 1.1.1
-// last-edited: 2026-08-06
+// version: 1.1.2
+// last-edited: 2026-08-19
 
 import React from 'react';
 import { render, type RenderOptions } from '@testing-library/react';
@@ -19,10 +19,7 @@ interface ProviderOptions extends Omit<RenderOptions, 'wrapper'> {
  * Custom render that wraps components in the providers they need:
  * MemoryRouter (for Link/navigate with configurable routes) and ThemeProvider (for MUI).
  */
-export function renderWithProviders(
-  ui: React.ReactElement,
-  options: ProviderOptions = {}
-) {
+export function renderWithProviders(ui: React.ReactElement, options: ProviderOptions = {}) {
   const { initialEntries = ['/'], ...renderOptions } = options;
 
   function Wrapper({ children }: { children: React.ReactNode }) {

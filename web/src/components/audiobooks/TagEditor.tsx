@@ -1,18 +1,9 @@
 // file: web/src/components/audiobooks/TagEditor.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: b3c4d5e6-f7a8-4b9c-0d1e-2f3a4b5c6d7e
 
 import React, { useState, useRef } from 'react';
-import {
-  Chip,
-  Autocomplete,
-  TextField,
-  Box,
-  Popover,
-  Button,
-  Stack,
-  Tooltip,
-} from '@mui/material';
+import { Chip, Autocomplete, TextField, Box, Popover, Button, Stack, Tooltip } from '@mui/material';
 import { Add as AddIcon } from '@mui/icons-material';
 import * as api from '../../services/api';
 import { formatTagLabel, shouldRenderTagChip } from '../../utils/tagDisplay';
@@ -94,9 +85,7 @@ export const TagEditor: React.FC<TagEditorProps> = ({
     (t) => isSystemTag(t.source) && shouldRenderTagChip(t.tag)
   );
 
-  const availableSuggestions = allTags.filter(
-    (t) => !tags.includes(t.toLowerCase())
-  );
+  const availableSuggestions = allTags.filter((t) => !tags.includes(t.toLowerCase()));
 
   const handleAddTag = async (tag: string) => {
     const normalized = tag.trim().toLowerCase();
@@ -214,9 +203,7 @@ export const TagEditor: React.FC<TagEditorProps> = ({
 
   return (
     <Stack spacing={1}>
-      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-        {userTags.map(renderUserChip)}
-      </Box>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>{userTags.map(renderUserChip)}</Box>
       {systemTags.length > 0 && (
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
           {systemTags.map(renderSystemChip)}

@@ -1,5 +1,5 @@
 // file: web/src/pages/PlaylistDetail.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7a5b6c4d-8e9f-4a70-b8c5-3d7e0f1b9a99
 
 import { useCallback, useEffect, useState } from 'react';
@@ -71,7 +71,9 @@ export default function PlaylistDetail() {
     }
   }, [id, navigate]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+  }, [load]);
 
   const handleSave = useCallback(async () => {
     if (!id || !playlist) return;
@@ -80,7 +82,8 @@ export default function PlaylistDetail() {
       const update: Record<string, unknown> = {};
       if (editName !== playlist.name) update.name = editName;
       if (editDescription !== (playlist.description || '')) update.description = editDescription;
-      if (playlist.type === 'smart' && editQuery !== (playlist.query || '')) update.query = editQuery;
+      if (playlist.type === 'smart' && editQuery !== (playlist.query || ''))
+        update.query = editQuery;
       await updatePlaylist(id, update);
       setDirty(false);
       load();
@@ -91,11 +94,14 @@ export default function PlaylistDetail() {
     }
   }, [id, playlist, editName, editDescription, editQuery, load]);
 
-  const handleRemoveBook = useCallback(async (bookId: string) => {
-    if (!id) return;
-    await removeBookFromPlaylist(id, bookId);
-    load();
-  }, [id, load]);
+  const handleRemoveBook = useCallback(
+    async (bookId: string) => {
+      if (!id) return;
+      await removeBookFromPlaylist(id, bookId);
+      load();
+    },
+    [id, load]
+  );
 
   const handleMaterialize = useCallback(async () => {
     if (!id) return;
@@ -118,7 +124,10 @@ export default function PlaylistDetail() {
         <Box>
           <TextField
             value={editName}
-            onChange={(e) => { setEditName(e.target.value); setDirty(true); }}
+            onChange={(e) => {
+              setEditName(e.target.value);
+              setDirty(true);
+            }}
             variant="standard"
             inputProps={{ style: { fontSize: '1.5rem', fontWeight: 'bold' } }}
           />
@@ -131,7 +140,12 @@ export default function PlaylistDetail() {
         </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
           {dirty && (
-            <Button variant="contained" startIcon={<SaveIcon />} onClick={handleSave} disabled={saving}>
+            <Button
+              variant="contained"
+              startIcon={<SaveIcon />}
+              onClick={handleSave}
+              disabled={saving}
+            >
               Save
             </Button>
           )}
@@ -150,7 +164,10 @@ export default function PlaylistDetail() {
         fullWidth
         label="Description"
         value={editDescription}
-        onChange={(e) => { setEditDescription(e.target.value); setDirty(true); }}
+        onChange={(e) => {
+          setEditDescription(e.target.value);
+          setDirty(true);
+        }}
         margin="normal"
         multiline
         rows={2}
@@ -162,7 +179,10 @@ export default function PlaylistDetail() {
           fullWidth
           label="Query (DSL)"
           value={editQuery}
-          onChange={(e) => { setEditQuery(e.target.value); setDirty(true); }}
+          onChange={(e) => {
+            setEditQuery(e.target.value);
+            setDirty(true);
+          }}
           margin="normal"
           size="small"
           helperText="e.g. author:sanderson year:>2015 format:m4b"
@@ -195,7 +215,11 @@ export default function PlaylistDetail() {
                 )}
                 <ListItemText
                   primary={book?.title || bid}
-                  secondary={book ? `${book.format?.toUpperCase() || ''} — ${book.authors?.map((a: { name: string }) => a.name).join(', ') || 'Unknown'}` : 'Loading...'}
+                  secondary={
+                    book
+                      ? `${book.format?.toUpperCase() || ''} — ${book.authors?.map((a: { name: string }) => a.name).join(', ') || 'Unknown'}`
+                      : 'Loading...'
+                  }
                 />
               </ListItem>
             );
@@ -204,7 +228,11 @@ export default function PlaylistDetail() {
             <ListItem>
               <ListItemText
                 primary="No books"
-                secondary={playlist.type === 'smart' ? 'Query returned no results' : 'Add books from the library'}
+                secondary={
+                  playlist.type === 'smart'
+                    ? 'Query returned no results'
+                    : 'Add books from the library'
+                }
               />
             </ListItem>
           )}

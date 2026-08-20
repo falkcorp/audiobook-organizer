@@ -1,5 +1,5 @@
 // file: web/src/components/TagComparison.tsx
-// version: 1.5.0
+// version: 1.5.1
 // guid: cfed2692-76f6-47b0-bc84-cc2a4075e554
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -62,7 +62,13 @@ const TAG_LABELS: Record<string, string> = {
   google_books_id: 'Google Books',
 };
 
-export const TagComparison = ({ bookId, versions, refreshKey, snapshotTimestamp, onClearSnapshot }: TagComparisonProps) => {
+export const TagComparison = ({
+  bookId,
+  versions,
+  refreshKey,
+  snapshotTimestamp,
+  onClearSnapshot,
+}: TagComparisonProps) => {
   const [tags, setTags] = useState<BookTags | null>(null);
   const [loading, setLoading] = useState(false);
   const [compareId, setCompareId] = useState<string>('');
@@ -82,7 +88,7 @@ export const TagComparison = ({ bookId, versions, refreshKey, snapshotTimestamp,
       const result = await api.getBookTags(
         bookId,
         compareId || undefined,
-        snapshotComparisonActive ? snapshotTimestamp ?? undefined : undefined
+        snapshotComparisonActive ? (snapshotTimestamp ?? undefined) : undefined
       );
       setTags(result);
     } catch {
@@ -117,10 +123,7 @@ export const TagComparison = ({ bookId, versions, refreshKey, snapshotTimestamp,
 
   // keyTagStatus removed — badges are now dynamic from tagEntries
 
-  const otherVersions = useMemo(
-    () => versions.filter((v) => v.id !== bookId),
-    [versions, bookId]
-  );
+  const otherVersions = useMemo(() => versions.filter((v) => v.id !== bookId), [versions, bookId]);
 
   const hasComparison = compareId !== '' || snapshotComparisonActive;
 
@@ -185,7 +188,9 @@ export const TagComparison = ({ bookId, versions, refreshKey, snapshotTimestamp,
   const getCellStyle = (tagValues: TagSourceValues, source: 'file' | 'db' | 'comparison') => {
     const fileVal = tagValues.file_value != null ? String(tagValues.file_value) : '';
     const storedVal = tagValues.stored_value != null ? String(tagValues.stored_value) : '';
-    const compVal = (tagValues as TagSourceValues & { comparison_value?: string | number | boolean | null }).comparison_value;
+    const compVal = (
+      tagValues as TagSourceValues & { comparison_value?: string | number | boolean | null }
+    ).comparison_value;
     const compStr = compVal != null ? String(compVal) : '';
 
     if (source === 'db') {
@@ -222,7 +227,7 @@ export const TagComparison = ({ bookId, versions, refreshKey, snapshotTimestamp,
               key={key}
               label={`${matches ? '\u2713' : hasValue || hasStored ? '\u2717' : '\u2013'} ${TAG_LABELS[key] || key}`}
               size="small"
-              color={matches ? 'success' : (hasValue || hasStored) ? 'warning' : 'default'}
+              color={matches ? 'success' : hasValue || hasStored ? 'warning' : 'default'}
               variant={isVisible ? 'outlined' : 'filled'}
               clickable
               onClick={() => {
@@ -236,17 +241,25 @@ export const TagComparison = ({ bookId, versions, refreshKey, snapshotTimestamp,
                   return next;
                 });
               }}
-              sx={[{
-                fontSize: '0.7rem'
-              }, isVisible ? {
-                opacity: 0.6
-              } : {
-                opacity: 1
-              }, isVisible ? {
-                textDecoration: 'none'
-              } : {
-                textDecoration: 'none'
-              }]}
+              sx={[
+                {
+                  fontSize: '0.7rem',
+                },
+                isVisible
+                  ? {
+                      opacity: 0.6,
+                    }
+                  : {
+                      opacity: 1,
+                    },
+                isVisible
+                  ? {
+                      textDecoration: 'none',
+                    }
+                  : {
+                      textDecoration: 'none',
+                    },
+              ]}
             />
           );
         })}
@@ -279,13 +292,17 @@ export const TagComparison = ({ bookId, versions, refreshKey, snapshotTimestamp,
               <Select
                 value={compareId}
                 label="Compare against"
-                onChange={(e) => { setCompareId(e.target.value); if (e.target.value) onClearSnapshot?.(); }}
+                onChange={(e) => {
+                  setCompareId(e.target.value);
+                  if (e.target.value) onClearSnapshot?.();
+                }}
                 data-testid="tag-comparison-select"
               >
                 <MenuItem value="">None</MenuItem>
                 {otherVersions.map((v) => (
                   <MenuItem key={v.id} value={v.id}>
-                    {v.title || 'Untitled'}{v.format ? ` (${v.format.toUpperCase()})` : ''}
+                    {v.title || 'Untitled'}
+                    {v.format ? ` (${v.format.toUpperCase()})` : ''}
                   </MenuItem>
                 ))}
               </Select>
@@ -297,7 +314,14 @@ export const TagComparison = ({ bookId, versions, refreshKey, snapshotTimestamp,
 
         {/* Hidden tags restore bar */}
         {hiddenTags.size > 0 && (
-          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap alignItems="center" sx={{ mb: 1 }}>
+          <Stack
+            direction="row"
+            spacing={0.5}
+            flexWrap="wrap"
+            useFlexGap
+            alignItems="center"
+            sx={{ mb: 1 }}
+          >
             <Typography variant="caption" color="text.secondary">
               {hiddenTags.size} hidden:
             </Typography>
@@ -307,7 +331,13 @@ export const TagComparison = ({ bookId, versions, refreshKey, snapshotTimestamp,
                 label={TAG_LABELS[tag] || tag}
                 size="small"
                 variant="outlined"
-                onDelete={() => setHiddenTags((prev) => { const next = new Set(prev); next.delete(tag); return next; })}
+                onDelete={() =>
+                  setHiddenTags((prev) => {
+                    const next = new Set(prev);
+                    next.delete(tag);
+                    return next;
+                  })
+                }
                 sx={{ fontSize: '0.7rem' }}
               />
             ))}
@@ -334,18 +364,30 @@ export const TagComparison = ({ bookId, versions, refreshKey, snapshotTimestamp,
               <TableHead>
                 <TableRow>
                   {/* Row label column */}
-                  <TableCell sx={{ fontWeight: 'bold', position: 'sticky', left: 0, bgcolor: 'background.paper', zIndex: 2, minWidth: 100 }}>
+                  <TableCell
+                    sx={{
+                      fontWeight: 'bold',
+                      position: 'sticky',
+                      left: 0,
+                      bgcolor: 'background.paper',
+                      zIndex: 2,
+                      minWidth: 100,
+                    }}
+                  >
                     Source
                   </TableCell>
                   {/* One column per tag */}
                   {visibleTagEntries.map(([tagName], colIdx) => (
                     <TableCell
                       key={tagName}
-                      sx={[{
-                        fontWeight: 'bold',
-                        position: 'relative',
-                        minWidth: 80
-                      }, (colWidths[colIdx] ? { width: colWidths[colIdx] } : {})]}
+                      sx={[
+                        {
+                          fontWeight: 'bold',
+                          position: 'relative',
+                          minWidth: 80,
+                        },
+                        colWidths[colIdx] ? { width: colWidths[colIdx] } : {},
+                      ]}
                     >
                       <Stack direction="row" alignItems="center" spacing={0.5}>
                         <span>{TAG_LABELS[tagName] || tagName}</span>
@@ -367,11 +409,21 @@ export const TagComparison = ({ bookId, versions, refreshKey, snapshotTimestamp,
               <TableBody>
                 {/* File Value row */}
                 <TableRow>
-                  <TableCell sx={{ fontWeight: 'bold', color: 'text.secondary', position: 'sticky', left: 0, bgcolor: 'background.paper', zIndex: 1 }}>
+                  <TableCell
+                    sx={{
+                      fontWeight: 'bold',
+                      color: 'text.secondary',
+                      position: 'sticky',
+                      left: 0,
+                      bgcolor: 'background.paper',
+                      zIndex: 1,
+                    }}
+                  >
                     File
                   </TableCell>
                   {visibleTagEntries.map(([tagName, tagValues]) => {
-                    const val = tagValues.file_value != null ? String(tagValues.file_value) : '\u2014';
+                    const val =
+                      tagValues.file_value != null ? String(tagValues.file_value) : '\u2014';
                     return (
                       <TableCell key={tagName} sx={{ fontSize: '0.85rem' }}>
                         {val}
@@ -381,11 +433,21 @@ export const TagComparison = ({ bookId, versions, refreshKey, snapshotTimestamp,
                 </TableRow>
                 {/* DB Value row */}
                 <TableRow>
-                  <TableCell sx={{ fontWeight: 'bold', color: 'text.secondary', position: 'sticky', left: 0, bgcolor: 'background.paper', zIndex: 1 }}>
+                  <TableCell
+                    sx={{
+                      fontWeight: 'bold',
+                      color: 'text.secondary',
+                      position: 'sticky',
+                      left: 0,
+                      bgcolor: 'background.paper',
+                      zIndex: 1,
+                    }}
+                  >
                     DB
                   </TableCell>
                   {visibleTagEntries.map(([tagName, tagValues]) => {
-                    const val = tagValues.stored_value != null ? String(tagValues.stored_value) : '\u2014';
+                    const val =
+                      tagValues.stored_value != null ? String(tagValues.stored_value) : '\u2014';
                     const style = getCellStyle(tagValues, 'db');
                     return (
                       <TableCell key={tagName} sx={{ fontSize: '0.85rem', ...style }}>
@@ -397,11 +459,24 @@ export const TagComparison = ({ bookId, versions, refreshKey, snapshotTimestamp,
                 {/* Comparison row (only when active) */}
                 {hasComparison && (
                   <TableRow>
-                    <TableCell sx={{ fontWeight: 'bold', color: 'text.secondary', position: 'sticky', left: 0, bgcolor: 'background.paper', zIndex: 1 }}>
+                    <TableCell
+                      sx={{
+                        fontWeight: 'bold',
+                        color: 'text.secondary',
+                        position: 'sticky',
+                        left: 0,
+                        bgcolor: 'background.paper',
+                        zIndex: 1,
+                      }}
+                    >
                       {snapshotComparisonActive ? 'Snapshot' : 'Compare'}
                     </TableCell>
                     {visibleTagEntries.map(([tagName, tagValues]) => {
-                      const compVal = (tagValues as TagSourceValues & { comparison_value?: string | number | boolean | null }).comparison_value;
+                      const compVal = (
+                        tagValues as TagSourceValues & {
+                          comparison_value?: string | number | boolean | null;
+                        }
+                      ).comparison_value;
                       const val = compVal != null ? String(compVal) : '\u2014';
                       const style = getCellStyle(tagValues, 'comparison');
                       return (

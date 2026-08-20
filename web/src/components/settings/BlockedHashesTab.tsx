@@ -1,5 +1,5 @@
 // file: web/src/components/settings/BlockedHashesTab.tsx
-// version: 1.0.0
+// version: 1.0.1
 
 import { useEffect, useState } from 'react';
 import {
@@ -22,11 +22,7 @@ import {
   Alert,
   Snackbar,
 } from '@mui/material';
-import {
-  Delete as DeleteIcon,
-  Add as AddIcon,
-  Block as BlockIcon,
-} from '@mui/icons-material';
+import { Delete as DeleteIcon, Add as AddIcon, Block as BlockIcon } from '@mui/icons-material';
 import {
   getBlockedHashes,
   addBlockedHash,
@@ -64,9 +60,7 @@ export default function BlockedHashesTab() {
       const response = await getBlockedHashes();
       setHashes(response.items || []);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Failed to load blocked hashes'
-      );
+      setError(err instanceof Error ? err.message : 'Failed to load blocked hashes');
     } finally {
       setLoading(false);
     }
@@ -106,8 +100,7 @@ export default function BlockedHashesTab() {
     } catch (err) {
       setSnackbar({
         open: true,
-        message:
-          err instanceof Error ? err.message : 'Failed to add blocked hash',
+        message: err instanceof Error ? err.message : 'Failed to add blocked hash',
         severity: 'error',
       });
     }
@@ -129,8 +122,7 @@ export default function BlockedHashesTab() {
     } catch (err) {
       setSnackbar({
         open: true,
-        message:
-          err instanceof Error ? err.message : 'Failed to remove blocked hash',
+        message: err instanceof Error ? err.message : 'Failed to remove blocked hash',
         severity: 'error',
       });
     }
@@ -165,15 +157,11 @@ export default function BlockedHashesTab() {
             Blocked File Hashes
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Files with these hashes will be skipped during import to prevent
-            reimporting deleted or unwanted audiobooks.
+            Files with these hashes will be skipped during import to prevent reimporting deleted or
+            unwanted audiobooks.
           </Typography>
         </Box>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => setAddDialogOpen(true)}
-        >
+        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setAddDialogOpen(true)}>
           Block Hash
         </Button>
       </Box>
@@ -193,14 +181,10 @@ export default function BlockedHashesTab() {
             No Blocked Hashes
           </Typography>
           <Typography variant="body2" color="text.secondary" paragraph>
-            When you delete an audiobook and choose to prevent reimporting, its
-            file hash will appear here.
+            When you delete an audiobook and choose to prevent reimporting, its file hash will
+            appear here.
           </Typography>
-          <Button
-            variant="outlined"
-            startIcon={<AddIcon />}
-            onClick={() => setAddDialogOpen(true)}
-          >
+          <Button variant="outlined" startIcon={<AddIcon />} onClick={() => setAddDialogOpen(true)}>
             Add Blocked Hash
           </Button>
         </Paper>
@@ -219,11 +203,7 @@ export default function BlockedHashesTab() {
               {hashes.map((hash) => (
                 <TableRow key={hash.hash}>
                   <TableCell>
-                    <Typography
-                      variant="body2"
-                      fontFamily="monospace"
-                      title={hash.hash}
-                    >
+                    <Typography variant="body2" fontFamily="monospace" title={hash.hash}>
                       {truncateHash(hash.hash)}
                     </Typography>
                   </TableCell>
@@ -247,18 +227,12 @@ export default function BlockedHashesTab() {
       )}
 
       {/* Add Hash Dialog */}
-      <Dialog
-        open={addDialogOpen}
-        onClose={() => setAddDialogOpen(false)}
-        maxWidth="md"
-        fullWidth
-      >
+      <Dialog open={addDialogOpen} onClose={() => setAddDialogOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>Block File Hash</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" paragraph>
-            Enter the SHA256 hash of a file you want to prevent from being
-            imported. This is typically used for files you've deleted and don't
-            want to reimport.
+            Enter the SHA256 hash of a file you want to prevent from being imported. This is
+            typically used for files you've deleted and don't want to reimport.
           </Typography>
           <TextField
             label="File Hash (SHA256)"
@@ -295,15 +269,12 @@ export default function BlockedHashesTab() {
       </Dialog>
 
       {/* Delete Confirmation Dialog */}
-      <Dialog
-        open={deleteDialogOpen}
-        onClose={() => setDeleteDialogOpen(false)}
-      >
+      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
         <DialogTitle>Unblock Hash?</DialogTitle>
         <DialogContent>
           <Typography>
-            Are you sure you want to unblock this hash? Files with this hash
-            will be able to be imported again.
+            Are you sure you want to unblock this hash? Files with this hash will be able to be
+            imported again.
           </Typography>
           {selectedHash && (
             <Typography

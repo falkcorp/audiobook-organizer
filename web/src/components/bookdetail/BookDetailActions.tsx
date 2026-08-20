@@ -1,16 +1,9 @@
 // file: web/src/components/bookdetail/BookDetailActions.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-08-07
+// last-edited: 2026-08-19
 
-import {
-  Button,
-  CircularProgress,
-  IconButton,
-  Paper,
-  Stack,
-  Tooltip,
-} from '@mui/material';
+import { Button, CircularProgress, IconButton, Paper, Stack, Tooltip } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import RestoreIcon from '@mui/icons-material/Restore';
 import EditIcon from '@mui/icons-material/Edit';
@@ -82,11 +75,7 @@ export const BookDetailActions = ({
 }: BookDetailActionsProps) => {
   return (
     <Paper sx={{ p: 2, mb: 3 }}>
-      <Stack
-        direction={{ xs: 'column', md: 'row' }}
-        spacing={2}
-        justifyContent="space-between"
-      >
+      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} justifyContent="space-between">
         <Stack direction="row" spacing={1} flexWrap="wrap">
           <Button
             variant="outlined"
@@ -98,13 +87,7 @@ export const BookDetailActions = ({
           </Button>
           <Button
             variant="outlined"
-            startIcon={
-              parsingWithAI ? (
-                <CircularProgress size={20} />
-              ) : (
-                <PsychologyIcon />
-              )
-            }
+            startIcon={parsingWithAI ? <CircularProgress size={20} /> : <PsychologyIcon />}
             onClick={onParseWithAI}
             disabled={parsingWithAI || actionLoading}
           >
@@ -112,13 +95,7 @@ export const BookDetailActions = ({
           </Button>
           <Button
             variant="outlined"
-            startIcon={
-              rescanningFolder ? (
-                <CircularProgress size={20} />
-              ) : (
-                <FolderOpenIcon />
-              )
-            }
+            startIcon={rescanningFolder ? <CircularProgress size={20} /> : <FolderOpenIcon />}
             onClick={onRescanFolder}
             disabled={rescanningFolder || actionLoading}
           >
@@ -145,11 +122,7 @@ export const BookDetailActions = ({
           alignItems="center"
         >
           <Tooltip title="Refresh book data">
-            <IconButton
-              onClick={onRefresh}
-              disabled={loading || actionLoading}
-              size="small"
-            >
+            <IconButton onClick={onRefresh} disabled={loading || actionLoading} size="small">
               <RefreshIcon />
             </IconButton>
           </Tooltip>
@@ -163,13 +136,7 @@ export const BookDetailActions = ({
           </Button>
           <Button
             variant="outlined"
-            startIcon={
-              fetchingMetadata ? (
-                <CircularProgress size={20} />
-              ) : (
-                <CloudDownloadIcon />
-              )
-            }
+            startIcon={fetchingMetadata ? <CircularProgress size={20} /> : <CloudDownloadIcon />}
             onClick={onFetchMetadata}
             disabled={fetchingMetadata || actionLoading}
           >
@@ -183,23 +150,13 @@ export const BookDetailActions = ({
           >
             Search Metadata
           </Button>
-          <Button
-            variant="outlined"
-            onClick={onOpenPlaylist}
-            disabled={actionLoading}
-          >
+          <Button variant="outlined" onClick={onOpenPlaylist} disabled={actionLoading}>
             Add to Playlist
           </Button>
           {book && book.format?.toLowerCase() !== 'm4b' && (
             <Button
               variant="outlined"
-              startIcon={
-                transcoding ? (
-                  <CircularProgress size={20} />
-                ) : (
-                  <TransformIcon />
-                )
-              }
+              startIcon={transcoding ? <CircularProgress size={20} /> : <TransformIcon />}
               onClick={onTranscode}
               disabled={transcoding || actionLoading}
             >
@@ -218,17 +175,15 @@ export const BookDetailActions = ({
             onClick={onPreviewOrganize}
             disabled={organizePreviewLoading || applyingOrganize || actionLoading}
           >
-            {applyingOrganize ? 'Organizing...' : organizePreviewLoading ? 'Loading...' : 'Preview Organize'}
+            {applyingOrganize
+              ? 'Organizing...'
+              : organizePreviewLoading
+                ? 'Loading...'
+                : 'Preview Organize'}
           </Button>
           <Button
             variant="outlined"
-            startIcon={
-              writingToFiles ? (
-                <CircularProgress size={20} />
-              ) : (
-                <SaveIcon />
-              )
-            }
+            startIcon={writingToFiles ? <CircularProgress size={20} /> : <SaveIcon />}
             onClick={onOpenWriteBack}
             disabled={writingToFiles || actionLoading}
           >
@@ -260,4 +215,3 @@ export const BookDetailActions = ({
     </Paper>
   );
 };
-

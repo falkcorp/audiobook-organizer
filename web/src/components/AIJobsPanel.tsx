@@ -1,10 +1,19 @@
 // file: web/src/components/AIJobsPanel.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 
 import { useEffect, useState, useRef } from 'react';
 import {
-  Box, Chip, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography,
+  Box,
+  Chip,
+  Paper,
+  Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
+  Typography,
 } from '@mui/material';
 import * as api from '../services/api';
 

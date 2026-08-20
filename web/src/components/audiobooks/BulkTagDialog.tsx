@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/BulkTagDialog.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: c4d5e6f7-a8b9-4c0d-1e2f-3a4b5c6d7e8f
 
 import React, { useState } from 'react';
@@ -99,9 +99,7 @@ export const BulkTagDialog: React.FC<BulkTagDialogProps> = ({
               size="small"
               options={allTags.filter((t) => !addTags.includes(t))}
               value={addTags}
-              onChange={(_e, value) =>
-                setAddTags(value.map((v) => v.trim().toLowerCase()))
-              }
+              onChange={(_e, value) => setAddTags(value.map((v) => v.trim().toLowerCase()))}
               inputValue={addInput}
               onInputChange={(_e, value) => setAddInput(value)}
               renderTags={(value, getTagProps) =>
@@ -144,9 +142,7 @@ export const BulkTagDialog: React.FC<BulkTagDialogProps> = ({
               size="small"
               options={allTags.filter((t) => !removeTags.includes(t))}
               value={removeTags}
-              onChange={(_e, value) =>
-                setRemoveTags(value.map((v) => v.trim().toLowerCase()))
-              }
+              onChange={(_e, value) => setRemoveTags(value.map((v) => v.trim().toLowerCase()))}
               inputValue={removeInput}
               onInputChange={(_e, value) => setRemoveInput(value)}
               renderTags={(value, getTagProps) =>
@@ -180,17 +176,11 @@ export const BulkTagDialog: React.FC<BulkTagDialogProps> = ({
           </div>
 
           {error && <Alert severity="error">{error}</Alert>}
-          {result && (
-            <Alert severity="success">
-              Tags updated for {result.affected} books.
-            </Alert>
-          )}
+          {result && <Alert severity="success">Tags updated for {result.affected} books.</Alert>}
         </Stack>
       </DialogContent>
       <DialogActions>
-        <Button onClick={handleClose}>
-          {result ? 'Close' : 'Cancel'}
-        </Button>
+        <Button onClick={handleClose}>{result ? 'Close' : 'Cancel'}</Button>
         {!result && (
           <Button
             variant="contained"

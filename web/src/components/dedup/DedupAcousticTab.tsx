@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupAcousticTab.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678902
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, Link as RouterLink } from 'react-router-dom';
 import {
@@ -77,18 +77,27 @@ export function AcousticBookMetadata({ book, filePath }: { book: Book; filePath?
       )}
       {book.series_name && (
         <Typography variant="caption" color="text.secondary" noWrap display="block">
-          {book.series_name}{book.series_position ? ` · Book ${book.series_position}` : ''}
+          {book.series_name}
+          {book.series_position ? ` · Book ${book.series_position}` : ''}
         </Typography>
       )}
       <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }} flexWrap="wrap" useFlexGap>
         {book.format && <Chip label={book.format.toUpperCase()} size="small" />}
-        {book.duration && <Chip label={formatDuration(book.duration)} size="small" variant="outlined" />}
+        {book.duration && (
+          <Chip label={formatDuration(book.duration)} size="small" variant="outlined" />
+        )}
       </Stack>
       {filePath && (
         <Typography
           variant="caption"
           color="text.secondary"
-          sx={{ display: 'block', mt: 0.5, wordBreak: 'break-all', fontSize: '0.65rem', fontFamily: 'monospace' }}
+          sx={{
+            display: 'block',
+            mt: 0.5,
+            wordBreak: 'break-all',
+            fontSize: '0.65rem',
+            fontFamily: 'monospace',
+          }}
         >
           {filePath}
         </Typography>
@@ -101,7 +110,11 @@ export function AcousticBookMetadata({ book, filePath }: { book: Book; filePath?
 export function AcousticBookCard({ book, label }: { book: Book; label: string }) {
   return (
     <Box sx={{ flex: 1, minWidth: 0 }}>
-      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}
+      >
         {label}
       </Typography>
       <Stack direction="row" spacing={1.5} sx={{ mt: 0.5 }} alignItems="flex-start">
@@ -183,13 +196,16 @@ function AcousticComparePanel({ initialA = '', initialB = '' }: AcousticCompareP
   };
 
   const segLabels: Record<string, string> = {
-    seg0: 'Intro', seg1: 'Body 1', seg2: 'Body 2',
-    seg3: 'Body 3', seg4: 'Body 4', seg5: 'Body 5', seg6: 'Outro',
+    seg0: 'Intro',
+    seg1: 'Body 1',
+    seg2: 'Body 2',
+    seg3: 'Body 3',
+    seg4: 'Body 4',
+    seg5: 'Body 5',
+    seg6: 'Outro',
   };
 
-  const hasAnySegments = result
-    ? result.segment_scores.some((s) => s.hash_a || s.hash_b)
-    : false;
+  const hasAnySegments = result ? result.segment_scores.some((s) => s.hash_a || s.hash_b) : false;
 
   const handleBookAIDChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setBookAID(e.target.value);
@@ -203,7 +219,9 @@ function AcousticComparePanel({ initialA = '', initialB = '' }: AcousticCompareP
 
   return (
     <Paper sx={{ p: 2 }}>
-      <Typography variant="subtitle1" sx={{ mb: 1.5, fontWeight: 600 }}>Fingerprint Comparison</Typography>
+      <Typography variant="subtitle1" sx={{ mb: 1.5, fontWeight: 600 }}>
+        Fingerprint Comparison
+      </Typography>
       <Stack direction="row" spacing={2} sx={{ mb: 2 }} alignItems="flex-start">
         <TextField
           label="Book A ID"
@@ -225,20 +243,41 @@ function AcousticComparePanel({ initialA = '', initialB = '' }: AcousticCompareP
           sx={{ flex: 1 }}
           placeholder="Paste book ID…"
         />
-        <Button variant="contained" onClick={handleCompare} disabled={loading || !bookAID.trim() || !bookBID.trim()} sx={{ mt: 0.5 }}>
+        <Button
+          variant="contained"
+          onClick={handleCompare}
+          disabled={loading || !bookAID.trim() || !bookBID.trim()}
+          sx={{ mt: 0.5 }}
+        >
           {loading ? 'Comparing…' : 'Compare'}
         </Button>
       </Stack>
 
-      {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
+      {error && (
+        <Alert severity="error" sx={{ mb: 1 }}>
+          {error}
+        </Alert>
+      )}
 
       {result && (
         <Box>
           {/* Cover images and metadata side by side */}
           <Stack direction="row" spacing={3} sx={{ mb: 3 }}>
             {/* Book A */}
-            <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+            <Box
+              sx={{
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 2,
+              }}
+            >
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}
+              >
                 Book A
               </Typography>
               {/* Cover image (clickable) */}
@@ -269,14 +308,29 @@ function AcousticComparePanel({ initialA = '', initialB = '' }: AcousticCompareP
                 )}
               </Box>
               {/* Metadata */}
-              <AcousticBookMetadata book={result.book_a as Book} filePath={(result.book_a as any)?.file_path} />
+              <AcousticBookMetadata
+                book={result.book_a as Book}
+                filePath={(result.book_a as any)?.file_path}
+              />
             </Box>
 
             <Divider orientation="vertical" flexItem />
 
             {/* Book B (same structure as Book A) */}
-            <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+            <Box
+              sx={{
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 2,
+              }}
+            >
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}
+              >
                 Book B
               </Typography>
               <Box
@@ -305,7 +359,10 @@ function AcousticComparePanel({ initialA = '', initialB = '' }: AcousticCompareP
                   <GraphicEqIcon sx={{ fontSize: 60, opacity: 0.3 }} />
                 )}
               </Box>
-              <AcousticBookMetadata book={result.book_b as Book} filePath={(result.book_b as any)?.file_path} />
+              <AcousticBookMetadata
+                book={result.book_b as Book}
+                filePath={(result.book_b as any)?.file_path}
+              />
             </Box>
           </Stack>
 
@@ -315,12 +372,19 @@ function AcousticComparePanel({ initialA = '', initialB = '' }: AcousticCompareP
           {/* Similarity score */}
           <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
             <Chip
-              label={hasAnySegments ? `${Math.round(result.overall_score * 100)}% match` : 'No fingerprint data'}
+              label={
+                hasAnySegments
+                  ? `${Math.round(result.overall_score * 100)}% match`
+                  : 'No fingerprint data'
+              }
               color={
-                !hasAnySegments ? 'default'
-                  : result.overall_score >= 0.85 ? 'error'
-                  : result.overall_score >= 0.6 ? 'warning'
-                  : 'default'
+                !hasAnySegments
+                  ? 'default'
+                  : result.overall_score >= 0.85
+                    ? 'error'
+                    : result.overall_score >= 0.6
+                      ? 'warning'
+                      : 'default'
               }
               icon={<GraphicEqIcon />}
             />
@@ -333,48 +397,58 @@ function AcousticComparePanel({ initialA = '', initialB = '' }: AcousticCompareP
 
           {/* Segment table */}
           <TableContainer>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Segment</TableCell>
-                <TableCell>Book A fingerprint</TableCell>
-                <TableCell>Book B fingerprint</TableCell>
-                <TableCell align="center">Match</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {result.segment_scores.map((seg) => (
-                <TableRow
-                  key={seg.segment}
-                  sx={{
-                    bgcolor: seg.match
-                      ? 'success.light'
-                      : seg.hash_a && seg.hash_b
-                      ? 'error.light'
-                      : undefined,
-                    opacity: 0.9,
-                  }}
-                >
-                  <TableCell><strong>{segLabels[seg.segment] ?? seg.segment}</strong></TableCell>
-                  <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.7rem' }}>
-                    {seg.hash_a ? seg.hash_a.slice(0, 16) + '…' : <em style={{ opacity: 0.4 }}>not fingerprinted</em>}
-                  </TableCell>
-                  <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.7rem' }}>
-                    {seg.hash_b ? seg.hash_b.slice(0, 16) + '…' : <em style={{ opacity: 0.4 }}>not fingerprinted</em>}
-                  </TableCell>
-                  <TableCell align="center">
-                    {!seg.hash_a || !seg.hash_b ? (
-                      <Chip label="n/a" size="small" variant="outlined" />
-                    ) : seg.match ? (
-                      <Chip label="✓ match" size="small" color="success" />
-                    ) : (
-                      <Chip label="✗ differ" size="small" color="error" />
-                    )}
-                  </TableCell>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Segment</TableCell>
+                  <TableCell>Book A fingerprint</TableCell>
+                  <TableCell>Book B fingerprint</TableCell>
+                  <TableCell align="center">Match</TableCell>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHead>
+              <TableBody>
+                {result.segment_scores.map((seg) => (
+                  <TableRow
+                    key={seg.segment}
+                    sx={{
+                      bgcolor: seg.match
+                        ? 'success.light'
+                        : seg.hash_a && seg.hash_b
+                          ? 'error.light'
+                          : undefined,
+                      opacity: 0.9,
+                    }}
+                  >
+                    <TableCell>
+                      <strong>{segLabels[seg.segment] ?? seg.segment}</strong>
+                    </TableCell>
+                    <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.7rem' }}>
+                      {seg.hash_a ? (
+                        seg.hash_a.slice(0, 16) + '…'
+                      ) : (
+                        <em style={{ opacity: 0.4 }}>not fingerprinted</em>
+                      )}
+                    </TableCell>
+                    <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.7rem' }}>
+                      {seg.hash_b ? (
+                        seg.hash_b.slice(0, 16) + '…'
+                      ) : (
+                        <em style={{ opacity: 0.4 }}>not fingerprinted</em>
+                      )}
+                    </TableCell>
+                    <TableCell align="center">
+                      {!seg.hash_a || !seg.hash_b ? (
+                        <Chip label="n/a" size="small" variant="outlined" />
+                      ) : seg.match ? (
+                        <Chip label="✓ match" size="small" color="success" />
+                      ) : (
+                        <Chip label="✗ differ" size="small" color="error" />
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </TableContainer>
         </Box>
       )}
@@ -390,9 +464,7 @@ function metadataQuality(book: Book | undefined): number {
   const title = book.title ?? '';
   // Title sanity: not empty, not literal "TITLE", not looks like a ULID/UUID
   const isGarbageTitle =
-    !title ||
-    title.toUpperCase() === 'TITLE' ||
-    /^[0-9A-Z]{26}$/.test(title.trim());
+    !title || title.toUpperCase() === 'TITLE' || /^[0-9A-Z]{26}$/.test(title.trim());
   if (!isGarbageTitle) score += 2;
   if (book.asin) score += 3;
   if (book.isbn13 || book.isbn) score += 2;
@@ -404,8 +476,10 @@ function metadataQuality(book: Book | undefined): number {
 }
 
 function qualityChip(score: number) {
-  if (score >= 6) return <Chip label="Rich metadata" size="small" color="success" variant="outlined" />;
-  if (score >= 3) return <Chip label="Partial metadata" size="small" color="warning" variant="outlined" />;
+  if (score >= 6)
+    return <Chip label="Rich metadata" size="small" color="success" variant="outlined" />;
+  if (score >= 3)
+    return <Chip label="Partial metadata" size="small" color="warning" variant="outlined" />;
   return <Chip label="Poor metadata" size="small" color="error" variant="outlined" />;
 }
 
@@ -450,14 +524,21 @@ export function AcousticDedupTab() {
       setTotal(resp.total || 0);
 
       const ids = new Set<string>();
-      for (const c of cands) { ids.add(c.entity_a_id); ids.add(c.entity_b_id); }
+      for (const c of cands) {
+        ids.add(c.entity_a_id);
+        ids.add(c.entity_b_id);
+      }
       const cache = new Map<string, Book>();
-      await Promise.all(Array.from(ids).map(async (id) => {
-        try {
-          const book = await fetchBookCached(id);
-          if (book) cache.set(id, book);
-        } catch { /* ignore */ }
-      }));
+      await Promise.all(
+        Array.from(ids).map(async (id) => {
+          try {
+            const book = await fetchBookCached(id);
+            if (book) cache.set(id, book);
+          } catch {
+            /* ignore */
+          }
+        })
+      );
       setBookCache(cache);
     } catch {
       // handled by empty state
@@ -466,7 +547,9 @@ export function AcousticDedupTab() {
     }
   }, [page, rowsPerPage]);
 
-  useEffect(() => { loadCandidates(); }, [loadCandidates]);
+  useEffect(() => {
+    loadCandidates();
+  }, [loadCandidates]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -530,7 +613,11 @@ export function AcousticDedupTab() {
       setStatusSeverity('error');
       setStatusMsg(err instanceof Error ? err.message : 'Merge failed');
     } finally {
-      setResolving((s) => { const next = new Set(s); next.delete(candidateId); return next; });
+      setResolving((s) => {
+        const next = new Set(s);
+        next.delete(candidateId);
+        return next;
+      });
     }
   };
 
@@ -543,7 +630,11 @@ export function AcousticDedupTab() {
       setStatusSeverity('error');
       setStatusMsg(err instanceof Error ? err.message : 'Dismiss failed');
     } finally {
-      setResolving((s) => { const next = new Set(s); next.delete(candidateId); return next; });
+      setResolving((s) => {
+        const next = new Set(s);
+        next.delete(candidateId);
+        return next;
+      });
     }
   };
 
@@ -559,7 +650,7 @@ export function AcousticDedupTab() {
       setStatusMsg(
         op_id
           ? `Cleanup queued — see bell for progress (op ${op_id.slice(-6)}).`
-          : 'Cleanup queued — see bell for progress.',
+          : 'Cleanup queued — see bell for progress.'
       );
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
       timeoutRef.current = setTimeout(() => {
@@ -605,10 +696,17 @@ export function AcousticDedupTab() {
   const [acoustidKeySaving, setAcoustidKeySaving] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    api.getConfig().then((cfg) => {
-      if (!cancelled) setAcoustidKeyMask(cfg.acoustid_api_key || '');
-    }).catch(() => { /* leave blank */ });
-    return () => { cancelled = true; };
+    api
+      .getConfig()
+      .then((cfg) => {
+        if (!cancelled) setAcoustidKeyMask(cfg.acoustid_api_key || '');
+      })
+      .catch(() => {
+        /* leave blank */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
   const handleSaveAcoustIDKey = async () => {
     if (!acoustidKey.trim()) return;
@@ -628,15 +726,18 @@ export function AcousticDedupTab() {
 
   const [resetting, setResetting] = useState(false);
   const handleResetAcoustID = async () => {
-    if (!window.confirm(
-      'This clears EVERY stored AcoustID fingerprint and re-enqueues a full library rescan (multi-hour). Continue?',
-    )) return;
+    if (
+      !window.confirm(
+        'This clears EVERY stored AcoustID fingerprint and re-enqueues a full library rescan (multi-hour). Continue?'
+      )
+    )
+      return;
     setResetting(true);
     setStatusMsg(null);
     try {
       const { reset_op_id, rescan_op_id } = await api.resetAcoustIDFingerprints();
       setStatusMsg(
-        `Reset queued (op ${reset_op_id.slice(-6)}); rescan will follow (op ${rescan_op_id.slice(-6) || 'pending'}). Watch the bell.`,
+        `Reset queued (op ${reset_op_id.slice(-6)}); rescan will follow (op ${rescan_op_id.slice(-6) || 'pending'}). Watch the bell.`
       );
     } catch (err) {
       setStatusMsg(err instanceof Error ? err.message : 'Reset failed');
@@ -648,9 +749,7 @@ export function AcousticDedupTab() {
   // Bulk dismiss N candidates in parallel (capped concurrency to be polite to
   // the backend). Refreshes the list once at the end instead of per-call so
   // the UI doesn't thrash. Selecting nothing is a no-op.
-  const bulkApply = async (
-    action: 'dismiss' | 'keep-a' | 'keep-b',
-  ) => {
+  const bulkApply = async (action: 'dismiss' | 'keep-a' | 'keep-b') => {
     if (selectedCandIds.size === 0) return;
     setBulkBusy(true);
     const ids = Array.from(selectedCandIds);
@@ -658,27 +757,31 @@ export function AcousticDedupTab() {
     const CONCURRENCY = 5;
     for (let i = 0; i < ids.length; i += CONCURRENCY) {
       const batch = ids.slice(i, i + CONCURRENCY);
-      await Promise.all(batch.map(async (id) => {
-        const c = candidates.find((x) => x.id === id);
-        if (!c) return;
-        try {
-          if (action === 'dismiss') {
-            await api.dismissDedupCandidate(id);
-          } else if (action === 'keep-a') {
-            await api.mergeDedupCandidate(id, c.entity_a_id);
-          } else {
-            await api.mergeDedupCandidate(id, c.entity_b_id);
+      await Promise.all(
+        batch.map(async (id) => {
+          const c = candidates.find((x) => x.id === id);
+          if (!c) return;
+          try {
+            if (action === 'dismiss') {
+              await api.dismissDedupCandidate(id);
+            } else if (action === 'keep-a') {
+              await api.mergeDedupCandidate(id, c.entity_a_id);
+            } else {
+              await api.mergeDedupCandidate(id, c.entity_b_id);
+            }
+          } catch {
+            failed.push(id);
           }
-        } catch {
-          failed.push(id);
-        }
-      }));
+        })
+      );
     }
     setSelectedCandIds(new Set(failed));
     setBulkBusy(false);
-    setStatusMsg(failed.length === 0
-      ? `Bulk ${action}: ${ids.length} candidate(s) processed`
-      : `Bulk ${action}: ${ids.length - failed.length} ok, ${failed.length} failed`);
+    setStatusMsg(
+      failed.length === 0
+        ? `Bulk ${action}: ${ids.length} candidate(s) processed`
+        : `Bulk ${action}: ${ids.length - failed.length} ok, ${failed.length} failed`
+    );
     await loadCandidates();
   };
 
@@ -689,7 +792,8 @@ export function AcousticDedupTab() {
     const b = bookCache.get(id);
     if (!b) return <em style={{ opacity: 0.5 }}>{id.slice(-8)}</em>;
     const title = b.title;
-    const isGarbage = !title || title.toUpperCase() === 'TITLE' || /^[0-9A-Z]{26}$/.test(title.trim());
+    const isGarbage =
+      !title || title.toUpperCase() === 'TITLE' || /^[0-9A-Z]{26}$/.test(title.trim());
     if (isGarbage) return <em style={{ color: 'orange' }}>{title || '(no title)'}</em>;
     return title;
   };
@@ -761,17 +865,34 @@ export function AcousticDedupTab() {
 
   return (
     <Box>
-      <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 1 }} flexWrap="wrap" useFlexGap>
+      <Stack
+        direction="row"
+        spacing={2}
+        alignItems="center"
+        sx={{ mb: 1 }}
+        flexWrap="wrap"
+        useFlexGap
+      >
         <Typography variant="h6">Acoustic Duplicates</Typography>
 
         <Tooltip title="Read every audio file and compute 7-segment chromaprint fingerprints. Required before duplicate scanning. Runs overnight; safe to trigger manually for new files.">
-          <Button variant="outlined" startIcon={<FingerprintIcon />} onClick={handleFingerprint} disabled={fingerprinting}>
+          <Button
+            variant="outlined"
+            startIcon={<FingerprintIcon />}
+            onClick={handleFingerprint}
+            disabled={fingerprinting}
+          >
             {fingerprinting ? 'Queuing…' : 'Fingerprint Books'}
           </Button>
         </Tooltip>
 
         <Tooltip title="Compare already-stored fingerprints across all books to find audio-level duplicate pairs. Fast — no file I/O.">
-          <Button variant="outlined" startIcon={<GraphicEqIcon />} onClick={handleScan} disabled={scanning}>
+          <Button
+            variant="outlined"
+            startIcon={<GraphicEqIcon />}
+            onClick={handleScan}
+            disabled={scanning}
+          >
             {scanning ? 'Queuing…' : 'Find Acoustic Duplicates'}
           </Button>
         </Tooltip>
@@ -783,22 +904,36 @@ export function AcousticDedupTab() {
         </Tooltip>
 
         <Tooltip title="Nuke every stored AcoustID fingerprint and force a full rescan. Use when stored fingerprints are suspected bad (e.g. every book matching one anchor at 100%). Multi-hour.">
-          <Button variant="outlined" color="error" onClick={handleResetAcoustID} disabled={resetting}>
+          <Button
+            variant="outlined"
+            color="error"
+            onClick={handleResetAcoustID}
+            disabled={resetting}
+          >
             {resetting ? 'Queuing…' : 'Reset & Rescan All AcoustID'}
           </Button>
         </Tooltip>
 
         <Tooltip title="Send every file's whole-file chromaprint to acoustid.org's /v2/lookup and store the top MusicBrainz recording_id (score ≥ 0.85). Requires ACOUSTID_API_KEY. Rate-limited to ~3 req/sec; takes hours over a full library. Audiobook coverage in AcoustID's DB is sparse — expect a 5–15% hit rate.">
-          <Button variant="outlined" color="info" onClick={handleAcoustIDOnline} disabled={onlineLookingUp}>
+          <Button
+            variant="outlined"
+            color="info"
+            onClick={handleAcoustIDOnline}
+            disabled={onlineLookingUp}
+          >
             {onlineLookingUp ? 'Queuing…' : 'Look Up on AcoustID.org'}
           </Button>
         </Tooltip>
 
-        <IconButton onClick={() => loadCandidates()} size="small" title="Refresh"><RefreshIcon /></IconButton>
+        <IconButton onClick={() => loadCandidates()} size="small" title="Refresh">
+          <RefreshIcon />
+        </IconButton>
       </Stack>
 
       <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
-        Workflow: <strong>Fingerprint Books</strong> (reads audio, ~hours) → <strong>Find Acoustic Duplicates</strong> (compares hashes, seconds). Merge direction: prefer the book with richer metadata (ASIN/ISBN → cover → sane title).
+        Workflow: <strong>Fingerprint Books</strong> (reads audio, ~hours) →{' '}
+        <strong>Find Acoustic Duplicates</strong> (compares hashes, seconds). Merge direction:
+        prefer the book with richer metadata (ASIN/ISBN → cover → sane title).
       </Typography>
 
       {/* AcoustID online lookup — API key form. Saved to the settings
@@ -812,7 +947,9 @@ export function AcousticDedupTab() {
           <TextField
             size="small"
             type="password"
-            placeholder={acoustidKeyMask ? `Saved: ${acoustidKeyMask}` : 'Get a free key at acoustid.org/login'}
+            placeholder={
+              acoustidKeyMask ? `Saved: ${acoustidKeyMask}` : 'Get a free key at acoustid.org/login'
+            }
             value={acoustidKey}
             onChange={(e) => setAcoustidKey(e.target.value)}
             sx={{ flex: 1, minWidth: 280 }}
@@ -828,16 +965,31 @@ export function AcousticDedupTab() {
           </Button>
         </Stack>
         <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-          Required for "Look Up on AcoustID.org". Stored in the settings database (masked when read back). Falls back to ACOUSTID_API_KEY env var if unset.
+          Required for "Look Up on AcoustID.org". Stored in the settings database (masked when read
+          back). Falls back to ACOUSTID_API_KEY env var if unset.
         </Typography>
       </Paper>
 
-      {statusMsg && <Alert severity={statusSeverity} sx={{ mb: 2 }} onClose={() => { setStatusMsg(null); setStatusSeverity('info'); }}>{statusMsg}</Alert>}
+      {statusMsg && (
+        <Alert
+          severity={statusSeverity}
+          sx={{ mb: 2 }}
+          onClose={() => {
+            setStatusMsg(null);
+            setStatusSeverity('info');
+          }}
+        >
+          {statusMsg}
+        </Alert>
+      )}
 
       {loading ? (
         <LinearProgress />
       ) : candidates.length === 0 ? (
-        <Alert severity="info">No acoustic duplicate candidates found. Run "Fingerprint Books" then "Find Acoustic Duplicates".</Alert>
+        <Alert severity="info">
+          No acoustic duplicate candidates found. Run "Fingerprint Books" then "Find Acoustic
+          Duplicates".
+        </Alert>
       ) : (
         <Paper>
           {/* Bulk action toolbar — visible whenever any row is selected. */}
@@ -846,151 +998,218 @@ export function AcousticDedupTab() {
               direction="row"
               spacing={1}
               alignItems="center"
-              sx={{ px: 2, py: 1, bgcolor: 'action.selected', borderBottom: '1px solid', borderColor: 'divider' }}
+              sx={{
+                px: 2,
+                py: 1,
+                bgcolor: 'action.selected',
+                borderBottom: '1px solid',
+                borderColor: 'divider',
+              }}
             >
               <Typography variant="body2" sx={{ fontWeight: 600 }}>
                 {selectedCandIds.size} selected
               </Typography>
               <Box sx={{ flexGrow: 1 }} />
-              <Button size="small" variant="outlined" disabled={bulkBusy}
-                onClick={() => bulkApply('keep-a')}>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={bulkBusy}
+                onClick={() => bulkApply('keep-a')}
+              >
                 Keep A on {selectedCandIds.size}
               </Button>
-              <Button size="small" variant="outlined" disabled={bulkBusy}
-                onClick={() => bulkApply('keep-b')}>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={bulkBusy}
+                onClick={() => bulkApply('keep-b')}
+              >
                 Keep B on {selectedCandIds.size}
               </Button>
-              <Button size="small" variant="outlined" color="warning" disabled={bulkBusy}
-                onClick={() => bulkApply('dismiss')}>
+              <Button
+                size="small"
+                variant="outlined"
+                color="warning"
+                disabled={bulkBusy}
+                onClick={() => bulkApply('dismiss')}
+              >
                 Dismiss {selectedCandIds.size}
               </Button>
-              <Button size="small" variant="text" disabled={bulkBusy}
-                onClick={() => setSelectedCandIds(new Set())}>
+              <Button
+                size="small"
+                variant="text"
+                disabled={bulkBusy}
+                onClick={() => setSelectedCandIds(new Set())}
+              >
                 Clear
               </Button>
             </Stack>
           )}
           <TableContainer>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell padding="checkbox">
-                  <Checkbox
-                    size="small"
-                    indeterminate={selectedCandIds.size > 0 && selectedCandIds.size < candidates.length}
-                    checked={candidates.length > 0 && selectedCandIds.size === candidates.length}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setSelectedCandIds(new Set(candidates.map((c) => c.id)));
-                      } else {
-                        setSelectedCandIds(new Set());
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell padding="checkbox">
+                    <Checkbox
+                      size="small"
+                      indeterminate={
+                        selectedCandIds.size > 0 && selectedCandIds.size < candidates.length
                       }
-                    }}
-                  />
-                </TableCell>
-                <TableCell>Book A</TableCell>
-                <TableCell>Book B</TableCell>
-                <TableCell align="center">Similarity</TableCell>
-                <TableCell>Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {candidates.map((c) => {
-                const bookA = bookCache.get(c.entity_a_id);
-                const bookB = bookCache.get(c.entity_b_id);
-                const qA = metadataQuality(bookA);
-                const qB = metadataQuality(bookB);
-                const recommendA = qA > qB;
-                const recommendB = qB > qA;
-                const busy = resolving.has(c.id);
-                const selected = selectedCandIds.has(c.id);
-                return (
-                  <TableRow
-                    key={c.id}
-                    hover
-                    selected={selected}
-                    sx={[busy ? {
-                      opacity: 0.5
-                    } : {
-                      opacity: 1
-                    }]}
-                  >
-                    <TableCell padding="checkbox">
-                      <Checkbox
-                        size="small"
-                        checked={selected}
-                        onChange={(e) => {
-                          setSelectedCandIds((prev) => {
-                            const next = new Set(prev);
-                            if (e.target.checked) next.add(c.id);
-                            else next.delete(c.id);
-                            return next;
-                          });
-                        }}
-                      />
-                    </TableCell>
-                    <TableCell sx={{ verticalAlign: 'top', minWidth: 280 }}>
-                      <Stack spacing={0.5}>
-                        {renderBookCell(c.entity_a_id)}
-                        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                          {qualityChip(qA)}
-                          {recommendA && <Chip label="★ Recommended keep" size="small" color="primary" />}
+                      checked={candidates.length > 0 && selectedCandIds.size === candidates.length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedCandIds(new Set(candidates.map((c) => c.id)));
+                        } else {
+                          setSelectedCandIds(new Set());
+                        }
+                      }}
+                    />
+                  </TableCell>
+                  <TableCell>Book A</TableCell>
+                  <TableCell>Book B</TableCell>
+                  <TableCell align="center">Similarity</TableCell>
+                  <TableCell>Actions</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {candidates.map((c) => {
+                  const bookA = bookCache.get(c.entity_a_id);
+                  const bookB = bookCache.get(c.entity_b_id);
+                  const qA = metadataQuality(bookA);
+                  const qB = metadataQuality(bookB);
+                  const recommendA = qA > qB;
+                  const recommendB = qB > qA;
+                  const busy = resolving.has(c.id);
+                  const selected = selectedCandIds.has(c.id);
+                  return (
+                    <TableRow
+                      key={c.id}
+                      hover
+                      selected={selected}
+                      sx={[
+                        busy
+                          ? {
+                              opacity: 0.5,
+                            }
+                          : {
+                              opacity: 1,
+                            },
+                      ]}
+                    >
+                      <TableCell padding="checkbox">
+                        <Checkbox
+                          size="small"
+                          checked={selected}
+                          onChange={(e) => {
+                            setSelectedCandIds((prev) => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.add(c.id);
+                              else next.delete(c.id);
+                              return next;
+                            });
+                          }}
+                        />
+                      </TableCell>
+                      <TableCell sx={{ verticalAlign: 'top', minWidth: 280 }}>
+                        <Stack spacing={0.5}>
+                          {renderBookCell(c.entity_a_id)}
+                          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                            {qualityChip(qA)}
+                            {recommendA && (
+                              <Chip label="★ Recommended keep" size="small" color="primary" />
+                            )}
+                          </Stack>
                         </Stack>
-                      </Stack>
-                    </TableCell>
-                    <TableCell sx={{ verticalAlign: 'top', minWidth: 280 }}>
-                      <Stack spacing={0.5}>
-                        {renderBookCell(c.entity_b_id)}
-                        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                          {qualityChip(qB)}
-                          {recommendB && <Chip label="★ Recommended keep" size="small" color="primary" />}
+                      </TableCell>
+                      <TableCell sx={{ verticalAlign: 'top', minWidth: 280 }}>
+                        <Stack spacing={0.5}>
+                          {renderBookCell(c.entity_b_id)}
+                          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                            {qualityChip(qB)}
+                            {recommendB && (
+                              <Chip label="★ Recommended keep" size="small" color="primary" />
+                            )}
+                          </Stack>
                         </Stack>
-                      </Stack>
-                    </TableCell>
-                    <TableCell align="center">
-                      <Chip label={simPct(c)} size="small" color={(c.similarity ?? 0) >= 0.9 ? 'error' : 'warning'} />
-                    </TableCell>
-                    <TableCell>
-                      <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                        <Tooltip title="Keep Book A, merge B into it">
-                          <Button size="small" variant={recommendA ? 'contained' : 'outlined'} color="primary"
-                            disabled={busy} onClick={() => handleMerge(c.id, c.entity_a_id)}>
-                            Keep A
-                          </Button>
-                        </Tooltip>
-                        <Tooltip title="Keep Book B, merge A into it">
-                          <Button size="small" variant={recommendB ? 'contained' : 'outlined'} color="primary"
-                            disabled={busy} onClick={() => handleMerge(c.id, c.entity_b_id)}>
-                            Keep B
-                          </Button>
-                        </Tooltip>
-                        <Tooltip title="Compare fingerprint segments side-by-side">
-                          <Button size="small" variant="outlined" startIcon={<GraphicEqIcon />}
-                            onClick={() => { setCompareA(c.entity_a_id); setCompareB(c.entity_b_id); setShowComparePanel(true); }}>
-                            Compare
-                          </Button>
-                        </Tooltip>
-                        <Tooltip title="Not a duplicate — dismiss">
-                          <Button size="small" variant="text" color="inherit" disabled={busy}
-                            onClick={() => handleDismiss(c.id)}>
-                            Dismiss
-                          </Button>
-                        </Tooltip>
-                      </Stack>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
+                      </TableCell>
+                      <TableCell align="center">
+                        <Chip
+                          label={simPct(c)}
+                          size="small"
+                          color={(c.similarity ?? 0) >= 0.9 ? 'error' : 'warning'}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                          <Tooltip title="Keep Book A, merge B into it">
+                            <Button
+                              size="small"
+                              variant={recommendA ? 'contained' : 'outlined'}
+                              color="primary"
+                              disabled={busy}
+                              onClick={() => handleMerge(c.id, c.entity_a_id)}
+                            >
+                              Keep A
+                            </Button>
+                          </Tooltip>
+                          <Tooltip title="Keep Book B, merge A into it">
+                            <Button
+                              size="small"
+                              variant={recommendB ? 'contained' : 'outlined'}
+                              color="primary"
+                              disabled={busy}
+                              onClick={() => handleMerge(c.id, c.entity_b_id)}
+                            >
+                              Keep B
+                            </Button>
+                          </Tooltip>
+                          <Tooltip title="Compare fingerprint segments side-by-side">
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              startIcon={<GraphicEqIcon />}
+                              onClick={() => {
+                                setCompareA(c.entity_a_id);
+                                setCompareB(c.entity_b_id);
+                                setShowComparePanel(true);
+                              }}
+                            >
+                              Compare
+                            </Button>
+                          </Tooltip>
+                          <Tooltip title="Not a duplicate — dismiss">
+                            <Button
+                              size="small"
+                              variant="text"
+                              color="inherit"
+                              disabled={busy}
+                              onClick={() => handleDismiss(c.id)}
+                            >
+                              Dismiss
+                            </Button>
+                          </Tooltip>
+                        </Stack>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
           </TableContainer>
           <TablePagination
             component="div"
             count={total}
             page={page}
-            onPageChange={(_, p) => { setPage(p); setSelectedCandIds(new Set()); }}
+            onPageChange={(_, p) => {
+              setPage(p);
+              setSelectedCandIds(new Set());
+            }}
             rowsPerPage={rowsPerPage}
-            onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); setSelectedCandIds(new Set()); }}
+            onRowsPerPageChange={(e) => {
+              setRowsPerPage(parseInt(e.target.value, 10));
+              setPage(0);
+              setSelectedCandIds(new Set());
+            }}
             rowsPerPageOptions={[25, 50, 100, 250]}
           />
         </Paper>

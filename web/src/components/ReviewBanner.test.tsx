@@ -1,7 +1,7 @@
 // file: web/src/components/ReviewBanner.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3a7e2c81-9d46-4b50-8f13-6c0a5d9e2b47
-// last-edited: 2026-07-13
+// last-edited: 2026-08-19
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent } from '@testing-library/react';
@@ -20,7 +20,13 @@ vi.mock('react-router-dom', async () => {
 describe('ReviewBanner', () => {
   beforeEach(() => {
     navigateSpy.mockReset();
-    useReviewStore.setState({ count: 0, byKind: {}, items: [], itemsLoading: false, _pollTimer: null });
+    useReviewStore.setState({
+      count: 0,
+      byKind: {},
+      items: [],
+      itemsLoading: false,
+      _pollTimer: null,
+    });
   });
 
   it('renders nothing when the count is 0', () => {

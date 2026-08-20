@@ -1,5 +1,5 @@
 // file: web/src/pages/Users.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4d2e3f1a-5b6c-4a70-b8c5-3d7e0f1b9a99
 
 import { useCallback, useEffect, useState, useRef } from 'react';
@@ -73,33 +73,44 @@ export default function Users() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
-
-  const handleDeactivate = useCallback(async (id: string) => {
-    await fetch(`${API_BASE}/users/${id}/deactivate`, { method: 'POST' });
+  useEffect(() => {
     load();
   }, [load]);
 
-  const handleReactivate = useCallback(async (id: string) => {
-    await fetch(`${API_BASE}/users/${id}/reactivate`, { method: 'POST' });
-    load();
-  }, [load]);
+  const handleDeactivate = useCallback(
+    async (id: string) => {
+      await fetch(`${API_BASE}/users/${id}/deactivate`, { method: 'POST' });
+      load();
+    },
+    [load]
+  );
 
-  const handleResetPassword = useCallback(async (id: string) => {
-    const resp = await fetch(`${API_BASE}/users/${id}/reset-password`, { method: 'POST' });
-    const data = await resp.json();
-    // The endpoint returns { token, login_url }. Copy the URL — it is what the
-    // user actually clicks. The bare token is kept as a fallback for a server
-    // that predates login_url, and because login_url is relative when
-    // EXTERNAL_URL is unset (the admin then prepends the address themselves).
-    const payload = data?.data ?? data;
-    const copyable = payload?.login_url || payload?.token;
-    if (copyable) {
-      setCopiedToken(copyable);
-      navigator.clipboard.writeText(copyable).catch(() => {});
-    }
-    load();
-  }, [load]);
+  const handleReactivate = useCallback(
+    async (id: string) => {
+      await fetch(`${API_BASE}/users/${id}/reactivate`, { method: 'POST' });
+      load();
+    },
+    [load]
+  );
+
+  const handleResetPassword = useCallback(
+    async (id: string) => {
+      const resp = await fetch(`${API_BASE}/users/${id}/reset-password`, { method: 'POST' });
+      const data = await resp.json();
+      // The endpoint returns { token, login_url }. Copy the URL — it is what the
+      // user actually clicks. The bare token is kept as a fallback for a server
+      // that predates login_url, and because login_url is relative when
+      // EXTERNAL_URL is unset (the admin then prepends the address themselves).
+      const payload = data?.data ?? data;
+      const copyable = payload?.login_url || payload?.token;
+      if (copyable) {
+        setCopiedToken(copyable);
+        navigator.clipboard.writeText(copyable).catch(() => {});
+      }
+      load();
+    },
+    [load]
+  );
 
   const handleCopyToken = useCallback((token: string) => {
     navigator.clipboard.writeText(token).catch(() => {});
@@ -126,7 +137,11 @@ export default function Users() {
         </Button>
       </Box>
 
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
+      )}
 
       <TableContainer component={Paper} sx={{ mb: 4 }}>
         <Table size="small">
@@ -154,7 +169,13 @@ export default function Users() {
                   <Chip
                     label={u.status}
                     size="small"
-                    color={u.status === 'active' ? 'success' : u.status === 'locked' ? 'error' : 'default'}
+                    color={
+                      u.status === 'active'
+                        ? 'success'
+                        : u.status === 'locked'
+                          ? 'error'
+                          : 'default'
+                    }
                   />
                 </TableCell>
                 <TableCell>{new Date(u.created_at).toLocaleDateString()}</TableCell>
@@ -189,7 +210,9 @@ export default function Users() {
 
       {invites.length > 0 && (
         <>
-          <Typography variant="h5" sx={{ mb: 1 }}>Pending Invites</Typography>
+          <Typography variant="h5" sx={{ mb: 1 }}>
+            Pending Invites
+          </Typography>
           <TableContainer component={Paper}>
             <Table size="small">
               <TableHead>
@@ -208,7 +231,12 @@ export default function Users() {
                     <TableCell>{new Date(inv.expires_at).toLocaleString()}</TableCell>
                     <TableCell>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        <Typography variant="caption" fontFamily="monospace" noWrap sx={{ maxWidth: 200 }}>
+                        <Typography
+                          variant="caption"
+                          fontFamily="monospace"
+                          noWrap
+                          sx={{ maxWidth: 200 }}
+                        >
                           {inv.token.slice(0, 16)}...
                         </Typography>
                         <Tooltip title={copiedToken === inv.token ? 'Copied!' : 'Copy token'}>

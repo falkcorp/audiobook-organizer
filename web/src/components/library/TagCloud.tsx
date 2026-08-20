@@ -1,7 +1,7 @@
 // file: web/src/components/library/TagCloud.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7e6c9a1d-3f2b-4c8e-9a5d-1b6f8e2c4d9a
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 import { useMemo, useState } from 'react';
 import { Box, Button, Chip, Collapse, IconButton, Stack, Typography } from '@mui/material';
 import { ExpandMore as ExpandMoreIcon } from '@mui/icons-material';
@@ -87,7 +87,9 @@ export function TagCloud({ availableTags, selectedTags, onTagsChange }: TagCloud
   const previewTags = useMemo(() => {
     const top = sortedTags.slice(0, PREVIEW_COUNT);
     const shown = new Set(top.map((t) => t.tag));
-    const selectedOutside = sortedTags.filter((t) => selectedTags.includes(t.tag) && !shown.has(t.tag));
+    const selectedOutside = sortedTags.filter(
+      (t) => selectedTags.includes(t.tag) && !shown.has(t.tag)
+    );
     return [...top, ...selectedOutside];
   }, [sortedTags, selectedTags]);
 
@@ -145,13 +147,18 @@ export function TagCloud({ availableTags, selectedTags, onTagsChange }: TagCloud
           }}
         >
           <ExpandMoreIcon
-            sx={[{
-              transition: 'transform 0.2s'
-            }, expanded ? {
-              transform: 'rotate(180deg)'
-            } : {
-              transform: 'rotate(0deg)'
-            }]}
+            sx={[
+              {
+                transition: 'transform 0.2s',
+              },
+              expanded
+                ? {
+                    transform: 'rotate(180deg)',
+                  }
+                : {
+                    transform: 'rotate(0deg)',
+                  },
+            ]}
           />
         </IconButton>
       </Stack>

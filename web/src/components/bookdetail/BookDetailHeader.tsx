@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailHeader.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-07
+// last-edited: 2026-08-19
 
 import { useEffect, useState } from 'react';
 import {
@@ -62,18 +62,8 @@ export const BookDetailHeader = ({
 
   return (
     <>
-      <Stack
-        direction="row"
-        alignItems="center"
-        spacing={2}
-        mb={3}
-        flexWrap="wrap"
-      >
-        <Button
-          startIcon={<ArrowBackIcon />}
-          variant="text"
-          onClick={onBack}
-        >
+      <Stack direction="row" alignItems="center" spacing={2} mb={3} flexWrap="wrap">
+        <Button startIcon={<ArrowBackIcon />} variant="text" onClick={onBack}>
           Back to Library
         </Button>
         <Stack direction="row" spacing={2} alignItems="center">
@@ -113,9 +103,7 @@ export const BookDetailHeader = ({
               <Typography variant="h4" component="h1">
                 {book.title || 'Untitled'}
               </Typography>
-              {isSoftDeleted && (
-                <Chip label="Soft Deleted" color="warning" size="small" />
-              )}
+              {isSoftDeleted && <Chip label="Soft Deleted" color="warning" size="small" />}
               {isQuarantined && (
                 <Tooltip title={book.quarantine_reason || 'Quarantined'}>
                   <Chip label="Failed" color="error" size="small" />
@@ -134,12 +122,15 @@ export const BookDetailHeader = ({
                   size="small"
                 />
               )}
-              {book.is_primary_version && (
-                <Chip label="Primary Version" color="primary" />
-              )}
+              {book.is_primary_version && <Chip label="Primary Version" color="primary" />}
               {bookFiles.some((f) => f.imported_from_deluge_at) && (
                 <Tooltip title="At least one file was imported via Deluge">
-                  <Chip label="Imported from Deluge" color="secondary" size="small" variant="outlined" />
+                  <Chip
+                    label="Imported from Deluge"
+                    color="secondary"
+                    size="small"
+                    variant="outlined"
+                  />
                 </Tooltip>
               )}
               <ReadStatusChip bookId={book.id} />
@@ -164,18 +155,20 @@ export const BookDetailHeader = ({
                 variant="outlined"
                 size="small"
               />
-              {book.version_group_id && (() => {
-                const anyMissing = book.file_exists === false || segments.some((s) => s.file_exists === false);
-                return (
-                  <Chip
-                    icon={<CompareIcon />}
-                    label="Version Group Linked"
-                    color={anyMissing ? 'error' : 'success'}
-                    variant="outlined"
-                    size="small"
-                  />
-                );
-              })()}
+              {book.version_group_id &&
+                (() => {
+                  const anyMissing =
+                    book.file_exists === false || segments.some((s) => s.file_exists === false);
+                  return (
+                    <Chip
+                      icon={<CompareIcon />}
+                      label="Version Group Linked"
+                      color={anyMissing ? 'error' : 'success'}
+                      variant="outlined"
+                      size="small"
+                    />
+                  );
+                })()}
               {itunesLinked && (
                 <Chip
                   label={`iTunes Linked (${itunesPidCount} PID${itunesPidCount !== 1 ? 's' : ''})`}
@@ -192,11 +185,7 @@ export const BookDetailHeader = ({
       </Stack>
 
       {/* Cover image lightbox */}
-      <Dialog
-        open={coverLightboxOpen}
-        onClose={() => setCoverLightboxOpen(false)}
-        maxWidth="sm"
-      >
+      <Dialog open={coverLightboxOpen} onClose={() => setCoverLightboxOpen(false)} maxWidth="sm">
         <DialogContent sx={{ p: 1 }}>
           <Box
             component="img"

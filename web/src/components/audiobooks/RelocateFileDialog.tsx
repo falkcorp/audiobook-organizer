@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/RelocateFileDialog.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
 import { useState } from 'react';
@@ -66,10 +66,7 @@ export function RelocateFileDialog({
     }
   };
 
-  const initialDir = segment.file_path.substring(
-    0,
-    segment.file_path.lastIndexOf('/')
-  );
+  const initialDir = segment.file_path.substring(0, segment.file_path.lastIndexOf('/'));
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
@@ -89,7 +86,15 @@ export function RelocateFileDialog({
           Browse to locate the file:
         </Typography>
 
-        <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, maxHeight: 400, overflow: 'auto' }}>
+        <Box
+          sx={{
+            border: '1px solid',
+            borderColor: 'divider',
+            borderRadius: 1,
+            maxHeight: 400,
+            overflow: 'auto',
+          }}
+        >
           <ServerFileBrowser
             initialPath={initialDir || '/'}
             showFiles
@@ -101,17 +106,17 @@ export function RelocateFileDialog({
         </Box>
 
         {selectedPath && (
-          <Typography variant="body2" sx={{ mt: 1, fontFamily: 'monospace', wordBreak: 'break-all' }}>
+          <Typography
+            variant="body2"
+            sx={{ mt: 1, fontFamily: 'monospace', wordBreak: 'break-all' }}
+          >
             Selected: {selectedPath}
           </Typography>
         )}
 
         <FormControlLabel
           control={
-            <Checkbox
-              checked={autoSiblings}
-              onChange={(e) => setAutoSiblings(e.target.checked)}
-            />
+            <Checkbox checked={autoSiblings} onChange={(e) => setAutoSiblings(e.target.checked)} />
           }
           label="Auto-detect siblings (relocate all missing files from this folder)"
           sx={{ mt: 1 }}
@@ -125,11 +130,7 @@ export function RelocateFileDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button
-          onClick={handleRelocate}
-          variant="contained"
-          disabled={!selectedPath || loading}
-        >
+        <Button onClick={handleRelocate} variant="contained" disabled={!selectedPath || loading}>
           {loading ? 'Relocating...' : 'Relocate'}
         </Button>
       </DialogActions>

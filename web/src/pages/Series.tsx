@@ -1,5 +1,5 @@
 // file: web/src/pages/Series.tsx
-// version: 1.5.0
+// version: 1.5.1
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
@@ -90,7 +90,9 @@ const seriesColumns: ColumnDef<SeriesType>[] = [
     sortable: true,
     sortValue: (s) => s.name.toLowerCase(),
     render: (s) => (
-      <Typography variant="body2" fontWeight={500}>{s.name}</Typography>
+      <Typography variant="body2" fontWeight={500}>
+        {s.name}
+      </Typography>
     ),
   },
   {
@@ -102,7 +104,9 @@ const seriesColumns: ColumnDef<SeriesType>[] = [
     sortable: true,
     sortValue: (s) => (s.author_name ?? '').toLowerCase(),
     render: (s) => (
-      <Typography variant="body2" color="text.secondary">{s.author_name ?? '-'}</Typography>
+      <Typography variant="body2" color="text.secondary">
+        {s.author_name ?? '-'}
+      </Typography>
     ),
   },
   {
@@ -140,7 +144,7 @@ const seriesColumns: ColumnDef<SeriesType>[] = [
     minWidth: 100,
     sortable: true,
     sortValue: (s) => s.created_at ?? '',
-    render: (s) => s.created_at ? new Date(s.created_at).toLocaleDateString() : '-',
+    render: (s) => (s.created_at ? new Date(s.created_at).toLocaleDateString() : '-'),
   },
 ];
 
@@ -159,7 +163,18 @@ interface SeriesRowProps {
   onDelete: () => void;
 }
 
-function SeriesRow({ series, selected, expanded, visibleColumns, columnWidths, onToggleSelect, onToggleExpand, onRename, onSplit, onDelete }: SeriesRowProps) {
+function SeriesRow({
+  series,
+  selected,
+  expanded,
+  visibleColumns,
+  columnWidths,
+  onToggleSelect,
+  onToggleExpand,
+  onRename,
+  onSplit,
+  onDelete,
+}: SeriesRowProps) {
   const navigate = useNavigate();
   const isExpanded = !!expanded;
   const bookCount = series.book_count ?? 0;
@@ -167,24 +182,48 @@ function SeriesRow({ series, selected, expanded, visibleColumns, columnWidths, o
 
   return (
     <>
-      <TableRow hover sx={[bookCount > 0 ? {
-        cursor: 'pointer'
-      } : {
-        cursor: 'default'
-      }, isExpanded ? {
-        '& > *': {
-          borderBottom: 'unset'
-        }
-      } : {
-        '& > *': {
-          borderBottom: null
-        }
-      }]} onClick={(e) => { if (bookCount > 0 && !(e.target as HTMLElement).closest('button, input, .MuiCheckbox-root')) onToggleExpand(); }}>
+      <TableRow
+        hover
+        sx={[
+          bookCount > 0
+            ? {
+                cursor: 'pointer',
+              }
+            : {
+                cursor: 'default',
+              },
+          isExpanded
+            ? {
+                '& > *': {
+                  borderBottom: 'unset',
+                },
+              }
+            : {
+                '& > *': {
+                  borderBottom: null,
+                },
+              },
+        ]}
+        onClick={(e) => {
+          if (
+            bookCount > 0 &&
+            !(e.target as HTMLElement).closest('button, input, .MuiCheckbox-root')
+          )
+            onToggleExpand();
+        }}
+      >
         <TableCell padding="checkbox" sx={{ width: 42 }}>
           <Checkbox checked={selected} onChange={onToggleSelect} />
         </TableCell>
         <TableCell sx={{ width: 42 }}>
-          <IconButton size="small" onClick={(e) => { e.stopPropagation(); onToggleExpand(); }} disabled={bookCount === 0}>
+          <IconButton
+            size="small"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleExpand();
+            }}
+            disabled={bookCount === 0}
+          >
             {isExpanded ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}
           </IconButton>
         </TableCell>
@@ -192,23 +231,38 @@ function SeriesRow({ series, selected, expanded, visibleColumns, columnWidths, o
           <TableCell
             key={col.key}
             align={col.align}
-            sx={{ width: columnWidths[col.key], maxWidth: columnWidths[col.key], overflow: 'hidden', textOverflow: 'ellipsis' }}
+            sx={{
+              width: columnWidths[col.key],
+              maxWidth: columnWidths[col.key],
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
           >
             {col.render(series)}
           </TableCell>
         ))}
-        <TableCell align="right" sx={{ width: 120, whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
+        <TableCell
+          align="right"
+          sx={{ width: 120, whiteSpace: 'nowrap' }}
+          onClick={(e) => e.stopPropagation()}
+        >
           <Tooltip title="Rename">
-            <IconButton size="small" onClick={onRename}><EditIcon fontSize="small" /></IconButton>
+            <IconButton size="small" onClick={onRename}>
+              <EditIcon fontSize="small" />
+            </IconButton>
           </Tooltip>
           {bookCount > 1 && (
             <Tooltip title="Split">
-              <IconButton size="small" onClick={onSplit}><CallSplitIcon fontSize="small" /></IconButton>
+              <IconButton size="small" onClick={onSplit}>
+                <CallSplitIcon fontSize="small" />
+              </IconButton>
             </Tooltip>
           )}
           {bookCount === 0 && (
             <Tooltip title="Delete">
-              <IconButton size="small" onClick={onDelete} color="error"><DeleteIcon fontSize="small" /></IconButton>
+              <IconButton size="small" onClick={onDelete} color="error">
+                <DeleteIcon fontSize="small" />
+              </IconButton>
             </Tooltip>
           )}
         </TableCell>
@@ -234,24 +288,44 @@ function SeriesRow({ series, selected, expanded, visibleColumns, columnWidths, o
                     </TableHead>
                     <TableBody>
                       {expanded?.books.map((book) => (
-                        <TableRow key={book.id} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(`/library/${book.id}`)}>
+                        <TableRow
+                          key={book.id}
+                          hover
+                          sx={{ cursor: 'pointer' }}
+                          onClick={() => navigate(`/library/${book.id}`)}
+                        >
                           <TableCell>{book.series_position ?? '-'}</TableCell>
                           <TableCell>
-                            <Typography variant="body2" color="primary" sx={{ '&:hover': { textDecoration: 'underline' } }}>
+                            <Typography
+                              variant="body2"
+                              color="primary"
+                              sx={{ '&:hover': { textDecoration: 'underline' } }}
+                            >
                               {book.title}
                             </Typography>
                           </TableCell>
                           <TableCell>
-                            <Typography variant="body2" color="text.secondary" noWrap>{book.author_name ?? '-'}</Typography>
+                            <Typography variant="body2" color="text.secondary" noWrap>
+                              {book.author_name ?? '-'}
+                            </Typography>
                           </TableCell>
                           <TableCell>{book.format ?? '-'}</TableCell>
                           <TableCell>
-                            {book.duration ? `${Math.floor(book.duration / 3600)}h ${Math.floor((book.duration % 3600) / 60)}m` : '-'}
+                            {book.duration
+                              ? `${Math.floor(book.duration / 3600)}h ${Math.floor((book.duration % 3600) / 60)}m`
+                              : '-'}
                           </TableCell>
                           <TableCell>
                             <Tooltip title={book.file_path || ''}>
-                              <Typography variant="body2" color="text.secondary" noWrap sx={{ maxWidth: 300 }}>
-                                {book.file_path ? book.file_path.split('/').slice(-2).join('/') : '-'}
+                              <Typography
+                                variant="body2"
+                                color="text.secondary"
+                                noWrap
+                                sx={{ maxWidth: 300 }}
+                              >
+                                {book.file_path
+                                  ? book.file_path.split('/').slice(-2).join('/')
+                                  : '-'}
                               </Typography>
                             </Tooltip>
                           </TableCell>
@@ -283,19 +357,33 @@ export function Series() {
   const [expanded, setExpanded] = useState<Record<number, ExpandedRow>>({});
 
   // Dialog states
-  const [renameDialog, setRenameDialog] = useState<{ open: boolean; series: SeriesType | null }>({ open: false, series: null });
+  const [renameDialog, setRenameDialog] = useState<{ open: boolean; series: SeriesType | null }>({
+    open: false,
+    series: null,
+  });
   const [renameValue, setRenameValue] = useState('');
   const [mergeDialog, setMergeDialog] = useState(false);
   const [mergeKeepId, setMergeKeepId] = useState<number | null>(null);
   const [mergeCustomName, setMergeCustomName] = useState('');
   const [mergeUseCustomName, setMergeUseCustomName] = useState(false);
-  const [splitDialog, setSplitDialog] = useState<{ open: boolean; series: SeriesType | null }>({ open: false, series: null });
+  const [splitDialog, setSplitDialog] = useState<{ open: boolean; series: SeriesType | null }>({
+    open: false,
+    series: null,
+  });
   const [splitBooks, setSplitBooks] = useState<Book[]>([]);
   const [splitSelected, setSplitSelected] = useState<Set<string>>(new Set());
   const [splitLoading, setSplitLoading] = useState(false);
-  const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; series: SeriesType | null }>({ open: false, series: null });
+  const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; series: SeriesType | null }>({
+    open: false,
+    series: null,
+  });
   const [bulkDeleteDialog, setBulkDeleteDialog] = useState(false);
-  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error'; undoAction?: () => void }>({ open: false, message: '', severity: 'success' });
+  const [snackbar, setSnackbar] = useState<{
+    open: boolean;
+    message: string;
+    severity: 'success' | 'error';
+    undoAction?: () => void;
+  }>({ open: false, message: '', severity: 'success' });
   const [history, setHistory] = useState<ActionHistoryEntry[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
 
@@ -319,7 +407,9 @@ export function Series() {
   });
 
   const addHistory = (entry: Omit<ActionHistoryEntry, 'id' | 'timestamp'>) => {
-    setHistory((prev) => [{ ...entry, id: crypto.randomUUID(), timestamp: new Date() }, ...prev].slice(0, 50));
+    setHistory((prev) =>
+      [{ ...entry, id: crypto.randomUUID(), timestamp: new Date() }, ...prev].slice(0, 50)
+    );
   };
 
   const fetchSeries = useCallback(async () => {
@@ -410,20 +500,40 @@ export function Series() {
     const newName = renameValue.trim();
     try {
       await api.renameSeries(seriesId, newName);
-      addHistory({ action: 'rename', description: `Renamed "${oldName}" → "${newName}"`, undoable: true, undoData: { seriesId, oldName } });
+      addHistory({
+        action: 'rename',
+        description: `Renamed "${oldName}" → "${newName}"`,
+        undoable: true,
+        undoData: { seriesId, oldName },
+      });
       const undoFn = async () => {
         try {
           await api.renameSeries(seriesId, oldName);
-          addHistory({ action: 'rename', description: `Undo: renamed "${newName}" back to "${oldName}"`, undoable: false });
+          addHistory({
+            action: 'rename',
+            description: `Undo: renamed "${newName}" back to "${oldName}"`,
+            undoable: false,
+          });
           setSnackbar({ open: true, message: 'Rename undone', severity: 'success' });
           fetchSeries();
-        } catch { setSnackbar({ open: true, message: 'Undo failed', severity: 'error' }); }
+        } catch {
+          setSnackbar({ open: true, message: 'Undo failed', severity: 'error' });
+        }
       };
-      setSnackbar({ open: true, message: `Renamed "${oldName}" → "${newName}"`, severity: 'success', undoAction: undoFn });
+      setSnackbar({
+        open: true,
+        message: `Renamed "${oldName}" → "${newName}"`,
+        severity: 'success',
+        undoAction: undoFn,
+      });
       setRenameDialog({ open: false, series: null });
       fetchSeries();
     } catch (err) {
-      setSnackbar({ open: true, message: err instanceof Error ? err.message : 'Rename failed', severity: 'error' });
+      setSnackbar({
+        open: true,
+        message: err instanceof Error ? err.message : 'Rename failed',
+        severity: 'error',
+      });
     }
   };
 
@@ -442,18 +552,30 @@ export function Series() {
   const doMerge = async () => {
     if (mergeKeepId === null) return;
     const mergeIds = [...selected].filter((id) => id !== mergeKeepId);
-    const finalName = mergeUseCustomName && mergeCustomName.trim() ? mergeCustomName.trim() : undefined;
+    const finalName =
+      mergeUseCustomName && mergeCustomName.trim() ? mergeCustomName.trim() : undefined;
     const keepName = finalName ?? selectedSeries.find((s) => s.id === mergeKeepId)?.name ?? '?';
-    const mergedNames = selectedSeries.filter((s) => s.id !== mergeKeepId).map((s) => s.name).join(', ');
+    const mergedNames = selectedSeries
+      .filter((s) => s.id !== mergeKeepId)
+      .map((s) => s.name)
+      .join(', ');
     try {
       await api.mergeSeriesGroup(mergeKeepId, mergeIds, finalName);
-      addHistory({ action: 'merge', description: `Merged "${mergedNames}" into "${keepName}"`, undoable: false });
+      addHistory({
+        action: 'merge',
+        description: `Merged "${mergedNames}" into "${keepName}"`,
+        undoable: false,
+      });
       setSnackbar({ open: true, message: 'Series merged', severity: 'success' });
       setMergeDialog(false);
       setSelected(new Set());
       fetchSeries();
     } catch (err) {
-      setSnackbar({ open: true, message: err instanceof Error ? err.message : 'Merge failed', severity: 'error' });
+      setSnackbar({
+        open: true,
+        message: err instanceof Error ? err.message : 'Merge failed',
+        severity: 'error',
+      });
     }
   };
 
@@ -477,12 +599,24 @@ export function Series() {
     const seriesName = splitDialog.series.name;
     try {
       const result = await api.splitSeries(splitDialog.series.id, [...splitSelected]);
-      addHistory({ action: 'split', description: `Split ${result.books_moved} book(s) from "${seriesName}"`, undoable: false });
-      setSnackbar({ open: true, message: `Split complete: ${result.books_moved} book(s) moved to new series`, severity: 'success' });
+      addHistory({
+        action: 'split',
+        description: `Split ${result.books_moved} book(s) from "${seriesName}"`,
+        undoable: false,
+      });
+      setSnackbar({
+        open: true,
+        message: `Split complete: ${result.books_moved} book(s) moved to new series`,
+        severity: 'success',
+      });
       setSplitDialog({ open: false, series: null });
       fetchSeries();
     } catch (err) {
-      setSnackbar({ open: true, message: err instanceof Error ? err.message : 'Split failed', severity: 'error' });
+      setSnackbar({
+        open: true,
+        message: err instanceof Error ? err.message : 'Split failed',
+        severity: 'error',
+      });
     }
   };
 
@@ -496,12 +630,20 @@ export function Series() {
     const seriesName = deleteDialog.series.name;
     try {
       await api.deleteSeries(deleteDialog.series.id);
-      addHistory({ action: 'delete', description: `Deleted empty series "${seriesName}"`, undoable: false });
+      addHistory({
+        action: 'delete',
+        description: `Deleted empty series "${seriesName}"`,
+        undoable: false,
+      });
       setSnackbar({ open: true, message: 'Series deleted', severity: 'success' });
       setDeleteDialog({ open: false, series: null });
       fetchSeries();
     } catch (err) {
-      setSnackbar({ open: true, message: err instanceof Error ? err.message : 'Delete failed', severity: 'error' });
+      setSnackbar({
+        open: true,
+        message: err instanceof Error ? err.message : 'Delete failed',
+        severity: 'error',
+      });
     }
   };
 
@@ -509,16 +651,21 @@ export function Series() {
   const doBulkDelete = async () => {
     try {
       const result = await api.bulkDeleteSeries([...selected]);
-      const msg = result.skipped > 0
-        ? `Deleted ${result.deleted}, skipped ${result.skipped} (have books)`
-        : `Deleted ${result.deleted} series`;
+      const msg =
+        result.skipped > 0
+          ? `Deleted ${result.deleted}, skipped ${result.skipped} (have books)`
+          : `Deleted ${result.deleted} series`;
       addHistory({ action: 'delete', description: msg, undoable: false });
       setSnackbar({ open: true, message: msg, severity: 'success' });
       setBulkDeleteDialog(false);
       setSelected(new Set());
       fetchSeries();
     } catch (err) {
-      setSnackbar({ open: true, message: err instanceof Error ? err.message : 'Bulk delete failed', severity: 'error' });
+      setSnackbar({
+        open: true,
+        message: err instanceof Error ? err.message : 'Bulk delete failed',
+        severity: 'error',
+      });
     }
   };
 
@@ -564,7 +711,9 @@ export function Series() {
       </Box>
 
       {error && (
-        <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
       )}
 
       {/* Toolbar */}
@@ -573,7 +722,10 @@ export function Series() {
           size="small"
           placeholder="Search series..."
           value={search}
-          onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setPage(0);
+          }}
           sx={{ minWidth: 250 }}
         />
         <FormControl size="small" sx={{ minWidth: 160 }}>
@@ -581,7 +733,10 @@ export function Series() {
           <Select
             label="Filter"
             value={filter}
-            onChange={(e) => { setFilter(e.target.value as SeriesFilter); setPage(0); }}
+            onChange={(e) => {
+              setFilter(e.target.value as SeriesFilter);
+              setPage(0);
+            }}
           >
             <MenuItem value="with_books">With books only</MenuItem>
             <MenuItem value="empty">Empty series</MenuItem>
@@ -594,7 +749,12 @@ export function Series() {
           </Button>
         )}
         {selected.size >= 1 && (
-          <Button variant="outlined" color="error" startIcon={<DeleteIcon />} onClick={() => setBulkDeleteDialog(true)}>
+          <Button
+            variant="outlined"
+            color="error"
+            startIcon={<DeleteIcon />}
+            onClick={() => setBulkDeleteDialog(true)}
+          >
             Delete ({selected.size})
           </Button>
         )}
@@ -631,7 +791,9 @@ export function Series() {
                   onStartResize={startResize}
                 />
               ))}
-              <TableCell align="right" sx={{ width: 120 }}>Actions</TableCell>
+              <TableCell align="right" sx={{ width: 120 }}>
+                Actions
+              </TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -669,19 +831,36 @@ export function Series() {
         page={page}
         onPageChange={(_, p) => setPage(p)}
         rowsPerPage={rowsPerPage}
-        onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
+        onRowsPerPageChange={(e) => {
+          setRowsPerPage(parseInt(e.target.value, 10));
+          setPage(0);
+        }}
         rowsPerPageOptions={[10, 25, 50, 100]}
       />
 
       {/* Rename Dialog */}
-      <Dialog open={renameDialog.open} onClose={() => setRenameDialog({ open: false, series: null })} maxWidth="sm" fullWidth>
+      <Dialog
+        open={renameDialog.open}
+        onClose={() => setRenameDialog({ open: false, series: null })}
+        maxWidth="sm"
+        fullWidth
+      >
         <DialogTitle>Rename Series</DialogTitle>
         <DialogContent>
-          <TextField autoFocus fullWidth label="New name" value={renameValue} onChange={(e) => setRenameValue(e.target.value)} sx={{ mt: 1 }} />
+          <TextField
+            autoFocus
+            fullWidth
+            label="New name"
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            sx={{ mt: 1 }}
+          />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setRenameDialog({ open: false, series: null })}>Cancel</Button>
-          <Button variant="contained" onClick={doRename} disabled={!renameValue.trim()}>Rename</Button>
+          <Button variant="contained" onClick={doRename} disabled={!renameValue.trim()}>
+            Rename
+          </Button>
         </DialogActions>
       </Dialog>
 
@@ -690,18 +869,29 @@ export function Series() {
         <DialogTitle>Merge Series</DialogTitle>
         <DialogContent>
           <Typography variant="body2" sx={{ mb: 2 }}>
-            Select which series to keep, then choose to use its existing name or enter a custom name.
+            Select which series to keep, then choose to use its existing name or enter a custom
+            name.
           </Typography>
-          <Typography variant="subtitle2" sx={{ mb: 1 }}>Keep series:</Typography>
-          <RadioGroup value={mergeKeepId ?? ''} onChange={(e) => setMergeKeepId(Number(e.target.value))}>
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>
+            Keep series:
+          </Typography>
+          <RadioGroup
+            value={mergeKeepId ?? ''}
+            onChange={(e) => setMergeKeepId(Number(e.target.value))}
+          >
             {selectedSeries.map((s) => (
               <FormControlLabel
-                key={s.id} value={s.id} control={<Radio />}
+                key={s.id}
+                value={s.id}
+                control={<Radio />}
                 label={
                   <Box>
-                    <Typography variant="body1" fontWeight={500}>{s.name}</Typography>
+                    <Typography variant="body1" fontWeight={500}>
+                      {s.name}
+                    </Typography>
                     <Typography variant="body2" color="text.secondary">
-                      {s.author_name ? `by ${s.author_name} — ` : ''}{s.book_count ?? 0} book{(s.book_count ?? 0) !== 1 ? 's' : ''} (ID: {s.id})
+                      {s.author_name ? `by ${s.author_name} — ` : ''}
+                      {s.book_count ?? 0} book{(s.book_count ?? 0) !== 1 ? 's' : ''} (ID: {s.id})
                     </Typography>
                   </Box>
                 }
@@ -712,12 +902,19 @@ export function Series() {
           {mergeKeepId !== null && (
             <Box sx={{ mt: 2, pl: 1 }}>
               <FormControlLabel
-                control={<Checkbox checked={mergeUseCustomName} onChange={(e) => setMergeUseCustomName(e.target.checked)} />}
+                control={
+                  <Checkbox
+                    checked={mergeUseCustomName}
+                    onChange={(e) => setMergeUseCustomName(e.target.checked)}
+                  />
+                }
                 label="Use custom name for merged series"
               />
               {mergeUseCustomName && (
                 <TextField
-                  autoFocus fullWidth size="small"
+                  autoFocus
+                  fullWidth
+                  size="small"
                   label="Custom series name"
                   value={mergeCustomName}
                   onChange={(e) => setMergeCustomName(e.target.value)}
@@ -729,24 +926,40 @@ export function Series() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setMergeDialog(false)}>Cancel</Button>
-          <Button variant="contained" onClick={doMerge} disabled={mergeKeepId === null || (mergeUseCustomName && !mergeCustomName.trim())}>Merge</Button>
+          <Button
+            variant="contained"
+            onClick={doMerge}
+            disabled={mergeKeepId === null || (mergeUseCustomName && !mergeCustomName.trim())}
+          >
+            Merge
+          </Button>
         </DialogActions>
       </Dialog>
 
       {/* Split Dialog */}
-      <Dialog open={splitDialog.open} onClose={() => setSplitDialog({ open: false, series: null })} maxWidth="sm" fullWidth>
+      <Dialog
+        open={splitDialog.open}
+        onClose={() => setSplitDialog({ open: false, series: null })}
+        maxWidth="sm"
+        fullWidth
+      >
         <DialogTitle>Split Series: {splitDialog.series?.name}</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" sx={{ mb: 2 }}>Select books to move to a new series.</Typography>
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            Select books to move to a new series.
+          </Typography>
           {splitLoading ? (
-            <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}><CircularProgress size={24} /></Box>
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
+              <CircularProgress size={24} />
+            </Box>
           ) : (
             <List dense>
               {splitBooks.map((book) => (
                 <ListItem key={book.id} dense>
                   <ListItemIcon>
                     <Checkbox
-                      edge="start" checked={splitSelected.has(book.id)}
+                      edge="start"
+                      checked={splitSelected.has(book.id)}
                       onChange={() => {
                         setSplitSelected((prev) => {
                           const next = new Set(prev);
@@ -757,48 +970,78 @@ export function Series() {
                       }}
                     />
                   </ListItemIcon>
-                  <ListItemText primary={book.title} secondary={book.series_position ? `#${book.series_position}` : undefined} />
+                  <ListItemText
+                    primary={book.title}
+                    secondary={book.series_position ? `#${book.series_position}` : undefined}
+                  />
                 </ListItem>
               ))}
               {splitBooks.length === 0 && (
-                <Typography color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>No books in this series</Typography>
+                <Typography color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>
+                  No books in this series
+                </Typography>
               )}
             </List>
           )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setSplitDialog({ open: false, series: null })}>Cancel</Button>
-          <Button variant="contained" onClick={doSplit} disabled={splitSelected.size === 0 || splitSelected.size === splitBooks.length}>
+          <Button
+            variant="contained"
+            onClick={doSplit}
+            disabled={splitSelected.size === 0 || splitSelected.size === splitBooks.length}
+          >
             Split ({splitSelected.size} book{splitSelected.size !== 1 ? 's' : ''})
           </Button>
         </DialogActions>
       </Dialog>
 
       {/* Delete Dialog */}
-      <Dialog open={deleteDialog.open} onClose={() => setDeleteDialog({ open: false, series: null })}>
+      <Dialog
+        open={deleteDialog.open}
+        onClose={() => setDeleteDialog({ open: false, series: null })}
+      >
         <DialogTitle>Delete Series</DialogTitle>
         <DialogContent>
-          <Typography>Are you sure you want to delete &quot;{deleteDialog.series?.name}&quot;?</Typography>
+          <Typography>
+            Are you sure you want to delete &quot;{deleteDialog.series?.name}&quot;?
+          </Typography>
           {(deleteDialog.series?.book_count ?? 0) > 0 && (
             <Alert severity="warning" sx={{ mt: 2 }}>
-              This series has {deleteDialog.series?.book_count} book(s). Only empty series can be deleted.
+              This series has {deleteDialog.series?.book_count} book(s). Only empty series can be
+              deleted.
             </Alert>
           )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDeleteDialog({ open: false, series: null })}>Cancel</Button>
-          <Button variant="contained" color="error" onClick={doDelete} disabled={(deleteDialog.series?.book_count ?? 0) > 0}>Delete</Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={doDelete}
+            disabled={(deleteDialog.series?.book_count ?? 0) > 0}
+          >
+            Delete
+          </Button>
         </DialogActions>
       </Dialog>
 
       {/* Bulk Delete Dialog */}
-      <Dialog open={bulkDeleteDialog} onClose={() => setBulkDeleteDialog(false)} maxWidth="sm" fullWidth>
+      <Dialog
+        open={bulkDeleteDialog}
+        onClose={() => setBulkDeleteDialog(false)}
+        maxWidth="sm"
+        fullWidth
+      >
         <DialogTitle>Delete {selected.size} Series</DialogTitle>
         <DialogContent>
-          <Typography>This will delete the selected series. Series with books will be skipped.</Typography>
+          <Typography>
+            This will delete the selected series. Series with books will be skipped.
+          </Typography>
           {selectedSeries.filter((s) => (s.book_count ?? 0) > 0).length > 0 && (
             <Alert severity="info" sx={{ mt: 2 }}>
-              {selectedSeries.filter((s) => (s.book_count ?? 0) > 0).length} series have books and will be skipped.
+              {selectedSeries.filter((s) => (s.book_count ?? 0) > 0).length} series have books and
+              will be skipped.
             </Alert>
           )}
         </DialogContent>
@@ -819,11 +1062,21 @@ export function Series() {
         <Alert
           severity={snackbar.severity}
           onClose={() => setSnackbar((prev) => ({ ...prev, open: false }))}
-          action={snackbar.undoAction ? (
-            <Button color="inherit" size="small" startIcon={<UndoIcon />} onClick={() => { snackbar.undoAction?.(); setSnackbar((prev) => ({ ...prev, open: false })); }}>
-              Undo
-            </Button>
-          ) : undefined}
+          action={
+            snackbar.undoAction ? (
+              <Button
+                color="inherit"
+                size="small"
+                startIcon={<UndoIcon />}
+                onClick={() => {
+                  snackbar.undoAction?.();
+                  setSnackbar((prev) => ({ ...prev, open: false }));
+                }}
+              >
+                Undo
+              </Button>
+            ) : undefined
+          }
         >
           {snackbar.message}
         </Alert>
@@ -832,32 +1085,63 @@ export function Series() {
       {/* History Drawer */}
       <Drawer anchor="right" open={historyOpen} onClose={() => setHistoryOpen(false)}>
         <Box sx={{ width: 380, p: 2 }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+          <Box
+            sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}
+          >
             <Typography variant="h6">Action History</Typography>
-            {history.length > 0 && <Button size="small" onClick={() => setHistory([])}>Clear</Button>}
+            {history.length > 0 && (
+              <Button size="small" onClick={() => setHistory([])}>
+                Clear
+              </Button>
+            )}
           </Box>
           <Divider sx={{ mb: 1 }} />
           {history.length === 0 ? (
-            <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>No actions yet</Typography>
+            <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
+              No actions yet
+            </Typography>
           ) : (
             <List dense>
               {history.map((entry) => (
-                <ListItem key={entry.id} secondaryAction={
-                  entry.undoable && entry.undoData ? (
-                    <Tooltip title="Undo this rename">
-                      <IconButton size="small" onClick={async () => {
-                        try {
-                          await api.renameSeries(entry.undoData!.seriesId, entry.undoData!.oldName);
-                          addHistory({ action: 'rename', description: `Undo: reverted rename on "${entry.undoData!.oldName}"`, undoable: false });
-                          setSnackbar({ open: true, message: 'Rename undone', severity: 'success' });
-                          fetchSeries();
-                        } catch { setSnackbar({ open: true, message: 'Undo failed', severity: 'error' }); }
-                      }}>
-                        <UndoIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  ) : undefined
-                }>
+                <ListItem
+                  key={entry.id}
+                  secondaryAction={
+                    entry.undoable && entry.undoData ? (
+                      <Tooltip title="Undo this rename">
+                        <IconButton
+                          size="small"
+                          onClick={async () => {
+                            try {
+                              await api.renameSeries(
+                                entry.undoData!.seriesId,
+                                entry.undoData!.oldName
+                              );
+                              addHistory({
+                                action: 'rename',
+                                description: `Undo: reverted rename on "${entry.undoData!.oldName}"`,
+                                undoable: false,
+                              });
+                              setSnackbar({
+                                open: true,
+                                message: 'Rename undone',
+                                severity: 'success',
+                              });
+                              fetchSeries();
+                            } catch {
+                              setSnackbar({
+                                open: true,
+                                message: 'Undo failed',
+                                severity: 'error',
+                              });
+                            }
+                          }}
+                        >
+                          <UndoIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    ) : undefined
+                  }
+                >
                   <ListItemIcon sx={{ minWidth: 32 }}>
                     {entry.action === 'rename' && <EditIcon fontSize="small" />}
                     {entry.action === 'merge' && <MergeTypeIcon fontSize="small" />}

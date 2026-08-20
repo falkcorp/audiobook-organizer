@@ -1,5 +1,5 @@
 // file: web/src/components/common/ServerFileBrowser.tsx
-// version: 1.6.0
+// version: 1.6.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
 import { useState, useEffect, useCallback, MouseEvent } from 'react';
@@ -74,8 +74,7 @@ export function ServerFileBrowser({
   const [items, setItems] = useState<api.FileSystemItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [diskInfo, setDiskInfo] =
-    useState<api.FilesystemBrowseResult['disk_info']>();
+  const [diskInfo, setDiskInfo] = useState<api.FilesystemBrowseResult['disk_info']>();
   const [editingPath, setEditingPath] = useState(false);
   const [editPath, setEditPath] = useState(currentPath);
   const [searchFilter, setSearchFilter] = useState('');
@@ -88,9 +87,7 @@ export function ServerFileBrowser({
     mouseX: number;
     mouseY: number;
   } | null>(null);
-  const [contextItem, setContextItem] = useState<api.FileSystemItem | null>(
-    null
-  );
+  const [contextItem, setContextItem] = useState<api.FileSystemItem | null>(null);
 
   const fetchDirectory = useCallback(
     async (path: string) => {
@@ -108,9 +105,7 @@ export function ServerFileBrowser({
         }
       } catch (err) {
         console.error('Failed to browse filesystem:', err);
-        setError(
-          err instanceof Error ? err.message : 'Failed to browse filesystem'
-        );
+        setError(err instanceof Error ? err.message : 'Failed to browse filesystem');
       } finally {
         setLoading(false);
       }
@@ -162,10 +157,7 @@ export function ServerFileBrowser({
     setEditPath(currentPath);
   };
 
-  const handleContextMenu = (
-    event: MouseEvent,
-    item: api.FileSystemItem
-  ) => {
+  const handleContextMenu = (event: MouseEvent, item: api.FileSystemItem) => {
     if (!item.is_dir) return;
     event.preventDefault();
     setContextItem(item);
@@ -195,8 +187,7 @@ export function ServerFileBrowser({
       }
       await fetchDirectory(currentPath);
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'Failed to update exclusion';
+      const message = err instanceof Error ? err.message : 'Failed to update exclusion';
       setError(message);
       setNotice({ message, severity: 'error' });
     } finally {
@@ -268,9 +259,7 @@ export function ServerFileBrowser({
         ].join(' ')
       : null;
   const libraryLabel =
-    diskInfo?.library_bytes !== undefined
-      ? `Library ${formatBytes(diskInfo.library_bytes)}`
-      : null;
+    diskInfo?.library_bytes !== undefined ? `Library ${formatBytes(diskInfo.library_bytes)}` : null;
 
   return (
     <Box>
@@ -281,11 +270,7 @@ export function ServerFileBrowser({
           onClose={() => setNotice(null)}
           anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
         >
-          <Alert
-            severity={notice.severity}
-            onClose={() => setNotice(null)}
-            sx={{ width: '100%' }}
-          >
+          <Alert severity={notice.severity} onClose={() => setNotice(null)} sx={{ width: '100%' }}>
             {notice.message}
           </Alert>
         </Snackbar>
@@ -307,12 +292,8 @@ export function ServerFileBrowser({
           </Typography>
           {diskInfo && (
             <Stack direction="row" spacing={1}>
-              {diskInfo.readable && (
-                <Chip label="Readable" size="small" color="success" />
-              )}
-              {diskInfo.writable && (
-                <Chip label="Writable" size="small" color="success" />
-              )}
+              {diskInfo.readable && <Chip label="Readable" size="small" color="success" />}
+              {diskInfo.writable && <Chip label="Writable" size="small" color="success" />}
             </Stack>
           )}
         </Stack>
@@ -340,10 +321,7 @@ export function ServerFileBrowser({
           </Stack>
         ) : (
           <Stack direction="row" spacing={1} alignItems="center">
-            <Breadcrumbs
-              separator={<NavigateNextIcon fontSize="small" />}
-              sx={{ flex: 1 }}
-            >
+            <Breadcrumbs separator={<NavigateNextIcon fontSize="small" />} sx={{ flex: 1 }}>
               {pathParts.map((part, index) => (
                 <Link
                   key={index}
@@ -385,16 +363,9 @@ export function ServerFileBrowser({
             helperText={regexError}
             sx={{ minWidth: 220, flexGrow: 1, maxWidth: 400 }}
           />
-          {availableLabel && (
-            <Chip label={availableLabel} size="small" color="info" />
-          )}
+          {availableLabel && <Chip label={availableLabel} size="small" color="info" />}
           {libraryLabel && (
-            <Chip
-              label={libraryLabel}
-              size="small"
-              color="primary"
-              variant="outlined"
-            />
+            <Chip label={libraryLabel} size="small" color="primary" variant="outlined" />
           )}
         </Stack>
       </Paper>
@@ -421,11 +392,7 @@ export function ServerFileBrowser({
               <ListItem>
                 <ListItemText
                   primary="No items found"
-                  secondary={
-                    showFiles
-                      ? 'This directory is empty'
-                      : 'No subdirectories found'
-                  }
+                  secondary={showFiles ? 'This directory is empty' : 'No subdirectories found'}
                 />
               </ListItem>
             )}
@@ -436,12 +403,7 @@ export function ServerFileBrowser({
                 onContextMenu={(event) => handleContextMenu(event, item)}
                 secondaryAction={
                   item.is_dir && item.excluded ? (
-                    <Chip
-                      icon={<BlockIcon />}
-                      label="Excluded"
-                      size="small"
-                      color="warning"
-                    />
+                    <Chip icon={<BlockIcon />} label="Excluded" size="small" color="warning" />
                   ) : null
                 }
               >
@@ -452,9 +414,7 @@ export function ServerFileBrowser({
                 >
                   <ListItemIcon>
                     {item.is_dir ? (
-                      <FolderIcon
-                        color={item.excluded ? 'disabled' : 'primary'}
-                      />
+                      <FolderIcon color={item.excluded ? 'disabled' : 'primary'} />
                     ) : (
                       <FileIcon color="action" />
                     )}
@@ -464,9 +424,7 @@ export function ServerFileBrowser({
                     secondary={
                       !item.is_dir && item.size !== undefined
                         ? `${formatBytes(item.size)}${
-                            item.mod_time
-                              ? ` • ${formatDate(item.mod_time)}`
-                              : ''
+                            item.mod_time ? ` • ${formatDate(item.mod_time)}` : ''
                           }`
                         : null
                     }
@@ -486,9 +444,7 @@ export function ServerFileBrowser({
         onClose={handleCloseContextMenu}
         anchorReference="anchorPosition"
         anchorPosition={
-          contextMenu !== null
-            ? { top: contextMenu.mouseY, left: contextMenu.mouseX }
-            : undefined
+          contextMenu !== null ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined
         }
       >
         <MenuItem onClick={handleToggleExclude} disabled={!contextItem}>

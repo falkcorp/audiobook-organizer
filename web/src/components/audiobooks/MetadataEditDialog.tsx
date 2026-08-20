@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/MetadataEditDialog.tsx
-// version: 2.2.0
+// version: 2.2.1
 // guid: 4a5b6c7d-8e9f-0a1b-2c3d-4e5f6a7b8c9d
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -85,9 +85,7 @@ export const MetadataEditDialog: React.FC<MetadataEditDialogProps> = ({
   useEffect(() => {
     if (audiobook) {
       setFormData(audiobook);
-      setYearInput(
-        typeof audiobook.year === 'number' ? String(audiobook.year) : ''
-      );
+      setYearInput(typeof audiobook.year === 'number' ? String(audiobook.year) : '');
       setYearError(null);
       setDirtyFields(new Set());
       setLockOverrides({});
@@ -222,31 +220,42 @@ export const MetadataEditDialog: React.FC<MetadataEditDialogProps> = ({
               size="small"
               onClick={() => toggleLock(field)}
               aria-label={`${locked ? 'Unlock' : 'Lock'} ${label}`}
-              sx={[{
-                mt: '10px',
-                mr: 0.5,
-                flexShrink: 0,
-                width: 32,
-                height: 32,
-                border: '1px solid',
-                borderRadius: 1
-              }, locked ? {
-                borderColor: 'warning.main'
-              } : {
-                borderColor: 'divider'
-              }, locked ? {
-                bgcolor: 'rgba(237, 108, 2, 0.08)'
-              } : {
-                bgcolor: 'transparent'
-              }, locked ? {
-                '&:hover': {
-                  bgcolor: 'rgba(237, 108, 2, 0.16)'
-                }
-              } : {
-                '&:hover': {
-                  bgcolor: 'action.hover'
-                }
-              }]}
+              sx={[
+                {
+                  mt: '10px',
+                  mr: 0.5,
+                  flexShrink: 0,
+                  width: 32,
+                  height: 32,
+                  border: '1px solid',
+                  borderRadius: 1,
+                },
+                locked
+                  ? {
+                      borderColor: 'warning.main',
+                    }
+                  : {
+                      borderColor: 'divider',
+                    },
+                locked
+                  ? {
+                      bgcolor: 'rgba(237, 108, 2, 0.08)',
+                    }
+                  : {
+                      bgcolor: 'transparent',
+                    },
+                locked
+                  ? {
+                      '&:hover': {
+                        bgcolor: 'rgba(237, 108, 2, 0.16)',
+                      },
+                    }
+                  : {
+                      '&:hover': {
+                        bgcolor: 'action.hover',
+                      },
+                    },
+              ]}
             >
               {locked ? (
                 <LockIcon sx={{ fontSize: 16, color: 'warning.main' }} />
@@ -274,40 +283,46 @@ export const MetadataEditDialog: React.FC<MetadataEditDialogProps> = ({
               type={field === 'year' ? 'text' : type}
               inputMode={field === 'year' ? 'numeric' : undefined}
               error={field === 'year' ? Boolean(yearError) : undefined}
-              helperText={field === 'year' ? (yearError || undefined) : undefined}
+              helperText={field === 'year' ? yearError || undefined : undefined}
               required={field === 'title'}
               size="small"
-              sx={[isDirty ? {
-                '& .MuiOutlinedInput-root': {
-                  bgcolor: 'rgba(237, 108, 2, 0.04)'
-                }
-              } : {
-                '& .MuiOutlinedInput-root': {
-                  bgcolor: 'transparent'
-                }
-              }]}
+              sx={[
+                isDirty
+                  ? {
+                      '& .MuiOutlinedInput-root': {
+                        bgcolor: 'rgba(237, 108, 2, 0.04)',
+                      },
+                    }
+                  : {
+                      '& .MuiOutlinedInput-root': {
+                        bgcolor: 'transparent',
+                      },
+                    },
+              ]}
             />
             {(sourceLabel || showFetched) && (
               <Stack direction="row" spacing={1} sx={{ mt: 0.25, ml: 0.5 }}>
                 {sourceLabel && (
                   <Typography
                     variant="caption"
-                    sx={[{
-                      fontSize: '0.7rem'
-                    }, isDirty ? {
-                      color: 'warning.main'
-                    } : {
-                      color: 'text.disabled'
-                    }]}
+                    sx={[
+                      {
+                        fontSize: '0.7rem',
+                      },
+                      isDirty
+                        ? {
+                            color: 'warning.main',
+                          }
+                        : {
+                            color: 'text.disabled',
+                          },
+                    ]}
                   >
                     Source: {sourceLabel}
                   </Typography>
                 )}
                 {showFetched && (
-                  <Typography
-                    variant="caption"
-                    sx={{ color: 'text.disabled', fontSize: '0.7rem' }}
-                  >
+                  <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.7rem' }}>
                     Fetched: {fetchedStr.length > 40 ? fetchedStr.slice(0, 37) + '...' : fetchedStr}
                   </Typography>
                 )}
@@ -333,7 +348,9 @@ export const MetadataEditDialog: React.FC<MetadataEditDialogProps> = ({
     >
       <DialogTitle sx={{ pb: 1 }}>
         <Stack direction="row" alignItems="center" spacing={1}>
-          <Typography variant="h6" component="span">Edit Metadata</Typography>
+          <Typography variant="h6" component="span">
+            Edit Metadata
+          </Typography>
           {loadingStates && <CircularProgress size={16} />}
         </Stack>
         <Typography variant="caption" color="text.disabled" display="block">

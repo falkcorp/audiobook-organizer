@@ -1,5 +1,5 @@
 // file: web/src/pages/Playlists.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2b0c1d6e-3f4a-4a70-b8c5-3d7e0f1b9a99
 
 import { useCallback, useEffect, useState } from 'react';
@@ -57,12 +57,17 @@ export default function Playlists() {
     }
   }, [tab]);
 
-  useEffect(() => { load(); }, [load]);
-
-  const handleDelete = useCallback(async (id: string) => {
-    await deletePlaylist(id);
+  useEffect(() => {
     load();
   }, [load]);
+
+  const handleDelete = useCallback(
+    async (id: string) => {
+      await deletePlaylist(id);
+      load();
+    },
+    [load]
+  );
 
   return (
     <Box sx={{ p: 3 }}>
@@ -73,7 +78,14 @@ export default function Playlists() {
         </Button>
       </Box>
 
-      <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto" allowScrollButtonsMobile sx={{ mb: 2 }}>
+      <Tabs
+        value={tab}
+        onChange={(_, v) => setTab(v)}
+        variant="scrollable"
+        scrollButtons="auto"
+        allowScrollButtonsMobile
+        sx={{ mb: 2 }}
+      >
         <Tab label="All" value="all" />
         <Tab label="Static" value="static" />
         <Tab label="Smart" value="smart" />
@@ -99,7 +111,11 @@ export default function Playlists() {
                 <ListItemText
                   primary={
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      {pl.type === 'smart' ? <SmartIcon fontSize="small" /> : <StaticIcon fontSize="small" />}
+                      {pl.type === 'smart' ? (
+                        <SmartIcon fontSize="small" />
+                      ) : (
+                        <StaticIcon fontSize="small" />
+                      )}
                       {pl.name}
                       <Chip
                         label={pl.type}
@@ -121,7 +137,11 @@ export default function Playlists() {
         </List>
       )}
 
-      <CreatePlaylistDialog open={createOpen} onClose={() => setCreateOpen(false)} onCreated={load} />
+      <CreatePlaylistDialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreated={load}
+      />
     </Box>
   );
 }
@@ -205,7 +225,7 @@ function CreatePlaylistDialog({
             onChange={(e) => setQuery(e.target.value)}
             margin="normal"
             required
-            placeholder='e.g. author:sanderson year:>2015'
+            placeholder="e.g. author:sanderson year:>2015"
             helperText="Uses the search DSL: field:value, &&, ||, NOT, ranges, wildcards"
           />
         )}
@@ -217,7 +237,11 @@ function CreatePlaylistDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button onClick={handleCreate} variant="contained" disabled={!name || (type === 'smart' && !query)}>
+        <Button
+          onClick={handleCreate}
+          variant="contained"
+          disabled={!name || (type === 'smart' && !query)}
+        >
           Create
         </Button>
       </DialogActions>

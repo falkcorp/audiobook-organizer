@@ -1,15 +1,9 @@
 // file: web/src/components/ChangeLog.tsx
-// version: 1.5.0
+// version: 1.5.1
 // guid: 00f575de-ecea-45b7-9aa5-d6dbbc3f21f6
 
 import { useCallback, useEffect, useState } from 'react';
-import {
-  Box,
-  Button,
-  CircularProgress,
-  Stack,
-  Typography,
-} from '@mui/material';
+import { Box, Button, CircularProgress, Stack, Typography } from '@mui/material';
 import RestoreIcon from '@mui/icons-material/Restore';
 import type { ChangeLogEntry } from '../services/api';
 import * as api from '../services/api';
@@ -24,11 +18,11 @@ interface ChangeLogProps {
 }
 
 const TYPE_ICONS: Record<string, string> = {
-  tag_write: '\uD83C\uDFF7\uFE0F',     // label/tag
-  rename: '\uD83D\uDCC1',              // folder
-  metadata_apply: '\uD83D\uDCE5',      // inbox tray
-  import: '\uD83D\uDCE6',              // package
-  transcode: '\uD83D\uDD04',           // arrows cycle
+  tag_write: '\uD83C\uDFF7\uFE0F', // label/tag
+  rename: '\uD83D\uDCC1', // folder
+  metadata_apply: '\uD83D\uDCE5', // inbox tray
+  import: '\uD83D\uDCE6', // package
+  transcode: '\uD83D\uDD04', // arrows cycle
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -77,7 +71,7 @@ export const ChangeLog = ({ bookId, refreshKey, onRevert, onCompareSnapshot }: C
     } finally {
       setLoading(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookId]);
 
   useEffect(() => {
@@ -124,7 +118,12 @@ export const ChangeLog = ({ bookId, refreshKey, onRevert, onCompareSnapshot }: C
 
   if (entries.length === 0) {
     return (
-      <Typography variant="body2" color="text.secondary" sx={{ py: 2 }} data-testid="changelog-empty">
+      <Typography
+        variant="body2"
+        color="text.secondary"
+        sx={{ py: 2 }}
+        data-testid="changelog-empty"
+      >
         No changes recorded yet.
       </Typography>
     );
@@ -135,20 +134,28 @@ export const ChangeLog = ({ bookId, refreshKey, onRevert, onCompareSnapshot }: C
       {entries.map((entry, idx) => (
         <Box
           key={`${entry.timestamp}-${idx}`}
-          sx={[{
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: 2,
-            py: 1.5,
-            px: 1,
-            borderColor: 'divider',
-            cursor: (entry.type === 'metadata_apply' || entry.type === 'tag_write') ? 'pointer' : undefined,
-            '&:hover': { bgcolor: 'action.hover' }
-          }, idx < entries.length - 1 ? {
-            borderBottom: '1px solid'
-          } : {
-            borderBottom: 'none'
-          }]}
+          sx={[
+            {
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 2,
+              py: 1.5,
+              px: 1,
+              borderColor: 'divider',
+              cursor:
+                entry.type === 'metadata_apply' || entry.type === 'tag_write'
+                  ? 'pointer'
+                  : undefined,
+              '&:hover': { bgcolor: 'action.hover' },
+            },
+            idx < entries.length - 1
+              ? {
+                  borderBottom: '1px solid',
+                }
+              : {
+                  borderBottom: 'none',
+                },
+          ]}
           onClick={() => {
             if (entry.type === 'metadata_apply' || entry.type === 'tag_write') {
               onCompareSnapshot?.(entry.timestamp);
@@ -181,19 +188,25 @@ export const ChangeLog = ({ bookId, refreshKey, onRevert, onCompareSnapshot }: C
 
           {/* Actions */}
           <Stack direction="row" spacing={1} sx={{ flexShrink: 0, alignItems: 'center' }}>
-            {idx > 0 && (entry.type === 'metadata_apply' || entry.type === 'tag_write' || entry.type === 'rename') && (
-              <Button
-                size="small"
-                variant="outlined"
-                color="warning"
-                startIcon={<RestoreIcon />}
-                disabled={reverting === entry.timestamp}
-                onClick={(e) => { e.stopPropagation(); handleRevert(entry.timestamp); }}
-                sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
-              >
-                {reverting === entry.timestamp ? 'Reverting...' : 'Revert'}
-              </Button>
-            )}
+            {idx > 0 &&
+              (entry.type === 'metadata_apply' ||
+                entry.type === 'tag_write' ||
+                entry.type === 'rename') && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="warning"
+                  startIcon={<RestoreIcon />}
+                  disabled={reverting === entry.timestamp}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleRevert(entry.timestamp);
+                  }}
+                  sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
+                >
+                  {reverting === entry.timestamp ? 'Reverting...' : 'Revert'}
+                </Button>
+              )}
           </Stack>
         </Box>
       ))}

@@ -1,5 +1,5 @@
 // file: web/src/components/settings/ITunesConflictDialog.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: g2f3a4b5-c6d7-8901-ghij-k1l2m3n4o5p6
 
 import React from 'react';
@@ -86,9 +86,7 @@ export function ITunesConflictDialog({
 
   return (
     <Dialog open={open} maxWidth="lg" fullWidth>
-      <DialogTitle>
-        Sync Conflicts Detected ({conflicts.length} conflicts)
-      </DialogTitle>
+      <DialogTitle>Sync Conflicts Detected ({conflicts.length} conflicts)</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           <Typography variant="body2" color="textSecondary">
@@ -96,18 +94,10 @@ export function ITunesConflictDialog({
           </Typography>
 
           <Stack direction="row" spacing={1}>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => handleBulkResolve('itunes')}
-            >
+            <Button size="small" variant="outlined" onClick={() => handleBulkResolve('itunes')}>
               Use iTunes for all
             </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => handleBulkResolve('organizer')}
-            >
+            <Button size="small" variant="outlined" onClick={() => handleBulkResolve('organizer')}>
               Use Organizer for all
             </Button>
           </Stack>
@@ -120,7 +110,9 @@ export function ITunesConflictDialog({
                   <TableCell width="15%">Field</TableCell>
                   <TableCell width="20%">iTunes Version</TableCell>
                   <TableCell width="20%">Organizer Version</TableCell>
-                  <TableCell width="20%" align="center">Choice</TableCell>
+                  <TableCell width="20%" align="center">
+                    Choice
+                  </TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -133,17 +125,13 @@ export function ITunesConflictDialog({
                       <TableCell variant="head">{conflict.bookTitle}</TableCell>
                       <TableCell>{conflict.fieldName}</TableCell>
                       <TableCell>
-                        <Typography variant="caption">
-                          {conflict.itunesVersion}
-                        </Typography>
+                        <Typography variant="caption">{conflict.itunesVersion}</Typography>
                         <Typography variant="caption" color="textSecondary" display="block">
                           Modified: {conflict.itunesModified}
                         </Typography>
                       </TableCell>
                       <TableCell>
-                        <Typography variant="caption">
-                          {conflict.organizerVersion}
-                        </Typography>
+                        <Typography variant="caption">{conflict.organizerVersion}</Typography>
                         <Typography variant="caption" color="textSecondary" display="block">
                           Modified: {conflict.organizerModified}
                         </Typography>
@@ -180,11 +168,7 @@ export function ITunesConflictDialog({
         <Button onClick={onCancel} disabled={loading}>
           Cancel
         </Button>
-        <Button
-          onClick={handleApply}
-          variant="contained"
-          disabled={loading}
-        >
+        <Button onClick={handleApply} variant="contained" disabled={loading}>
           {loading ? 'Syncing...' : 'Apply & Sync'}
         </Button>
       </DialogActions>

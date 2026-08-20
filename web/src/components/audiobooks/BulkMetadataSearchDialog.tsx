@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/BulkMetadataSearchDialog.tsx
-// version: 1.5.0
+// version: 1.5.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-08-07
+// last-edited: 2026-08-19
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { applyFieldClick } from './fieldRangeSelect';
@@ -48,22 +48,47 @@ interface BulkMetadataSearchDialogProps {
   books: Audiobook[];
   onClose: () => void;
   onComplete: () => void;
-  toast: (message: string, severity?: 'success' | 'error' | 'warning' | 'info', action?: { label: string; onClick: () => void }) => void;
+  toast: (
+    message: string,
+    severity?: 'success' | 'error' | 'warning' | 'info',
+    action?: { label: string; onClick: () => void }
+  ) => void;
 }
 
 const FIELD_OPTIONS = [
-  'title', 'author', 'narrator', 'series', 'series_position',
-  'year', 'publisher', 'isbn', 'cover_url', 'description', 'language',
+  'title',
+  'author',
+  'narrator',
+  'series',
+  'series_position',
+  'year',
+  'publisher',
+  'isbn',
+  'cover_url',
+  'description',
+  'language',
 ] as const;
 
 const FIELD_LABELS: Record<string, string> = {
-  title: 'Title', author: 'Author', narrator: 'Narrator', series: 'Series',
-  series_position: 'Series Position', year: 'Year', publisher: 'Publisher',
-  isbn: 'ISBN', cover_url: 'Cover Image', description: 'Description', language: 'Language',
+  title: 'Title',
+  author: 'Author',
+  narrator: 'Narrator',
+  series: 'Series',
+  series_position: 'Series Position',
+  year: 'Year',
+  publisher: 'Publisher',
+  isbn: 'ISBN',
+  cover_url: 'Cover Image',
+  description: 'Description',
+  language: 'Language',
 };
 
 const SOURCE_COLORS: Record<string, 'primary' | 'secondary' | 'success' | 'warning' | 'info'> = {
-  openlibrary: 'primary', google_books: 'secondary', audible: 'success', goodreads: 'warning', manual: 'info',
+  openlibrary: 'primary',
+  google_books: 'secondary',
+  audible: 'success',
+  goodreads: 'warning',
+  manual: 'info',
 };
 
 type BookStatus = 'pending' | 'applied' | 'skipped';
@@ -87,7 +112,13 @@ function basename(p: string): string {
   return parts[parts.length - 1] || p;
 }
 
-export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toast }: BulkMetadataSearchDialogProps) {
+export function BulkMetadataSearchDialog({
+  open,
+  books,
+  onClose,
+  onComplete,
+  toast,
+}: BulkMetadataSearchDialogProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [query, setQuery] = useState('');
   const [authorQuery, setAuthorQuery] = useState('');
@@ -132,21 +163,30 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
   const alreadyAppliedCount = books.filter((b) => b.metadata_review_status === 'matched').length;
 
   // Search when the current book changes
-  const doSearch = useCallback(async (searchQuery: string, author?: string, narrator?: string, series?: string) => {
-    if (!currentBook?.id) return;
-    setLoading(true);
-    setResults([]);
-    setExpandedCard(null);
-    setSelectedFields(new Set());
-    try {
-      const resp = await api.searchMetadataForBook(currentBook.id, searchQuery, author || undefined, narrator || undefined, series || undefined);
-      setResults(resp.results || []);
-    } catch {
+  const doSearch = useCallback(
+    async (searchQuery: string, author?: string, narrator?: string, series?: string) => {
+      if (!currentBook?.id) return;
+      setLoading(true);
       setResults([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [currentBook?.id]);
+      setExpandedCard(null);
+      setSelectedFields(new Set());
+      try {
+        const resp = await api.searchMetadataForBook(
+          currentBook.id,
+          searchQuery,
+          author || undefined,
+          narrator || undefined,
+          series || undefined
+        );
+        setResults(resp.results || []);
+      } catch {
+        setResults([]);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [currentBook?.id]
+  );
 
   // Auto-search when navigating to a new book
   useEffect(() => {
@@ -184,20 +224,23 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
 
   // Synthetic fallback so the Files control is never blank: if the API returns
   // nothing, show "1 File" using the book's own path/size.
-  const displayFiles: BookFile[] = files.length > 0
-    ? files
-    : currentBook?.file_path
-      ? [{
-          id: `fallback-${currentBook.id}`,
-          book_id: currentBook.id,
-          file_path: currentBook.file_path,
-          file_size: currentBook.file_size_bytes ?? undefined,
-          format: currentBook.format ?? undefined,
-          missing: false,
-          created_at: '',
-          updated_at: '',
-        }]
-      : [];
+  const displayFiles: BookFile[] =
+    files.length > 0
+      ? files
+      : currentBook?.file_path
+        ? [
+            {
+              id: `fallback-${currentBook.id}`,
+              book_id: currentBook.id,
+              file_path: currentBook.file_path,
+              file_size: currentBook.file_size_bytes ?? undefined,
+              format: currentBook.format ?? undefined,
+              missing: false,
+              created_at: '',
+              updated_at: '',
+            },
+          ]
+        : [];
   const fileCount = Math.max(displayFiles.length, 1);
 
   const handleSearch = () => doSearch(query, authorQuery, narratorQuery, seriesQuery);
@@ -216,7 +259,9 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
             toast(`Undid metadata apply for "${bookTitle}"`, 'info');
             setBookStatuses((prev) => new Map(prev).set(bookId, 'pending'));
             setAppliedStack((prev) => prev.filter((b) => b.id !== bookId));
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
         },
       });
       setBookStatuses((prev) => new Map(prev).set(bookId, 'applied'));
@@ -247,7 +292,9 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
             toast(`Undid metadata apply for "${bookTitle}"`, 'info');
             setBookStatuses((prev) => new Map(prev).set(bookId, 'pending'));
             setAppliedStack((prev) => prev.filter((b) => b.id !== bookId));
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
         },
       });
       setBookStatuses((prev) => new Map(prev).set(bookId, 'applied'));
@@ -362,7 +409,9 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleClose} variant="outlined">Close</Button>
+          <Button onClick={handleClose} variant="outlined">
+            Close
+          </Button>
         </DialogActions>
       </Dialog>
     );
@@ -376,11 +425,17 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
       <DialogTitle sx={{ pb: 1 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Typography variant="h6">
-            Search Metadata — Book {currentIndex + 1} of {filteredBooks.length}{skipApplied && alreadyAppliedCount > 0 ? ` (${alreadyAppliedCount} filtered)` : ''}
+            Search Metadata — Book {currentIndex + 1} of {filteredBooks.length}
+            {skipApplied && alreadyAppliedCount > 0 ? ` (${alreadyAppliedCount} filtered)` : ''}
           </Typography>
           <Stack direction="row" spacing={1} alignItems="center">
             {appliedCount > 0 && (
-              <Chip icon={<CheckCircleIcon />} label={`${appliedCount} applied`} color="success" size="small" />
+              <Chip
+                icon={<CheckCircleIcon />}
+                label={`${appliedCount} applied`}
+                color="success"
+                size="small"
+              />
             )}
             {skippedCount > 0 && (
               <Chip label={`${skippedCount} skipped`} size="small" variant="outlined" />
@@ -394,19 +449,24 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
         {/* Current book info — click to enlarge cover */}
         <Box
           sx={{
-            p: 1.5, mb: 2, border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'action.hover',
+            p: 1.5,
+            mb: 2,
+            border: 1,
+            borderColor: 'divider',
+            borderRadius: 1,
+            bgcolor: 'action.hover',
             cursor: currentBook.cover_url ? 'pointer' : 'default',
-            '&:hover': currentBook.cover_url ? { borderColor: 'primary.main', bgcolor: 'action.selected' } : {},
+            '&:hover': currentBook.cover_url
+              ? { borderColor: 'primary.main', bgcolor: 'action.selected' }
+              : {},
           }}
-          onClick={() => { if (currentBook.cover_url) setPreviewCover(currentBook.cover_url); }}
+          onClick={() => {
+            if (currentBook.cover_url) setPreviewCover(currentBook.cover_url);
+          }}
         >
           <Stack direction="row" spacing={2} alignItems="flex-start">
             {currentBook.cover_url && (
-              <Avatar
-                src={currentBook.cover_url}
-                variant="rounded"
-                sx={{ width: 48, height: 64 }}
-              >
+              <Avatar src={currentBook.cover_url} variant="rounded" sx={{ width: 48, height: 64 }}>
                 {currentBook.title?.[0]}
               </Avatar>
             )}
@@ -420,10 +480,19 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
               </Typography>
               <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 0.5 }}>
                 {currentBook.format && (
-                  <Chip label={currentBook.format.toUpperCase()} size="small" color="primary" variant="outlined" />
+                  <Chip
+                    label={currentBook.format.toUpperCase()}
+                    size="small"
+                    color="primary"
+                    variant="outlined"
+                  />
                 )}
                 {currentBook.duration_seconds != null && currentBook.duration_seconds > 0 && (
-                  <Chip label={formatDuration(currentBook.duration_seconds)} size="small" variant="outlined" />
+                  <Chip
+                    label={formatDuration(currentBook.duration_seconds)}
+                    size="small"
+                    variant="outlined"
+                  />
                 )}
                 {currentBook.series && (
                   <Chip
@@ -434,7 +503,11 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
                   />
                 )}
                 {currentBook.file_size_bytes != null && currentBook.file_size_bytes > 0 && (
-                  <Chip label={formatFileSize(currentBook.file_size_bytes)} size="small" variant="outlined" />
+                  <Chip
+                    label={formatFileSize(currentBook.file_size_bytes)}
+                    size="small"
+                    variant="outlined"
+                  />
                 )}
                 {currentBook.cover_url ? (
                   <Chip label="Has Cover" size="small" color="success" variant="outlined" />
@@ -446,17 +519,30 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
                 )}
               </Stack>
               {currentBook.file_path && (
-                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, wordBreak: 'break-all' }}>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: 'block', mt: 0.5, wordBreak: 'break-all' }}
+                >
                   File: {currentBook.file_path}
                 </Typography>
               )}
-              {currentBook.original_filename && currentBook.original_filename !== currentBook.file_path?.split('/').pop() && (
-                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', wordBreak: 'break-all' }}>
-                  Original: {currentBook.original_filename}
-                </Typography>
-              )}
+              {currentBook.original_filename &&
+                currentBook.original_filename !== currentBook.file_path?.split('/').pop() && (
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ display: 'block', wordBreak: 'break-all' }}
+                  >
+                    Original: {currentBook.original_filename}
+                  </Typography>
+                )}
               {currentBook.itunes_path && (
-                <Typography variant="caption" color="info.main" sx={{ display: 'block', wordBreak: 'break-all' }}>
+                <Typography
+                  variant="caption"
+                  color="info.main"
+                  sx={{ display: 'block', wordBreak: 'break-all' }}
+                >
                   iTunes: {currentBook.itunes_path}
                 </Typography>
               )}
@@ -468,7 +554,11 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
               <Box sx={{ mt: 0.75 }} onClick={(e) => e.stopPropagation()}>
                 <Chip
                   icon={filesLoading ? <CircularProgress size={14} /> : <FolderOpenIcon />}
-                  label={filesLoading ? 'Loading files…' : `${fileCount} File${fileCount === 1 ? '' : 's'}`}
+                  label={
+                    filesLoading
+                      ? 'Loading files…'
+                      : `${fileCount} File${fileCount === 1 ? '' : 's'}`
+                  }
                   size="small"
                   variant="outlined"
                   clickable
@@ -483,19 +573,28 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
                         f.format,
                         f.file_size != null && f.file_size > 0 ? formatFileSize(f.file_size) : null,
                         f.duration != null && f.duration > 0 ? formatDuration(f.duration) : null,
-                      ].filter(Boolean).join(' · ');
+                      ]
+                        .filter(Boolean)
+                        .join(' · ');
                       return (
                         <ListItem key={f.id} disableGutters sx={{ display: 'block', py: 0.25 }}>
                           <Tooltip title={f.file_path} placement="bottom-start">
                             <Typography
                               variant="caption"
-                              sx={{ fontFamily: 'monospace', display: 'block', color: f.missing ? 'error.main' : 'text.primary', wordBreak: 'break-all' }}
+                              sx={{
+                                fontFamily: 'monospace',
+                                display: 'block',
+                                color: f.missing ? 'error.main' : 'text.primary',
+                                wordBreak: 'break-all',
+                              }}
                             >
                               {basename(f.file_path)}
                             </Typography>
                           </Tooltip>
                           {meta && (
-                            <Typography variant="caption" color="text.secondary">{meta}</Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {meta}
+                            </Typography>
                           )}
                         </ListItem>
                       );
@@ -511,17 +610,26 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
 
         {/* Search */}
         <TextField
-          fullWidth size="small"
+          fullWidth
+          size="small"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') handleSearch();
+          }}
           placeholder="Search by title, ISBN, or ASIN..."
           sx={{ mb: 1 }}
           InputProps={{
-            startAdornment: <InputAdornment position="start"><SearchIcon /></InputAdornment>,
+            startAdornment: (
+              <InputAdornment position="start">
+                <SearchIcon />
+              </InputAdornment>
+            ),
             endAdornment: (
               <InputAdornment position="end">
-                <IconButton onClick={handleSearch} disabled={loading} size="small"><SearchIcon /></IconButton>
+                <IconButton onClick={handleSearch} disabled={loading} size="small">
+                  <SearchIcon />
+                </IconButton>
               </InputAdornment>
             ),
           }}
@@ -537,26 +645,35 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
         <Collapse in={showAdvanced}>
           <Stack spacing={1.5} sx={{ mb: 2 }}>
             <TextField
-              fullWidth size="small"
+              fullWidth
+              size="small"
               value={authorQuery}
               onChange={(e) => setAuthorQuery(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSearch();
+              }}
               placeholder="Author name (narrows results)"
               label="Author"
             />
             <TextField
-              fullWidth size="small"
+              fullWidth
+              size="small"
               value={narratorQuery}
               onChange={(e) => setNarratorQuery(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSearch();
+              }}
               placeholder="Narrator name (boosts matching results)"
               label="Narrator"
             />
             <TextField
-              fullWidth size="small"
+              fullWidth
+              size="small"
               value={seriesQuery}
               onChange={(e) => setSeriesQuery(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSearch();
+              }}
               placeholder="Series name (boosts matching series)"
               label="Series"
             />
@@ -567,13 +684,27 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
         <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 1 }}>
           <Tooltip title="Write applied metadata to audio file tags (MP3/M4B/M4A)">
             <FormControlLabel
-              control={<Switch checked={writeToFiles} onChange={(e) => setWriteToFiles(e.target.checked)} size="small" />}
+              control={
+                <Switch
+                  checked={writeToFiles}
+                  onChange={(e) => setWriteToFiles(e.target.checked)}
+                  size="small"
+                />
+              }
               label={<Typography variant="body2">Write to files</Typography>}
             />
           </Tooltip>
-          <Tooltip title={`Skip books that already have metadata applied${alreadyAppliedCount > 0 ? ` (${alreadyAppliedCount} books)` : ''}`}>
+          <Tooltip
+            title={`Skip books that already have metadata applied${alreadyAppliedCount > 0 ? ` (${alreadyAppliedCount} books)` : ''}`}
+          >
             <FormControlLabel
-              control={<Switch checked={skipApplied} onChange={(e) => handleToggleSkipApplied(e.target.checked)} size="small" />}
+              control={
+                <Switch
+                  checked={skipApplied}
+                  onChange={(e) => handleToggleSkipApplied(e.target.checked)}
+                  size="small"
+                />
+              }
               label={<Typography variant="body2">Skip applied</Typography>}
             />
           </Tooltip>
@@ -604,126 +735,191 @@ export function BulkMetadataSearchDialog({ open, books, onClose, onComplete, toa
         )}
 
         {/* Source filter + sort */}
-        {!loading && results.length > 0 && (() => {
-          const sources = Array.from(new Set(results.map((r) => r.source)));
-          return (
-            <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mb: 1 }} flexWrap="wrap">
-              <Chip
-                label="All"
-                size="small"
-                variant={sourceFilter === null ? 'filled' : 'outlined'}
-                onClick={() => setSourceFilter(null)}
-              />
-              {sources.map((src) => (
+        {!loading &&
+          results.length > 0 &&
+          (() => {
+            const sources = Array.from(new Set(results.map((r) => r.source)));
+            return (
+              <Stack
+                direction="row"
+                spacing={0.5}
+                alignItems="center"
+                sx={{ mb: 1 }}
+                flexWrap="wrap"
+              >
                 <Chip
-                  key={src}
-                  label={`${src} (${results.filter((r) => r.source === src).length})`}
+                  label="All"
                   size="small"
-                  color={SOURCE_COLORS[src] || 'default'}
-                  variant={sourceFilter === src ? 'filled' : 'outlined'}
-                  onClick={() => setSourceFilter(sourceFilter === src ? null : src)}
+                  variant={sourceFilter === null ? 'filled' : 'outlined'}
+                  onClick={() => setSourceFilter(null)}
                 />
-              ))}
-              <Box sx={{ flex: 1 }} />
-              <Chip
-                label={sortResults === 'score' ? 'Sort: Score' : 'Sort: Source'}
-                size="small"
-                variant="outlined"
-                onClick={() => setSortResults(sortResults === 'score' ? 'source' : 'score')}
-              />
-            </Stack>
-          );
-        })()}
+                {sources.map((src) => (
+                  <Chip
+                    key={src}
+                    label={`${src} (${results.filter((r) => r.source === src).length})`}
+                    size="small"
+                    color={SOURCE_COLORS[src] || 'default'}
+                    variant={sourceFilter === src ? 'filled' : 'outlined'}
+                    onClick={() => setSourceFilter(sourceFilter === src ? null : src)}
+                  />
+                ))}
+                <Box sx={{ flex: 1 }} />
+                <Chip
+                  label={sortResults === 'score' ? 'Sort: Score' : 'Sort: Source'}
+                  size="small"
+                  variant="outlined"
+                  onClick={() => setSortResults(sortResults === 'score' ? 'source' : 'score')}
+                />
+              </Stack>
+            );
+          })()}
 
         <Stack spacing={1.5} sx={{ maxHeight: '50vh', overflow: 'auto' }}>
           {results
             .filter((c) => !sourceFilter || c.source === sourceFilter)
-            .sort((a, b) => sortResults === 'source' ? a.source.localeCompare(b.source) : b.score - a.score)
+            .sort((a, b) =>
+              sortResults === 'source' ? a.source.localeCompare(b.source) : b.score - a.score
+            )
             .map((candidate, idx) => (
-            <Box key={idx} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
-              <Stack direction="row" spacing={2} alignItems="flex-start">
-                <Avatar
-                  src={candidate.cover_url}
-                  variant="rounded"
-                  sx={{ width: 50, height: 65, cursor: candidate.cover_url ? 'pointer' : 'default', '&:hover': candidate.cover_url ? { opacity: 0.8 } : {} }}
-                  onClick={() => { if (candidate.cover_url) setPreviewCover(candidate.cover_url); }}
-                >
-                  {candidate.title?.[0] || '?'}
-                </Avatar>
-                <Box sx={{ flex: 1, minWidth: 0 }}>
-                  <Typography variant="body1" fontWeight="bold" noWrap>{candidate.title}</Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {candidate.author}{candidate.year ? ` (${candidate.year})` : ''}
-                  </Typography>
-                  {candidate.series && (
-                    <Typography variant="body2" color="text.secondary">
-                      Series: {candidate.series}{candidate.series_position ? ` · Book ${candidate.series_position}` : ''}
+              <Box key={idx} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
+                <Stack direction="row" spacing={2} alignItems="flex-start">
+                  <Avatar
+                    src={candidate.cover_url}
+                    variant="rounded"
+                    sx={{
+                      width: 50,
+                      height: 65,
+                      cursor: candidate.cover_url ? 'pointer' : 'default',
+                      '&:hover': candidate.cover_url ? { opacity: 0.8 } : {},
+                    }}
+                    onClick={() => {
+                      if (candidate.cover_url) setPreviewCover(candidate.cover_url);
+                    }}
+                  >
+                    {candidate.title?.[0] || '?'}
+                  </Avatar>
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Typography variant="body1" fontWeight="bold" noWrap>
+                      {candidate.title}
                     </Typography>
-                  )}
-                  {candidate.narrator && (
-                    <Typography variant="body2" color="text.secondary">Narrator: {candidate.narrator}</Typography>
-                  )}
-                  <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }}>
-                    <Chip label={candidate.source} size="small" color={SOURCE_COLORS[candidate.source] || 'default'} />
-                    <Chip label={`${Math.round(candidate.score * 100)}%`} size="small" variant="outlined" />
-                    {candidate.narrator && <Chip icon={<HeadphonesIcon />} label="Audiobook" size="small" color="info" variant="outlined" />}
-                  </Stack>
-                </Box>
-                <Button
-                  variant="contained"
-                  size="small"
-                  onClick={() => handleApplyAll(candidate)}
-                  disabled={applying || bookStatuses.get(currentBook.id) === 'applied'}
-                  sx={bookStatuses.get(currentBook.id) === 'applied' ? { opacity: 0.5 } : {}}
-                  startIcon={bookStatuses.get(currentBook.id) === 'applied' ? <CheckCircleIcon /> : undefined}
-                >
-                  {bookStatuses.get(currentBook.id) === 'applied' ? 'Applied' : 'Apply'}
-                </Button>
-              </Stack>
-
-              {/* Field selector */}
-              <Box sx={{ mt: 0.5 }}>
-                <Button
-                  size="small"
-                  onClick={() => setExpandedCard(expandedCard === idx ? null : idx)}
-                  endIcon={expandedCard === idx ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-                >
-                  Select fields...
-                </Button>
-                <Collapse in={expandedCard === idx}>
-                  <Box sx={{ mt: 0.5, pl: 1 }}>
-                    {(() => {
-                      const visibleFields = FIELD_OPTIONS.filter((f) => {
-                        const v = candidate[f as keyof MetadataCandidate];
-                        return v !== undefined && v !== null && v !== '';
-                      });
-                      return visibleFields.map((field) => {
-                        const value = candidate[field as keyof MetadataCandidate];
-                        return (
-                          <FormControlLabel
-                            key={field}
-                            control={<Checkbox checked={selectedFields.has(field)} onClick={(e) => { e.preventDefault(); handleFieldClick(field, e.shiftKey, visibleFields); }} onChange={() => {}} size="small" />}
-                            label={<Typography variant="body2">{FIELD_LABELS[field] || field}: {String(value)}</Typography>}
-                          />
-                        );
-                      });
-                    })()}
-                    <Box sx={{ mt: 0.5 }}>
-                      <Button
-                        variant="outlined"
+                    <Typography variant="body2" color="text.secondary">
+                      {candidate.author}
+                      {candidate.year ? ` (${candidate.year})` : ''}
+                    </Typography>
+                    {candidate.series && (
+                      <Typography variant="body2" color="text.secondary">
+                        Series: {candidate.series}
+                        {candidate.series_position ? ` · Book ${candidate.series_position}` : ''}
+                      </Typography>
+                    )}
+                    {candidate.narrator && (
+                      <Typography variant="body2" color="text.secondary">
+                        Narrator: {candidate.narrator}
+                      </Typography>
+                    )}
+                    <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }}>
+                      <Chip
+                        label={candidate.source}
                         size="small"
-                        onClick={() => handleApplySelected(candidate)}
-                        disabled={applying || selectedFields.size === 0 || bookStatuses.get(currentBook.id) === 'applied'}
-                        sx={bookStatuses.get(currentBook.id) === 'applied' ? { opacity: 0.5 } : {}}
-                      >
-                        {bookStatuses.get(currentBook.id) === 'applied' ? 'Applied' : 'Apply Selected'}
-                      </Button>
-                    </Box>
+                        color={SOURCE_COLORS[candidate.source] || 'default'}
+                      />
+                      <Chip
+                        label={`${Math.round(candidate.score * 100)}%`}
+                        size="small"
+                        variant="outlined"
+                      />
+                      {candidate.narrator && (
+                        <Chip
+                          icon={<HeadphonesIcon />}
+                          label="Audiobook"
+                          size="small"
+                          color="info"
+                          variant="outlined"
+                        />
+                      )}
+                    </Stack>
                   </Box>
-                </Collapse>
+                  <Button
+                    variant="contained"
+                    size="small"
+                    onClick={() => handleApplyAll(candidate)}
+                    disabled={applying || bookStatuses.get(currentBook.id) === 'applied'}
+                    sx={bookStatuses.get(currentBook.id) === 'applied' ? { opacity: 0.5 } : {}}
+                    startIcon={
+                      bookStatuses.get(currentBook.id) === 'applied' ? (
+                        <CheckCircleIcon />
+                      ) : undefined
+                    }
+                  >
+                    {bookStatuses.get(currentBook.id) === 'applied' ? 'Applied' : 'Apply'}
+                  </Button>
+                </Stack>
+
+                {/* Field selector */}
+                <Box sx={{ mt: 0.5 }}>
+                  <Button
+                    size="small"
+                    onClick={() => setExpandedCard(expandedCard === idx ? null : idx)}
+                    endIcon={expandedCard === idx ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                  >
+                    Select fields...
+                  </Button>
+                  <Collapse in={expandedCard === idx}>
+                    <Box sx={{ mt: 0.5, pl: 1 }}>
+                      {(() => {
+                        const visibleFields = FIELD_OPTIONS.filter((f) => {
+                          const v = candidate[f as keyof MetadataCandidate];
+                          return v !== undefined && v !== null && v !== '';
+                        });
+                        return visibleFields.map((field) => {
+                          const value = candidate[field as keyof MetadataCandidate];
+                          return (
+                            <FormControlLabel
+                              key={field}
+                              control={
+                                <Checkbox
+                                  checked={selectedFields.has(field)}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    handleFieldClick(field, e.shiftKey, visibleFields);
+                                  }}
+                                  onChange={() => {}}
+                                  size="small"
+                                />
+                              }
+                              label={
+                                <Typography variant="body2">
+                                  {FIELD_LABELS[field] || field}: {String(value)}
+                                </Typography>
+                              }
+                            />
+                          );
+                        });
+                      })()}
+                      <Box sx={{ mt: 0.5 }}>
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          onClick={() => handleApplySelected(candidate)}
+                          disabled={
+                            applying ||
+                            selectedFields.size === 0 ||
+                            bookStatuses.get(currentBook.id) === 'applied'
+                          }
+                          sx={
+                            bookStatuses.get(currentBook.id) === 'applied' ? { opacity: 0.5 } : {}
+                          }
+                        >
+                          {bookStatuses.get(currentBook.id) === 'applied'
+                            ? 'Applied'
+                            : 'Apply Selected'}
+                        </Button>
+                      </Box>
+                    </Box>
+                  </Collapse>
+                </Box>
               </Box>
-            </Box>
-          ))}
+            ))}
         </Stack>
       </DialogContent>
 

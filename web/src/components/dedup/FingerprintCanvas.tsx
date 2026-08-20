@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/FingerprintCanvas.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: c7d8e9f0-a1b2-4c3d-8e4f-5a6b7c8d9e0f
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 // FingerprintCanvas renders a chromaprint base64 fingerprint as a visual
 // bit-matrix heatmap. Each row = one time bucket (aggregated frames), each
 // column = one of the 32 bit positions. Cells are colored by bit value and
@@ -38,7 +38,7 @@ function decodeChromaprint(b64: string): Uint32Array | null {
     const frames = new Uint32Array(
       frameBytes.buffer,
       frameBytes.byteOffset,
-      Math.floor(frameBytes.byteLength / 4),
+      Math.floor(frameBytes.byteLength / 4)
     );
     return frames.length > 0 ? frames : null;
   } catch {
@@ -128,12 +128,19 @@ export function FingerprintCanvas({
 
   return (
     <Tooltip title={tooltipText} placement="top">
-      <Box sx={{ display: 'inline-flex', flexDirection: 'column', gap: 0.5, alignItems: 'flex-start' }}>
+      <Box
+        sx={{ display: 'inline-flex', flexDirection: 'column', gap: 0.5, alignItems: 'flex-start' }}
+      >
         {label && (
           <Typography
             variant="caption"
             color="text.secondary"
-            sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, fontSize: '0.6rem' }}
+            sx={{
+              fontWeight: 600,
+              textTransform: 'uppercase',
+              letterSpacing: 0.5,
+              fontSize: '0.6rem',
+            }}
           >
             {label}
           </Typography>
@@ -196,7 +203,7 @@ export function FingerprintPair({ hashA, hashB, width = 180, rows = 48 }: Finger
     function renderCanvas(
       ref: RefObject<HTMLCanvasElement | null>,
       bits: Uint8Array,
-      hasData: boolean,
+      hasData: boolean
     ) {
       const canvas = ref.current;
       if (!canvas) return;
@@ -260,21 +267,30 @@ export function FingerprintPair({ hashA, hashB, width = 180, rows = 48 }: Finger
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       {simPct != null && (
-        <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'center', display: 'block' }}>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ textAlign: 'center', display: 'block' }}
+        >
           Visual similarity:{' '}
           <Box
             component="span"
-            sx={[{
-              fontWeight: 700
-            }, simPct > 80 ? {
-              color: 'success.main'
-            } : {
-              color: simPct > 50 ? 'warning.main' : 'error.main'
-            }]}
+            sx={[
+              {
+                fontWeight: 700,
+              },
+              simPct > 80
+                ? {
+                    color: 'success.main',
+                  }
+                : {
+                    color: simPct > 50 ? 'warning.main' : 'error.main',
+                  },
+            ]}
           >
             {simPct}%
-          </Box>
-          {' '}(amber = differs)
+          </Box>{' '}
+          (amber = differs)
         </Typography>
       )}
       <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
@@ -282,7 +298,12 @@ export function FingerprintPair({ hashA, hashB, width = 180, rows = 48 }: Finger
           <Typography
             variant="caption"
             color="text.secondary"
-            sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, fontSize: '0.6rem' }}
+            sx={{
+              fontWeight: 600,
+              textTransform: 'uppercase',
+              letterSpacing: 0.5,
+              fontSize: '0.6rem',
+            }}
           >
             Book A
           </Typography>
@@ -312,7 +333,12 @@ export function FingerprintPair({ hashA, hashB, width = 180, rows = 48 }: Finger
           <Typography
             variant="caption"
             color="text.secondary"
-            sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, fontSize: '0.6rem' }}
+            sx={{
+              fontWeight: 600,
+              textTransform: 'uppercase',
+              letterSpacing: 0.5,
+              fontSize: '0.6rem',
+            }}
           >
             Book B
           </Typography>

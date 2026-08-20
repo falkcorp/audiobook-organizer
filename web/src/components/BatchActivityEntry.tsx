@@ -1,5 +1,5 @@
 // file: web/src/components/BatchActivityEntry.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7e3a1f9c-4b82-4d5e-a6c8-2f0d8e7b3a91
 
 import React, { useState } from 'react';
@@ -92,7 +92,10 @@ export function BatchActivityEntry({ entry, tierColor }: BatchActivityEntryProps
               size="small"
               sx={{ p: 0 }}
               aria-label={expanded ? 'Collapse batch' : 'Expand batch'}
-              onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setExpanded((v) => !v);
+              }}
             >
               {expanded ? (
                 <ExpandMoreIcon fontSize="small" />
@@ -130,9 +133,7 @@ export function BatchActivityEntry({ entry, tierColor }: BatchActivityEntryProps
 
         {/* 3. Source chip */}
         <TableCell>
-          {entry.source ? (
-            <Chip size="small" label={entry.source} variant="outlined" />
-          ) : null}
+          {entry.source ? <Chip size="small" label={entry.source} variant="outlined" /> : null}
         </TableCell>
 
         {/* 4. Summary (spans wider column) */}
@@ -161,24 +162,24 @@ export function BatchActivityEntry({ entry, tierColor }: BatchActivityEntryProps
       <TableRow>
         <TableCell
           colSpan={7}
-          sx={[{
-            py: 0
-          }, expanded ? {
-            borderBottom: null
-          } : {
-            borderBottom: 'none'
-          }]}
+          sx={[
+            {
+              py: 0,
+            },
+            expanded
+              ? {
+                  borderBottom: null,
+                }
+              : {
+                  borderBottom: 'none',
+                },
+          ]}
         >
           <Collapse in={expanded} timeout="auto" unmountOnExit>
             <Box sx={{ py: 1, pl: 4 }}>
               {visibleItems.map((item, idx) => (
-                <Typography
-                  key={idx}
-                  variant="body2"
-                  sx={{ py: 0.25 }}
-                >
-                  {idx + 1}.{' '}
-                  <strong>{item.name}</strong>
+                <Typography key={idx} variant="body2" sx={{ py: 0.25 }}>
+                  {idx + 1}. <strong>{item.name}</strong>
                   {' — '}
                   {item.count === 1 ? '1 item' : `${item.count} items`}
                   {item.detail ? ` (${item.detail})` : ''}
@@ -190,7 +191,11 @@ export function BatchActivityEntry({ entry, tierColor }: BatchActivityEntryProps
                   color="text.secondary"
                   sx={{ pt: 0.5, display: 'block' }}
                 >
-                  … and {hiddenCount > 0 ? hiddenCount : (details?.original_count ?? 0) - visibleItems.length} more not shown
+                  … and{' '}
+                  {hiddenCount > 0
+                    ? hiddenCount
+                    : (details?.original_count ?? 0) - visibleItems.length}{' '}
+                  more not shown
                 </Typography>
               )}
             </Box>

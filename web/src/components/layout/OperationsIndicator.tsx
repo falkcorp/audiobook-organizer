@@ -1,5 +1,5 @@
 // file: web/src/components/layout/OperationsIndicator.tsx
-// version: 4.0.1
+// version: 4.0.2
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
 
 import { useState } from 'react';
@@ -30,13 +30,8 @@ import CloseIcon from '@mui/icons-material/Close';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { OperationActivityPanel } from '../OperationActivityPanel';
-import {
-  useOperationsStore,
-  type ActiveOperation,
-} from '../../stores/useOperationsStore';
-import {
-  cancelOperation,
-} from '../../services/api';
+import { useOperationsStore, type ActiveOperation } from '../../stores/useOperationsStore';
+import { cancelOperation } from '../../services/api';
 import { getUndoPreflight, revertOperation as revertOp } from '../../services/versionApi';
 
 function formatOperationType(type: string): string {
@@ -98,9 +93,7 @@ function formatElapsed(op: ActiveOperation): string | null {
 
 function parseMessageDetails(message: string) {
   const titleMatch = message.match(/—\s*(.+)$/);
-  const countsMatch = message.match(
-    /\(imported (\d+), skipped (\d+), failed (\d+)\)/
-  );
+  const countsMatch = message.match(/\(imported (\d+), skipped (\d+), failed (\d+)\)/);
   // OL import: "Importing editions: 1234k records"
   const olMatch = message.match(/Importing (\w+): (\d+)k records/);
   return {
@@ -245,15 +238,8 @@ export function OperationsIndicator() {
             : 'No active operations'
         }
       >
-        <IconButton
-          color="inherit"
-          onClick={(e) => setAnchorEl(e.currentTarget)}
-          sx={{ mr: 1 }}
-        >
-          <Badge
-            badgeContent={badgeCount > 0 ? badgeCount : undefined}
-            color="warning"
-          >
+        <IconButton color="inherit" onClick={(e) => setAnchorEl(e.currentTarget)} sx={{ mr: 1 }}>
+          <Badge badgeContent={badgeCount > 0 ? badgeCount : undefined} color="warning">
             {badgeCount > 0 ? (
               <CircularProgress size={24} color="inherit" thickness={4} />
             ) : (
@@ -318,8 +304,7 @@ export function OperationsIndicator() {
               />
               <Collapse in={collapse.running} unmountOnExit>
                 {running.map((op: ActiveOperation) => {
-                  const progressPct =
-                    op.total > 0 ? Math.round((op.progress / op.total) * 100) : 0;
+                  const progressPct = op.total > 0 ? Math.round((op.progress / op.total) * 100) : 0;
                   const eta = formatETA(op);
                   const elapsed = formatElapsed(op);
                   const details = parseMessageDetails(op.message);
@@ -408,19 +393,15 @@ export function OperationsIndicator() {
                         >
                           {op.total > 0 ? (
                             <>
-                              {op.progress.toLocaleString()} / {op.total.toLocaleString()}
-                              {' '}({progressPct}%)
+                              {op.progress.toLocaleString()} / {op.total.toLocaleString()} (
+                              {progressPct}%)
                             </>
                           ) : (
                             'Starting...'
                           )}
                         </Typography>
                         {eta && (
-                          <Typography
-                            variant="caption"
-                            color="text.secondary"
-                            fontStyle="italic"
-                          >
+                          <Typography variant="caption" color="text.secondary" fontStyle="italic">
                             {eta}
                           </Typography>
                         )}
@@ -540,8 +521,7 @@ export function OperationsIndicator() {
               />
               <Collapse in={collapse.completed} unmountOnExit>
                 {terminal.map((op: ActiveOperation) => {
-                  const statusLabel =
-                    op.status === 'completed' ? 'success' : op.status;
+                  const statusLabel = op.status === 'completed' ? 'success' : op.status;
                   const statusColor =
                     op.status === 'completed'
                       ? ('success' as const)
@@ -567,12 +547,7 @@ export function OperationsIndicator() {
                         },
                       }}
                     >
-                      <Typography
-                        variant="caption"
-                        fontWeight="bold"
-                        noWrap
-                        sx={{ flex: 1 }}
-                      >
+                      <Typography variant="caption" fontWeight="bold" noWrap sx={{ flex: 1 }}>
                         {formatOperationType(op.type)}
                       </Typography>
                       <Chip
@@ -585,27 +560,26 @@ export function OperationsIndicator() {
                           '& .MuiChip-label': { px: 0.75 },
                         }}
                       />
-                      {op.type === 'metadata_candidate_fetch' &&
-                        op.status === 'completed' && (
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            sx={{
-                              textTransform: 'none',
-                              fontSize: '0.65rem',
-                              py: 0,
-                              minHeight: 20,
-                            }}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              e.preventDefault();
-                              setAnchorEl(null);
-                              window.location.href = `/library?reviewOp=${op.id}`;
-                            }}
-                          >
-                            Review
-                          </Button>
-                        )}
+                      {op.type === 'metadata_candidate_fetch' && op.status === 'completed' && (
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          sx={{
+                            textTransform: 'none',
+                            fontSize: '0.65rem',
+                            py: 0,
+                            minHeight: 20,
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            setAnchorEl(null);
+                            window.location.href = `/library?reviewOp=${op.id}`;
+                          }}
+                        >
+                          Review
+                        </Button>
+                      )}
                       {(op.type === 'organize' || op.type === 'scan_and_organize') &&
                         op.status === 'completed' && (
                           <Button
@@ -636,8 +610,7 @@ export function OperationsIndicator() {
                                   alert('Operation reverted successfully');
                                 }
                               } catch (err: unknown) {
-                                const msg =
-                                  (err as { message?: string })?.message || 'Undo failed';
+                                const msg = (err as { message?: string })?.message || 'Undo failed';
                                 alert(msg);
                               }
                             }}

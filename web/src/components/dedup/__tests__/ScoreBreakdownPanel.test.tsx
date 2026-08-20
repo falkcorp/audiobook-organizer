@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/__tests__/ScoreBreakdownPanel.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: b2c3d4e5-f6a7-8901-bcde-222345678901
-// last-edited: 2026-06-10
+// last-edited: 2026-08-19
 
 import { render, screen } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
@@ -62,11 +62,7 @@ describe('ScoreBreakdownPanel', () => {
   });
 
   it('renders empty state when no signals', () => {
-    render(
-      <ScoreBreakdownPanel
-        breakdown={{ ...mockBreakdown, signals: [] }}
-      />
-    );
+    render(<ScoreBreakdownPanel breakdown={{ ...mockBreakdown, signals: [] }} />);
     expect(screen.getByText(/No signal data available/i)).toBeInTheDocument();
   });
 

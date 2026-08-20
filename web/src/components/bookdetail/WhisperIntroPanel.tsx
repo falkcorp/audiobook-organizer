@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/WhisperIntroPanel.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 import { useState } from 'react';
 import {
   Accordion,
@@ -25,7 +25,8 @@ export function WhisperIntroPanel({ book }: Props) {
 
   if (!book.intro_transcription && !book.intro_transcribed_at) return null;
 
-  const hasExtracted = book.transcribed_title || book.transcribed_author || book.transcribed_narrator;
+  const hasExtracted =
+    book.transcribed_title || book.transcribed_author || book.transcribed_narrator;
   const transcribedAt = book.intro_transcribed_at
     ? new Date(book.intro_transcribed_at).toLocaleString()
     : null;
@@ -37,7 +38,13 @@ export function WhisperIntroPanel({ book }: Props) {
       expanded={expanded}
       onChange={(_, v) => setExpanded(v)}
       disableGutters
-      sx={{ mb: 3, '&:before': { display: 'none' }, borderRadius: 1, border: '1px solid', borderColor: 'divider' }}
+      sx={{
+        mb: 3,
+        '&:before': { display: 'none' },
+        borderRadius: 1,
+        border: '1px solid',
+        borderColor: 'divider',
+      }}
       elevation={0}
     >
       <AccordionSummary expandIcon={<ExpandMoreIcon />}>
@@ -64,27 +71,42 @@ export function WhisperIntroPanel({ book }: Props) {
 
       <AccordionDetails>
         {book.intro_transcription && (
-          <Box sx={[hasExtracted ? {
-            mb: 2
-          } : {
-            mb: 0
-          }]}>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+          <Box
+            sx={[
+              hasExtracted
+                ? {
+                    mb: 2,
+                  }
+                : {
+                    mb: 0,
+                  },
+            ]}
+          >
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: 'block', mb: 0.5, textTransform: 'uppercase', letterSpacing: 0.5 }}
+            >
               Raw Transcript
             </Typography>
             <Typography
               variant="body2"
-              sx={[{
-                fontStyle: 'italic',
-                bgcolor: 'action.hover',
-                borderRadius: 1,
-                p: 1.5,
-                whiteSpace: 'pre-wrap'
-              }, isShort ? {
-                color: 'warning.main'
-              } : {
-                color: 'text.primary'
-              }]}
+              sx={[
+                {
+                  fontStyle: 'italic',
+                  bgcolor: 'action.hover',
+                  borderRadius: 1,
+                  p: 1.5,
+                  whiteSpace: 'pre-wrap',
+                },
+                isShort
+                  ? {
+                      color: 'warning.main',
+                    }
+                  : {
+                      color: 'text.primary',
+                    },
+              ]}
             >
               {book.intro_transcription}
             </Typography>
@@ -93,21 +115,32 @@ export function WhisperIntroPanel({ book }: Props) {
 
         {hasExtracted && (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-            <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 0.5 }}>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ textTransform: 'uppercase', letterSpacing: 0.5 }}
+            >
               Extracted
             </Typography>
             {[
               { label: 'Title', value: book.transcribed_title },
               { label: 'Author', value: book.transcribed_author },
               { label: 'Narrator', value: book.transcribed_narrator },
-            ].map(({ label, value }) => value && (
-              <Box key={label} sx={{ display: 'flex', gap: 1.5, alignItems: 'baseline' }}>
-                <Typography variant="body2" color="text.secondary" sx={{ width: 64, flexShrink: 0 }}>
-                  {label}
-                </Typography>
-                <Typography variant="body2">{value}</Typography>
-              </Box>
-            ))}
+            ].map(
+              ({ label, value }) =>
+                value && (
+                  <Box key={label} sx={{ display: 'flex', gap: 1.5, alignItems: 'baseline' }}>
+                    <Typography
+                      variant="body2"
+                      color="text.secondary"
+                      sx={{ width: 64, flexShrink: 0 }}
+                    >
+                      {label}
+                    </Typography>
+                    <Typography variant="body2">{value}</Typography>
+                  </Box>
+                )
+            )}
           </Box>
         )}
       </AccordionDetails>

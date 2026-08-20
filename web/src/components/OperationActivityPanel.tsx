@@ -1,5 +1,5 @@
 // file: web/src/components/OperationActivityPanel.tsx
-// version: 1.3.1
+// version: 1.3.2
 // guid: f7a1e2c3-9b4d-4e5a-8c6f-1d3b5a7e9c0f
 
 import { useCallback, useEffect, useState, useRef, useMemo } from 'react';
@@ -18,10 +18,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import {
-  fetchOperationActivity,
-  type OperationActivityEntry,
-} from '../services/activityApi';
+import { fetchOperationActivity, type OperationActivityEntry } from '../services/activityApi';
 import { useOperationsStore } from '../stores/useOperationsStore';
 import { useToast } from './toast/ToastProvider';
 
@@ -67,9 +64,7 @@ function formatTimestamp(ts: string): string {
   });
 }
 
-function statusColor(
-  status: string,
-): 'success' | 'error' | 'warning' | 'info' | 'default' {
+function statusColor(status: string): 'success' | 'error' | 'warning' | 'info' | 'default' {
   if (status === 'completed') return 'success';
   if (status === 'failed') return 'error';
   if (status === 'canceled') return 'warning';
@@ -124,11 +119,7 @@ function EntryRow({ entry }: EntryRowProps) {
             onClick={() => setExpanded((v) => !v)}
             aria-label={expanded ? 'Collapse details' : 'Expand details'}
           >
-            {expanded ? (
-              <ExpandMoreIcon fontSize="small" />
-            ) : (
-              <ChevronRightIcon fontSize="small" />
-            )}
+            {expanded ? <ExpandMoreIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
           </IconButton>
         )}
       </Stack>
@@ -163,10 +154,7 @@ function EntryRow({ entry }: EntryRowProps) {
  * inferred from the last entry's level) plus a chronological list of entries
  * with color-coded level badges and collapsible details.
  */
-export function OperationActivityPanel({
-  operationId,
-  limit,
-}: OperationActivityPanelProps) {
+export function OperationActivityPanel({ operationId, limit }: OperationActivityPanelProps) {
   const [entries, setEntries] = useState<OperationActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -175,7 +163,7 @@ export function OperationActivityPanel({
   const { toast } = useToast();
 
   const op = useOperationsStore((state) =>
-    state.activeOperations.find((o) => o.id === operationId),
+    state.activeOperations.find((o) => o.id === operationId)
   );
   const latestLogEvent = useOperationsStore((state) => state.latestLogEvent);
 
@@ -193,7 +181,7 @@ export function OperationActivityPanel({
       const data = await fetchOperationActivity(operationId, limit);
       if (!isUnmountedRef.current) {
         setEntries(data.entries ?? []);
-        setTotal(data.total ?? (data.entries?.length ?? 0));
+        setTotal(data.total ?? data.entries?.length ?? 0);
       }
     } catch (err) {
       if (!isUnmountedRef.current) {
@@ -240,9 +228,7 @@ export function OperationActivityPanel({
         const ts = e.timestamp;
         const lvl = (e.level || '').toUpperCase();
         const main = `${ts} ${lvl} ${e.message}`;
-        return e.details && e.details.trim().length > 0
-          ? `${main}\n${e.details}`
-          : main;
+        return e.details && e.details.trim().length > 0 ? `${main}\n${e.details}` : main;
       })
       .join('\n');
   }, [entries]);
@@ -252,19 +238,12 @@ export function OperationActivityPanel({
       await navigator.clipboard.writeText(logsAsText);
       toast('Copied to clipboard', 'success');
     } catch (err) {
-      toast(
-        err instanceof Error ? `Copy failed: ${err.message}` : 'Copy failed',
-        'error',
-      );
+      toast(err instanceof Error ? `Copy failed: ${err.message}` : 'Copy failed', 'error');
     }
   }, [logsAsText, toast]);
 
   const status = op?.status ?? inferStatusFromEntries(entries);
-  const operationType =
-    op?.displayName ||
-    op?.def_id ||
-    entries[0]?.operation_type ||
-    'operation';
+  const operationType = op?.displayName || op?.def_id || entries[0]?.operation_type || 'operation';
 
   return (
     <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
@@ -287,11 +266,7 @@ export function OperationActivityPanel({
             label={status === 'queued' ? 'pending' : status}
             color={statusColor(status)}
           />
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{ fontFamily: 'monospace' }}
-          >
+          <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
             {operationId.slice(0, 12)}
           </Typography>
           <Box sx={{ flexGrow: 1 }} />
@@ -330,17 +305,11 @@ export function OperationActivityPanel({
           </Typography>
         </Box>
       ) : entries.length === 0 ? (
-        <Typography
-          variant="body2"
-          color="text.secondary"
-          sx={{ py: 4, textAlign: 'center' }}
-        >
+        <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
           No activity recorded for this operation yet.
         </Typography>
       ) : (
-        <Box
-          sx={{ maxHeight: 480, overflowY: 'auto' }}
-        >
+        <Box sx={{ maxHeight: 480, overflowY: 'auto' }}>
           {entries.map((entry, idx) => (
             <EntryRow key={`${entry.timestamp}-${idx}`} entry={entry} />
           ))}

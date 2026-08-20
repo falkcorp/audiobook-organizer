@@ -1,5 +1,5 @@
 // file: web/src/components/layout/UserMenu.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
 import { useState } from 'react';
@@ -162,16 +162,26 @@ export function UserMenu() {
         </Box>
         <Divider />
         <MenuItem onClick={() => openDialog('profile')}>
-          <ListItemIcon><PersonIcon fontSize="small" /></ListItemIcon>
+          <ListItemIcon>
+            <PersonIcon fontSize="small" />
+          </ListItemIcon>
           Edit profile
         </MenuItem>
         <MenuItem onClick={() => openDialog('password')}>
-          <ListItemIcon><LockIcon fontSize="small" /></ListItemIcon>
+          <ListItemIcon>
+            <LockIcon fontSize="small" />
+          </ListItemIcon>
           Change password
         </MenuItem>
         <Divider />
-        <MenuItem onClick={() => { void handleLogout(); }}>
-          <ListItemIcon><LogoutIcon fontSize="small" /></ListItemIcon>
+        <MenuItem
+          onClick={() => {
+            void handleLogout();
+          }}
+        >
+          <ListItemIcon>
+            <LogoutIcon fontSize="small" />
+          </ListItemIcon>
           Logout
         </MenuItem>
       </Menu>
@@ -186,13 +196,7 @@ export function UserMenu() {
         </DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
-            <TextField
-              label="Username"
-              value={username}
-              disabled
-              fullWidth
-              size="small"
-            />
+            <TextField label="Username" value={username} disabled fullWidth size="small" />
             <TextField
               label="Email"
               value={email}
@@ -201,10 +205,14 @@ export function UserMenu() {
               size="small"
               type="email"
               autoFocus
-              onKeyDown={(e) => { if (e.key === 'Enter') void saveProfile(); }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void saveProfile();
+              }}
             />
             {profileError && (
-              <Typography variant="body2" color="error">{profileError}</Typography>
+              <Typography variant="body2" color="error">
+                {profileError}
+              </Typography>
             )}
           </Stack>
         </DialogContent>
@@ -250,10 +258,14 @@ export function UserMenu() {
               fullWidth
               size="small"
               type="password"
-              onKeyDown={(e) => { if (e.key === 'Enter') void savePassword(); }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void savePassword();
+              }}
             />
             {passwordError && (
-              <Typography variant="body2" color="error">{passwordError}</Typography>
+              <Typography variant="body2" color="error">
+                {passwordError}
+              </Typography>
             )}
           </Stack>
         </DialogContent>

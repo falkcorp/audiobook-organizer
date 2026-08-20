@@ -1,7 +1,7 @@
 // file: web/src/components/layout/Sidebar.tsx
-// version: 1.18.0
+// version: 1.18.1
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
@@ -59,9 +59,25 @@ const librarySubItems = [
   // settles the URL, `search` is percent-encoded and `page=1` is appended, so
   // '/library?search=read_status:in_progress' never string-matches the live
   // location. Comparing the parsed param sidesteps both.
-  { text: 'All Books', icon: <LibraryBooksIcon />, path: '/library?reset=1', matchPath: '/library', matchSearch: '' },
-  { text: 'In Progress', icon: <MenuBookIcon />, path: '/library?search=read_status:in_progress', matchSearch: 'read_status:in_progress' },
-  { text: 'Finished', icon: <LibraryBooksIcon />, path: '/library?search=read_status:finished', matchSearch: 'read_status:finished' },
+  {
+    text: 'All Books',
+    icon: <LibraryBooksIcon />,
+    path: '/library?reset=1',
+    matchPath: '/library',
+    matchSearch: '',
+  },
+  {
+    text: 'In Progress',
+    icon: <MenuBookIcon />,
+    path: '/library?search=read_status:in_progress',
+    matchSearch: 'read_status:in_progress',
+  },
+  {
+    text: 'Finished',
+    icon: <LibraryBooksIcon />,
+    path: '/library?search=read_status:finished',
+    matchSearch: 'read_status:finished',
+  },
   { text: 'Fingerprints', icon: <WavesIcon />, path: '/fingerprints' },
   { text: 'Series', icon: <CollectionsBookmarkIcon />, path: '/series' },
   { text: 'Authors', icon: <PeopleIcon />, path: '/authors' },
@@ -82,7 +98,13 @@ const menuItems = [
   { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
 ];
 
-export function Sidebar({ open, onClose, drawerWidth, collapsed = false, onToggleCollapse }: SidebarProps) {
+export function Sidebar({
+  open,
+  onClose,
+  drawerWidth,
+  collapsed = false,
+  onToggleCollapse,
+}: SidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
   // Live pending-review count → a Badge on the Review nav icon. Read from the
@@ -119,17 +141,27 @@ export function Sidebar({ open, onClose, drawerWidth, collapsed = false, onToggl
             <ListItemButton
               selected={location.pathname === '/dashboard'}
               onClick={() => handleNavigation('/dashboard')}
-              sx={[isCollapsed ? {
-                justifyContent: 'center'
-              } : {
-                justifyContent: 'flex-start'
-              }]}
+              sx={[
+                isCollapsed
+                  ? {
+                      justifyContent: 'center',
+                    }
+                  : {
+                      justifyContent: 'flex-start',
+                    },
+              ]}
             >
-              <ListItemIcon sx={[isCollapsed ? {
-                minWidth: 0
-              } : {
-                minWidth: null
-              }]}>
+              <ListItemIcon
+                sx={[
+                  isCollapsed
+                    ? {
+                        minWidth: 0,
+                      }
+                    : {
+                        minWidth: null,
+                      },
+                ]}
+              >
                 <DashboardIcon />
               </ListItemIcon>
               {!isCollapsed && <ListItemText primary="Dashboard" />}
@@ -142,7 +174,12 @@ export function Sidebar({ open, onClose, drawerWidth, collapsed = false, onToggl
           <ListItem disablePadding>
             <Tooltip title="Library" placement="right">
               <ListItemButton
-                selected={location.pathname.startsWith('/library') || location.pathname === '/fingerprints' || location.pathname === '/series' || location.pathname === '/authors'}
+                selected={
+                  location.pathname.startsWith('/library') ||
+                  location.pathname === '/fingerprints' ||
+                  location.pathname === '/series' ||
+                  location.pathname === '/authors'
+                }
                 onClick={() => handleNavigation('/library')}
                 sx={{ justifyContent: 'center' }}
               >
@@ -154,17 +191,22 @@ export function Sidebar({ open, onClose, drawerWidth, collapsed = false, onToggl
           </ListItem>
         ) : (
           <>
-            <ListItem disablePadding secondaryAction={
-              <IconButton edge="end" size="small" onClick={() => setLibraryOpen(!libraryOpen)}>
-                {libraryOpen ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-              </IconButton>
-            }>
+            <ListItem
+              disablePadding
+              secondaryAction={
+                <IconButton edge="end" size="small" onClick={() => setLibraryOpen(!libraryOpen)}>
+                  {libraryOpen ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                </IconButton>
+              }
+            >
               <ListItemButton
                 selected={location.pathname === '/library'}
                 onClick={() => handleNavigation('/library')}
                 sx={{ pr: 5 }}
               >
-                <ListItemIcon><LibraryBooksIcon /></ListItemIcon>
+                <ListItemIcon>
+                  <LibraryBooksIcon />
+                </ListItemIcon>
                 <ListItemText primary="Library" />
               </ListItemButton>
             </ListItem>
@@ -194,17 +236,27 @@ export function Sidebar({ open, onClose, drawerWidth, collapsed = false, onToggl
               <ListItemButton
                 selected={location.pathname === item.path}
                 onClick={() => handleNavigation(item.path)}
-                sx={[isCollapsed ? {
-                  justifyContent: 'center'
-                } : {
-                  justifyContent: 'flex-start'
-                }]}
+                sx={[
+                  isCollapsed
+                    ? {
+                        justifyContent: 'center',
+                      }
+                    : {
+                        justifyContent: 'flex-start',
+                      },
+                ]}
               >
-                <ListItemIcon sx={[isCollapsed ? {
-                  minWidth: 0
-                } : {
-                  minWidth: null
-                }]}>
+                <ListItemIcon
+                  sx={[
+                    isCollapsed
+                      ? {
+                          minWidth: 0,
+                        }
+                      : {
+                          minWidth: null,
+                        },
+                  ]}
+                >
                   {renderMenuIcon(item)}
                 </ListItemIcon>
                 {!isCollapsed && <ListItemText primary={item.text} />}
@@ -231,10 +283,7 @@ export function Sidebar({ open, onClose, drawerWidth, collapsed = false, onToggl
   );
 
   return (
-    <Box
-      component="nav"
-      sx={{ width: { sm: drawerWidth }, flexShrink: { sm: 0 } }}
-    >
+    <Box component="nav" sx={{ width: { sm: drawerWidth }, flexShrink: { sm: 0 } }}>
       {/* Mobile drawer — always full width, no collapse */}
       <Drawer
         variant="temporary"
@@ -254,7 +303,7 @@ export function Sidebar({ open, onClose, drawerWidth, collapsed = false, onToggl
       {/* Permanent drawer — supports collapse to icon-only */}
       <Drawer
         variant="permanent"
-        sx={theme => ({
+        sx={(theme) => ({
           display: { xs: 'none', sm: 'block' },
           '& .MuiDrawer-paper': {
             boxSizing: 'border-box',
@@ -266,7 +315,7 @@ export function Sidebar({ open, onClose, drawerWidth, collapsed = false, onToggl
                 ? theme.transitions.duration.leavingScreen
                 : theme.transitions.duration.enteringScreen,
             }),
-          }
+          },
         })}
         open
       >

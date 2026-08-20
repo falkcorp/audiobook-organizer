@@ -1,12 +1,12 @@
 // file: web/src/components/FingerprintVisualsColumn.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: f1a2b3c4-d5e6-7890-abcd-ef1234567890
-// last-edited: 2026-06-10
+// last-edited: 2026-08-19
 
-import React from "react";
-import { Box, IconButton, Tooltip } from "@mui/material";
-import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
-import { useNavigate } from "react-router-dom";
+import React from 'react';
+import { Box, IconButton, Tooltip } from '@mui/material';
+import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
+import { useNavigate } from 'react-router-dom';
 
 interface FingerprintVisualProps {
   book: any; // Book object from API
@@ -37,7 +37,15 @@ export const FingerprintWaveform: React.FC<FingerprintVisualProps> = ({ book }) 
   if (fingerprints.length === 0) {
     return (
       <Tooltip title="No fingerprint data">
-        <Box sx={{ width: "100%", height: 30, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <Box
+          sx={{
+            width: '100%',
+            height: 30,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
           —
         </Box>
       </Tooltip>
@@ -48,12 +56,12 @@ export const FingerprintWaveform: React.FC<FingerprintVisualProps> = ({ book }) 
     <Tooltip title={`${fingerprints.length} segments`}>
       <Box
         sx={{
-          width: "100%",
+          width: '100%',
           height: 30,
-          display: "flex",
+          display: 'flex',
           gap: 1,
-          alignItems: "flex-end",
-          padding: "4px 0",
+          alignItems: 'flex-end',
+          padding: '4px 0',
         }}
       >
         {fingerprints.map((height, idx) => (
@@ -64,7 +72,7 @@ export const FingerprintWaveform: React.FC<FingerprintVisualProps> = ({ book }) 
               height: `${height}%`,
               backgroundColor: `hsl(${(idx / fingerprints.length) * 240}, 70%, 60%)`,
               minHeight: 2,
-              borderRadius: "2px",
+              borderRadius: '2px',
             }}
           />
         ))}
@@ -99,7 +107,15 @@ export const FingerprintSpectrogram: React.FC<FingerprintVisualProps> = ({ book 
   if (fingerprints.length === 0) {
     return (
       <Tooltip title="No fingerprint data">
-        <Box sx={{ width: "100%", height: 30, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <Box
+          sx={{
+            width: '100%',
+            height: 30,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
           —
         </Box>
       </Tooltip>
@@ -110,14 +126,14 @@ export const FingerprintSpectrogram: React.FC<FingerprintVisualProps> = ({ book 
     <Tooltip title={`${fingerprints.length} frequency bands`}>
       <Box
         sx={{
-          width: "100%",
+          width: '100%',
           height: 30,
-          display: "flex",
+          display: 'flex',
           gap: 0.5,
-          padding: "4px 0",
-          backgroundColor: "#f0f0f0",
-          borderRadius: "4px",
-          overflow: "hidden",
+          padding: '4px 0',
+          backgroundColor: '#f0f0f0',
+          borderRadius: '4px',
+          overflow: 'hidden',
         }}
       >
         {fingerprints.map((intensity, idx) => {
@@ -128,7 +144,7 @@ export const FingerprintSpectrogram: React.FC<FingerprintVisualProps> = ({ book 
               key={idx}
               sx={{
                 flex: 1,
-                height: "100%",
+                height: '100%',
                 backgroundColor: `hsl(${Math.max(0, hue)}, 100%, 50%)`,
               }}
             />

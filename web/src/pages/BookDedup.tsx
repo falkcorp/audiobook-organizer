@@ -1,19 +1,11 @@
 // file: web/src/pages/BookDedup.tsx
-// version: 3.40.0
+// version: 3.40.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-book0dedup02
-// last-edited: 2026-06-22
+// last-edited: 2026-08-19
 
 import { useState, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import {
-  Box,
-  Typography,
-  Tooltip,
-  Button,
-  Tabs,
-  Tab,
-  Badge,
-} from '@mui/material';
+import { Box, Typography, Tooltip, Button, Tabs, Tab, Badge } from '@mui/material';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import BuildIcon from '@mui/icons-material/Build';
 import FingerprintIcon from '@mui/icons-material/Fingerprint';
@@ -42,13 +34,23 @@ function isUnifiedDedupEnabled(): boolean {
 }
 
 // ---- Main Dedup Page ----
-const TAB_NAMES = ['books', 'book-duplicates', 'authors', 'series', 'ai', 'reconcile', 'embedding', 'acoustic', 'split-books'] as const;
+const TAB_NAMES = [
+  'books',
+  'book-duplicates',
+  'authors',
+  'series',
+  'ai',
+  'reconcile',
+  'embedding',
+  'acoustic',
+  'split-books',
+] as const;
 
 export function BookDedup() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = useMemo(() => {
     const t = searchParams.get('tab');
-    const idx = TAB_NAMES.indexOf(t as typeof TAB_NAMES[number]);
+    const idx = TAB_NAMES.indexOf(t as (typeof TAB_NAMES)[number]);
     return idx >= 0 ? idx : 0;
   }, [searchParams]);
 
@@ -68,7 +70,11 @@ export function BookDedup() {
   const handleToggleLegacy = () => {
     setShowLegacy((prev) => {
       const next = !prev;
-      try { sessionStorage.setItem('dedup_show_legacy', next ? '1' : '0'); } catch { /* ignore */ }
+      try {
+        sessionStorage.setItem('dedup_show_legacy', next ? '1' : '0');
+      } catch {
+        /* ignore */
+      }
       return next;
     });
   };
@@ -117,16 +123,95 @@ export function BookDedup() {
       {/* Legacy tabs — kept mounted when legacy toggle is on or feature is disabled */}
       {!showUnified && (
         <>
-          <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto" allowScrollButtonsMobile sx={{ mb: 3, borderBottom: 1, borderColor: 'divider' }}>
-            <Tab icon={<Badge color="default"><MenuBookIcon /></Badge>} label="Version Groups" iconPosition="start" />
-            <Tab icon={<Badge color="default"><ContentCopyIcon /></Badge>} label="Duplicate Scan" iconPosition="start" />
-            <Tab icon={<Badge color="default"><PersonIcon /></Badge>} label="Authors" iconPosition="start" />
-            <Tab icon={<Badge color="default"><ListIcon /></Badge>} label="Series" iconPosition="start" />
-            <Tab icon={<Badge color="default"><AutoAwesomeIcon /></Badge>} label="AI Review" iconPosition="start" />
-            <Tab icon={<Badge color="default"><BuildIcon /></Badge>} label="Reconcile" iconPosition="start" />
-            <Tab icon={<Badge color="default"><FingerprintIcon /></Badge>} label="Embedding" iconPosition="start" />
-            <Tab icon={<Badge color="default"><GraphicEqIcon /></Badge>} label="Acoustic" iconPosition="start" />
-            <Tab icon={<Badge color="default"><CallSplitIcon /></Badge>} label="Split Books" iconPosition="start" />
+          <Tabs
+            value={tab}
+            onChange={(_, v) => setTab(v)}
+            variant="scrollable"
+            scrollButtons="auto"
+            allowScrollButtonsMobile
+            sx={{ mb: 3, borderBottom: 1, borderColor: 'divider' }}
+          >
+            <Tab
+              icon={
+                <Badge color="default">
+                  <MenuBookIcon />
+                </Badge>
+              }
+              label="Version Groups"
+              iconPosition="start"
+            />
+            <Tab
+              icon={
+                <Badge color="default">
+                  <ContentCopyIcon />
+                </Badge>
+              }
+              label="Duplicate Scan"
+              iconPosition="start"
+            />
+            <Tab
+              icon={
+                <Badge color="default">
+                  <PersonIcon />
+                </Badge>
+              }
+              label="Authors"
+              iconPosition="start"
+            />
+            <Tab
+              icon={
+                <Badge color="default">
+                  <ListIcon />
+                </Badge>
+              }
+              label="Series"
+              iconPosition="start"
+            />
+            <Tab
+              icon={
+                <Badge color="default">
+                  <AutoAwesomeIcon />
+                </Badge>
+              }
+              label="AI Review"
+              iconPosition="start"
+            />
+            <Tab
+              icon={
+                <Badge color="default">
+                  <BuildIcon />
+                </Badge>
+              }
+              label="Reconcile"
+              iconPosition="start"
+            />
+            <Tab
+              icon={
+                <Badge color="default">
+                  <FingerprintIcon />
+                </Badge>
+              }
+              label="Embedding"
+              iconPosition="start"
+            />
+            <Tab
+              icon={
+                <Badge color="default">
+                  <GraphicEqIcon />
+                </Badge>
+              }
+              label="Acoustic"
+              iconPosition="start"
+            />
+            <Tab
+              icon={
+                <Badge color="default">
+                  <CallSplitIcon />
+                </Badge>
+              }
+              label="Split Books"
+              iconPosition="start"
+            />
           </Tabs>
 
           {tab === 0 && <DedupBookTab />}

@@ -1,5 +1,5 @@
 // file: web/src/components/CacheStatsPanel.tsx
-// version: 1.1.2
+// version: 1.1.3
 // guid: b5c8d9ea-1f2g-3h4i-5j6k-7l8m9n0o1p2q
 
 import { useEffect, useState, useRef } from 'react';
@@ -55,9 +55,7 @@ const formatInvalidations = (inv: api.CacheInvalidations): string => {
 };
 
 const totalRequests = (cache: api.CacheStatsEntry): number => {
-  const misses = cache.misses
-    ? Object.values(cache.misses).reduce((a, b) => a + b, 0)
-    : 0;
+  const misses = cache.misses ? Object.values(cache.misses).reduce((a, b) => a + b, 0) : 0;
   return cache.hits + misses;
 };
 

@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.resetNavigation.test.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4c8b1a2d-9e3f-4a7b-8c1d-2e3f4a5b6c7d
-// last-edited: 2026-08-06
+// last-edited: 2026-08-19
 
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
@@ -68,18 +68,14 @@ vi.mock('../services/api', () => {
 // /library?reset=1) without needing to render the full Sidebar/layout.
 function ResetNavButton() {
   const navigate = useNavigate();
-  return (
-    <button onClick={() => navigate('/library?reset=1')}>trigger-reset-nav</button>
-  );
+  return <button onClick={() => navigate('/library?reset=1')}>trigger-reset-nav</button>;
 }
 
 describe('Library reset navigation (/library?reset=1)', () => {
   it('clears the tag filter left over from a prior filtered view', async () => {
     const user = userEvent.setup();
     render(
-      <MemoryRouter
-        initialEntries={['/library?tag=metadata']}
-      >
+      <MemoryRouter initialEntries={['/library?tag=metadata']}>
         <ResetNavButton />
         <Library />
       </MemoryRouter>
@@ -112,9 +108,7 @@ describe('Library reset navigation (/library?reset=1)', () => {
   it('clears the search box left over from a prior filtered view', async () => {
     const user = userEvent.setup();
     render(
-      <MemoryRouter
-        initialEntries={['/library?search=foo']}
-      >
+      <MemoryRouter initialEntries={['/library?search=foo']}>
         <ResetNavButton />
         <Library />
       </MemoryRouter>

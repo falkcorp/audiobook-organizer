@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupBookTab.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 71F51230-1BB6-4864-A1EB-120EE776D673
-// last-edited: 2026-05-01
+// last-edited: 2026-08-19
 
 import { useState, useEffect, useCallback } from 'react';
 import {
@@ -75,7 +75,9 @@ export function DedupBookTab() {
     }
   }, []);
 
-  useEffect(() => { fetchDuplicates(); }, [fetchDuplicates]);
+  useEffect(() => {
+    fetchDuplicates();
+  }, [fetchDuplicates]);
 
   const handleMerge = async (group: Book[], groupKey: string) => {
     const keepId = keepSelections[groupKey];
@@ -91,10 +93,14 @@ export function DedupBookTab() {
         } else {
           setMergeSuccess(`Merged duplicates of "${group[0]?.title}"`);
           setGroups((prev) => prev.filter((_, i) => `group-${i}` !== groupKey));
-          setSelectedGroups((prev) => { const next = new Set(prev); next.delete(groupKey); return next; });
+          setSelectedGroups((prev) => {
+            const next = new Set(prev);
+            next.delete(groupKey);
+            return next;
+          });
         }
       },
-      setError,
+      setError
     );
   };
 
@@ -145,7 +151,8 @@ export function DedupBookTab() {
   const toggleGroup = (key: string) => {
     setSelectedGroups((prev) => {
       const next = new Set(prev);
-      if (next.has(key)) next.delete(key); else next.add(key);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
@@ -173,27 +180,56 @@ export function DedupBookTab() {
                 {selectedGroups.size === groups.length ? 'Deselect All' : 'Select All'}
               </Button>
               {selectedGroups.size > 0 && (
-                <Button variant="contained" color="primary" startIcon={<MergeIcon />}
-                  onClick={handleMergeSelected} disabled={busy}>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  startIcon={<MergeIcon />}
+                  onClick={handleMergeSelected}
+                  disabled={busy}
+                >
                   Merge Selected ({selectedGroups.size})
                 </Button>
               )}
-              <Button variant="contained" color="warning" startIcon={<MergeIcon />}
-                onClick={() => setConfirmOpen(true)} disabled={busy}>
+              <Button
+                variant="contained"
+                color="warning"
+                startIcon={<MergeIcon />}
+                onClick={() => setConfirmOpen(true)}
+                disabled={busy}
+              >
                 Merge All ({totalDuplicates})
               </Button>
             </>
           )}
-          <Tooltip title="Refresh"><IconButton onClick={fetchDuplicates} disabled={loading || busy}><RefreshIcon /></IconButton></Tooltip>
+          <Tooltip title="Refresh">
+            <IconButton onClick={fetchDuplicates} disabled={loading || busy}>
+              <RefreshIcon />
+            </IconButton>
+          </Tooltip>
         </Stack>
       </Box>
 
       <OperationProgress operation={activeOp} />
-      {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
-      {mergeSuccess && <Alert severity="success" sx={{ mb: 2 }} icon={<CheckCircleIcon />} onClose={() => setMergeSuccess(null)}>{mergeSuccess}</Alert>}
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
+          {error}
+        </Alert>
+      )}
+      {mergeSuccess && (
+        <Alert
+          severity="success"
+          sx={{ mb: 2 }}
+          icon={<CheckCircleIcon />}
+          onClose={() => setMergeSuccess(null)}
+        >
+          {mergeSuccess}
+        </Alert>
+      )}
 
       {loading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box>
+        <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+          <CircularProgress />
+        </Box>
       ) : groups.length === 0 ? (
         <Paper sx={{ p: 4, textAlign: 'center' }}>
           <CheckCircleIcon sx={{ fontSize: 48, color: 'success.main', mb: 1 }} />
@@ -201,53 +237,92 @@ export function DedupBookTab() {
         </Paper>
       ) : (
         <>
-        <PaginationControls total={groups.length} page={pagination.page} rowsPerPage={pagination.rowsPerPage}
-          onPageChange={pagination.setPage} onRowsPerPageChange={pagination.setRowsPerPage} />
-        <Stack spacing={2}>
-          {groups.slice(pagination.startIdx, pagination.endIdx).map((group, sliceIdx) => {
-            const idx = pagination.startIdx + sliceIdx;
-            const groupKey = `group-${idx}`;
-            return (
-              <Card key={groupKey} variant="outlined">
-                <CardContent>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                    <Checkbox
-                      checked={selectedGroups.has(groupKey)}
-                      onChange={() => toggleGroup(groupKey)}
-                      disabled={busy}
+          <PaginationControls
+            total={groups.length}
+            page={pagination.page}
+            rowsPerPage={pagination.rowsPerPage}
+            onPageChange={pagination.setPage}
+            onRowsPerPageChange={pagination.setRowsPerPage}
+          />
+          <Stack spacing={2}>
+            {groups.slice(pagination.startIdx, pagination.endIdx).map((group, sliceIdx) => {
+              const idx = pagination.startIdx + sliceIdx;
+              const groupKey = `group-${idx}`;
+              return (
+                <Card key={groupKey} variant="outlined">
+                  <CardContent>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                      <Checkbox
+                        checked={selectedGroups.has(groupKey)}
+                        onChange={() => toggleGroup(groupKey)}
+                        disabled={busy}
+                        size="small"
+                      />
+                      <Typography variant="subtitle1" fontWeight="bold">
+                        {cleanDisplayTitle(group[0]?.title || 'Unknown')}
+                      </Typography>
+                      <Chip
+                        label={`${group.length} copies`}
+                        size="small"
+                        color="warning"
+                        variant="outlined"
+                      />
+                    </Box>
+                    <Divider sx={{ my: 1 }} />
+                    <RadioGroup
+                      value={keepSelections[groupKey] || ''}
+                      onChange={(e) =>
+                        setKeepSelections((prev) => ({ ...prev, [groupKey]: e.target.value }))
+                      }
+                    >
+                      {group.map((book) => (
+                        <FormControlLabel
+                          key={book.id}
+                          value={book.id}
+                          control={<Radio size="small" />}
+                          label={
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <FolderIcon fontSize="small" color="action" />
+                              <Typography
+                                variant="body2"
+                                sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}
+                              >
+                                {book.file_path}
+                              </Typography>
+                              {book.itunes_persistent_id && (
+                                <Chip label="iTunes" size="small" color="info" variant="outlined" />
+                              )}
+                              {book.format && (
+                                <Chip label={book.format} size="small" variant="outlined" />
+                              )}
+                            </Box>
+                          }
+                        />
+                      ))}
+                    </RadioGroup>
+                  </CardContent>
+                  <CardActions>
+                    <Button
+                      startIcon={<MergeIcon />}
+                      variant="contained"
                       size="small"
-                    />
-                    <Typography variant="subtitle1" fontWeight="bold">{cleanDisplayTitle(group[0]?.title || 'Unknown')}</Typography>
-                    <Chip label={`${group.length} copies`} size="small" color="warning" variant="outlined" />
-                  </Box>
-                  <Divider sx={{ my: 1 }} />
-                  <RadioGroup value={keepSelections[groupKey] || ''}
-                    onChange={(e) => setKeepSelections((prev) => ({ ...prev, [groupKey]: e.target.value }))}>
-                    {group.map((book) => (
-                      <FormControlLabel key={book.id} value={book.id} control={<Radio size="small" />}
-                        label={
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                            <FolderIcon fontSize="small" color="action" />
-                            <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>{book.file_path}</Typography>
-                            {book.itunes_persistent_id && <Chip label="iTunes" size="small" color="info" variant="outlined" />}
-                            {book.format && <Chip label={book.format} size="small" variant="outlined" />}
-                          </Box>
-                        } />
-                    ))}
-                  </RadioGroup>
-                </CardContent>
-                <CardActions>
-                  <Button startIcon={<MergeIcon />} variant="contained" size="small"
-                    onClick={() => handleMerge(group, groupKey)} disabled={busy}>
-                    Merge
-                  </Button>
-                </CardActions>
-              </Card>
-            );
-          })}
-        </Stack>
-        <PaginationControls total={groups.length} page={pagination.page} rowsPerPage={pagination.rowsPerPage}
-          onPageChange={pagination.setPage} onRowsPerPageChange={pagination.setRowsPerPage} />
+                      onClick={() => handleMerge(group, groupKey)}
+                      disabled={busy}
+                    >
+                      Merge
+                    </Button>
+                  </CardActions>
+                </Card>
+              );
+            })}
+          </Stack>
+          <PaginationControls
+            total={groups.length}
+            page={pagination.page}
+            rowsPerPage={pagination.rowsPerPage}
+            onPageChange={pagination.setPage}
+            onRowsPerPageChange={pagination.setRowsPerPage}
+          />
         </>
       )}
 
@@ -260,7 +335,9 @@ export function DedupBookTab() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmOpen(false)}>Cancel</Button>
-          <Button onClick={handleMergeAll} color="warning" variant="contained">Confirm</Button>
+          <Button onClick={handleMergeAll} color="warning" variant="contained">
+            Confirm
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>

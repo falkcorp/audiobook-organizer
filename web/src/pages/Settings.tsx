@@ -1,7 +1,7 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.54.0
+// version: 1.54.1
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-07-03
+// last-edited: 2026-08-19
 
 import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -54,18 +54,13 @@ import {
   FolderOpen as FolderOpenIcon,
   ExpandMore as ExpandMoreIcon,
 } from '@mui/icons-material';
-import {
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
-} from '@mui/material';
+import { Accordion, AccordionSummary, AccordionDetails } from '@mui/material';
 
 interface TabPanelProps {
   children?: React.ReactNode;
   index: number;
   value: number;
 }
-
 
 function TabPanel(props: TabPanelProps) {
   const { children, value, index, ...other } = props;
@@ -90,8 +85,19 @@ function TabPanel(props: TabPanelProps) {
   );
 }
 
-
-const TAB_KEYS = ['library', 'itunes', 'metadata', 'dedup', 'paths', 'performance', 'security', 'api-keys', 'plugins', 'tools', 'system'] as const;
+const TAB_KEYS = [
+  'library',
+  'itunes',
+  'metadata',
+  'dedup',
+  'paths',
+  'performance',
+  'security',
+  'api-keys',
+  'plugins',
+  'tools',
+  'system',
+] as const;
 
 function tabFromHash(hash: string): number {
   const key = hash.replace('#', '');
@@ -169,13 +175,9 @@ export function Settings() {
   const [addFolderDialogOpen, setAddFolderDialogOpen] = useState(false);
   const [newFolderPath, setNewFolderPath] = useState('');
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
-  const [scanStatuses, setScanStatuses] = useState<
-    Record<number, ScanStatus>
-  >({});
-  const [cancelScanTarget, setCancelScanTarget] =
-    useState<api.ImportPath | null>(null);
-  const [scanErrorTarget, setScanErrorTarget] =
-    useState<ScanErrorTarget | null>(null);
+  const [scanStatuses, setScanStatuses] = useState<Record<number, ScanStatus>>({});
+  const [cancelScanTarget, setCancelScanTarget] = useState<api.ImportPath | null>(null);
+  const [scanErrorTarget, setScanErrorTarget] = useState<ScanErrorTarget | null>(null);
   const [backups, setBackups] = useState<api.BackupInfo[]>([]);
   const [backupsLoading, setBackupsLoading] = useState(false);
   const [backupNotice, setBackupNotice] = useState<{
@@ -183,13 +185,10 @@ export function Settings() {
     message: string;
   } | null>(null);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
-  const [restoreTarget, setRestoreTarget] = useState<api.BackupInfo | null>(
-    null
-  );
+  const [restoreTarget, setRestoreTarget] = useState<api.BackupInfo | null>(null);
   const [restoreInProgress, setRestoreInProgress] = useState(false);
   const [restoreVerify, setRestoreVerify] = useState(true);
-  const [deleteBackupTarget, setDeleteBackupTarget] =
-    useState<api.BackupInfo | null>(null);
+  const [deleteBackupTarget, setDeleteBackupTarget] = useState<api.BackupInfo | null>(null);
   const [deleteBackupInProgress, setDeleteBackupInProgress] = useState(false);
   const [createBackupInProgress, setCreateBackupInProgress] = useState(false);
   const [openaiTestState, setOpenaiTestState] = useState<{
@@ -202,11 +201,9 @@ export function Settings() {
   const [extensionsInput, setExtensionsInput] = useState('');
   const [excludePatternInput, setExcludePatternInput] = useState('');
   const [extensionsError, setExtensionsError] = useState<string | null>(null);
-  const [excludePatternError, setExcludePatternError] =
-    useState<string | null>(null);
+  const [excludePatternError, setExcludePatternError] = useState<string | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
-  const [importPayload, setImportPayload] =
-    useState<Partial<api.Config> | null>(null);
+  const [importPayload, setImportPayload] = useState<Partial<api.Config> | null>(null);
   const [importFileName, setImportFileName] = useState('');
   const [importNotice, setImportNotice] = useState<string | null>(null);
   const [exportInProgress, setExportInProgress] = useState(false);
@@ -335,15 +332,20 @@ export function Settings() {
   const [settings, setSettings] = useState<SettingsState>(initialSettings);
   const [saved, setSaved] = useState(false);
   const [expandedSource, setExpandedSource] = useState<string | null>(null);
-  const [sourceTestStatus, setSourceTestStatus] = useState<Record<string, { testing: boolean; result?: { success: boolean; message?: string; error?: string } }>>({});
+  const [sourceTestStatus, setSourceTestStatus] = useState<
+    Record<
+      string,
+      { testing: boolean; result?: { success: boolean; message?: string; error?: string } }
+    >
+  >({});
   const [savedApiKeyMask, setSavedApiKeyMask] = useState<string>('');
 
   // Nested config state (CFG-2)
   const [dedupConfig, setDedupConfig] = useState<api.DedupConfig>({
     book_high_threshold: 0.92,
-    book_low_threshold: 0.70,
+    book_low_threshold: 0.7,
     author_high_threshold: 0.92,
-    author_low_threshold: 0.70,
+    author_low_threshold: 0.7,
     auto_merge_enabled: false,
     embeddings_enabled: false,
     llm_auto_merge_high_confidence: false,
@@ -353,7 +355,7 @@ export function Settings() {
       band_certain_min: 0.97,
       band_high_min: 0.92,
       band_medium_min: 0.82,
-      band_review_min: 0.70,
+      band_review_min: 0.7,
       duration_boost: 0.05,
       folder_path_boost: 0.03,
     },
@@ -406,12 +408,8 @@ export function Settings() {
     embed_queue_debounce_ms: 500,
   });
 
-  const settingsSnapshot = useMemo(
-    () => JSON.stringify(settings),
-    [settings]
-  );
-  const hasUnsavedChanges =
-    savedSnapshot !== '' && settingsSnapshot !== savedSnapshot;
+  const settingsSnapshot = useMemo(() => JSON.stringify(settings), [settings]);
+  const hasUnsavedChanges = savedSnapshot !== '' && settingsSnapshot !== savedSnapshot;
   const blocker = useUnsavedChangesBlocker(hasUnsavedChanges);
   const savedSettings = useMemo(() => {
     if (!savedSnapshot) return null;
@@ -431,7 +429,7 @@ export function Settings() {
     loadConfig();
     loadImportFolders();
     loadBackups();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -475,11 +473,8 @@ export function Settings() {
         scanOnStartup: config.scan_on_startup ?? false,
         autoOrganize: config.auto_organize ?? true,
         folderNamingPattern:
-          config.folder_naming_pattern ||
-          '{author}/{series}/{title} ({print_year})',
-        fileNamingPattern:
-          config.file_naming_pattern ||
-          '{title} - {author} - read by {narrator}',
+          config.folder_naming_pattern || '{author}/{series}/{title} ({print_year})',
+        fileNamingPattern: config.file_naming_pattern || '{title} - {author} - read by {narrator}',
         createBackups: config.create_backups ?? true,
         supportedExtensions: config.supported_extensions?.length
           ? config.supported_extensions
@@ -571,8 +566,7 @@ export function Settings() {
 
         // Lifecycle / retention
         purgeSoftDeletedAfterDays: config.purge_soft_deleted_after_days ?? 30,
-        purgeSoftDeletedDeleteFiles:
-          config.purge_soft_deleted_delete_files ?? false,
+        purgeSoftDeletedDeleteFiles: config.purge_soft_deleted_delete_files ?? false,
 
         // Logging
         logLevel: config.log_level || 'info',
@@ -582,13 +576,17 @@ export function Settings() {
         // Auto-update (nested key preferred, flat fallback for compat)
         autoUpdateEnabled: config.auto_update?.enabled ?? config.auto_update_enabled ?? false,
         autoUpdateChannel: config.auto_update?.channel ?? config.auto_update_channel ?? 'stable',
-        autoUpdateCheckMinutes: config.auto_update?.check_minutes ?? config.auto_update_check_minutes ?? 60,
-        autoUpdateWindowStart: config.auto_update?.window_start ?? config.auto_update_window_start ?? 1,
+        autoUpdateCheckMinutes:
+          config.auto_update?.check_minutes ?? config.auto_update_check_minutes ?? 60,
+        autoUpdateWindowStart:
+          config.auto_update?.window_start ?? config.auto_update_window_start ?? 1,
         autoUpdateWindowEnd: config.auto_update?.window_end ?? config.auto_update_window_end ?? 4,
 
         // Maintenance window (nested key preferred, flat fallback for compat)
-        maintenanceWindowEnabled: config.maintenance?.enabled ?? config.maintenance_window_enabled ?? false,
-        maintenanceWindowStart: config.maintenance?.window_start ?? config.maintenance_window_start ?? 2,
+        maintenanceWindowEnabled:
+          config.maintenance?.enabled ?? config.maintenance_window_enabled ?? false,
+        maintenanceWindowStart:
+          config.maintenance?.window_start ?? config.maintenance_window_start ?? 2,
         maintenanceWindowEnd: config.maintenance?.window_end ?? config.maintenance_window_end ?? 4,
 
         // Smart apply pipeline
@@ -664,31 +662,82 @@ export function Settings() {
     handleDiscardNavigation,
     handleCancelNavigation,
   } = useSettingsHandlers({
-    settings, setSettings, setSaved, setSavedApiKeyMask, setConfigLoaded,
-    setDedupConfig, setEmbeddingConfig, setAIBackendConfig, setMetadataScoringConfig,
-    setMaintenanceConfig, setScheduledConfig, setToolsConfig,
-    setLibraryPathError, setOpenaiKeyError, setExtensionsError, setExcludePatternError,
-    setImportFolders, setScanStatuses, setCancelScanTarget,
-    setScanErrorTarget, setBackups, setBackupNotice, setBackupsLoading,
-    setRestoreTarget, setRestoreDialogOpen, setRestoreInProgress,
-    setDeleteBackupTarget, setDeleteBackupInProgress, setCreateBackupInProgress,
-    setOpenaiTestState, setSavedSnapshot, setSourceTestStatus, setExpandedSource,
-    setBrowserOpen, setSelectedPath, setAddFolderDialogOpen, setNewFolderPath, setShowFolderBrowser,
-    setImportDialogOpen, setImportPayload, setImportFileName, setImportNotice,
-    setExportInProgress, setImportInProgress,
-    setExtensionsInput, setExcludePatternInput,
-    savedApiKeyMask, configLoaded, navigate,
-    scanIntervalsRef, isUnmountedRef, timeoutRef,
-    restoreTarget, restoreVerify, deleteBackupTarget, cancelScanTarget,
-    scanStatuses, importPayload, importFileName, savedSettings,
-    extensionsInput, excludePatternInput, newFolderPath, selectedPath,
-    blocker, dedupConfig, embeddingConfig, aiBackendConfig, metadataScoringConfig,
-    maintenanceConfig, scheduledConfig, toolsConfig,
-    importInputRef, loadConfig, initialSettings,
+    settings,
+    setSettings,
+    setSaved,
+    setSavedApiKeyMask,
+    setConfigLoaded,
+    setDedupConfig,
+    setEmbeddingConfig,
+    setAIBackendConfig,
+    setMetadataScoringConfig,
+    setMaintenanceConfig,
+    setScheduledConfig,
+    setToolsConfig,
+    setLibraryPathError,
+    setOpenaiKeyError,
+    setExtensionsError,
+    setExcludePatternError,
+    setImportFolders,
+    setScanStatuses,
+    setCancelScanTarget,
+    setScanErrorTarget,
+    setBackups,
+    setBackupNotice,
+    setBackupsLoading,
+    setRestoreTarget,
+    setRestoreDialogOpen,
+    setRestoreInProgress,
+    setDeleteBackupTarget,
+    setDeleteBackupInProgress,
+    setCreateBackupInProgress,
+    setOpenaiTestState,
+    setSavedSnapshot,
+    setSourceTestStatus,
+    setExpandedSource,
+    setBrowserOpen,
+    setSelectedPath,
+    setAddFolderDialogOpen,
+    setNewFolderPath,
+    setShowFolderBrowser,
+    setImportDialogOpen,
+    setImportPayload,
+    setImportFileName,
+    setImportNotice,
+    setExportInProgress,
+    setImportInProgress,
+    setExtensionsInput,
+    setExcludePatternInput,
+    savedApiKeyMask,
+    configLoaded,
+    navigate,
+    scanIntervalsRef,
+    isUnmountedRef,
+    timeoutRef,
+    restoreTarget,
+    restoreVerify,
+    deleteBackupTarget,
+    cancelScanTarget,
+    scanStatuses,
+    importPayload,
+    importFileName,
+    savedSettings,
+    extensionsInput,
+    excludePatternInput,
+    newFolderPath,
+    selectedPath,
+    blocker,
+    dedupConfig,
+    embeddingConfig,
+    aiBackendConfig,
+    metadataScoringConfig,
+    maintenanceConfig,
+    scheduledConfig,
+    toolsConfig,
+    importInputRef,
+    loadConfig,
+    initialSettings,
   });
-
-
-
 
   return (
     <Box
@@ -813,7 +862,10 @@ export function Settings() {
             <AIBackendsSection config={aiBackendConfig} onChange={handleAIBackendChange} />
           </Box>
           <Box sx={{ mt: 4 }}>
-            <MetadataScoringSection config={metadataScoringConfig} onChange={handleMetadataScoringChange} />
+            <MetadataScoringSection
+              config={metadataScoringConfig}
+              onChange={handleMetadataScoringChange}
+            />
           </Box>
           {scheduledConfig && (
             <Box sx={{ mt: 4 }}>
@@ -874,7 +926,9 @@ export function Settings() {
                 label="Embed queue debounce (ms)"
                 type="number"
                 value={toolsConfig.embed_queue_debounce_ms}
-                onChange={(e) => handleToolsChange({ embed_queue_debounce_ms: Number(e.target.value) })}
+                onChange={(e) =>
+                  handleToolsChange({ embed_queue_debounce_ms: Number(e.target.value) })
+                }
                 helperText="Milliseconds to wait before draining embed queue"
               />
             </AccordionDetails>
@@ -886,7 +940,10 @@ export function Settings() {
 
           <AutoUpdateSection settings={settings} setSettings={setSettings} />
 
-          <MaintenanceSettingsSection config={maintenanceConfig} onChange={handleMaintenanceChange} />
+          <MaintenanceSettingsSection
+            config={maintenanceConfig}
+            onChange={handleMaintenanceChange}
+          />
 
           <Paper
             sx={{
@@ -901,8 +958,8 @@ export function Settings() {
               Danger Zone
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Permanently delete all data including audiobooks, authors, series,
-              settings, and metadata cache. This cannot be undone.
+              Permanently delete all data including audiobooks, authors, series, settings, and
+              metadata cache. This cannot be undone.
             </Typography>
             <Button
               variant="outlined"
@@ -915,16 +972,12 @@ export function Settings() {
           </Paper>
 
           {/* Factory Reset Dialog 1: Warning */}
-          <Dialog
-            open={factoryResetStep === 1}
-            onClose={() => setFactoryResetStep(0)}
-          >
+          <Dialog open={factoryResetStep === 1} onClose={() => setFactoryResetStep(0)}>
             <DialogTitle>Factory Reset</DialogTitle>
             <DialogContent>
               <Typography>
-                This will permanently delete <strong>ALL</strong> data —
-                audiobooks, authors, series, settings, and metadata cache. This
-                action cannot be undone.
+                This will permanently delete <strong>ALL</strong> data — audiobooks, authors,
+                series, settings, and metadata cache. This action cannot be undone.
               </Typography>
               <Typography sx={{ mt: 1 }}>Continue?</Typography>
             </DialogContent>
@@ -943,10 +996,7 @@ export function Settings() {
           </Dialog>
 
           {/* Factory Reset Dialog 2: Type RESET */}
-          <Dialog
-            open={factoryResetStep === 2}
-            onClose={() => setFactoryResetStep(0)}
-          >
+          <Dialog open={factoryResetStep === 2} onClose={() => setFactoryResetStep(0)}>
             <DialogTitle>Confirm Factory Reset</DialogTitle>
             <DialogContent>
               <Typography sx={{ mb: 2 }}>
@@ -967,10 +1017,7 @@ export function Settings() {
               <Button
                 color="error"
                 variant="contained"
-                disabled={
-                  factoryResetConfirmText !== 'RESET' ||
-                  factoryResetInProgress
-                }
+                disabled={factoryResetConfirmText !== 'RESET' || factoryResetInProgress}
                 onClick={async () => {
                   setFactoryResetInProgress(true);
                   try {
@@ -1018,25 +1065,13 @@ export function Settings() {
             onChange={handleImportFileChange}
             style={{ display: 'none' }}
           />
-          <Button
-            variant="outlined"
-            onClick={handleExportSettings}
-            disabled={exportInProgress}
-          >
+          <Button variant="outlined" onClick={handleExportSettings} disabled={exportInProgress}>
             {exportInProgress ? 'Exporting...' : 'Export Settings'}
           </Button>
-          <Button
-            variant="outlined"
-            onClick={handleImportClick}
-            disabled={importInProgress}
-          >
+          <Button variant="outlined" onClick={handleImportClick} disabled={importInProgress}>
             {importInProgress ? 'Importing...' : 'Import Settings'}
           </Button>
-          <Button
-            variant="outlined"
-            startIcon={<RestartAltIcon />}
-            onClick={handleReset}
-          >
+          <Button variant="outlined" startIcon={<RestartAltIcon />} onClick={handleReset}>
             Reset to Defaults
           </Button>
           <Button
@@ -1081,24 +1116,14 @@ export function Settings() {
           >
             Discard
           </Button>
-          <Button
-            size="small"
-            variant="contained"
-            onClick={handleSave}
-            disabled={!configLoaded}
-          >
+          <Button size="small" variant="contained" onClick={handleSave} disabled={!configLoaded}>
             Save
           </Button>
         </Paper>
       )}
 
       {/* Library Path Browser Dialog */}
-      <Dialog
-        open={browserOpen}
-        onClose={handleBrowserCancel}
-        maxWidth="md"
-        fullWidth
-      >
+      <Dialog open={browserOpen} onClose={handleBrowserCancel} maxWidth="md" fullWidth>
         <DialogTitle>Browse Server Filesystem</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" gutterBottom>
@@ -1123,11 +1148,7 @@ export function Settings() {
         </DialogContent>
         <DialogActions>
           <Button onClick={handleBrowserCancel}>Cancel</Button>
-          <Button
-            onClick={handleBrowserConfirm}
-            variant="contained"
-            disabled={!selectedPath}
-          >
+          <Button onClick={handleBrowserConfirm} variant="contained" disabled={!selectedPath}>
             Select Folder
           </Button>
         </DialogActions>
@@ -1143,9 +1164,8 @@ export function Settings() {
         <DialogTitle>Add Import Path (Watch Location)</DialogTitle>
         <DialogContent>
           <Alert severity="info" sx={{ mb: 2 }}>
-            <strong>Import paths</strong> are separate from your main library.
-            They are watched for new audiobook files that will be scanned,
-            organized, and moved to your library path.
+            <strong>Import paths</strong> are separate from your main library. They are watched for
+            new audiobook files that will be scanned, organized, and moved to your library path.
           </Alert>
 
           {!showFolderBrowser ? (
@@ -1169,10 +1189,7 @@ export function Settings() {
             </Box>
           ) : (
             <Box>
-              <Button
-                onClick={() => setShowFolderBrowser(false)}
-                sx={{ mb: 2 }}
-              >
+              <Button onClick={() => setShowFolderBrowser(false)} sx={{ mb: 2 }}>
                 ← Back to Manual Entry
               </Button>
               <ServerFileBrowser
@@ -1211,40 +1228,26 @@ export function Settings() {
         </DialogActions>
       </Dialog>
 
-      <Dialog
-        open={Boolean(cancelScanTarget)}
-        onClose={() => setCancelScanTarget(null)}
-      >
+      <Dialog open={Boolean(cancelScanTarget)} onClose={() => setCancelScanTarget(null)}>
         <DialogTitle>Cancel Scan</DialogTitle>
         <DialogContent>
           <Typography variant="body2" gutterBottom>
-            Cancel scan for{' '}
-            <strong>{cancelScanTarget?.path || 'this folder'}</strong>?
+            Cancel scan for <strong>{cancelScanTarget?.path || 'this folder'}</strong>?
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setCancelScanTarget(null)}>
-            Keep Scanning
-          </Button>
-          <Button
-            color="error"
-            variant="contained"
-            onClick={handleConfirmCancelScan}
-          >
+          <Button onClick={() => setCancelScanTarget(null)}>Keep Scanning</Button>
+          <Button color="error" variant="contained" onClick={handleConfirmCancelScan}>
             Cancel Scan
           </Button>
         </DialogActions>
       </Dialog>
 
-      <Dialog
-        open={Boolean(scanErrorTarget)}
-        onClose={() => setScanErrorTarget(null)}
-      >
+      <Dialog open={Boolean(scanErrorTarget)} onClose={() => setScanErrorTarget(null)}>
         <DialogTitle>Scan Errors</DialogTitle>
         <DialogContent>
           <Typography variant="body2" gutterBottom>
-            Errors while scanning{' '}
-            <strong>{scanErrorTarget?.path || 'this folder'}</strong>:
+            Errors while scanning <strong>{scanErrorTarget?.path || 'this folder'}</strong>:
           </Typography>
           {scanErrorTarget?.errors?.length ? (
             <List dense>
@@ -1265,18 +1268,14 @@ export function Settings() {
         </DialogActions>
       </Dialog>
 
-      <Dialog
-        open={restoreDialogOpen}
-        onClose={() => setRestoreDialogOpen(false)}
-      >
+      <Dialog open={restoreDialogOpen} onClose={() => setRestoreDialogOpen(false)}>
         <DialogTitle>Restore Backup</DialogTitle>
         <DialogContent>
           <Alert severity="warning" sx={{ mb: 2 }}>
             This will replace the current database with the selected backup.
           </Alert>
           <Typography variant="body2" gutterBottom>
-            Restore from{' '}
-            <strong>{restoreTarget?.filename || 'selected backup'}</strong>?
+            Restore from <strong>{restoreTarget?.filename || 'selected backup'}</strong>?
           </Typography>
           <FormControlLabel
             control={
@@ -1289,38 +1288,24 @@ export function Settings() {
           />
         </DialogContent>
         <DialogActions>
-          <Button
-            onClick={() => setRestoreDialogOpen(false)}
-            disabled={restoreInProgress}
-          >
+          <Button onClick={() => setRestoreDialogOpen(false)} disabled={restoreInProgress}>
             Cancel
           </Button>
-          <Button
-            variant="contained"
-            onClick={handleConfirmRestore}
-            disabled={restoreInProgress}
-          >
+          <Button variant="contained" onClick={handleConfirmRestore} disabled={restoreInProgress}>
             {restoreInProgress ? 'Restoring...' : 'Restore'}
           </Button>
         </DialogActions>
       </Dialog>
 
-      <Dialog
-        open={Boolean(deleteBackupTarget)}
-        onClose={() => setDeleteBackupTarget(null)}
-      >
+      <Dialog open={Boolean(deleteBackupTarget)} onClose={() => setDeleteBackupTarget(null)}>
         <DialogTitle>Delete Backup</DialogTitle>
         <DialogContent>
           <Typography variant="body2">
-            Delete{' '}
-            <strong>{deleteBackupTarget?.filename || 'this backup'}</strong>?
+            Delete <strong>{deleteBackupTarget?.filename || 'this backup'}</strong>?
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button
-            onClick={() => setDeleteBackupTarget(null)}
-            disabled={deleteBackupInProgress}
-          >
+          <Button onClick={() => setDeleteBackupTarget(null)} disabled={deleteBackupInProgress}>
             Cancel
           </Button>
           <Button
@@ -1357,35 +1342,23 @@ export function Settings() {
               ))}
               {importKeys.length > 12 && (
                 <ListItem>
-                  <ListItemText
-                    primary={`+${importKeys.length - 12} more fields`}
-                  />
+                  <ListItemText primary={`+${importKeys.length - 12} more fields`} />
                 </ListItem>
               )}
             </List>
           )}
         </DialogContent>
         <DialogActions>
-          <Button
-            onClick={() => setImportDialogOpen(false)}
-            disabled={importInProgress}
-          >
+          <Button onClick={() => setImportDialogOpen(false)} disabled={importInProgress}>
             Cancel
           </Button>
-          <Button
-            variant="contained"
-            onClick={handleConfirmImport}
-            disabled={importInProgress}
-          >
+          <Button variant="contained" onClick={handleConfirmImport} disabled={importInProgress}>
             {importInProgress ? 'Importing...' : 'Import Settings'}
           </Button>
         </DialogActions>
       </Dialog>
 
-      <Dialog
-        open={blocker.state === 'blocked'}
-        onClose={handleCancelNavigation}
-      >
+      <Dialog open={blocker.state === 'blocked'} onClose={handleCancelNavigation}>
         <DialogTitle>Unsaved Changes</DialogTitle>
         <DialogContent>
           <Typography variant="body2" gutterBottom>

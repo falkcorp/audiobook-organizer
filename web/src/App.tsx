@@ -1,17 +1,11 @@
 // file: web/src/App.tsx
-// version: 1.23.0
+// version: 1.23.1
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
 import { STORAGE_KEYS } from './lib/storageKeys';
 import { Routes, Route, Navigate } from 'react-router-dom';
-import {
-  Box,
-  Backdrop,
-  CircularProgress,
-  Typography,
-  Stack,
-} from '@mui/material';
+import { Box, Backdrop, CircularProgress, Typography, Stack } from '@mui/material';
 import { MainLayout } from './components/layout/MainLayout';
 import { WelcomeWizard } from './components/wizard/WelcomeWizard';
 import { KeyboardShortcutsDialog } from './components/KeyboardShortcutsDialog';
@@ -26,34 +20,20 @@ import { useReviewStore } from './stores/useReviewStore';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 
 // Lazy-loaded pages (code-split for smaller initial bundle)
-const Library = lazy(() =>
-  import('./pages/Library').then((m) => ({ default: m.Library }))
-);
+const Library = lazy(() => import('./pages/Library').then((m) => ({ default: m.Library })));
 const BookDetail = lazy(() =>
   import('./pages/BookDetail').then((m) => ({ default: m.BookDetail }))
 );
-const Works = lazy(() =>
-  import('./pages/Works').then((m) => ({ default: m.Works }))
-);
-const System = lazy(() =>
-  import('./pages/System').then((m) => ({ default: m.System }))
-);
-const Settings = lazy(() =>
-  import('./pages/Settings').then((m) => ({ default: m.Settings }))
-);
+const Works = lazy(() => import('./pages/Works').then((m) => ({ default: m.Works })));
+const System = lazy(() => import('./pages/System').then((m) => ({ default: m.System })));
+const Settings = lazy(() => import('./pages/Settings').then((m) => ({ default: m.Settings })));
 const FileBrowser = lazy(() =>
   import('./pages/FileBrowser').then((m) => ({ default: m.FileBrowser }))
 );
-const BookDedup = lazy(() =>
-  import('./pages/BookDedup').then((m) => ({ default: m.BookDedup }))
-);
+const BookDedup = lazy(() => import('./pages/BookDedup').then((m) => ({ default: m.BookDedup })));
 const DedupLabels = lazy(() => import('./pages/DedupLabels'));
-const Series = lazy(() =>
-  import('./pages/Series').then((m) => ({ default: m.Series }))
-);
-const Authors = lazy(() =>
-  import('./pages/Authors').then((m) => ({ default: m.Authors }))
-);
+const Series = lazy(() => import('./pages/Series').then((m) => ({ default: m.Series })));
+const Authors = lazy(() => import('./pages/Authors').then((m) => ({ default: m.Authors })));
 const Diagnostics = lazy(() =>
   import('./pages/Diagnostics').then((m) => ({ default: m.Diagnostics }))
 );
@@ -93,8 +73,7 @@ function App() {
       try {
         const config = await api.getConfig();
         const setupComplete =
-          Boolean(config.root_dir && config.root_dir.trim()) ||
-          Boolean(config.setup_complete);
+          Boolean(config.root_dir && config.root_dir.trim()) || Boolean(config.setup_complete);
         if (!cancelled) {
           setShowWizard(!setupComplete);
           if (setupComplete) {
@@ -102,9 +81,7 @@ function App() {
           }
         }
       } catch (_error) {
-        const wizardCompleted = localStorage.getItem(
-          STORAGE_KEYS.WELCOME_WIZARD_COMPLETED
-        );
+        const wizardCompleted = localStorage.getItem(STORAGE_KEYS.WELCOME_WIZARD_COMPLETED);
         if (!cancelled) {
           setShowWizard(!wizardCompleted);
         }
@@ -207,9 +184,9 @@ function App() {
       {/* Shutdown/Restart Overlay */}
       <Backdrop
         open={serverShutdown}
-        sx={theme => ({
+        sx={(theme) => ({
           color: '#fff',
-          zIndex: theme.zIndex.drawer + 9999
+          zIndex: theme.zIndex.drawer + 9999,
         })}
       >
         <Stack spacing={3} alignItems="center">
@@ -226,9 +203,7 @@ function App() {
         </Stack>
       </Backdrop>
 
-      {!requiresLogin && (
-        <WelcomeWizard open={showWizard} onComplete={handleWizardComplete} />
-      )}
+      {!requiresLogin && <WelcomeWizard open={showWizard} onComplete={handleWizardComplete} />}
 
       {requiresLogin ? (
         <Routes>
@@ -240,39 +215,176 @@ function App() {
           <Suspense fallback={<CircularProgress sx={{ m: 4 }} />}>
             <Routes>
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
-              <Route path="/dashboard" element={<ErrorBoundary><Dashboard /></ErrorBoundary>} />
-              <Route path="/library" element={<ErrorBoundary><Library defaultPreset="standard" /></ErrorBoundary>} />
-              <Route path="/fingerprints" element={<ErrorBoundary><Library defaultPreset="fingerprints" /></ErrorBoundary>} />
-              <Route path="/library/:id" element={<ErrorBoundary><BookDetail /></ErrorBoundary>} />
-              <Route path="/works" element={<ErrorBoundary><Works /></ErrorBoundary>} />
-              <Route path="/system" element={<ErrorBoundary><System /></ErrorBoundary>} />
-              <Route path="/settings" element={<ErrorBoundary><Settings /></ErrorBoundary>} />
+              <Route
+                path="/dashboard"
+                element={
+                  <ErrorBoundary>
+                    <Dashboard />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/library"
+                element={
+                  <ErrorBoundary>
+                    <Library defaultPreset="standard" />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/fingerprints"
+                element={
+                  <ErrorBoundary>
+                    <Library defaultPreset="fingerprints" />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/library/:id"
+                element={
+                  <ErrorBoundary>
+                    <BookDetail />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/works"
+                element={
+                  <ErrorBoundary>
+                    <Works />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/system"
+                element={
+                  <ErrorBoundary>
+                    <System />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/settings"
+                element={
+                  <ErrorBoundary>
+                    <Settings />
+                  </ErrorBoundary>
+                }
+              />
               <Route path="/login" element={<Navigate to="/dashboard" replace />} />
-              <Route path="/files" element={<ErrorBoundary><FileBrowser /></ErrorBoundary>} />
+              <Route
+                path="/files"
+                element={
+                  <ErrorBoundary>
+                    <FileBrowser />
+                  </ErrorBoundary>
+                }
+              />
               <Route path="/operations" element={<Navigate to="/activity" replace />} />
               <Route path="/maintenance" element={<Navigate to="/system" replace />} />
               <Route path="/authors/dedup" element={<Navigate to="/dedup" replace />} />
               <Route path="/books/dedup" element={<Navigate to="/dedup" replace />} />
-              <Route path="/dedup" element={<ErrorBoundary><BookDedup /></ErrorBoundary>} />
-              <Route path="/dedup/labels" element={<ErrorBoundary><DedupLabels /></ErrorBoundary>} />
-              <Route path="/series" element={<ErrorBoundary><Series /></ErrorBoundary>} />
-              <Route path="/authors" element={<ErrorBoundary><Authors /></ErrorBoundary>} />
-              <Route path="/diagnostics" element={<ErrorBoundary><Diagnostics /></ErrorBoundary>} />
-              <Route path="/activity" element={<ErrorBoundary><ActivityLog /></ErrorBoundary>} />
-              <Route path="/playlists" element={<ErrorBoundary><Playlists /></ErrorBoundary>} />
-              <Route path="/playlists/:id" element={<ErrorBoundary><PlaylistDetail /></ErrorBoundary>} />
-              <Route path="/setup" element={<ErrorBoundary><Setup /></ErrorBoundary>} />
-              <Route path="/users" element={<ErrorBoundary><Users /></ErrorBoundary>} />
-              <Route path="/versions" element={<ErrorBoundary><TrashedVersions /></ErrorBoundary>} />
-              <Route path="/review" element={<ErrorBoundary><ReviewQueue /></ErrorBoundary>} />
+              <Route
+                path="/dedup"
+                element={
+                  <ErrorBoundary>
+                    <BookDedup />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/dedup/labels"
+                element={
+                  <ErrorBoundary>
+                    <DedupLabels />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/series"
+                element={
+                  <ErrorBoundary>
+                    <Series />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/authors"
+                element={
+                  <ErrorBoundary>
+                    <Authors />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/diagnostics"
+                element={
+                  <ErrorBoundary>
+                    <Diagnostics />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/activity"
+                element={
+                  <ErrorBoundary>
+                    <ActivityLog />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/playlists"
+                element={
+                  <ErrorBoundary>
+                    <Playlists />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/playlists/:id"
+                element={
+                  <ErrorBoundary>
+                    <PlaylistDetail />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/setup"
+                element={
+                  <ErrorBoundary>
+                    <Setup />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/users"
+                element={
+                  <ErrorBoundary>
+                    <Users />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/versions"
+                element={
+                  <ErrorBoundary>
+                    <TrashedVersions />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/review"
+                element={
+                  <ErrorBoundary>
+                    <ReviewQueue />
+                  </ErrorBoundary>
+                }
+              />
             </Routes>
           </Suspense>
         </MainLayout>
       )}
-      <KeyboardShortcutsDialog
-        open={shortcutsOpen}
-        onClose={() => setShortcutsOpen(false)}
-      />
+      <KeyboardShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
     </Box>
   );
 }

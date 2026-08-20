@@ -1,5 +1,5 @@
 // file: web/src/components/PendingFileOpsBanner.tsx
-// version: 1.0.2
+// version: 1.0.3
 // guid: 6c1e8b3d-2a47-4f5d-9e0c-b8a4d2f6e7a3
 // last-edited: 2026-08-19
 //
@@ -73,9 +73,7 @@ export function PendingFileOpsBanner({ operations }: Props): JSX.Element | null 
           Writing files for <strong>{count}</strong> book{count === 1 ? '' : 's'}
           {count > 1 && '...'}
         </Typography>
-        <IconButton size="small">
-          {expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-        </IconButton>
+        <IconButton size="small">{expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}</IconButton>
       </Box>
       <LinearProgress sx={{ height: 2 }} />
       <Collapse in={expanded}>
@@ -91,7 +89,11 @@ export function PendingFileOpsBanner({ operations }: Props): JSX.Element | null 
               <Typography variant="caption" color="text.secondary">
                 {formatOpType(op.op_type)}
               </Typography>
-              <Typography variant="caption" color="text.secondary" sx={{ minWidth: 32, textAlign: 'right' }}>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ minWidth: 32, textAlign: 'right' }}
+              >
                 {timeAgo(op.started_at)}
               </Typography>
             </Box>

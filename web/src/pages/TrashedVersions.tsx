@@ -1,5 +1,5 @@
 // file: web/src/pages/TrashedVersions.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6f4a5b3c-7d8e-4a70-b8c5-3d7e0f1b9a99
 
 import { useCallback, useEffect, useState } from 'react';
@@ -36,27 +36,48 @@ const API_BASE = '/api/v1';
 
 const COLUMNS: ColumnDef<BookVersion>[] = [
   {
-    key: 'book_id', label: 'Book ID', defaultWidth: 140, sortable: true,
-    render: (v) => <Typography variant="caption" fontFamily="monospace">{v.book_id.slice(0, 12)}…</Typography>,
+    key: 'book_id',
+    label: 'Book ID',
+    defaultWidth: 140,
+    sortable: true,
+    render: (v) => (
+      <Typography variant="caption" fontFamily="monospace">
+        {v.book_id.slice(0, 12)}…
+      </Typography>
+    ),
     sortValue: (v) => v.book_id,
   },
   {
-    key: 'format', label: 'Format', defaultWidth: 90, sortable: true,
+    key: 'format',
+    label: 'Format',
+    defaultWidth: 90,
+    sortable: true,
     render: (v) => v.format?.toUpperCase() ?? '—',
     sortValue: (v) => v.format ?? '',
   },
   {
-    key: 'source', label: 'Source', defaultWidth: 120, sortable: true,
+    key: 'source',
+    label: 'Source',
+    defaultWidth: 120,
+    sortable: true,
     render: (v) => v.source,
     sortValue: (v) => v.source,
   },
   {
-    key: 'status', label: 'Status', defaultWidth: 120, sortable: true,
-    render: (v) => <Chip label={v.status} size="small" color={v.status === 'trash' ? 'warning' : 'error'} />,
+    key: 'status',
+    label: 'Status',
+    defaultWidth: 120,
+    sortable: true,
+    render: (v) => (
+      <Chip label={v.status} size="small" color={v.status === 'trash' ? 'warning' : 'error'} />
+    ),
     sortValue: (v) => v.status,
   },
   {
-    key: 'date', label: 'Date', defaultWidth: 110, sortable: true,
+    key: 'date',
+    label: 'Date',
+    defaultWidth: 110,
+    sortable: true,
     render: (v) => new Date(v.purged_date || v.created_at).toLocaleDateString(),
     sortValue: (v) => new Date(v.purged_date || v.created_at).getTime(),
   },
@@ -89,7 +110,8 @@ export default function TrashedVersions() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const endpoint = tab === 'trash' ? '/audiobooks/trashed-versions' : '/audiobooks/purged-versions';
+      const endpoint =
+        tab === 'trash' ? '/audiobooks/trashed-versions' : '/audiobooks/purged-versions';
       const resp = await fetch(`${API_BASE}${endpoint}`);
       if (resp.ok) {
         const data = await resp.json();
@@ -102,24 +124,35 @@ export default function TrashedVersions() {
     }
   }, [tab]);
 
-  useEffect(() => { load(); }, [load]);
-
-  const handleRestore = useCallback(async (v: BookVersion) => {
-    await restoreVersion(v.book_id, v.id);
+  useEffect(() => {
     load();
   }, [load]);
 
-  const handlePurge = useCallback(async (v: BookVersion) => {
-    if (!confirm('Permanently delete files for this version? This cannot be undone.')) return;
-    await purgeVersion(v.book_id, v.id);
-    load();
-  }, [load]);
+  const handleRestore = useCallback(
+    async (v: BookVersion) => {
+      await restoreVersion(v.book_id, v.id);
+      load();
+    },
+    [load]
+  );
 
-  const handleHardDelete = useCallback(async (v: BookVersion) => {
-    if (!confirm('Remove all traces of this version? Fingerprint data will be lost.')) return;
-    await hardDeleteVersion(v.id);
-    load();
-  }, [load]);
+  const handlePurge = useCallback(
+    async (v: BookVersion) => {
+      if (!confirm('Permanently delete files for this version? This cannot be undone.')) return;
+      await purgeVersion(v.book_id, v.id);
+      load();
+    },
+    [load]
+  );
+
+  const handleHardDelete = useCallback(
+    async (v: BookVersion) => {
+      if (!confirm('Remove all traces of this version? Fingerprint data will be lost.')) return;
+      await hardDeleteVersion(v.id);
+      load();
+    },
+    [load]
+  );
 
   const sorted = sortRows(versions);
 
@@ -135,7 +168,14 @@ export default function TrashedVersions() {
         />
       </Stack>
 
-      <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto" allowScrollButtonsMobile sx={{ mb: 2 }}>
+      <Tabs
+        value={tab}
+        onChange={(_, v) => setTab(v)}
+        variant="scrollable"
+        scrollButtons="auto"
+        allowScrollButtonsMobile
+        sx={{ mb: 2 }}
+      >
         <Tab label="Trash" value="trash" />
         <Tab label="Purged" value="purged" />
       </Tabs>
@@ -164,7 +204,9 @@ export default function TrashedVersions() {
                     onStartResize={startResize}
                   />
                 ))}
-                <TableCell align="right" sx={{ width: 160 }}>Actions</TableCell>
+                <TableCell align="right" sx={{ width: 160 }}>
+                  Actions
+                </TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -174,7 +216,13 @@ export default function TrashedVersions() {
                     <TableCell
                       key={col.key}
                       align={col.align}
-                      sx={{ width: columnWidths[col.key], maxWidth: columnWidths[col.key], overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      sx={{
+                        width: columnWidths[col.key],
+                        maxWidth: columnWidths[col.key],
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
                     >
                       {col.render(v)}
                     </TableCell>
@@ -182,8 +230,12 @@ export default function TrashedVersions() {
                   <TableCell align="right">
                     {v.status === 'trash' && (
                       <>
-                        <Button size="small" onClick={() => handleRestore(v)}>Restore</Button>
-                        <Button size="small" color="error" onClick={() => handlePurge(v)}>Purge Now</Button>
+                        <Button size="small" onClick={() => handleRestore(v)}>
+                          Restore
+                        </Button>
+                        <Button size="small" color="error" onClick={() => handlePurge(v)}>
+                          Purge Now
+                        </Button>
                       </>
                     )}
                     {(v.status === 'inactive_purged' || v.status === 'blocked_for_redownload') && (

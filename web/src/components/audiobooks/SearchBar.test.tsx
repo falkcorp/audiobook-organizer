@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/SearchBar.test.tsx
-// version: 1.1.0
+// version: 1.1.1
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor } from '@testing-library/react';
@@ -26,15 +26,11 @@ describe('SearchBar', () => {
   describe('rendering', () => {
     it('renders the search input with default placeholder', () => {
       renderWithProviders(<SearchBar {...defaultProps()} />);
-      expect(
-        screen.getByPlaceholderText(/Search audiobooks/i)
-      ).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(/Search audiobooks/i)).toBeInTheDocument();
     });
 
     it('renders a custom placeholder when provided', () => {
-      renderWithProviders(
-        <SearchBar {...defaultProps({ placeholder: 'Find books...' })} />
-      );
+      renderWithProviders(<SearchBar {...defaultProps({ placeholder: 'Find books...' })} />);
       expect(screen.getByPlaceholderText('Find books...')).toBeInTheDocument();
     });
 
@@ -42,7 +38,6 @@ describe('SearchBar', () => {
       renderWithProviders(<SearchBar {...defaultProps()} />);
       expect(screen.queryByLabelText('Sort by')).not.toBeInTheDocument();
     });
-
   });
 
   describe('sort controls', () => {
@@ -81,18 +76,14 @@ describe('SearchBar', () => {
 
   describe('view mode toggle', () => {
     it('highlights the current view mode', () => {
-      renderWithProviders(
-        <SearchBar {...defaultProps({ viewMode: 'list' })} />
-      );
+      renderWithProviders(<SearchBar {...defaultProps({ viewMode: 'list' })} />);
       const listBtn = screen.getByRole('button', { name: 'list view' });
       expect(listBtn).toHaveAttribute('aria-pressed', 'true');
     });
 
     it('calls onViewModeChange when toggling', () => {
       const onViewModeChange = vi.fn();
-      renderWithProviders(
-        <SearchBar {...defaultProps({ onViewModeChange })} />
-      );
+      renderWithProviders(<SearchBar {...defaultProps({ onViewModeChange })} />);
       fireEvent.click(screen.getByRole('button', { name: 'list view' }));
       expect(onViewModeChange).toHaveBeenCalledWith('list');
     });
@@ -108,9 +99,7 @@ describe('SearchBar', () => {
     });
 
     it('shows clear button when value is non-empty', () => {
-      renderWithProviders(
-        <SearchBar {...defaultProps({ value: 'hello' })} />
-      );
+      renderWithProviders(<SearchBar {...defaultProps({ value: 'hello' })} />);
       // The clear button exists (ClearIcon inside an IconButton)
       const buttons = screen.getAllByRole('button');
       // At least one button should be the clear button
@@ -119,9 +108,7 @@ describe('SearchBar', () => {
 
     it('calls onChange with empty string when clear is clicked', () => {
       const onChange = vi.fn();
-      renderWithProviders(
-        <SearchBar {...defaultProps({ value: 'hello', onChange })} />
-      );
+      renderWithProviders(<SearchBar {...defaultProps({ value: 'hello', onChange })} />);
       // Find the clear button — it's an IconButton near the input
       const clearButtons = screen.getAllByRole('button');
       // The clear button is before the help button in the end adornment
@@ -138,26 +125,20 @@ describe('SearchBar', () => {
   describe('filter chips', () => {
     it('displays parsed field filters as chips', () => {
       // Provide a value that the real parser will parse into field filters
-      renderWithProviders(
-        <SearchBar {...defaultProps({ value: 'author:Sanderson tag:scifi' })} />
-      );
+      renderWithProviders(<SearchBar {...defaultProps({ value: 'author:Sanderson tag:scifi' })} />);
       expect(screen.getByText('author:Sanderson')).toBeInTheDocument();
       expect(screen.getByText('tag:scifi')).toBeInTheDocument();
     });
 
     it('shows negated filters with NOT prefix', () => {
-      renderWithProviders(
-        <SearchBar {...defaultProps({ value: '-tag:romance' })} />
-      );
+      renderWithProviders(<SearchBar {...defaultProps({ value: '-tag:romance' })} />);
       expect(screen.getByText('NOT tag:romance')).toBeInTheDocument();
     });
 
     it('calls onChange with filter removed when chip is deleted', () => {
       const onChange = vi.fn();
       renderWithProviders(
-        <SearchBar
-          {...defaultProps({ value: 'author:Smith great books', onChange })}
-        />
+        <SearchBar {...defaultProps({ value: 'author:Smith great books', onChange })} />
       );
       // Find the delete button on the chip
       const chip = screen.getByText('author:Smith');
@@ -219,9 +200,7 @@ describe('SearchBar', () => {
 
   describe('recent searches', () => {
     it('saves to localStorage on Enter', () => {
-      renderWithProviders(
-        <SearchBar {...defaultProps({ value: 'my search' })} />
-      );
+      renderWithProviders(<SearchBar {...defaultProps({ value: 'my search' })} />);
       const input = screen.getByPlaceholderText(/Search audiobooks/i);
       fireEvent.keyDown(input, { key: 'Enter' });
       const stored = JSON.parse(localStorage.getItem('library_recent_searches') || '[]');

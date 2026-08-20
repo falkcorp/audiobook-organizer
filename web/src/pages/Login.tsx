@@ -1,5 +1,5 @@
 // file: web/src/pages/Login.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9a3f2c1d-4b5e-6f70-8a9b-0c1d2e3f4a5b
 
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
@@ -68,7 +68,8 @@ export function Login() {
       .then((r) => (r.ok ? r.json() : null))
       .then((body) => {
         const list = body?.data?.providers ?? body?.providers ?? [];
-        if (Array.isArray(list)) setProviders(list.filter((p): p is string => typeof p === 'string'));
+        if (Array.isArray(list))
+          setProviders(list.filter((p): p is string => typeof p === 'string'));
       })
       .catch(() => {
         /* providers endpoint absent → no SSO buttons */
@@ -185,13 +186,9 @@ export function Login() {
             onChange={(e) => setPassword(e.target.value)}
             name="password"
             id="password"
-            autoComplete={
-              mode === 'setup' ? 'new-password' : 'current-password'
-            }
+            autoComplete={mode === 'setup' ? 'new-password' : 'current-password'}
             helperText={
-              mode === 'setup'
-                ? 'Use at least 8 characters for the admin password.'
-                : undefined
+              mode === 'setup' ? 'Use at least 8 characters for the admin password.' : undefined
             }
             required
             fullWidth
@@ -210,13 +207,7 @@ export function Login() {
             />
           )}
 
-          <Button
-            type="submit"
-            variant="contained"
-            size="large"
-            disabled={loading}
-            fullWidth
-          >
+          <Button type="submit" variant="contained" size="large" disabled={loading} fullWidth>
             {loading ? (
               <CircularProgress size={20} />
             ) : mode === 'setup' ? (
@@ -252,11 +243,7 @@ export function Login() {
           {auth.bootstrapReady && (
             <Button
               variant="text"
-              onClick={() =>
-                setMode((current) =>
-                  current === 'setup' ? 'login' : 'setup'
-                )
-              }
+              onClick={() => setMode((current) => (current === 'setup' ? 'login' : 'setup'))}
               disabled={loading}
             >
               {mode === 'setup'

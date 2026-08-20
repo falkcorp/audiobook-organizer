@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupSplitBookTab.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 // Split-book backfill review tab (MAYDEPLOY-G3).
 //
 // Lists persisted split-book candidate clusters from
@@ -78,36 +78,21 @@ function CandidateRow({ candidate, expanded, onToggle, onMergeRequest, merging }
           </IconButton>
         </TableCell>
         <TableCell>
-          <Typography
-            variant="body2"
-            sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}
-          >
+          <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
             {candidate.parent_folder || <em>(empty)</em>}
           </Typography>
           <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
-            <Chip
-              size="small"
-              label={candidate.shape || 'parent'}
-              variant="outlined"
-            />
+            <Chip size="small" label={candidate.shape || 'parent'} variant="outlined" />
             {candidate.sequential_pattern && (
-              <Chip
-                size="small"
-                label={candidate.sequential_pattern}
-                variant="outlined"
-              />
+              <Chip size="small" label={candidate.sequential_pattern} variant="outlined" />
             )}
           </Stack>
         </TableCell>
         <TableCell>
-          <Typography variant="body2">
-            {candidate.suggested_title || <em>(none)</em>}
-          </Typography>
+          <Typography variant="body2">{candidate.suggested_title || <em>(none)</em>}</Typography>
         </TableCell>
         <TableCell>
-          <Typography variant="body2">
-            {candidate.suggested_author || <em>(none)</em>}
-          </Typography>
+          <Typography variant="body2">{candidate.suggested_author || <em>(none)</em>}</Typography>
         </TableCell>
         <TableCell align="right">
           <Chip size="small" color="primary" label={bookCount} />
@@ -151,12 +136,7 @@ function CandidateRow({ candidate, expanded, onToggle, onMergeRequest, merging }
                   >
                     {bid}
                     {idx === 0 && (
-                      <Chip
-                        size="small"
-                        label="suggested keep"
-                        color="success"
-                        sx={{ ml: 0.5 }}
-                      />
+                      <Chip size="small" label="suggested keep" color="success" sx={{ ml: 0.5 }} />
                     )}
                   </Link>
                 ))}
@@ -283,8 +263,8 @@ export function DedupSplitBookTab() {
           <Box>
             <Typography variant="h6">Split-book candidates</Typography>
             <Typography variant="body2" color="text.secondary">
-              Clusters of one-Book-per-chapter rows that look like a single
-              audiobook split across many records.
+              Clusters of one-Book-per-chapter rows that look like a single audiobook split across
+              many records.
             </Typography>
             <Stack direction="row" spacing={2} sx={{ mt: 1 }}>
               <Chip
@@ -293,11 +273,7 @@ export function DedupSplitBookTab() {
                 color="primary"
                 variant="outlined"
               />
-              <Chip
-                size="small"
-                label={`${totalBooks} books`}
-                variant="outlined"
-              />
+              <Chip size="small" label={`${totalBooks} books`} variant="outlined" />
             </Stack>
           </Box>
           <Stack direction="row" spacing={1}>
@@ -388,18 +364,15 @@ export function DedupSplitBookTab() {
         <DialogContent>
           <DialogContentText component="div">
             <Typography variant="body2" gutterBottom>
-              Merge <strong>{confirmCandidate?.book_ids.length ?? 0}</strong> books into
-              one record using the earliest ULID as the keeper. Source books will be
-              soft-deleted and their files re-parented to the keep book.
+              Merge <strong>{confirmCandidate?.book_ids.length ?? 0}</strong> books into one record
+              using the earliest ULID as the keeper. Source books will be soft-deleted and their
+              files re-parented to the keep book.
             </Typography>
             <Box sx={{ mt: 2 }}>
               <Typography variant="caption" color="text.secondary">
                 Parent folder
               </Typography>
-              <Typography
-                variant="body2"
-                sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}
-              >
+              <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
                 {confirmCandidate?.parent_folder}
               </Typography>
             </Box>

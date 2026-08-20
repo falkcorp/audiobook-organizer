@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupReconcileTab.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
-// last-edited: 2026-05-11
+// last-edited: 2026-08-19
 
 import { useState, useEffect } from 'react';
 import {
@@ -25,7 +25,11 @@ import type { ReconcileMatch, ReconcilePreview, ReconcileBrokenRecord } from '..
 
 export function ReconcileTab() {
   const [scanning, setScanning] = useState(false);
-  const [scanProgress, setScanProgress] = useState<{ progress: number; total: number; message: string } | null>(null);
+  const [scanProgress, setScanProgress] = useState<{
+    progress: number;
+    total: number;
+    message: string;
+  } | null>(null);
   const [preview, setPreview] = useState<ReconcilePreview | null>(null);
   const [lastScanTime, setLastScanTime] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -127,7 +131,9 @@ export function ReconcileTab() {
         setApplyResult('Reconciliation completed successfully.');
         startScan();
       } else {
-        setApplyResult(`Reconciliation ${result.status}: ${result.message || result.error_message || ''}`);
+        setApplyResult(
+          `Reconciliation ${result.status}: ${result.message || result.error_message || ''}`
+        );
       }
     } catch (err) {
       setApplyResult(err instanceof Error ? err.message : 'Failed to apply fixes');
@@ -138,27 +144,34 @@ export function ReconcileTab() {
 
   const confidenceColor = (confidence: string): 'success' | 'warning' | 'error' => {
     switch (confidence) {
-      case 'high': return 'success';
-      case 'medium': return 'warning';
-      default: return 'error';
+      case 'high':
+        return 'success';
+      case 'medium':
+        return 'warning';
+      default:
+        return 'error';
     }
   };
 
   const matchTypeLabel = (type: string): string => {
     switch (type) {
-      case 'hash': return 'File Hash';
-      case 'original_hash': return 'Original Hash';
-      case 'filename': return 'Filename';
-      default: return type;
+      case 'hash':
+        return 'File Hash';
+      case 'original_hash':
+        return 'Original Hash';
+      case 'filename':
+        return 'Filename';
+      default:
+        return type;
     }
   };
 
   return (
     <Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Scan the library to find books whose file paths no longer exist on disk,
-        then match them against untracked audio files by hash or filename.
-        Scans run in the background — you can refresh the page and results will persist.
+        Scan the library to find books whose file paths no longer exist on disk, then match them
+        against untracked audio files by hash or filename. Scans run in the background — you can
+        refresh the page and results will persist.
       </Typography>
 
       <Stack direction="row" spacing={2} sx={{ mb: 2 }} alignItems="center">
@@ -185,7 +198,9 @@ export function ReconcileTab() {
               <>
                 <LinearProgress
                   variant={scanProgress.total > 0 ? 'determinate' : 'indeterminate'}
-                  value={scanProgress.total > 0 ? (scanProgress.progress / scanProgress.total) * 100 : 0}
+                  value={
+                    scanProgress.total > 0 ? (scanProgress.progress / scanProgress.total) * 100 : 0
+                  }
                 />
                 <Typography variant="body2" color="text.secondary">
                   {scanProgress.message}
@@ -200,8 +215,16 @@ export function ReconcileTab() {
         </Paper>
       )}
 
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-      {applyResult && <Alert severity="info" sx={{ mb: 2 }}>{applyResult}</Alert>}
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
+      )}
+      {applyResult && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          {applyResult}
+        </Alert>
+      )}
 
       {preview && (
         <>
@@ -220,11 +243,20 @@ export function ReconcileTab() {
 
           {preview.matches.length > 0 && (
             <Paper sx={{ p: 2, mb: 2 }}>
-              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+              <Stack
+                direction="row"
+                justifyContent="space-between"
+                alignItems="center"
+                sx={{ mb: 1 }}
+              >
                 <Typography variant="h6">Matches ({preview.matches.length})</Typography>
                 <Stack direction="row" spacing={1}>
-                  <Button size="small" onClick={selectAll}>Select All</Button>
-                  <Button size="small" onClick={deselectAll}>Deselect All</Button>
+                  <Button size="small" onClick={selectAll}>
+                    Select All
+                  </Button>
+                  <Button size="small" onClick={deselectAll}>
+                    Deselect All
+                  </Button>
                   <Button
                     variant="contained"
                     color="primary"
@@ -279,14 +311,36 @@ export function ReconcileTab() {
                             />
                           </Stack>
                           {hasCommon && (
-                            <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'monospace', fontSize: '0.7rem', opacity: 0.6 }}>
+                            <Typography
+                              variant="body2"
+                              color="text.secondary"
+                              sx={{ fontFamily: 'monospace', fontSize: '0.7rem', opacity: 0.6 }}
+                            >
                               {commonPrefix}/
                             </Typography>
                           )}
-                          <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'error.main', overflowX: 'auto', whiteSpace: 'nowrap' }}>
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              fontFamily: 'monospace',
+                              fontSize: '0.75rem',
+                              color: 'error.main',
+                              overflowX: 'auto',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
                             - {hasCommon ? oldSuffix : m.old_path}
                           </Typography>
-                          <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'success.main', overflowX: 'auto', whiteSpace: 'nowrap' }}>
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              fontFamily: 'monospace',
+                              fontSize: '0.75rem',
+                              color: 'success.main',
+                              overflowX: 'auto',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
                             + {hasCommon ? newSuffix : m.new_path}
                           </Typography>
                         </Box>
@@ -310,7 +364,12 @@ export function ReconcileTab() {
                 <Card key={b.book_id} variant="outlined" sx={{ mb: 1 }}>
                   <CardContent sx={{ pb: 1 }}>
                     <Typography variant="subtitle2">{b.title}</Typography>
-                    <Typography variant="body2" color="text.secondary" noWrap sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                    <Typography
+                      variant="body2"
+                      color="text.secondary"
+                      noWrap
+                      sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}
+                    >
                       {b.file_path}
                     </Typography>
                   </CardContent>
@@ -320,7 +379,9 @@ export function ReconcileTab() {
           )}
 
           {preview.broken_records.length === 0 && (
-            <Alert severity="success">All book file paths are valid. No reconciliation needed.</Alert>
+            <Alert severity="success">
+              All book file paths are valid. No reconciliation needed.
+            </Alert>
           )}
         </>
       )}

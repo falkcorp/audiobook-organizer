@@ -1,5 +1,5 @@
 // file: web/src/components/settings/PluginsTab.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: d5e6f7a8-b9c0-1d2e-3f4a-5b6c7d8e9f0a
 
 import { useEffect, useState, useCallback } from 'react';
@@ -187,18 +187,14 @@ function PluginRow({ plugin: p, onRefresh }: { plugin: PluginInfo; onRefresh: ()
                     label={k}
                     value={v}
                     size="small"
-                    onChange={(e) =>
-                      setSettings((prev) => ({ ...prev, [k]: e.target.value }))
-                    }
+                    onChange={(e) => setSettings((prev) => ({ ...prev, [k]: e.target.value }))}
                   />
                 ))}
                 <Stack direction="row" spacing={1}>
                   <Button
                     size="small"
                     variant="outlined"
-                    onClick={() =>
-                      setSettings((prev) => ({ ...prev, '': '' }))
-                    }
+                    onClick={() => setSettings((prev) => ({ ...prev, '': '' }))}
                   >
                     Add Setting
                   </Button>

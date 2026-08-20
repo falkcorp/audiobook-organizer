@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/FilterSidebar.tsx
-// version: 1.7.0
+// version: 1.7.1
 // guid: 2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b
 
 import React from 'react';
@@ -74,21 +74,12 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
   return (
     <Drawer anchor="right" open={open} onClose={onClose}>
       <Box sx={{ width: 320, p: 3 }}>
-        <Box
-          display="flex"
-          alignItems="center"
-          justifyContent="space-between"
-          mb={2}
-        >
+        <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
           <Box display="flex" alignItems="center" gap={1}>
             <FilterListIcon />
             <Typography variant="h6">Filters</Typography>
             {getActiveFilterCount() > 0 && (
-              <Chip
-                label={getActiveFilterCount()}
-                size="small"
-                color="primary"
-              />
+              <Chip label={getActiveFilterCount()} size="small" color="primary" />
             )}
           </Box>
           <Button size="small" onClick={handleClearFilters}>
@@ -104,9 +95,7 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
             <Select
               labelId="filter-library-state-label"
               value={filters.libraryState || ''}
-              onChange={(e) =>
-                handleFilterChange('libraryState', e.target.value)
-              }
+              onChange={(e) => handleFilterChange('libraryState', e.target.value)}
               label="Library State"
             >
               <MenuItem value="">
@@ -201,7 +190,16 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
                 Tags
               </Typography>
 
-              <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', maxHeight: 140, overflowY: 'auto', mb: 1 }}>
+              <Box
+                sx={{
+                  display: 'flex',
+                  gap: 0.5,
+                  flexWrap: 'wrap',
+                  maxHeight: 140,
+                  overflowY: 'auto',
+                  mb: 1,
+                }}
+              >
                 {availableTags.map((t) => (
                   <Chip
                     key={t.tag}
@@ -209,7 +207,9 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
                     size="small"
                     onClick={() => {
                       const exists = selectedTags.includes(t.tag);
-                      const newTags = exists ? selectedTags.filter((x) => x !== t.tag) : [...selectedTags, t.tag];
+                      const newTags = exists
+                        ? selectedTags.filter((x) => x !== t.tag)
+                        : [...selectedTags, t.tag];
                       onTagsChange(newTags);
                     }}
                     color={selectedTags.includes(t.tag) ? 'primary' : undefined}
@@ -240,7 +240,9 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
                 }
                 renderOption={(props, option) => {
                   const tagInfo = availableTags.find((t) => t.tag === option);
-                  const { key, ...rest } = props as React.HTMLAttributes<HTMLLIElement> & { key: string };
+                  const { key, ...rest } = props as React.HTMLAttributes<HTMLLIElement> & {
+                    key: string;
+                  };
                   return (
                     <li key={key} {...rest}>
                       <Box
@@ -252,10 +254,7 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
                       >
                         <span>{formatTagLabel(option)}</span>
                         {tagInfo && (
-                          <Typography
-                            variant="caption"
-                            color="text.secondary"
-                          >
+                          <Typography variant="caption" color="text.secondary">
                             ({tagInfo.count})
                           </Typography>
                         )}
@@ -266,9 +265,7 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
                 renderInput={(params) => (
                   <TextField
                     {...params}
-                    placeholder={
-                      selectedTags.length === 0 ? 'Filter by tags...' : ''
-                    }
+                    placeholder={selectedTags.length === 0 ? 'Filter by tags...' : ''}
                   />
                 )}
               />
@@ -289,9 +286,7 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
             control={
               <Switch
                 checked={!!filters.showFailed}
-                onChange={(e) =>
-                  onFiltersChange({ ...filters, showFailed: e.target.checked })
-                }
+                onChange={(e) => onFiltersChange({ ...filters, showFailed: e.target.checked })}
                 color="error"
               />
             }
@@ -316,7 +311,8 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
               onChange={(e) =>
                 onFiltersChange({
                   ...filters,
-                  fingerprintStatus: (e.target.value as "complete" | "partial" | "none") || undefined,
+                  fingerprintStatus:
+                    (e.target.value as 'complete' | 'partial' | 'none') || undefined,
                 })
               }
               label="Fingerprint Status"
@@ -354,7 +350,6 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
               step={1}
             />
           </Box>
-
         </Stack>
       </Box>
     </Drawer>

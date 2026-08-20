@@ -1,6 +1,6 @@
 // file: web/src/pages/BookDetail.files-history.test.tsx
-// version: 1.1.1
-// last-edited: 2026-08-06
+// version: 1.1.2
+// last-edited: 2026-08-19
 // guid: e6be4c8c-534d-44aa-bcb7-9089a8796df4
 
 import { render, screen, waitFor } from '@testing-library/react';
@@ -19,9 +19,7 @@ vi.mock('../components/ChangeLog', () => ({
 }));
 
 vi.mock('../services/api', async () => {
-  const actual = await vi.importActual<typeof import('../services/api')>(
-    '../services/api'
-  );
+  const actual = await vi.importActual<typeof import('../services/api')>('../services/api');
   return {
     ...actual,
     getBook: vi.fn(),
@@ -94,9 +92,7 @@ describe('BookDetail Files & History', () => {
     const user = userEvent.setup();
 
     render(
-      <MemoryRouter
-        initialEntries={['/library/book-1?tab=files']}
-      >
+      <MemoryRouter initialEntries={['/library/book-1?tab=files']}>
         <Routes>
           <Route path="/library/:id" element={<BookDetail />} />
         </Routes>
@@ -112,20 +108,14 @@ describe('BookDetail Files & History', () => {
     expect(screen.getByText('≠ DB')).toBeInTheDocument();
     expect(screen.getByText('DB: Database Title')).toBeInTheDocument();
 
-    expect(
-      screen.getByRole('button', { name: 'Show all 7 files (2 more)' })
-    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show all 7 files (2 more)' })).toBeInTheDocument();
     expect(screen.queryByText('/library/the-great-book/file-6.mp3')).not.toBeInTheDocument();
 
-    await user.click(
-      screen.getByRole('button', { name: 'Show all 7 files (2 more)' })
-    );
+    await user.click(screen.getByRole('button', { name: 'Show all 7 files (2 more)' }));
 
     await waitFor(() => {
       expect(screen.getByText('/library/the-great-book/file-6.mp3')).toBeInTheDocument();
     });
-    expect(
-      screen.getByRole('button', { name: 'Show fewer files' })
-    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show fewer files' })).toBeInTheDocument();
   });
 });

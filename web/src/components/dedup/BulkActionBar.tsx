@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/BulkActionBar.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: b7a8c9d0-e1f2-3456-abcd-ba7890123456
-// last-edited: 2026-06-10
+// last-edited: 2026-08-19
 
 // BulkActionBar renders the floating bottom bar inside UnifiedDedupTab when
 // candidates are selected. Provides merge-selected, dismiss-selected, and
@@ -119,12 +119,7 @@ export function BulkActionBar({
 
         <Box sx={{ flex: 1 }} />
 
-        <Button
-          size="small"
-          variant="text"
-          disabled={isBusy}
-          onClick={onClearSelection}
-        >
+        <Button size="small" variant="text" disabled={isBusy} onClick={onClearSelection}>
           Clear
         </Button>
       </Paper>
@@ -141,14 +136,14 @@ export function BulkActionBar({
             {bandFilter === 'CERTAIN' ? (
               <>
                 You are about to merge <strong>{total}</strong> CERTAIN-band candidate
-                {total === 1 ? '' : 's'} (score ≥ 97). These are the highest-confidence
-                duplicates. Each pair becomes one version group. This is irreversible.
+                {total === 1 ? '' : 's'} (score ≥ 97). These are the highest-confidence duplicates.
+                Each pair becomes one version group. This is irreversible.
               </>
             ) : (
               <>
                 You are about to merge <strong>{total}</strong> candidate
-                {total === 1 ? '' : 's'} matching the current filter. Each pair becomes one
-                version group. This is irreversible.
+                {total === 1 ? '' : 's'} matching the current filter. Each pair becomes one version
+                group. This is irreversible.
               </>
             )}
           </DialogContentText>

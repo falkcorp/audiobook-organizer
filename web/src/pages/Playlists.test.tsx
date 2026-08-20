@@ -1,5 +1,5 @@
 // file: web/src/pages/Playlists.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor } from '@testing-library/react';
@@ -13,11 +13,7 @@ vi.mock('../services/playlistApi', () => ({
   deletePlaylist: vi.fn(),
 }));
 
-import {
-  listPlaylists,
-  createPlaylist,
-  deletePlaylist,
-} from '../services/playlistApi';
+import { listPlaylists, createPlaylist, deletePlaylist } from '../services/playlistApi';
 
 const mockListPlaylists = vi.mocked(listPlaylists);
 const mockCreatePlaylist = vi.mocked(createPlaylist);
@@ -34,9 +30,7 @@ describe('Playlists', () => {
     it('shows empty message when no playlists exist', async () => {
       renderWithProviders(<Playlists />);
       await waitFor(() => {
-        expect(
-          screen.getByText(/No playlists yet/)
-        ).toBeInTheDocument();
+        expect(screen.getByText(/No playlists yet/)).toBeInTheDocument();
       });
     });
 
