@@ -1,0 +1,38 @@
+{
+  "score": 1.7192499999999997,
+  "steps": [
+    {
+      "id": "base",
+      "label": "Title/author match",
+      "op": "base",
+      "operand": 1,
+      "running": 1,
+      "detail": "Fuzzy F1 overlap between the search title/author and this result."
+    },
+    {
+      "id": "rich_metadata",
+      "label": "Rich metadata",
+      "op": "add",
+      "operand": 0.15,
+      "running": 1.15,
+      "detail": "Present: description, cover, narrator, ISBN. Capped at +0.150.",
+      "capped": true
+    },
+    {
+      "id": "narrator_present",
+      "label": "Has narrator",
+      "op": "multiply",
+      "operand": 1.15,
+      "running": 1.3224999999999998,
+      "detail": "The result names a narrator, so it is more likely an audiobook edition."
+    },
+    {
+      "id": "duration",
+      "label": "Runtime comparison",
+      "op": "multiply",
+      "operand": 1.3,
+      "running": 1.7192499999999997,
+      "detail": "Candidate runtime compared against the local file's duration."
+    }
+  ]
+}
