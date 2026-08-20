@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4a71c8e2-53d9-4f06-b18a-9e2c7d4a0f53
 // last-edited: 2026-08-20
 //
@@ -271,7 +271,20 @@ describe('keyboard shortcuts', () => {
     expect(api.dismissDedupCandidate).not.toHaveBeenCalled();
   });
 
-  it('selects with s and the whole page with Shift+A', async () => {
+  it('Shift+A selects only what the search left on screen', async () => {
+    // The label used to promise "the current page" while the code selected the
+    // search-narrowed set. Selecting less than promised is the safe direction,
+    // but `merge-selected` is irreversible, so the two must agree exactly.
+    const { result } = await renderLane();
+
+    act(() => result.current.setFilters({ search: 'A1' }));
+    await waitFor(() => expect(result.current.candidates).toHaveLength(1));
+
+    act(() => result.current.selectAllVisible());
+    expect([...result.current.selectedIds]).toEqual([1]);
+  });
+
+  it('selects with s and every visible row with Shift+A', async () => {
     const { result } = await renderLane();
 
     press('s');

@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
 // last-edited: 2026-08-20
 
@@ -121,7 +121,8 @@ export interface DupesLane {
    * only because the `s` shortcut has no click to extend from.
    */
   toggleSelect: (id: number, index?: number, shiftKey?: boolean) => void;
-  selectAllOnPage: () => void;
+  /** Selects every row currently on screen -- which the search may have narrowed. */
+  selectAllVisible: () => void;
   clearSelection: () => void;
 
   /** Row the j/k shortcuts act on. Index into `candidates`. */
@@ -370,7 +371,11 @@ export function useDupesLane(
     [visible]
   );
 
-  const selectAllOnPage = useCallback(() => {
+  // `visible`, not the whole page: the client-side search narrows what is on
+  // screen, and a select-all that reached past it would stage rows the reviewer
+  // cannot see for a merge they cannot undo. The name says `visible` so the
+  // shortcut's label has to as well.
+  const selectAllVisible = useCallback(() => {
     setSelectedIds(new Set(visible.map((c) => c.id)));
   }, [visible]);
 
@@ -560,7 +565,7 @@ export function useDupesLane(
         case 'A':
           if (event.shiftKey) {
             event.preventDefault();
-            selectAllOnPage();
+            selectAllVisible();
           }
           return;
         case 'Enter':
@@ -594,7 +599,7 @@ export function useDupesLane(
     shortcutHelpOpen,
     dispatch,
     toggleSelect,
-    selectAllOnPage,
+    selectAllVisible,
   ]);
 
   return {
@@ -612,7 +617,7 @@ export function useDupesLane(
     pendingTotal,
     selectedIds,
     toggleSelect,
-    selectAllOnPage,
+    selectAllVisible,
     clearSelection,
     focusedIndex,
     setFocusedIndex,
@@ -654,6 +659,6 @@ export const DEDUP_SHORTCUTS = [
   { keys: 's', action: 'Select / deselect the focused row' },
   { keys: 'Enter', action: 'Open the compare drawer for the focused row' },
   { keys: 'Esc', action: 'Close the compare drawer' },
-  { keys: 'Shift+A', action: 'Select all on the current page' },
+  { keys: 'Shift+A', action: 'Select all rows shown (the search narrows this)' },
   { keys: '?', action: 'Toggle this shortcut help' },
 ];

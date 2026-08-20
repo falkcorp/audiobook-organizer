@@ -1,5 +1,5 @@
 <!-- file: changelog.d/20260820_114500_review_dupes_lane.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 3f7b0c95-8d42-4a16-b73e-5c1d9e2a8047 -->
 <!-- last-edited: 2026-08-20 -->
 
@@ -52,3 +52,10 @@ requested every pending candidate in the library, then threw that response away 
 asked again with the filter. The URL's two filters are now read once, above the lane,
 and passed in — so the first render is already correct and a deep link costs one
 request instead of two. The larger the library, the more the discarded one cost.
+
+#### Shift+A said "the current page" but selected only the search's matches
+
+The shortcut has always selected what is on screen, which is the right behaviour --
+staging rows a reviewer cannot see for an irreversible merge is not a feature. The
+help text described something larger. The label now matches, and says that the search
+narrows it.
