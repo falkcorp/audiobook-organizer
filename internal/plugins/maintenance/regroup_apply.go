@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
 // last-edited: 2026-08-19
 
@@ -11,10 +11,19 @@
 // executable ACTION; the review handler dispatches on the chosen action and, on a
 // nil error, transitions the item to "applied" (handler.go:approveOne).
 //
-// Two actions have an apply function:
+// Three actions have an apply function:
 //   - combine       → collapse N single-file books into 1 (CombineBooks).
 //   - version-group → share a VersionGroupID + designate one primary, via
 //     UpdateBook (NOT MergeBooks — both editions must stay visible; locked #8).
+//   - duplicate-of  → merge the folder's debris INTO a canonical book that lives
+//     outside the folder (CombineBooks again). The canonical book is read from the
+//     dedup track's candidate rows, which is the only place that relationship is
+//     recorded; this file's classifier cannot see outside one folder.
+//
+// The remaining two actions resolve without an apply function, by design:
+// `separate` is a decision that the on-disk state is already correct (handler.go
+// records it and returns), and `insufficient-evidence` is emitted BY the machine
+// and is not a choice a human can approve.
 //
 // 🔴 DISPATCH MOVED FROM Kind TO ACTION ON 2026-08-06 (owner item 2), and this
 // comment used to claim a safety property the code no longer has. It read
@@ -78,6 +87,13 @@ import (
 // merge service while the real wiring passes *merge.Service.
 type bookCombiner interface {
 	CombineBooks(bookIDs []string, primaryID string, override *merge.CombineOverride) (*merge.CombineResult, error)
+}
+
+// candidateLister reads the dedup track's candidate rows for one entity. It is the
+// existing record of "these two books are the same thing", which is exactly the
+// evidence ActionDuplicateOf needs and the regroup classifier never gathers.
+type candidateLister interface {
+	ListCandidatesForEntity(entityType, entityID, status string) ([]database.DedupCandidate, error)
 }
 
 // ApplyMultidisc builds the apply function for regroup.multidisc holds: it collapses
@@ -380,4 +396,117 @@ func pickPrimary(ids []string) string {
 		}
 	}
 	return primary
+}
+
+// ApplyDuplicateOf builds the apply function for a hold a reviewer decided is
+// ActionDuplicateOf: the folder's members are debris of a book that already exists
+// correctly somewhere else, so the debris is merged INTO that canonical book.
+//
+// This executes through the same machinery every other merge in the app uses —
+// CombineBooks, the call ApplyMultidisc and the duplicates UI both make. The only
+// thing that made duplicate-of special was never the merge, it was naming the
+// canonical book: the regroup classifier reasons over ONE folder's names and
+// runtimes, so it cannot see a book outside that folder. The dedup track already
+// records exactly that relationship, so the target is READ from its candidate rows
+// rather than re-derived here.
+//
+// Target resolution, and why it refuses rather than guesses:
+//
+//   - Collect every candidate touching any present member, and keep the partner IDs
+//     that are NOT themselves members. Those are the canonical-book nominations.
+//   - Exactly one distinct nomination → that is the survivor; merge the members into
+//     it with CombineBooks(members+target, target).
+//   - Zero → the dedup track has no opinion, so there is nothing to merge into.
+//     Fail loudly: silently doing nothing would mark the hold decided (and "decided"
+//     is sticky — UpsertReviewItem never re-offers a non-pending hold) while the
+//     debris stayed on disk.
+//   - More than one → ambiguous. Picking one would merge a book into an arbitrary
+//     survivor and hard-delete the others' rows. Error out so the item lands in
+//     "failed" with both IDs named, exactly as ApplyVersionGroup refuses a
+//     cross-group merge.
+//
+// Soft-deleted and vanished members are dropped by presentMembers before any of this,
+// so a corpse can never be merged onto a survivor or become one.
+func ApplyDuplicateOf(store multidiscApplier, combiner bookCombiner, cands candidateLister) func(context.Context, database.ReviewItem) error {
+	return func(ctx context.Context, item database.ReviewItem) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		p, err := decodeRegroupPayload(item)
+		if err != nil {
+			return err
+		}
+		present, err := presentMembers(store, p.MemberBookIDs)
+		if err != nil {
+			return err
+		}
+		if len(present) == 0 {
+			slog.Info("regroup duplicate-of apply: no members remain — nothing to merge",
+				"item", item.ID, "folder", p.Folder)
+			return nil
+		}
+
+		memberSet := make(map[string]bool, len(present))
+		for _, id := range present {
+			memberSet[id] = true
+		}
+
+		// Nominations are gathered across ALL members and de-duplicated, so N pieces of
+		// debris pointing at the same canonical book is one nomination, not N.
+		nominations := map[string]bool{}
+		for _, id := range present {
+			rows, lerr := cands.ListCandidatesForEntity("book", id, "")
+			if lerr != nil {
+				return fmt.Errorf("regroup duplicate-of apply: list candidates for %s: %w", id, lerr)
+			}
+			for _, c := range rows {
+				for _, side := range []string{c.EntityAID, c.EntityBID} {
+					if side != "" && !memberSet[side] {
+						nominations[side] = true
+					}
+				}
+			}
+		}
+
+		targets := make([]string, 0, len(nominations))
+		for id := range nominations {
+			targets = append(targets, id)
+		}
+		sort.Strings(targets) // deterministic error text
+
+		if len(targets) == 0 {
+			return fmt.Errorf("regroup duplicate-of apply: folder %q has %d member(s) but the dedup track "+
+				"names no book outside the folder for them to duplicate — nothing to merge into. Re-run the "+
+				"dedup scan for these books, or choose combine/separate instead", p.Folder, len(present))
+		}
+		if len(targets) > 1 {
+			return fmt.Errorf("regroup duplicate-of apply: folder %q is ambiguous — the dedup track names %d "+
+				"different books outside the folder (%v); merging would hard-delete rows on a guess. Resolve "+
+				"the duplicate candidates first, then re-approve", p.Folder, len(targets), targets)
+		}
+
+		target := targets[0]
+		// Verify the survivor is real and alive before merging anything into it: it was
+		// named by a candidate row, which can outlive the book it points at (the exact
+		// orphan class DeleteBook's cascade now prevents, but old rows predate it).
+		tb, err := store.GetBookByID(target)
+		if err != nil {
+			return fmt.Errorf("regroup duplicate-of apply: lookup target %s: %w", target, err)
+		}
+		if tb == nil || tb.IsSoftDeleted() {
+			return fmt.Errorf("regroup duplicate-of apply: folder %q names canonical book %s, but that book is "+
+				"gone or merged away — the candidate row is stale. Re-run the dedup scan, then re-approve",
+				p.Folder, target)
+		}
+
+		res, err := combiner.CombineBooks(append(present, target), target, nil)
+		if err != nil {
+			return fmt.Errorf("regroup duplicate-of apply: merge %q (%d books) into %s: %w",
+				p.Folder, len(present), target, err)
+		}
+		slog.Info("regroup duplicate-of apply: merged debris into canonical book",
+			"item", item.ID, "folder", p.Folder, "survivor", res.PrimaryID,
+			"debris_merged", len(present), "files_moved", res.FilesMoved, "books_deleted", res.BooksDeleted)
+		return nil
+	}
 }

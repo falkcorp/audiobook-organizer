@@ -62,6 +62,7 @@ func doReqRaw(t *testing.T, fn gin.HandlerFunc, method, url, body string, params
 type counters struct {
 	combine      int
 	versionGroup int
+	duplicateOf  int
 }
 
 // newActionHandler wires a handler with fake apply funcs registered under the two
@@ -75,6 +76,10 @@ func newActionHandler(s *database.PebbleStore, applyOn bool) (*reviewhandler.Han
 	})
 	h.RegisterApplyHandler(itunesservice.ActionVersionGroup, func(_ context.Context, _ database.ReviewItem) error {
 		c.versionGroup++
+		return nil
+	})
+	h.RegisterApplyHandler(itunesservice.ActionDuplicateOf, func(_ context.Context, _ database.ReviewItem) error {
+		c.duplicateOf++
 		return nil
 	})
 	return h, c
@@ -226,23 +231,50 @@ func TestApprove_Separate_TransitionsWithoutApplying(t *testing.T) {
 	}
 }
 
-// duplicate-of has no apply path yet. Refuse loudly rather than marking the hold
-// decided while doing nothing — "decided" is sticky across re-scans.
-func TestApprove_DuplicateOf_RejectedAsUnimplemented(t *testing.T) {
+// duplicate-of now HAS an apply path (maintenance.ApplyDuplicateOf, wired
+// 2026-08-19). It used to answer 501. The merge runs through CombineBooks — the
+// same call combine uses — so the dispatch must reach the registered handler and
+// transition the hold to "applied", not sit pending.
+func TestApprove_DuplicateOf_DispatchesToApplyHandler(t *testing.T) {
 	s := newTestStore(t)
 	it := seedAction(t, s, "regroup.ambiguous", "a1", itunesservice.ActionCombine)
 	h, c := newActionHandler(s, true)
 
 	w, _ := approveBody(t, h, it.ID, itunesservice.ActionDuplicateOf)
-	if w.Code != http.StatusNotImplemented {
-		t.Fatalf("code %d, want 501 for an action with no implementation", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code %d, want 200 — duplicate-of has an apply path now; body %s", w.Code, w.Body.String())
 	}
+	if c.duplicateOf != 1 {
+		t.Fatalf("duplicate-of handler ran %d times, want 1", c.duplicateOf)
+	}
+	// The reviewer chose duplicate-of over the payload's `combine`; combine must not
+	// also fire, or the debris would be collapsed into itself as well as merged away.
 	if c.combine != 0 {
-		t.Fatalf("combine ran %d times on a rejected duplicate-of", c.combine)
+		t.Fatalf("combine ran %d times, want 0 — the explicit action must win", c.combine)
 	}
 	got, _ := s.GetReviewItem(it.ID)
-	if got.Status != database.ReviewStatusPending {
-		t.Fatalf("status = %q, want pending — an unimplemented action must not decide the hold", got.Status)
+	if got.Status != database.ReviewStatusApplied {
+		t.Fatalf("status = %q, want applied", got.Status)
+	}
+	if got.ChosenAction != itunesservice.ActionDuplicateOf {
+		t.Fatalf("chosen action = %q, want duplicate-of recorded", got.ChosenAction)
+	}
+}
+
+// A duplicate-of hold on a deployment where the handler could NOT be registered
+// (no embedding store, so no way to name the canonical survivor) must not be
+// marked applied. "Decided" is sticky — UpsertReviewItem never re-offers a
+// non-pending hold — so silently succeeding would strand the debris on disk.
+func TestApprove_DuplicateOf_NoHandlerDoesNotMarkApplied(t *testing.T) {
+	s := newTestStore(t)
+	it := seedAction(t, s, "regroup.ambiguous", "a2", itunesservice.ActionCombine)
+	h := reviewhandler.New(s, func() bool { return true }) // no handlers registered at all
+
+	approveBody(t, h, it.ID, itunesservice.ActionDuplicateOf)
+
+	got, _ := s.GetReviewItem(it.ID)
+	if got.Status == database.ReviewStatusApplied {
+		t.Fatalf("status = applied with no registered handler — nothing executed the merge")
 	}
 }
 
