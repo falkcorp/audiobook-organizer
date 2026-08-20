@@ -74,8 +74,10 @@ import (
 // ActionInsufficientEvidence is in the vocabulary but is NOT approvable — it is a
 // statement BY the machine ("I cannot tell"), not a decision a human can make.
 // Approving one would record a decision nobody took, on exactly the holds where the
-// evidence is weakest. ActionDuplicateOf is approvable in principle but has no apply
-// path yet; approveOne rejects it explicitly rather than no-op'ing (see there).
+// evidence is weakest. ActionDuplicateOf is approvable AND now has an apply path
+// (maintenance.ApplyDuplicateOf, wired 2026-08-19); it merges the folder's debris
+// into the canonical book the dedup track names, and errors rather than guessing
+// when that track names zero or several.
 var approvableActions = map[string]bool{
 	itunesservice.ActionCombine:              true,
 	itunesservice.ActionSeparate:             true,
@@ -381,15 +383,18 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string) (*databa
 				"so approving requires an explicit {\"action\": \"...\"} choice (combine, separate or version-group)")
 	}
 
-	// (3) duplicate-of has no apply path yet (deciding a folder duplicates an existing
-	// book needs cross-book identity evidence the regroup classifier never gathers).
-	// Refuse loudly: accepting it would mark the hold decided while doing nothing,
-	// and "decided" is sticky — UpsertReviewItem never re-offers a non-pending hold.
-	if chosen == itunesservice.ActionDuplicateOf {
-		return nil, chosen, "", rejectf(http.StatusNotImplemented, "REVIEW_ACTION_NOT_IMPLEMENTED",
-			"action 'duplicate-of' is not implemented: the duplicate-detection track owns it. "+
-				"Reject the hold instead, or choose combine/separate/version-group")
-	}
+	// (3) duplicate-of DOES have an apply path (maintenance.ApplyDuplicateOf). It was
+	// refused with a 501 until 2026-08-19 on the grounds that deciding "this folder
+	// duplicates an existing book" needs cross-book identity evidence the regroup
+	// classifier never gathers. That was true about the CLASSIFIER and wrong about the
+	// APPLY: the dedup track already records exactly that relationship, so the apply
+	// reads the survivor from its candidate rows and merges through CombineBooks —
+	// the same call combine and the duplicates UI use. It refuses (returning an error,
+	// so the hold lands in "failed" with a reason) when the dedup track names zero or
+	// more than one candidate survivor, rather than guessing one.
+	//
+	// The generic no-handler path below still covers the case where the handler could
+	// not be registered — e.g. a non-Pebble store with no embedding store.
 
 	// (4) 🔴 EVERY TRANSITION BELOW WRITES THE CHOSEN ACTION ALONGSIDE THE STATUS.
 	//

@@ -658,6 +658,14 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 			maintenanceplugin.ApplyMultidisc(s.storeForWiring(), mergeSvc))
 		reviewH.RegisterApplyHandler(itunesservice.ActionVersionGroup,
 			maintenanceplugin.ApplyVersionGroup(s.storeForWiring()))
+		// duplicate-of merges the folder's debris into a canonical book that lives
+		// OUTSIDE the folder. The survivor is named by the dedup track's candidate
+		// rows, so this handler needs the embedding store as well; with no embedding
+		// store the apply refuses (no nominations) rather than guessing a survivor.
+		if embStore := database.NewEmbeddingStoreFromStore(s.storeForWiring()); embStore != nil {
+			reviewH.RegisterApplyHandler(itunesservice.ActionDuplicateOf,
+				maintenanceplugin.ApplyDuplicateOf(s.storeForWiring(), mergeSvc, embStore))
+		}
 	}
 
 	// ── Register protected routes via per-domain methods ─────────────────────
