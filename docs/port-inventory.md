@@ -1,5 +1,5 @@
 <!-- file: docs/port-inventory.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 3e7b2f18-64a0-4c95-b1d7-8f2e5c0a9b43 -->
 <!-- last-edited: 2026-08-20 -->
 
@@ -17,6 +17,26 @@ deletion**, not a nice-to-have alongside it.
 How to use it: tick a row when the behaviour exists in the new surface *and* has a test
 covering it. A row ticked because "the code was copied across" is not ticked — the port
 changes the containing layout, and layout is where these silently stop working.
+
+`[~]` marks a row that was **deliberately not ported**, with the reasoning recorded. That
+is a different thing from an unticked row, and collapsing the two is how a considered
+decision turns into an unnoticed regression six months later.
+
+### Status
+
+| Section | State |
+|---|---|
+| 1 — State | in `lanes/useMetadataLane.ts`; the two derivations lifted to `spine/rowState.ts` |
+| 2 — Handlers | done, except `handleClose`, which is a deliberate drop (`[~]`) |
+| 3 — Persistence | done, all three loaders lifted verbatim |
+| 4 — Renderers | done, including the three-position view toggle |
+| 5 — API surface | done |
+| 6 — Copy | done |
+| 7 — New in the port | done |
+
+**Every section now passes.** The precondition PLAN.md sets for the Phase 7 deletions is
+met: `MetadataReviewDialog.tsx`, the superseded search dialogs, and the legacy dedup
+surfaces can be removed. That deletion is its own change, not a rider on this one.
 
 ---
 
@@ -89,29 +109,49 @@ changing either is a deliberate act rather than a tidy-up.
 
 ## 2. Handlers
 
-- [ ] `handleApplyOne` — apply a single candidate
-- [ ] `handleBulkApply` — apply all selected
-- [ ] `handleReject` / `handleUnreject` — reject is **undoable** (see the "click to undo" chip)
-- [ ] `handleSkip` — skip is **undoable** (same pattern)
-- [x] `handleRejectGroup` — reject an entire multi-book group (now a dispatched
+All of these now live in `lanes/useMetadataLane.ts` as `dispatch` cases over the
+`MetadataAction` union. The switch has no `default`, so an action added to the union
+and not handled is a compile error rather than a button that silently does nothing.
+
+- [x] `handleApplyOne` — apply a single candidate (optimistic, then debounced)
+- [x] `handleBulkApply` — apply all selected
+- [x] `handleReject` / `handleUnreject` — reject is **undoable**; the undo rides on
+      the toast, asserted in `useMetadataLane.test.ts`
+- [x] `handleSkip` — split into `skip` / `unskip`, so the Skip button and the
+      "Skipped" chip no longer call one function meaning opposite things
+- [x] `handleRejectGroup` — reject an entire multi-book group (a dispatched
       `rejectGroup` carrying only the still-actionable ids)
-- [ ] `handleSkipAllUnmatched` — bulk skip
-- [x] `handleUngroup` — "Separate from group"; feeds `ungroupedIds`
-- [ ] `toggleSelected` — selection
-- [ ] `handleClose` — refreshes the parent only when `hasChangesRef` is set
-- [ ] `handleApplyError` — per-row error state, not a global toast
-- [ ] `runApplyOp` / `flushApplyQueue` — the debounced batch pipeline
+- [x] `handleSkipAllUnmatched` — bulk skip; tested to touch `no_match`/`error` only
+- [x] `handleUngroup` — "Separate from group"; now scoped to the page it was
+      performed on rather than reset by an effect
+- [x] `toggleSelected` — selection, via `spineCtx.onToggleSelect`
+- [x] `handleApplyError` — the auth-bounce path that must NOT claim "nothing was
+      applied" (see the comment; measured against a 2-minute production apply)
+- [x] `runApplyOp` / `flushApplyQueue` — the debounced batch pipeline, tested to
+      coalesce rapid single applies into one call
+- [~] `handleClose` — **deliberately dropped, not ported.** It exists because a
+      dialog closes and has exactly one moment to tell the library to refresh.
+      A route does not close. The workspace refreshes when the apply operation
+      actually finishes, which is strictly more accurate: the dialog's version
+      fired on close whether or not the background op had done anything yet.
+      `hasChangesRef` goes with it, for the same reason.
 
 ---
 
 ## 3. Persistence (`STORAGE_KEYS`, localStorage)
 
-- [ ] `METADATA_REVIEW_LANGUAGE_FILTER` (:79)
-- [ ] `METADATA_REVIEW_STRICT_PRESET` (:164)
-- [ ] `METADATA_REVIEW_PAGE_SIZE` (:178) — **loads with correction**: an out-of-range stored
+All three loaders were **lifted verbatim** into `lanes/useMetadataLane.ts`.
+
+- [x] `METADATA_REVIEW_LANGUAGE_FILTER` (:79)
+- [x] `METADATA_REVIEW_STRICT_PRESET` (:164) — the preset sets its three members
+      together; tested both directions, including that switching off returns the
+      threshold to `DEFAULT_CONFIDENCE` rather than leaving it at 190
+- [x] `METADATA_REVIEW_PAGE_SIZE` (:178) — **loads with correction**: an out-of-range stored
       value is clamped and rewritten. Comment at :141 records why: a bad value could not be
       fixed from the UI, and the only escape was clearing localStorage by hand. Porting the
       read without the correction reintroduces a bug that was already fixed once.
+      Tested directly, including that the correction is *persisted* and not merely
+      applied for the session.
 
 ---
 
@@ -128,8 +168,9 @@ Line numbers below are PLAN.md's; the actual bodies are :739-974, :976-1318, :13
       current-vs-proposed detail
 - [x] `renderTwoColumnCard` → `TwoColumnCard` — current vs proposed
 - [x] dispatch between them — now `CompareSpine`'s `viewMode` switch
-- [ ] `<ToggleButtonGroup>` — the control itself belongs to the workspace toolbar, not the
-      spine; **still to port** (`CompareSpine` accepts `viewMode`, nothing sets it yet)
+- [x] `<ToggleButtonGroup>` — now in the workspace toolbar, with **three** positions:
+      the dialog's Compact and Two-Column, plus `auto`. Tested to actually drive the
+      spine's `data-view-mode`, which nothing did while the shell was missing.
 - [x] **New:** `auto` mode on `container-type: inline-size`, declared on the spine itself
       so the query measures the spine and not the row. jsdom cannot evaluate container
       queries — the declaration is asserted, the reflow is a visual-harness question.
@@ -143,9 +184,10 @@ behaviour identical; intent now readable at the call site.
 
 ## 5. API surface
 
-- [ ] `api.batchApplyFromCache`
-- [ ] `api.markNoMatch`
-- [ ] `api.clearMetadataNoMatch`
+- [x] `api.batchApplyFromCache` — via `runApplyOp`; asserted to be called once for a
+      debounced pair rather than once per row
+- [x] `api.markNoMatch` — the reject path
+- [x] `api.clearMetadataNoMatch` — the undo path, asserted through the toast action
 
 ---
 
@@ -154,18 +196,27 @@ behaviour identical; intent now readable at the call site.
 These tooltips explain non-obvious semantics and took real thought; rewriting them from
 scratch during a port loses information that is not recoverable from the code:
 
-- [ ] `hideMultiBook`: "Hide any book that shares a match with another book … Turning this
+- [x] `hideMultiBook`: "Hide any book that shares a match with another book … Turning this
       on leaves only the straightforward one-book-one-match rows, and takes the hidden books
       out of Apply Selected too." — note the second clause, which is a *behaviour*, not a
       description.
-- [ ] `matchLanguage`: "Books without a language set still show all candidates."
-- [ ] `onlyWithTranscription` vs `onlyTranscriptionMatched`: has transcription data vs the
-      score was boosted by it.
+- [x] `matchLanguage`: "Books without a language set still show all candidates." The
+      *behaviour* behind it is tested too: an unknown language on either side shows the
+      row rather than hiding it.
+- [x] `onlyWithTranscription` vs `onlyTranscriptionMatched`: has transcription data vs the
+      score was boosted by it. Both carried, with the distinction stated in the tooltip.
 
 ---
 
 ## 7. New in the port (not carried, added)
 
-- [ ] `EvidencePanel` on the metadata lane — `metadataEvidence(candidate)` renders the
+- [x] `EvidencePanel` on the metadata lane — `metadataEvidence(candidate)` renders the
       recorded scoring waterfall. The dialog never had this; it is the reason the backend
       instrumentation in `5fb7f5f6` / `94440de4` exists.
+
+      Wired in `spine/CompareSpine.tsx` as `EvidenceSection`, in both places a reviewer
+      judges a candidate: the compact row's expanded detail, and the two-column card
+      (where it needs no expand, since that card already shows everything). Tested
+      through the workspace, including the case where a candidate predates the
+      instrumentation and has no breakdown — the panel says so rather than rendering
+      blank, because a blank panel reads as "no signals fired".

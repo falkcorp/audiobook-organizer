@@ -43,6 +43,9 @@ import type { CandidateGroup, SpineContext } from '../spine/CompareSpine';
 import type { RowState } from '../spine/rowState';
 import type { MetadataAction } from '../reviewActions';
 
+/** Stable identity for "no un-groupings on this page" -- see `ungroupedIds`. */
+const EMPTY_IDS: ReadonlySet<string> = new Set<string>();
+
 export type Toast = (
   message: string,
   severity?: 'success' | 'error' | 'warning' | 'info',
@@ -302,12 +305,28 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [filters, setFiltersState] = useState<MetadataFilters>(initialFilters);
   const [strictPreset, setStrictPresetState] = useState(loadStrictPreset);
-  const [page, setPage] = useState(1);
+  const [requestedPage, setPage] = useState(1);
   const [pageSize, setPageSizeState] = useState<number>(loadReviewPageSize);
   const [applying, setApplying] = useState(false);
   const [previewCover, setPreviewCover] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [ungroupedIds, setUngroupedIds] = useState<Set<string>>(new Set());
+  // Un-groupings are per-page: a group is a set of books on the CURRENT page
+  // that share a candidate, so navigating away makes them meaningless. Carrying
+  // the page they belong to makes that automatic -- the alternative, an effect
+  // that empties the set whenever `page` changes, costs a second render pass on
+  // every page turn and briefly renders the new page with the old page's
+  // un-groupings still applied.
+  const [ungrouped, setUngrouped] = useState<{ page: number; ids: Set<string> }>({
+    page: 1,
+    ids: new Set(),
+  });
+  // Keyed on `requestedPage`, NOT on the clamped `page` below: `page` is derived
+  // from totalPages <- filteredResults <- multiBookIds <- ungroupedIds, so
+  // keying on it would close a cycle.
+  const ungroupedIds = useMemo(
+    () => (ungrouped.page === requestedPage ? ungrouped.ids : EMPTY_IDS),
+    [ungrouped, requestedPage]
+  );
   const [summary, setSummary] = useState({ matched: 0, no_match: 0, errors: 0, total: 0 });
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -370,11 +389,6 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         setLoading(false);
       });
   }, [active, refreshKey]);
-
-  // Groups are per-page, so a page change invalidates any manual un-grouping.
-  useEffect(() => {
-    setUngroupedIds(new Set());
-  }, [page]);
 
   const setFilters = useCallback((patch: Partial<MetadataFilters>) => {
     setFiltersState((prev) => {
@@ -504,11 +518,16 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
 
   const totalPages = Math.max(1, Math.ceil(filteredResults.length / pageSize));
 
-  // Clamp rather than auto-advance. Filters can shrink the set below the current
-  // page index; with client-side pagination there is no empty page to skip past.
-  useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
-  }, [page, totalPages]);
+  // Clamp rather than auto-advance: filters can shrink the set below the current
+  // page index, and with client-side pagination there is no empty page to skip
+  // past.
+  //
+  // DERIVED, not synced in an effect. An effect would render one frame at the
+  // out-of-range page before correcting it -- `pageResults` would slice past the
+  // end and the spine would flash empty -- and it would cost a second render
+  // pass every time a filter changed. `requestedPage` is what the reviewer
+  // asked for; `page` is what is actually reachable.
+  const page = Math.min(requestedPage, totalPages);
 
   const pageResults = useMemo(() => {
     const start = (page - 1) * pageSize;
@@ -755,11 +774,14 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           });
           return;
         case 'ungroup':
-          setUngroupedIds((prev) => new Set(prev).add(action.id));
+          setUngrouped((prev) => ({
+            page: requestedPage,
+            ids: new Set(prev.page === requestedPage ? prev.ids : []).add(action.id),
+          }));
           return;
       }
     },
-    [applyOne, applyMany, reject, unreject, results, toast]
+    [applyOne, applyMany, reject, unreject, results, toast, requestedPage]
   );
 
   const toggleSelect = useCallback((bookId: string) => {

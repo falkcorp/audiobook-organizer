@@ -1,7 +1,7 @@
 // file: web/src/App.tsx
-// version: 1.23.2
+// version: 1.24.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-19
+// last-edited: 2026-08-20
 import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
 import { STORAGE_KEYS } from './lib/storageKeys';
 import { Routes, Route, Navigate } from 'react-router-dom';
@@ -43,8 +43,12 @@ const PlaylistDetail = lazy(() => import('./pages/PlaylistDetail'));
 const Setup = lazy(() => import('./pages/Setup'));
 const Users = lazy(() => import('./pages/Users'));
 const TrashedVersions = lazy(() => import('./pages/TrashedVersions'));
-const ReviewQueue = lazy(() =>
-  import('./pages/ReviewQueue').then((m) => ({ default: m.ReviewQueue }))
+// PLAN.md Phase 5: /review is the unified workspace. No `review_show_legacy`
+// toggle -- one user, no migration window, so a compatibility gate would be pure
+// cost with nobody to protect. ReviewQueue stays importable until Phase 7
+// deletes it, gated on docs/port-inventory.md.
+const ReviewWorkspace = lazy(() =>
+  import('./components/review/ReviewWorkspace').then((m) => ({ default: m.ReviewWorkspace }))
 );
 
 function App() {
@@ -381,7 +385,7 @@ function App() {
                 path="/review"
                 element={
                   <ErrorBoundary>
-                    <ReviewQueue />
+                    <ReviewWorkspace />
                   </ErrorBoundary>
                 }
               />
