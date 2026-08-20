@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.84.0
+// version: 1.84.1
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-08-20
 
@@ -1110,6 +1110,26 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     if (!pendingFetchOpId) return;
     const op = activeOperations.find((o) => o.id === pendingFetchOpId);
     if (!op) return;
+    if (op.status !== 'completed' && op.status !== 'failed') return;
+
+    // Forget the op before acting on it. The store rebuilds activeOperations
+    // with Object.values() on every set, so the array identity changes on
+    // every poll tick and this effect re-runs -- and nothing else here is
+    // idempotent. Unfixed, a failed fetch re-toasts its error on every tick
+    // forever, because the failure path never navigates away and so never
+    // unmounts the page that is toasting. Clearing makes both outcomes fire
+    // exactly once; the next run sees a null id and returns immediately.
+    //
+    // set-state-in-effect is suppressed rather than avoided. The obvious
+    // alternative is a ref -- this id is never rendered, so it costs a render
+    // it does not need. But writing state re-runs this effect immediately,
+    // which is what catches an op that is already terminal by the time the
+    // fetch call resolves; a ref would wait for the next poll tick, and if
+    // none came the result would be dropped silently. An extra render is the
+    // cheaper failure mode.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPendingFetchOpId(null);
+
     if (op.status === 'completed') {
       // The review surface is a screen now, not a modal over this page. The old
       // dialog took the whole viewport and ignored backdrop clicks and Escape,
@@ -1118,7 +1138,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       // restores them.
       navigate('/review');
       toast('Metadata fetch complete — review results.', 'success');
-    } else if (op.status === 'failed') {
+    } else {
       toast('Metadata fetch failed.', 'error');
     }
   }, [activeOperations, navigate, pendingFetchOpId, toast]);
@@ -2290,7 +2310,6 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           handleBulkFetchMetadata={handleBulkFetchMetadata}
           bulkSearchOpen={bulkSearchOpen}
           setBulkSearchOpen={setBulkSearchOpen}
-
           versionManagingAudiobook={versionManagingAudiobook}
           versionManagementOpen={versionManagementOpen}
           handleVersionManagementClose={handleVersionManagementClose}
