@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.61.0
+// version: 2.62.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-08-16
+// last-edited: 2026-08-20
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -554,11 +554,7 @@ export async function getOperationV2(id: string): Promise<OperationV2> {
 
 // SSE event types emitted by the operations EventHub (UOS-06).
 export type OperationSSEEventName =
-  | 'op.created'
-  | 'op.updated'
-  | 'op.log'
-  | 'op.terminal'
-  | 'op.current_item';
+  'op.created' | 'op.updated' | 'op.log' | 'op.terminal' | 'op.current_item';
 
 export interface OperationSSEHandler {
   onEvent: (name: OperationSSEEventName, payload: unknown) => void;
@@ -1171,9 +1167,12 @@ export async function purgeSoftDeletedBooks(
   if (olderThanDays && olderThanDays > 0) {
     params.set('older_than_days', String(olderThanDays));
   }
-  const response = await apiFetch(`${API_BASE}/audiobooks/purge-soft-deleted?${params.toString()}`, {
-    method: 'DELETE',
-  });
+  const response = await apiFetch(
+    `${API_BASE}/audiobooks/purge-soft-deleted?${params.toString()}`,
+    {
+      method: 'DELETE',
+    }
+  );
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to purge soft-deleted books');
   }
@@ -1340,7 +1339,9 @@ export async function getBookTags(
   if (compareId) params.set('compare_id', compareId);
   if (snapshotTimestamp) params.set('snapshot_ts', snapshotTimestamp);
   const query = params.toString();
-  const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/tags${query ? `?${query}` : ''}`);
+  const response = await apiFetch(
+    `${API_BASE}/audiobooks/${bookId}/tags${query ? `?${query}` : ''}`
+  );
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to fetch book tags');
   }
@@ -1609,7 +1610,7 @@ export interface CombineOverride {
 export async function combineBooks(
   keepId: string,
   mergeIds: string[],
-  override?: CombineOverride,
+  override?: CombineOverride
 ): Promise<CombineBooksResult> {
   const response = await apiFetch(`${API_BASE}/audiobooks/combine`, {
     method: 'POST',
@@ -2921,6 +2922,24 @@ export interface MetadataCandidate {
    *  Whisper-transcribed intro, causing a score multiplier to be applied.
    *  Use as a filter to find books where audio data confirmed the match. */
   transcription_boosted?: boolean;
+  /** The additive score component contributed by the duration signal, banded by
+   *  |candidate - book| / book: <5% -> +20, <10% -> +15, <20% -> +10,
+   *  >50% -> -10, >100% -> -20. Zero when either side lacks a duration.
+   *
+   *  The backend has always serialized this (`duration_score`); it was simply
+   *  never declared here, so nothing could read it. It is currently the ONLY
+   *  per-signal contribution the metadata lane exposes -- every other component
+   *  of `score` (title/author F1 base, compilation and length penalties, the
+   *  rich-metadata bonus) is a local intermediate that is collapsed into the
+   *  total before serialization. See docs/evidence-panel-audit.md. */
+  duration_score?: number;
+  /** True when duration_delta_sec exceeds 600s. Makes the threshold the review
+   *  UI already draws a warning chip at explicit in the payload rather than
+   *  re-derived on the client. */
+  duration_mismatch?: boolean;
+  /** Audible category ladder node names, e.g. "Science Fiction". Audible-sourced
+   *  candidates only; applied as book_tags on apply. */
+  category_tags?: string[];
 }
 
 export interface SearchMetadataResponse {
@@ -3500,9 +3519,12 @@ export async function undoMetadataChange(
   bookId: string,
   field: string
 ): Promise<{ message: string }> {
-  const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/metadata-history/${field}/undo`, {
-    method: 'POST',
-  });
+  const response = await apiFetch(
+    `${API_BASE}/audiobooks/${bookId}/metadata-history/${field}/undo`,
+    {
+      method: 'POST',
+    }
+  );
   if (!response.ok) throw await buildApiError(response, 'Failed to undo change');
   return response.json();
 }
@@ -4288,13 +4310,7 @@ export async function applyAIAuthorReview(suggestions: ApplyAISuggestion[]): Pro
 export interface AIScan {
   id: number;
   status:
-    | 'pending'
-    | 'scanning'
-    | 'enriching'
-    | 'cross_validating'
-    | 'complete'
-    | 'failed'
-    | 'canceled';
+    'pending' | 'scanning' | 'enriching' | 'cross_validating' | 'complete' | 'failed' | 'canceled';
   mode: 'batch' | 'realtime';
   models: { groups: string; full: string };
   author_count: number;
@@ -4459,7 +4475,9 @@ export async function previewRename(bookId: string): Promise<RenamePreview> {
 }
 
 export async function applyRename(bookId: string): Promise<RenameApplyResult> {
-  const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/rename/apply`, { method: 'POST' });
+  const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/rename/apply`, {
+    method: 'POST',
+  });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to apply rename');
   }
@@ -5992,7 +6010,9 @@ export async function getAIBackendsStatus(): Promise<AIBackendsStatus> {
   return body.data;
 }
 
-export async function pullAIBackendModel(model: string): Promise<{ model: string; pulled: boolean }> {
+export async function pullAIBackendModel(
+  model: string
+): Promise<{ model: string; pulled: boolean }> {
   const response = await apiFetch(`${API_BASE}/ai/backends/pull-model`, {
     method: 'POST',
     credentials: 'include',
