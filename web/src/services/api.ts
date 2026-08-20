@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.64.0
+// version: 2.65.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-08-20
 
@@ -5144,12 +5144,25 @@ export interface BulkMergeDedupResult {
   failures?: Array<{ candidate_id: number; reason: string }>;
 }
 
+/**
+ * Merge every candidate matching a filter. Destructive and irreversible.
+ *
+ * The filter fields here must stay in parity with getDedupCandidates. Any
+ * filter a reviewer can apply to the list but cannot send here silently widens
+ * the merge beyond the set they are looking at -- which is what `band` did
+ * before it was added on both sides. `both_unmatched` is deliberately absent:
+ * it is not a candidate-level filter (the signal lives on the Book), so the
+ * endpoint cannot express it and callers must refuse the bulk action while it
+ * is active rather than send a wider filter than the reviewer sees.
+ */
 export async function bulkMergeDedupCandidates(filter: {
   entity_type?: string;
   status?: string;
   layer?: string;
   min_similarity?: number;
   max_similarity?: number;
+  band?: string;
+  entity_id?: string;
 }): Promise<BulkMergeDedupResult> {
   const response = await apiFetch(`${API_BASE}/dedup/candidates/bulk-merge`, {
     method: 'POST',

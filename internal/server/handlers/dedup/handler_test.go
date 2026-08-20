@@ -433,6 +433,49 @@ func TestBulkMergeDedupCandidates(t *testing.T) {
 	}
 }
 
+func TestBulkMergeDedupCandidates_ScopedByBand(t *testing.T) {
+	// The UI control is labelled "merge everything matching this filter" and the
+	// band bar is the dedup screen's primary filter. Before band was bindable
+	// here, narrowing to REVIEW and pressing that button merged every pending
+	// book candidate in the library -- and merges are the hardest operation in
+	// this system to undo.
+	h, d := newHandler(t)
+	allowLabelCaptureReads(d)
+	insertCandidateWithBand(t, d.es, "rev-a", "rev-b", "REVIEW")
+	insertCandidateWithBand(t, d.es, "cert-a", "cert-b", "CERTAIN")
+	insertCandidateWithBand(t, d.es, "high-a", "high-b", "HIGH")
+
+	// .Once() is the assertion that matters: if band were dropped, the handler
+	// would call MergeBooks three times and the mock would fail on the
+	// unexpected second call.
+	d.merge.EXPECT().
+		MergeBooks([]string{"rev-a", "rev-b"}, "").
+		Return(&merge.Result{PrimaryID: "rev-a"}, nil).
+		Once()
+
+	w := doReq(t, h.BulkMergeDedupCandidates, http.MethodPost,
+		"/api/v1/dedup/candidates/bulk-merge", map[string]any{"band": "REVIEW"}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Attempted int `json:"attempted"`
+			Merged    int `json:"merged"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, w.Body.String())
+	}
+	if resp.Data.Attempted != 1 {
+		t.Fatalf("attempted=%d want 1 -- the band filter must narrow the merge set, not just the list; body=%s",
+			resp.Data.Attempted, w.Body.String())
+	}
+	if resp.Data.Merged != 1 {
+		t.Fatalf("merged=%d want 1; body=%s", resp.Data.Merged, w.Body.String())
+	}
+}
+
 func TestBulkMergeDedupCandidates_NonBookRejected(t *testing.T) {
 	h, _ := newHandler(t)
 	w := doReq(t, h.BulkMergeDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-merge", map[string]string{"entity_type": "author"}, nil)
