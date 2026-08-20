@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
 // last-edited: 2026-08-20
 
@@ -947,9 +947,19 @@ func (h *Handler) GetDedupStats(c *gin.Context) {
 // BulkMergeDedupCandidates handles POST /api/v1/dedup/candidates/bulk-merge.
 //
 // Accepts the same filter params as listDedupCandidates in the JSON body
-// (entity_type, status, layer, min_similarity, max_similarity) and merges
-// every matching candidate by calling MergeService.MergeBooks. Returns a
-// summary with counts of attempted, merged, and failed candidates.
+// (entity_type, status, layer, min_similarity, max_similarity, band,
+// entity_id) and merges every matching candidate by calling
+// MergeService.MergeBooks. Returns a summary with counts of attempted,
+// merged, and failed candidates.
+//
+// Filter parity with the list endpoint is a SAFETY property, not a
+// convenience. The UI's bulk control is labelled "merge everything matching
+// this filter", so any filter the reviewer can apply to the list and cannot
+// send here silently widens a destructive action to a larger set than the one
+// on screen. band was exactly that gap: the band bar is the dedup UI's primary
+// filter, so narrowing to REVIEW and pressing the button merged every pending
+// book candidate in the library. Anything added to listDedupCandidates'
+// filters belongs here too, or the caller must be refused.
 //
 // The endpoint is intended for the "Merge Filtered" bulk action in the
 // Embedding Dedup UI. It only operates on book candidates; author
@@ -985,6 +995,8 @@ func (h *Handler) BulkMergeDedupCandidates(c *gin.Context) {
 		Layer         string   `json:"layer"`
 		MinSimilarity *float64 `json:"min_similarity"`
 		MaxSimilarity *float64 `json:"max_similarity"`
+		Band          string   `json:"band"`
+		EntityID      string   `json:"entity_id"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil && !errors.Is(err, io.EOF) {
 		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
@@ -1011,6 +1023,8 @@ func (h *Handler) BulkMergeDedupCandidates(c *gin.Context) {
 		Layer:         body.Layer,
 		MinSimilarity: body.MinSimilarity,
 		MaxSimilarity: body.MaxSimilarity,
+		Band:          body.Band,
+		EntityID:      body.EntityID,
 		Limit:         100000,
 	}
 
