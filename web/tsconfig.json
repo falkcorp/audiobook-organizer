@@ -1,15 +1,19 @@
 // file: web/tsconfig.json
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c1e9a74-8b32-4f60-a1d7-2e63b8f0c945
-// last-edited: 2026-08-06
+// last-edited: 2026-08-19
 {
   "compilerOptions": {
     // TypeScript 6.0 removed `baseUrl`. `paths` values are now resolved relative
     // to this file, so they must be full-prefix ("./src/*", not "src/*").
     "ignoreDeprecations": "6.0",
-    "target": "ES2020",
+    "target": "ES2022",
     "useDefineForClassFields": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    // ES2022, not ES2020: the codebase already uses Array.prototype.at(),
+    // which is ES2022. It compiled under the old setting only because
+    // @types/node 22 happened to declare it; @types/node 26 does not, so the
+    // lib level now has to be honest about what the source actually uses.
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["vitest/globals", "node"],
     "module": "ESNext",
     "skipLibCheck": true,
