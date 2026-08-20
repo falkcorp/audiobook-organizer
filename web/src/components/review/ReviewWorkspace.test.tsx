@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
 // last-edited: 2026-08-20
 
@@ -102,31 +102,6 @@ describe('lane default', () => {
     expect(screen.queryByTestId('lane-unported-dupes')).not.toBeInTheDocument();
   });
 
-  it('carries a ?book= deep link into the lane as a server-side filter', async () => {
-    // The entry point from FingerprintVisualsColumn. This used to narrow the
-    // loaded page client-side, so a book whose candidate sat on page 2 showed
-    // an empty list under a banner naming it.
-    const user = userEvent.setup();
-    renderWorkspace(['/review?book=book-7']);
-    await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
-
-    await user.click(screen.getByTestId('lane-tab-dupes'));
-    await screen.findByTestId('dupes-rail');
-
-    await waitFor(() =>
-      expect(api.getDedupCandidates).toHaveBeenCalledWith(
-        expect.objectContaining({ entity_id: 'book-7' }),
-        expect.anything()
-      )
-    );
-    // ...and ONLY that request. The assertion above passed while the lane still
-    // fired a first fetch for the entire unfiltered pending set and aborted it,
-    // because a matcher that inspects "any call" cannot see a wasted one. On a
-    // real library that discarded request is the expensive one.
-    expect(api.getDedupCandidates).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId('dupes-deeplink-banner')).toBeInTheDocument();
-  });
-
   it('stops fetching the metadata set while another lane is showing', async () => {
     const user = userEvent.setup();
     renderWorkspace();
@@ -136,6 +111,81 @@ describe('lane default', () => {
     await screen.findByTestId('regroup-rail');
 
     expect(api.getCachedReviewResults).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the lane comes from the URL', () => {
+  // Every test here renders and asserts WITHOUT clicking a tab. That is the
+  // whole point: the lane tests above all click their way to the lane first,
+  // so they never exercised arrival, and the `?book=` fix shipped behind a
+  // default that could not reach it.
+
+  it('opens the lane named by ?lane=', async () => {
+    renderWorkspace(['/review?lane=regroup']);
+    expect(await screen.findByTestId('regroup-rail')).toBeInTheDocument();
+  });
+
+  it('infers dupes from a ?book= deep link, with no ?lane= at all', async () => {
+    // The link BookDetailStatusAlerts hands out. Landing on metadata meant the
+    // dupes lane stayed inactive, so its server-side entity filter never ran --
+    // the fix was real but unreachable through its own entry point.
+    renderWorkspace(['/review?book=book-7']);
+
+    expect(await screen.findByTestId('dupes-rail')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(api.getDedupCandidates).toHaveBeenCalledWith(
+        expect.objectContaining({ entity_id: 'book-7' }),
+        expect.anything()
+      )
+    );
+    // Arrival must not cost a wasted round trip either.
+    expect(api.getDedupCandidates).toHaveBeenCalledTimes(1);
+    // ...and the metadata lane, which is no longer the one showing, must not
+    // have fetched its set on the way past.
+    expect(api.getCachedReviewResults).not.toHaveBeenCalled();
+    // The banner names the book being filtered to, so a near-empty list reads as
+    // "one book" rather than "dedup is broken".
+    expect(screen.getByTestId('dupes-deeplink-banner')).toBeInTheDocument();
+  });
+
+  it('infers dupes from a ?band= deep link', async () => {
+    renderWorkspace(['/review?band=HIGH']);
+    expect(await screen.findByTestId('dupes-rail')).toBeInTheDocument();
+  });
+
+  it('falls back to metadata when ?lane= names something that is not a lane', async () => {
+    // A stale bookmark or a typo must not blank the screen.
+    renderWorkspace(['/review?lane=nonsense']);
+    await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
+  });
+
+  it('lets ?lane= win over an inferred one', async () => {
+    // `?lane=` is explicit; `?book=` is a hint. Someone who linked to the
+    // metadata lane for a specific book gets the metadata lane.
+    renderWorkspace(['/review?lane=metadata&book=book-7']);
+    await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
+    expect(screen.queryByTestId('dupes-rail')).not.toBeInTheDocument();
+  });
+
+  it('reads the URL once and does not re-derive the lane from it', async () => {
+    // The lane is state seeded FROM the URL, not state mirroring it. A mirror
+    // is what DupesPanel had: the click writes the URL, the URL re-derives the
+    // state a render later, and the lane's gated fetch fires twice. Clicking
+    // away from an inferred lane must simply work.
+    const user = userEvent.setup();
+    renderWorkspace(['/review?book=book-7']);
+    await screen.findByTestId('dupes-rail');
+
+    await user.click(screen.getByTestId('lane-tab-metadata'));
+    await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
+    expect(api.getCachedReviewResults).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByTestId('lane-tab-dupes'));
+    await screen.findByTestId('dupes-rail');
+    // Re-entering the lane refetches once, not twice: the ?book= filter is
+    // still in the URL and still applies, and nothing about the click changed
+    // the URL to trigger a second pass.
+    expect(api.getDedupCandidates).toHaveBeenCalledTimes(2);
   });
 });
 
