@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.66.0
+// version: 2.67.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-08-20
 
@@ -3731,6 +3731,17 @@ export async function getCachedReviewResults(
    * being inferred from two counts that used to disagree by thousands.
    */
   unreviewable?: number;
+  /**
+   * The same total, split by what actually caused each row to drop out. The
+   * causes need opposite remedies -- an orphaned row can only be reaped, a
+   * candidateless one can be refetched -- so the bare total cannot tell a
+   * reader what to do about it.
+   */
+  unreviewable_by_cause?: {
+    orphaned: number;
+    no_candidates: number;
+    decode_errors: number;
+  };
 }> {
   const response = await apiFetch(
     `${API_BASE}/audiobooks/metadata/cache/review?limit=${limit}&offset=${offset}`
@@ -5063,27 +5074,30 @@ export interface DedupStats {
   count: number;
 }
 
-export async function getDedupCandidates(params?: {
-  entity_type?: string;
-  status?: string;
-  layer?: string;
-  min_similarity?: number;
-  limit?: number;
-  offset?: number;
-  // T016 extensions
-  band?: string;
-  include_breakdown?: boolean;
-  // When true, each candidate row carries inline book_a/book_b objects.
-  include_books?: boolean;
-  // When true, only pairs where NEITHER book has matched metadata are returned
-  // (both low-quality, need manual matching).
-  both_unmatched?: boolean;
-  // Restrict to candidates where EITHER side of the pair is this entity --
-  // the "this book's duplicates" view behind the ?book= deep link. Filtered
-  // server-side at scan level, so `total` covers the whole matching set and
-  // the result can be paginated like any other filter.
-  entity_id?: string;
-}, opts?: { signal?: AbortSignal }): Promise<DedupCandidatesResponse> {
+export async function getDedupCandidates(
+  params?: {
+    entity_type?: string;
+    status?: string;
+    layer?: string;
+    min_similarity?: number;
+    limit?: number;
+    offset?: number;
+    // T016 extensions
+    band?: string;
+    include_breakdown?: boolean;
+    // When true, each candidate row carries inline book_a/book_b objects.
+    include_books?: boolean;
+    // When true, only pairs where NEITHER book has matched metadata are returned
+    // (both low-quality, need manual matching).
+    both_unmatched?: boolean;
+    // Restrict to candidates where EITHER side of the pair is this entity --
+    // the "this book's duplicates" view behind the ?book= deep link. Filtered
+    // server-side at scan level, so `total` covers the whole matching set and
+    // the result can be paginated like any other filter.
+    entity_id?: string;
+  },
+  opts?: { signal?: AbortSignal }
+): Promise<DedupCandidatesResponse> {
   const qs = new URLSearchParams();
   if (params?.entity_type) qs.set('entity_type', params.entity_type);
   if (params?.status) qs.set('status', params.status);

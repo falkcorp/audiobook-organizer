@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-08-20
 
@@ -225,9 +225,15 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	}
 
 	prepared := make([]entryWithStatus, 0, total)
+	// orphaned counts cache rows that outlived their book. Counted here rather
+	// than inferred later: this `continue` is the only place that still knows
+	// WHY the row is going away, and a subtraction at the end cannot tell it
+	// apart from a book that simply has no candidates stored.
+	var orphaned int
 	for _, sum := range summaries {
 		book := lookupBook(sum.BookID)
 		if book == nil {
+			orphaned++
 			continue
 		}
 		st := "matched"
@@ -287,10 +293,13 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	}
 	reviewable := make([]reviewableRow, 0, len(prepared))
 	var decodeErrors int
+	// noCandidates is the second cause, counted for the same reason as orphaned.
+	var noCandidates int
 	for i, p := range prepared {
 		entry := cachedByIdx[i]
 		if entry == nil || len(entry.Candidates) == 0 {
 			// No cached candidate means nothing to review. Not an error.
+			noCandidates++
 			continue
 		}
 		var cand metafetch.MetadataCandidate
@@ -353,11 +362,29 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		// the cache holds but nobody can review until it is repaired.
 		"errors":        decodeErrors,
 		"total_applied": applied,
-		// Cache summaries that exist but are not reviewable: no resolvable book,
-		// or no stored candidate. Surfaced so the gap between "the cache has
-		// 14,306 entries" and "you can review 5,774" is visible instead of
-		// being discovered by subtracting two numbers that never agreed.
-		"unreviewable": total - len(reviewable),
+		// Cache summaries that exist but are not reviewable. Surfaced so the gap
+		// between "the cache has 14,306 entries" and "you can review 5,774" is
+		// visible instead of being discovered by subtracting two numbers that
+		// never agreed.
+		//
+		// This is the same value `total - len(reviewable)` produced, since every
+		// dropped row passes through exactly one of these three counters -- but
+		// summed from the causes rather than inferred, so the causes can be
+		// reported alongside it. Knowing the number is 8,532 tells an operator
+		// nothing about what to DO; knowing 3,354 of it is rows whose book is
+		// gone points straight at a reaper, and the rest at a refetch.
+		"unreviewable": orphaned + noCandidates + decodeErrors,
+		"unreviewable_by_cause": gin.H{
+			// The book the row points at no longer resolves. Only a cleanup
+			// pass fixes these; refetching cannot.
+			"orphaned": orphaned,
+			// The book is fine, the cache just holds no candidate for it.
+			// A refetch fixes these.
+			"no_candidates": noCandidates,
+			// Stored, but the JSON would not decode. Also counted in `errors`;
+			// this repeats it so the three causes sum to `unreviewable`.
+			"decode_errors": decodeErrors,
+		},
 	})
 }
 
