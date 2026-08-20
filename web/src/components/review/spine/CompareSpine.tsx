@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/CompareSpine.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1e5b8d72-4c30-49a6-8f21-0b7e3a6c9d54
 // last-edited: 2026-08-20
 //
@@ -28,6 +28,8 @@
 //      dispatch `skip` and `unskip`. Net behaviour is identical; the intent is
 //      now readable at the call site.
 //   3. `auto` view mode -- see below. The one addition PLAN.md authorises.
+//   4. `EvidenceSection` -- the recorded scoring derivation, which the dialog
+//      never had. It is the reason the backend instrumentation exists.
 //
 // Not generic over lanes. These renderers are metadata-shaped throughout
 // (`CandidateResult`, `duration_delta_sec`, provider chips), and a type
@@ -49,6 +51,8 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import type { CandidateResult, MetadataCandidate } from '../../../services/api';
 import type { MetadataAction } from '../reviewActions';
+import { EvidencePanel } from '../evidence/EvidencePanel';
+import { metadataEvidence } from '../evidence/adapters';
 import {
   SOURCE_COLORS,
   formatDuration,
@@ -57,6 +61,33 @@ import {
   isRowActionable,
   type RowState,
 } from './rowState';
+
+/**
+ * "Why did it score that?" -- the recorded derivation for one candidate.
+ *
+ * This is the one thing in the spine that the dialog never had. The metadata
+ * scorer now ships `score_breakdown` alongside the score, and `metadataEvidence`
+ * turns it into a waterfall: base, then each multiplier and term in the order the
+ * pipeline applied them, replaying to the number on the chip.
+ *
+ * A waterfall rather than the dedup lane's stacked share bar, because metadata
+ * scoring is `(base x factors) + terms` and a multiplicative factor has no share
+ * of a total. Feeding it to the share bar would produce segments summing to
+ * nothing meaningful -- worse than no bar, because it would still look complete.
+ *
+ * If the steps do not replay to the shipped score, the panel says so rather than
+ * rendering a confident-looking breakdown of a number it cannot account for.
+ */
+function EvidenceSection({ candidate }: { candidate: MetadataCandidate }) {
+  return (
+    <Box sx={{ mt: 2 }} data-testid="evidence-section">
+      <Typography variant="subtitle2" gutterBottom>
+        How this score was reached
+      </Typography>
+      <EvidencePanel evidence={metadataEvidence(candidate)} />
+    </Box>
+  );
+}
 
 /** A set of books that all matched the same candidate -- the ambiguity unit. */
 export interface CandidateGroup {
@@ -366,7 +397,13 @@ function CompactRow({ r, ctx }: { r: CandidateResult; ctx: SpineContext }) {
           }}
         />
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="body2" noWrap>
+          {/* `component="span"`, not the default `<p>`: the no-match/error
+              branches below render a Chip, which is a <div>, and a <div> inside
+              a <p> is invalid HTML -- the browser closes the paragraph early and
+              the chip escapes the row's layout. Carried in from the dialog by
+              the mechanical port; the surrounding Box is the block container, so
+              nothing needs the <p>. */}
+          <Typography variant="body2" component="span" noWrap sx={{ display: 'block' }}>
             {r.book.title}
             {r.candidate ? (
               <>
@@ -491,185 +528,186 @@ function CompactRow({ r, ctx }: { r: CandidateResult; ctx: SpineContext }) {
 
       {/* Expanded two-column detail for this row */}
       {isExpanded && r.candidate && (
-        <Stack
-          direction="row"
-          spacing={2}
-          sx={{ p: 2, pl: 7, bgcolor: 'action.hover', borderRadius: 1 }}
-        >
-          <Box sx={{ flex: 1 }}>
-            <Typography variant="subtitle2" gutterBottom>
-              Current
-            </Typography>
-            <Stack
-              direction="row"
-              spacing={1}
-              sx={{
-                alignItems: 'flex-start',
-              }}
-            >
-              <Avatar
-                src={r.book.cover_url || ''}
-                variant="rounded"
-                sx={{ width: 60, height: 80, cursor: r.book.cover_url ? 'pointer' : 'default' }}
-                onClick={() => r.book.cover_url && ctx.onPreviewCover(r.book.cover_url)}
-              />
-              <Box>
-                <Typography
-                  variant="body2"
-                  sx={{
-                    fontWeight: 'bold',
-                  }}
-                >
-                  {r.book.title}
-                </Typography>
-                <Typography variant="body2">{r.book.author}</Typography>
-                {r.book.format && <Chip label={r.book.format} size="small" sx={{ mt: 0.5 }} />}
-                {r.book.duration_seconds && (
-                  <Typography
-                    variant="caption"
-                    sx={{
-                      display: 'block',
-                    }}
-                  >
-                    {formatDuration(r.book.duration_seconds)}
-                  </Typography>
-                )}
-                {r.book.file_size_bytes && (
-                  <Typography
-                    variant="caption"
-                    sx={{
-                      display: 'block',
-                    }}
-                  >
-                    {formatFileSize(r.book.file_size_bytes)}
-                  </Typography>
-                )}
-                <Typography variant="caption" sx={{ wordBreak: 'break-all' }}>
-                  {r.book.file_path}
-                </Typography>
-                {r.book.itunes_path && (
-                  <Typography
-                    variant="caption"
-                    sx={{
-                      color: 'info.main',
-                      display: 'block',
-                      wordBreak: 'break-all',
-                    }}
-                  >
-                    iTunes: {r.book.itunes_path}
-                  </Typography>
-                )}
-              </Box>
-            </Stack>
-          </Box>
-          <Box sx={{ flex: 1 }}>
-            <Typography variant="subtitle2" gutterBottom>
-              Proposed
-            </Typography>
-            <Stack
-              direction="row"
-              spacing={1}
-              sx={{
-                alignItems: 'flex-start',
-              }}
-            >
-              <Avatar
-                src={r.candidate.cover_url || ''}
-                variant="rounded"
+        <Box sx={{ p: 2, pl: 7, bgcolor: 'action.hover', borderRadius: 1 }}>
+          <Stack direction="row" spacing={2}>
+            <Box sx={{ flex: 1 }}>
+              <Typography variant="subtitle2" gutterBottom>
+                Current
+              </Typography>
+              <Stack
+                direction="row"
+                spacing={1}
                 sx={{
-                  width: 60,
-                  height: 80,
-                  cursor: r.candidate?.cover_url ? 'pointer' : 'default',
+                  alignItems: 'flex-start',
                 }}
-                onClick={() => r.candidate?.cover_url && ctx.onPreviewCover(r.candidate.cover_url)}
-              />
-              <Box>
-                <Typography
-                  variant="body2"
-                  sx={{
-                    fontWeight: 'bold',
-                  }}
-                >
-                  {r.candidate.title}
-                </Typography>
-                <Typography variant="body2">{r.candidate.author}</Typography>
-                {r.candidate.narrator && (
+              >
+                <Avatar
+                  src={r.book.cover_url || ''}
+                  variant="rounded"
+                  sx={{ width: 60, height: 80, cursor: r.book.cover_url ? 'pointer' : 'default' }}
+                  onClick={() => r.book.cover_url && ctx.onPreviewCover(r.book.cover_url)}
+                />
+                <Box>
                   <Typography
                     variant="body2"
                     sx={{
-                      color: 'text.secondary',
+                      fontWeight: 'bold',
                     }}
                   >
-                    Narrated by {r.candidate.narrator}
+                    {r.book.title}
                   </Typography>
-                )}
-                {r.candidate.series && (
-                  <Typography variant="body2">
-                    Series: {r.candidate.series}
-                    {r.candidate.series_position
-                      ? ` \u00b7 Book ${r.candidate.series_position}`
-                      : ''}
+                  <Typography variant="body2">{r.book.author}</Typography>
+                  {r.book.format && <Chip label={r.book.format} size="small" sx={{ mt: 0.5 }} />}
+                  {r.book.duration_seconds && (
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        display: 'block',
+                      }}
+                    >
+                      {formatDuration(r.book.duration_seconds)}
+                    </Typography>
+                  )}
+                  {r.book.file_size_bytes && (
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        display: 'block',
+                      }}
+                    >
+                      {formatFileSize(r.book.file_size_bytes)}
+                    </Typography>
+                  )}
+                  <Typography variant="caption" sx={{ wordBreak: 'break-all' }}>
+                    {r.book.file_path}
                   </Typography>
-                )}
-                {r.candidate.year && (
-                  <Typography
-                    variant="caption"
-                    sx={{
-                      display: 'block',
-                    }}
-                  >
-                    {r.candidate.year}
-                  </Typography>
-                )}
-                {r.candidate.publisher && (
-                  <Typography
-                    variant="caption"
-                    sx={{
-                      display: 'block',
-                    }}
-                  >
-                    {r.candidate.publisher}
-                  </Typography>
-                )}
-                <Chip
-                  label={`${Math.round(r.candidate.score * 100)}%`}
-                  size="small"
-                  color={
-                    r.candidate.score >= 0.85
-                      ? 'success'
-                      : r.candidate.score >= 0.6
-                        ? 'warning'
-                        : 'default'
+                  {r.book.itunes_path && (
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: 'info.main',
+                        display: 'block',
+                        wordBreak: 'break-all',
+                      }}
+                    >
+                      iTunes: {r.book.itunes_path}
+                    </Typography>
+                  )}
+                </Box>
+              </Stack>
+            </Box>
+            <Box sx={{ flex: 1 }}>
+              <Typography variant="subtitle2" gutterBottom>
+                Proposed
+              </Typography>
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{
+                  alignItems: 'flex-start',
+                }}
+              >
+                <Avatar
+                  src={r.candidate.cover_url || ''}
+                  variant="rounded"
+                  sx={{
+                    width: 60,
+                    height: 80,
+                    cursor: r.candidate?.cover_url ? 'pointer' : 'default',
+                  }}
+                  onClick={() =>
+                    r.candidate?.cover_url && ctx.onPreviewCover(r.candidate.cover_url)
                   }
-                  sx={{ mt: 0.5, mr: 0.5 }}
                 />
-                <Chip
-                  label={r.candidate.source}
-                  size="small"
-                  color={SOURCE_COLORS[r.candidate.source] || 'default'}
-                  variant="outlined"
-                  sx={{ mt: 0.5, mr: 0.5 }}
-                />
-                {(r.candidate.audible_rating_overall ?? 0) > 0 && (
+                <Box>
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      fontWeight: 'bold',
+                    }}
+                  >
+                    {r.candidate.title}
+                  </Typography>
+                  <Typography variant="body2">{r.candidate.author}</Typography>
+                  {r.candidate.narrator && (
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.secondary',
+                      }}
+                    >
+                      Narrated by {r.candidate.narrator}
+                    </Typography>
+                  )}
+                  {r.candidate.series && (
+                    <Typography variant="body2">
+                      Series: {r.candidate.series}
+                      {r.candidate.series_position
+                        ? ` \u00b7 Book ${r.candidate.series_position}`
+                        : ''}
+                    </Typography>
+                  )}
+                  {r.candidate.year && (
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        display: 'block',
+                      }}
+                    >
+                      {r.candidate.year}
+                    </Typography>
+                  )}
+                  {r.candidate.publisher && (
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        display: 'block',
+                      }}
+                    >
+                      {r.candidate.publisher}
+                    </Typography>
+                  )}
                   <Chip
-                    label={`★ ${r.candidate.audible_rating_overall!.toFixed(1)}${(r.candidate.audible_rating_count ?? 0) > 0 ? ` (${r.candidate.audible_rating_count!.toLocaleString()})` : ''}`}
+                    label={`${Math.round(r.candidate.score * 100)}%`}
                     size="small"
-                    variant="outlined"
-                    sx={{ mt: 0.5, mr: 0.5, fontWeight: 500 }}
+                    color={
+                      r.candidate.score >= 0.85
+                        ? 'success'
+                        : r.candidate.score >= 0.6
+                          ? 'warning'
+                          : 'default'
+                    }
+                    sx={{ mt: 0.5, mr: 0.5 }}
                   />
-                )}
-                {(r.candidate.google_rating_average ?? 0) > 0 && (
                   <Chip
-                    label={`G★ ${r.candidate.google_rating_average!.toFixed(1)}${(r.candidate.google_rating_count ?? 0) > 0 ? ` (${r.candidate.google_rating_count!.toLocaleString()})` : ''}`}
+                    label={r.candidate.source}
                     size="small"
+                    color={SOURCE_COLORS[r.candidate.source] || 'default'}
                     variant="outlined"
-                    sx={{ mt: 0.5, fontWeight: 500 }}
+                    sx={{ mt: 0.5, mr: 0.5 }}
                   />
-                )}
-              </Box>
-            </Stack>
-          </Box>
-        </Stack>
+                  {(r.candidate.audible_rating_overall ?? 0) > 0 && (
+                    <Chip
+                      label={`★ ${r.candidate.audible_rating_overall!.toFixed(1)}${(r.candidate.audible_rating_count ?? 0) > 0 ? ` (${r.candidate.audible_rating_count!.toLocaleString()})` : ''}`}
+                      size="small"
+                      variant="outlined"
+                      sx={{ mt: 0.5, mr: 0.5, fontWeight: 500 }}
+                    />
+                  )}
+                  {(r.candidate.google_rating_average ?? 0) > 0 && (
+                    <Chip
+                      label={`G★ ${r.candidate.google_rating_average!.toFixed(1)}${(r.candidate.google_rating_count ?? 0) > 0 ? ` (${r.candidate.google_rating_count!.toLocaleString()})` : ''}`}
+                      size="small"
+                      variant="outlined"
+                      sx={{ mt: 0.5, fontWeight: 500 }}
+                    />
+                  )}
+                </Box>
+              </Stack>
+            </Box>
+          </Stack>
+          <EvidenceSection candidate={r.candidate} />
+        </Box>
       )}
     </Box>
   );
@@ -944,6 +982,7 @@ function TwoColumnCard({ r, ctx }: { r: CandidateResult; ctx: SpineContext }) {
           )}
         </Box>
       </Stack>
+      {r.candidate && <EvidenceSection candidate={r.candidate} />}
     </Box>
   );
 }
