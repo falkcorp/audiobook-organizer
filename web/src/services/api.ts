@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.67.0
+// version: 2.68.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-08-20
 
@@ -3593,6 +3593,14 @@ export interface CandidateResult {
   candidate?: MetadataCandidate;
   status: 'matched' | 'no_match' | 'error' | 'rejected' | 'applied';
   error_message?: string;
+  /** When the cached candidate was written. Absent on paths not served from cache. */
+  fetched_at?: string;
+  /**
+   * Whether `fetched_at` is inside the server's 30-day cache TTL. Absent rather
+   * than false when the row has no age: "unknown" and "stale" are different
+   * claims, and only one of them should put a warning in front of a reviewer.
+   */
+  is_fresh?: boolean;
 }
 
 export interface BatchFetchResponse {
@@ -3731,6 +3739,12 @@ export async function getCachedReviewResults(
    * being inferred from two counts that used to disagree by thousands.
    */
   unreviewable?: number;
+  /**
+   * Reviewable rows whose cached candidate is past the server's TTL. They are
+   * still returned -- staleness is informational -- but a reviewer applying
+   * month-old metadata should be told how much of it is old.
+   */
+  stale?: number;
   /**
    * The same total, split by what actually caused each row to drop out. The
    * causes need opposite remedies -- an orphaned row can only be reaped, a

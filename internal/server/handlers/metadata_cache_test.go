@@ -30,6 +30,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -352,4 +353,70 @@ func TestGetCacheReviewResults_UnreviewableSplitByCause(t *testing.T) {
 	assert.Equal(t, body.Data.Unreviewable, byCause, "causes must account for every unreviewable row")
 	assert.Equal(t, len(summaries)-body.Data.TotalCount, body.Data.Unreviewable,
 		"unreviewable must still equal total minus reviewable")
+}
+
+// TestGetCacheReviewResults_FlagsStaleRows pins that the review listing carries
+// the age of what it is showing.
+//
+// MetadataCacheTTL's contract is explicit: entries past it stay readable and
+// "the UI flags them and offers a Refresh". This endpoint sent no age at all,
+// so the review surface had nothing to flag with. On the live library 5,771 of
+// 5,774 reviewable rows were past the TTL -- some of them three months old --
+// and every one was presented as though freshly fetched.
+func TestGetCacheReviewResults_FlagsStaleRows(t *testing.T) {
+	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	svc := handlersmocks.NewMockMetadataCacheFetchService(t)
+
+	now := time.Now()
+	summaries := []metafetch.MetadataCacheSummary{
+		{BookID: "fresh", FetchedAt: now.Add(-24 * time.Hour)},
+		{BookID: "stale", FetchedAt: now.Add(-database.MetadataCacheTTL - 24*time.Hour)},
+	}
+	svc.EXPECT().ListCachedSummaries(mock.Anything).Return(summaries, nil)
+
+	store.EXPECT().GetBooksByIDs(mock.Anything).
+		Return([]database.Book{{ID: "fresh"}, {ID: "stale"}}, nil)
+	store.EXPECT().GetBookFiles(mock.Anything).Return(nil, nil).Maybe()
+
+	raw, err := json.Marshal(map[string]any{"title": "T"})
+	require.NoError(t, err)
+	withCandidate := &metafetch.MetadataCandidateCache{Candidates: []json.RawMessage{raw}}
+	svc.EXPECT().GetCachedCandidates("fresh").Return(withCandidate, true, nil)
+	svc.EXPECT().GetCachedCandidates("stale").Return(withCandidate, true, nil)
+
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	c, w := reviewCtx("limit=0&offset=0")
+	h.GetCacheReviewResults(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var body struct {
+		Data struct {
+			Results []struct {
+				Book struct {
+					ID string `json:"id"`
+				} `json:"book"`
+				FetchedAt *time.Time `json:"fetched_at"`
+				IsFresh   *bool      `json:"is_fresh"`
+			} `json:"results"`
+			TotalCount int `json:"total_count"`
+			Stale      int `json:"stale"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+
+	require.Len(t, body.Data.Results, 2)
+	assert.Equal(t, 2, body.Data.TotalCount, "stale rows are still reviewable, not dropped")
+
+	byID := map[string]*bool{}
+	for _, r := range body.Data.Results {
+		require.NotNil(t, r.FetchedAt, "every row must carry when it was fetched")
+		require.NotNil(t, r.IsFresh, "absent freshness is a different claim from stale")
+		byID[r.Book.ID] = r.IsFresh
+	}
+	assert.True(t, *byID["fresh"], "a one-day-old row is inside the TTL")
+	assert.False(t, *byID["stale"], "a row past the TTL must say so")
+
+	// The rail states the size of the problem, so the count covers every
+	// reviewable row rather than whatever fraction is on the current page.
+	assert.Equal(t, 1, body.Data.Stale)
 }

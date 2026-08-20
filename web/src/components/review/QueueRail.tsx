@@ -1,5 +1,5 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
 // last-edited: 2026-08-20
 //
@@ -44,6 +44,7 @@ import {
 } from '@mui/material';
 import ClearIcon from '@mui/icons-material/Clear';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import HistoryIcon from '@mui/icons-material/History';
 import type { CandidateResult } from '../../services/api';
 import { PAGE_SIZE_OPTIONS, type MetadataFilters } from './lanes/useMetadataLane';
 import { isDecided, scoreColor, type RowState } from './spine/rowState';
@@ -105,6 +106,7 @@ export interface QueueRailProps {
     errors: number;
     total: number;
     unreviewable: number;
+    stale: number;
     unreviewable_by_cause?: { orphaned: number; no_candidates: number; decode_errors: number };
   };
   sourceCounts: Record<string, number>;
@@ -135,6 +137,27 @@ export interface QueueRailProps {
  * A server that does not send the breakdown falls back to naming the causes
  * without counting them, which is exactly what this tooltip said before.
  */
+/**
+ * How old a cached candidate is, in whole days, or null when the row carries no
+ * usable timestamp.
+ *
+ * Null rather than a guess: the row already knows it is stale from `is_fresh`,
+ * and an invented age is worse than an unspecified one.
+ */
+export function daysSince(iso?: string): number | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return null;
+  return Math.max(0, Math.floor((Date.now() - t) / 86_400_000));
+}
+
+/** Tooltip for the per-row stale marker. */
+export function staleRowTitle(fetchedAt?: string): string {
+  const days = daysSince(fetchedAt);
+  const age = days === null ? 'more than 30 days ago' : `${days.toLocaleString()} days ago`;
+  return `Fetched ${age} \u2014 the source may have changed since. Refetch to be sure.`;
+}
+
 export function unreviewableReason(byCause?: {
   orphaned: number;
   no_candidates: number;
@@ -204,6 +227,24 @@ export function QueueRail({
             <Chip size="small" color="error" label={`${summary.errors} errors`} />
           )}
           <Chip size="small" variant="outlined" label={`${summary.total} total`} />
+          {summary.stale > 0 && (
+            // Stale rows ARE reviewable and are counted in `total` -- this is
+            // not a shortfall, it is a caveat on what is already in the list.
+            // MetadataCacheTTL's contract says stale entries stay readable and
+            // the UI flags them; before this the review surface received no age
+            // at all, so month-old candidates looked freshly fetched.
+            <Tooltip
+              title={`${summary.stale.toLocaleString()} of these were fetched more than 30 days ago. They are still reviewable, but the source may have changed since — refetch to be sure.`}
+            >
+              <Chip
+                size="small"
+                variant="outlined"
+                color="warning"
+                icon={<HistoryIcon fontSize="small" />}
+                label={`${summary.stale.toLocaleString()} stale`}
+              />
+            </Tooltip>
+          )}
           {summary.unreviewable > 0 && (
             // `total` counts only what a reviewer can act on. This says what the
             // cache holds that they cannot, so the difference is stated rather
@@ -400,6 +441,20 @@ export function QueueRail({
                     </Typography>
                   )}
                 </Box>
+                {/* Explicitly false, not falsy: a row with no age is not a
+                    stale row, and marking it as one would be a claim the
+                    payload never made. */}
+                {r.is_fresh === false && (
+                  <Tooltip title={staleRowTitle(r.fetched_at)}>
+                    <Box
+                      component="span"
+                      sx={{ display: 'flex' }}
+                      aria-label={staleRowTitle(r.fetched_at)}
+                    >
+                      <HistoryIcon fontSize="small" color="warning" />
+                    </Box>
+                  </Tooltip>
+                )}
                 {r.candidate && (
                   <Chip
                     size="small"
