@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
 <!-- last-edited: 2026-08-20 -->
 
@@ -417,6 +417,74 @@ The example file developers copy from when adding new settings was also
 cleaned up: four entries that had never done anything (documented for years,
 read by no code) were removed, and every setting introduced by this change
 was documented in their place.
+
+---
+
+## 11. August 20: the safety check that could not fire
+
+Section 9 ended by flagging something and setting it aside: one of the safety checks
+guarding automatic merging could only ever answer "no reasons to doubt." This is what
+that turned out to be, and what was done about it.
+
+**The check.** Before the app will merge two books together on its own, it runs through a
+short list of refusals. One of them asks: *does this pair have any recorded reasons to
+doubt it?* There are three such reasons the app knows how to detect — the two books are
+already filed as two formats of the same title, they are clearly different volumes of one
+series, or they are two chapters of a single book sitting in the same folder. Any of them
+means "these are not duplicates, do not merge."
+
+**The problem.** That check read the reasons off a note attached to the pair's saved
+verdict. Nothing in the app ever writes that note. The one function capable of filling it
+in is called from three places, and all three pass in an empty list. Worse, the routine
+scan never gets the chance: when it detects one of the three reasons, it **throws the pair
+away entirely** rather than saving it with the reason attached. So a pair that was
+correctly identified as "do not merge" leaves no record behind at all.
+
+The result is a check that reads a field nothing fills in. It has never refused a single
+pair, and as written it never could have. This was originally believed to affect only the
+eighteen thousand pairs from section 9's fill-in job. It did not — it affected **every
+pair in the library**.
+
+**Why it had not been caught.** There was a test for it. The test passed. It created a
+pair, wrote the reasons onto it by hand, and confirmed the merge was refused — a shape
+real data never takes, because nothing writes those reasons by hand or otherwise. The test
+was checking that the code does what it says when handed input it will never receive. It
+passes just as happily with the broken code as with the fixed code; this was confirmed
+directly, by removing the fix and watching it stay green.
+
+**The fix.** Rather than trying to backfill a note onto eighteen thousand records, the
+check now works the reasons out **on the spot**, from the two books themselves, at the
+moment it is deciding whether to merge them. It already had both books in hand and the
+calculation is pure arithmetic on data already loaded, so this costs nothing. It is also
+more correct than the saved note would have been: if two books become "do not merge" after
+their verdict was recorded — someone files them as two formats of one title next week —
+the live check notices and the saved note never would.
+
+The old note-reading check was kept in front of the new one rather than deleted. Whether
+any very old record carries reasons written by a previous version of the program could not
+be confirmed, and removing the check would have quietly changed how those records are
+treated. Keeping both costs one line.
+
+Two new tests cover it, built the way the old one should have been: the reasons are left
+blank, exactly as real data has them, and the two books are made genuinely un-mergeable.
+Both fail when the fix is removed.
+
+**What this did and did not change.** No merge behaviour changed in production, because
+automatic merging is switched off and always has been. What changed is that the switch is
+now safe to consider turning on. Before this, doing so would have handed the merge
+decision to a list of refusals with a hole in it — and the eleven pairs currently eligible
+for automatic merging would have been assessed by a guard that had never once said no.
+
+**Alongside it,** the project's code-quality gate was fixed. It had been failing on three
+warnings for long enough that failure had become the normal result, which is the condition
+under which a real warning goes unnoticed. Two were genuinely harmless leftovers. The
+third was not: it reported an unused helper, but the helper was unused because a scoring
+routine had been hand-copying what the helper does instead of calling it. Deleting the
+helper would have silenced the warning and left the copied version with nothing to be
+compared against — so the scoring routine was pointed at the helper instead. The
+arithmetic is pinned by reference figures, and rather than assume those figures covered
+the change, they were checked by deliberately breaking it: the reference figures caught it
+both times.
 
 ---
 
