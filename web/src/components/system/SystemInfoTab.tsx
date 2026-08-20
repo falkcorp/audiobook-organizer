@@ -1,5 +1,5 @@
 // file: web/src/components/system/SystemInfoTab.tsx
-// version: 1.6.0
+// version: 1.6.1
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 
 import { useState, useEffect } from 'react';
@@ -71,10 +71,8 @@ export function SystemInfoTab() {
     setError(null);
     try {
       const status = await api.getSystemStatus();
-      const librarySize =
-        status.library_size_bytes ?? status.library.total_size;
-      const libraryBooks =
-        status.library_book_count ?? status.library.book_count;
+      const librarySize = status.library_size_bytes ?? status.library.total_size;
+      const libraryBooks = status.library_book_count ?? status.library.book_count;
       const folderCount = status.import_paths?.folder_count ?? 0;
 
       // Map API SystemStatus to SystemInfo format
@@ -111,9 +109,7 @@ export function SystemInfoTab() {
       });
     } catch (err) {
       console.error('Failed to fetch system info:', err);
-      setError(
-        err instanceof Error ? err.message : 'Failed to fetch system info'
-      );
+      setError(err instanceof Error ? err.message : 'Failed to fetch system info');
     } finally {
       setLoading(false);
     }
@@ -156,12 +152,7 @@ export function SystemInfoTab() {
 
   if (loading) {
     return (
-      <Box
-        display="flex"
-        justifyContent="center"
-        alignItems="center"
-        minHeight="400px"
-      >
+      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
         <CircularProgress />
       </Box>
     );
@@ -169,12 +160,7 @@ export function SystemInfoTab() {
 
   if (error) {
     return (
-      <Box
-        display="flex"
-        justifyContent="center"
-        alignItems="center"
-        minHeight="400px"
-      >
+      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
         <Typography color="error">{error}</Typography>
       </Box>
     );
@@ -186,12 +172,7 @@ export function SystemInfoTab() {
 
   return (
     <Box>
-      <Stack
-        direction="row"
-        justifyContent="space-between"
-        alignItems="center"
-        mb={2}
-      >
+      <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
         <Stack direction="row" spacing={2} alignItems="center">
           <Typography variant="h6">System Information</Typography>
           <Chip label={`v${info.version}`} size="small" color="primary" />
@@ -208,7 +189,12 @@ export function SystemInfoTab() {
 
       <Grid container spacing={3}>
         {/* Operating System */}
-        <Grid item xs={12} md={6}>
+        <Grid
+          size={{
+            xs: 12,
+            md: 6,
+          }}
+        >
           <Card>
             <CardContent>
               <Stack direction="row" spacing={2} alignItems="center" mb={2}>
@@ -238,7 +224,12 @@ export function SystemInfoTab() {
         </Grid>
 
         {/* Memory */}
-        <Grid item xs={12} md={6}>
+        <Grid
+          size={{
+            xs: 12,
+            md: 6,
+          }}
+        >
           <Card>
             <CardContent>
               <Stack direction="row" spacing={2} alignItems="center" mb={2}>
@@ -250,36 +241,28 @@ export function SystemInfoTab() {
                   <Typography variant="body2" color="text.secondary">
                     App Memory System
                   </Typography>
-                  <Typography variant="body1">
-                    {formatBytes(info.memory.total)}
-                  </Typography>
+                  <Typography variant="body1">{formatBytes(info.memory.total)}</Typography>
                 </Box>
                 <Divider />
                 <Box>
                   <Typography variant="body2" color="text.secondary">
                     Used by App
                   </Typography>
-                  <Typography variant="body1">
-                    {formatBytes(info.memory.used)}
-                  </Typography>
+                  <Typography variant="body1">{formatBytes(info.memory.used)}</Typography>
                 </Box>
                 <Divider />
                 <Box>
                   <Typography variant="body2" color="text.secondary">
                     Heap Allocated
                   </Typography>
-                  <Typography variant="body1">
-                    {formatBytes(info.memory.heapAlloc)}
-                  </Typography>
+                  <Typography variant="body1">{formatBytes(info.memory.heapAlloc)}</Typography>
                 </Box>
                 <Divider />
                 <Box>
                   <Typography variant="body2" color="text.secondary">
                     Heap System
                   </Typography>
-                  <Typography variant="body1">
-                    {formatBytes(info.memory.heapSys)}
-                  </Typography>
+                  <Typography variant="body1">{formatBytes(info.memory.heapSys)}</Typography>
                 </Box>
               </Stack>
             </CardContent>
@@ -287,7 +270,12 @@ export function SystemInfoTab() {
         </Grid>
 
         {/* CPU */}
-        <Grid item xs={12} md={6}>
+        <Grid
+          size={{
+            xs: 12,
+            md: 6,
+          }}
+        >
           <Card>
             <CardContent>
               <Stack direction="row" spacing={2} alignItems="center" mb={2}>
@@ -307,7 +295,12 @@ export function SystemInfoTab() {
         </Grid>
 
         {/* Uptime */}
-        <Grid item xs={12} md={6}>
+        <Grid
+          size={{
+            xs: 12,
+            md: 6,
+          }}
+        >
           <Card>
             <CardContent>
               <Stack direction="row" spacing={2} alignItems="center" mb={2}>
@@ -319,18 +312,14 @@ export function SystemInfoTab() {
                   <Typography variant="body2" color="text.secondary">
                     Application
                   </Typography>
-                  <Typography variant="body1">
-                    {formatUptime(info.uptime.appSeconds)}
-                  </Typography>
+                  <Typography variant="body1">{formatUptime(info.uptime.appSeconds)}</Typography>
                 </Box>
                 <Divider />
                 <Box>
                   <Typography variant="body2" color="text.secondary">
                     System
                   </Typography>
-                  <Typography variant="body1">
-                    {formatUptime(info.uptime.systemSeconds)}
-                  </Typography>
+                  <Typography variant="body1">{formatUptime(info.uptime.systemSeconds)}</Typography>
                 </Box>
               </Stack>
             </CardContent>
@@ -338,7 +327,12 @@ export function SystemInfoTab() {
         </Grid>
 
         {/* Runtime */}
-        <Grid item xs={12} md={6}>
+        <Grid
+          size={{
+            xs: 12,
+            md: 6,
+          }}
+        >
           <Card>
             <CardContent>
               <Stack direction="row" spacing={2} alignItems="center" mb={2}>
@@ -350,18 +344,14 @@ export function SystemInfoTab() {
                   <Typography variant="body2" color="text.secondary">
                     Go Version
                   </Typography>
-                  <Typography variant="body1">
-                    {info.runtime.goVersion}
-                  </Typography>
+                  <Typography variant="body1">{info.runtime.goVersion}</Typography>
                 </Box>
                 <Divider />
                 <Box>
                   <Typography variant="body2" color="text.secondary">
                     Goroutines
                   </Typography>
-                  <Typography variant="body1">
-                    {info.runtime.numGoroutines}
-                  </Typography>
+                  <Typography variant="body1">{info.runtime.numGoroutines}</Typography>
                 </Box>
               </Stack>
             </CardContent>
@@ -369,7 +359,7 @@ export function SystemInfoTab() {
         </Grid>
 
         {/* Database & Library */}
-        <Grid item xs={12}>
+        <Grid size={12}>
           <Card>
             <CardContent>
               <Stack direction="row" spacing={2} alignItems="center" mb={2}>
@@ -377,34 +367,46 @@ export function SystemInfoTab() {
                 <Typography variant="h6">Library & Storage</Typography>
               </Stack>
               <Grid container spacing={3}>
-                <Grid item xs={12} sm={6} md={4}>
+                <Grid
+                  size={{
+                    xs: 12,
+                    sm: 6,
+                    md: 4,
+                  }}
+                >
                   <Box>
                     <Typography variant="body2" color="text.secondary">
                       Library Size
                     </Typography>
-                    <Typography variant="h6">
-                      {formatBytes(info.database.size)}
-                    </Typography>
+                    <Typography variant="h6">{formatBytes(info.database.size)}</Typography>
                   </Box>
                 </Grid>
-                <Grid item xs={12} sm={6} md={4}>
+                <Grid
+                  size={{
+                    xs: 12,
+                    sm: 6,
+                    md: 4,
+                  }}
+                >
                   <Box>
                     <Typography variant="body2" color="text.secondary">
                       Books
                     </Typography>
-                    <Typography variant="h6">
-                      {info.database.books.toLocaleString()}
-                    </Typography>
+                    <Typography variant="h6">{info.database.books.toLocaleString()}</Typography>
                   </Box>
                 </Grid>
-                <Grid item xs={12} sm={6} md={4}>
+                <Grid
+                  size={{
+                    xs: 12,
+                    sm: 6,
+                    md: 4,
+                  }}
+                >
                   <Box>
                     <Typography variant="body2" color="text.secondary">
                       Import Paths
                     </Typography>
-                    <Typography variant="h6">
-                      {info.database.folderCount}
-                    </Typography>
+                    <Typography variant="h6">{info.database.folderCount}</Typography>
                   </Box>
                 </Grid>
               </Grid>

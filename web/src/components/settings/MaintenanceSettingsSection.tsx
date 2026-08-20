@@ -1,7 +1,7 @@
 // file: web/src/components/settings/MaintenanceSettingsSection.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-06-19
+// last-edited: 2026-08-19
 
 import {
   Box,
@@ -46,7 +46,7 @@ export function MaintenanceSettingsSection({ config, onChange }: MaintenanceSett
       </Typography>
 
       <Grid container spacing={2}>
-        <Grid item xs={12}>
+        <Grid size={12}>
           <FormControlLabel
             control={
               <Switch
@@ -58,7 +58,12 @@ export function MaintenanceSettingsSection({ config, onChange }: MaintenanceSett
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             select
             fullWidth
@@ -75,7 +80,12 @@ export function MaintenanceSettingsSection({ config, onChange }: MaintenanceSett
           </TextField>
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             select
             fullWidth
@@ -92,7 +102,7 @@ export function MaintenanceSettingsSection({ config, onChange }: MaintenanceSett
           </TextField>
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={12}>
           <Divider sx={{ my: 1 }} />
           <Typography variant="subtitle2" gutterBottom>
             Nightly Tasks
@@ -100,7 +110,13 @@ export function MaintenanceSettingsSection({ config, onChange }: MaintenanceSett
         </Grid>
 
         {TASK_TOGGLES.map(({ field, label }) => (
-          <Grid item xs={12} sm={6} key={field}>
+          <Grid
+            key={field}
+            size={{
+              xs: 12,
+              sm: 6,
+            }}
+          >
             <FormControlLabel
               control={
                 <Switch
@@ -113,7 +129,12 @@ export function MaintenanceSettingsSection({ config, onChange }: MaintenanceSett
           </Grid>
         ))}
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             fullWidth
             type="number"

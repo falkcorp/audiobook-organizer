@@ -1,7 +1,7 @@
 // file: web/src/components/settings/ScheduledTasksSection.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: e5f4a3b2-c1d0-9876-efab-c09876543210
-// last-edited: 2026-06-19
+// last-edited: 2026-08-19
 
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
@@ -46,7 +46,7 @@ describe('ScheduledTasksSection', () => {
     render(<ScheduledTasksSection config={defaultConfig} onChange={onChange} />);
 
     // The first "Enabled" switch belongs to Dedup Refresh (first task row)
-    const enabledSwitches = screen.getAllByRole('checkbox', { name: /^enabled$/i });
+    const enabledSwitches = screen.getAllByRole('switch', { name: /^enabled$/i });
     fireEvent.click(enabledSwitches[0]);
 
     expect(onChange).toHaveBeenCalledWith({

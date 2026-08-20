@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/__tests__/UnifiedDedupTab.test.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: d4e5f6a7-b8c9-0123-defa-444567890123
-// last-edited: 2026-06-28
+// last-edited: 2026-08-19
 
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -179,9 +179,7 @@ describe('UnifiedDedupTab', () => {
   it('renders empty state when no candidates', async () => {
     renderInRouter();
     await waitFor(() => {
-      expect(
-        screen.getByText(/No candidates found for the current filter/i)
-      ).toBeInTheDocument();
+      expect(screen.getByText(/No candidates found for the current filter/i)).toBeInTheDocument();
     });
   });
 
@@ -221,8 +219,7 @@ describe('UnifiedDedupTab', () => {
       }
       return Promise.resolve({
         ok: true,
-        json: () =>
-          Promise.resolve({ data: { candidates: [mockCandidate], total: 1 } }),
+        json: () => Promise.resolve({ data: { candidates: [mockCandidate], total: 1 } }),
       });
     });
 
@@ -253,8 +250,7 @@ describe('UnifiedDedupTab', () => {
       }
       return Promise.resolve({
         ok: true,
-        json: () =>
-          Promise.resolve({ data: { candidates: [mockCandidate], total: 1 } }),
+        json: () => Promise.resolve({ data: { candidates: [mockCandidate], total: 1 } }),
       });
     });
 
@@ -329,8 +325,13 @@ describe('UnifiedDedupTab', () => {
     });
 
     fireEvent.keyDown(window, { key: 'Escape' });
+    // Assert the Drawer actually unmounts, not just that its heading text
+    // changed. The heading is `Candidate #{candidateId}`, so nulling the id
+    // alone stops /Candidate #1/ matching while the Drawer is still mounted
+    // and mid-exit-transition -- still holding focus, and so still suppressing
+    // every subsequent shortcut.
     await waitFor(() => {
-      expect(screen.queryByText(/Candidate #1/i)).not.toBeInTheDocument();
+      expect(screen.queryByTestId('candidate-compare-drawer')).not.toBeInTheDocument();
     });
 
     fireEvent.keyDown(window, { key: '?' });

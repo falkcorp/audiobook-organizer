@@ -1,7 +1,7 @@
 // file: web/src/components/settings/EmbeddingSettingsSection.test.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: a9b8c7d6-e5f4-3210-abcd-ef9876543210
-// last-edited: 2026-07-01
+// last-edited: 2026-08-19
 
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
@@ -38,7 +38,7 @@ describe('EmbeddingSettingsSection', () => {
   it('calls onChange with enabled: true when Switch is toggled on', () => {
     const onChange = vi.fn();
     render(<EmbeddingSettingsSection config={defaultConfig} onChange={onChange} />);
-    const switchInput = screen.getByRole('checkbox', { name: /enable embedding generation/i });
+    const switchInput = screen.getByRole('switch', { name: /enable embedding generation/i });
     fireEvent.click(switchInput);
     expect(onChange).toHaveBeenCalledWith({ enabled: true });
   });
@@ -48,7 +48,7 @@ describe('EmbeddingSettingsSection', () => {
     render(
       <EmbeddingSettingsSection config={{ ...defaultConfig, enabled: true }} onChange={onChange} />
     );
-    const switchInput = screen.getByRole('checkbox', { name: /enable embedding generation/i });
+    const switchInput = screen.getByRole('switch', { name: /enable embedding generation/i });
     fireEvent.click(switchInput);
     expect(onChange).toHaveBeenCalledWith({ enabled: false });
   });

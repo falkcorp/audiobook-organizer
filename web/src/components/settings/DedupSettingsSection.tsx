@@ -1,17 +1,9 @@
 // file: web/src/components/settings/DedupSettingsSection.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-06-19
+// last-edited: 2026-08-19
 
-import {
-  Box,
-  Typography,
-  TextField,
-  FormControlLabel,
-  Switch,
-  Grid,
-  Divider,
-} from '@mui/material';
+import { Box, Typography, TextField, FormControlLabel, Switch, Grid, Divider } from '@mui/material';
 import * as api from '../../services/api';
 
 interface DedupSettingsSectionProps {
@@ -27,7 +19,12 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
       </Typography>
 
       <Grid container spacing={2}>
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <FormControlLabel
             control={
               <Switch
@@ -39,7 +36,12 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <FormControlLabel
             control={
               <Switch
@@ -51,7 +53,12 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <FormControlLabel
             control={
               <Switch
@@ -63,7 +70,12 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <FormControlLabel
             control={
               <Switch
@@ -75,7 +87,12 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             fullWidth
             type="number"
@@ -87,7 +104,12 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             fullWidth
             type="number"
@@ -99,7 +121,12 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             fullWidth
             type="number"
@@ -111,7 +138,12 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             fullWidth
             type="number"
@@ -123,7 +155,7 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
           />
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={12}>
           <TextField
             fullWidth
             label="Review model"
@@ -134,14 +166,19 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
           />
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={12}>
           <Divider sx={{ my: 1 }} />
           <Typography variant="subtitle2" gutterBottom>
             Signal Band Thresholds
           </Typography>
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             fullWidth
             type="number"
@@ -155,7 +192,12 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             fullWidth
             type="number"
@@ -169,7 +211,12 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             fullWidth
             type="number"
@@ -183,7 +230,12 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             fullWidth
             type="number"
@@ -197,14 +249,19 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
           />
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={12}>
           <Divider sx={{ my: 1 }} />
           <Typography variant="subtitle2" gutterBottom>
             Signal Boosts
           </Typography>
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             fullWidth
             type="number"
@@ -218,14 +275,21 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             fullWidth
             type="number"
             label="Folder path boost"
             value={config.signals.folder_path_boost}
             onChange={(e) =>
-              onChange({ signals: { ...config.signals, folder_path_boost: Number(e.target.value) } })
+              onChange({
+                signals: { ...config.signals, folder_path_boost: Number(e.target.value) },
+              })
             }
             size="small"
             inputProps={{ min: 0, max: 1, step: 0.01 }}

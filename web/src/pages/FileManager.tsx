@@ -1,5 +1,5 @@
 // file: web/src/pages/FileManager.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4a5b6c7d-8e9f-0a1b-2c3d-4e5f6a7b8c9d
 
 import { useState, useCallback, useRef, useEffect } from 'react';
@@ -26,14 +26,8 @@ import {
   NavigateNext as NavigateNextIcon,
   FolderOpen as FolderOpenIcon,
 } from '@mui/icons-material';
-import {
-  DirectoryTree,
-  DirectoryNode,
-} from '../components/filemanager/DirectoryTree';
-import {
-  ImportPathCard,
-  ImportPath,
-} from '../components/filemanager/ImportPathCard';
+import { DirectoryTree, DirectoryNode } from '../components/filemanager/DirectoryTree';
+import { ImportPathCard, ImportPath } from '../components/filemanager/ImportPathCard';
 import * as api from '../services/api';
 import { useToast } from '../components/toast/ToastProvider';
 
@@ -47,14 +41,19 @@ export function FileManager() {
   const { toast } = useToast();
 
   useEffect(() => {
-    api.getImportPaths().then((paths) => {
-      setImportPaths(paths.map((p) => ({
-        id: p.id,
-        path: p.path,
-        status: 'idle' as const,
-        book_count: p.book_count,
-      })));
-    }).catch((err) => console.error('Failed to load import paths:', err));
+    api
+      .getImportPaths()
+      .then((paths) => {
+        setImportPaths(
+          paths.map((p) => ({
+            id: p.id,
+            path: p.path,
+            status: 'idle' as const,
+            book_count: p.book_count,
+          }))
+        );
+      })
+      .catch((err) => console.error('Failed to load import paths:', err));
   }, []);
 
   const handleAddFolder = async () => {
@@ -78,49 +77,51 @@ export function FileManager() {
     }
   };
 
-  const handleRemoveFolder = useCallback(async (folder: ImportPath) => {
-    if (!confirm(`Remove import path: ${folder.path}?`)) return;
+  const handleRemoveFolder = useCallback(
+    async (folder: ImportPath) => {
+      if (!confirm(`Remove import path: ${folder.path}?`)) return;
 
-    try {
-      await api.removeImportPath(folder.id);
-      setImportPaths((prev) => prev.filter((f) => f.id !== folder.id));
-      toast('Import path removed.', 'success');
-    } catch (error) {
-      console.error('Failed to remove import path:', error);
-      toast('Failed to remove import path.', 'error');
-    }
-  }, [toast]);
+      try {
+        await api.removeImportPath(folder.id);
+        setImportPaths((prev) => prev.filter((f) => f.id !== folder.id));
+        toast('Import path removed.', 'success');
+      } catch (error) {
+        console.error('Failed to remove import path:', error);
+        toast('Failed to remove import path.', 'error');
+      }
+    },
+    [toast]
+  );
 
-  const handleScanFolder = useCallback(async (folder: ImportPath) => {
-    try {
-      setImportPaths((prev) =>
-        prev.map((f) =>
-          f.id === folder.id
-            ? { ...f, status: 'scanning' as const, progress: 0 }
-            : f
-        )
-      );
-      await api.startScan(folder.path);
-      setImportPaths((prev) =>
-        prev.map((f) =>
-          f.id === folder.id
-            ? { ...f, status: 'complete' as const, progress: 100 }
-            : f
-        )
-      );
-      toast('Scan started.', 'success');
-    } catch (error) {
-      console.error('Failed to scan import path:', error);
-      setImportPaths((prev) =>
-        prev.map((f) =>
-          f.id === folder.id
-            ? { ...f, status: 'error' as const, error_message: 'Scan failed' }
-            : f
-        )
-      );
-      toast('Failed to start scan.', 'error');
-    }
-  }, [toast]);
+  const handleScanFolder = useCallback(
+    async (folder: ImportPath) => {
+      try {
+        setImportPaths((prev) =>
+          prev.map((f) =>
+            f.id === folder.id ? { ...f, status: 'scanning' as const, progress: 0 } : f
+          )
+        );
+        await api.startScan(folder.path);
+        setImportPaths((prev) =>
+          prev.map((f) =>
+            f.id === folder.id ? { ...f, status: 'complete' as const, progress: 100 } : f
+          )
+        );
+        toast('Scan started.', 'success');
+      } catch (error) {
+        console.error('Failed to scan import path:', error);
+        setImportPaths((prev) =>
+          prev.map((f) =>
+            f.id === folder.id
+              ? { ...f, status: 'error' as const, error_message: 'Scan failed' }
+              : f
+          )
+        );
+        toast('Failed to start scan.', 'error');
+      }
+    },
+    [toast]
+  );
 
   const handleLoadChildren = async (path: string): Promise<DirectoryNode[]> => {
     try {
@@ -148,16 +149,13 @@ export function FileManager() {
     folderInputRef.current?.click();
   };
 
-  const handleFolderSelect = async (
-    event: React.ChangeEvent<HTMLInputElement>
-  ) => {
+  const handleFolderSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
 
     // Get the directory path from the first file
     const firstFile = files[0];
-    const webkitPath = (firstFile as File & { webkitRelativePath?: string })
-      .webkitRelativePath;
+    const webkitPath = (firstFile as File & { webkitRelativePath?: string }).webkitRelativePath;
     if (webkitPath) {
       const folderPath = webkitPath.split('/')[0];
       setNewFolderPath(folderPath);
@@ -167,19 +165,10 @@ export function FileManager() {
 
   return (
     <Box>
-      <Box
-        display="flex"
-        justifyContent="space-between"
-        alignItems="center"
-        mb={3}
-      >
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
         <Typography variant="h4">File Manager</Typography>
         <Stack direction="row" spacing={2}>
-          <Button
-            variant="outlined"
-            startIcon={<FolderOpenIcon />}
-            onClick={handleBrowseFolder}
-          >
+          <Button variant="outlined" startIcon={<FolderOpenIcon />} onClick={handleBrowseFolder}>
             Browse for Folder
           </Button>
           <Button
@@ -205,7 +194,7 @@ export function FileManager() {
       />
 
       <Grid container spacing={3}>
-        <Grid item xs={12}>
+        <Grid size={12}>
           <Typography variant="h6" gutterBottom>
             Import Paths
           </Typography>
@@ -216,7 +205,14 @@ export function FileManager() {
           ) : (
             <Grid container spacing={2}>
               {importPaths.map((folder) => (
-                <Grid item xs={12} md={6} lg={4} key={folder.id}>
+                <Grid
+                  key={folder.id}
+                  size={{
+                    xs: 12,
+                    md: 6,
+                    lg: 4,
+                  }}
+                >
                   <ImportPathCard
                     importPath={folder}
                     onRemove={handleRemoveFolder}
@@ -229,16 +225,13 @@ export function FileManager() {
         </Grid>
 
         {directoryTree && (
-          <Grid item xs={12}>
+          <Grid size={12}>
             <Paper sx={{ p: 2 }}>
               <Typography variant="h6" gutterBottom>
                 Directory Browser
               </Typography>
 
-              <Breadcrumbs
-                separator={<NavigateNextIcon fontSize="small" />}
-                sx={{ mb: 2 }}
-              >
+              <Breadcrumbs separator={<NavigateNextIcon fontSize="small" />} sx={{ mb: 2 }}>
                 <Link
                   underline="hover"
                   color="inherit"
@@ -276,12 +269,7 @@ export function FileManager() {
         )}
       </Grid>
 
-      <Dialog
-        open={addFolderOpen}
-        onClose={() => setAddFolderOpen(false)}
-        maxWidth="sm"
-        fullWidth
-      >
+      <Dialog open={addFolderOpen} onClose={() => setAddFolderOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Add Import Path</DialogTitle>
         <DialogContent>
           <TextField
@@ -298,11 +286,7 @@ export function FileManager() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setAddFolderOpen(false)}>Cancel</Button>
-          <Button
-            onClick={handleAddFolder}
-            variant="contained"
-            disabled={!newFolderPath.trim()}
-          >
+          <Button onClick={handleAddFolder} variant="contained" disabled={!newFolderPath.trim()}>
             Add Folder
           </Button>
         </DialogActions>

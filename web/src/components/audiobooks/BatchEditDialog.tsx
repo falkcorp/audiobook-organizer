@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/BatchEditDialog.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5b6c7d8e-9f0a-1b2c-3d4e-5f6a7b8c9d0e
 
 import React, { useState } from 'react';
@@ -100,10 +100,7 @@ export const BatchEditDialog: React.FC<BatchEditDialogProps> = ({
       // series_position. Uses onSavePerBook when available
       // (single PUT per book) or falls back to onSave in
       // a loop (batch endpoint can't do per-book values).
-      if (
-        updates.series_position.enabled &&
-        autoIncrement
-      ) {
+      if (updates.series_position.enabled && autoIncrement) {
         const start = Number(updates.series_position.value) || 1;
         const saveFn = onSavePerBook || (async (_id: string, u: Partial<Audiobook>) => onSave(u));
         let i = 0;
@@ -120,9 +117,7 @@ export const BatchEditDialog: React.FC<BatchEditDialogProps> = ({
       }
       onClose();
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Failed to update audiobooks'
-      );
+      setError(err instanceof Error ? err.message : 'Failed to update audiobooks');
     } finally {
       setSaving(false);
     }
@@ -136,8 +131,8 @@ export const BatchEditDialog: React.FC<BatchEditDialogProps> = ({
       </DialogTitle>
       <DialogContent>
         <Alert severity="info" sx={{ mb: 2 }}>
-          Select the fields you want to update. Only checked fields will be
-          modified for all selected audiobooks.
+          Select the fields you want to update. Only checked fields will be modified for all
+          selected audiobooks.
         </Alert>
 
         {error && (
@@ -148,7 +143,7 @@ export const BatchEditDialog: React.FC<BatchEditDialogProps> = ({
 
         <Box sx={{ mt: 2 }}>
           <Grid container spacing={2}>
-            <Grid item xs={12}>
+            <Grid size={12}>
               <FormControlLabel
                 control={
                   <Checkbox
@@ -168,7 +163,7 @@ export const BatchEditDialog: React.FC<BatchEditDialogProps> = ({
               />
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={12}>
               <FormControlLabel
                 control={
                   <Checkbox
@@ -188,7 +183,7 @@ export const BatchEditDialog: React.FC<BatchEditDialogProps> = ({
               />
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={12}>
               <FormControlLabel
                 control={
                   <Checkbox
@@ -208,7 +203,12 @@ export const BatchEditDialog: React.FC<BatchEditDialogProps> = ({
               />
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid
+              size={{
+                xs: 12,
+                sm: 6,
+              }}
+            >
               <FormControlLabel
                 control={
                   <Checkbox
@@ -223,9 +223,7 @@ export const BatchEditDialog: React.FC<BatchEditDialogProps> = ({
                 type="number"
                 placeholder="Starting position"
                 value={updates.series_position.value}
-                onChange={(e) =>
-                  handleChange('series_position', parseInt(e.target.value) || 1)
-                }
+                onChange={(e) => handleChange('series_position', parseInt(e.target.value) || 1)}
                 disabled={!updates.series_position.enabled}
                 sx={{ mt: 1 }}
               />
@@ -239,18 +237,19 @@ export const BatchEditDialog: React.FC<BatchEditDialogProps> = ({
                         size="small"
                       />
                     }
-                    label={
-                      <Typography variant="body2">
-                        Auto-increment (1, 2, 3, …)
-                      </Typography>
-                    }
+                    label={<Typography variant="body2">Auto-increment (1, 2, 3, …)</Typography>}
                     sx={{ mt: 0.5 }}
                   />
                 </Tooltip>
               )}
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid
+              size={{
+                xs: 12,
+                sm: 6,
+              }}
+            >
               <FormControlLabel
                 control={
                   <Checkbox
@@ -270,7 +269,12 @@ export const BatchEditDialog: React.FC<BatchEditDialogProps> = ({
               />
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid
+              size={{
+                xs: 12,
+                sm: 6,
+              }}
+            >
               <FormControlLabel
                 control={
                   <Checkbox
@@ -290,7 +294,12 @@ export const BatchEditDialog: React.FC<BatchEditDialogProps> = ({
               />
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid
+              size={{
+                xs: 12,
+                sm: 6,
+              }}
+            >
               <FormControlLabel
                 control={
                   <Checkbox
@@ -310,13 +319,15 @@ export const BatchEditDialog: React.FC<BatchEditDialogProps> = ({
               />
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid
+              size={{
+                xs: 12,
+                sm: 6,
+              }}
+            >
               <FormControlLabel
                 control={
-                  <Checkbox
-                    checked={updates.year.enabled}
-                    onChange={() => handleToggle('year')}
-                  />
+                  <Checkbox checked={updates.year.enabled} onChange={() => handleToggle('year')} />
                 }
                 label="Year"
               />
@@ -325,9 +336,7 @@ export const BatchEditDialog: React.FC<BatchEditDialogProps> = ({
                 type="number"
                 placeholder="Year"
                 value={updates.year.value}
-                onChange={(e) =>
-                  handleChange('year', parseInt(e.target.value) || 0)
-                }
+                onChange={(e) => handleChange('year', parseInt(e.target.value) || 0)}
                 disabled={!updates.year.enabled}
                 sx={{ mt: 1 }}
               />

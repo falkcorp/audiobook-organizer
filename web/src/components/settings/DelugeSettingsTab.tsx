@@ -1,5 +1,5 @@
 // file: web/src/components/settings/DelugeSettingsTab.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4f2a3b1c-5d6e-4a70-b8c5-3d7e0f1b9a99
 
 import { useCallback, useEffect, useState } from 'react';
@@ -43,7 +43,11 @@ export default function DelugeSettingsTab() {
   const [torrents, setTorrents] = useState<Record<string, TorrentInfo>>({});
   const [showTorrents, setShowTorrents] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<{ total: number; imported: number; failed: number } | null>(null);
+  const [importResult, setImportResult] = useState<{
+    total: number;
+    imported: number;
+    failed: number;
+  } | null>(null);
 
   useEffect(() => {
     fetch(`${API_BASE}/deluge/status`)
@@ -101,13 +105,18 @@ export default function DelugeSettingsTab() {
         Deluge Integration
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Connect to your Deluge Web UI to automatically update torrent storage paths
-        when books are reorganized, version-swapped, or undone.
+        Connect to your Deluge Web UI to automatically update torrent storage paths when books are
+        reorganized, version-swapped, or undone.
       </Typography>
       <Divider sx={{ mb: 2 }} />
 
       <Grid container spacing={2}>
-        <Grid item xs={12} sm={8}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 8,
+          }}
+        >
           <TextField
             fullWidth
             label="Deluge Web URL"
@@ -118,7 +127,12 @@ export default function DelugeSettingsTab() {
             size="small"
           />
         </Grid>
-        <Grid item xs={12} sm={4}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 4,
+          }}
+        >
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', height: '100%' }}>
             {status?.configured ? (
               <Chip label="Configured" color="success" size="small" />
@@ -137,11 +151,7 @@ export default function DelugeSettingsTab() {
         >
           {testing ? 'Testing...' : 'Test Connection'}
         </Button>
-        <Button
-          variant="outlined"
-          onClick={handleLoadTorrents}
-          disabled={!status?.configured}
-        >
+        <Button variant="outlined" onClick={handleLoadTorrents} disabled={!status?.configured}>
           View Torrents
         </Button>
       </Box>
@@ -178,7 +188,13 @@ export default function DelugeSettingsTab() {
                       <Chip
                         label={t.state}
                         size="small"
-                        color={t.state === 'Seeding' ? 'success' : t.state === 'Downloading' ? 'primary' : 'default'}
+                        color={
+                          t.state === 'Seeding'
+                            ? 'success'
+                            : t.state === 'Downloading'
+                              ? 'primary'
+                              : 'default'
+                        }
                       />
                     </TableCell>
                     <TableCell>{Math.round(t.progress)}%</TableCell>
@@ -208,11 +224,7 @@ export default function DelugeSettingsTab() {
           Import all pending Deluge files (those with a torrent hash but not yet copied to the
           library).
         </Typography>
-        <Button
-          variant="outlined"
-          onClick={handleBulkImport}
-          disabled={importing}
-        >
+        <Button variant="outlined" onClick={handleBulkImport} disabled={importing}>
           {importing ? 'Importing…' : 'Import Unimported'}
         </Button>
         {importResult && (

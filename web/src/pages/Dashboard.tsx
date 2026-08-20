@@ -1,7 +1,7 @@
 // file: web/src/pages/Dashboard.tsx
-// version: 1.14.3
+// version: 1.14.4
 // guid: 2f3a4b5c-6d7e-8f9a-0b1c-2d3e4f5a6b7c
-// last-edited: 2026-05-24
+// last-edited: 2026-08-19
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -93,29 +93,23 @@ export function Dashboard() {
         api.getSystemStorage().catch(() => null),
       ]);
 
-      const libraryBooks =
-        systemStatus.library_book_count ?? systemStatus.library.book_count ?? 0;
+      const libraryBooks = systemStatus.library_book_count ?? systemStatus.library.book_count ?? 0;
       const importBooks =
-        systemStatus.import_book_count ??
-        systemStatus.import_paths?.book_count ??
-        0;
-      const totalBooks =
-        systemStatus.total_book_count ?? libraryBooks + importBooks;
+        systemStatus.import_book_count ?? systemStatus.import_paths?.book_count ?? 0;
+      const totalBooks = systemStatus.total_book_count ?? libraryBooks + importBooks;
       const totalFiles = systemStatus.total_file_count ?? totalBooks;
       const librarySizeBytes =
         systemStatus.library_size_bytes ?? systemStatus.library.total_size ?? 0;
       const importSizeBytes =
-        systemStatus.import_size_bytes ??
-        systemStatus.import_paths?.total_size ??
-        0;
-      const totalSizeBytes =
-        systemStatus.total_size_bytes ?? librarySizeBytes + importSizeBytes;
+        systemStatus.import_size_bytes ?? systemStatus.import_paths?.total_size ?? 0;
+      const totalSizeBytes = systemStatus.total_size_bytes ?? librarySizeBytes + importSizeBytes;
 
       // Prefer the dedicated storage endpoint which statfs's the actual data volume.
       // Fall back to system status fields only if the endpoint is unavailable.
       const diskTotalBytes = storageInfo?.total_bytes ?? systemStatus.disk_total_bytes ?? 0;
       const diskUsedBytes = storageInfo?.used_bytes ?? systemStatus.disk_used_bytes ?? 0;
-      const diskUsagePercent = storageInfo?.percent_used ??
+      const diskUsagePercent =
+        storageInfo?.percent_used ??
         (diskTotalBytes > 0 ? (diskUsedBytes / diskTotalBytes) * 100 : 0);
 
       setStats({
@@ -139,28 +133,35 @@ export function Dashboard() {
       setBrokenFileCount((systemStatus as any).broken_file_count ?? null);
 
       // Convert recent operations
-      const recentOps = (systemStatus.operations?.recent || [])
-        .slice(0, 5)
-        .map((op) => ({
-          id: op.id,
-          type: op.type,
-          status: (op.status === 'completed'
-            ? 'success'
-            : op.status === 'failed'
-              ? 'error'
-              : 'running') as 'success' | 'error' | 'running',
-          message: op.message || `${op.type} operation`,
-          timestamp: op.created_at,
-        }));
+      const recentOps = (systemStatus.operations?.recent || []).slice(0, 5).map((op) => ({
+        id: op.id,
+        type: op.type,
+        status: (op.status === 'completed'
+          ? 'success'
+          : op.status === 'failed'
+            ? 'error'
+            : 'running') as 'success' | 'error' | 'running',
+        message: op.message || `${op.type} operation`,
+        timestamp: op.created_at,
+      }));
       setOperations(recentOps);
     } catch (error) {
       console.error('Failed to load system status:', error);
       // Set empty defaults so spinners stop
       setStats({
-        library_books: 0, import_books: 0, total_books: 0, total_files: 0,
-        total_authors: 0, total_series: 0, import_paths: 0,
-        library_size_gb: 0, import_size_gb: 0, total_size_gb: 0,
-        disk_used_gb: 0, disk_total_gb: 0, disk_usage_percent: 0,
+        library_books: 0,
+        import_books: 0,
+        total_books: 0,
+        total_files: 0,
+        total_authors: 0,
+        total_series: 0,
+        import_paths: 0,
+        library_size_gb: 0,
+        import_size_gb: 0,
+        total_size_gb: 0,
+        disk_used_gb: 0,
+        disk_total_gb: 0,
+        disk_usage_percent: 0,
       });
       setStorageLoaded(true);
       setOperations([]);
@@ -290,11 +291,7 @@ export function Dashboard() {
     <Card>
       <CardActionArea onClick={onClick} disabled={!onClick}>
         <CardContent>
-          <Box
-            display="flex"
-            alignItems="center"
-            justifyContent="space-between"
-          >
+          <Box display="flex" alignItems="center" justifyContent="space-between">
             <Box>
               <Typography color="text.secondary" gutterBottom>
                 {title}
@@ -365,18 +362,34 @@ export function Dashboard() {
       )}
 
       <Grid container spacing={3}>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+            md: 3,
+          }}
+        >
           <StatCard
             title="Library Books"
             value={stats?.library_books ?? 0}
             loading={bookStatsLoading}
             icon={<LibraryBooksIcon sx={{ fontSize: 40 }} />}
-            subtitle={stats && stats.total_files > stats.total_books ? `${stats.total_files.toLocaleString()} files total` : undefined}
+            subtitle={
+              stats && stats.total_files > stats.total_books
+                ? `${stats.total_files.toLocaleString()} files total`
+                : undefined
+            }
             onClick={() => navigate('/library')}
           />
         </Grid>
 
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+            md: 3,
+          }}
+        >
           <StatCard
             title="Import Path Books"
             value={stats?.import_books ?? 0}
@@ -386,7 +399,13 @@ export function Dashboard() {
           />
         </Grid>
 
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+            md: 3,
+          }}
+        >
           <StatCard
             title="Authors"
             value={authorCount ?? stats?.total_authors ?? 0}
@@ -396,7 +415,13 @@ export function Dashboard() {
           />
         </Grid>
 
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+            md: 3,
+          }}
+        >
           <StatCard
             title="Series"
             value={seriesCount ?? stats?.total_series ?? 0}
@@ -406,7 +431,13 @@ export function Dashboard() {
           />
         </Grid>
 
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+            md: 3,
+          }}
+        >
           <StatCard
             title="Broken Files"
             value={brokenFileCount ?? 0}
@@ -415,11 +446,19 @@ export function Dashboard() {
             subtitle={brokenFileCount !== null ? 'books with broken files' : undefined}
             onClick={() => navigate('/library?has_file_errors=true')}
             iconColor={'warning.main'}
-            valueColor={brokenFileCount !== null && brokenFileCount > 0 ? 'warning.main' : undefined}
+            valueColor={
+              brokenFileCount !== null && brokenFileCount > 0 ? 'warning.main' : undefined
+            }
           />
         </Grid>
 
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+            md: 3,
+          }}
+        >
           {(() => {
             const allOrganized = !importedLoading && importedCount === 0;
             return (
@@ -442,18 +481,10 @@ export function Dashboard() {
                       : undefined
                 }
                 iconColor={
-                  importedLoading
-                    ? 'primary.main'
-                    : allOrganized
-                      ? 'success.main'
-                      : 'warning.main'
+                  importedLoading ? 'primary.main' : allOrganized ? 'success.main' : 'warning.main'
                 }
                 valueColor={
-                  importedLoading
-                    ? undefined
-                    : allOrganized
-                      ? 'success.main'
-                      : 'warning.main'
+                  importedLoading ? undefined : allOrganized ? 'success.main' : 'warning.main'
                 }
                 onClick={() => navigate('/library?state=imported')}
               />
@@ -461,7 +492,12 @@ export function Dashboard() {
           })()}
         </Grid>
 
-        <Grid item xs={12} md={6}>
+        <Grid
+          size={{
+            xs: 12,
+            md: 6,
+          }}
+        >
           <Paper sx={{ p: 3 }}>
             <Typography variant="h6" gutterBottom>
               Storage Usage
@@ -508,7 +544,12 @@ export function Dashboard() {
           </Paper>
         </Grid>
 
-        <Grid item xs={12} md={6}>
+        <Grid
+          size={{
+            xs: 12,
+            md: 6,
+          }}
+        >
           <Paper sx={{ p: 3 }}>
             <Typography variant="h6" gutterBottom>
               Recent Operations
@@ -537,12 +578,7 @@ export function Dashboard() {
                       <Chip
                         label={op.type}
                         size="small"
-                        color={
-                          getStatusColor(op.status) as
-                            | 'success'
-                            | 'error'
-                            | 'default'
-                        }
+                        color={getStatusColor(op.status) as 'success' | 'error' | 'default'}
                         variant="outlined"
                       />
                     </Box>
@@ -553,7 +589,7 @@ export function Dashboard() {
           </Paper>
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={12}>
           <Paper sx={{ p: 3 }}>
             <Typography variant="h6" gutterBottom>
               Quick Actions
@@ -563,9 +599,7 @@ export function Dashboard() {
                 variant="contained"
                 onClick={handleScanAll}
                 disabled={scanInProgress}
-                startIcon={
-                  scanInProgress ? <CircularProgress size={20} /> : undefined
-                }
+                startIcon={scanInProgress ? <CircularProgress size={20} /> : undefined}
               >
                 {scanInProgress ? 'Starting Scan...' : 'Scan All Import Paths'}
               </Button>
@@ -577,10 +611,7 @@ export function Dashboard() {
         </Grid>
       </Grid>
 
-      <Dialog
-        open={organizeDialogOpen}
-        onClose={() => setOrganizeDialogOpen(false)}
-      >
+      <Dialog open={organizeDialogOpen} onClose={() => setOrganizeDialogOpen(false)}>
         <DialogTitle>Organize All Scanned Books</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -597,19 +628,14 @@ export function Dashboard() {
           />
         </DialogContent>
         <DialogActions>
-          <Button
-            onClick={() => setOrganizeDialogOpen(false)}
-            disabled={organizeInProgress}
-          >
+          <Button onClick={() => setOrganizeDialogOpen(false)} disabled={organizeInProgress}>
             Cancel
           </Button>
           <Button
             variant="contained"
             onClick={handleConfirmOrganizeAll}
             disabled={organizeInProgress}
-            startIcon={
-              organizeInProgress ? <CircularProgress size={20} /> : undefined
-            }
+            startIcon={organizeInProgress ? <CircularProgress size={20} /> : undefined}
           >
             {organizeInProgress ? 'Organizing...' : 'Organize'}
           </Button>

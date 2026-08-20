@@ -1,7 +1,7 @@
 // file: web/src/components/settings/MetadataScoringSection.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-08-15
+// last-edited: 2026-08-19
 
 import {
   Box,
@@ -61,9 +61,15 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
     label: string,
     helperText: string,
     step = 0.05,
-    min?: number,
+    min?: number
   ) => (
-    <Grid item xs={12} sm={6} key={key}>
+    <Grid
+      key={key}
+      size={{
+        xs: 12,
+        sm: 6,
+      }}
+    >
       <TextField
         fullWidth
         type="number"
@@ -80,7 +86,7 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
   );
 
   const resetButton = (label: string, patch: Partial<api.MetadataScoringConfig>) => (
-    <Grid item xs={12}>
+    <Grid size={12}>
       <Button size="small" variant="outlined" onClick={() => onChange(patch)}>
         {label}
       </Button>
@@ -93,17 +99,23 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
   const durationArray = (
     key: 'duration_tier_multipliers' | 'duration_tier_scores',
     label: string,
-    step: number,
+    step: number
   ) => {
     const values = config[key] ?? SCORING_DEFAULTS[key];
     return (
-      <Grid item xs={12}>
+      <Grid size={12}>
         <Typography variant="body2" gutterBottom>
           {label}
         </Typography>
         <Grid container spacing={1}>
           {values.map((v, i) => (
-            <Grid item xs={4} sm={2} key={`${key}-${i}`}>
+            <Grid
+              key={`${key}-${i}`}
+              size={{
+                xs: 4,
+                sm: 2,
+              }}
+            >
               <TextField
                 fullWidth
                 type="number"
@@ -131,7 +143,12 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
       </Typography>
 
       <Grid container spacing={2}>
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <FormControlLabel
             control={
               <Switch
@@ -143,7 +160,12 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             fullWidth
             type="number"
@@ -156,7 +178,12 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             fullWidth
             type="number"
@@ -169,7 +196,12 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <FormControlLabel
             control={
               <Switch
@@ -181,7 +213,12 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             fullWidth
             type="number"
@@ -194,7 +231,12 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             fullWidth
             type="number"
@@ -207,7 +249,7 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
           />
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={12}>
           <FormControlLabel
             control={
               <Switch
@@ -230,22 +272,22 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
         {numField(
           'transcription_title_exact_boost',
           'Title exact-match boost',
-          'Multiplier when the transcription title matches exactly',
+          'Multiplier when the transcription title matches exactly'
         )}
         {numField(
           'transcription_title_substr_boost',
           'Title substring boost',
-          'Multiplier when the transcription title matches as a substring',
+          'Multiplier when the transcription title matches as a substring'
         )}
         {numField(
           'transcription_author_boost',
           'Author boost',
-          'Multiplier when the transcription author matches',
+          'Multiplier when the transcription author matches'
         )}
         {numField(
           'transcription_narrator_boost',
           'Narrator boost',
-          'Multiplier when the transcription narrator matches',
+          'Multiplier when the transcription narrator matches'
         )}
         {resetButton('Reset transcription boosts to defaults', {
           transcription_title_exact_boost: SCORING_DEFAULTS.transcription_title_exact_boost,
@@ -265,22 +307,22 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
         {numField(
           'compilation_penalty',
           'Compilation penalty',
-          'Penalty for compilation candidates (0 is a real value; leave empty for default)',
+          'Penalty for compilation candidates (0 is a real value; leave empty for default)'
         )}
         {numField(
           'rich_metadata_field_bonus',
           'Rich-metadata field bonus',
-          'Per-field bonus for candidates with rich metadata',
+          'Per-field bonus for candidates with rich metadata'
         )}
         {numField(
           'rich_metadata_bonus_cap',
           'Rich-metadata bonus cap',
-          'Cap on total rich-metadata bonus (0 is a real value; leave empty for default)',
+          'Cap on total rich-metadata bonus (0 is a real value; leave empty for default)'
         )}
         {numField(
           'f1_min_score',
           'F1 minimum score',
-          'Minimum score floor (0 is a real value; leave empty for default)',
+          'Minimum score floor (0 is a real value; leave empty for default)'
         )}
         {resetButton('Reset score adjustments to defaults', {
           compilation_penalty: SCORING_DEFAULTS.compilation_penalty,
@@ -300,17 +342,17 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
         {numField(
           'series_name_match_boost',
           'Series name match boost',
-          'Multiplier when the series name matches',
+          'Multiplier when the series name matches'
         )}
         {numField(
           'series_number_exact_boost',
           'Series number exact boost',
-          'Multiplier when the series number matches exactly',
+          'Multiplier when the series number matches exactly'
         )}
         {numField(
           'series_number_wrong_penalty',
           'Series number wrong penalty',
-          'Penalty when the series number is wrong',
+          'Penalty when the series number is wrong'
         )}
         {resetButton('Reset series boosts to defaults', {
           series_name_match_boost: SCORING_DEFAULTS.series_name_match_boost,
@@ -349,14 +391,14 @@ export function MetadataScoringSection({ config, onChange }: MetadataScoringProp
           'Bulk fetch workers',
           'Concurrent workers for bulk metadata fetch',
           1,
-          1,
+          1
         )}
         {numField(
           'write_back_workers',
           'Write-back workers',
           'Concurrent workers writing tags into audio files (bulk write-back, batch save to files)',
           1,
-          1,
+          1
         )}
         {resetButton('Reset concurrency to defaults', {
           bulk_fetch_workers: SCORING_DEFAULTS.bulk_fetch_workers,

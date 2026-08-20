@@ -1,7 +1,7 @@
 // file: web/src/components/settings/AIBackendsSection.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e1f2a3b-4c5d-6e7f-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-07-03
+// last-edited: 2026-08-19
 
 import { useState } from 'react';
 import {
@@ -94,7 +94,12 @@ export function AIBackendsSection({ config, onChange }: AIBackendsSectionProps) 
       </Typography>
 
       <Grid container spacing={2}>
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             select
             fullWidth
@@ -111,7 +116,12 @@ export function AIBackendsSection({ config, onChange }: AIBackendsSectionProps) 
           </TextField>
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             select
             fullWidth
@@ -130,7 +140,12 @@ export function AIBackendsSection({ config, onChange }: AIBackendsSectionProps) 
 
         {showLocalFields && (
           <>
-            <Grid item xs={12} sm={4}>
+            <Grid
+              size={{
+                xs: 12,
+                sm: 4,
+              }}
+            >
               <TextField
                 fullWidth
                 label="Local base URL"
@@ -140,7 +155,12 @@ export function AIBackendsSection({ config, onChange }: AIBackendsSectionProps) 
                 size="small"
               />
             </Grid>
-            <Grid item xs={12} sm={4}>
+            <Grid
+              size={{
+                xs: 12,
+                sm: 4,
+              }}
+            >
               <TextField
                 fullWidth
                 label="Local embedding model"
@@ -150,7 +170,12 @@ export function AIBackendsSection({ config, onChange }: AIBackendsSectionProps) 
                 size="small"
               />
             </Grid>
-            <Grid item xs={12} sm={4}>
+            <Grid
+              size={{
+                xs: 12,
+                sm: 4,
+              }}
+            >
               <TextField
                 fullWidth
                 label="Local LLM model"
@@ -163,7 +188,7 @@ export function AIBackendsSection({ config, onChange }: AIBackendsSectionProps) 
           </>
         )}
 
-        <Grid item xs={12}>
+        <Grid size={12}>
           <Button
             variant="outlined"
             size="small"
@@ -176,26 +201,28 @@ export function AIBackendsSection({ config, onChange }: AIBackendsSectionProps) 
         </Grid>
 
         {testError && (
-          <Grid item xs={12}>
+          <Grid size={12}>
             <Alert severity="error">{testError}</Alert>
           </Grid>
         )}
 
         {status && (
-          <Grid item xs={12}>
+          <Grid size={12}>
             <Stack spacing={1}>
               <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
                 <Chip size="small" label={`Embedding: ${status.embedding_mode}`} />
                 <Chip size="small" label={`LLM: ${status.llm_mode}`} />
                 <Chip
                   size="small"
-                  label={status.local_reachable ? 'Local endpoint reachable' : 'Local endpoint unreachable'}
+                  label={
+                    status.local_reachable
+                      ? 'Local endpoint reachable'
+                      : 'Local endpoint unreachable'
+                  }
                   color={status.local_reachable ? 'success' : 'default'}
                 />
               </Stack>
-              {status.fallback_reason && (
-                <Alert severity="warning">{status.fallback_reason}</Alert>
-              )}
+              {status.fallback_reason && <Alert severity="warning">{status.fallback_reason}</Alert>}
               {[status.embedding_model, status.llm_model]
                 .filter((m): m is api.AIBackendModelStatus => !!m)
                 .map((m) => (
