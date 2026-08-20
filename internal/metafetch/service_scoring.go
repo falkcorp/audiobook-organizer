@@ -1,12 +1,13 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
-// last-edited: 2026-07-11
+// last-edited: 2026-08-20
 
 package metafetch
 
 import (
 	"context"
+	"fmt"
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -113,12 +114,46 @@ func computeF1Base(r metadata.BookMetadata, searchWords map[string]bool) float64
 // ApplyNonBaseAdjustments applies bonuses/penalties to a base similarity score
 // based on metadata heuristics (series, narrator, language, etc.).
 func ApplyNonBaseAdjustments(baseScore float64, r metadata.BookMetadata, baseWordCount int) float64 {
+	score, _ := ApplyNonBaseAdjustmentsWithBreakdown(baseScore, r, baseWordCount)
+	return score
+}
+
+// ApplyNonBaseAdjustmentsWithBreakdown is ApplyNonBaseAdjustments plus a record
+// of how it got there. It is the ONLY implementation — the plain function above
+// delegates to it and discards the steps — so the two cannot drift apart. That
+// is deliberate: the golden fixtures in service_scoring_test.go pin these totals
+// bit-for-bit, and a second copy of the arithmetic kept in sync by hand is
+// exactly the thing those fixtures would eventually fail to catch.
+//
+// The steps mirror WaterfallStep in
+// web/src/components/review/evidence/types.ts. They are ordered, and the order
+// is load-bearing: this pipeline is (base × factors) + terms, so replaying the
+// ops is the only faithful way to reconstruct the total. Do not reshape these
+// into weights — see docs/evidence-panel-audit.md for why a share bar cannot
+// represent a multiplicative factor.
+func ApplyNonBaseAdjustmentsWithBreakdown(
+	baseScore float64,
+	r metadata.BookMetadata,
+	baseWordCount int,
+) (float64, []ScoreStep) {
 	k := scoringKnobs()
 	score := baseScore
+
+	steps := make([]ScoreStep, 0, 4)
+	steps = append(steps, ScoreStep{
+		ID: "base", Label: "Title/author match", Op: ScoreOpBase,
+		Operand: score, Running: score,
+		Detail: "Fuzzy F1 overlap between the search title/author and this result.",
+	})
 
 	// Compilation penalty
 	if isCompilation(r.Title) {
 		score *= k.CompilationPenalty
+		steps = append(steps, ScoreStep{
+			ID: "compilation", Label: "Compilation penalty", Op: ScoreOpMultiply,
+			Operand: k.CompilationPenalty, Running: score,
+			Detail: "The result title looks like a box set or collection rather than a single book.",
+		})
 	}
 
 	// Length penalty: penalise results that are much longer than the search.
@@ -128,29 +163,56 @@ func ApplyNonBaseAdjustments(baseScore float64, r metadata.BookMetadata, baseWor
 		nSearch := float64(baseWordCount)
 		nResult := float64(len(resultWords))
 		if nResult > 1.5*nSearch {
-			score *= (1.5 * nSearch) / nResult
+			factor := (1.5 * nSearch) / nResult
+			score *= factor
+			steps = append(steps, ScoreStep{
+				ID: "length", Label: "Length penalty", Op: ScoreOpMultiply,
+				Operand: factor, Running: score,
+				Detail: fmt.Sprintf(
+					"Result title has %d significant words against %d searched — over the 1.5× threshold.",
+					len(resultWords), baseWordCount),
+			})
 		}
 	}
 
 	// Rich-metadata bonus (capped at +RichMetadataBonusCap, additive)
 	bonus := 0.0
+	fields := make([]string, 0, 4)
 	if r.Description != "" {
 		bonus += k.RichMetadataFieldBonus
+		fields = append(fields, "description")
 	}
 	if r.CoverURL != "" {
 		bonus += k.RichMetadataFieldBonus
+		fields = append(fields, "cover")
 	}
 	if r.Narrator != "" {
 		bonus += k.RichMetadataFieldBonus
+		fields = append(fields, "narrator")
 	}
 	if r.ISBN != "" {
 		bonus += k.RichMetadataFieldBonus
+		fields = append(fields, "ISBN")
 	}
+	capped := false
 	if bonus > k.RichMetadataBonusCap {
 		bonus = k.RichMetadataBonusCap
+		capped = true
 	}
 
-	return score + bonus
+	total := score + bonus
+	if bonus > 0 {
+		detail := "Present: " + strings.Join(fields, ", ") + "."
+		if capped {
+			detail += fmt.Sprintf(" Capped at %+.3f.", k.RichMetadataBonusCap)
+		}
+		steps = append(steps, ScoreStep{
+			ID: "rich_metadata", Label: "Rich metadata", Op: ScoreOpAdd,
+			Operand: bonus, Running: total, Detail: detail, Capped: capped,
+		})
+	}
+
+	return total, steps
 }
 
 // durationTiers is the ONE canonical, ratio-based classification of how
@@ -634,11 +696,40 @@ func pickBestMatchFromScored(
 // pre-refactor signature and behavior, composing computeF1Base and
 // applyNonBaseAdjustments. Existing callers are unchanged.
 func ScoreOneResult(r metadata.BookMetadata, searchWords map[string]bool) float64 {
+	score, _ := ScoreOneResultWithBreakdown(r, searchWords)
+	return score
+}
+
+// ScoreOneResultWithBreakdown is ScoreOneResult plus the derivation, for the
+// review UI's evidence panel. As with ApplyNonBaseAdjustments, the plain
+// function delegates here rather than duplicating the arithmetic, so the score
+// a reviewer is shown and the score the pipeline acts on are the same number by
+// construction.
+//
+// Replaying breakdown.Steps must reproduce breakdown.Score exactly; that is
+// asserted as a property in service_scoring_breakdown_test.go rather than left
+// to the golden fixtures, which only cover the cases someone already thought of.
+func ScoreOneResultWithBreakdown(
+	r metadata.BookMetadata,
+	searchWords map[string]bool,
+) (float64, ScoreBreakdown) {
 	base := computeF1Base(r, searchWords)
 	if base == 0 {
-		return 0 // preserve original early-return behavior (skips bonus)
+		// Preserve the original early return, which skips the bonus entirely.
+		// Recorded as a single zero base step so the panel can say WHY the
+		// candidate scored nothing instead of rendering an empty breakdown.
+		return 0, ScoreBreakdown{
+			Score: 0,
+			Steps: []ScoreStep{{
+				ID: "base", Label: "Title/author match", Op: ScoreOpBase,
+				Operand: 0, Running: 0,
+				Detail: "No significant word overlap with the search title — " +
+					"later bonuses are skipped entirely.",
+			}},
+		}
 	}
-	return ApplyNonBaseAdjustments(base, r, len(searchWords))
+	score, steps := ApplyNonBaseAdjustmentsWithBreakdown(base, r, len(searchWords))
+	return score, ScoreBreakdown{Score: score, Steps: steps}
 }
 
 // allZero reports whether every score in the slice is exactly 0. A scorer
