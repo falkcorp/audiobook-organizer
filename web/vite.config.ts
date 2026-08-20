@@ -1,5 +1,5 @@
 // file: web/vite.config.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9a8b7c6d-5e4f-3a2b-1c0d-9e8f7a6b5c4d
 // last-edited: 2026-08-19
 
@@ -50,10 +50,20 @@ export default defineConfig({
       output: {
         // rolldown (vite 8) rejects the object form of manualChunks -- it accepts
         // only a function -- and exposes advancedChunks as its native equivalent.
-        // Groups are evaluated in order, so @mui is matched before the react
-        // group. react-is and scheduler are listed explicitly: the old object
-        // form pulled them in via rollup's module graph, whereas advancedChunks
+        // react-is and scheduler are listed explicitly: the old object form
+        // pulled them in via rollup's module graph, whereas advancedChunks
         // matches on module path, so they would otherwise land in the entry chunk.
+        //
+        // These groups are a hint, not a partition: rolldown still places a
+        // shared module wherever its own analysis prefers. Verified 2026-08-19
+        // against the emitted sourcemaps -- react core and every @emotion
+        // package end up in `mui` rather than `vendor`, while react-dom/client,
+        // scheduler and react/compiler-runtime end up in `vendor`. That is
+        // cosmetically off from the names but correct where it counts: no
+        // module path appears in two chunks, so react and emotion are each a
+        // single instance. Duplicating either is what produced the React #130
+        // crash on the previous Vite 8 attempt, so re-run that check (group the
+        // sourcemaps' `sources` by package) before changing these groups.
         advancedChunks: {
           groups: [
             { name: 'mui', test: /[\\/]node_modules[\\/]@mui[\\/]/ },
