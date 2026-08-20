@@ -1,5 +1,5 @@
 // file: web/src/components/review/evidence/types.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b3f1a94-6c02-4e7d-95a1-2f8e4d0c7b63
 // last-edited: 2026-08-20
 //
@@ -109,8 +109,15 @@ export interface FactsEvidence {
 export interface WaterfallStep {
   id: string;
   label: string;
-  op: 'base' | 'multiply' | 'add';
-  /** The base value, the multiplier, or the addend, depending on `op`. */
+  /**
+   * `replace` overwrites the running total instead of adjusting it. The LLM
+   * reranker and a direct ASIN match both do this -- they substitute a verdict
+   * rather than scaling the evidence. Expressing either as a multiply by
+   * new/old would recompose correctly while showing the reviewer a factor that
+   * corresponds to no real signal.
+   */
+  op: 'base' | 'multiply' | 'add' | 'replace';
+  /** The base value, the multiplier, the addend, or the replacement, per `op`. */
   operand: number;
   /** Running total after this step. */
   running: number;
@@ -157,6 +164,9 @@ export function recomposeWaterfall(steps: WaterfallStep[]): number {
         break;
       case 'add':
         total += step.operand;
+        break;
+      case 'replace':
+        total = step.operand;
         break;
     }
   }

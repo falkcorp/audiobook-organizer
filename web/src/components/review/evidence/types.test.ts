@@ -1,5 +1,5 @@
 // file: web/src/components/review/evidence/types.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1d7c4b28-93ef-4a05-b6c1-8e2f0a5d9c34
 // last-edited: 2026-08-20
 
@@ -38,6 +38,18 @@ describe('recomposeWaterfall', () => {
 
     expect(recomposeWaterfall([base, add, mul])).toBe(4); // (1+1)*2
     expect(recomposeWaterfall([base, mul, add])).toBe(3); // (1*2)+1
+  });
+
+  it('discards the prior total on a replace', () => {
+    // Rerank and direct-ASIN matches substitute a verdict. Anything the
+    // pipeline computed before that point no longer contributes.
+    const steps: WaterfallStep[] = [
+      { id: 'base', label: 'base', op: 'base', operand: 0.5, running: 0.5 },
+      { id: 'x', label: 'x', op: 'multiply', operand: 4, running: 2 },
+      { id: 'r', label: 'rerank', op: 'replace', operand: 0.3, running: 0.3 },
+      { id: 'y', label: 'y', op: 'add', operand: 0.1, running: 0.4 },
+    ];
+    expect(recomposeWaterfall(steps)).toBeCloseTo(0.4, 12);
   });
 
   it('returns 0 for no steps', () => {

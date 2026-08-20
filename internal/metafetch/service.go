@@ -195,6 +195,14 @@ type MetadataCandidate struct {
 	Language       string  `json:"language,omitempty"`
 	Source         string  `json:"source"`
 	Score          float64 `json:"score"`
+	// ScoreBreakdown is the ordered derivation of Score, for the review UI's
+	// evidence panel. Replaying its steps reproduces Score -- asserted as a
+	// property in service_scoring_breakdown_test.go, not merely hoped for.
+	//
+	// Nil when the candidate did not come from a scoring path (e.g. a
+	// hand-constructed candidate in a test or a calibration harness). Nil means
+	// "no derivation recorded"; it never means the score was zero.
+	ScoreBreakdown *ScoreBreakdown `json:"score_breakdown,omitempty"`
 	// DurationSec is the runtime from the metadata source (Audible: runtime_length_min × 60).
 	// Zero means the source did not provide a duration.
 	DurationSec int `json:"duration_sec,omitempty"`
