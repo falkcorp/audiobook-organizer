@@ -1,7 +1,7 @@
 // file: web/src/theme.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-11
+// last-edited: 2026-08-20
 
 import { createTheme } from '@mui/material/styles';
 
@@ -130,10 +130,23 @@ export function createAppTheme(mode: PaletteMode = 'dark') {
         //     --project=chromium -g "complete workflow" --repeat-each=10 --workers=1
         defaultProps: {
           slotProps: { transition: { exit: false } },
-          // Kept for the enter animation. No Drawer call site passes its own
-          // `slotProps`/`SlideProps`, so the defaults above are not clobbered —
-          // MUI merges defaultProps shallowly, so adding one would silently
-          // drop `exit: false`.
+          // Kept for the enter animation.
+          //
+          // ⚠️ 2026-08-20: this comment used to warn that a call site passing
+          // its own `slotProps` would silently drop `exit: false`, because
+          // "MUI merges defaultProps shallowly". THAT WAS WRONG WHEN WRITTEN.
+          // `resolveProps` special-cases `slotProps` and merges it per slot,
+          // recursively — verified by reading the implementation in both
+          // @mui/utils 6.x and 9.x, which are identical in that branch, and by
+          // running the real defaults against a real call-site shape. Shallow
+          // merging applies to `slots`/`components` and to top-level props.
+          //
+          // This matters because the MUI 9 codemod rewrote
+          // CandidateCompareDrawer's `PaperProps` into `slotProps.paper`, which
+          // the old comment forbade. That is safe: the merged props carry both
+          // `paper` and `transition.exit: false`. Pinned by
+          // theme.slot-merge.test.ts, because the mitigation depends on MUI's
+          // merge contract rather than on anything in this repo.
           transitionDuration: { enter: 225, exit: 0 },
         },
         styleOverrides: {
