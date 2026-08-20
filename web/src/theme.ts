@@ -1,5 +1,5 @@
 // file: web/src/theme.ts
-// version: 2.0.0
+// version: 2.1.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-08-20
 
@@ -12,6 +12,38 @@ declare module '@mui/material/styles' {
   interface CssThemeVariables {
     enabled: true;
   }
+  interface Palette {
+    signal: SignalPalette;
+  }
+  interface PaletteOptions {
+    signal?: SignalPalette;
+  }
+}
+
+/**
+ * A categorical palette for evidence signals -- one stable hue per dedup signal
+ * kind, so a signal keeps its identity between the stacked bar and its row.
+ *
+ * This lives in the theme rather than in the panel because it MUST differ by
+ * colour scheme. The original values were hardcoded in ScoreBreakdownPanel and
+ * chosen against a white background; #4a148c on `#1e2a38` paper is very nearly
+ * invisible, and a 2px-wide bar segment in that colour reads as a gap rather
+ * than as evidence. Categorical hues are content, not decoration -- if one is
+ * unreadable the panel is lying about which signal carried the verdict.
+ */
+export interface SignalPalette {
+  exact_file: string;
+  exact_acoustid: string;
+  isbn_asin: string;
+  lsh_acoustid: string;
+  embedding_high: string;
+  metadata_hash: string;
+  metadata_fuzzy: string;
+  embedding_med: string;
+  duration: string;
+  folder_path: string;
+  /** Fallback for a signal kind the frontend does not know about yet. */
+  unknown: string;
 }
 
 // A single CSS-variable theme with two colour schemes, replacing the previous
@@ -50,6 +82,39 @@ declare module '@mui/material/styles' {
 // Light mode keeps the original brand colours unchanged. Pinned by
 // theme.contrast.test.ts so a future palette edit cannot quietly drop
 // back under the floor.
+// The light-mode signal hues are the values ScoreBreakdownPanel hardcoded, kept
+// verbatim: they were picked deliberately and read correctly on white.
+const lightSignals: SignalPalette = {
+  exact_file: '#d32f2f',
+  exact_acoustid: '#c62828',
+  isbn_asin: '#f57c00',
+  lsh_acoustid: '#e65100',
+  embedding_high: '#1565c0',
+  metadata_hash: '#558b2f',
+  metadata_fuzzy: '#33691e',
+  embedding_med: '#0277bd',
+  duration: '#6a1b9a',
+  folder_path: '#4a148c',
+  unknown: '#9e9e9e',
+};
+
+// Dark-mode counterparts: the same ten hues raised in lightness so each clears
+// the `#1e2a38` paper, while keeping the family groupings that let a reader tell
+// the two reds, two blues, two greens and two purples apart at a glance.
+const darkSignals: SignalPalette = {
+  exact_file: '#ef5350',
+  exact_acoustid: '#e57373',
+  isbn_asin: '#ffb74d',
+  lsh_acoustid: '#ff9800',
+  embedding_high: '#64b5f6',
+  metadata_hash: '#aed581',
+  metadata_fuzzy: '#9ccc65',
+  embedding_med: '#4fc3f7',
+  duration: '#ba68c8',
+  folder_path: '#9575cd',
+  unknown: '#bdbdbd',
+};
+
 export const lightPalette = {
   primary: { main: '#1976d2' },
   secondary: { main: '#dc004e' },
@@ -57,6 +122,7 @@ export const lightPalette = {
     default: '#f5f5f5',
     paper: '#ffffff',
   },
+  signal: lightSignals,
 } as const;
 
 export const darkPalette = {
@@ -66,6 +132,7 @@ export const darkPalette = {
     default: '#0a1929',
     paper: '#1e2a38',
   },
+  signal: darkSignals,
 } as const;
 
 /**

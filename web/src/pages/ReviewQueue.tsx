@@ -1,7 +1,7 @@
 // file: web/src/pages/ReviewQueue.tsx
-// version: 2.3.2
+// version: 2.4.0
 // guid: 4c8f2a17-5e93-4d60-a1b8-7f3c6d9e0a52
-// last-edited: 2026-08-19
+// last-edited: 2026-08-20
 import { useEffect, useMemo, useState } from 'react';
 import {
   Accordion,
@@ -38,13 +38,15 @@ import {
   REVIEW_ACTIONS,
   actionSpec,
   defaultActionFor,
-  evidenceFacts,
   labelForAction,
   type MemberEntry,
   memberCount,
   memberEntries,
   parsePayload,
+  type RecommendationEvidence,
 } from '../lib/reviewPayload';
+import { EvidencePanel } from '../components/review/evidence/EvidencePanel';
+import { regroupEvidence } from '../components/review/evidence/adapters';
 import { formatBytes, formatDuration } from '../utils/mediaFormat';
 import { formatPath, usePathVars } from '../utils/formatPath';
 
@@ -197,14 +199,18 @@ function MemberRow({
 function RecommendationPanel({
   recommended,
   reason,
-  facts,
+  evidence,
 }: {
   recommended: string | undefined;
   reason: string | undefined;
-  facts: ReturnType<typeof evidenceFacts>;
+  evidence: RecommendationEvidence | undefined;
 }) {
   const spec = actionSpec(recommended);
   const undecidable = !spec || !spec.approvable;
+  // No headline: this banner already renders `reason` above, with its own
+  // fallback copy for holds that predate evidence-backed recommendations.
+  const factsEvidence = regroupEvidence(evidence);
+  const hasFacts = factsEvidence.facts.length > 0;
 
   return (
     <Alert
@@ -218,7 +224,7 @@ function RecommendationPanel({
           : `Recommended: ${spec.label}`}
       </AlertTitle>
       {reason && (
-        <Typography variant="body2" sx={{ mb: facts.length ? 1 : 0 }}>
+        <Typography variant="body2" sx={{ mb: hasFacts ? 1 : 0 }}>
           {reason}
         </Typography>
       )}
@@ -227,43 +233,14 @@ function RecommendationPanel({
           variant="body2"
           sx={{
             color: 'text.secondary',
-            mb: facts.length ? 1 : 0,
+            mb: hasFacts ? 1 : 0,
           }}
         >
           This hold predates evidence-backed recommendations. Re-run the regroup scan to refresh it,
           or decide it here.
         </Typography>
       )}
-      {facts.length > 0 ? (
-        <Stack
-          direction="row"
-          spacing={0.5}
-          useFlexGap
-          sx={{
-            flexWrap: 'wrap',
-          }}
-        >
-          {facts.map((f) => (
-            <Tooltip key={f.label} title={f.hint} placement="top">
-              <Chip
-                size="small"
-                label={f.label}
-                color={f.warn ? 'warning' : 'default'}
-                variant={f.warn ? 'filled' : 'outlined'}
-              />
-            </Tooltip>
-          ))}
-        </Stack>
-      ) : (
-        <Typography
-          variant="caption"
-          sx={{
-            color: 'text.secondary',
-          }}
-        >
-          No evidence recorded for this hold.
-        </Typography>
-      )}
+      <EvidencePanel evidence={factsEvidence} />
     </Alert>
   );
 }
@@ -796,7 +773,7 @@ export function ReviewQueue() {
                         <RecommendationPanel
                           recommended={recommended}
                           reason={payload?.recommendationReason}
-                          facts={evidenceFacts(payload?.recommendationEvidence)}
+                          evidence={payload?.recommendationEvidence}
                         />
                         {/*
                           Actions are rendered ABOVE the detail as well as below it.
