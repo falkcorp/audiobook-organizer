@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.65.0
+// version: 2.66.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-08-20
 
@@ -3724,6 +3724,13 @@ export async function getCachedReviewResults(
   no_match: number;
   errors: number;
   total_applied?: number;
+  /**
+   * Cache entries that exist but cannot be reviewed: the book no longer
+   * resolves, or no candidate was ever stored. Reported so the gap between what
+   * the cache holds and what a reviewer can act on is visible, rather than
+   * being inferred from two counts that used to disagree by thousands.
+   */
+  unreviewable?: number;
 }> {
   const response = await apiFetch(
     `${API_BASE}/audiobooks/metadata/cache/review?limit=${limit}&offset=${offset}`

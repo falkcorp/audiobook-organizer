@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 6b1c0a94-2f7d-4c8e-9a15-3d0e7b28c4f1
-// last-edited: 2026-08-15
+// last-edited: 2026-08-20
 
 // Tests for BatchApplyFromCache's DISPATCH behaviour.
 //
@@ -31,11 +31,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -188,4 +191,85 @@ func TestBatchApplyFromCache_RejectsMalformedBody(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Equal(t, 0, ops.calls, "nothing may be enqueued for an unparseable body")
+}
+
+// ---------------------------------------------------------------------------
+// GetCacheReviewResults — the counts must describe the rows actually returned.
+// ---------------------------------------------------------------------------
+
+// reviewCtx builds a GET gin context for the cache review listing.
+func reviewCtx(query string) (*gin.Context, *httptest.ResponseRecorder) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/audiobooks/metadata/cache/review?"+query, nil)
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+	return c, w
+}
+
+// TestGetCacheReviewResults_CountsOnlyReviewableRows pins the fix for a real
+// production reporting bug.
+//
+// The counts were tallied over every row whose BOOK resolved, while the results
+// list additionally dropped rows with no cached candidate. On the live server
+// that was 10,952 counted against 5,774 returned, so the review rail advertised
+// "10730 matched" over a list that could never hold more than 5,774 rows — and
+// `errors` was hardcoded 0, so nothing in the payload hinted at the gap.
+//
+// The fixture reproduces that shape in miniature: four cache summaries, one
+// whose book is gone and one with no stored candidate, leaving two reviewable.
+func TestGetCacheReviewResults_CountsOnlyReviewableRows(t *testing.T) {
+	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	svc := handlersmocks.NewMockMetadataCacheFetchService(t)
+
+	ids := []string{"b1", "b2", "b3", "gone"}
+	summaries := make([]metafetch.MetadataCacheSummary, 0, len(ids))
+	for _, id := range ids {
+		summaries = append(summaries, metafetch.MetadataCacheSummary{BookID: id})
+	}
+	svc.EXPECT().ListCachedSummaries(mock.Anything).Return(summaries, nil)
+
+	// "gone" is a cache entry whose book no longer exists — the class that made
+	// total_count overstate by thousands.
+	books := []database.Book{{ID: "b1"}, {ID: "b2"}, {ID: "b3"}}
+	store.EXPECT().GetBooksByIDs(mock.Anything).Return(books, nil)
+	store.EXPECT().GetBookByID("gone").Return(nil, nil).Maybe()
+	store.EXPECT().GetBookFiles(mock.Anything).Return(nil, nil).Maybe()
+
+	raw, err := json.Marshal(map[string]any{"title": "T"})
+	require.NoError(t, err)
+	withCandidate := &metafetch.MetadataCandidateCache{Candidates: []json.RawMessage{raw}}
+
+	svc.EXPECT().GetCachedCandidates("b1").Return(withCandidate, true, nil)
+	svc.EXPECT().GetCachedCandidates("b2").Return(withCandidate, true, nil)
+	// b3 is cached but holds no candidate: nothing to review, and it must not be
+	// counted as though there were.
+	svc.EXPECT().GetCachedCandidates("b3").Return(&metafetch.MetadataCandidateCache{}, true, nil)
+
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	c, w := reviewCtx("limit=0&offset=0")
+	h.GetCacheReviewResults(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var body struct {
+		Data struct {
+			Results      []map[string]any `json:"results"`
+			TotalCount   int              `json:"total_count"`
+			Matched      int              `json:"matched"`
+			NoMatch      int              `json:"no_match"`
+			Errors       int              `json:"errors"`
+			Unreviewable int              `json:"unreviewable"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+
+	// The load-bearing assertion: the advertised total is the number of rows the
+	// caller was actually given, not the number of cache entries that exist.
+	assert.Len(t, body.Data.Results, 2, "b1 and b2 are the only reviewable rows")
+	assert.Equal(t, 2, body.Data.TotalCount, "total_count must not count rows it cannot return")
+	assert.Equal(t, 2, body.Data.Matched, "matched must not count the bookless or candidateless rows")
+	assert.Equal(t, 0, body.Data.Errors)
+	// 4 summaries, 2 reviewable — the gap is reported rather than left to be
+	// discovered by subtracting two numbers that never agreed.
+	assert.Equal(t, 2, body.Data.Unreviewable)
 }

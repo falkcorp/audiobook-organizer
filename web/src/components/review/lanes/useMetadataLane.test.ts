@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-08-20
 //
@@ -54,6 +54,34 @@ function reviewPayload(results: api.CandidateResult[]) {
     errors: 0,
   };
 }
+
+describe('summary reflects what the server says is reviewable', () => {
+  it('carries unreviewable through instead of inventing a zero', async () => {
+    // The server counts only rows it can actually return, and reports the
+    // cache entries it cannot as `unreviewable`. On production that gap was
+    // 14,306 held against 5,774 reviewable; the lane must not silently drop it.
+    const rows = [makeResult('b1')];
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+      ...reviewPayload(rows),
+      unreviewable: 8532,
+    } as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.summary.unreviewable).toBe(8532);
+  });
+
+  it('defaults unreviewable to 0 when the server omits it', async () => {
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
+      reviewPayload([makeResult('b1')]) as Awaited<
+        ReturnType<typeof api.getCachedReviewResults>
+      >
+    );
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.summary.unreviewable).toBe(0);
+  });
+});
 
 beforeEach(() => {
   vi.resetAllMocks();
