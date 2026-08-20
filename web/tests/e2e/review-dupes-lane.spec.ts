@@ -1,15 +1,24 @@
-// file: web/tests/e2e/unified-dedup-tab.spec.ts
-// version: 1.1.0
-// guid: e5f6a7b8-c9d0-1234-efab-555678901234
-// last-edited: 2026-08-09
+// file: web/tests/e2e/review-dupes-lane.spec.ts
+// version: 2.0.0
+// guid: 47849aa3-3814-42c5-81aa-299a39fb5384
+// last-edited: 2026-08-20
 
-// Playwright E2E flow for the unified dedup tab:
-//   1. Enable feature flag via localStorage
-//   2. Navigate to /dedup
-//   3. Unified tab surface renders (band filter bar visible)
-//   4. Click CERTAIN band chip — table re-queries
-//   5. Click the info button on a candidate row — breakdown drawer opens
-//   6. Switch to "Score Breakdown" tab inside drawer — breakdown renders
+// End-to-end coverage for the dupes lane of /review.
+//
+// This spec used to drive UnifiedDedupTab at /dedup, which Phase 7 deleted. It
+// was rewritten rather than removed: /review had NO e2e coverage at all, so
+// deleting the suite that covered the surface it replaces would have traded
+// five passing tests for a blind spot on the screen this whole project built.
+//
+// The mocks survived the move untouched -- both surfaces call the same
+// /api/v1/dedup/* endpoints, and the comparison drawer is literally the same
+// component. What changed is the route, the wrapper test id, and the removal of
+// a feature flag that no longer exists.
+//
+// The one test genuinely deleted is the legacy-view toggle, whose subject
+// (sessionStorage.dedup_show_legacy) is gone. In its place: a deep-link test,
+// covering the defect where /review?book=<id> opened the metadata lane and left
+// the dupes lane's server-side filter unreachable.
 
 import { test, expect, type Page } from '@playwright/test';
 import { setupPhase2Interactive } from './utils/test-helpers';
@@ -122,17 +131,11 @@ function bookALink(page: Page) {
 // was replaced by a labelled "Compare" Button with no candidate-specific label,
 // so scope the lookup to the row that holds Book A's link.
 function compareButton(page: Page) {
+  // Scoped by the row's own test id rather than by table semantics -- the lane
+  // renders cards in the two-column and auto view modes, where there is no row.
   return page
-    .getByRole('row')
-    .filter({ has: page.locator(`a[href="/library/${MOCK_CANDIDATE.entity_a_id}"]`) })
+    .locator(`[data-testid="dupes-row-${MOCK_CANDIDATE.id}"]`)
     .getByRole('button', { name: /compare/i });
-}
-
-async function enableUnifiedDedupFeatureFlag(page: Page) {
-  // Set the feature flag via localStorage before the app JS runs.
-  await page.addInitScript(() => {
-    localStorage.setItem('feature_unified_dedup', '1');
-  });
 }
 
 async function mockDedupRoutes(page: Page) {
@@ -186,20 +189,19 @@ async function mockDedupRoutes(page: Page) {
   });
 }
 
-test.describe('Unified Dedup Tab (T017)', () => {
-  test('unified tab renders band filter bar and candidate table', async ({ page }) => {
-    await enableUnifiedDedupFeatureFlag(page);
+test.describe('the dupes lane of /review', () => {
+  test('renders the rail, the band filter and the candidate table', async ({ page }) => {
     await setupPhase2Interactive(page);
     await mockDedupRoutes(page);
 
-    await page.goto('/dedup');
+    await page.goto('/review?lane=dupes');
     await page.waitForLoadState('domcontentloaded');
 
-    // The unified tab wrapper should be visible (feature flag enabled, legacy not toggled).
-    await expect(page.locator('[data-testid="unified-dedup-tab-wrapper"]')).toBeVisible();
+    await expect(page.locator('[data-testid="dupes-rail"]')).toBeVisible();
 
-    // Band filter bar should render.
-    await expect(page.locator('[data-testid="band-filter-bar"]')).toBeVisible();
+    // The band filter, asserted through its chips. UnifiedDedupTab wrapped these
+    // in a `band-filter-bar` element; the lane puts them straight in the rail,
+    // which the assertion above already covers -- so the chips ARE the filter.
     await expect(page.locator('[data-testid="band-chip-CERTAIN"]')).toBeVisible();
     await expect(page.locator('[data-testid="band-chip-HIGH"]')).toBeVisible();
     await expect(page.locator('[data-testid="band-chip-MEDIUM"]')).toBeVisible();
@@ -207,11 +209,10 @@ test.describe('Unified Dedup Tab (T017)', () => {
   });
 
   test('filtering by CERTAIN band updates the table', async ({ page }) => {
-    await enableUnifiedDedupFeatureFlag(page);
     await setupPhase2Interactive(page);
     await mockDedupRoutes(page);
 
-    await page.goto('/dedup');
+    await page.goto('/review?lane=dupes');
     await page.waitForLoadState('domcontentloaded');
 
     // Wait for the band filter to be ready.
@@ -225,12 +226,11 @@ test.describe('Unified Dedup Tab (T017)', () => {
     await expect(bookALink(page)).toBeVisible();
   });
 
-  test('clicking info button opens comparison drawer', async ({ page }) => {
-    await enableUnifiedDedupFeatureFlag(page);
+  test('opens the comparison drawer from a candidate row', async ({ page }) => {
     await setupPhase2Interactive(page);
     await mockDedupRoutes(page);
 
-    await page.goto('/dedup');
+    await page.goto('/review?lane=dupes');
     await page.waitForLoadState('domcontentloaded');
 
     // Wait for table to populate.
@@ -245,11 +245,10 @@ test.describe('Unified Dedup Tab (T017)', () => {
   });
 
   test('score breakdown renders in drawer', async ({ page }) => {
-    await enableUnifiedDedupFeatureFlag(page);
     await setupPhase2Interactive(page);
     await mockDedupRoutes(page);
 
-    await page.goto('/dedup');
+    await page.goto('/review?lane=dupes');
     await page.waitForLoadState('domcontentloaded');
 
     await expect(bookALink(page)).toBeVisible({ timeout: 10000 });
@@ -271,26 +270,31 @@ test.describe('Unified Dedup Tab (T017)', () => {
     await expect(page.locator('text=Exact file hash')).toBeVisible();
   });
 
-  test('legacy toggle shows legacy tab view', async ({ page }) => {
-    await enableUnifiedDedupFeatureFlag(page);
+  test('a ?book= deep link opens the dupes lane, filtered server-side', async ({ page }) => {
+    // The defect this covers: /review opened the metadata lane regardless of the
+    // URL, and because each lane only fetches while it is the visible one, the
+    // dupes lane stayed inactive and never applied the entity filter. The link
+    // worked, the filter worked, and the two could not reach each other.
+    let entityFiltered = false;
     await setupPhase2Interactive(page);
     await mockDedupRoutes(page);
+    await page.route('**/api/v1/dedup/candidates**', (route) => {
+      if (route.request().url().includes(`entity_id=${MOCK_CANDIDATE.entity_a_id}`)) {
+        entityFiltered = true;
+      }
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: { candidates: [MOCK_CANDIDATE], total: 1 } }),
+      });
+    });
 
-    await page.goto('/dedup');
+    await page.goto(`/review?book=${MOCK_CANDIDATE.entity_a_id}`);
     await page.waitForLoadState('domcontentloaded');
 
-    // Feature is enabled, so unified should be visible.
-    await expect(page.locator('[data-testid="unified-dedup-tab-wrapper"]')).toBeVisible();
-
-    // Click legacy toggle.
-    await page.locator('[data-testid="legacy-toggle-btn"]').click();
-
-    // Unified tab should be hidden; legacy tab bar should appear.
-    await expect(page.locator('[data-testid="unified-dedup-tab-wrapper"]')).not.toBeVisible();
-    await expect(page.locator('text=Version Groups')).toBeVisible();
-
-    // Toggle back to new view.
-    await page.locator('[data-testid="legacy-toggle-btn"]').click();
-    await expect(page.locator('[data-testid="unified-dedup-tab-wrapper"]')).toBeVisible();
+    // Arrived on dupes without anyone clicking a lane tab.
+    await expect(page.locator('[data-testid="dupes-rail"]')).toBeVisible();
+    await expect(page.locator('[data-testid="dupes-deeplink-banner"]')).toBeVisible();
+    await expect.poll(() => entityFiltered).toBe(true);
   });
 });

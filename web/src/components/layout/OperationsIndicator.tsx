@@ -1,5 +1,5 @@
 // file: web/src/components/layout/OperationsIndicator.tsx
-// version: 4.0.3
+// version: 4.1.0
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
 
 import { useState } from 'react';
@@ -618,7 +618,12 @@ export function OperationsIndicator() {
                             e.stopPropagation();
                             e.preventDefault();
                             setAnchorEl(null);
-                            window.location.href = `/library?reviewOp=${op.id}`;
+                            // Was `window.location.href = '/library?reviewOp=' + op.id`,
+                            // which reloaded the whole SPA to open a modal over
+                            // the library. The op id was never used for anything
+                            // but its own presence -- Library read it as a
+                            // boolean -- so nothing is lost by dropping it.
+                            navigate('/review');
                           }}
                         >
                           Review

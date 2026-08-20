@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryDialogs.tsx
-// version: 1.6.2
+// version: 1.7.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-08-19
+// last-edited: 2026-08-20
 import React from 'react';
 import {
   Typography,
@@ -36,7 +36,6 @@ import { BatchEditDialog } from '../audiobooks/BatchEditDialog';
 import { BulkMetadataSearchDialog } from '../audiobooks/BulkMetadataSearchDialog';
 import { BulkTagDialog } from '../audiobooks/BulkTagDialog';
 import { BulkRatingDialog } from '../audiobooks/BulkRatingDialog';
-import { MetadataReviewDialog } from '../audiobooks/MetadataReviewDialog';
 import { VersionManagement } from '../audiobooks/VersionManagement';
 import AddToPlaylistDialog from '../audiobooks/AddToPlaylistDialog';
 import { ServerFileBrowser } from '../common/ServerFileBrowser';
@@ -182,10 +181,6 @@ interface LibraryDialogsProps {
   bulkSearchOpen: boolean;
   setBulkSearchOpen: (open: boolean) => void;
 
-  // Metadata review dialog
-  metadataReviewOpen: boolean;
-  setMetadataReviewOpen: (open: boolean) => void;
-
   // Version management
   versionManagingAudiobook: Audiobook | null;
   versionManagementOpen: boolean;
@@ -329,8 +324,6 @@ export const LibraryDialogs = ({
   handleBulkFetchMetadata,
   bulkSearchOpen,
   setBulkSearchOpen,
-  metadataReviewOpen,
-  setMetadataReviewOpen,
   versionManagingAudiobook,
   versionManagementOpen,
   handleVersionManagementClose,
@@ -1010,24 +1003,6 @@ export const LibraryDialogs = ({
       open={bulkSearchOpen}
       books={selectedAudiobooks}
       onClose={() => setBulkSearchOpen(false)}
-      onComplete={() => {
-        loadAudiobooks();
-        setSelectedAudiobooks([]);
-      }}
-      toast={toast}
-    />
-
-    {/* Always render the review dialog so its internal state
-        (loaded results, row states, scroll position) survives
-        across close/reopen cycles. Only toggle the `open` prop.
-        The dialog ignores backdrop clicks and Escape — the
-        user must click the x button or Done to close, which
-        prevents accidentally blowing away a long review
-        session. Reopening is instant because the data is
-        already loaded. */}
-    <MetadataReviewDialog
-      open={metadataReviewOpen}
-      onClose={() => setMetadataReviewOpen(false)}
       onComplete={() => {
         loadAudiobooks();
         setSelectedAudiobooks([]);

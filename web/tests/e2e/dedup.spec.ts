@@ -1,7 +1,7 @@
 // file: web/tests/e2e/dedup.spec.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: d1e2f3a4-b5c6-7d8e-9f0a-1b2c3d4e5f6a
-// last-edited: 2026-08-09
+// last-edited: 2026-08-20
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -65,31 +65,6 @@ const booksForAuthor = [
   { id: 'b3', title: 'Oathbringer', author_name: 'Brandon Sanderson', cover_url: null },
 ];
 
-/**
- * Opt into the legacy tabbed Dedup UI.
- *
- * /dedup was redesigned: it now renders a unified candidate view, and the
- * tabbed Books/Authors/Series UI these tests cover sits behind a "Legacy View"
- * toggle persisted in sessionStorage. Without this, `?tab=authors` renders the
- * unified surface and every tab assertion fails with "element(s) not found".
- *
- * Must be called BEFORE page.goto — every test that navigates to /dedup needs
- * it, including the ones that call page.goto directly rather than going
- * through openDedupPage().
- *
- * The unified view itself is NOT covered by this spec; see the todo fragment
- * filed alongside this change.
- */
-async function enableLegacyDedupView(page: Page) {
-  await page.addInitScript(() => {
-    try {
-      sessionStorage.setItem('dedup_show_legacy', '1');
-    } catch {
-      /* storage disabled — the test fails loudly rather than silently */
-    }
-  });
-}
-
 async function openDedupPage(page: Page, opts: {
   authorGroups?: MockAuthorDedupGroup[];
   seriesGroups?: MockSeriesDupGroup[];
@@ -113,7 +88,6 @@ async function openDedupPage(page: Page, opts: {
     });
   });
 
-  await enableLegacyDedupView(page);
 
   const tab = opts.tab ?? 'authors';
   await page.goto(`/dedup?tab=${tab}`);
@@ -320,7 +294,6 @@ test.describe('Book Preview Popover', () => {
       });
     });
 
-    await enableLegacyDedupView(page);
     await page.goto('/dedup?tab=authors');
     await page.waitForLoadState('networkidle');
 
@@ -358,7 +331,6 @@ test.describe('Dedup Tab Navigation', () => {
       books: generateTestBooks(3),
       authorDedup: { groups: authorDedupGroups },
     });
-    await enableLegacyDedupView(page);
     await page.goto('/dedup');
     await page.waitForLoadState('networkidle');
 

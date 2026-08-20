@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-08-20
 //
@@ -39,8 +39,12 @@ import {
   Alert,
   AlertTitle,
   Box,
+  Button,
   Dialog,
+  DialogActions,
   DialogContent,
+  DialogContentText,
+  DialogTitle,
   Link,
   Tab,
   Tabs,
@@ -162,6 +166,8 @@ export function ReviewWorkspace() {
   // Expansion is a view concern and the two lanes key it on different id types,
   // so it is not shared state.
   const [dupesExpandedId, setDupesExpandedId] = useState<number | null>(null);
+  // Rescore-with-apply asks first. See the command pair below.
+  const [rescoreConfirmOpen, setRescoreConfirmOpen] = useState(false);
   const regroup = useRegroupLane(toast, lane === 'regroup');
 
   const unmatchedCount = useMemo(
@@ -192,11 +198,25 @@ export function ReviewWorkspace() {
             scope: 'library',
             run: startJob('Duplicate scan', api.triggerDedupScan),
           },
+          // Two commands, because there are two operations and they were being
+          // reported as one. This menu item passed `apply=false` while calling
+          // itself plain "Rescore", so it answered "Rescore started" and then
+          // wrote nothing -- a dry run announced as the real thing.
           {
-            id: 'rescore',
-            label: 'Rescore',
+            id: 'rescore-dry-run',
+            label: 'Rescore (dry run)',
             scope: 'library',
-            run: startJob('Rescore', () => api.rescoreDedupCandidates(false)),
+            run: startJob('Rescore dry run', () => api.rescoreDedupCandidates(false)),
+          },
+          {
+            id: 'rescore-apply',
+            label: 'Rescore and apply…',
+            scope: 'library',
+            // The surface this replaces put Apply behind a dialog, in warning
+            // colour, next to a Dry Run button. Reachable in one click from a
+            // menu would be a downgrade in safety, not a port, so the confirm
+            // step carries over even though nothing else in this menu confirms.
+            run: () => setRescoreConfirmOpen(true),
           },
           {
             id: 'full-rescan',
@@ -486,6 +506,33 @@ export function ReviewWorkspace() {
           />
         </>
       )}
+
+      {/* Rescore-and-apply confirmation. */}
+      <Dialog open={rescoreConfirmOpen} onClose={() => setRescoreConfirmOpen(false)}>
+        <DialogTitle>Rescore and apply?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Re-runs the unified scoring formula over stored signal sets for every pending
+            candidate and writes the new scores. No re-embedding or re-collection happens —
+            only candidates that already have stored signals are updated, and older rows are
+            counted as skipped.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRescoreConfirmOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="warning"
+            data-testid="rescore-apply-confirm"
+            onClick={() => {
+              setRescoreConfirmOpen(false);
+              void startJob('Rescore', () => api.rescoreDedupCandidates(true))();
+            }}
+          >
+            Rescore and apply
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Cover lightbox. */}
       <Dialog

@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.83.2
+// version: 1.84.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-08-19
+// last-edited: 2026-08-20
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -369,7 +369,6 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   // pendingFetchOpId tracks the in-flight metadata fetch so we can
   // auto-open the review dialog when it completes.
   const [pendingFetchOpId, setPendingFetchOpId] = useState<string | null>(null);
-  const [metadataReviewOpen, setMetadataReviewOpen] = useState(!!searchParams.get('reviewOp'));
   const [mergeInProgress, setMergeInProgress] = useState(false);
   const sseStatusRef = useRef<EventSourceStatus['state'] | null>(null);
 
@@ -685,11 +684,6 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   const seenSearch = useRef(searchParams.toString());
 
   const prevPageRef = useRef(page);
-  const reviewOpRef = useRef(searchParams.get('reviewOp'));
-  useEffect(() => {
-    reviewOpRef.current = searchParams.get('reviewOp');
-  }, [searchParams]);
-
   useEffect(() => {
     // Do not write while an unconsumed external URL change is pending.
     //
@@ -756,8 +750,6 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     params.set('page', page.toString());
     if (itemsPerPage !== DEFAULT_ITEMS_PER_PAGE) params.set('limit', itemsPerPage.toString());
     if (selectedTags.length > 0) params.set('tag', selectedTags[0]);
-    // Preserve reviewOp if present (via ref to avoid infinite loop)
-    if (reviewOpRef.current) params.set('reviewOp', reviewOpRef.current);
 
     // Push a new history entry when page changes so back button works;
     // replace for other changes (search typing, etc.) to avoid history spam.
@@ -1119,12 +1111,17 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     const op = activeOperations.find((o) => o.id === pendingFetchOpId);
     if (!op) return;
     if (op.status === 'completed') {
-      setMetadataReviewOpen(true);
+      // The review surface is a screen now, not a modal over this page. The old
+      // dialog took the whole viewport and ignored backdrop clicks and Escape,
+      // so this was already a takeover; navigating is strictly less trapping,
+      // and Library keeps its filters and page in the URL, so coming back
+      // restores them.
+      navigate('/review');
       toast('Metadata fetch complete — review results.', 'success');
     } else if (op.status === 'failed') {
       toast('Metadata fetch failed.', 'error');
     }
-  }, [activeOperations, pendingFetchOpId, toast]);
+  }, [activeOperations, navigate, pendingFetchOpId, toast]);
 
   const handleEdit = useCallback((audiobook: Audiobook) => {
     setEditingAudiobook(audiobook);
@@ -2027,7 +2024,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         );
         return;
       }
-      setMetadataReviewOpen(true);
+      navigate('/review');
       toast(
         `${cached.entries.length} book${cached.entries.length === 1 ? '' : 's'} ready for review.`,
         'info'
@@ -2293,8 +2290,6 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           handleBulkFetchMetadata={handleBulkFetchMetadata}
           bulkSearchOpen={bulkSearchOpen}
           setBulkSearchOpen={setBulkSearchOpen}
-          metadataReviewOpen={metadataReviewOpen}
-          setMetadataReviewOpen={setMetadataReviewOpen}
 
           versionManagingAudiobook={versionManagingAudiobook}
           versionManagementOpen={versionManagementOpen}
