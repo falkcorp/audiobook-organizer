@@ -1,5 +1,5 @@
 # file: .github/workflows/e2e.yml
-# version: 1.4.0
+# version: 1.4.1
 # guid: 6a2f47c9-1e83-4d05-b7f6-92c4a0d81b3e
 # last-edited: 2026-08-20
 
@@ -257,7 +257,7 @@ jobs:
       # golden on a macOS machine.
       - name: Upload failure artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: e2e-failure-artifacts
           path: web/test-results/
@@ -266,7 +266,7 @@ jobs:
 
       - name: Upload regenerated goldens
         if: always() && inputs.update_snapshots
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: updated-snapshots
           path: web/tests/e2e/**/*-snapshots/**
