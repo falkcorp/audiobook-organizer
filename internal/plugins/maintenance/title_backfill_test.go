@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-08-19
+// last-edited: 2026-08-20
 
 package maintenance
 
@@ -37,13 +37,16 @@ func (r *fakeReporter) SetCurrentItem(_ string)                          {}
 var _ sdk.Reporter = (*fakeReporter)(nil)
 
 // fakeDeps satisfies the ServerDeps interface with only the store accessors
-// wired. All three return the same value; the narrowing lives in the declared
+// wired. All four return the same value; the narrowing lives in the declared
 // type, not in what is handed over.
 type fakeDeps struct{ store database.Store }
 
 func (d fakeDeps) OpsStore() OpsStore                        { return d.store }
 func (d fakeDeps) ReconcileStore() ReconcileStore            { return d.store }
 func (d fakeDeps) PlaylistStore() database.UserPlaylistStore { return d.store }
+func (d fakeDeps) MetadataCacheStore() database.MetadataCacheStore {
+	return d.store
+}
 
 // Delegate stubs — maintenance plugin calls these on ServerDeps from other ops.
 func (d fakeDeps) RunIsbnEnrichment(_ context.Context, _ operations.ProgressReporter, _ string) error {
