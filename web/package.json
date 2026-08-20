@@ -1,6 +1,6 @@
 {
   "name": "audiobook-organizer-web",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -15,6 +15,7 @@
     "test:e2e:headed": "playwright test -c tests/e2e/playwright.config.ts --project chromium --headed",
     "test:e2e:debug": "playwright test -c tests/e2e/playwright.config.ts --project chromium --debug",
     "test:smoke": "node tests/smoke/routes.mjs",
+    "test:visual": "node tests/visual/compare-layout.mjs",
     "test:ui": "vitest --ui",
     "test:all": "vitest run && playwright test -c tests/e2e/playwright.config.ts",
     "lint": "eslint .",
