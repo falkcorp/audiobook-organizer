@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.9.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
 <!-- last-edited: 2026-08-20 -->
 
@@ -488,6 +488,84 @@ both times.
 
 ---
 
+## 12. August 20: two checks nobody was running
+
+Section 11 described a safety check that could never say no. This is a variation on the
+same idea, and arguably a starker one: two checks that were not broken at all. They worked
+perfectly. Nothing ever asked them anything.
+
+**How they came to light.** Neither was discovered by the automated checks that run on
+every change — those were, and had been for months, entirely green. They surfaced by
+accident, while someone was verifying an unrelated piece of work and happened to run the
+full set of checks by hand.
+
+**The first check.** The app can be extended by other programs, and the toolkit they plug
+into is meant to be a stable, narrow public contract. There is a guard whose whole job is
+to notice when internal parts of the app quietly leak into that toolkit. It had been
+reporting a failure since 18 July — thirty-three days — and no one had seen it, because
+the guard was only ever wired into a command a developer runs on their own machine. It
+appeared nowhere in the automated checks. Searching the automated checks for its name
+found matches only inside comments *about* it.
+
+The three things it was complaining about turned out not to be real problems. All three
+were pulled in indirectly, through parts of the app the guard had already approved, and
+none of them are visible to anyone writing a plug-in. But that is exactly what made the
+guard's design unworkable: it compared against a hand-maintained list of approved parts,
+and every time an unrelated piece of work added something indirectly, the list fell
+further behind. Five of its nine existing entries had already been added this way, one at
+a time, each without explanation. It was losing a race it could not win.
+
+So rather than adding three more names to a list that had already failed five times, the
+guard was rebuilt around the distinction that actually matters. What a plug-in author can
+*see* is now a short, deliberately-chosen list that a person must edit by hand, and which
+no automatic step can quietly extend. Everything pulled in indirectly is now compared
+against a recorded snapshot instead. When that set legitimately grows, accepting the
+growth means updating a file that is kept alongside the code — so the change shows up in
+review, where somebody looks at it, rather than as a line of text in a log nobody reads.
+
+**The second check.** A body of benchmarking tooling — used for tuning how the app decides
+two authors are the same person — is kept behind a switch, so that ordinary builds skip
+it. On 18 April, a reorganisation moved two pieces of shared machinery to a new home and
+updated everything that referred to them, except four places inside that switched-off
+tooling. Because no build anywhere turned the switch on, nothing ever tried to compile
+those four places. The tooling had not been buildable for **four months**, and not one
+automated run said so.
+
+The repair itself was four lines. The interesting part is that the project already
+possessed a command that would have caught it on day one. It had simply never been run
+anywhere either.
+
+**What was actually fixed.** Both faults were repaired, but the durable change is that
+both checks now run automatically on every proposed change, and both are also part of the
+single command a developer runs before submitting work — so the two can no longer drift
+apart, with one of them quietly checking less than the other.
+
+**On trusting the new guard.** A guard that reports success is not evidence of anything
+until it has been seen to fail. Before this was accepted, it was deliberately broken four
+ways — a forbidden connection added by hand, an unrecorded addition, a stale entry, and a
+clean run — and it gave the right answer each time. The same was done to the small tests
+covering it: each was checked by deliberately damaging the code it protects and confirming
+it noticed. Two of five initially appeared not to notice, which turned out to be a fault
+in how the damage was being applied rather than in the tests; once corrected, all five
+caught it.
+
+**One caveat, stated plainly.** These two checks now report on every proposed change, but
+they cannot yet *block* one. The list of checks that must pass before work can be merged
+is a separate setting, and adding to it is a deliberate administrative decision rather
+than something that follows automatically. Until that is done, a change that re-breaks
+either of these will be flagged and can still be merged.
+
+**And a third instance, found while fixing these two.** The project's code formatter is
+also verified nowhere — not in the automated checks, not in the developer command — and
+forty-three files across twenty-four areas of the code have drifted out of shape as a
+result. That has been written down as follow-up work rather than folded in here, because
+tidying forty-three files at the same time as repairing two safety checks would have made
+both harder to review. It is noted because three instances of the same oversight in a
+single day is no longer a coincidence: the project has no rule that a check must be
+reachable by the automated system in order to count as a check.
+
+---
+
 ## Themes worth carrying into next month
 
 1. **A silent fallback is worse than a loud failure.** The transcription outage, the
@@ -503,3 +581,11 @@ both times.
    The collections work justified a decision with "we checked, the conflicting thing
    does not exist" — true when written, false one commit later, in the same change. A
    check that runs is worth more than a check that was run once and written down.
+5. **A check that exists is not a check that runs.** Three separate examples surfaced on
+   20 August alone: a guard on the plug-in toolkit that ran only on developers' own
+   machines, a body of code kept behind a switch that no build ever turned on, and a code
+   formatter verified in neither place. Two of them had been reporting failure for
+   thirty-three days and four months respectively, the entire time on a green board.
+   Writing a new check is the easy half; the project has no rule that one must be
+   reachable by the automated system before it counts, and until it does, the green tick
+   answers a narrower question than anybody reading it assumes.
