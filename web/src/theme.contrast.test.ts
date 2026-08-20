@@ -1,10 +1,10 @@
 // file: web/src/theme.contrast.test.ts
-// version: 1.0.0
+// version: 2.0.0
 // guid: 7e3d1a95-4c62-4b08-9f71-6a2d5c0e8b34
-// last-edited: 2026-08-11
+// last-edited: 2026-08-20
 
 import { describe, expect, it } from 'vitest';
-import { createAppTheme } from './theme';
+import { palettes } from './theme';
 
 // Reported 2026-08-11: the library page buttons in dark mode "too closely match
 // the existing" background. They did: primary.main was '#1976d2' in BOTH modes,
@@ -13,6 +13,14 @@ import { createAppTheme } from './theme';
 //
 // This pins the fix as a MEASUREMENT rather than a matter of taste, so a future
 // palette edit cannot quietly put it back under the floor.
+//
+// 2026-08-20: the theme became a single CSS-variable theme with two colour
+// schemes, so these now read `appTheme.colorSchemes.<scheme>.palette` instead of
+// calling a per-mode factory. The values asserted on are the same hexes the
+// theme declares, and those are what MUI emits as --mui-palette-* on the
+// document -- verified against a running build rather than assumed, because a
+// test that measures one source while the page paints another passes while
+// proving nothing.
 
 /** sRGB relative luminance, per WCAG 2.1. */
 function luminance(hex: string): number {
@@ -34,9 +42,9 @@ function contrast(a: string, b: string): number {
 const AA_NORMAL = 4.5;
 
 describe('dark theme contrast', () => {
-  const dark = createAppTheme('dark');
-  const bg = dark.palette.background.default;
-  const paper = dark.palette.background.paper;
+  const dark = palettes.dark;
+  const bg = dark.background.default;
+  const paper = dark.background.paper;
 
   it('sanity-checks the contrast helper against known values', () => {
     // Anchors the maths itself: white on black is the maximum 21:1, and a
@@ -48,29 +56,33 @@ describe('dark theme contrast', () => {
 
   it('primary is legible on both dark surfaces', () => {
     // The old hardcoded '#1976d2' measured 3.89:1 here and FAILED this.
-    expect(contrast(dark.palette.primary.main, bg)).toBeGreaterThanOrEqual(AA_NORMAL);
-    expect(contrast(dark.palette.primary.main, paper)).toBeGreaterThanOrEqual(AA_NORMAL);
+    expect(contrast(dark.primary.main, bg)).toBeGreaterThanOrEqual(AA_NORMAL);
+    expect(contrast(dark.primary.main, paper)).toBeGreaterThanOrEqual(AA_NORMAL);
   });
 
   it('secondary is legible on both dark surfaces', () => {
     // The old hardcoded '#dc004e' measured 3.47:1 here and FAILED this.
-    expect(contrast(dark.palette.secondary.main, bg)).toBeGreaterThanOrEqual(AA_NORMAL);
-    expect(contrast(dark.palette.secondary.main, paper)).toBeGreaterThanOrEqual(AA_NORMAL);
+    expect(contrast(dark.secondary.main, bg)).toBeGreaterThanOrEqual(AA_NORMAL);
+    expect(contrast(dark.secondary.main, paper)).toBeGreaterThanOrEqual(AA_NORMAL);
   });
 
   it('is a real improvement over the previous shared palette', () => {
     // Guards against a "fix" that merely nudges past the threshold.
-    expect(contrast(dark.palette.primary.main, bg)).toBeGreaterThan(contrast('#1976d2', bg));
-    expect(contrast(dark.palette.secondary.main, bg)).toBeGreaterThan(contrast('#dc004e', bg));
+    expect(contrast(dark.primary.main, bg)).toBeGreaterThan(contrast('#1976d2', bg));
+    expect(contrast(dark.secondary.main, bg)).toBeGreaterThan(contrast('#dc004e', bg));
   });
 });
 
 describe('light theme contrast', () => {
-  const light = createAppTheme('light');
+  const light = palettes.light;
 
   it('keeps the original brand colours', () => {
-    // The dark-mode fix must not repaint light mode.
-    expect(light.palette.primary.main).toBe('#1976d2');
-    expect(light.palette.secondary.main).toBe('#dc004e');
+    // The dark-mode fix must not repaint light mode. The 2026-08-20
+    // modernisation pass deliberately left both palettes alone and changed
+    // shape, typography and surface treatment instead, so this still holds. If
+    // light mode is ever repainted on purpose, this test needs a rewritten
+    // purpose -- not merely updated constants.
+    expect(light.primary.main).toBe('#1976d2');
+    expect(light.secondary.main).toBe('#dc004e');
   });
 });

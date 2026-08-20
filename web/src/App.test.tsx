@@ -1,17 +1,17 @@
 // file: web/src/App.test.tsx
-// version: 1.0.10
+// version: 1.0.11
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-08-06
+// last-edited: 2026-08-20
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { ThemeProvider } from '@mui/material';
 import App from './App';
-import { createAppTheme } from './theme';
+import { appTheme } from './theme';
 import { AuthProvider } from './contexts/AuthContext';
 
-const theme = createAppTheme('dark');
+const theme = appTheme;
 
 // Mock API
 vi.mock('./services/api', () => ({
