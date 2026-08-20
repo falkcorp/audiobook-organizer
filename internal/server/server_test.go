@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-08-16
+// last-edited: 2026-08-20
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -22,12 +22,14 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/gin-gonic/gin"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -128,21 +130,41 @@ func setupTestServerFS(t *testing.T, inMemory bool) (*Server, func()) {
 	return server, cleanup
 }
 
+// allowOpDefinitionUpserts permits the OperationDef upserts that server boot
+// performs, when the store under test is a MockStore. Boot registers ~150 defs
+// across the maintenance plugin and the opRegistrars loop; none of them is
+// what these tests are asserting, so the expectation is deliberately broad and
+// optional (.Maybe()) rather than enumerating defs that change with every new
+// op. A non-mock store (PebbleStore, etc.) is left untouched.
+//
+// Before this existed, the registration loop was gated on
+// config.AppConfig.RootDir != "" so tests would never reach it — which also
+// meant a production server started with no RootDir registered no operations
+// at all and still reported healthy.
+func allowOpDefinitionUpserts(store database.Store) {
+	if ms, ok := store.(*mocks.MockStore); ok {
+		ms.EXPECT().UpsertOpDefinitionV2(mock.Anything).Return(nil).Maybe()
+	}
+}
+
 // setupTestServerWithStore creates a test server with a provided database store
 func setupTestServerWithStore(t *testing.T, store database.Store) (*Server, func()) {
 	// Set Gin to test mode
 	gin.SetMode(gin.TestMode)
 
-	// Hermetic config: callers pass MockStores with a fixed expectation set,
-	// but the plugin Build guards (itunes, deluge) go LIVE whenever the
-	// ambient config.AppConfig.RootDir is non-empty and then call
-	// UpsertOpDefinitionV2 on the mock, which has no such expectation —
-	// testify FailNow fires before the test's real assertions run. RootDir
-	// can be non-empty here through cross-test (and, under `go test
-	// -count=N`, cross-iteration) config pollution, so pin it to "" for the
-	// duration instead of trusting ambient state.
+	// Hermetic config: the plugin Build guards (itunes, deluge) go LIVE
+	// whenever the ambient config.AppConfig.RootDir is non-empty, and RootDir
+	// can be non-empty here through cross-test (and, under `go test -count=N`,
+	// cross-iteration) config pollution, so pin it to "" instead of trusting
+	// ambient state.
 	origCfg := config.AppConfig
 	config.AppConfig.RootDir = ""
+
+	// Boot registers every OperationDef unconditionally (it used to be gated
+	// on RootDir, which meant an unset RootDir silently produced a server with
+	// zero operations). A MockStore therefore needs the def-upsert expectation
+	// or testify FailNow fires before the test's real assertions run.
+	allowOpDefinitionUpserts(store)
 
 	// Set the global store to the provided store
 	database.SetGlobalStore(store)
