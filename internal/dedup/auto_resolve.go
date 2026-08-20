@@ -1,7 +1,7 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
-// last-edited: 2026-07-13
+// last-edited: 2026-08-20
 
 package dedup
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -38,6 +39,31 @@ var autoResolvePrimaryKinds = map[unified.SignalKind]bool{
 	unified.SigExactAcoustID: true,
 	unified.SigISBNASIN:      true,
 	unified.SigMetaSrcHash:   true,
+}
+
+// DistinctAutoResolvePrimaryKinds returns the distinct PRIMARY signal kinds
+// present in signals that count toward the Tier-1 "≥2 distinct corroborating
+// signals" rule, in a stable sorted order. Kinds with Confidence == 0 do not
+// count (a signal that contributed nothing is not corroboration).
+//
+// It is EXPORTED so a REPORTING caller measures eligibility with the exact
+// rule autoResolveEligible enforces: dedup.breakdown-backfill's band histogram
+// uses it to answer "how many CERTAIN rows rest on a single strong signal".
+// A hand-copied allow-list in the reporting op would silently drift from this
+// one the moment a kind is added or re-weighted — the same failure shape as a
+// plugin guard that restates its registration contract (#2625), which is why
+// the rule is called rather than repeated.
+func DistinctAutoResolvePrimaryKinds(signals []unified.Signal) []unified.SignalKind {
+	seen := make(map[unified.SignalKind]bool, len(signals))
+	out := make([]unified.SignalKind, 0, len(signals))
+	for _, sig := range signals {
+		if sig.Confidence > 0 && autoResolvePrimaryKinds[sig.Kind] && !seen[sig.Kind] {
+			seen[sig.Kind] = true
+			out = append(out, sig.Kind)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 // AutoResolveResult is the report returned by AutoResolveCertain. In dry-run
@@ -210,15 +236,13 @@ func (de *Engine) autoResolveEligible(c database.DedupCandidate, bookA, bookB *d
 
 	// Corroboration: ≥2 distinct primary signal kinds with Confidence>0, OR a
 	// whole-book-signature true_dup labeled example.
-	distinct := map[unified.SignalKind]bool{}
-	for _, sig := range c.ScoreBreakdown.Signals {
-		if sig.Confidence > 0 && autoResolvePrimaryKinds[sig.Kind] {
-			distinct[sig.Kind] = true
-		}
-	}
+	// Sorted by DistinctAutoResolvePrimaryKinds, so the audit reason string is
+	// deterministic for the same evidence (it used to depend on Go's random
+	// map-iteration order).
+	distinct := DistinctAutoResolvePrimaryKinds(c.ScoreBreakdown.Signals)
 	if len(distinct) >= 2 {
 		kinds := make([]string, 0, len(distinct))
-		for k := range distinct {
+		for _, k := range distinct {
 			kinds = append(kinds, string(k))
 		}
 		return true, fmt.Sprintf("%d distinct primary signals: %s", len(distinct), strings.Join(kinds, "+"))

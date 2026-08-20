@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/breakdown_backfill.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ec0f5e9d-2f6d-485d-9f24-ad3d917d1834
-// last-edited: 2026-08-19
+// last-edited: 2026-08-20
 
 // Package dedup — op dedup.breakdown-backfill.
 //
@@ -39,6 +39,20 @@
 // persisted, since an empty breakdown would be indistinguishable from
 // "scored, no evidence".
 //
+// # Band histogram
+//
+// Both dry-run and apply report a band histogram over the SCORED pairs, plus a
+// risk split of the CERTAIN band. The band alone is not the merge gate:
+// dedup.auto-resolve additionally requires >=2 distinct kinds from its primary
+// allow-list (exact_file, exact_acoustid, isbn_asin, metadata_hash), which
+// excludes metadata_fuzzy and the embedding kinds. Since this op is what GIVES
+// these pre-T015 rows a Band and a breakdown at all — and a nil breakdown is
+// itself an auto-resolve refusal reason — the count of CERTAIN rows with <2
+// allow-listed kinds is the number an operator needs before running apply=true.
+// The distinct-kind count comes from dedup.DistinctAutoResolvePrimaryKinds, the
+// same function the eligibility check calls, so the report cannot drift from
+// the gate.
+//
 // Dry-run (report only, 10 sample pairs logged) is the default.
 // {"apply":true} writes.
 package dedup
@@ -49,11 +63,14 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/models"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -70,6 +87,56 @@ const breakdownBackfillProgressEvery = 1000
 
 // breakdownBackfillSampleLimit caps the sample pairs logged for a dry-run.
 const breakdownBackfillSampleLimit = 10
+
+// breakdownBackfillBelowBandKey names the report bucket for a composed score
+// that landed below the REVIEW floor (Band == ""). This op deliberately
+// bypasses the scan's below-band skip, so those rows are real and persisted —
+// a bare "" key in the JSON histogram would read as a bug rather than a band.
+const breakdownBackfillBelowBandKey = "BELOW"
+
+// breakdownBackfillBandOrder is the band order used in the human-readable
+// summary line (highest confidence first). The JSON map is unordered.
+var breakdownBackfillBandOrder = []string{
+	unified.BandCertain, unified.BandHigh, unified.BandMedium, unified.BandReview,
+	breakdownBackfillBelowBandKey,
+}
+
+// bandKey maps a composed score's band to its histogram bucket, naming the
+// below-band case instead of emitting an empty key.
+func bandKey(band string) string {
+	if band == "" {
+		return breakdownBackfillBelowBandKey
+	}
+	return band
+}
+
+// signalSetKey renders a pair's evidence as a stable, sorted, "+"-joined set of
+// DISTINCT signal kinds ("isbn_asin+metadata_fuzzy"), so the histogram can be
+// grouped by what a pair is actually made of.
+//
+// WHY the whole set rather than the single strongest signal: the composed score
+// is a noisy-OR product, so two mid-confidence signals can outrank one strong
+// one (0.90+0.90 → 99.0 beats a lone 0.95 → 95.0). A "top signal" column would
+// misattribute exactly those rows — the ones worth looking at. The key space is
+// bounded by the fixed signal-kind list, so there is no cap and nothing is
+// silently dropped.
+func signalSetKey(signals []unified.Signal) string {
+	seen := make(map[string]bool, len(signals))
+	kinds := make([]string, 0, len(signals))
+	for _, s := range signals {
+		k := string(s.Kind)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		kinds = append(kinds, k)
+	}
+	if len(kinds) == 0 {
+		return "none"
+	}
+	sort.Strings(kinds)
+	return strings.Join(kinds, "+")
+}
 
 // breakdownBackfillParams are the JSON parameters accepted by the op.
 type breakdownBackfillParams struct {
@@ -102,6 +169,29 @@ type breakdownBackfillReport struct {
 	UpdateErrs          int            `json:"update_errs"`
 	MissingSignalCounts map[string]int `json:"missing_signal_counts"`
 	SignalKindCounts    map[string]int `json:"signal_kind_counts"`
+
+	// BandCounts is the band histogram over every SCORED pair (zero-signal
+	// pairs are excluded — they are counted by ZeroSignal and have no band).
+	// Keys: CERTAIN/HIGH/MEDIUM/REVIEW plus BELOW for sub-REVIEW scores.
+	BandCounts map[string]int `json:"band_counts"`
+
+	// CertainSignalsEq1 counts CERTAIN pairs carrying exactly ONE signal of
+	// any kind — the shape that shows up in the sample log.
+	CertainSignalsEq1 int `json:"certain_signals_eq_1"`
+
+	// CertainPrimaryKindCounts buckets CERTAIN pairs by how many DISTINCT
+	// auto-resolve primary signal kinds they carry ("0"/"1"/"2+"), using
+	// dedup.DistinctAutoResolvePrimaryKinds — the same rule
+	// autoResolveEligible enforces. Only the "2+" bucket can ever auto-merge;
+	// the "0" and "1" buckets are CERTAIN pairs that dedup.auto-resolve would
+	// still refuse, which is what makes this the risk-relevant split.
+	CertainPrimaryKindCounts map[string]int `json:"certain_primary_kind_counts"`
+
+	// CertainSignalSets counts CERTAIN pairs by their full distinct signal
+	// set ("exact_file", "isbn_asin+duration", …). This is what answers
+	// "can a fuzzy title match alone reach CERTAIN" with data instead of an
+	// argument from the calibration table.
+	CertainSignalSets map[string]int `json:"certain_signal_sets"`
 }
 
 // breakdownBackfillDef returns the OperationDef for dedup.breakdown-backfill.
@@ -260,6 +350,10 @@ func runBreakdownBackfillWith(
 		scoreErrs        int
 		updateErrs       int
 		signalKindCounts = map[string]int{}
+		bandCounts       = map[string]int{}
+		certainSigsEq1   int
+		certainPrimaries = map[string]int{}
+		certainSets      = map[string]int{}
 		samples          []string
 	)
 
@@ -324,6 +418,28 @@ func runBreakdownBackfillWith(
 			for _, s := range res.Score.Signals {
 				signalKindCounts[string(s.Kind)]++
 			}
+			// Histogram every SCORED pair — apply and dry-run alike. Counting
+			// here (not inside the !Apply arm below) keeps an apply=true report
+			// from showing an all-zero histogram that reads as a regression.
+			band := bandKey(res.Score.Band)
+			bandCounts[band]++
+			if band == unified.BandCertain {
+				if res.NumSignals == 1 {
+					certainSigsEq1++
+				}
+				// The auto-merge gate is "≥2 distinct primary kinds", NOT the
+				// band — a CERTAIN pair in the "0"/"1" bucket is one that
+				// dedup.auto-resolve would refuse.
+				switch n := len(dedupengine.DistinctAutoResolvePrimaryKinds(res.Score.Signals)); {
+				case n >= 2:
+					certainPrimaries["2+"]++
+				case n == 1:
+					certainPrimaries["1"]++
+				default:
+					certainPrimaries["0"]++
+				}
+				certainSets[signalSetKey(res.Score.Signals)]++
+			}
 			if len(samples) < breakdownBackfillSampleLimit {
 				samples = append(samples, fmt.Sprintf(
 					"cand=%d pair=%s↔%s score=%.2f band=%q signals=%d",
@@ -383,6 +499,11 @@ func runBreakdownBackfillWith(
 		UpdateErrs:          updateErrs,
 		MissingSignalCounts: missingSignalCounts,
 		SignalKindCounts:    signalKindCounts,
+
+		BandCounts:               bandCounts,
+		CertainSignalsEq1:        certainSigsEq1,
+		CertainPrimaryKindCounts: certainPrimaries,
+		CertainSignalSets:        certainSets,
 	}
 	reportJSON, _ := json.Marshal(report)
 	_ = reporter.Log(slog.LevelInfo, "Breakdown-backfill report (JSON)", slog.String("report", string(reportJSON)))
@@ -400,6 +521,15 @@ func runBreakdownBackfillWith(
 		"update_errs", updateErrs,
 		"missing_signal_counts", missingSignalCounts,
 		"signal_kind_counts", signalKindCounts,
+		"band_counts", bandCounts,
+	)
+	// Risk profile of the CERTAIN band, logged on its own line: the band alone
+	// does not authorise a merge, the distinct-primary-kind count does.
+	log.Info("breakdown-backfill band histogram",
+		"band_counts", bandCounts,
+		"certain_signals_eq_1", certainSigsEq1,
+		"certain_primary_kind_counts", certainPrimaries,
+		"certain_signal_sets", certainSets,
 	)
 
 	summary := fmt.Sprintf(
@@ -408,6 +538,14 @@ func runBreakdownBackfillWith(
 	for k, v := range missingSignalCounts {
 		summary += fmt.Sprintf(" missing[%s]=%d", k, v)
 	}
+	// Bands in a fixed high→low order (the JSON map is unordered); zero
+	// buckets are printed too, so an absent band reads as measured-zero rather
+	// than as a dropped key.
+	for _, b := range breakdownBackfillBandOrder {
+		summary += fmt.Sprintf(" %s=%d", b, bandCounts[b])
+	}
+	summary += fmt.Sprintf(" certain_1sig=%d certain_primary[0]=%d certain_primary[1]=%d certain_primary[2+]=%d",
+		certainSigsEq1, certainPrimaries["0"], certainPrimaries["1"], certainPrimaries["2+"])
 
 	if !params.Apply {
 		_ = reporter.UpdateProgress(3, 3, "Dry-run — "+summary+". Pass apply=true to persist ScoreBreakdowns.")
