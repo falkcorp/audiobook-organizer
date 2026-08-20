@@ -280,6 +280,69 @@ func TestListDedupCandidates_BothUnmatched(t *testing.T) {
 	}
 }
 
+func TestListDedupCandidates_EntityID(t *testing.T) {
+	// Backs the ?book= deep link. The behaviour that matters is not "filters by
+	// book" but "filters at scan level": the frontend previously narrowed the
+	// LOADED PAGE client-side, so arriving for a book whose candidate sorted
+	// onto page 2 showed an empty list under a banner naming that book.
+	h, d := newHandler(t)
+	// Pair ordering normalises (a,b) so that a < b. These two ids straddle
+	// "m-target", putting it on side B in one pair and side A in the other --
+	// the either-side case the predicate exists for.
+	insertCandidate(t, d.es, "a-x", "m-target") // target normalises to B
+	insertCandidate(t, d.es, "m-target", "z-y") // target normalises to A
+	insertCandidate(t, d.es, "n-1", "n-2")
+	insertCandidate(t, d.es, "n-3", "n-4")
+	insertCandidate(t, d.es, "n-5", "n-6")
+	insertCandidate(t, d.es, "n-7", "n-8")
+	d.store.EXPECT().GetBookByID(mock.Anything).
+		Return(&database.Book{ID: "x", Title: "T"}, nil).Maybe()
+
+	// limit=2 is deliberate: without a scan-level filter, a client-side narrow
+	// of this page could only ever have found candidates that happened to land
+	// in the first two rows.
+	w := doReq(t, h.ListDedupCandidates, http.MethodGet,
+		"/api/v1/dedup/candidates?entity_id=m-target&limit=2", nil, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Candidates []map[string]any `json:"candidates"`
+			Total      int              `json:"total"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, w.Body.String())
+	}
+	// total is the whole matching set, not the page -- this is what lets the UI
+	// paginate a deep-linked book correctly.
+	if resp.Data.Total != 2 {
+		t.Fatalf("total=%d want 2 (the matching set, not the unfiltered 6); body=%s",
+			resp.Data.Total, w.Body.String())
+	}
+	if len(resp.Data.Candidates) != 2 {
+		t.Fatalf("len=%d want 2", len(resp.Data.Candidates))
+	}
+	sawA, sawB := false, false
+	for _, row := range resp.Data.Candidates {
+		a, _ := row["entity_a_id"].(string)
+		b, _ := row["entity_b_id"].(string)
+		if a != "m-target" && b != "m-target" {
+			t.Fatalf("unrelated pair leaked through entity_id: %v", row)
+		}
+		if a == "m-target" {
+			sawA = true
+		}
+		if b == "m-target" {
+			sawB = true
+		}
+	}
+	if !sawA || !sawB {
+		t.Fatalf("entity_id must match either side of the pair; sawA=%v sawB=%v", sawA, sawB)
+	}
+}
+
 func TestListDedupCandidates_NoEmbedStore(t *testing.T) {
 	h, _ := newHandler(t, noEmbed)
 	w := doReq(t, h.ListDedupCandidates, http.MethodGet, "/api/v1/dedup/candidates", nil, nil)

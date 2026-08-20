@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.63.0
+// version: 2.64.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-08-20
 
@@ -5071,7 +5071,12 @@ export async function getDedupCandidates(params?: {
   // When true, only pairs where NEITHER book has matched metadata are returned
   // (both low-quality, need manual matching).
   both_unmatched?: boolean;
-}): Promise<DedupCandidatesResponse> {
+  // Restrict to candidates where EITHER side of the pair is this entity --
+  // the "this book's duplicates" view behind the ?book= deep link. Filtered
+  // server-side at scan level, so `total` covers the whole matching set and
+  // the result can be paginated like any other filter.
+  entity_id?: string;
+}, opts?: { signal?: AbortSignal }): Promise<DedupCandidatesResponse> {
   const qs = new URLSearchParams();
   if (params?.entity_type) qs.set('entity_type', params.entity_type);
   if (params?.status) qs.set('status', params.status);
@@ -5081,10 +5086,13 @@ export async function getDedupCandidates(params?: {
   if (params?.include_breakdown) qs.set('include_breakdown', 'true');
   if (params?.include_books) qs.set('include_books', 'true');
   if (params?.both_unmatched) qs.set('both_unmatched', 'true');
+  if (params?.entity_id) qs.set('entity_id', params.entity_id);
   if (params?.limit != null) qs.set('limit', String(params.limit));
   if (params?.offset != null) qs.set('offset', String(params.offset));
   const url = qs.toString() ? `${API_BASE}/dedup/candidates?${qs}` : `${API_BASE}/dedup/candidates`;
-  const response = await apiFetch(url);
+  // apiFetch has always accepted a signal; this function simply never plumbed
+  // one through, which is why the dedup UI reached past it to a raw fetch.
+  const response = await apiFetch(url, { signal: opts?.signal });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to fetch dedup candidates');
   }
