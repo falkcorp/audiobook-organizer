@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
 // last-edited: 2026-08-20
 
@@ -186,6 +186,53 @@ describe('the lane comes from the URL', () => {
     // still in the URL and still applies, and nothing about the click changed
     // the URL to trigger a second pass.
     expect(api.getDedupCandidates).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('rescore', () => {
+  // The surface that owned rescore (UnifiedDedupTab) is deleted, and this is
+  // where its two-button dialog went. Worth testing precisely because the
+  // command bar had quietly collapsed both buttons into one that only dry-ran.
+
+  async function openDedupMenu(user: ReturnType<typeof userEvent.setup>) {
+    renderWorkspace();
+    await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /dedup/i }));
+  }
+
+  it('dry run says it is a dry run, and writes nothing', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.rescoreDedupCandidates).mockResolvedValue({} as never);
+    await openDedupMenu(user);
+
+    await user.click(screen.getByRole('menuitem', { name: /rescore \(dry run\)/i }));
+
+    // The label and the argument have to agree. They did not: the item read
+    // "Rescore", passed apply=false, and toasted "Rescore started".
+    expect(api.rescoreDedupCandidates).toHaveBeenCalledWith(false);
+  });
+
+  it('does not apply until the confirmation is accepted', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.rescoreDedupCandidates).mockResolvedValue({} as never);
+    await openDedupMenu(user);
+
+    await user.click(screen.getByRole('menuitem', { name: /rescore and apply/i }));
+    // Choosing the menu item must not be the mutation.
+    expect(api.rescoreDedupCandidates).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId('rescore-apply-confirm'));
+    expect(api.rescoreDedupCandidates).toHaveBeenCalledWith(true);
+  });
+
+  it('cancelling leaves the candidates alone', async () => {
+    const user = userEvent.setup();
+    await openDedupMenu(user);
+
+    await user.click(screen.getByRole('menuitem', { name: /rescore and apply/i }));
+    await user.click(screen.getByRole('button', { name: /cancel/i }));
+
+    expect(api.rescoreDedupCandidates).not.toHaveBeenCalled();
   });
 });
 

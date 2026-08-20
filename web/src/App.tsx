@@ -1,5 +1,5 @@
 // file: web/src/App.tsx
-// version: 1.24.0
+// version: 1.25.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-08-20
 import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
@@ -43,10 +43,11 @@ const PlaylistDetail = lazy(() => import('./pages/PlaylistDetail'));
 const Setup = lazy(() => import('./pages/Setup'));
 const Users = lazy(() => import('./pages/Users'));
 const TrashedVersions = lazy(() => import('./pages/TrashedVersions'));
-// PLAN.md Phase 5: /review is the unified workspace. No `review_show_legacy`
-// toggle -- one user, no migration window, so a compatibility gate would be pure
-// cost with nobody to protect. ReviewQueue stays importable until Phase 7
-// deletes it, gated on docs/port-inventory.md.
+// /review is the unified workspace: dedup, metadata apply and the review queue
+// in three lanes on one screen. No `review_show_legacy` toggle -- one user, no
+// migration window, so a compatibility gate would be pure cost with nobody to
+// protect. Phase 7 deleted the surfaces it replaced (ReviewQueue,
+// MetadataReviewDialog, UnifiedDedupTab); git is the safety net now.
 const ReviewWorkspace = lazy(() =>
   import('./components/review/ReviewWorkspace').then((m) => ({ default: m.ReviewWorkspace }))
 );
