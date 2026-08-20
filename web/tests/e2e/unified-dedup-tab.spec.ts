@@ -260,8 +260,14 @@ test.describe('Unified Dedup Tab (T017)', () => {
     await page.locator('[data-testid="drawer-tab-breakdown"]').click();
 
     // Breakdown panel should render with signal data.
-    await expect(page.locator('[data-testid="score-breakdown-panel"]')).toBeVisible();
-    await expect(page.locator('[data-testid="score-stacked-bar"]')).toBeVisible();
+    //
+    // ScoreBreakdownPanel was promoted to the shared EvidencePanel, which names
+    // its test ids by EVIDENCE KIND rather than by lane: dedup's score is a
+    // weighted sum, so it renders the `weighted` view -- the only one of the
+    // three kinds entitled to a stacked share bar. See
+    // src/components/review/evidence/types.ts.
+    await expect(page.locator('[data-testid="evidence-weighted"]')).toBeVisible();
+    await expect(page.locator('[data-testid="evidence-stacked-bar"]')).toBeVisible();
     await expect(page.locator('text=Exact file hash')).toBeVisible();
   });
 

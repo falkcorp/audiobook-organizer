@@ -402,15 +402,19 @@ test.describe('MetadataEditDialog Provenance E2E', () => {
     const titleField = page.getByLabel('Title *');
     const titleContainer = titleField.locator('..').locator('..');
     const titleLockButton = titleContainer.locator('button').first();
-    await expect(titleLockButton.locator('[data-testid="LockOpenIcon"]')).toBeVisible();
+    // Asserted through aria-pressed rather than through which icon is rendered.
+    // The old form read MUI's internal icon `data-testid`, which v9 emits only
+    // in development -- and it tested a glyph rather than the state the glyph
+    // stands for.
+    await expect(titleLockButton).toHaveAttribute('aria-pressed', 'false');
 
     // Click to lock
     await titleLockButton.click();
-    await expect(titleLockButton.locator('[data-testid="LockIcon"]')).toBeVisible();
+    await expect(titleLockButton).toHaveAttribute('aria-pressed', 'true');
 
     // Click again to unlock
     await titleLockButton.click();
-    await expect(titleLockButton.locator('[data-testid="LockOpenIcon"]')).toBeVisible();
+    await expect(titleLockButton).toHaveAttribute('aria-pressed', 'false');
   });
 
   test('source labels show correct source type', async ({ page }) => {

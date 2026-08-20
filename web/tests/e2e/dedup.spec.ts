@@ -235,8 +235,10 @@ test.describe('Author Dedup', () => {
   test('edit canonical name inline', async ({ page }) => {
     await openDedupPage(page);
 
-    // Find edit button (pencil icon next to canonical name)
-    const editBtns = page.locator('button').filter({ has: page.locator('[data-testid="EditIcon"]') });
+    // Found by accessible name. This used to filter on the `data-testid` MUI
+    // stamped inside the icon; MUI 9 emits that only in development, so it
+    // matched nothing in the production bundle the e2e suite builds.
+    const editBtns = page.getByRole('button', { name: 'Edit canonical name' });
     await editBtns.first().click();
 
     // Should show text field in main content area (not the search bar)

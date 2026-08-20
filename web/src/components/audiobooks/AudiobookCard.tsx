@@ -219,6 +219,12 @@ export const AudiobookCard: React.FC<AudiobookCardProps> = ({
           }}
           onClick={handleMenuClick}
           size="small"
+          // Named for assistive tech AND for tests. Until MUI 9 this button had
+          // no accessible name at all, and the e2e suite reached it through the
+          // `data-testid` MUI stamped on the icon -- an internal debug
+          // affordance that MUI 9 emits only in development builds, so every
+          // selector using it broke silently against the production bundle.
+          aria-label="Book actions"
         >
           <MoreVertIcon />
         </IconButton>

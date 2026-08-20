@@ -1,7 +1,7 @@
 # file: .github/workflows/e2e.yml
-# version: 1.3.1
+# version: 1.4.0
 # guid: 6a2f47c9-1e83-4d05-b7f6-92c4a0d81b3e
-# last-edited: 2026-08-10
+# last-edited: 2026-08-20
 
 # Runs the Playwright end-to-end suite.
 #
@@ -78,6 +78,19 @@ on:
           - chromium
           - chromium+webkit
         default: chromium
+      update_snapshots:
+        description: >-
+          Regenerate visual-regression goldens and upload them as an artifact.
+          Goldens are per-platform (…-chromium-linux.png), so the Linux ones can
+          only be produced on a Linux runner -- a developer on macOS cannot
+          regenerate them locally, which is why this switch exists rather than
+          a "just run it with --update-snapshots" note in a README.
+          The job still fails on purpose when snapshots change, so a
+          regeneration can never be mistaken for a green run; download the
+          artifact and commit the files deliberately.
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: e2e-${{ github.ref }}
@@ -181,6 +194,7 @@ jobs:
           # workflow injections, so it is avoided uniformly.
           EVENT_NAME: ${{ github.event_name }}
           INPUT_PROJECTS: ${{ inputs.projects }}
+          INPUT_UPDATE_SNAPSHOTS: ${{ inputs.update_snapshots }}
         run: |
           cd web
           if [ "$EVENT_NAME" = "pull_request" ] || \
@@ -226,4 +240,35 @@ jobs:
             *) PROJECTS=(--project=chromium --project=webkit) ;;
           esac
           echo "Running with: ${PROJECTS[*]}"
-          npx playwright test -c tests/e2e/playwright.config.ts "${PROJECTS[@]}" --reporter=line
+          UPDATE=()
+          if [ "$INPUT_UPDATE_SNAPSHOTS" = "true" ]; then
+            # Deliberately still exits non-zero when anything changed. A
+            # regeneration run that reported success would be indistinguishable
+            # from a passing suite, and the next person would trust a green tick
+            # that only means "the goldens were overwritten".
+            UPDATE=(--update-snapshots)
+            echo "::warning::Regenerating goldens. This run is EXPECTED to fail if any changed; download the updated-snapshots artifact and commit the files."
+          fi
+          npx playwright test -c tests/e2e/playwright.config.ts "${PROJECTS[@]}" "${UPDATE[@]}" --reporter=line
+
+      # Without these, a red E2E job offers a line-reporter dump and nothing
+      # else: no screenshot, no trace, no diff image. Every visual failure then
+      # has to be reproduced locally, which is impossible for a Linux-only
+      # golden on a macOS machine.
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure-artifacts
+          path: web/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload regenerated goldens
+        if: always() && inputs.update_snapshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: updated-snapshots
+          path: web/tests/e2e/**/*-snapshots/**
+          retention-days: 7
+          if-no-files-found: warn

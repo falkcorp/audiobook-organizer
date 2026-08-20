@@ -142,10 +142,7 @@ test.describe('Import Audiobook File - Interactive Navigation', () => {
     await expect(dialog(page).getByText('Users')).toBeVisible();
     await expect(dialog(page).getByText('tmp')).toBeVisible();
 
-    const homeButton = dialog(page)
-      .locator('button')
-      .filter({ has: page.locator('svg[data-testid="HomeIcon"]') })
-      .first();
+    const homeButton = dialog(page).getByRole('button', { name: 'Filesystem root' }).first();
     await homeButton.click();
 
     await expect(dialog(page).getByText('Audiobooks')).toBeVisible();
@@ -201,18 +198,12 @@ test.describe('Import Audiobook File - Interactive Navigation', () => {
     await openImportFileBrowser(page);
 
     // Click edit path button (the EditIcon next to breadcrumbs)
-    const editButton = dialog(page)
-      .locator('button')
-      .filter({ has: page.locator('svg[data-testid="EditIcon"]') })
-      .first();
+    const editButton = dialog(page).getByRole('button', { name: 'Edit path' }).first();
     await editButton.click();
 
     // The path editor textbox appears near the CheckIcon button
     // (not the "Import file path" labeled field at the top)
-    const checkButton = dialog(page)
-      .locator('button')
-      .filter({ has: page.locator('svg[data-testid="CheckIcon"]') })
-      .first();
+    const checkButton = dialog(page).getByRole('button', { name: 'Save path' }).first();
     // The textbox is a sibling of the check button in the same Stack
     const pathInput = checkButton.locator('..').getByRole('textbox');
     await pathInput.clear();
@@ -394,16 +385,10 @@ test.describe('Import Audiobook File - Error Handling', () => {
     await openImportFileBrowser(page);
 
     // Enter invalid path via edit mode
-    const editButton = dialog(page)
-      .locator('button')
-      .filter({ has: page.locator('svg[data-testid="EditIcon"]') })
-      .first();
+    const editButton = dialog(page).getByRole('button', { name: 'Edit path' }).first();
     await editButton.click();
 
-    const checkButton = dialog(page)
-      .locator('button')
-      .filter({ has: page.locator('svg[data-testid="CheckIcon"]') })
-      .first();
+    const checkButton = dialog(page).getByRole('button', { name: 'Save path' }).first();
     const pathInput = checkButton.locator('..').getByRole('textbox');
     await pathInput.clear();
     await pathInput.fill('/nonexistent/path');

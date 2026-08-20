@@ -275,7 +275,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                     <>
                       {value && (
                         <InputAdornment position="end">
-                          <IconButton size="small" onClick={handleClear}>
+                          <IconButton size="small" onClick={handleClear} aria-label="Clear search">
                             <ClearIcon />
                           </IconButton>
                         </InputAdornment>

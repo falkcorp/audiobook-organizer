@@ -38,9 +38,11 @@ const openVersionManager = async (
   const card = page
     .getByText(title, { exact: true })
     .locator('xpath=ancestor::*[contains(@class,"MuiCard-root")][1]');
-  // The overflow IconButton carries no accessible name (AudiobookCard.tsx:183),
-  // so it can only be found by the icon MUI stamps inside it.
-  await card.locator('button:has([data-testid="MoreVertIcon"])').click();
+  // Found by its accessible name. It previously had none, and this reached it
+  // through the `data-testid` MUI stamped on the icon -- an internal debug
+  // affordance MUI 9 emits only in development, so it matched nothing in the
+  // production bundle the e2e suite actually builds.
+  await card.getByRole('button', { name: 'Book actions' }).click();
   await page.getByRole('menuitem', { name: 'Manage Versions' }).click();
 };
 

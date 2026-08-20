@@ -133,7 +133,7 @@ const openVersionManagerFor = async (page: Page, title: string) => {
   const card = page
     .getByText(title, { exact: true })
     .locator('xpath=ancestor::*[contains(@class,"MuiCard-root")][1]');
-  await card.locator('button:has([data-testid="MoreVertIcon"])').click();
+  await card.getByRole('button', { name: 'Book actions' }).click();
   await page.getByRole('menuitem', { name: 'Manage Versions' }).click();
 };
 
