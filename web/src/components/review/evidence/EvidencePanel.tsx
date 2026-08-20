@@ -1,5 +1,5 @@
 // file: web/src/components/review/evidence/EvidencePanel.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: c07f4b91-8d23-4e56-a1b8-5f2c9d0e3a74
 // last-edited: 2026-08-20
 //
@@ -22,7 +22,7 @@ import type {
   WeightedEvidence,
   WeightedSignal,
 } from './types';
-import { recomposeWaterfall } from './types';
+import { incompleteReason, recomposeWaterfall, waterfallIsConsistent } from './types';
 
 // Human-friendly labels for dedup signal kinds. An unknown kind falls through
 // to its raw value rather than rendering blank -- a signal we cannot name is
@@ -50,6 +50,34 @@ const SIGNAL_LABELS: Record<string, string> = {
 function signalColor(theme: Theme, kind: string): string {
   const palette = theme.vars.palette.signal;
   return (palette as unknown as Record<string, string>)[kind] ?? palette.unknown;
+}
+
+/**
+ * Format a number that arrived over the wire and may not be one.
+ *
+ * Steps come from JSON, so `operand` and `running` are only numbers if the
+ * backend still calls them that. When a tag is renamed or dropped they arrive
+ * as `undefined`, and `undefined.toFixed(2)` throws -- which unmounts the whole
+ * review screen over one malformed row. A step we cannot read is a real thing
+ * to show the reviewer, not a reason to lose the other four: render it as
+ * unreadable and let the "breakdown incomplete" chip say why.
+ */
+function num(value: number, digits = 2): string {
+  return Number.isFinite(value) ? value.toFixed(digits) : '—';
+}
+
+/**
+ * A bar width as a percentage string, clamped to [0, 100].
+ *
+ * The clamp is not cosmetic. A non-finite input yields the CSS length `NaN%`,
+ * which is invalid, so the browser discards the declaration and the element
+ * falls back to its auto width -- frequently reading as a FULL bar. A step we
+ * could not parse would then be drawn as the strongest one on screen. Zero is
+ * the honest width for a quantity we do not have.
+ */
+function barPercent(value: number): string {
+  if (!Number.isFinite(value)) return '0%';
+  return `${Math.min(100, Math.max(0, value))}%`;
 }
 
 function bandColor(band: string): 'error' | 'warning' | 'info' | 'default' {
@@ -103,7 +131,7 @@ function WeightedView({ evidence }: { evidence: WeightedEvidence }) {
     <Box data-testid="evidence-weighted">
       <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1.5 }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-          Score: {evidence.score.toFixed(1)}
+          Score: {num(evidence.score, 1)}
         </Typography>
         {evidence.band && (
           <Chip label={evidence.band} size="small" color={bandColor(evidence.band)} />
@@ -121,7 +149,7 @@ function WeightedView({ evidence }: { evidence: WeightedEvidence }) {
           <Box>
             {rows.map((s) => (
               <Typography key={s.id} variant="caption" sx={{ display: 'block' }}>
-                {SIGNAL_LABELS[s.id] ?? s.label}: {(s.share * 100).toFixed(1)}%
+                {SIGNAL_LABELS[s.id] ?? s.label}: {num(s.share * 100, 1)}%
               </Typography>
             ))}
           </Box>
@@ -142,7 +170,7 @@ function WeightedView({ evidence }: { evidence: WeightedEvidence }) {
             <Box
               key={s.id}
               sx={(theme) => ({
-                width: `${s.share * 100}%`,
+                width: barPercent(s.share * 100),
                 bgcolor: signalColor(theme, s.id),
                 minWidth: s.share > 0 ? 2 : 0,
               })}
@@ -175,7 +203,7 @@ function WeightedView({ evidence }: { evidence: WeightedEvidence }) {
                   flexShrink: 0,
                 }}
               >
-                {(s.value * 100).toFixed(0)}%
+                {num(s.value * 100, 0)}%
               </Typography>
               <Typography
                 variant="caption"
@@ -187,7 +215,7 @@ function WeightedView({ evidence }: { evidence: WeightedEvidence }) {
                   textAlign: 'right',
                 }}
               >
-                w={s.weight.toFixed(2)}
+                w={num(s.weight)}
               </Typography>
             </Stack>
           </Tooltip>
@@ -235,15 +263,16 @@ function FactsView({ evidence }: { evidence: FactsEvidence }) {
 
 /** How an operand reads in the reviewer's terms, given what the op does. */
 function formatOperand(step: WaterfallStep): string {
+  if (!Number.isFinite(step.operand)) return '—';
   switch (step.op) {
     case 'base':
-      return step.operand.toFixed(2);
+      return num(step.operand);
     case 'multiply':
-      return `×${step.operand.toFixed(2)}`;
+      return `×${num(step.operand)}`;
     case 'add':
-      return `${step.operand >= 0 ? '+' : ''}${step.operand.toFixed(2)}`;
+      return `${step.operand >= 0 ? '+' : ''}${num(step.operand)}`;
     case 'replace':
-      return `= ${step.operand.toFixed(2)}`;
+      return `= ${num(step.operand)}`;
   }
 }
 
@@ -289,22 +318,23 @@ function WaterfallView({ evidence }: { evidence: WaterfallEvidence }) {
   // The panel must not present a derivation that does not derive the score.
   // This is the same check the backend asserts as a property; repeating it here
   // guards against a stale or hand-built payload reaching the UI.
+  //
+  // Delegated to `waterfallIsConsistent` rather than re-comparing inline: the
+  // predicate has to reject non-finite recompositions explicitly, and an inline
+  // `Math.abs(a - b) > eps` gets that exactly backwards, since NaN compares
+  // false against everything and so reads as agreement. Two copies of this test
+  // is two chances to write the wrong polarity, so there is only one.
   const recomposed = recomposeWaterfall(evidence.steps);
-  const inconsistent = Math.abs(recomposed - evidence.score) > 1e-6;
+  const inconsistent = !waterfallIsConsistent(evidence, 1e-6);
 
   return (
     <Box data-testid="evidence-waterfall">
       <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1.5 }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-          Score: {evidence.score.toFixed(2)}
+          Score: {num(evidence.score)}
         </Typography>
         {inconsistent && (
-          <Tooltip
-            title={
-              `These steps replay to ${recomposed.toFixed(4)}, not ${evidence.score.toFixed(4)}. ` +
-              'The breakdown does not explain this score, so treat it as incomplete rather than as a derivation.'
-            }
-          >
+          <Tooltip title={incompleteReason(recomposed, evidence.score)}>
             <Chip size="small" color="warning" label="breakdown incomplete" />
           </Tooltip>
         )}
@@ -353,7 +383,7 @@ function WaterfallView({ evidence }: { evidence: WaterfallEvidence }) {
                 >
                   <Box
                     sx={{
-                      width: `${Math.min(100, (Math.abs(step.running) / scale) * 100)}%`,
+                      width: barPercent((Math.abs(step.running) / scale) * 100),
                       height: '100%',
                       bgcolor: step.op === 'replace' ? 'info.main' : 'primary.main',
                     }}
@@ -370,7 +400,7 @@ function WaterfallView({ evidence }: { evidence: WaterfallEvidence }) {
                     textAlign: 'right',
                   }}
                 >
-                  {step.running.toFixed(2)}
+                  {num(step.running)}
                 </Typography>
               </Stack>
             </Tooltip>

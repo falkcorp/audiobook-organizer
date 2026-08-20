@@ -1,5 +1,5 @@
 // file: web/src/components/review/evidence/types.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8b3f1a94-6c02-4e7d-95a1-2f8e4d0c7b63
 // last-edited: 2026-08-20
 //
@@ -176,8 +176,49 @@ export function recomposeWaterfall(steps: WaterfallStep[]): number {
 /**
  * Whether a waterfall's steps reproduce its score, within floating-point
  * tolerance. `epsilon` is absolute; scores here live in [0, ~1.2].
+ *
+ * Non-finite values are inconsistent, and this must be checked explicitly
+ * rather than left to the comparison. `NaN` is unordered against everything,
+ * so `Math.abs(NaN - score) > epsilon` is FALSE -- a caller phrasing the test
+ * as "flag it when they diverge" would report agreement. That is not a
+ * hypothetical: a wire-format drift (a renamed JSON tag, a field the backend
+ * stopped sending) yields steps whose `operand` is `undefined`, which recomposes
+ * to `NaN`, and the panel would then present rows it could not verify as a
+ * verified derivation. Requiring finiteness makes the seam fail loudly.
  */
 export function waterfallIsConsistent(ev: WaterfallEvidence, epsilon = 1e-9): boolean {
   if (ev.steps.length === 0) return false;
-  return Math.abs(recomposeWaterfall(ev.steps) - ev.score) <= epsilon;
+  const recomposed = recomposeWaterfall(ev.steps);
+  if (!Number.isFinite(recomposed) || !Number.isFinite(ev.score)) return false;
+  return Math.abs(recomposed - ev.score) <= epsilon;
+}
+
+/** Fixed-digit formatting that tolerates a value the wire did not supply. */
+function fmt(value: number, digits: number): string {
+  return Number.isFinite(value) ? value.toFixed(digits) : '—';
+}
+
+/**
+ * Why a breakdown is being shown as incomplete.
+ *
+ * The two causes are genuinely different and point at different fixes, so they
+ * do not get the same sentence: a breakdown that replays to the WRONG number
+ * means the scorer and the recorder disagree, and one that cannot be replayed
+ * AT ALL means the payload and this panel disagree about the shape of a step.
+ * Lives here, beside the predicate it explains, rather than in the panel:
+ * the panel is a component module, and exporting a plain function from one
+ * breaks Fast Refresh for the whole file.
+ */
+export function incompleteReason(recomposed: number, score: number): string {
+  if (!Number.isFinite(recomposed)) {
+    return (
+      'These steps cannot be replayed at all -- at least one is missing the number it operates on. ' +
+      'That usually means the payload and this panel disagree about the shape of a step, so nothing ' +
+      'here should be read as a derivation of the score.'
+    );
+  }
+  return (
+    `These steps replay to ${fmt(recomposed, 4)}, not ${fmt(score, 4)}. ` +
+    'The breakdown does not explain this score, so treat it as incomplete rather than as a derivation.'
+  );
 }

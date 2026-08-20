@@ -1,5 +1,5 @@
 // file: web/src/components/review/evidence/EvidencePanel.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4f8b0d13-97a2-4c65-b83e-1e6a5c9f0d27
 // last-edited: 2026-08-20
 
@@ -248,5 +248,115 @@ describe('regroup lane through the shared panel', () => {
   it('says nothing was recorded for a pre-evidence hold', () => {
     renderPanel(regroupEvidence(undefined));
     expect(screen.getByText(/No evidence recorded for this hold/i)).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The wire seam.
+//
+// Everything above tests one link at a time against fixtures written here, in
+// this file, by hand -- which is exactly the setup in which the two sides of a
+// contract drift apart while every individual test stays green. `MetadataScoreStep`
+// in services/api.ts is a hand-maintained mirror of Go's `ScoreStep`, and a
+// comment asking editors to keep them in step is not a mechanism.
+//
+// This payload is different: it is not written here. It is emitted by the real
+// Go search path in internal/metafetch/score_breakdown_fixture_test.go and
+// checked in. A renamed or dropped JSON tag now breaks the Go test (the fixture
+// no longer matches) or this one (the shape no longer adapts) -- rather than
+// reaching a reviewer as a panel of confident, empty rows.
+// ---------------------------------------------------------------------------
+
+import fixture from './__fixtures__/score_breakdown.json';
+import { metadataEvidence } from './adapters';
+import { incompleteReason, recomposeWaterfall } from './types';
+import type { MetadataCandidate } from '../../../services/api';
+
+describe('metadata lane, end to end from the Go payload', () => {
+  // Only the scoring fields matter here; the rest of the candidate is shaped by
+  // the search response and is not what this seam is about.
+  const candidate = {
+    title: 'Mistborn',
+    author: 'Brandon Sanderson',
+    source: 'test-source',
+    score: fixture.score,
+    score_breakdown: fixture,
+  } as unknown as MetadataCandidate;
+
+  it('adapts real backend JSON into steps that replay to the shipped score', () => {
+    const evidence = metadataEvidence(candidate);
+    expect(evidence.kind).toBe('waterfall');
+    expect(evidence.steps.length).toBeGreaterThanOrEqual(3);
+
+    // The assertion that a field-name mismatch would break: undefined operands
+    // recompose to NaN, and NaN is never close to anything.
+    const replayed = recomposeWaterfall(evidence.steps);
+    expect(Number.isFinite(replayed)).toBe(true);
+    expect(replayed).toBeCloseTo(fixture.score, 9);
+  });
+
+  it('carries every field the renderer reads across the wire', () => {
+    const [first] = metadataEvidence(candidate).steps;
+    // Checked individually rather than via a snapshot: a snapshot of a dropped
+    // field is just a smaller snapshot, and would be re-blessed on update.
+    expect(first.id).toBeTruthy();
+    expect(first.label).toBeTruthy();
+    expect(['base', 'multiply', 'add', 'replace']).toContain(first.op);
+    expect(typeof first.operand).toBe('number');
+    expect(typeof first.running).toBe('number');
+    expect(first.detail).toBeTruthy();
+  });
+
+  it('renders the real payload as a verified derivation, not an incomplete one', () => {
+    renderPanel(metadataEvidence(candidate));
+    expect(screen.getByTestId('evidence-waterfall')).toBeInTheDocument();
+    // The end the whole chain exists for: the reviewer sees the labels the
+    // scorer actually recorded, and no incompleteness warning.
+    expect(screen.getByText('Rich metadata')).toBeInTheDocument();
+    expect(screen.getByText('Runtime comparison')).toBeInTheDocument();
+    expect(screen.queryByText(/breakdown incomplete/i)).not.toBeInTheDocument();
+  });
+
+  it('flags the payload as incomplete when a field goes missing', () => {
+    // Simulates precisely the drift this seam guards: the backend renames
+    // `operand`, so the adapter reads undefined. Without the finiteness check in
+    // waterfallIsConsistent this renders as a clean, verified, entirely empty
+    // explanation -- the worst of the available failure modes, because it looks
+    // exactly like success.
+    const drifted = {
+      ...candidate,
+      score_breakdown: {
+        ...fixture,
+        steps: fixture.steps.map(({ operand: _operand, ...rest }) => rest),
+      },
+    } as unknown as MetadataCandidate;
+
+    renderPanel(metadataEvidence(drifted));
+    expect(screen.getByText(/breakdown incomplete/i)).toBeInTheDocument();
+
+    // It must survive the bad payload rather than throwing: `undefined.toFixed()`
+    // would unmount the entire review screen over one malformed row. The step
+    // stays on screen, labelled, with its number shown as unreadable.
+    expect(screen.getByText('Rich metadata')).toBeInTheDocument();
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+  });
+
+  it('explains an unreplayable breakdown differently from a mismatched one', () => {
+    // These have different causes and different fixes -- a wrong number means
+    // the scorer and the recorder disagree; an absent one means the payload and
+    // the panel disagree about the shape of a step. Same chip, different cause.
+    const drifted = {
+      ...candidate,
+      score_breakdown: {
+        ...fixture,
+        steps: fixture.steps.map(({ operand: _operand, ...rest }) => rest),
+      },
+    } as unknown as MetadataCandidate;
+
+    expect(
+      incompleteReason(recomposeWaterfall(metadataEvidence(drifted).steps), fixture.score)
+    ).toMatch(/cannot be replayed at all/i);
+    // ...whereas a breakdown that replays to the wrong number names both numbers.
+    expect(incompleteReason(0.41, 0.9)).toMatch(/replay to 0\.4100, not 0\.9000/);
   });
 });

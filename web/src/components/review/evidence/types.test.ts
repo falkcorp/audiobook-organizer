@@ -1,5 +1,5 @@
 // file: web/src/components/review/evidence/types.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1d7c4b28-93ef-4a05-b6c1-8e2f0a5d9c34
 // last-edited: 2026-08-20
 
@@ -89,6 +89,31 @@ describe('waterfallIsConsistent', () => {
     const ev: WaterfallEvidence = { kind: 'waterfall', score: 0.45 + 1e-12, steps };
     expect(waterfallIsConsistent(ev)).toBe(true);
     expect(waterfallIsConsistent({ ...ev, score: 0.4501 })).toBe(false);
+  });
+
+  it('rejects a breakdown that recomposes to a non-finite value', () => {
+    // The wire-format regression. If the backend renames a JSON tag or stops
+    // sending a field, `operand` arrives as undefined and the replay yields NaN.
+    // NaN is unordered against everything, so the natural phrasing of this test
+    // -- "flag it when |recomposed - score| is large" -- evaluates to false and
+    // reports AGREEMENT. The panel would then present rows it could not verify
+    // as a verified derivation, which is the precise lie this module exists to
+    // prevent. Finiteness is therefore a precondition, not a consequence.
+    const broken = [
+      { id: 'base', label: 'base', op: 'base', operand: undefined, running: 0 },
+      { id: 'p', label: 'penalty', op: 'multiply', operand: undefined, running: 0 },
+    ] as unknown as WaterfallStep[];
+
+    expect(Number.isNaN(recomposeWaterfall(broken))).toBe(true);
+    // The naive comparison this guard replaced, kept to show WHY it was wrong:
+    expect(Math.abs(recomposeWaterfall(broken) - 0.45) > 1e-9).toBe(false);
+    // The predicate must not agree with it.
+    expect(waterfallIsConsistent({ kind: 'waterfall', score: 0.45, steps: broken })).toBe(false);
+  });
+
+  it('rejects a non-finite score', () => {
+    expect(waterfallIsConsistent({ kind: 'waterfall', score: NaN, steps })).toBe(false);
+    expect(waterfallIsConsistent({ kind: 'waterfall', score: Infinity, steps })).toBe(false);
   });
 
   it('rejects an empty breakdown rather than calling it consistent with 0', () => {
