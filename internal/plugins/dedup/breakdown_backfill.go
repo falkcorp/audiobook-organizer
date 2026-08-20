@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/breakdown_backfill.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: ec0f5e9d-2f6d-485d-9f24-ad3d917d1834
 // last-edited: 2026-08-20
 
@@ -66,8 +66,16 @@
 // Note also that the rescore path composes with NIL suppressors
 // (rescore.go: ComposeScore(signals, nil, …)), so every breakdown this op
 // writes carries an empty Suppressors list. A "certain_with_suppressors"
-// counter here would be a structural zero, not a measurement — and the
-// suppressor guard in autoResolveEligible passes vacuously on these rows.
+// counter here would be a structural zero, not a measurement.
+//
+// That emptiness used to mean the suppressor guard in autoResolveEligible
+// passed vacuously on these rows — and, since no production path populates the
+// field at all, on every other row too. It no longer does: autoResolveEligible
+// now evaluates PairEligibility LIVE against both book records rather than
+// trusting the stored list, so a suppressed pair is refused at the gate whether
+// or not its breakdown ever recorded the fact. The structural zero here is
+// therefore still a true statement about what this op writes, and no longer a
+// statement about what auto-resolve can catch.
 //
 // Dry-run (report only, 10 sample pairs logged) is the default.
 // {"apply":true} writes.

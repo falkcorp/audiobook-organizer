@@ -1,5 +1,5 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
 // last-edited: 2026-08-20
 
@@ -222,6 +222,20 @@ func (de *Engine) autoResolveEligible(c database.DedupCandidate, bookA, bookB *d
 	}
 	if len(c.ScoreBreakdown.Suppressors) > 0 {
 		return false, "score has active suppressors: " + strings.Join(c.ScoreBreakdown.Suppressors, ",")
+	}
+	// The stored list above is retained for legacy rows, but it CANNOT be relied
+	// on: no production path populates it. unified.ComposeScore is the only
+	// writer, and every live caller passes nil (engine.go, rescore.go,
+	// calibrate_composite.go); the scan deletes a suppressed pair outright rather
+	// than scoring it, so a suppressed pair never acquires a stored breakdown at
+	// all. Empty is the only value the current code can persist, which made the
+	// check above pass vacuously on every row in the library.
+	//
+	// So evaluate the predicate live. PairEligibility is pure and does no I/O,
+	// and both books are already in hand here, so this costs nothing. It also
+	// catches a pair that became suppressed AFTER its score was written.
+	if ok, suppressors := PairEligibility(bookA, bookB); !ok {
+		return false, "pair is suppressed: " + strings.Join(suppressors, ",")
 	}
 
 	// Both sides must look like real audio, and their identifiers must not
