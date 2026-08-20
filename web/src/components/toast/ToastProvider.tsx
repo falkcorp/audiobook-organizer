@@ -1,8 +1,9 @@
 // file: web/src/components/toast/ToastProvider.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 21680277-8dde-49a7-b06e-e4d2de977e04
+// last-edited: 2026-08-19
 
-import { createContext, useCallback, useContext, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, type JSX, type ReactNode } from 'react';
 import { Alert, Button, Snackbar, Stack } from '@mui/material';
 import { useAppStore } from '../../stores/useAppStore';
 

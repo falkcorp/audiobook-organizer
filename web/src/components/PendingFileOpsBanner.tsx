@@ -1,12 +1,13 @@
 // file: web/src/components/PendingFileOpsBanner.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6c1e8b3d-2a47-4f5d-9e0c-b8a4d2f6e7a3
+// last-edited: 2026-08-19
 //
 // Banner shown when background file operations (tag write, cover embed,
 // rename) are in flight. Mounted at the top of the Activity Log so users
 // can see what's still happening before the activity entries are written.
 
-import { useState } from 'react';
+import { useState, type JSX } from 'react';
 import {
   Box,
   CircularProgress,
