@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
 // last-edited: 2026-08-20
 
@@ -117,7 +117,17 @@ func (p *Plugin) missingFileRepointDef() sdk.OperationDef {
 		// WRITES, and an apply interrupted midway must not silently pick itself back
 		// up. Re-running is cheap and safe (a repointed row is no longer missing, so
 		// it is simply not selected again), so dropping loses nothing.
-		ResumePolicy:    sdk.ResumeDrop,
+		ResumePolicy: sdk.ResumeDrop,
+		// LivenessRunItems: both work phases go through registry.RunItems, which
+		// stamps progress per item. No ProgressTimeout, matching missing-file-audit
+		// and missing-file-repair -- they share this op's exact prologue
+		// (GetAllBookFilesCore over every row before the first tick) and the audit
+		// has completed against the real 532,296-row library, so the silent window
+		// fits inside the 5m default. Note the watchdog accrues stuck-time from
+		// StartedAt when an op has never reported (R-2), so that prologue is NOT
+		// free: if this op ever grows heavier pre-RunItems work, it needs an
+		// explicit ProgressTimeout or it will be canceled as "never_reported".
+		Liveness: sdk.LivenessRunItems,
 		// CapLibraryWrite: this op mutates book_file rows (FilePath only).
 		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		Run: func(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
