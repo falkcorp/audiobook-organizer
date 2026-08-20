@@ -1,17 +1,9 @@
 // file: web/src/components/settings/ScheduledTasksSection.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: e5f6a7b8-c9d0-1234-efab-345678901234
-// last-edited: 2026-06-19
+// last-edited: 2026-08-19
 
-import {
-  Box,
-  Typography,
-  TextField,
-  FormControlLabel,
-  Switch,
-  Grid,
-  Paper,
-} from '@mui/material';
+import { Box, Typography, TextField, FormControlLabel, Switch, Grid, Paper } from '@mui/material';
 import * as api from '../../services/api';
 
 interface ScheduledTasksSectionProps {
@@ -46,18 +38,25 @@ function TaskRow({
         {label}
       </Typography>
       <Grid container spacing={2} alignItems="center">
-        <Grid item xs={12} sm={4}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 4,
+          }}
+        >
           <FormControlLabel
             control={
-              <Switch
-                checked={enabled}
-                onChange={(e) => onEnabledChange(e.target.checked)}
-              />
+              <Switch checked={enabled} onChange={(e) => onEnabledChange(e.target.checked)} />
             }
             label="Enabled"
           />
         </Grid>
-        <Grid item xs={12} sm={4}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 4,
+          }}
+        >
           <TextField
             fullWidth
             type="number"
@@ -69,7 +68,12 @@ function TaskRow({
           />
         </Grid>
         {hasOnStartup && onStartupChange && (
-          <Grid item xs={12} sm={4}>
+          <Grid
+            size={{
+              xs: 12,
+              sm: 4,
+            }}
+          >
             <FormControlLabel
               control={
                 <Switch
@@ -94,7 +98,7 @@ export function ScheduledTasksSection({ config, onChange }: ScheduledTasksSectio
       </Typography>
 
       <Grid container spacing={2}>
-        <Grid item xs={12}>
+        <Grid size={12}>
           <TaskRow
             label="Dedup Refresh"
             enabled={config.dedup_refresh.enabled}
@@ -113,7 +117,7 @@ export function ScheduledTasksSection({ config, onChange }: ScheduledTasksSectio
           />
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={12}>
           <TaskRow
             label="Author Split"
             enabled={config.author_split.enabled}
@@ -132,7 +136,7 @@ export function ScheduledTasksSection({ config, onChange }: ScheduledTasksSectio
           />
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={12}>
           <TaskRow
             label="DB Optimize"
             enabled={config.db_optimize.enabled}
@@ -151,7 +155,7 @@ export function ScheduledTasksSection({ config, onChange }: ScheduledTasksSectio
           />
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={12}>
           <TaskRow
             label="Metadata Refresh"
             enabled={config.metadata_refresh.enabled}
@@ -170,7 +174,7 @@ export function ScheduledTasksSection({ config, onChange }: ScheduledTasksSectio
           />
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={12}>
           <TaskRow
             label="Resolve Production Authors"
             enabled={config.resolve_production_authors.enabled}
@@ -195,7 +199,7 @@ export function ScheduledTasksSection({ config, onChange }: ScheduledTasksSectio
           />
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={12}>
           <TaskRow
             label="Series Prune"
             enabled={config.series_prune.enabled}
@@ -214,7 +218,7 @@ export function ScheduledTasksSection({ config, onChange }: ScheduledTasksSectio
           />
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={12}>
           <TaskRow
             label="AI Dedup Batch"
             enabled={config.ai_dedup_batch.enabled}
@@ -233,22 +237,16 @@ export function ScheduledTasksSection({ config, onChange }: ScheduledTasksSectio
           />
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={12}>
           <TaskRow
             label="Reconcile"
             enabled={config.reconcile.enabled}
             interval={config.reconcile.interval}
             onStartup={config.reconcile.on_startup}
             hasOnStartup
-            onEnabledChange={(v) =>
-              onChange({ reconcile: { ...config.reconcile, enabled: v } })
-            }
-            onIntervalChange={(v) =>
-              onChange({ reconcile: { ...config.reconcile, interval: v } })
-            }
-            onStartupChange={(v) =>
-              onChange({ reconcile: { ...config.reconcile, on_startup: v } })
-            }
+            onEnabledChange={(v) => onChange({ reconcile: { ...config.reconcile, enabled: v } })}
+            onIntervalChange={(v) => onChange({ reconcile: { ...config.reconcile, interval: v } })}
+            onStartupChange={(v) => onChange({ reconcile: { ...config.reconcile, on_startup: v } })}
           />
         </Grid>
       </Grid>

@@ -1,7 +1,7 @@
 // file: web/src/components/settings/PathsSettingsTab.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8c9d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-05-01
+// last-edited: 2026-08-19
 
 import { Dispatch, SetStateAction } from 'react';
 import {
@@ -56,7 +56,7 @@ interface PathsSettingsTabProps {
 export function PathsSettingsTab(props: PathsSettingsTabProps) {
   return (
     <Grid container spacing={3}>
-      <Grid item xs={12}>
+      <Grid size={12}>
         <Typography variant="h6" gutterBottom>
           Path Settings
         </Typography>
@@ -64,7 +64,7 @@ export function PathsSettingsTab(props: PathsSettingsTabProps) {
       </Grid>
 
       {/* Library Path Section */}
-      <Grid item xs={12}>
+      <Grid size={12}>
         <Typography variant="subtitle1" gutterBottom sx={{ mt: 2, fontWeight: 600 }}>
           Library Path
         </Typography>
@@ -95,33 +95,31 @@ export function PathsSettingsTab(props: PathsSettingsTabProps) {
         />
         <Alert severity="info" sx={{ mt: 1 }}>
           <Typography variant="caption">
-            <strong>Library vs Import Paths:</strong> The library path is where
-            organized audiobooks live. Import paths below are watched for new files
-            to import into the library.
+            <strong>Library vs Import Paths:</strong> The library path is where organized audiobooks
+            live. Import paths below are watched for new files to import into the library.
           </Typography>
         </Alert>
       </Grid>
 
       {/* Import Paths Section */}
-      <Grid item xs={12}>
+      <Grid size={12}>
         <Typography variant="subtitle1" gutterBottom sx={{ mt: 2, fontWeight: 600 }}>
           Import Paths (Watch Locations)
         </Typography>
         <Divider sx={{ mb: 2 }} />
       </Grid>
 
-      <Grid item xs={12}>
+      <Grid size={12}>
         <Alert severity="info" sx={{ mb: 2 }}>
-          <strong>Import Paths</strong> are watched for new audiobook files.
-          Files found here are scanned and imported into the main library path
-          where they are organized.
+          <strong>Import Paths</strong> are watched for new audiobook files. Files found here are
+          scanned and imported into the main library path where they are organized.
         </Alert>
 
         <Box>
           {props.importPaths.length === 0 ? (
             <Alert severity="warning" sx={{ mb: 2 }}>
-              No import folders configured. Add folders to automatically import
-              audiobooks from specific locations.
+              No import folders configured. Add folders to automatically import audiobooks from
+              specific locations.
             </Alert>
           ) : (
             <List>
@@ -132,8 +130,7 @@ export function PathsSettingsTab(props: PathsSettingsTabProps) {
                 let secondaryText = `${folder.book_count || 0} books`;
                 if (scanStatus) {
                   if (scanStatus.status === 'scanning') {
-                    secondaryText =
-                      `Scanning... Scanned ${scanStatus.scanned} files`;
+                    secondaryText = `Scanning... Scanned ${scanStatus.scanned} files`;
                   } else if (scanStatus.status === 'complete') {
                     if (errorCount > 0) {
                       secondaryText =
@@ -143,21 +140,13 @@ export function PathsSettingsTab(props: PathsSettingsTabProps) {
                         errorCount +
                         ' errors.';
                     } else {
-                      secondaryText =
-                        'Scan complete. Found ' +
-                        scanStatus.scanned +
-                        ' audiobooks.';
+                      secondaryText = 'Scan complete. Found ' + scanStatus.scanned + ' audiobooks.';
                     }
                   } else if (scanStatus.status === 'cancelled') {
-                    secondaryText =
-                      'Scan cancelled. Processed ' +
-                      scanStatus.scanned +
-                      ' files.';
+                    secondaryText = 'Scan cancelled. Processed ' + scanStatus.scanned + ' files.';
                   } else if (scanStatus.status === 'error') {
                     secondaryText =
-                      errorCount > 0
-                        ? `Scan failed. ${errorCount} errors.`
-                        : 'Scan failed.';
+                      errorCount > 0 ? `Scan failed. ${errorCount} errors.` : 'Scan failed.';
                   }
                 }
 
@@ -169,9 +158,7 @@ export function PathsSettingsTab(props: PathsSettingsTabProps) {
                         {scanStatus && errorCount > 0 && (
                           <Button
                             size="small"
-                            onClick={() =>
-                              props.handleViewScanErrors(folder, scanStatus)
-                            }
+                            onClick={() => props.handleViewScanErrors(folder, scanStatus)}
                           >
                             View Errors
                           </Button>
@@ -181,9 +168,7 @@ export function PathsSettingsTab(props: PathsSettingsTabProps) {
                             size="small"
                             color="error"
                             variant="outlined"
-                            onClick={() =>
-                              props.handleRequestCancelScan(folder)
-                            }
+                            onClick={() => props.handleRequestCancelScan(folder)}
                           >
                             Cancel Scan
                           </Button>
@@ -198,9 +183,7 @@ export function PathsSettingsTab(props: PathsSettingsTabProps) {
                         </Button>
                         <IconButton
                           edge="end"
-                          onClick={() =>
-                            props.handleRemoveImportFolder(folder.id)
-                          }
+                          onClick={() => props.handleRemoveImportFolder(folder.id)}
                         >
                           <DeleteIcon />
                         </IconButton>
@@ -210,10 +193,7 @@ export function PathsSettingsTab(props: PathsSettingsTabProps) {
                     <ListItemIcon>
                       <FolderIcon />
                     </ListItemIcon>
-                    <ListItemText
-                      primary={folder.path}
-                      secondary={secondaryText}
-                    />
+                    <ListItemText primary={folder.path} secondary={secondaryText} />
                   </ListItem>
                 );
               })}
@@ -232,14 +212,14 @@ export function PathsSettingsTab(props: PathsSettingsTabProps) {
       </Grid>
 
       {/* Protected Paths Section */}
-      <Grid item xs={12}>
+      <Grid size={12}>
         <Paper sx={{ p: 3, mb: 3 }}>
           <Typography variant="subtitle1" fontWeight={600} gutterBottom>
             Protected Paths
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Paths that the organizer will never move or delete files from. One
-            path per line. These are typically your Deluge download directories.
+            Paths that the organizer will never move or delete files from. One path per line. These
+            are typically your Deluge download directories.
           </Typography>
           <TextField
             multiline
@@ -262,7 +242,7 @@ export function PathsSettingsTab(props: PathsSettingsTabProps) {
       </Grid>
 
       {/* Deluge Settings */}
-      <Grid item xs={12}>
+      <Grid size={12}>
         <DelugeSettingsTab />
       </Grid>
     </Grid>

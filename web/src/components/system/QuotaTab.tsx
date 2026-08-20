@@ -1,5 +1,5 @@
 // file: web/src/components/system/QuotaTab.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0f1a2b3c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
 
 import { useEffect, useState } from 'react';
@@ -41,10 +41,7 @@ export function QuotaTab() {
     setLoading(true);
     setError(null);
     try {
-      const [storage, config] = await Promise.all([
-        api.getSystemStorage(),
-        api.getConfig(),
-      ]);
+      const [storage, config] = await Promise.all([api.getSystemStorage(), api.getConfig()]);
 
       const enabled = Boolean(config.enable_disk_quota);
       const quotaPercent = config.disk_quota_percent || 80;
@@ -61,11 +58,7 @@ export function QuotaTab() {
         userQuotasEnabled: Boolean(config.enable_user_quotas),
       });
     } catch (fetchError) {
-      setError(
-        fetchError instanceof Error
-          ? fetchError.message
-          : 'Failed to fetch quota info'
-      );
+      setError(fetchError instanceof Error ? fetchError.message : 'Failed to fetch quota info');
     } finally {
       setLoading(false);
     }
@@ -85,12 +78,7 @@ export function QuotaTab() {
 
   if (loading) {
     return (
-      <Box
-        display="flex"
-        justifyContent="center"
-        alignItems="center"
-        minHeight="320px"
-      >
+      <Box display="flex" justifyContent="center" alignItems="center" minHeight="320px">
         <CircularProgress />
       </Box>
     );
@@ -109,21 +97,14 @@ export function QuotaTab() {
   }
 
   const percentage =
-    quota.systemQuotaLimit > 0
-      ? (quota.systemQuotaUsed / quota.systemQuotaLimit) * 100
-      : 0;
+    quota.systemQuotaLimit > 0 ? (quota.systemQuotaUsed / quota.systemQuotaLimit) * 100 : 0;
 
   const progressColor: 'primary' | 'warning' | 'error' =
     percentage >= 100 ? 'error' : percentage >= 85 ? 'warning' : 'primary';
 
   return (
     <Box>
-      <Stack
-        direction="row"
-        justifyContent="space-between"
-        alignItems="center"
-        mb={2}
-      >
+      <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
         <Typography variant="h6">Quota Information</Typography>
         <Button
           variant="outlined"
@@ -138,15 +119,10 @@ export function QuotaTab() {
       </Stack>
 
       <Grid container spacing={3}>
-        <Grid item xs={12}>
+        <Grid size={12}>
           <Card>
             <CardContent>
-              <Stack
-                direction="row"
-                justifyContent="space-between"
-                alignItems="center"
-                mb={2}
-              >
+              <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
                 <Typography variant="h6">System-wide Quota</Typography>
                 <Chip
                   label={quota.systemQuotaEnabled ? 'Enabled' : 'Disabled'}
@@ -188,8 +164,8 @@ export function QuotaTab() {
                     sx={{ height: 10, borderRadius: 1, mb: 2 }}
                   />
                   <Typography variant="body2" color="text.secondary">
-                    Maximum disk usage is limited to {quota.systemQuotaPercent}%
-                    of total available space.
+                    Maximum disk usage is limited to {quota.systemQuotaPercent}% of total available
+                    space.
                   </Typography>
                 </>
               ) : (
@@ -204,7 +180,7 @@ export function QuotaTab() {
           </Card>
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={12}>
           <Card>
             <CardContent>
               <Typography variant="h6" gutterBottom>

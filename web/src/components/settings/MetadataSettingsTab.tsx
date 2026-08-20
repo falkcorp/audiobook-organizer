@@ -1,7 +1,7 @@
 // file: web/src/components/settings/MetadataSettingsTab.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9e0f1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 import { Dispatch, SetStateAction } from 'react';
 import {
   Box,
@@ -58,7 +58,10 @@ interface MetadataSettingsTabProps {
   openaiKeyError: string | null;
   savedApiKeyMask: string;
   setSavedApiKeyMask: (value: string) => void;
-  sourceTestStatus: Record<string, { testing: boolean; result?: { success: boolean; message?: string; error?: string } }>;
+  sourceTestStatus: Record<
+    string,
+    { testing: boolean; result?: { success: boolean; message?: string; error?: string } }
+  >;
   handleTestAIConnection: () => void;
   handleSourceToggle: (sourceId: string) => void;
   handleTestMetadataSource: (sourceId: string) => void;
@@ -98,21 +101,19 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
 
   return (
     <Grid container spacing={3}>
-      <Grid item xs={12}>
+      <Grid size={12}>
         <Typography variant="h6" gutterBottom>
           Metadata Settings
         </Typography>
         <Divider sx={{ mb: 2 }} />
       </Grid>
 
-      <Grid item xs={12}>
+      <Grid size={12}>
         <FormControlLabel
           control={
             <Switch
               checked={settings.autoFetchMetadata}
-              onChange={(e) =>
-                handleChange('autoFetchMetadata', e.target.checked)
-              }
+              onChange={(e) => handleChange('autoFetchMetadata', e.target.checked)}
             />
           }
           label="Automatically fetch missing metadata"
@@ -120,59 +121,53 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
       </Grid>
 
       {/* AI-Powered Parsing Section */}
-      <Grid item xs={12}>
+      <Grid size={12}>
         <Typography variant="subtitle1" gutterBottom sx={{ mt: 2 }}>
           AI-Powered Filename Parsing
         </Typography>
         <Divider sx={{ mb: 2 }} />
       </Grid>
 
-      <Grid item xs={12}>
+      <Grid size={12}>
         <FormControlLabel
           control={
             <Switch
               checked={settings.enableAIParsing}
-              onChange={(e) =>
-                handleChange('enableAIParsing', e.target.checked)
-              }
+              onChange={(e) => handleChange('enableAIParsing', e.target.checked)}
             />
           }
           label="Enable AI-powered filename parsing"
         />
         <Alert severity="info" sx={{ mt: 1, mb: 2 }}>
           <Typography variant="caption">
-            <strong>What is this?</strong> Uses OpenAI to intelligently
-            parse complex audiobook filenames into title, author, series,
-            narrator, etc. This dramatically improves metadata extraction
-            from poorly named files where traditional parsing fails.
+            <strong>What is this?</strong> Uses OpenAI to intelligently parse complex audiobook
+            filenames into title, author, series, narrator, etc. This dramatically improves metadata
+            extraction from poorly named files where traditional parsing fails.
           </Typography>
         </Alert>
       </Grid>
 
-      <Grid item xs={12}>
+      <Grid size={12}>
         <FormControlLabel
           control={
             <Switch
               checked={settings.metadataLLMScoringEnabled}
-              onChange={(e) =>
-                handleChange('metadataLLMScoringEnabled', e.target.checked)
-              }
+              onChange={(e) => handleChange('metadataLLMScoringEnabled', e.target.checked)}
             />
           }
           label="Enable AI rerank for metadata search (opt-in per search)"
         />
         <Alert severity="info" sx={{ mt: 1, mb: 2 }}>
           <Typography variant="caption">
-            <strong>What is this?</strong> Allows users to request a
-            higher-quality LLM rerank pass on ambiguous metadata search results.
-            The per-search toggle in the search dialog is only effective when
-            this server-wide switch is on. Adds approximately $0.003 per search
-            when a user opts in.
+            <strong>What is this?</strong> Allows users to request a higher-quality LLM rerank pass
+            on ambiguous metadata search results. The per-search toggle in the search dialog is only
+            effective when this server-wide switch is on. Adds approximately $0.003 per search when
+            a user opts in.
           </Typography>
         </Alert>
       </Grid>
 
-      <Grid item xs={12}>
+      <Grid size={12}>
         <Box
           sx={{
             display: 'flex',
@@ -201,14 +196,9 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
           <Button
             variant="outlined"
             onClick={handleTestAIConnection}
-            disabled={
-              !settings.enableAIParsing ||
-              openaiTestState.status === 'loading'
-            }
+            disabled={!settings.enableAIParsing || openaiTestState.status === 'loading'}
           >
-            {openaiTestState.status === 'loading'
-              ? 'Testing...'
-              : 'Test Connection'}
+            {openaiTestState.status === 'loading' ? 'Testing...' : 'Test Connection'}
           </Button>
         </Box>
         {openaiTestState.status === 'success' && (
@@ -223,15 +213,14 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
         )}
       </Grid>
 
-      <Grid item xs={12}>
+      <Grid size={12}>
         <Typography variant="subtitle1" gutterBottom>
           Metadata Sources (Priority Order)
         </Typography>
         <Alert severity="info" sx={{ mb: 2 }}>
           <Typography variant="caption">
-            Sources are queried in order. If a field is missing from the
-            first source, the system automatically falls back to the next
-            enabled source to fill in additional fields.
+            Sources are queried in order. If a field is missing from the first source, the system
+            automatically falls back to the next enabled source to fill in additional fields.
           </Typography>
         </Alert>
         <Paper variant="outlined" sx={{ p: 2 }}>
@@ -243,14 +232,10 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
                   alignItems: 'center',
                   py: 1.5,
                   px: 1,
-                  bgcolor: source.enabled
-                    ? 'transparent'
-                    : 'action.disabledBackground',
+                  bgcolor: source.enabled ? 'transparent' : 'action.disabledBackground',
                 }}
               >
-                <Box
-                  sx={{ display: 'flex', flexDirection: 'column', mr: 1 }}
-                >
+                <Box sx={{ display: 'flex', flexDirection: 'column', mr: 1 }}>
                   <Button
                     size="small"
                     onClick={() => handleSourceReorder(source.id, 'up')}
@@ -262,34 +247,25 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
                   <Button
                     size="small"
                     onClick={() => handleSourceReorder(source.id, 'down')}
-                    disabled={
-                      index === settings.metadataSources.length - 1
-                    }
+                    disabled={index === settings.metadataSources.length - 1}
                     sx={{ minWidth: 'auto', p: 0.5 }}
                   >
                     ▼
                   </Button>
                 </Box>
                 <DragHandleIcon sx={{ mr: 2, color: 'text.disabled' }} />
-                <Box
-                  sx={{ display: 'flex', alignItems: 'center', flex: 1 }}
-                >
+                <Box sx={{ display: 'flex', alignItems: 'center', flex: 1 }}>
                   <Typography
                     variant="body1"
                     sx={{
                       fontWeight: source.enabled ? 500 : 400,
-                      color: source.enabled
-                        ? 'text.primary'
-                        : 'text.disabled',
+                      color: source.enabled ? 'text.primary' : 'text.disabled',
                     }}
                   >
                     {source.priority}. {source.name}
                   </Typography>
                   {source.requiresAuth && (
-                    <Typography
-                      variant="caption"
-                      sx={{ ml: 1, color: 'text.secondary' }}
-                    >
+                    <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
                       (requires API key)
                     </Typography>
                   )}
@@ -298,33 +274,30 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
                   <IconButton
                     size="small"
                     onClick={() =>
-                      setExpandedSource(
-                        expandedSource === source.id ? null : source.id
-                      )
+                      setExpandedSource(expandedSource === source.id ? null : source.id)
                     }
                     sx={{ mr: 1 }}
                   >
                     <ExpandMoreIcon
-                      sx={[{
-                        transition: 'transform 0.3s'
-                      }, expandedSource === source.id ? {
-                        transform: 'rotate(180deg)'
-                      } : {
-                        transform: 'rotate(0deg)'
-                      }]}
+                      sx={[
+                        {
+                          transition: 'transform 0.3s',
+                        },
+                        expandedSource === source.id
+                          ? {
+                              transform: 'rotate(180deg)',
+                            }
+                          : {
+                              transform: 'rotate(0deg)',
+                            },
+                      ]}
                     />
                   </IconButton>
                 )}
                 <Button
                   size="small"
                   onClick={() => handleSourceToggle(source.id)}
-                  startIcon={
-                    source.enabled ? (
-                      <CheckBoxIcon />
-                    ) : (
-                      <CheckBoxOutlineBlankIcon />
-                    )
-                  }
+                  startIcon={source.enabled ? <CheckBoxIcon /> : <CheckBoxOutlineBlankIcon />}
                 >
                   {source.enabled ? 'Enabled' : 'Disabled'}
                 </Button>
@@ -352,7 +325,7 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
                       API Configuration
                     </Typography>
                     <Grid container spacing={2}>
-                      <Grid item xs={12}>
+                      <Grid size={12}>
                         <TextField
                           fullWidth
                           size="small"
@@ -360,22 +333,18 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
                           type="password"
                           value={source.credentials.apiKey || ''}
                           onChange={(e) =>
-                            handleCredentialChange(
-                              source.id,
-                              'apiKey',
-                              e.target.value
-                            )
+                            handleCredentialChange(source.id, 'apiKey', e.target.value)
                           }
-                          placeholder={
-                            'Enter your ' + source.name + ' API key'
-                          }
+                          placeholder={'Enter your ' + source.name + ' API key'}
                         />
                       </Grid>
-                      <Grid item xs={12}>
+                      <Grid size={12}>
                         <Button
                           size="small"
                           variant="outlined"
-                          disabled={!source.credentials.apiKey || sourceTestStatus[source.id]?.testing}
+                          disabled={
+                            !source.credentials.apiKey || sourceTestStatus[source.id]?.testing
+                          }
                           onClick={() => handleTestMetadataSource(source.id)}
                         >
                           {sourceTestStatus[source.id]?.testing ? 'Testing...' : 'Test Connection'}
@@ -397,14 +366,9 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
                         )}
                       </Grid>
                       {source.id === 'google-books' && (
-                        <Grid item xs={12}>
-                          <Typography
-                            variant="caption"
-                            color="text.secondary"
-                            component="div"
-                          >
-                            Setup (2 clicks):{' '}
-                            <strong>1.</strong>{' '}
+                        <Grid size={12}>
+                          <Typography variant="caption" color="text.secondary" component="div">
+                            Setup (2 clicks): <strong>1.</strong>{' '}
                             <a
                               href={
                                 'https://console.cloud.google.com/' +
@@ -415,8 +379,8 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
                               rel="noopener noreferrer"
                             >
                               Enable Books API
-                            </a>
-                            {' '}<strong>2.</strong>{' '}
+                            </a>{' '}
+                            <strong>2.</strong>{' '}
                             <a
                               href={
                                 'https://console.cloud.google.com/' +
@@ -427,18 +391,14 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
                               rel="noopener noreferrer"
                             >
                               Create API Key
-                            </a>
-                            {' '} then paste it above. Free tier: 1,000 requests/day.
+                            </a>{' '}
+                            then paste it above. Free tier: 1,000 requests/day.
                           </Typography>
                         </Grid>
                       )}
                       {source.id === 'hardcover' && (
-                        <Grid item xs={12}>
-                          <Typography
-                            variant="caption"
-                            color="text.secondary"
-                            component="div"
-                          >
+                        <Grid size={12}>
+                          <Typography variant="caption" color="text.secondary" component="div">
                             Get your API key from{' '}
                             <a
                               href="https://hardcover.app/account/api"
@@ -446,8 +406,8 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
                               rel="noopener noreferrer"
                             >
                               hardcover.app/account/api
-                            </a>
-                            {' '}(free account required).
+                            </a>{' '}
+                            (free account required).
                           </Typography>
                         </Grid>
                       )}
@@ -461,7 +421,12 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
         </Paper>
       </Grid>
 
-      <Grid item xs={12} sm={6}>
+      <Grid
+        size={{
+          xs: 12,
+          sm: 6,
+        }}
+      >
         <TextField
           fullWidth
           label="Default Language"
@@ -472,31 +437,30 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
       </Grid>
 
       {/* Open Library Data Dumps Section */}
-      <Grid item xs={12}>
+      <Grid size={12}>
         <Typography variant="subtitle1" gutterBottom sx={{ mt: 2 }}>
           Open Library Data Dumps
         </Typography>
         <Divider sx={{ mb: 2 }} />
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Download Open Library data dumps for fast, offline metadata
-          lookups. Dumps are ~12GB total and enable near-instant ISBN and
-          title searches without API rate limits.
+          Download Open Library data dumps for fast, offline metadata lookups. Dumps are ~12GB total
+          and enable near-instant ISBN and title searches without API rate limits.
         </Typography>
       </Grid>
 
-      <Grid item xs={12}>
+      <Grid size={12}>
         <OpenLibraryDumps />
       </Grid>
 
       {/* Database Maintenance */}
-      <Grid item xs={12}>
+      <Grid size={12}>
         <Typography variant="subtitle1" gutterBottom sx={{ mt: 2 }}>
           Database Maintenance
         </Typography>
         <Divider sx={{ mb: 2 }} />
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Split compound author/narrator names (e.g. &quot;Author A &amp; Author B&quot;)
-          into separate records for better matching and display.
+          Split compound author/narrator names (e.g. &quot;Author A &amp; Author B&quot;) into
+          separate records for better matching and display.
         </Typography>
         <Button
           variant="outlined"
@@ -505,8 +469,8 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
               const result = await api.optimizeDatabase();
               alert(
                 `Processed ${result.books_processed} books.\n` +
-                `Authors split: ${result.authors_split}\n` +
-                `Narrators split: ${result.narrators_split}`
+                  `Authors split: ${result.authors_split}\n` +
+                  `Narrators split: ${result.narrators_split}`
               );
             } catch {
               alert('Failed to optimize database');

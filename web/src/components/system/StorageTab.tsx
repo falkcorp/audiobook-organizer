@@ -1,7 +1,7 @@
 // file: web/src/components/system/StorageTab.tsx
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9e0f1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 import { useState, useEffect } from 'react';
 import {
   Box,
@@ -59,10 +59,8 @@ export function StorageTab() {
         api.getImportPaths(),
         api.getDBHealthStats().catch(() => null),
       ]);
-      const librarySize =
-        statusData.library_size_bytes ?? statusData.library.total_size;
-      const libraryBookCount =
-        statusData.library_book_count ?? statusData.library.book_count;
+      const librarySize = statusData.library_size_bytes ?? statusData.library.total_size;
+      const libraryBookCount = statusData.library_book_count ?? statusData.library.book_count;
 
       setStorage({
         totalLibrarySize: librarySize,
@@ -73,9 +71,7 @@ export function StorageTab() {
       });
     } catch (err) {
       console.error('Failed to fetch storage info:', err);
-      setError(
-        err instanceof Error ? err.message : 'Failed to fetch storage info'
-      );
+      setError(err instanceof Error ? err.message : 'Failed to fetch storage info');
     } finally {
       setLoading(false);
     }
@@ -90,12 +86,7 @@ export function StorageTab() {
 
   if (loading) {
     return (
-      <Box
-        display="flex"
-        justifyContent="center"
-        alignItems="center"
-        minHeight="400px"
-      >
+      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
         <CircularProgress />
       </Box>
     );
@@ -103,12 +94,7 @@ export function StorageTab() {
 
   if (error) {
     return (
-      <Box
-        display="flex"
-        justifyContent="center"
-        alignItems="center"
-        minHeight="400px"
-      >
+      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
         <Typography color="error">{error}</Typography>
       </Box>
     );
@@ -120,12 +106,7 @@ export function StorageTab() {
 
   return (
     <Box>
-      <Stack
-        direction="row"
-        justifyContent="space-between"
-        alignItems="center"
-        mb={2}
-      >
+      <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
         <Typography variant="h6">Library Storage</Typography>
         <Button
           variant="outlined"
@@ -139,7 +120,7 @@ export function StorageTab() {
 
       <Grid container spacing={3}>
         {/* Library Summary */}
-        <Grid item xs={12}>
+        <Grid size={12}>
           <Card>
             <CardContent>
               <Stack direction="row" spacing={2} alignItems="center" mb={2}>
@@ -147,27 +128,38 @@ export function StorageTab() {
                 <Typography variant="h6">Library Summary</Typography>
               </Stack>
               <Grid container spacing={3}>
-                <Grid item xs={12} sm={4}>
+                <Grid
+                  size={{
+                    xs: 12,
+                    sm: 4,
+                  }}
+                >
                   <Box>
                     <Typography variant="body2" color="text.secondary">
                       Total Library Size
                     </Typography>
-                    <Typography variant="h5">
-                      {formatBytes(storage.totalLibrarySize)}
-                    </Typography>
+                    <Typography variant="h5">{formatBytes(storage.totalLibrarySize)}</Typography>
                   </Box>
                 </Grid>
-                <Grid item xs={12} sm={4}>
+                <Grid
+                  size={{
+                    xs: 12,
+                    sm: 4,
+                  }}
+                >
                   <Box>
                     <Typography variant="body2" color="text.secondary">
                       Total Books
                     </Typography>
-                    <Typography variant="h5">
-                      {storage.bookCount.toLocaleString()}
-                    </Typography>
+                    <Typography variant="h5">{storage.bookCount.toLocaleString()}</Typography>
                   </Box>
                 </Grid>
-                <Grid item xs={12} sm={4}>
+                <Grid
+                  size={{
+                    xs: 12,
+                    sm: 4,
+                  }}
+                >
                   <Box>
                     <Typography variant="body2" color="text.secondary">
                       Import Folders
@@ -181,7 +173,7 @@ export function StorageTab() {
         </Grid>
 
         {/* Library Folders */}
-        <Grid item xs={12}>
+        <Grid size={12}>
           <Card>
             <CardContent>
               <Stack direction="row" spacing={2} alignItems="center" mb={2}>
@@ -194,18 +186,21 @@ export function StorageTab() {
                   color="text.secondary"
                   sx={{ py: 2, textAlign: 'center' }}
                 >
-                  No import folders configured. Add folders in Settings or
-                  Library page.
+                  No import folders configured. Add folders in Settings or Library page.
                 </Typography>
               ) : (
                 storage.folders.map((folder, index) => (
                   <Box
                     key={folder.id}
-                    sx={[index < storage.folders.length - 1 ? {
-                      mb: 2
-                    } : {
-                      mb: 0
-                    }]}
+                    sx={[
+                      index < storage.folders.length - 1
+                        ? {
+                            mb: 2,
+                          }
+                        : {
+                            mb: 0,
+                          },
+                    ]}
                   >
                     <Stack
                       direction="row"
@@ -217,18 +212,13 @@ export function StorageTab() {
                         <Typography variant="body2" fontWeight="medium" noWrap>
                           {folder.name || folder.path}
                         </Typography>
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          noWrap
-                        >
+                        <Typography variant="caption" color="text.secondary" noWrap>
                           {folder.path}
                         </Typography>
                       </Box>
                       <Stack direction="row" spacing={2} alignItems="center">
                         <Typography variant="body2" color="text.secondary">
-                          {folder.book_count}{' '}
-                          {folder.book_count === 1 ? 'book' : 'books'}
+                          {folder.book_count} {folder.book_count === 1 ? 'book' : 'books'}
                         </Typography>
                         <Typography
                           variant="caption"
@@ -236,21 +226,15 @@ export function StorageTab() {
                             px: 1,
                             py: 0.5,
                             borderRadius: 1,
-                            bgcolor: folder.enabled
-                              ? 'success.light'
-                              : 'grey.300',
-                            color: folder.enabled
-                              ? 'success.dark'
-                              : 'text.secondary',
+                            bgcolor: folder.enabled ? 'success.light' : 'grey.300',
+                            color: folder.enabled ? 'success.dark' : 'text.secondary',
                           }}
                         >
                           {folder.enabled ? 'Enabled' : 'Disabled'}
                         </Typography>
                       </Stack>
                     </Stack>
-                    {index < storage.folders.length - 1 && (
-                      <Divider sx={{ mt: 1 }} />
-                    )}
+                    {index < storage.folders.length - 1 && <Divider sx={{ mt: 1 }} />}
                   </Box>
                 ))
               )}
@@ -260,7 +244,7 @@ export function StorageTab() {
 
         {/* DB Path Distribution */}
         {storage.pathPrefixes.length > 0 && (
-          <Grid item xs={12}>
+          <Grid size={12}>
             <Card>
               <CardContent>
                 <Stack direction="row" spacing={2} alignItems="center" mb={2}>
@@ -271,17 +255,26 @@ export function StorageTab() {
                   </Tooltip>
                 </Stack>
                 <Typography variant="body2" color="text.secondary" mb={2}>
-                  Top path prefixes in the database vs your configured import folders.
-                  Mismatches indicate books that were organized away or are stored under a different root.
+                  Top path prefixes in the database vs your configured import folders. Mismatches
+                  indicate books that were organized away or are stored under a different root.
                 </Typography>
                 <Stack spacing={1}>
                   {storage.pathPrefixes.map((p, i) => {
-                    const isConfigured = storage.folders.some(f =>
-                      f.path.startsWith(p.prefix) || p.prefix.startsWith(f.path)
+                    const isConfigured = storage.folders.some(
+                      (f) => f.path.startsWith(p.prefix) || p.prefix.startsWith(f.path)
                     );
                     return (
-                      <Stack key={i} direction="row" justifyContent="space-between" alignItems="center">
-                        <Typography variant="body2" sx={{ fontFamily: 'monospace', flex: 1, mr: 1 }} noWrap>
+                      <Stack
+                        key={i}
+                        direction="row"
+                        justifyContent="space-between"
+                        alignItems="center"
+                      >
+                        <Typography
+                          variant="body2"
+                          sx={{ fontFamily: 'monospace', flex: 1, mr: 1 }}
+                          noWrap
+                        >
                           {p.prefix}
                         </Typography>
                         <Stack direction="row" spacing={1} alignItems="center">
@@ -291,9 +284,19 @@ export function StorageTab() {
                             variant="outlined"
                           />
                           {isConfigured ? (
-                            <Chip label="configured" size="small" color="success" variant="outlined" />
+                            <Chip
+                              label="configured"
+                              size="small"
+                              color="success"
+                              variant="outlined"
+                            />
                           ) : (
-                            <Chip label="not in import paths" size="small" color="warning" variant="outlined" />
+                            <Chip
+                              label="not in import paths"
+                              size="small"
+                              color="warning"
+                              variant="outlined"
+                            />
                           )}
                         </Stack>
                       </Stack>

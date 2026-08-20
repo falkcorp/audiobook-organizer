@@ -1,7 +1,7 @@
 // file: web/src/components/settings/AutoUpdateSection.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: f8e2d4c6-b3a1-4f7e-9c2d-5a8b6e3f1d90
-// last-edited: 2026-06-19
+// last-edited: 2026-08-19
 
 import { useState, useEffect } from 'react';
 import {
@@ -43,7 +43,10 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   useEffect(() => {
-    api.getUpdateStatus().then(setUpdateInfo).catch((err) => console.error('Failed to get update status:', err));
+    api
+      .getUpdateStatus()
+      .then(setUpdateInfo)
+      .catch((err) => console.error('Failed to get update status:', err));
   }, []);
 
   const handleCheck = async () => {
@@ -81,7 +84,7 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
       </Typography>
 
       <Grid container spacing={2}>
-        <Grid item xs={12}>
+        <Grid size={12}>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
             Current version: <strong>{updateInfo?.current_version || 'loading...'}</strong>
           </Typography>
@@ -89,14 +92,29 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
             <Alert severity="info" sx={{ mb: 2 }}>
               Update available: {updateInfo.latest_version}
               {updateInfo.release_url && (
-                <> &mdash; <a href={updateInfo.release_url} target="_blank" rel="noreferrer">Release notes</a></>
+                <>
+                  {' '}
+                  &mdash;{' '}
+                  <a href={updateInfo.release_url} target="_blank" rel="noreferrer">
+                    Release notes
+                  </a>
+                </>
               )}
             </Alert>
           )}
-          {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+          {error && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {error}
+            </Alert>
+          )}
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <FormControlLabel
             control={
               <Switch
@@ -113,7 +131,12 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             select
             fullWidth
@@ -132,7 +155,12 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
           </TextField>
         </Grid>
 
-        <Grid item xs={12} sm={4}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 4,
+          }}
+        >
           <TextField
             fullWidth
             type="number"
@@ -149,7 +177,12 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
           />
         </Grid>
 
-        <Grid item xs={12} sm={4}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 4,
+          }}
+        >
           <TextField
             select
             fullWidth
@@ -171,7 +204,12 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
           </TextField>
         </Grid>
 
-        <Grid item xs={12} sm={4}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 4,
+          }}
+        >
           <TextField
             select
             fullWidth
@@ -193,13 +231,9 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
           </TextField>
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={12}>
           <Stack direction="row" spacing={2} alignItems="center">
-            <Button
-              variant="outlined"
-              onClick={handleCheck}
-              disabled={checking}
-            >
+            <Button variant="outlined" onClick={handleCheck} disabled={checking}>
               {checking ? <CircularProgress size={20} sx={{ mr: 1 }} /> : null}
               Check Now
             </Button>
@@ -228,8 +262,8 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
         <DialogContent>
           <Typography>
             This will download and apply the update to version{' '}
-            <strong>{updateInfo?.latest_version}</strong>, then restart the
-            server. The page will be temporarily unavailable.
+            <strong>{updateInfo?.latest_version}</strong>, then restart the server. The page will be
+            temporarily unavailable.
           </Typography>
         </DialogContent>
         <DialogActions>

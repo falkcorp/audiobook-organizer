@@ -1,6 +1,6 @@
 // file: web/src/pages/Diagnostics.tsx
-// version: 1.5.0
-// last-edited: 2026-08-16
+// version: 1.5.1
+// last-edited: 2026-08-19
 // guid: f2323fc4-b3e7-4298-9ec5-759447cbd643
 
 import { useState, useCallback, useRef, useEffect } from 'react';
@@ -343,27 +343,46 @@ export function Diagnostics() {
       </Typography>
       <Grid container spacing={2} sx={{ mb: 3 }}>
         {categories.map((cat) => (
-          <Grid item xs={12} sm={6} key={cat.id}>
+          <Grid
+            key={cat.id}
+            size={{
+              xs: 12,
+              sm: 6,
+            }}
+          >
             <Card
               variant="outlined"
-              sx={[selectedCategory === cat.id ? {
-                border: 2
-              } : {
-                border: 1
-              }, selectedCategory === cat.id ? {
-                borderColor: 'primary.main'
-              } : {
-                borderColor: 'divider'
-              }]}
+              sx={[
+                selectedCategory === cat.id
+                  ? {
+                      border: 2,
+                    }
+                  : {
+                      border: 1,
+                    },
+                selectedCategory === cat.id
+                  ? {
+                      borderColor: 'primary.main',
+                    }
+                  : {
+                      borderColor: 'divider',
+                    },
+              ]}
             >
               <CardActionArea onClick={() => setSelectedCategory(cat.id)}>
                 <CardContent>
                   <Stack direction="row" spacing={2} alignItems="center">
-                    <Box sx={[selectedCategory === cat.id ? {
-                      color: 'primary.main'
-                    } : {
-                      color: 'text.secondary'
-                    }]}>
+                    <Box
+                      sx={[
+                        selectedCategory === cat.id
+                          ? {
+                              color: 'primary.main',
+                            }
+                          : {
+                              color: 'text.secondary',
+                            },
+                      ]}
+                    >
                       {cat.icon}
                     </Box>
                     <Box>
@@ -430,15 +449,8 @@ export function Diagnostics() {
       {/* AI Results Panel */}
       {aiResults && (
         <Box sx={{ mt: 2 }}>
-          <Stack
-            direction="row"
-            justifyContent="space-between"
-            alignItems="center"
-            sx={{ mb: 2 }}
-          >
-            <Typography variant="h6">
-              AI Suggestions ({aiResults.suggestions.length})
-            </Typography>
+          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
+            <Typography variant="h6">AI Suggestions ({aiResults.suggestions.length})</Typography>
             <Stack direction="row" spacing={2} alignItems="center">
               <FormControlLabel
                 control={
@@ -456,9 +468,7 @@ export function Diagnostics() {
                 disabled={selectedSuggestions.size === 0 || applying}
                 onClick={() => setApplyDialogOpen(true)}
               >
-                {applying
-                  ? 'Applying...'
-                  : `Apply Selected (${selectedSuggestions.size})`}
+                {applying ? 'Applying...' : `Apply Selected (${selectedSuggestions.size})`}
               </Button>
             </Stack>
           </Stack>
@@ -481,9 +491,7 @@ export function Diagnostics() {
           )}
 
           {groupedSuggestions.length === 0 && (
-            <Typography color="text.secondary">
-              No suggestions found.
-            </Typography>
+            <Typography color="text.secondary">No suggestions found.</Typography>
           )}
 
           {groupedSuggestions.map(([action, suggestions]) => (
@@ -498,16 +506,10 @@ export function Diagnostics() {
               </AccordionSummary>
               <AccordionDetails>
                 <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
-                  <Button
-                    size="small"
-                    onClick={() => selectAllInGroup(suggestions)}
-                  >
+                  <Button size="small" onClick={() => selectAllInGroup(suggestions)}>
                     Select All
                   </Button>
-                  <Button
-                    size="small"
-                    onClick={() => deselectAllInGroup(suggestions)}
-                  >
+                  <Button size="small" onClick={() => deselectAllInGroup(suggestions)}>
                     Deselect All
                   </Button>
                 </Stack>
@@ -530,33 +532,19 @@ export function Diagnostics() {
                           sx={{ mt: -0.5 }}
                         />
                         <Box sx={{ flex: 1, minWidth: 0 }}>
-                          <Typography variant="body2">
-                            {s.reason}
-                          </Typography>
-                          <Typography
-                            variant="caption"
-                            color="text.secondary"
-                          >
+                          <Typography variant="body2">{s.reason}</Typography>
+                          <Typography variant="caption" color="text.secondary">
                             Books: {s.book_ids.join(', ')}
                             {s.primary_id && ` | Primary: ${s.primary_id}`}
                           </Typography>
                           {s.fix && (
-                            <Typography
-                              variant="caption"
-                              color="text.secondary"
-                              component="div"
-                            >
+                            <Typography variant="caption" color="text.secondary" component="div">
                               Fix: {JSON.stringify(s.fix)}
                             </Typography>
                           )}
                         </Box>
                         {s.applied && (
-                          <Chip
-                            size="small"
-                            label="Applied"
-                            color="success"
-                            variant="outlined"
-                          />
+                          <Chip size="small" label="Applied" color="success" variant="outlined" />
                         )}
                       </CardContent>
                     </Card>
@@ -569,15 +557,12 @@ export function Diagnostics() {
       )}
 
       {/* Apply Confirmation Dialog */}
-      <Dialog
-        open={applyDialogOpen}
-        onClose={() => setApplyDialogOpen(false)}
-      >
+      <Dialog open={applyDialogOpen} onClose={() => setApplyDialogOpen(false)}>
         <DialogTitle>Apply Suggestions</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            Are you sure you want to apply {selectedSuggestions.size} selected
-            suggestion(s)? This will modify your library data.
+            Are you sure you want to apply {selectedSuggestions.size} selected suggestion(s)? This
+            will modify your library data.
           </DialogContentText>
         </DialogContent>
         <DialogActions>
@@ -593,13 +578,25 @@ export function Diagnostics() {
 
       {/* DB Health Section */}
       <Accordion>
-        <AccordionSummary expandIcon={<ExpandMoreIcon />} onClick={() => { if (!dbHealth && !dbHealthLoading) fetchDBHealth(); }}>
-          <Typography variant="h6" fontWeight="bold">Database Health</Typography>
+        <AccordionSummary
+          expandIcon={<ExpandMoreIcon />}
+          onClick={() => {
+            if (!dbHealth && !dbHealthLoading) fetchDBHealth();
+          }}
+        >
+          <Typography variant="h6" fontWeight="bold">
+            Database Health
+          </Typography>
         </AccordionSummary>
         <AccordionDetails>
           <Stack spacing={2}>
             <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <Button size="small" variant="outlined" onClick={fetchDBHealth} disabled={dbHealthLoading}>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={fetchDBHealth}
+                disabled={dbHealthLoading}
+              >
                 {dbHealthLoading ? <CircularProgress size={16} sx={{ mr: 1 }} /> : null}
                 Refresh
               </Button>
@@ -613,25 +610,26 @@ export function Diagnostics() {
                 {dbHealth.sqlite && (
                   <Paper variant="outlined" sx={{ p: 2 }}>
                     <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
-                      SQLite — Main Store ({(dbHealth.sqlite.size_bytes / 1024 / 1024).toFixed(1)} MB)
+                      SQLite — Main Store ({(dbHealth.sqlite.size_bytes / 1024 / 1024).toFixed(1)}{' '}
+                      MB)
                     </Typography>
                     <TableContainer>
-                    <Table size="small">
-                      <TableHead>
-                        <TableRow>
-                          <TableCell>Table</TableCell>
-                          <TableCell align="right">Row Count</TableCell>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {dbHealth.sqlite.tables.map((t) => (
-                          <TableRow key={t.name}>
-                            <TableCell>{t.name}</TableCell>
-                            <TableCell align="right">{t.row_count.toLocaleString()}</TableCell>
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>Table</TableCell>
+                            <TableCell align="right">Row Count</TableCell>
                           </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+                        </TableHead>
+                        <TableBody>
+                          {dbHealth.sqlite.tables.map((t) => (
+                            <TableRow key={t.name}>
+                              <TableCell>{t.name}</TableCell>
+                              <TableCell align="right">{t.row_count.toLocaleString()}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
                     </TableContainer>
                   </Paper>
                 )}
@@ -644,12 +642,18 @@ export function Diagnostics() {
                     </Typography>
                     <Stack direction="row" spacing={4}>
                       <Box>
-                        <Typography variant="caption" color="text.secondary">Keys</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Keys
+                        </Typography>
                         <Typography>{dbHealth.pebble.key_count.toLocaleString()}</Typography>
                       </Box>
                       <Box>
-                        <Typography variant="caption" color="text.secondary">Size</Typography>
-                        <Typography>{(dbHealth.pebble.size_bytes / 1024 / 1024).toFixed(1)} MB</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Size
+                        </Typography>
+                        <Typography>
+                          {(dbHealth.pebble.size_bytes / 1024 / 1024).toFixed(1)} MB
+                        </Typography>
                       </Box>
                     </Stack>
                   </Paper>
@@ -657,32 +661,105 @@ export function Diagnostics() {
 
                 {/* Embeddings + AI Scans + Metadata cache as grid */}
                 <Grid container spacing={2}>
-                  <Grid item xs={12} sm={4}>
+                  <Grid
+                    size={{
+                      xs: 12,
+                      sm: 4,
+                    }}
+                  >
                     <Paper variant="outlined" sx={{ p: 2 }}>
-                      <Typography variant="subtitle2" fontWeight="bold" gutterBottom>Embeddings DB</Typography>
+                      <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
+                        Embeddings DB
+                      </Typography>
                       <Stack spacing={0.5}>
-                        <Box><Typography variant="caption" color="text.secondary">Vectors</Typography><Typography>{dbHealth.embeddings.vector_count.toLocaleString()}</Typography></Box>
-                        <Box><Typography variant="caption" color="text.secondary">Size</Typography><Typography>{(dbHealth.embeddings.size_bytes / 1024 / 1024).toFixed(1)} MB</Typography></Box>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary">
+                            Vectors
+                          </Typography>
+                          <Typography>
+                            {dbHealth.embeddings.vector_count.toLocaleString()}
+                          </Typography>
+                        </Box>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary">
+                            Size
+                          </Typography>
+                          <Typography>
+                            {(dbHealth.embeddings.size_bytes / 1024 / 1024).toFixed(1)} MB
+                          </Typography>
+                        </Box>
                       </Stack>
                     </Paper>
                   </Grid>
-                  <Grid item xs={12} sm={4}>
+                  <Grid
+                    size={{
+                      xs: 12,
+                      sm: 4,
+                    }}
+                  >
                     <Paper variant="outlined" sx={{ p: 2 }}>
-                      <Typography variant="subtitle2" fontWeight="bold" gutterBottom>AI Scans DB</Typography>
+                      <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
+                        AI Scans DB
+                      </Typography>
                       <Stack spacing={0.5}>
-                        <Box><Typography variant="caption" color="text.secondary">Jobs</Typography><Typography>{dbHealth.ai_scans.job_count.toLocaleString()}</Typography></Box>
-                        <Box><Typography variant="caption" color="text.secondary">Pending</Typography><Typography>{dbHealth.ai_scans.pending_count.toLocaleString()}</Typography></Box>
-                        <Box><Typography variant="caption" color="text.secondary">Size</Typography><Typography>{(dbHealth.ai_scans.size_bytes / 1024 / 1024).toFixed(1)} MB</Typography></Box>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary">
+                            Jobs
+                          </Typography>
+                          <Typography>{dbHealth.ai_scans.job_count.toLocaleString()}</Typography>
+                        </Box>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary">
+                            Pending
+                          </Typography>
+                          <Typography>
+                            {dbHealth.ai_scans.pending_count.toLocaleString()}
+                          </Typography>
+                        </Box>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary">
+                            Size
+                          </Typography>
+                          <Typography>
+                            {(dbHealth.ai_scans.size_bytes / 1024 / 1024).toFixed(1)} MB
+                          </Typography>
+                        </Box>
                       </Stack>
                     </Paper>
                   </Grid>
-                  <Grid item xs={12} sm={4}>
+                  <Grid
+                    size={{
+                      xs: 12,
+                      sm: 4,
+                    }}
+                  >
                     <Paper variant="outlined" sx={{ p: 2 }}>
-                      <Typography variant="subtitle2" fontWeight="bold" gutterBottom>Metadata Cache</Typography>
+                      <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
+                        Metadata Cache
+                      </Typography>
                       <Stack spacing={0.5}>
-                        <Box><Typography variant="caption" color="text.secondary">Total entries</Typography><Typography>{dbHealth.metadata_cache.total_entries.toLocaleString()}</Typography></Box>
-                        <Box><Typography variant="caption" color="text.secondary">TTL</Typography><Typography>{dbHealth.metadata_cache.ttl_days} days</Typography></Box>
-                        <Box><Typography variant="caption" color="text.secondary">Expired</Typography><Typography>{dbHealth.metadata_cache.expired_entries.toLocaleString()}</Typography></Box>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary">
+                            Total entries
+                          </Typography>
+                          <Typography>
+                            {dbHealth.metadata_cache.total_entries.toLocaleString()}
+                          </Typography>
+                        </Box>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary">
+                            TTL
+                          </Typography>
+                          <Typography>{dbHealth.metadata_cache.ttl_days} days</Typography>
+                        </Box>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary">
+                            Expired
+                          </Typography>
+                          <Typography>
+                            {dbHealth.metadata_cache.expired_entries.toLocaleString()}
+                          </Typography>
+                        </Box>
                       </Stack>
                     </Paper>
                   </Grid>

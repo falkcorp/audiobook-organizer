@@ -1,7 +1,7 @@
 // file: web/src/components/settings/EmbeddingSettingsSection.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-01
+// last-edited: 2026-08-19
 
 import {
   Box,
@@ -34,7 +34,7 @@ export function EmbeddingSettingsSection({ config, onChange }: EmbeddingSettings
       </Box>
 
       <Grid container spacing={2}>
-        <Grid item xs={12}>
+        <Grid size={12}>
           <FormControlLabel
             control={
               <Switch
@@ -46,7 +46,12 @@ export function EmbeddingSettingsSection({ config, onChange }: EmbeddingSettings
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             fullWidth
             label="Model"
@@ -57,7 +62,12 @@ export function EmbeddingSettingsSection({ config, onChange }: EmbeddingSettings
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             fullWidth
             type="number"
@@ -70,7 +80,12 @@ export function EmbeddingSettingsSection({ config, onChange }: EmbeddingSettings
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             fullWidth
             label="Base URL"
@@ -81,7 +96,12 @@ export function EmbeddingSettingsSection({ config, onChange }: EmbeddingSettings
           />
         </Grid>
 
-        <Grid item xs={12} sm={6}>
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
           <TextField
             select
             fullWidth

@@ -1,7 +1,7 @@
 // file: web/src/components/settings/DedupSettingsSection.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: b8c7d6e5-f4a3-2109-bcde-fa8765432109
-// last-edited: 2026-06-19
+// last-edited: 2026-08-19
 
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
@@ -50,7 +50,7 @@ describe('DedupSettingsSection', () => {
   it('calls onChange with auto_merge_enabled: true when Switch is toggled on', () => {
     const onChange = vi.fn();
     render(<DedupSettingsSection config={defaultConfig} onChange={onChange} />);
-    const switchInput = screen.getByRole('checkbox', { name: /auto-merge certain duplicates/i });
+    const switchInput = screen.getByRole('switch', { name: /auto-merge certain duplicates/i });
     fireEvent.click(switchInput);
     expect(onChange).toHaveBeenCalledWith({ auto_merge_enabled: true });
   });
@@ -58,7 +58,7 @@ describe('DedupSettingsSection', () => {
   it('calls onChange with embeddings_enabled: true when embeddings Switch is toggled', () => {
     const onChange = vi.fn();
     render(<DedupSettingsSection config={defaultConfig} onChange={onChange} />);
-    const switchInput = screen.getByRole('checkbox', {
+    const switchInput = screen.getByRole('switch', {
       name: /enable embedding similarity/i,
     });
     fireEvent.click(switchInput);

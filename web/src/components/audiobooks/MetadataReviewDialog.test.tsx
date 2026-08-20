@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/MetadataReviewDialog.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
@@ -44,8 +44,14 @@ function makeResult(
   };
 }
 
-const GROUPED_A = makeResult('dup-1', 'Long Book Part 1', { asin: 'B00SHARED', title: 'Long Book' });
-const GROUPED_B = makeResult('dup-2', 'Long Book Part 2', { asin: 'B00SHARED', title: 'Long Book' });
+const GROUPED_A = makeResult('dup-1', 'Long Book Part 1', {
+  asin: 'B00SHARED',
+  title: 'Long Book',
+});
+const GROUPED_B = makeResult('dup-2', 'Long Book Part 2', {
+  asin: 'B00SHARED',
+  title: 'Long Book',
+});
 const STANDALONE = makeResult('solo-1', 'A Normal Book', { asin: 'B00UNIQUE' });
 
 const noop = () => {};
@@ -61,7 +67,7 @@ async function toggleHideMultiBook() {
   const label = await screen.findByText(/Hide Multi-Book Matches/);
   // The Switch is the input inside the same FormControlLabel as this text.
   const control = label.closest('label') as HTMLElement;
-  fireEvent.click(within(control).getByRole('checkbox'));
+  fireEvent.click(within(control).getByRole('switch'));
 }
 
 function setResults(results: CandidateResult[]) {
@@ -130,8 +136,7 @@ describe('MetadataReviewDialog — Hide Multi-Book Matches', () => {
     // string match cannot hit it — match a substring.
     const titleEl = await screen.findByText(/Long Book Part 1/);
 
-    // Tick dup-1's own row checkbox. getAllByRole('checkbox') also matches the
-    // filter Switches — MUI renders those as checkbox inputs — so scope to this
+    // Tick dup-1's own row checkbox. Scope the query to this
     // row rather than clicking everything on the page.
     const row = titleEl.closest('.MuiStack-root') as HTMLElement;
     fireEvent.click(within(row).getByRole('checkbox'));

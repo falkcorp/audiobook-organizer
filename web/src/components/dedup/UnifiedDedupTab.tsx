@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/UnifiedDedupTab.tsx
-// version: 1.9.0
+// version: 1.10.0
 // guid: c8b9d0e1-f2a3-4567-bcde-cb8901234567
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 // UnifiedDedupTab is the T017 single surface that replaces the separate Books /
 // Advanced-Scan / Acoustic tabs. It shows a paginated candidate table filtered
 // by band (CERTAIN/HIGH/MEDIUM/REVIEW), with a side drawer for per-candidate
@@ -20,7 +20,15 @@
 //   - Timers cleared on unmount.
 //   - No module-level mutable state.
 
-import { type MouseEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type MouseEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useSearchParams, Link as RouterLink } from 'react-router-dom';
 import {
   Alert,
@@ -143,7 +151,10 @@ function isKeyboardShortcutSuppressed(): boolean {
   const activeElement = active as HTMLElement;
   if (activeElement.isContentEditable) return true;
   // Block shortcuts when focus is anywhere inside a modal dialog (MUI renders
-  // div[role="dialog"], not a native <dialog> element).
+  // div[role="dialog"], not a native <dialog> element). Escape is deliberately
+  // exempted by the caller: MUI 7 gives the compare Drawer's paper role="dialog"
+  // and moves focus into it, so applying this guard to Escape would suppress the
+  // one shortcut whose whole job is to close that drawer.
   return Boolean(activeElement.closest('[role="dialog"]'));
 }
 
@@ -213,22 +224,30 @@ function renderBookCard(book: Book | null | undefined, id: string, opts: BookCar
               component={RouterLink}
               to={`/library/${id}`}
               underline="hover"
-              sx={[{
-                fontWeight: 600,
-                fontSize: '1rem',
-                textTransform: 'none',
-                textAlign: 'left',
-                whiteSpace: 'normal',
-                wordBreak: 'break-word'
-              }, isGarbageTitle ? {
-                color: 'warning.main'
-              } : {
-                color: 'primary.main'
-              }, isGarbageTitle ? {
-                fontStyle: 'italic'
-              } : {
-                fontStyle: 'normal'
-              }]}
+              sx={[
+                {
+                  fontWeight: 600,
+                  fontSize: '1rem',
+                  textTransform: 'none',
+                  textAlign: 'left',
+                  whiteSpace: 'normal',
+                  wordBreak: 'break-word',
+                },
+                isGarbageTitle
+                  ? {
+                      color: 'warning.main',
+                    }
+                  : {
+                      color: 'primary.main',
+                    },
+                isGarbageTitle
+                  ? {
+                      fontStyle: 'italic',
+                    }
+                  : {
+                      fontStyle: 'normal',
+                    },
+              ]}
               onClick={(e: MouseEvent) => e.stopPropagation()}
             >
               {isGarbageTitle ? title || '(no title)' : title}
@@ -294,10 +313,10 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
   const [bothUnmatched, setBothUnmatched] = useState(false);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState<number>(() =>
-    parseInt(localStorage.getItem(STORAGE_KEYS.DEDUP_PAGE_SIZE) ?? '25', 10),
+    parseInt(localStorage.getItem(STORAGE_KEYS.DEDUP_PAGE_SIZE) ?? '25', 10)
   );
   const [showMultiSelect, setShowMultiSelect] = useState<boolean>(
-    () => localStorage.getItem(STORAGE_KEYS.DEDUP_MULTI_SELECT) === 'true',
+    () => localStorage.getItem(STORAGE_KEYS.DEDUP_MULTI_SELECT) === 'true'
   );
   const lastClickedIdxRef = useRef<number | null>(null);
 
@@ -337,7 +356,7 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
       refreshTimeoutsRef.current.forEach((id) => window.clearTimeout(id));
       refreshTimeoutsRef.current = [];
     },
-    [],
+    []
   );
 
   // --- sync band filter to URL ---
@@ -615,19 +634,22 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
         return;
       }
 
-      if (hidden || isKeyboardShortcutSuppressed()) return;
+      if (hidden) return;
 
-      if (event.key === '?') {
-        event.preventDefault();
-        setShortcutHelpOpen((open) => !open);
-        return;
-      }
-
+      // Escape runs before the suppression guard -- see isKeyboardShortcutSuppressed.
       if (event.key === 'Escape') {
         if (drawerCandidateId !== null) {
           event.preventDefault();
           setDrawerCandidateId(null);
         }
+        return;
+      }
+
+      if (isKeyboardShortcutSuppressed()) return;
+
+      if (event.key === '?') {
+        event.preventDefault();
+        setShortcutHelpOpen((open) => !open);
         return;
       }
 
@@ -998,177 +1020,189 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
         <>
           <Paper variant="outlined">
             <TableContainer>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  {showMultiSelect && (
-                    <TableCell padding="checkbox">
-                      <Checkbox
-                        size="small"
-                        indeterminate={selected.size > 0 && selected.size < filteredCandidates.length}
-                        checked={
-                          filteredCandidates.length > 0 && selected.size === filteredCandidates.length
-                        }
-                        onChange={(e) => (e.target.checked ? selectAll() : clearSelection())}
-                      />
-                    </TableCell>
-                  )}
-                  <TableCell>Book A</TableCell>
-                  <TableCell>Book B</TableCell>
-                  <TableCell align="center">Actions</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {filteredCandidates.map((c, idx) => {
-                  const busy = bulkBusy;
-                  const bookA = c.book_a;
-                  const bookB = c.book_b;
-                  const qA = metadataQuality(bookA);
-                  const qB = metadataQuality(bookB);
-                  // Use the shared helper so the ★ chip and `m` shortcut always agree.
-                  const rec = recommendedKeepSide(c);
-                  const recommendA = rec?.label === 'A';
-                  const recommendB = rec?.label === 'B';
-                  const isSelected = selected.has(c.id);
-                  const isFocused = idx === focusedRowIndex;
-                  return (
-                    <TableRow
-                      key={c.id}
-                      ref={(node) => {
-                        rowRefs.current[idx] = node;
-                      }}
-                      hover
-                      selected={isSelected}
-                      onClick={(e) => handleRowClick(e, c.id, idx)}
-                      data-testid={`dedup-candidate-row-${c.id}`}
-                      aria-current={isFocused ? 'true' : undefined}
-                      sx={[{
-                        cursor: 'pointer',
-                        outlineColor: 'primary.main',
-                        outlineOffset: -2
-                      }, busy ? {
-                        opacity: 0.7
-                      } : {
-                        opacity: 1
-                      }, isSelected ? {
-                        bgcolor: null
-                      } : {
-                        bgcolor: idx % 2 === 1
-                            ? 'action.hover'
-                            : 'transparent'
-                      }, isFocused ? {
-                        outline: 2
-                      } : {
-                        outline: 0
-                      }]}
-                    >
-                      {showMultiSelect && (
-                        <TableCell padding="checkbox">
-                          <Checkbox
-                            size="small"
-                            checked={isSelected}
-                            onChange={() => toggleSelect(c.id)}
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                        </TableCell>
-                      )}
-                      {/* Book A: cover left + score badges above title + quality chip inline */}
-                      <TableCell sx={{ verticalAlign: 'middle', minWidth: 300 }}>
-                        {renderBookCard(bookA, c.entity_a_id, {
-                          badgesNode: (
-                            <>
-                              <ScoreBadgeRow
-                                band={c.band}
-                                score={c.score}
-                                layer={c.layer}
-                                similarity={c.similarity}
-                              />
-                              <Chip
-                                label={c.status}
-                                size="small"
-                                color={
-                                  c.status === 'merged'
-                                    ? 'success'
-                                    : c.status === 'dismissed'
-                                      ? 'default'
-                                      : 'warning'
-                                }
-                                variant="outlined"
-                              />
-                            </>
-                          ),
-                          qualityChipNode: qualityChip(qA),
-                          recommendedNode: recommendA ? (
-                            <Chip label="★ Recommended keep" size="small" color="primary" />
-                          ) : undefined,
-                        })}
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    {showMultiSelect && (
+                      <TableCell padding="checkbox">
+                        <Checkbox
+                          size="small"
+                          indeterminate={
+                            selected.size > 0 && selected.size < filteredCandidates.length
+                          }
+                          checked={
+                            filteredCandidates.length > 0 &&
+                            selected.size === filteredCandidates.length
+                          }
+                          onChange={(e) => (e.target.checked ? selectAll() : clearSelection())}
+                        />
                       </TableCell>
-                      {/* Book B: cover left + quality chip inline */}
-                      <TableCell sx={{ verticalAlign: 'middle', minWidth: 280 }}>
-                        {renderBookCard(bookB, c.entity_b_id, {
-                          qualityChipNode: qualityChip(qB),
-                          recommendedNode: recommendB ? (
-                            <Chip label="★ Recommended keep" size="small" color="primary" />
-                          ) : undefined,
-                        })}
-                      </TableCell>
-                      <TableCell sx={{ verticalAlign: 'top' }}>
-                        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                          {c.status === 'pending' && (
-                            <>
-                              <Tooltip title="Keep Book A, merge B into it">
-                                <Button
-                                  size="small"
-                                  variant={recommendA ? 'contained' : 'outlined'}
-                                  color="primary"
-                                  disabled={busy}
-                                  onClick={() => handleKeep(c.id, c.entity_a_id, 'A')}
-                                >
-                                  Keep A
-                                </Button>
-                              </Tooltip>
-                              <Tooltip title="Keep Book B, merge A into it">
-                                <Button
-                                  size="small"
-                                  variant={recommendB ? 'contained' : 'outlined'}
-                                  color="primary"
-                                  disabled={busy}
-                                  onClick={() => handleKeep(c.id, c.entity_b_id, 'B')}
-                                >
-                                  Keep B
-                                </Button>
-                              </Tooltip>
-                            </>
-                          )}
-                          <Tooltip title="Compare side-by-side with full score breakdown">
-                            <Button
+                    )}
+                    <TableCell>Book A</TableCell>
+                    <TableCell>Book B</TableCell>
+                    <TableCell align="center">Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {filteredCandidates.map((c, idx) => {
+                    const busy = bulkBusy;
+                    const bookA = c.book_a;
+                    const bookB = c.book_b;
+                    const qA = metadataQuality(bookA);
+                    const qB = metadataQuality(bookB);
+                    // Use the shared helper so the ★ chip and `m` shortcut always agree.
+                    const rec = recommendedKeepSide(c);
+                    const recommendA = rec?.label === 'A';
+                    const recommendB = rec?.label === 'B';
+                    const isSelected = selected.has(c.id);
+                    const isFocused = idx === focusedRowIndex;
+                    return (
+                      <TableRow
+                        key={c.id}
+                        ref={(node) => {
+                          rowRefs.current[idx] = node;
+                        }}
+                        hover
+                        selected={isSelected}
+                        onClick={(e) => handleRowClick(e, c.id, idx)}
+                        data-testid={`dedup-candidate-row-${c.id}`}
+                        aria-current={isFocused ? 'true' : undefined}
+                        sx={[
+                          {
+                            cursor: 'pointer',
+                            outlineColor: 'primary.main',
+                            outlineOffset: -2,
+                          },
+                          busy
+                            ? {
+                                opacity: 0.7,
+                              }
+                            : {
+                                opacity: 1,
+                              },
+                          isSelected
+                            ? {
+                                bgcolor: null,
+                              }
+                            : {
+                                bgcolor: idx % 2 === 1 ? 'action.hover' : 'transparent',
+                              },
+                          isFocused
+                            ? {
+                                outline: 2,
+                              }
+                            : {
+                                outline: 0,
+                              },
+                        ]}
+                      >
+                        {showMultiSelect && (
+                          <TableCell padding="checkbox">
+                            <Checkbox
                               size="small"
-                              variant="outlined"
-                              onClick={() => setDrawerCandidateId(c.id)}
-                            >
-                              Compare
-                            </Button>
-                          </Tooltip>
-                          {c.status === 'pending' && (
-                            <Tooltip title="Not a duplicate — dismiss">
+                              checked={isSelected}
+                              onChange={() => toggleSelect(c.id)}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          </TableCell>
+                        )}
+                        {/* Book A: cover left + score badges above title + quality chip inline */}
+                        <TableCell sx={{ verticalAlign: 'middle', minWidth: 300 }}>
+                          {renderBookCard(bookA, c.entity_a_id, {
+                            badgesNode: (
+                              <>
+                                <ScoreBadgeRow
+                                  band={c.band}
+                                  score={c.score}
+                                  layer={c.layer}
+                                  similarity={c.similarity}
+                                />
+                                <Chip
+                                  label={c.status}
+                                  size="small"
+                                  color={
+                                    c.status === 'merged'
+                                      ? 'success'
+                                      : c.status === 'dismissed'
+                                        ? 'default'
+                                        : 'warning'
+                                  }
+                                  variant="outlined"
+                                />
+                              </>
+                            ),
+                            qualityChipNode: qualityChip(qA),
+                            recommendedNode: recommendA ? (
+                              <Chip label="★ Recommended keep" size="small" color="primary" />
+                            ) : undefined,
+                          })}
+                        </TableCell>
+                        {/* Book B: cover left + quality chip inline */}
+                        <TableCell sx={{ verticalAlign: 'middle', minWidth: 280 }}>
+                          {renderBookCard(bookB, c.entity_b_id, {
+                            qualityChipNode: qualityChip(qB),
+                            recommendedNode: recommendB ? (
+                              <Chip label="★ Recommended keep" size="small" color="primary" />
+                            ) : undefined,
+                          })}
+                        </TableCell>
+                        <TableCell sx={{ verticalAlign: 'top' }}>
+                          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                            {c.status === 'pending' && (
+                              <>
+                                <Tooltip title="Keep Book A, merge B into it">
+                                  <Button
+                                    size="small"
+                                    variant={recommendA ? 'contained' : 'outlined'}
+                                    color="primary"
+                                    disabled={busy}
+                                    onClick={() => handleKeep(c.id, c.entity_a_id, 'A')}
+                                  >
+                                    Keep A
+                                  </Button>
+                                </Tooltip>
+                                <Tooltip title="Keep Book B, merge A into it">
+                                  <Button
+                                    size="small"
+                                    variant={recommendB ? 'contained' : 'outlined'}
+                                    color="primary"
+                                    disabled={busy}
+                                    onClick={() => handleKeep(c.id, c.entity_b_id, 'B')}
+                                  >
+                                    Keep B
+                                  </Button>
+                                </Tooltip>
+                              </>
+                            )}
+                            <Tooltip title="Compare side-by-side with full score breakdown">
                               <Button
                                 size="small"
-                                variant="text"
-                                color="inherit"
-                                disabled={busy}
-                                onClick={() => handleDismissOne(c.id)}
+                                variant="outlined"
+                                onClick={() => setDrawerCandidateId(c.id)}
                               >
-                                Dismiss
+                                Compare
                               </Button>
                             </Tooltip>
-                          )}
-                        </Stack>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+                            {c.status === 'pending' && (
+                              <Tooltip title="Not a duplicate — dismiss">
+                                <Button
+                                  size="small"
+                                  variant="text"
+                                  color="inherit"
+                                  disabled={busy}
+                                  onClick={() => handleDismissOne(c.id)}
+                                >
+                                  Dismiss
+                                </Button>
+                              </Tooltip>
+                            )}
+                          </Stack>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
             </TableContainer>
           </Paper>
 
@@ -1242,7 +1276,12 @@ export function UnifiedDedupTab({ hidden }: UnifiedDedupTabProps) {
             {DEDUP_SHORTCUTS.map((shortcut, idx) => (
               <Box key={shortcut.keys}>
                 {idx > 0 && <Divider sx={{ mb: 1 }} />}
-                <Stack direction="row" spacing={2} alignItems="center" justifyContent="space-between">
+                <Stack
+                  direction="row"
+                  spacing={2}
+                  alignItems="center"
+                  justifyContent="space-between"
+                >
                   <Typography variant="body2">{shortcut.action}</Typography>
                   <Chip
                     label={shortcut.keys}

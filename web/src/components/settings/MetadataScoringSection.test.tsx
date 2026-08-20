@@ -1,7 +1,7 @@
 // file: web/src/components/settings/MetadataScoringSection.test.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: c7d6e5f4-a3b2-1098-cdef-a98765432109
-// last-edited: 2026-07-11
+// last-edited: 2026-08-19
 
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
@@ -43,9 +43,7 @@ describe('MetadataScoringSection', () => {
   it('renders the embedding enabled label', () => {
     const onChange = vi.fn();
     render(<MetadataScoringSection config={defaultConfig} onChange={onChange} />);
-    expect(
-      screen.getByText('Use embedding similarity in metadata scoring')
-    ).toBeInTheDocument();
+    expect(screen.getByText('Use embedding similarity in metadata scoring')).toBeInTheDocument();
   });
 
   it('renders the embedding min score field', () => {
@@ -57,7 +55,7 @@ describe('MetadataScoringSection', () => {
   it('calls onChange with embedding_enabled: true when Switch is toggled on', () => {
     const onChange = vi.fn();
     render(<MetadataScoringSection config={defaultConfig} onChange={onChange} />);
-    const switchInput = screen.getByRole('checkbox', {
+    const switchInput = screen.getByRole('switch', {
       name: /use embedding similarity in metadata scoring/i,
     });
     fireEvent.click(switchInput);
@@ -67,7 +65,7 @@ describe('MetadataScoringSection', () => {
   it('calls onChange with llm_enabled: true when LLM Switch is toggled on', () => {
     const onChange = vi.fn();
     render(<MetadataScoringSection config={defaultConfig} onChange={onChange} />);
-    const switchInput = screen.getByRole('checkbox', {
+    const switchInput = screen.getByRole('switch', {
       name: /use llm to rerank top candidates/i,
     });
     fireEvent.click(switchInput);

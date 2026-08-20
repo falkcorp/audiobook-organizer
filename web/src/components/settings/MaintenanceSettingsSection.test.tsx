@@ -1,7 +1,7 @@
 // file: web/src/components/settings/MaintenanceSettingsSection.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: d6e5f4a3-b2c1-0987-defa-b09876543210
-// last-edited: 2026-06-19
+// last-edited: 2026-08-19
 
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
@@ -44,7 +44,7 @@ describe('MaintenanceSettingsSection', () => {
   it('calls onChange with enabled: true when main Switch is toggled on', () => {
     const onChange = vi.fn();
     render(<MaintenanceSettingsSection config={defaultConfig} onChange={onChange} />);
-    const switchInput = screen.getByRole('checkbox', {
+    const switchInput = screen.getByRole('switch', {
       name: /enable nightly maintenance window/i,
     });
     fireEvent.click(switchInput);
@@ -59,7 +59,7 @@ describe('MaintenanceSettingsSection', () => {
         onChange={onChange}
       />
     );
-    const switchInput = screen.getByRole('checkbox', {
+    const switchInput = screen.getByRole('switch', {
       name: /enable nightly maintenance window/i,
     });
     fireEvent.click(switchInput);
@@ -75,7 +75,7 @@ describe('MaintenanceSettingsSection', () => {
   it('calls onChange with dedup_refresh: true when task Switch is toggled', () => {
     const onChange = vi.fn();
     render(<MaintenanceSettingsSection config={defaultConfig} onChange={onChange} />);
-    const switchInput = screen.getByRole('checkbox', { name: /dedup refresh/i });
+    const switchInput = screen.getByRole('switch', { name: /dedup refresh/i });
     fireEvent.click(switchInput);
     expect(onChange).toHaveBeenCalledWith({ dedup_refresh: true });
   });
