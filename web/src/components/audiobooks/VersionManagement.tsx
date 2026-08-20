@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/VersionManagement.tsx
-// version: 1.1.3
+// version: 1.1.4
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
 
 import { useState, useEffect } from 'react';
@@ -152,8 +152,8 @@ export function VersionManagement({
       return;
     }
     const currentGroup =
-      versions.find((version) => version.id === audiobookId)
-        ?.version_group_id ?? versions[0]?.version_group_id;
+      versions.find((version) => version.id === audiobookId)?.version_group_id ??
+      versions[0]?.version_group_id;
     const selected = searchResults.find((version) => version.id === targetId);
     if (currentGroup && selected?.version_group_id === currentGroup) {
       setError('Cannot create circular version links');
@@ -202,9 +202,7 @@ export function VersionManagement({
     return 50;
   };
 
-  const getQualityColor = (
-    tier: number
-  ): 'success' | 'info' | 'warning' | 'default' => {
+  const getQualityColor = (tier: number): 'success' | 'info' | 'warning' | 'default' => {
     if (tier >= 90) return 'success';
     if (tier >= 70) return 'info';
     if (tier >= 50) return 'warning';
@@ -222,11 +220,7 @@ export function VersionManagement({
         </DialogTitle>
         <DialogContent>
           {error && (
-            <Alert
-              severity="error"
-              sx={{ mb: 2 }}
-              onClose={() => setError(null)}
-            >
+            <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
               {error}
             </Alert>
           )}
@@ -236,8 +230,8 @@ export function VersionManagement({
           ) : versions.length === 0 ? (
             <Alert severity="info">
               <AlertTitle>No Additional Versions</AlertTitle>
-              This audiobook has no linked versions. Link another version to
-              compare quality, format, or editions.
+              This audiobook has no linked versions. Link another version to compare quality,
+              format, or editions.
             </Alert>
           ) : (
             <List>
@@ -251,39 +245,24 @@ export function VersionManagement({
                     {index > 0 && <Divider />}
                     <ListItem>
                       <Box sx={{ width: '100%' }}>
-                        <Stack
-                          direction="row"
-                          alignItems="center"
-                          spacing={1}
-                          sx={{ mb: 1 }}
-                        >
+                        <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
                           <IconButton
                             size="small"
                             onClick={() => handleSetPrimary(version.id)}
-                            color={
-                              version.is_primary_version ? 'primary' : 'default'
-                            }
+                            color={version.is_primary_version ? 'primary' : 'default'}
                             aria-label={
                               version.is_primary_version
                                 ? `Primary version for ${labelTitle}`
                                 : `Set primary for ${labelTitle}`
                             }
                           >
-                            {version.is_primary_version ? (
-                              <StarIcon />
-                            ) : (
-                              <StarBorderIcon />
-                            )}
+                            {version.is_primary_version ? <StarIcon /> : <StarBorderIcon />}
                           </IconButton>
                           <Typography variant="subtitle1" sx={{ flex: 1 }}>
                             {version.title}
                           </Typography>
                           {version.is_primary_version && (
-                            <Chip
-                              label="Primary"
-                              color="primary"
-                              size="small"
-                            />
+                            <Chip label="Primary" color="primary" size="small" />
                           )}
                           {version.id !== audiobookId && (
                             <Button
@@ -296,24 +275,12 @@ export function VersionManagement({
                           )}
                         </Stack>
 
-                        <Stack
-                          direction="row"
-                          spacing={1}
-                          sx={{ ml: 5, mb: 1 }}
-                        >
+                        <Stack direction="row" spacing={1} sx={{ ml: 5, mb: 1 }}>
                           {version.quality && (
-                            <Chip
-                              label={version.quality}
-                              color={qualityColor}
-                              size="small"
-                            />
+                            <Chip label={version.quality} color={qualityColor} size="small" />
                           )}
                           {version.codec && (
-                            <Chip
-                              label={version.codec}
-                              size="small"
-                              variant="outlined"
-                            />
+                            <Chip label={version.codec} size="small" variant="outlined" />
                           )}
                           {version.bitrate && (
                             <Chip
@@ -332,11 +299,7 @@ export function VersionManagement({
                         </Stack>
 
                         {version.version_notes && (
-                          <Typography
-                            variant="body2"
-                            color="text.secondary"
-                            sx={{ ml: 5 }}
-                          >
+                          <Typography variant="body2" color="text.secondary" sx={{ ml: 5 }}>
                             <InfoIcon
                               sx={{
                                 fontSize: 14,
@@ -382,8 +345,8 @@ export function VersionManagement({
         <DialogTitle>Link Version</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Search for an audiobook to link as another version. This is useful
-            for different qualities, formats, or editions of the same book.
+            Search for an audiobook to link as another version. This is useful for different
+            qualities, formats, or editions of the same book.
           </Typography>
           <TextField
             autoFocus
@@ -395,12 +358,7 @@ export function VersionManagement({
             placeholder="Search audiobooks"
           />
           {searchLoading && (
-            <Stack
-              direction="row"
-              spacing={1}
-              alignItems="center"
-              sx={{ mt: 2 }}
-            >
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 2 }}>
               <CircularProgress size={16} />
               <Typography variant="body2">Searching...</Typography>
             </Stack>
@@ -456,25 +414,17 @@ export function VersionManagement({
         </DialogActions>
       </Dialog>
 
-      <Dialog
-        open={Boolean(unlinkTarget)}
-        onClose={() => setUnlinkTarget(null)}
-      >
+      <Dialog open={Boolean(unlinkTarget)} onClose={() => setUnlinkTarget(null)}>
         <DialogTitle>Unlink Version</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary">
-            Unlink{' '}
-            <strong>{unlinkTarget?.title || 'this audiobook'}</strong> from this
-            version group?
+            Unlink <strong>{unlinkTarget?.title || 'this audiobook'}</strong> from this version
+            group?
           </Typography>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setUnlinkTarget(null)}>Cancel</Button>
-          <Button
-            variant="contained"
-            color="secondary"
-            onClick={handleConfirmUnlink}
-          >
+          <Button variant="contained" color="secondary" onClick={handleConfirmUnlink}>
             Unlink
           </Button>
         </DialogActions>

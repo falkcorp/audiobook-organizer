@@ -1,7 +1,7 @@
 // file: web/src/components/library/TagCloud.test.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4f3d2c1b-8a9e-4d7c-b6a5-2e1f9c8d7b6a
-// last-edited: 2026-08-08
+// last-edited: 2026-08-19
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent } from '@testing-library/react';
@@ -50,7 +50,9 @@ describe('TagCloud', () => {
   });
 
   it('renders nothing when there are no available tags', () => {
-    const { container } = renderWithProviders(<TagCloud {...defaultProps({ availableTags: [] })} />);
+    const { container } = renderWithProviders(
+      <TagCloud {...defaultProps({ availableTags: [] })} />
+    );
     expect(container.firstChild).toBeNull();
   });
 

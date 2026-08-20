@@ -1,5 +1,5 @@
 // file: web/src/pages/FileBrowser.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2c1d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
 
 import { useState } from 'react';
@@ -24,8 +24,7 @@ export function FileBrowser() {
       setNotice('Import path added successfully.');
       navigate('/settings');
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Failed to add import path';
+      const message = error instanceof Error ? error.message : 'Failed to add import path';
       setNotice(message);
     } finally {
       setAdding(false);

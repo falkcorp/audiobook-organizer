@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.hash-chain.test.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4b2d9f7e-1c3a-4e5b-8a6d-9f0e1c2d3b4a
-// last-edited: 2026-08-06
+// last-edited: 2026-08-19
 
 import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -18,9 +18,7 @@ vi.mock('../components/ChangeLog', () => ({
 }));
 
 vi.mock('../services/api', async () => {
-  const actual = await vi.importActual<typeof import('../services/api')>(
-    '../services/api'
-  );
+  const actual = await vi.importActual<typeof import('../services/api')>('../services/api');
   return {
     ...actual,
     getBook: vi.fn(),
@@ -97,9 +95,7 @@ function setup(files: api.BookFile[]) {
   vi.mocked(api.getBookTags).mockResolvedValue({ tags: {} });
 
   return render(
-    <MemoryRouter
-      initialEntries={['/library/book-1?tab=files']}
-    >
+    <MemoryRouter initialEntries={['/library/book-1?tab=files']}>
       <Routes>
         <Route path="/library/:id" element={<BookDetail />} />
       </Routes>

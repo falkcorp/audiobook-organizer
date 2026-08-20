@@ -1,5 +1,5 @@
 // file: web/src/components/common/ConfigurableTable.tsx
-// version: 1.1.2
+// version: 1.1.3
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -91,10 +91,13 @@ export function useConfigurableTable<T>({
   defaultSortField,
   defaultSortDir = 'asc',
 }: UseConfigurableTableOptions<T>): UseConfigurableTableResult<T> {
-  const getDefaultState = useCallback((): ColumnState => ({
-    visible: columns.filter((c) => c.defaultVisible !== false).map((c) => c.key),
-    widths: Object.fromEntries(columns.map((c) => [c.key, c.defaultWidth ?? 150])),
-  }), [columns]);
+  const getDefaultState = useCallback(
+    (): ColumnState => ({
+      visible: columns.filter((c) => c.defaultVisible !== false).map((c) => c.key),
+      widths: Object.fromEntries(columns.map((c) => [c.key, c.defaultWidth ?? 150])),
+    }),
+    [columns]
+  );
 
   const loadState = useCallback((): ColumnState => {
     try {
@@ -111,7 +114,9 @@ export function useConfigurableTable<T>({
         parsed.visible = parsed.visible.filter((k) => columns.some((c) => c.key === k));
         return parsed;
       }
-    } catch { /* use defaults */ }
+    } catch {
+      /* use defaults */
+    }
     return getDefaultState();
   }, [storageKey, columns, getDefaultState]);
 
@@ -143,9 +148,7 @@ export function useConfigurableTable<T>({
       if (isVisible && prev.visible.length <= 1) return prev; // keep at least 1
       return {
         ...prev,
-        visible: isVisible
-          ? prev.visible.filter((k) => k !== key)
-          : [...prev.visible, key],
+        visible: isVisible ? prev.visible.filter((k) => k !== key) : [...prev.visible, key],
       };
     });
   }, []);
@@ -158,41 +161,44 @@ export function useConfigurableTable<T>({
   // Resize handling
   const resizeRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
 
-  const startResize = useCallback((key: string, startX: number) => {
-    const startWidth = colState.widths[key] ?? 150;
-    resizeRef.current = { key, startX, startWidth };
+  const startResize = useCallback(
+    (key: string, startX: number) => {
+      const startWidth = colState.widths[key] ?? 150;
+      resizeRef.current = { key, startX, startWidth };
 
-    const onMouseMove = (e: MouseEvent) => {
-      if (!resizeRef.current) return;
-      const diff = e.clientX - resizeRef.current.startX;
-      const col = columns.find((c) => c.key === resizeRef.current!.key);
-      const minW = col?.minWidth ?? 50;
-      const newWidth = Math.max(minW, resizeRef.current.startWidth + diff);
-      setColState((prev) => ({
-        ...prev,
-        widths: { ...prev.widths, [resizeRef.current!.key]: newWidth },
-      }));
-    };
+      const onMouseMove = (e: MouseEvent) => {
+        if (!resizeRef.current) return;
+        const diff = e.clientX - resizeRef.current.startX;
+        const col = columns.find((c) => c.key === resizeRef.current!.key);
+        const minW = col?.minWidth ?? 50;
+        const newWidth = Math.max(minW, resizeRef.current.startWidth + diff);
+        setColState((prev) => ({
+          ...prev,
+          widths: { ...prev.widths, [resizeRef.current!.key]: newWidth },
+        }));
+      };
 
-    const onMouseUp = () => {
-      resizeRef.current = null;
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
+      const onMouseUp = () => {
+        resizeRef.current = null;
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      };
 
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
 
-    // Return cleanup function for potential early termination
-    return () => {
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-    };
-  }, [colState.widths, columns]);
+      // Return cleanup function for potential early termination
+      return () => {
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+      };
+    },
+    [colState.widths, columns]
+  );
 
   const sortRows = useCallback(
     (rows: T[]): T[] => {
@@ -331,7 +337,9 @@ export function ColumnPicker({ columns, isVisible, onToggle, onReset }: ColumnPi
         transformOrigin={{ vertical: 'top', horizontal: 'right' }}
       >
         <Box sx={{ p: 2, minWidth: 220, maxHeight: 400, overflow: 'auto' }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+          <Box
+            sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}
+          >
             <Typography variant="subtitle2">Columns</Typography>
             <Typography
               variant="caption"

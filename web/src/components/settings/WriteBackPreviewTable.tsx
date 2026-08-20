@@ -1,7 +1,7 @@
 // file: web/src/components/settings/WriteBackPreviewTable.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: e8a9b0c1-d2e3-4f5a-6b7c-8d9e0f1a2b3c
-// last-edited: 2026-05-05
+// last-edited: 2026-08-19
 
 import {
   Box,
@@ -210,8 +210,7 @@ export function WriteBackPreviewTable({
                     key={col.key}
                     sx={{
                       width: columnWidths[col.key] ?? col.defaultWidth ?? 150,
-                      maxWidth:
-                        columnWidths[col.key] ?? col.defaultWidth ?? 150,
+                      maxWidth: columnWidths[col.key] ?? col.defaultWidth ?? 150,
                       overflow: 'hidden',
                     }}
                   >

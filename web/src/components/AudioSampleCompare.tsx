@@ -1,5 +1,5 @@
 // file: web/src/components/AudioSampleCompare.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
 
 import { useState, useRef, useCallback } from 'react';
@@ -95,23 +95,31 @@ function SamplePlayer({ book, src, label, selected, onSelect }: PlayerProps) {
   return (
     <Box
       onClick={onSelect}
-      sx={[{
-        flex: 1,
-        border: 2,
-        borderRadius: 2,
-        p: 2,
-        cursor: 'pointer',
-        transition: 'border-color 0.15s',
-        '&:hover': { borderColor: 'primary.light' }
-      }, selected ? {
-        borderColor: 'primary.main'
-      } : {
-        borderColor: 'divider'
-      }, selected ? {
-        bgcolor: 'action.selected'
-      } : {
-        bgcolor: 'background.paper'
-      }]}
+      sx={[
+        {
+          flex: 1,
+          border: 2,
+          borderRadius: 2,
+          p: 2,
+          cursor: 'pointer',
+          transition: 'border-color 0.15s',
+          '&:hover': { borderColor: 'primary.light' },
+        },
+        selected
+          ? {
+              borderColor: 'primary.main',
+            }
+          : {
+              borderColor: 'divider',
+            },
+        selected
+          ? {
+              bgcolor: 'action.selected',
+            }
+          : {
+              bgcolor: 'background.paper',
+            },
+      ]}
     >
       <Stack spacing={1}>
         <Stack direction="row" alignItems="center" justifyContent="space-between">
@@ -145,25 +153,36 @@ function SamplePlayer({ book, src, label, selected, onSelect }: PlayerProps) {
           ref={audioRef}
           src={src}
           preload="none"
-          onPlay={() => { setPlaying(true); setLoading(false); }}
+          onPlay={() => {
+            setPlaying(true);
+            setLoading(false);
+          }}
           onPause={() => setPlaying(false)}
-          onEnded={() => { setPlaying(false); setProgress(0); }}
+          onEnded={() => {
+            setPlaying(false);
+            setProgress(0);
+          }}
           onTimeUpdate={() => {
             const el = audioRef.current;
-            if (el && el.duration) setProgress(el.currentTime / el.duration * 100);
+            if (el && el.duration) setProgress((el.currentTime / el.duration) * 100);
           }}
           onWaiting={() => setLoading(true)}
           onCanPlay={() => setLoading(false)}
         />
 
         {loading && <LinearProgress sx={{ borderRadius: 1 }} />}
-        {!loading && <LinearProgress variant="determinate" value={progress} sx={{ borderRadius: 1 }} />}
+        {!loading && (
+          <LinearProgress variant="determinate" value={progress} sx={{ borderRadius: 1 }} />
+        )}
 
         <Button
           size="small"
           variant={playing ? 'outlined' : 'contained'}
           startIcon={playing ? <PauseIcon /> : <PlayArrowIcon />}
-          onClick={(e) => { e.stopPropagation(); toggle(); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            toggle();
+          }}
           fullWidth
         >
           {playing ? 'Pause' : 'Play'}
@@ -254,12 +273,7 @@ export function AudioSampleCompare({ open, bookA, bookB, onClose, onKeep }: Prop
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button
-          variant="contained"
-          color="primary"
-          disabled={!selected}
-          onClick={handleKeep}
-        >
+        <Button variant="contained" color="primary" disabled={!selected} onClick={handleKeep}>
           Keep {selected === bookA.id ? 'Version A' : selected === bookB.id ? 'Version B' : '…'}
         </Button>
       </DialogActions>

@@ -1,5 +1,5 @@
 // file: web/src/components/toast/ToastProvider.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 21680277-8dde-49a7-b06e-e4d2de977e04
 // last-edited: 2026-08-19
 
@@ -44,10 +44,7 @@ export function ToastProvider({ children }: ToastProviderProps): JSX.Element {
   return (
     <ToastContext.Provider value={{ toast }}>
       {children}
-      <Stack
-        spacing={1}
-        sx={{ position: 'fixed', bottom: 16, left: 16, zIndex: 1400 }}
-      >
+      <Stack spacing={1} sx={{ position: 'fixed', bottom: 16, left: 16, zIndex: 1400 }}>
         {notifications.map((notification) => (
           <Snackbar
             key={notification.id}
@@ -61,19 +58,21 @@ export function ToastProvider({ children }: ToastProviderProps): JSX.Element {
               onClose={() => removeNotification(notification.id)}
               variant="filled"
               sx={{ width: '100%', minWidth: 280, maxWidth: 420 }}
-              action={notification.action ? (
-                <Button
-                  color="inherit"
-                  size="small"
-                  onClick={() => {
-                    notification.action!.onClick();
-                    removeNotification(notification.id);
-                  }}
-                  sx={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}
-                >
-                  {notification.action.label}
-                </Button>
-              ) : undefined}
+              action={
+                notification.action ? (
+                  <Button
+                    color="inherit"
+                    size="small"
+                    onClick={() => {
+                      notification.action!.onClick();
+                      removeNotification(notification.id);
+                    }}
+                    sx={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}
+                  >
+                    {notification.action.label}
+                  </Button>
+                ) : undefined
+              }
             >
               {notification.message}
             </Alert>

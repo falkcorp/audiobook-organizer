@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/SearchBar.tsx
-// version: 2.6.0
+// version: 2.6.1
 // guid: 1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -50,7 +50,10 @@ function saveRecentSearch(query: string) {
   if (!query.trim()) return;
   const recent = getRecentSearches().filter((s) => s !== query);
   recent.unshift(query);
-  localStorage.setItem(STORAGE_KEYS.LIBRARY_RECENT_SEARCHES, JSON.stringify(recent.slice(0, MAX_RECENT)));
+  localStorage.setItem(
+    STORAGE_KEYS.LIBRARY_RECENT_SEARCHES,
+    JSON.stringify(recent.slice(0, MAX_RECENT))
+  );
 }
 
 // Build autocomplete options: field prefixes, prefix wildcard, + recent searches
@@ -107,15 +110,21 @@ const SEARCH_HELP = [
   { example: 'publisher:Audible', desc: 'Filter by publisher' },
   // Common combinations
   { example: 'review:matched has_written:yes has_organized:yes', desc: 'Fully processed books' },
-  { example: '-review:matched library_state:organized -has_written:yes', desc: 'Organized but needs metadata + file write' },
+  {
+    example: '-review:matched library_state:organized -has_written:yes',
+    desc: 'Organized but needs metadata + file write',
+  },
   { example: '-review:matched', desc: 'Books still needing metadata' },
   { example: 'review:matched -has_written:yes', desc: 'Metadata applied but not written to files' },
-  { example: 'review:matched has_written:yes -has_organized:yes', desc: 'Written but not organized' },
+  {
+    example: 'review:matched has_written:yes -has_organized:yes',
+    desc: 'Written but not organized',
+  },
   { example: 'has_cover:no review:matched', desc: 'Matched but missing cover art' },
   { example: 'library_state:imported -review:matched', desc: 'Imported books needing metadata' },
   // Read/unread tracking (per-user)
-  { example: 'read_status:finished', desc: 'Books you\'ve finished' },
-  { example: 'read_status:in_progress', desc: 'Books you\'re reading' },
+  { example: 'read_status:finished', desc: "Books you've finished" },
+  { example: 'read_status:in_progress', desc: "Books you're reading" },
   { example: '-read_status:finished', desc: 'Unfinished books' },
   { example: 'progress_pct:>75', desc: 'Nearly finished books' },
   // Advanced DSL operators
@@ -202,7 +211,10 @@ export const SearchBar: React.FC<SearchBarProps> = ({
     const prefix = filter.negated ? (value.includes('NOT ') ? 'NOT ' : '-') : '';
     const valStr = filter.quoted ? `"${filter.value}"` : filter.value;
     const token = `${prefix}${filter.field}:${valStr}`;
-    const newValue = value.replace(token, '').replace(/\s{2,}/g, ' ').trim();
+    const newValue = value
+      .replace(token, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
     onChange(newValue);
   };
 
@@ -255,7 +267,11 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                     )}
                     <InputAdornment position="end">
                       <Tooltip title="Search help">
-                        <IconButton size="small" ref={helpAnchorRef} onClick={() => setHelpOpen(!helpOpen)}>
+                        <IconButton
+                          size="small"
+                          ref={helpAnchorRef}
+                          onClick={() => setHelpOpen(!helpOpen)}
+                        >
                           <HelpIcon />
                         </IconButton>
                       </Tooltip>
@@ -285,7 +301,13 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                 ))}
               </Select>
             </FormControl>
-            <Tooltip title={sortOrder === 'asc' ? 'Ascending (click for descending)' : 'Descending (click for ascending)'}>
+            <Tooltip
+              title={
+                sortOrder === 'asc'
+                  ? 'Ascending (click for descending)'
+                  : 'Descending (click for ascending)'
+              }
+            >
               <IconButton
                 aria-label="toggle sort direction"
                 onClick={() =>
@@ -364,9 +386,23 @@ export const SearchBar: React.FC<SearchBarProps> = ({
               <Box
                 key={h.example}
                 onClick={() => handleHelpExampleClick(h.example)}
-                sx={{ cursor: 'pointer', py: 0.5, px: 1, borderRadius: 1, '&:hover': { bgcolor: 'action.hover' } }}
+                sx={{
+                  cursor: 'pointer',
+                  py: 0.5,
+                  px: 1,
+                  borderRadius: 1,
+                  '&:hover': { bgcolor: 'action.hover' },
+                }}
               >
-                <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.8rem', color: 'primary.main', wordBreak: 'break-word' }}>
+                <Typography
+                  variant="body2"
+                  sx={{
+                    fontFamily: 'monospace',
+                    fontSize: '0.8rem',
+                    color: 'primary.main',
+                    wordBreak: 'break-word',
+                  }}
+                >
                   {h.example}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
@@ -402,7 +438,10 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                     key={s}
                     label={s}
                     size="small"
-                    onClick={() => { onChange(s); setHelpOpen(false); }}
+                    onClick={() => {
+                      onChange(s);
+                      setHelpOpen(false);
+                    }}
                     sx={{ cursor: 'pointer' }}
                   />
                 ))}

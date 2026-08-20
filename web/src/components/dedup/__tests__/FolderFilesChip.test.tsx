@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/__tests__/FolderFilesChip.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9c2e7a41-5b80-4d63-8f19-3a6d1c5e2b47
-// last-edited: 2026-06-19
+// last-edited: 2026-08-19
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -26,8 +26,24 @@ describe('FolderFilesChip', () => {
     vi.mocked(api.getBookFiles).mockResolvedValue({
       count: 2,
       files: [
-        { id: 'f1', book_id: 'BOOK1', file_path: '/books/At All Costs/01.m4b', format: 'm4b', file_size: 1048576, duration: 3600, missing: false },
-        { id: 'f2', book_id: 'BOOK1', file_path: '/books/At All Costs/02.m4b', format: 'm4b', file_size: 2097152, duration: 1800, missing: false },
+        {
+          id: 'f1',
+          book_id: 'BOOK1',
+          file_path: '/books/At All Costs/01.m4b',
+          format: 'm4b',
+          file_size: 1048576,
+          duration: 3600,
+          missing: false,
+        },
+        {
+          id: 'f2',
+          book_id: 'BOOK1',
+          file_path: '/books/At All Costs/02.m4b',
+          format: 'm4b',
+          file_size: 2097152,
+          duration: 1800,
+          missing: false,
+        },
       ],
     } as Awaited<ReturnType<typeof api.getBookFiles>>);
 

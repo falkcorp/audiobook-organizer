@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibrarySoftDeletedSection.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 26804E8D-51BA-462C-9BBE-45ED69E17B9F
-// last-edited: 2026-08-11
+// last-edited: 2026-08-19
 
 import {
   Paper,
@@ -16,10 +16,7 @@ import {
   ListItemText,
   ListItemSecondaryAction,
 } from '@mui/material';
-import {
-  ExpandMore as ExpandMoreIcon,
-  Refresh as RefreshIcon,
-} from '@mui/icons-material';
+import { ExpandMore as ExpandMoreIcon, Refresh as RefreshIcon } from '@mui/icons-material';
 import type { Audiobook } from '../../types';
 
 export interface LibrarySoftDeletedSectionProps {
@@ -61,13 +58,18 @@ export function LibrarySoftDeletedSection({
       >
         <Stack direction="row" alignItems="center" spacing={1}>
           <ExpandMoreIcon
-            sx={[{
-              transition: 'transform 0.2s'
-            }, softDeletedExpanded ? {
-              transform: 'rotate(180deg)'
-            } : {
-              transform: 'rotate(0deg)'
-            }]}
+            sx={[
+              {
+                transition: 'transform 0.2s',
+              },
+              softDeletedExpanded
+                ? {
+                    transform: 'rotate(180deg)',
+                  }
+                : {
+                    transform: 'rotate(0deg)',
+                  },
+            ]}
           />
           <Typography variant="h6">Soft-Deleted Books</Typography>
         </Stack>
@@ -128,66 +130,62 @@ export function LibrarySoftDeletedSection({
             {softDeletedCount > softDeletedBooks.length && (
               <Alert severity="info" sx={{ mt: 2 }}>
                 Showing the first {softDeletedBooks.length.toLocaleString()} of{' '}
-                {softDeletedCount.toLocaleString()} soft-deleted books. Rendering
-                all of them freezes the page, so the rest are reachable through
-                the bulk purge/restore controls rather than row by row.
+                {softDeletedCount.toLocaleString()} soft-deleted books. Rendering all of them
+                freezes the page, so the rest are reachable through the bulk purge/restore controls
+                rather than row by row.
               </Alert>
             )}
             <List dense sx={{ mt: 1 }} data-testid="soft-deleted-list">
               {softDeletedBooks.map((book) => {
-              const deletedAt =
-                book.marked_for_deletion_at && new Date(book.marked_for_deletion_at);
-              return (
-                <ListItem
-                  key={book.id}
-                  alignItems="flex-start"
-                  data-testid="soft-deleted-item"
-                >
-                  <ListItemText
-                    primary={book.title || 'Untitled'}
-                    secondary={
-                      <Stack spacing={0.5}>
-                        <Typography variant="body2" color="text.secondary">
-                          {book.author || 'Unknown Author'}
-                        </Typography>
-                        {deletedAt && (
-                          <Typography variant="caption" color="text.secondary">
-                            Soft deleted at {deletedAt.toLocaleString()}
+                const deletedAt =
+                  book.marked_for_deletion_at && new Date(book.marked_for_deletion_at);
+                return (
+                  <ListItem key={book.id} alignItems="flex-start" data-testid="soft-deleted-item">
+                    <ListItemText
+                      primary={book.title || 'Untitled'}
+                      secondary={
+                        <Stack spacing={0.5}>
+                          <Typography variant="body2" color="text.secondary">
+                            {book.author || 'Unknown Author'}
                           </Typography>
-                        )}
-                        {book.file_path && (
-                          <Typography variant="caption" color="text.secondary">
-                            {book.file_path}
-                          </Typography>
-                        )}
-                      </Stack>
-                    }
-                  />
-                  <ListItemSecondaryAction>
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      sx={{ mr: 1 }}
-                      onClick={() => onRestoreOne(book)}
-                      disabled={
-                        restoringBookId === book.id ||
-                        purgeInProgress ||
-                        purgingBookId === book.id
+                          {deletedAt && (
+                            <Typography variant="caption" color="text.secondary">
+                              Soft deleted at {deletedAt.toLocaleString()}
+                            </Typography>
+                          )}
+                          {book.file_path && (
+                            <Typography variant="caption" color="text.secondary">
+                              {book.file_path}
+                            </Typography>
+                          )}
+                        </Stack>
                       }
-                    >
-                      {restoringBookId === book.id ? 'Restoring...' : 'Restore'}
-                    </Button>
-                    <Button
-                      size="small"
-                      color="error"
-                      variant="outlined"
-                      onClick={() => onPurgeOne(book)}
-                      disabled={purgingBookId === book.id || purgeInProgress}
-                    >
-                      {purgingBookId === book.id ? 'Purging...' : 'Purge now'}
-                    </Button>
-                  </ListItemSecondaryAction>
-                </ListItem>
+                    />
+                    <ListItemSecondaryAction>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        sx={{ mr: 1 }}
+                        onClick={() => onRestoreOne(book)}
+                        disabled={
+                          restoringBookId === book.id ||
+                          purgeInProgress ||
+                          purgingBookId === book.id
+                        }
+                      >
+                        {restoringBookId === book.id ? 'Restoring...' : 'Restore'}
+                      </Button>
+                      <Button
+                        size="small"
+                        color="error"
+                        variant="outlined"
+                        onClick={() => onPurgeOne(book)}
+                        disabled={purgingBookId === book.id || purgeInProgress}
+                      >
+                        {purgingBookId === book.id ? 'Purging...' : 'Purge now'}
+                      </Button>
+                    </ListItemSecondaryAction>
+                  </ListItem>
                 );
               })}
             </List>

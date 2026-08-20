@@ -1,7 +1,7 @@
 // file: web/src/components/wizard/WelcomeWizard.tsx
-// version: 1.5.0
+// version: 1.5.1
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-06-15
+// last-edited: 2026-08-19
 
 import { useState, useEffect } from 'react';
 import {
@@ -58,9 +58,7 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
   const [showLibraryBrowser, setShowLibraryBrowser] = useState(false);
   const [openaiKey, setOpenaiKey] = useState('');
   const [testingKey, setTestingKey] = useState(false);
-  const [keyTestResult, setKeyTestResult] = useState<
-    'success' | 'error' | null
-  >(null);
+  const [keyTestResult, setKeyTestResult] = useState<'success' | 'error' | null>(null);
   const [importFolders, setImportFolders] = useState<string[]>([]);
   const [importFolderSelection, setImportFolderSelection] = useState('');
   const [showImportBrowser, setShowImportBrowser] = useState(false);
@@ -78,10 +76,14 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
   const [iTunesEnabled, setITunesEnabled] = useState(false);
   const [iTunesImportMode, setITunesImportMode] = useState<'import' | 'organize'>('import');
   const [pathMappings, setPathMappings] = useState<api.PathMapping[]>([]);
-  const [mappingTests, setMappingTests] = useState<Record<number, api.ITunesTestMappingResponse | null>>({});
+  const [mappingTests, setMappingTests] = useState<
+    Record<number, api.ITunesTestMappingResponse | null>
+  >({});
   const [testingMapping, setTestingMapping] = useState<number | null>(null);
   const [appVersion, setAppVersion] = useState('');
-  const [toolInstallChoice, setToolInstallChoice] = useState<'recommended' | 'custom'>('recommended');
+  const [toolInstallChoice, setToolInstallChoice] = useState<'recommended' | 'custom'>(
+    'recommended'
+  );
 
   useEffect(() => {
     api.getAppVersion().then(setAppVersion);
@@ -185,9 +187,7 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
   const handleConfirmImportFolder = () => {
     const trimmed = (importFolderSelection || '').trim();
     if (trimmed) {
-      setImportFolders((prev) =>
-        prev.includes(trimmed) ? prev : [...prev, trimmed]
-      );
+      setImportFolders((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
     }
     setShowImportBrowser(false);
   };
@@ -269,14 +269,17 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
         // Persist iTunes settings so the Settings page can see them
         const activeMappings = pathMappings.filter((m) => m.from && m.to);
         try {
-          localStorage.setItem(STORAGE_KEYS.ITUNES_IMPORT_SETTINGS, JSON.stringify({
-            libraryPath: iTunesPath,
-            importMode: iTunesImportMode,
-            preserveLocation: iTunesImportMode === 'import',
-            importPlaylists: true,
-            skipDuplicates: true,
-            pathMappings: activeMappings,
-          }));
+          localStorage.setItem(
+            STORAGE_KEYS.ITUNES_IMPORT_SETTINGS,
+            JSON.stringify({
+              libraryPath: iTunesPath,
+              importMode: iTunesImportMode,
+              preserveLocation: iTunesImportMode === 'import',
+              importPlaylists: true,
+              skipDuplicates: true,
+              pathMappings: activeMappings,
+            })
+          );
         } catch {
           // ignore localStorage errors
         }
@@ -353,9 +356,8 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
                 Set Your Library Path
               </Typography>
               <Typography variant="body2" color="text.secondary" paragraph>
-                This is where your organized audiobooks will be stored. The app
-                will create a structured folder hierarchy here based on your
-                naming patterns.
+                This is where your organized audiobooks will be stored. The app will create a
+                structured folder hierarchy here based on your naming patterns.
               </Typography>
 
               <TextField
@@ -368,11 +370,7 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
                 InputProps={{
                   endAdornment: (
                     <InputAdornment position="end">
-                      <Button
-                        variant="outlined"
-                        size="small"
-                        onClick={handleOpenLibraryBrowser}
-                      >
+                      <Button variant="outlined" size="small" onClick={handleOpenLibraryBrowser}>
                         Browse
                       </Button>
                     </InputAdornment>
@@ -381,8 +379,8 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
               />
 
               <Alert severity="info">
-                Choose a location with plenty of storage space. This will be the
-                permanent home for your organized audiobook collection.
+                Choose a location with plenty of storage space. This will be the permanent home for
+                your organized audiobook collection.
               </Alert>
             </Box>
           )}
@@ -394,14 +392,14 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
                 Set up AI &amp; fingerprinting tools
               </Typography>
               <Typography variant="body2" color="text.secondary" mb={2}>
-                These tools power local AI deduplication and audio fingerprint matching.
-                Recommended installs everything automatically.
+                These tools power local AI deduplication and audio fingerprint matching. Recommended
+                installs everything automatically.
               </Typography>
 
               <FormControl component="fieldset" sx={{ mb: 2 }}>
                 <RadioGroup
                   value={toolInstallChoice}
-                  onChange={e => setToolInstallChoice(e.target.value as 'recommended' | 'custom')}
+                  onChange={(e) => setToolInstallChoice(e.target.value as 'recommended' | 'custom')}
                 >
                   <FormControlLabel
                     value="recommended"
@@ -415,22 +413,16 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
                       </Stack>
                     }
                   />
-                  <FormControlLabel
-                    value="custom"
-                    control={<Radio />}
-                    label="Let me choose"
-                  />
+                  <FormControlLabel value="custom" control={<Radio />} label="Let me choose" />
                 </RadioGroup>
               </FormControl>
 
-              {toolInstallChoice === 'custom' && (
-                <ToolsPanel mode="wizard" />
-              )}
+              {toolInstallChoice === 'custom' && <ToolsPanel mode="wizard" />}
 
               <Button
                 variant="text"
                 size="small"
-                onClick={() => setActiveStep(prev => prev + 1)}
+                onClick={() => setActiveStep((prev) => prev + 1)}
                 sx={{ mt: 1 }}
               >
                 Skip — I'll set this up later
@@ -445,9 +437,8 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
                 AI-Powered Metadata (Optional)
               </Typography>
               <Typography variant="body2" color="text.secondary" paragraph>
-                Enable AI-powered author name parsing and metadata enhancement
-                with OpenAI. This is optional and can be configured later in
-                Settings.
+                Enable AI-powered author name parsing and metadata enhancement with OpenAI. This is
+                optional and can be configured later in Settings.
               </Typography>
 
               <TextField
@@ -484,8 +475,7 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
               )}
 
               <Alert severity="info">
-                You can skip this step and configure it later in Settings if
-                needed.
+                You can skip this step and configure it later in Settings if needed.
               </Alert>
             </Box>
           )}
@@ -497,9 +487,8 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
                 Import from iTunes Library
               </Typography>
               <Typography variant="body2" color="text.secondary" paragraph>
-                If you have audiobooks in iTunes/Apple Books, you can import them
-                automatically. Point to your iTunes Library.xml file to get
-                started.
+                If you have audiobooks in iTunes/Apple Books, you can import them automatically.
+                Point to your iTunes Library.xml file to get started.
               </Typography>
 
               {!iTunesPath ? (
@@ -576,9 +565,9 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
               {iTunesValidation?.valid && (
                 <>
                   <Alert severity="success" sx={{ mb: 2 }}>
-                    Found {iTunesValidation.audiobook_count} audiobook tracks
-                    ({iTunesValidation.files_found} files found). These will be
-                    processed in the background when you complete setup.
+                    Found {iTunesValidation.audiobook_count} audiobook tracks (
+                    {iTunesValidation.files_found} files found). These will be processed in the
+                    background when you complete setup.
                   </Alert>
 
                   <FormControl component="fieldset" sx={{ mb: 2 }}>
@@ -608,13 +597,15 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
                 </Alert>
               )}
 
-              {iTunesValidation?.valid && iTunesValidation.files_found === 0 && (iTunesValidation.audiobook_count ?? 0) > 0 && (
-                <Alert severity="warning" sx={{ mb: 2 }}>
-                  No files found on disk. If your iTunes library was created on a
-                  different machine (e.g. Windows), use path mapping below to
-                  translate the original paths to local paths.
-                </Alert>
-              )}
+              {iTunesValidation?.valid &&
+                iTunesValidation.files_found === 0 &&
+                (iTunesValidation.audiobook_count ?? 0) > 0 && (
+                  <Alert severity="warning" sx={{ mb: 2 }}>
+                    No files found on disk. If your iTunes library was created on a different
+                    machine (e.g. Windows), use path mapping below to translate the original paths
+                    to local paths.
+                  </Alert>
+                )}
 
               {pathMappings.length > 0 && (
                 <Box sx={{ mb: 2 }}>
@@ -626,7 +617,10 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
                   </Typography>
                   {pathMappings.map((mapping, idx) => (
                     <Box key={idx} sx={{ mb: 2 }}>
-                      <Typography variant="body2" sx={{ fontFamily: 'monospace', mb: 0.5, wordBreak: 'break-all' }}>
+                      <Typography
+                        variant="body2"
+                        sx={{ fontFamily: 'monospace', mb: 0.5, wordBreak: 'break-all' }}
+                      >
                         {mapping.from}
                       </Typography>
                       <Stack direction="row" spacing={1} alignItems="flex-start">
@@ -651,10 +645,17 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
                           onClick={async () => {
                             setTestingMapping(idx);
                             try {
-                              const result = await api.testITunesPathMapping(iTunesPath, mapping.from, mapping.to);
+                              const result = await api.testITunesPathMapping(
+                                iTunesPath,
+                                mapping.from,
+                                mapping.to
+                              );
                               setMappingTests((prev) => ({ ...prev, [idx]: result }));
                             } catch {
-                              setMappingTests((prev) => ({ ...prev, [idx]: { tested: 0, found: 0, examples: [] } }));
+                              setMappingTests((prev) => ({
+                                ...prev,
+                                [idx]: { tested: 0, found: 0, examples: [] },
+                              }));
                             } finally {
                               setTestingMapping(null);
                             }
@@ -665,11 +666,24 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
                       </Stack>
                       {mappingTests[idx] && (
                         <Box sx={{ mt: 0.5, pl: 1 }}>
-                          <Typography variant="body2" color={mappingTests[idx]!.found > 0 ? 'success.main' : 'error.main'}>
-                            Found {mappingTests[idx]!.found}/{mappingTests[idx]!.tested} files tested
+                          <Typography
+                            variant="body2"
+                            color={mappingTests[idx]!.found > 0 ? 'success.main' : 'error.main'}
+                          >
+                            Found {mappingTests[idx]!.found}/{mappingTests[idx]!.tested} files
+                            tested
                           </Typography>
                           {mappingTests[idx]!.examples.map((ex, i) => (
-                            <Typography key={i} variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'text.secondary', wordBreak: 'break-all' }}>
+                            <Typography
+                              key={i}
+                              variant="body2"
+                              sx={{
+                                fontFamily: 'monospace',
+                                fontSize: '0.75rem',
+                                color: 'text.secondary',
+                                wordBreak: 'break-all',
+                              }}
+                            >
                               {ex.title}: {ex.path}
                             </Typography>
                           ))}
@@ -712,8 +726,8 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
               )}
 
               <Alert severity="info">
-                This step is optional. You can skip it and import from iTunes
-                later via the Library page.
+                This step is optional. You can skip it and import from iTunes later via the Library
+                page.
               </Alert>
             </Box>
           )}
@@ -725,9 +739,8 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
                 Add Import Folders
               </Typography>
               <Typography variant="body2" color="text.secondary" paragraph>
-                Import folders are watched locations where the scanner looks for
-                new audiobooks. Files found here will be scanned and organized
-                into your library path.
+                Import folders are watched locations where the scanner looks for new audiobooks.
+                Files found here will be scanned and organized into your library path.
               </Typography>
 
               <Box sx={{ mb: 2 }}>
@@ -773,8 +786,8 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
               </Box>
 
               <Alert severity="info">
-                You can add import folders later in the Library page if you
-                prefer to skip this step.
+                You can add import folders later in the Library page if you prefer to skip this
+                step.
               </Alert>
             </Box>
           )}
@@ -790,18 +803,12 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
               variant="contained"
               onClick={handleComplete}
               disabled={saving}
-              startIcon={
-                saving ? <CircularProgress size={16} /> : <CheckCircleIcon />
-              }
+              startIcon={saving ? <CircularProgress size={16} /> : <CheckCircleIcon />}
             >
               {saving ? 'Saving...' : 'Complete Setup'}
             </Button>
           ) : (
-            <Button
-              variant="contained"
-              onClick={handleNext}
-              disabled={!canProceed()}
-            >
+            <Button variant="contained" onClick={handleNext} disabled={!canProceed()}>
               Next
             </Button>
           )}

@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/AudiobookCard.tsx
-// version: 1.14.0
+// version: 1.14.1
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 import React from 'react';
 import {
   Card,
@@ -121,32 +121,43 @@ export const AudiobookCard: React.FC<AudiobookCardProps> = ({
 
   return (
     <Card
-      sx={[{
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        transition: 'transform 0.2s, box-shadow 0.2s'
-      }, onClick ? {
-        cursor: 'pointer'
-      } : {
-        cursor: 'default'
-      }, onClick ? {
-        '&:hover': {
-          transform: 'translateY(-4px)'
-        }
-      } : {
-        '&:hover': {
-          transform: 'none'
-        }
-      }, onClick ? {
-        '&:hover': {
-          boxShadow: 6
-        }
-      } : {
-        '&:hover': {
-          boxShadow: 1
-        }
-      }]}
+      sx={[
+        {
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          transition: 'transform 0.2s, box-shadow 0.2s',
+        },
+        onClick
+          ? {
+              cursor: 'pointer',
+            }
+          : {
+              cursor: 'default',
+            },
+        onClick
+          ? {
+              '&:hover': {
+                transform: 'translateY(-4px)',
+              },
+            }
+          : {
+              '&:hover': {
+                transform: 'none',
+              },
+            },
+        onClick
+          ? {
+              '&:hover': {
+                boxShadow: 6,
+              },
+            }
+          : {
+              '&:hover': {
+                boxShadow: 1,
+              },
+            },
+      ]}
       onClick={handleCardClick}
     >
       <Box sx={{ position: 'relative' }}>
@@ -171,7 +182,11 @@ export const AudiobookCard: React.FC<AudiobookCardProps> = ({
           <CardMedia
             component="img"
             height="240"
-            image={audiobook.cover_url.startsWith('/api/') ? audiobook.cover_url : `/api/v1/covers/proxy?url=${encodeURIComponent(audiobook.cover_url)}`}
+            image={
+              audiobook.cover_url.startsWith('/api/')
+                ? audiobook.cover_url
+                : `/api/v1/covers/proxy?url=${encodeURIComponent(audiobook.cover_url)}`
+            }
             alt={audiobook.title || 'Audiobook cover'}
             loading="lazy"
             sx={{ objectFit: 'contain', bgcolor: 'grey.900' }}
@@ -207,9 +222,7 @@ export const AudiobookCard: React.FC<AudiobookCardProps> = ({
         </IconButton>
       </Box>
 
-      <CardContent
-        sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column' }}
-      >
+      <CardContent sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column' }}>
         <Typography
           gutterBottom
           variant="h6"
@@ -230,24 +243,14 @@ export const AudiobookCard: React.FC<AudiobookCardProps> = ({
         </Typography>
 
         {audiobook.series && (
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            noWrap
-            sx={{ mt: 0.5 }}
-          >
+          <Typography variant="caption" color="text.secondary" noWrap sx={{ mt: 0.5 }}>
             {audiobook.series}
             {audiobook.series_number && ` #${audiobook.series_number}`}
           </Typography>
         )}
 
         {audiobook.narrator && (
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            noWrap
-            sx={{ mt: 0.5 }}
-          >
+          <Typography variant="caption" color="text.secondary" noWrap sx={{ mt: 0.5 }}>
             Narrated by: {audiobook.narrator}
           </Typography>
         )}
@@ -298,21 +301,14 @@ export const AudiobookCard: React.FC<AudiobookCardProps> = ({
           {audiobook.metadata_updated_at &&
             (!audiobook.last_written_at ||
               new Date(audiobook.last_written_at) < new Date(audiobook.metadata_updated_at)) && (
-            <Tooltip title="Metadata saved to DB but not yet written to file tags">
-              <Chip label="Write pending" size="small" color="warning" variant="outlined" />
-            </Tooltip>
-          )}
+              <Tooltip title="Metadata saved to DB but not yet written to file tags">
+                <Chip label="Write pending" size="small" color="warning" variant="outlined" />
+              </Tooltip>
+            )}
           {audiobook.version_group_id && (
-            <Chip
-              label="Multiple Versions"
-              size="small"
-              color="info"
-              icon={<CompareIcon />}
-            />
+            <Chip label="Multiple Versions" size="small" color="info" icon={<CompareIcon />} />
           )}
-          {audiobook.genre && (
-            <Chip label={audiobook.genre} size="small" variant="outlined" />
-          )}
+          {audiobook.genre && <Chip label={audiobook.genre} size="small" variant="outlined" />}
           {audiobook.language && (
             <Chip label={audiobook.language} size="small" variant="outlined" />
           )}

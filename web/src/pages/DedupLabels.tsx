@@ -1,7 +1,7 @@
 // file: web/src/pages/DedupLabels.tsx
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7e3a1c92-4b60-4d85-9f21-6a5e0c9d3f58
-// last-edited: 2026-07-11
+// last-edited: 2026-08-19
 
 // DedupLabels — the C6 gold-dataset review page for the dedup feedback loop.
 // Lists labeled dedup examples (the dedup:label: keyspace), filterable by label
@@ -10,9 +10,29 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Box, Typography, Paper, Table, TableBody, TableCell, TableContainer, TableHead,
-  TableRow, Chip, Select, MenuItem, FormControl, InputLabel, Button, Stack,
-  CircularProgress, Alert, Tooltip, Link as MuiLink, TextField, Tabs, Tab,
+  Box,
+  Typography,
+  Paper,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Chip,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  Button,
+  Stack,
+  CircularProgress,
+  Alert,
+  Tooltip,
+  Link as MuiLink,
+  TextField,
+  Tabs,
+  Tab,
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { LabelToggle } from '../components/dedup/LabelToggle';
@@ -65,7 +85,13 @@ const labelColor = (l: string): 'success' | 'error' | 'warning' | 'default' =>
   l === 'true_dup' ? 'success' : l === 'not_dup' ? 'error' : l === 'unsure' ? 'warning' : 'default';
 
 const sourceColor = (s: string): 'primary' | 'secondary' | 'info' | 'default' =>
-  s === 'human' ? 'primary' : s === 'auto_high_conf' ? 'info' : s === 'rule' ? 'secondary' : 'default';
+  s === 'human'
+    ? 'primary'
+    : s === 'auto_high_conf'
+      ? 'info'
+      : s === 'rule'
+        ? 'secondary'
+        : 'default';
 
 const PAGE = 50;
 
@@ -97,7 +123,11 @@ function BookCell({
         {title || bookId}
       </MuiLink>
       {path && (
-        <Tooltip title={path} placement="bottom-start" componentsProps={{ tooltip: { sx: { maxWidth: 600 } } }}>
+        <Tooltip
+          title={path}
+          placement="bottom-start"
+          componentsProps={{ tooltip: { sx: { maxWidth: 600 } } }}
+        >
           <Typography
             variant="caption"
             color="text.secondary"
@@ -142,11 +172,15 @@ function SuspiciousQueue({
   return (
     <Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Rule-sourced <code>not_dup</code> labels carrying duplicate-shaped evidence
-        (shared ASIN/path, CERTAIN/HIGH band, cosine&nbsp;≥&nbsp;0.95, or the ms/sec
-        duration-ratio signature). Each override becomes a permanent human gold label.
+        Rule-sourced <code>not_dup</code> labels carrying duplicate-shaped evidence (shared
+        ASIN/path, CERTAIN/HIGH band, cosine&nbsp;≥&nbsp;0.95, or the ms/sec duration-ratio
+        signature). Each override becomes a permanent human gold label.
       </Typography>
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
+      )}
       <TableContainer component={Paper}>
         <Table size="small" stickyHeader>
           <TableHead>
@@ -160,39 +194,82 @@ function SuspiciousQueue({
           </TableHead>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={5} align="center"><CircularProgress size={24} sx={{ my: 2 }} /></TableCell></TableRow>
-            ) : rows.length === 0 ? (
-              <TableRow><TableCell colSpan={5} align="center"><Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>No suspicious labels in the queue.</Typography></TableCell></TableRow>
-            ) : rows.map((r) => (
-              <TableRow key={r.candidate_id} hover>
-                <TableCell>
-                  <BookCell bookId={r.entity_a_id} title={r.a?.title} path={r.a?.primary_path} pathVars={pathVars} onOpen={onOpen} />
-                </TableCell>
-                <TableCell>
-                  <BookCell bookId={r.entity_b_id} title={r.b?.title} path={r.b?.primary_path} pathVars={pathVars} onOpen={onOpen} />
-                </TableCell>
-                <TableCell>
-                  <Typography variant="caption">{fmtDuration(r.a?.total_duration_sec)} / {fmtDuration(r.b?.total_duration_sec)}</Typography>
-                </TableCell>
-                <TableCell>
-                  <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
-                    {(r.suspicion_reasons || []).map((reason) => (
-                      <Chip key={reason} size="small" color="warning" variant="outlined" label={reason} />
-                    ))}
-                  </Stack>
-                </TableCell>
-                <TableCell align="center">
-                  <Stack direction="row" spacing={1} justifyContent="center">
-                    <Button size="small" color="success" variant="outlined" onClick={() => onOverride(r.candidate_id, 'true_dup')}>
-                      Mark true_dup
-                    </Button>
-                    <Button size="small" color="error" variant="outlined" onClick={() => onOverride(r.candidate_id, 'not_dup')}>
-                      Confirm not_dup
-                    </Button>
-                  </Stack>
+              <TableRow>
+                <TableCell colSpan={5} align="center">
+                  <CircularProgress size={24} sx={{ my: 2 }} />
                 </TableCell>
               </TableRow>
-            ))}
+            ) : rows.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={5} align="center">
+                  <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
+                    No suspicious labels in the queue.
+                  </Typography>
+                </TableCell>
+              </TableRow>
+            ) : (
+              rows.map((r) => (
+                <TableRow key={r.candidate_id} hover>
+                  <TableCell>
+                    <BookCell
+                      bookId={r.entity_a_id}
+                      title={r.a?.title}
+                      path={r.a?.primary_path}
+                      pathVars={pathVars}
+                      onOpen={onOpen}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <BookCell
+                      bookId={r.entity_b_id}
+                      title={r.b?.title}
+                      path={r.b?.primary_path}
+                      pathVars={pathVars}
+                      onOpen={onOpen}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="caption">
+                      {fmtDuration(r.a?.total_duration_sec)} /{' '}
+                      {fmtDuration(r.b?.total_duration_sec)}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+                      {(r.suspicion_reasons || []).map((reason) => (
+                        <Chip
+                          key={reason}
+                          size="small"
+                          color="warning"
+                          variant="outlined"
+                          label={reason}
+                        />
+                      ))}
+                    </Stack>
+                  </TableCell>
+                  <TableCell align="center">
+                    <Stack direction="row" spacing={1} justifyContent="center">
+                      <Button
+                        size="small"
+                        color="success"
+                        variant="outlined"
+                        onClick={() => onOverride(r.candidate_id, 'true_dup')}
+                      >
+                        Mark true_dup
+                      </Button>
+                      <Button
+                        size="small"
+                        color="error"
+                        variant="outlined"
+                        onClick={() => onOverride(r.candidate_id, 'not_dup')}
+                      >
+                        Confirm not_dup
+                      </Button>
+                    </Stack>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
           </TableBody>
         </Table>
       </TableContainer>
@@ -230,24 +307,34 @@ export default function DedupLabels() {
     }
   }, []);
 
-  const override = useCallback(async (candidateId: number, label: string) => {
-    try {
-      const r = await apiFetch(`${API_BASE}/dedup/labels/${candidateId}/override`, {
-        method: 'POST',
-        body: JSON.stringify({ label, reason: 'ui_override' }),
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const d = (await r.json()).data;
-      setRows((current) => current.map((row) => (
-        row.candidate_id === candidateId
-          ? { ...row, label: d.label || label, label_source: d.label_source || 'human', label_reason: 'ui_override' }
-          : row
-      )));
-      await loadStats();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Override failed');
-    }
-  }, [loadStats]);
+  const override = useCallback(
+    async (candidateId: number, label: string) => {
+      try {
+        const r = await apiFetch(`${API_BASE}/dedup/labels/${candidateId}/override`, {
+          method: 'POST',
+          body: JSON.stringify({ label, reason: 'ui_override' }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const d = (await r.json()).data;
+        setRows((current) =>
+          current.map((row) =>
+            row.candidate_id === candidateId
+              ? {
+                  ...row,
+                  label: d.label || label,
+                  label_source: d.label_source || 'human',
+                  label_reason: 'ui_override',
+                }
+              : row
+          )
+        );
+        await loadStats();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Override failed');
+      }
+    },
+    [loadStats]
+  );
 
   const loadSuspicious = useCallback(async () => {
     setSuspLoading(true);
@@ -266,94 +353,107 @@ export default function DedupLabels() {
 
   // overrideSuspicious POSTs the EXISTING override route (stamping
   // label_source=human) and drops the row from the queue on success.
-  const overrideSuspicious = useCallback(async (candidateId: number, label: string) => {
-    try {
-      const r = await apiFetch(`${API_BASE}/dedup/labels/${candidateId}/override`, {
-        method: 'POST',
-        body: JSON.stringify({ label, reason: 'ui_override' }),
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setSuspRows((current) => current.filter((row) => row.candidate_id !== candidateId));
-      await loadStats();
-    } catch (e) {
-      setSuspError(e instanceof Error ? e.message : 'Override failed');
-    }
-  }, [loadStats]);
+  const overrideSuspicious = useCallback(
+    async (candidateId: number, label: string) => {
+      try {
+        const r = await apiFetch(`${API_BASE}/dedup/labels/${candidateId}/override`, {
+          method: 'POST',
+          body: JSON.stringify({ label, reason: 'ui_override' }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        setSuspRows((current) => current.filter((row) => row.candidate_id !== candidateId));
+        await loadStats();
+      } catch (e) {
+        setSuspError(e instanceof Error ? e.message : 'Override failed');
+      }
+    },
+    [loadStats]
+  );
 
-  const columns = useMemo<ColumnDef<LabeledExample>[]>(() => [
-    {
-      key: 'book_a',
-      label: 'Book A',
-      defaultWidth: 360,
-      sortable: false,
-      render: (r) => (
-        <BookCell
-          bookId={r.entity_a_id}
-          title={r.a?.title}
-          path={r.a?.primary_path}
-          pathVars={pathVars}
-          onOpen={openBook}
-        />
-      ),
-    },
-    {
-      key: 'book_b',
-      label: 'Book B',
-      defaultWidth: 360,
-      sortable: false,
-      render: (r) => (
-        <BookCell
-          bookId={r.entity_b_id}
-          title={r.b?.title}
-          path={r.b?.primary_path}
-          pathVars={pathVars}
-          onOpen={openBook}
-        />
-      ),
-    },
-    {
-      key: 'layer',
-      label: 'Layer',
-      defaultWidth: 120,
-      sortValue: (r) => r.layer,
-      render: (r) => r.layer,
-    },
-    {
-      key: 'band',
-      label: 'Band',
-      defaultWidth: 120,
-      sortValue: (r) => r.band || '',
-      render: (r) => r.band || '—',
-    },
-    {
-      key: 'source',
-      label: 'Source',
-      defaultWidth: 150,
-      sortValue: (r) => r.label_source,
-      render: (r) => (
-        <Chip size="small" variant="outlined" color={sourceColor(r.label_source)} label={r.label_source} />
-      ),
-    },
-    {
-      key: 'reason',
-      label: 'Reason',
-      defaultWidth: 220,
-      sortValue: (r) => r.label_reason || '',
-      render: (r) => (
-        <Typography variant="caption" color="text.secondary">{r.label_reason}</Typography>
-      ),
-    },
-    {
-      key: 'label',
-      label: 'Label',
-      align: 'center',
-      defaultWidth: 220,
-      sortValue: (r) => r.label,
-      render: (r) => (
-        <LabelToggle value={r.label} onChange={(label) => void override(r.candidate_id, label)} />
-      ),
-    },
-  ], [openBook, pathVars, override]);
+  const columns = useMemo<ColumnDef<LabeledExample>[]>(
+    () => [
+      {
+        key: 'book_a',
+        label: 'Book A',
+        defaultWidth: 360,
+        sortable: false,
+        render: (r) => (
+          <BookCell
+            bookId={r.entity_a_id}
+            title={r.a?.title}
+            path={r.a?.primary_path}
+            pathVars={pathVars}
+            onOpen={openBook}
+          />
+        ),
+      },
+      {
+        key: 'book_b',
+        label: 'Book B',
+        defaultWidth: 360,
+        sortable: false,
+        render: (r) => (
+          <BookCell
+            bookId={r.entity_b_id}
+            title={r.b?.title}
+            path={r.b?.primary_path}
+            pathVars={pathVars}
+            onOpen={openBook}
+          />
+        ),
+      },
+      {
+        key: 'layer',
+        label: 'Layer',
+        defaultWidth: 120,
+        sortValue: (r) => r.layer,
+        render: (r) => r.layer,
+      },
+      {
+        key: 'band',
+        label: 'Band',
+        defaultWidth: 120,
+        sortValue: (r) => r.band || '',
+        render: (r) => r.band || '—',
+      },
+      {
+        key: 'source',
+        label: 'Source',
+        defaultWidth: 150,
+        sortValue: (r) => r.label_source,
+        render: (r) => (
+          <Chip
+            size="small"
+            variant="outlined"
+            color={sourceColor(r.label_source)}
+            label={r.label_source}
+          />
+        ),
+      },
+      {
+        key: 'reason',
+        label: 'Reason',
+        defaultWidth: 220,
+        sortValue: (r) => r.label_reason || '',
+        render: (r) => (
+          <Typography variant="caption" color="text.secondary">
+            {r.label_reason}
+          </Typography>
+        ),
+      },
+      {
+        key: 'label',
+        label: 'Label',
+        align: 'center',
+        defaultWidth: 220,
+        sortValue: (r) => r.label,
+        render: (r) => (
+          <LabelToggle value={r.label} onChange={(label) => void override(r.candidate_id, label)} />
+        ),
+      },
+    ],
+    [openBook, pathVars, override]
+  );
 
   const {
     visibleColumns,
@@ -393,28 +493,49 @@ export default function DedupLabels() {
     }
   }, [labelFilter, sourceFilter, bandFilter, offset]);
 
-  useEffect(() => { void loadStats(); }, [loadStats]);
-  useEffect(() => { void load(); }, [load]);
-  useEffect(() => { if (tab === 1) void loadSuspicious(); }, [tab, loadSuspicious]);
-  useEffect(() => () => { if (bandDebounceRef.current) clearTimeout(bandDebounceRef.current); }, []);
+  useEffect(() => {
+    void loadStats();
+  }, [loadStats]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+  useEffect(() => {
+    if (tab === 1) void loadSuspicious();
+  }, [tab, loadSuspicious]);
+  useEffect(
+    () => () => {
+      if (bandDebounceRef.current) clearTimeout(bandDebounceRef.current);
+    },
+    []
+  );
 
   return (
     <Box sx={{ p: 3 }}>
-      <Typography variant="h4" gutterBottom>Dedup Gold Dataset</Typography>
+      <Typography variant="h4" gutterBottom>
+        Dedup Gold Dataset
+      </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Labeled duplicate-candidate examples the classifier trains and validates on.
-        Human overrides become gold (<code>label_source=human</code>) and take precedence.
+        Labeled duplicate-candidate examples the classifier trains and validates on. Human overrides
+        become gold (<code>label_source=human</code>) and take precedence.
       </Typography>
 
       {stats && (
         <Stack direction="row" spacing={1} sx={{ mb: 2, flexWrap: 'wrap', gap: 1 }}>
           <Chip label={`total ${stats.total}`} />
           {Object.entries(stats.by_label).map(([k, v]) => (
-            <Chip key={k} size="small" color={labelColor(k)} label={`${k}: ${v}`} variant="outlined" />
+            <Chip
+              key={k}
+              size="small"
+              color={labelColor(k)}
+              label={`${k}: ${v}`}
+              variant="outlined"
+            />
           ))}
-          {Object.entries(stats.by_source).filter(([, v]) => v > 0).map(([k, v]) => (
-            <Chip key={k} size="small" color={sourceColor(k)} label={`${k}: ${v}`} />
-          ))}
+          {Object.entries(stats.by_source)
+            .filter(([, v]) => v > 0)
+            .map(([k, v]) => (
+              <Chip key={k} size="small" color={sourceColor(k)} label={`${k}: ${v}`} />
+            ))}
         </Stack>
       )}
 
@@ -424,115 +545,141 @@ export default function DedupLabels() {
       </Tabs>
 
       {tab === 0 && (
-      <>
-      <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
-        <FormControl size="small" sx={{ minWidth: 160 }}>
-          <InputLabel id="dedup-label-filter-label">Label</InputLabel>
-          <Select
-            id="dedup-label-filter"
-            labelId="dedup-label-filter-label"
-            label="Label"
-            value={labelFilter}
-            onChange={(e) => { setOffset(0); setLabelFilter(e.target.value); }}
-          >
-            <MenuItem value="">All</MenuItem>
-            <MenuItem value="true_dup">true_dup</MenuItem>
-            <MenuItem value="not_dup">not_dup</MenuItem>
-            <MenuItem value="unsure">unsure</MenuItem>
-          </Select>
-        </FormControl>
-        <FormControl size="small" sx={{ minWidth: 180 }}>
-          <InputLabel id="dedup-source-filter-label">Source</InputLabel>
-          <Select
-            id="dedup-source-filter"
-            labelId="dedup-source-filter-label"
-            label="Source"
-            value={sourceFilter}
-            onChange={(e) => { setOffset(0); setSourceFilter(e.target.value); }}
-          >
-            <MenuItem value="">All</MenuItem>
-            <MenuItem value="human">human (gold)</MenuItem>
-            <MenuItem value="auto_high_conf">auto_high_conf</MenuItem>
-            <MenuItem value="rule">rule</MenuItem>
-            <MenuItem value="llm_judge">llm_judge</MenuItem>
-          </Select>
-        </FormControl>
-        <TextField
-          size="small"
-          label="Band"
-          value={localBandFilter}
-          onChange={(e) => {
-            setLocalBandFilter(e.target.value);
-            if (bandDebounceRef.current) clearTimeout(bandDebounceRef.current);
-            bandDebounceRef.current = setTimeout(() => {
-              setOffset(0);
-              setBandFilter(e.target.value);
-            }, 300);
-          }}
-          sx={{ minWidth: 180 }}
-        />
-        <Box sx={{ display: 'flex', alignItems: 'center', ml: 'auto' }}>
-          <ColumnPicker
-            columns={allColumns.map(({ key, label }) => ({ key, label }))}
-            isVisible={isColumnVisible}
-            onToggle={toggleColumn}
-            onReset={resetColumns}
-          />
-        </Box>
-      </Stack>
+        <>
+          <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
+            <FormControl size="small" sx={{ minWidth: 160 }}>
+              <InputLabel id="dedup-label-filter-label">Label</InputLabel>
+              <Select
+                id="dedup-label-filter"
+                labelId="dedup-label-filter-label"
+                label="Label"
+                value={labelFilter}
+                onChange={(e) => {
+                  setOffset(0);
+                  setLabelFilter(e.target.value);
+                }}
+              >
+                <MenuItem value="">All</MenuItem>
+                <MenuItem value="true_dup">true_dup</MenuItem>
+                <MenuItem value="not_dup">not_dup</MenuItem>
+                <MenuItem value="unsure">unsure</MenuItem>
+              </Select>
+            </FormControl>
+            <FormControl size="small" sx={{ minWidth: 180 }}>
+              <InputLabel id="dedup-source-filter-label">Source</InputLabel>
+              <Select
+                id="dedup-source-filter"
+                labelId="dedup-source-filter-label"
+                label="Source"
+                value={sourceFilter}
+                onChange={(e) => {
+                  setOffset(0);
+                  setSourceFilter(e.target.value);
+                }}
+              >
+                <MenuItem value="">All</MenuItem>
+                <MenuItem value="human">human (gold)</MenuItem>
+                <MenuItem value="auto_high_conf">auto_high_conf</MenuItem>
+                <MenuItem value="rule">rule</MenuItem>
+                <MenuItem value="llm_judge">llm_judge</MenuItem>
+              </Select>
+            </FormControl>
+            <TextField
+              size="small"
+              label="Band"
+              value={localBandFilter}
+              onChange={(e) => {
+                setLocalBandFilter(e.target.value);
+                if (bandDebounceRef.current) clearTimeout(bandDebounceRef.current);
+                bandDebounceRef.current = setTimeout(() => {
+                  setOffset(0);
+                  setBandFilter(e.target.value);
+                }, 300);
+              }}
+              sx={{ minWidth: 180 }}
+            />
+            <Box sx={{ display: 'flex', alignItems: 'center', ml: 'auto' }}>
+              <ColumnPicker
+                columns={allColumns.map(({ key, label }) => ({ key, label }))}
+                isVisible={isColumnVisible}
+                onToggle={toggleColumn}
+                onReset={resetColumns}
+              />
+            </Box>
+          </Stack>
 
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+          {error && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {error}
+            </Alert>
+          )}
 
-      <TableContainer component={Paper}>
-        <Table size="small" stickyHeader>
-          <TableHead>
-            <TableRow>
-              {visibleColumns.map((column) => (
-                <ResizableHeaderCell
-                  key={column.key}
-                  columnKey={column.key}
-                  label={column.label}
-                  width={columnWidths[column.key] ?? column.defaultWidth ?? 150}
-                  align={column.align}
-                  sortable={column.sortable !== false}
-                  sortActive={sortField === column.key}
-                  sortDirection={sortDir}
-                  onSort={() => handleSort(column.key)}
-                  onStartResize={startResize}
-                />
-              ))}
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {loading ? (
-              <TableRow><TableCell colSpan={visibleColumns.length} align="center"><CircularProgress size={24} sx={{ my: 2 }} /></TableCell></TableRow>
-            ) : rows.length === 0 ? (
-              <TableRow><TableCell colSpan={visibleColumns.length} align="center"><Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>No labeled examples for this filter.</Typography></TableCell></TableRow>
-            ) : sortRows(rows).map((r) => (
-              <TableRow key={r.candidate_id} hover>
-                {visibleColumns.map((column) => (
-                  <TableCell
-                    key={column.key}
-                    align={column.align}
-                    sx={{ width: columnWidths[column.key] ?? column.defaultWidth ?? 150 }}
-                  >
-                    {column.render(r)}
-                  </TableCell>
-                ))}
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+          <TableContainer component={Paper}>
+            <Table size="small" stickyHeader>
+              <TableHead>
+                <TableRow>
+                  {visibleColumns.map((column) => (
+                    <ResizableHeaderCell
+                      key={column.key}
+                      columnKey={column.key}
+                      label={column.label}
+                      width={columnWidths[column.key] ?? column.defaultWidth ?? 150}
+                      align={column.align}
+                      sortable={column.sortable !== false}
+                      sortActive={sortField === column.key}
+                      sortDirection={sortDir}
+                      onSort={() => handleSort(column.key)}
+                      onStartResize={startResize}
+                    />
+                  ))}
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {loading ? (
+                  <TableRow>
+                    <TableCell colSpan={visibleColumns.length} align="center">
+                      <CircularProgress size={24} sx={{ my: 2 }} />
+                    </TableCell>
+                  </TableRow>
+                ) : rows.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={visibleColumns.length} align="center">
+                      <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
+                        No labeled examples for this filter.
+                      </Typography>
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  sortRows(rows).map((r) => (
+                    <TableRow key={r.candidate_id} hover>
+                      {visibleColumns.map((column) => (
+                        <TableCell
+                          key={column.key}
+                          align={column.align}
+                          sx={{ width: columnWidths[column.key] ?? column.defaultWidth ?? 150 }}
+                        >
+                          {column.render(r)}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
 
-      <Stack direction="row" spacing={2} alignItems="center" sx={{ mt: 2 }}>
-        <Button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE))}>Prev</Button>
-        <Typography variant="body2">
-          {total === 0 ? '0' : `${offset + 1}–${Math.min(offset + PAGE, total)}`} of {total}
-        </Typography>
-        <Button disabled={offset + PAGE >= total} onClick={() => setOffset(offset + PAGE)}>Next</Button>
-      </Stack>
-      </>
+          <Stack direction="row" spacing={2} alignItems="center" sx={{ mt: 2 }}>
+            <Button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE))}>
+              Prev
+            </Button>
+            <Typography variant="body2">
+              {total === 0 ? '0' : `${offset + 1}–${Math.min(offset + PAGE, total)}`} of {total}
+            </Typography>
+            <Button disabled={offset + PAGE >= total} onClick={() => setOffset(offset + PAGE)}>
+              Next
+            </Button>
+          </Stack>
+        </>
       )}
 
       {tab === 1 && (

@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/ReadStatusChip.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c5d6e1f-8a9b-4a70-b8c5-3d7e0f1b9a99
 
 import React, { useCallback, useEffect, useState } from 'react';
@@ -37,7 +37,9 @@ export default function ReadStatusChip({ bookId, compact }: ReadStatusChipProps)
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
 
   useEffect(() => {
-    getBookState(bookId).then(setState).catch(() => {});
+    getBookState(bookId)
+      .then(setState)
+      .catch(() => {});
   }, [bookId]);
 
   const status: ReadStatus = (state?.status as ReadStatus) || 'unstarted';
@@ -99,11 +101,7 @@ export default function ReadStatusChip({ bookId, compact }: ReadStatusChipProps)
       )}
       <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={handleClose}>
         {(['unstarted', 'in_progress', 'finished', 'abandoned'] as ReadStatus[]).map((s) => (
-          <MenuItem
-            key={s}
-            selected={s === status}
-            onClick={() => handleSelect(s)}
-          >
+          <MenuItem key={s} selected={s === status} onClick={() => handleSelect(s)}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               {STATUS_ICONS[s]}
               <Typography variant="body2">{READ_STATUS_LABELS[s]}</Typography>

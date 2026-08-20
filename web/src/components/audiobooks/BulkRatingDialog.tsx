@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/BulkRatingDialog.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
 import React, { useState } from 'react';
@@ -43,7 +43,8 @@ export const BulkRatingDialog: React.FC<BulkRatingDialogProps> = ({
   const [result, setResult] = useState<{ success: number; failed: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const hasAnyRating = overall !== null || story !== null || performance !== null || notes.trim() !== '';
+  const hasAnyRating =
+    overall !== null || story !== null || performance !== null || notes.trim() !== '';
 
   const handleApply = async () => {
     if (!hasAnyRating) return;
@@ -92,15 +93,20 @@ export const BulkRatingDialog: React.FC<BulkRatingDialogProps> = ({
 
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Rate {bookIds.length} book{bookIds.length !== 1 ? 's' : ''}</DialogTitle>
+      <DialogTitle>
+        Rate {bookIds.length} book{bookIds.length !== 1 ? 's' : ''}
+      </DialogTitle>
       <DialogContent>
         <Stack spacing={3} sx={{ mt: 1 }}>
           <Typography variant="body2" color="text.secondary">
-            Set ratings for all selected books. Leave a dimension blank to keep each book's existing value.
+            Set ratings for all selected books. Leave a dimension blank to keep each book's existing
+            value.
           </Typography>
 
           <Box>
-            <Typography variant="subtitle2" gutterBottom>Overall</Typography>
+            <Typography variant="subtitle2" gutterBottom>
+              Overall
+            </Typography>
             <Rating
               value={overall}
               onChange={(_e, v) => setOverall(v)}
@@ -110,7 +116,9 @@ export const BulkRatingDialog: React.FC<BulkRatingDialogProps> = ({
           </Box>
 
           <Box>
-            <Typography variant="subtitle2" gutterBottom>Story</Typography>
+            <Typography variant="subtitle2" gutterBottom>
+              Story
+            </Typography>
             <Rating
               value={story}
               onChange={(_e, v) => setStory(v)}
@@ -120,7 +128,9 @@ export const BulkRatingDialog: React.FC<BulkRatingDialogProps> = ({
           </Box>
 
           <Box>
-            <Typography variant="subtitle2" gutterBottom>Performance</Typography>
+            <Typography variant="subtitle2" gutterBottom>
+              Performance
+            </Typography>
             <Rating
               value={performance}
               onChange={(_e, v) => setPerformance(v)}

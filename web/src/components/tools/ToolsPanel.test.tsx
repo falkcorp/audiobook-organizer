@@ -1,7 +1,7 @@
 // file: web/src/components/tools/ToolsPanel.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: f8a9b0c1-d2e3-4567-fabc-567890123455
-// last-edited: 2026-06-15
+// last-edited: 2026-08-19
 
 import { render, screen } from '@testing-library/react';
 import { ToolsPanel } from './ToolsPanel';
@@ -9,7 +9,13 @@ import { vi } from 'vitest';
 
 vi.mock('../../services/api', () => ({
   getTools: vi.fn().mockResolvedValue([
-    { name: 'ollama', mode: 'system', available: true, resolved_path: '/usr/bin/ollama', version: '0.30.8' },
+    {
+      name: 'ollama',
+      mode: 'system',
+      available: true,
+      resolved_path: '/usr/bin/ollama',
+      version: '0.30.8',
+    },
     { name: 'fpcalc', mode: 'disabled', available: false },
   ]),
   installTool: vi.fn(),

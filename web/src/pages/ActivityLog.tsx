@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.21.0
+// version: 2.21.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-11
+// last-edited: 2026-08-19
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -90,12 +90,7 @@ function levelChip(level: string) {
     debug: 'default',
   };
   return (
-    <Chip
-      size="small"
-      label={level}
-      color={colorMap[level] ?? 'default'}
-      variant="outlined"
-    />
+    <Chip size="small" label={level} color={colorMap[level] ?? 'default'} variant="outlined" />
   );
 }
 
@@ -199,9 +194,7 @@ export default function ActivityLog() {
 
   /** Toggle a single tag in the tag filter. Adds if absent, removes if present. */
   const toggleTagFilter = useCallback((tag: string) => {
-    setTagFilter((prev) =>
-      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
-    );
+    setTagFilter((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]));
   }, []);
 
   // Mobile filter collapse
@@ -214,7 +207,9 @@ export default function ActivityLog() {
   const activeOps = useOperationsStore((state) => state.activeOperations);
   const loadActiveOpsFromServer = useOperationsStore((state) => state.loadFromServer);
   const latestLogEvent = useOperationsStore((state) => state.latestLogEvent);
-  const [pinned, setPinned] = useState(() => localStorage.getItem(STORAGE_KEYS.ACTIVITY_OPS_PINNED) !== 'false');
+  const [pinned, setPinned] = useState(
+    () => localStorage.getItem(STORAGE_KEYS.ACTIVITY_OPS_PINNED) !== 'false'
+  );
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
   const [expandedOpId, setExpandedOpId] = useState<string | null>(searchParams.get('op'));
   // pausedByExpand: true when auto-refresh was auto-paused because a row is
@@ -297,7 +292,7 @@ export default function ActivityLog() {
       feedAbortRef.current?.abort();
       sourcesAbortRef.current?.abort();
     },
-    [],
+    []
   );
 
   // Tracks pending scroll timers so they can be cancelled on unmount — a timer
@@ -309,7 +304,7 @@ export default function ActivityLog() {
       scrollTimeoutsRef.current.forEach((id) => window.clearTimeout(id));
       scrollTimeoutsRef.current = [];
     },
-    [],
+    []
   );
 
   // Auto-pause refresh when a row is expanded so log lines don't jump away.
@@ -325,8 +320,8 @@ export default function ActivityLog() {
       setAutoRefresh(true);
       pausedByExpandRef.current = false;
     }
-  // intentionally omit autoRefresh — only trigger on expand/collapse transitions
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // intentionally omit autoRefresh — only trigger on expand/collapse transitions
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expandedOpId]);
 
   // Persist excluded sources
@@ -367,7 +362,7 @@ export default function ActivityLog() {
     setOpLogsLoaded(true);
     const scrollTimeout = window.setTimeout(
       () => opLogsRef.current?.scrollTo({ top: opLogsRef.current.scrollHeight }),
-      50,
+      50
     );
     scrollTimeoutsRef.current.push(scrollTimeout);
   }, []);
@@ -408,125 +403,143 @@ export default function ActivityLog() {
     setOpLogs((prev) => [...prev, latestLogEvent.message].slice(-1000));
     const scrollTimeout = window.setTimeout(
       () => opLogsRef.current?.scrollTo({ top: opLogsRef.current.scrollHeight }),
-      50,
+      50
     );
     scrollTimeoutsRef.current.push(scrollTimeout);
   }, [latestLogEvent, expandedOpId]);
 
   // Load sources. Pass silent=true from the auto-refresh tick so it can be
   // dropped rather than stacked when the previous one has not returned.
-  const loadSources = useCallback(async (silent = false) => {
-    if (silent) {
-      if (sourcesInFlightRef.current) return;
-    } else {
-      sourcesAbortRef.current?.abort();
-    }
-    const controller = new AbortController();
-    sourcesAbortRef.current = controller;
-    sourcesInFlightRef.current = true;
-    const seq = ++sourcesSeqRef.current;
-    const isCurrent = () => seq === sourcesSeqRef.current;
-
-    try {
-      const data = await fetchActivitySources(
-        {
-          since: toRFC3339(sinceFilter),
-          until: toRFC3339(untilFilter),
-        },
-        { signal: controller.signal },
-      );
-      if (!isCurrent()) return;
-      setSources(data.sources || []);
-      setSourcesError(null);
-    } catch (err) {
-      // A supersede/unmount abort is normal control flow, not a failure.
-      if (isAbortError(err) || !isCurrent()) return;
-      console.error('Failed to load sources', err);
-      setSourcesError(describeError(err));
-    } finally {
-      if (isCurrent()) {
-        sourcesInFlightRef.current = false;
-        sourcesAbortRef.current = null;
+  const loadSources = useCallback(
+    async (silent = false) => {
+      if (silent) {
+        if (sourcesInFlightRef.current) return;
+      } else {
+        sourcesAbortRef.current?.abort();
       }
-    }
-  }, [sinceFilter, untilFilter]);
+      const controller = new AbortController();
+      sourcesAbortRef.current = controller;
+      sourcesInFlightRef.current = true;
+      const seq = ++sourcesSeqRef.current;
+      const isCurrent = () => seq === sourcesSeqRef.current;
+
+      try {
+        const data = await fetchActivitySources(
+          {
+            since: toRFC3339(sinceFilter),
+            until: toRFC3339(untilFilter),
+          },
+          { signal: controller.signal }
+        );
+        if (!isCurrent()) return;
+        setSources(data.sources || []);
+        setSourcesError(null);
+      } catch (err) {
+        // A supersede/unmount abort is normal control flow, not a failure.
+        if (isAbortError(err) || !isCurrent()) return;
+        console.error('Failed to load sources', err);
+        setSourcesError(describeError(err));
+      } finally {
+        if (isCurrent()) {
+          sourcesInFlightRef.current = false;
+          sourcesAbortRef.current = null;
+        }
+      }
+    },
+    [sinceFilter, untilFilter]
+  );
 
   // Load activity feed. Pass silent=true for background refreshes to avoid
   // replacing the table with a spinner (which resets scroll position).
-  const loadFeed = useCallback(async (p: number, silent = false) => {
-    // The guard lives HERE, not in the polling effect, so that every entry
-    // point is covered: the effects, the Refresh button, revert and compact
-    // all call loadFeed directly.
-    if (silent) {
-      if (feedInFlightRef.current) return;
-    } else {
-      feedAbortRef.current?.abort();
-    }
-    const controller = new AbortController();
-    feedAbortRef.current = controller;
-    feedInFlightRef.current = true;
-    const seq = ++feedSeqRef.current;
-    const isCurrent = () => seq === feedSeqRef.current;
-
-    if (silent) {
-      setRefreshing(true);
-    } else {
-      setLoading(true);
-    }
-    try {
-      const excludeStr = excludedSources.size > 0 ? [...excludedSources].join(',') : undefined;
-
-      // Server-side tier filtering via exclude_tiers
-      const allTiers = ['audit', 'change', 'debug', 'digest'];
-      const inactiveTiers = allTiers.filter((t) => !tiers.has(t));
-      const excludeTiersStr = inactiveTiers.length > 0 ? inactiveTiers.join(',') : undefined;
-
-      const result = await fetchActivity(
-        {
-          limit: pageSize,
-          offset: (p - 1) * pageSize,
-          type: typeFilter || undefined,
-          level: levelFilter || undefined,
-          operation_id: operationId.trim() || undefined,
-          since: toRFC3339(sinceFilter),
-          until: toRFC3339(untilFilter),
-          search: search.trim() || undefined,
-          exclude_sources: excludeStr,
-          exclude_tiers: excludeTiersStr,
-          exclude_tags: hideNoOp ? 'no-op' : undefined,
-          tags: tagFilter.length > 0 ? tagFilter.join(',') : undefined,
-        },
-        { signal: controller.signal },
-      );
-
-      if (!isCurrent()) return;
-      setEntries(result.entries || []);
-      setTotal(result.total || 0);
-      setError(null);
-      setLastUpdated(new Date());
-    } catch (err) {
-      // Our own abort (supersede / unmount) is not a failure — reporting it
-      // would flash an error panel on every keystroke in the search box.
-      if (isAbortError(err) || !isCurrent()) return;
-      console.error('Failed to load activity', err);
-      setError(describeError(err));
-      // A failed BACKGROUND refresh must not destroy what the user is reading:
-      // keep the last good page and surface the failure as a banner. Only a
-      // failed foreground load clears the table, because in that case there is
-      // nothing valid left to show.
-      if (!silent) {
-        setEntries([]);
-        setTotal(0);
+  const loadFeed = useCallback(
+    async (p: number, silent = false) => {
+      // The guard lives HERE, not in the polling effect, so that every entry
+      // point is covered: the effects, the Refresh button, revert and compact
+      // all call loadFeed directly.
+      if (silent) {
+        if (feedInFlightRef.current) return;
+      } else {
+        feedAbortRef.current?.abort();
       }
-    } finally {
-      if (isCurrent()) {
-        feedInFlightRef.current = false;
-        feedAbortRef.current = null;
-        setLoading(false);
-        setRefreshing(false);
+      const controller = new AbortController();
+      feedAbortRef.current = controller;
+      feedInFlightRef.current = true;
+      const seq = ++feedSeqRef.current;
+      const isCurrent = () => seq === feedSeqRef.current;
+
+      if (silent) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
       }
-    }
-  }, [typeFilter, levelFilter, operationId, sinceFilter, untilFilter, search, excludedSources, tiers, hideNoOp, tagFilter, pageSize]);
+      try {
+        const excludeStr = excludedSources.size > 0 ? [...excludedSources].join(',') : undefined;
+
+        // Server-side tier filtering via exclude_tiers
+        const allTiers = ['audit', 'change', 'debug', 'digest'];
+        const inactiveTiers = allTiers.filter((t) => !tiers.has(t));
+        const excludeTiersStr = inactiveTiers.length > 0 ? inactiveTiers.join(',') : undefined;
+
+        const result = await fetchActivity(
+          {
+            limit: pageSize,
+            offset: (p - 1) * pageSize,
+            type: typeFilter || undefined,
+            level: levelFilter || undefined,
+            operation_id: operationId.trim() || undefined,
+            since: toRFC3339(sinceFilter),
+            until: toRFC3339(untilFilter),
+            search: search.trim() || undefined,
+            exclude_sources: excludeStr,
+            exclude_tiers: excludeTiersStr,
+            exclude_tags: hideNoOp ? 'no-op' : undefined,
+            tags: tagFilter.length > 0 ? tagFilter.join(',') : undefined,
+          },
+          { signal: controller.signal }
+        );
+
+        if (!isCurrent()) return;
+        setEntries(result.entries || []);
+        setTotal(result.total || 0);
+        setError(null);
+        setLastUpdated(new Date());
+      } catch (err) {
+        // Our own abort (supersede / unmount) is not a failure — reporting it
+        // would flash an error panel on every keystroke in the search box.
+        if (isAbortError(err) || !isCurrent()) return;
+        console.error('Failed to load activity', err);
+        setError(describeError(err));
+        // A failed BACKGROUND refresh must not destroy what the user is reading:
+        // keep the last good page and surface the failure as a banner. Only a
+        // failed foreground load clears the table, because in that case there is
+        // nothing valid left to show.
+        if (!silent) {
+          setEntries([]);
+          setTotal(0);
+        }
+      } finally {
+        if (isCurrent()) {
+          feedInFlightRef.current = false;
+          feedAbortRef.current = null;
+          setLoading(false);
+          setRefreshing(false);
+        }
+      }
+    },
+    [
+      typeFilter,
+      levelFilter,
+      operationId,
+      sinceFilter,
+      untilFilter,
+      search,
+      excludedSources,
+      tiers,
+      hideNoOp,
+      tagFilter,
+      pageSize,
+    ]
+  );
 
   // Initial load + polling for active ops (3s when Activity page is mounted or
   // bell is open). The interval was unconditional before — toggling
@@ -561,8 +574,7 @@ export default function ActivityLog() {
   // covers both cases with exactly one fetch.
   const prevLoadFeedRef = useRef<typeof loadFeed | null>(null);
   useEffect(() => {
-    const filtersChanged =
-      prevLoadFeedRef.current !== null && prevLoadFeedRef.current !== loadFeed;
+    const filtersChanged = prevLoadFeedRef.current !== null && prevLoadFeedRef.current !== loadFeed;
     prevLoadFeedRef.current = loadFeed;
     if (filtersChanged && page !== 1) {
       // Changing a filter resets to page 1. Fetch nothing now: setPage re-runs
@@ -655,7 +667,7 @@ export default function ActivityLog() {
   // Per-op copy: plain-text summary suitable for pasting into a bug report
   // or sharing with another claude session — id, def, status, progress,
   // message, timestamps.
-  const handleCopyOp = async (op: typeof activeOps[0]) => {
+  const handleCopyOp = async (op: (typeof activeOps)[0]) => {
     const lines = [
       `id:       ${op.id}`,
       `def:      ${op.def_id ?? op.type}`,
@@ -691,7 +703,9 @@ export default function ActivityLog() {
     setCompacting(true);
     try {
       const result = await compactActivityLog(days);
-      alert(`Compacted ${result.days_compacted} days, removed ${result.entries_deleted.toLocaleString()} entries`);
+      alert(
+        `Compacted ${result.days_compacted} days, removed ${result.entries_deleted.toLocaleString()} entries`
+      );
       loadFeed(page);
     } catch (err) {
       alert(`Compaction failed: ${err}`);
@@ -780,29 +794,45 @@ export default function ActivityLog() {
         label={hideNoOp ? '\u2713 hide no-op' : 'show no-op'}
         onClick={() => setHideNoOp((v) => !v)}
         variant={hideNoOp ? 'filled' : 'outlined'}
-        sx={[{
-          cursor: 'pointer'
-        }, hideNoOp ? {
-          borderWidth: 2
-        } : {
-          borderWidth: 1
-        }, hideNoOp ? {
-          opacity: 1
-        } : {
-          opacity: 0.6
-        }]}
+        sx={[
+          {
+            cursor: 'pointer',
+          },
+          hideNoOp
+            ? {
+                borderWidth: 2,
+              }
+            : {
+                borderWidth: 1,
+              },
+          hideNoOp
+            ? {
+                opacity: 1,
+              }
+            : {
+                opacity: 0.6,
+              },
+        ]}
       />
     </Stack>
   );
 
   const sourcesButton = (fullWidth?: boolean) => (
-    <Box sx={[{
-      position: 'relative'
-    }, fullWidth ? {
-      width: '100%'
-    } : {
-      width: null
-    }]} ref={sourcesDropdownRef}>
+    <Box
+      sx={[
+        {
+          position: 'relative',
+        },
+        fullWidth
+          ? {
+              width: '100%',
+            }
+          : {
+              width: null,
+            },
+      ]}
+      ref={sourcesDropdownRef}
+    >
       <Button
         size="small"
         variant="outlined"
@@ -865,20 +895,33 @@ export default function ActivityLog() {
                     });
                   }}
                 >
-                  <input type="checkbox" checked={!isExcluded} readOnly style={{ pointerEvents: 'none' }} />
+                  <input
+                    type="checkbox"
+                    checked={!isExcluded}
+                    readOnly
+                    style={{ pointerEvents: 'none' }}
+                  />
                   <Typography
                     variant="body2"
-                    sx={[{
-                      flexGrow: 1
-                    }, isExcluded ? {
-                      textDecoration: 'line-through'
-                    } : {
-                      textDecoration: 'none'
-                    }, isExcluded ? {
-                      opacity: 0.5
-                    } : {
-                      opacity: 1
-                    }]}
+                    sx={[
+                      {
+                        flexGrow: 1,
+                      },
+                      isExcluded
+                        ? {
+                            textDecoration: 'line-through',
+                          }
+                        : {
+                            textDecoration: 'none',
+                          },
+                      isExcluded
+                        ? {
+                            opacity: 0.5,
+                          }
+                        : {
+                            opacity: 1,
+                          },
+                    ]}
                   >
                     {s.source}
                   </Typography>
@@ -889,9 +932,20 @@ export default function ActivityLog() {
               );
             })
           )}
-          <Stack direction="row" spacing={1} sx={{ mt: 1, pt: 1, borderTop: '1px solid', borderColor: 'divider' }}>
-            <Button size="small" onClick={() => setExcludedSources(new Set())}>All</Button>
-            <Button size="small" onClick={() => setExcludedSources(new Set(sources.map((s) => s.source)))}>None</Button>
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{ mt: 1, pt: 1, borderTop: '1px solid', borderColor: 'divider' }}
+          >
+            <Button size="small" onClick={() => setExcludedSources(new Set())}>
+              All
+            </Button>
+            <Button
+              size="small"
+              onClick={() => setExcludedSources(new Set(sources.map((s) => s.source)))}
+            >
+              None
+            </Button>
             <Button
               size="small"
               onClick={() => {
@@ -944,7 +998,10 @@ export default function ActivityLog() {
           <RefreshIcon />
         </IconButton>
         {lastUpdated && (
-          <Typography variant="caption" sx={{ color: 'text.secondary', ml: 1, alignSelf: 'center' }}>
+          <Typography
+            variant="caption"
+            sx={{ color: 'text.secondary', ml: 1, alignSelf: 'center' }}
+          >
             Updated {formatTimestamp(lastUpdated.toISOString())}
           </Typography>
         )}
@@ -958,9 +1015,7 @@ export default function ActivityLog() {
         <Paper sx={{ p: 2, mb: 2 }}>
           <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
             <Stack direction="row" alignItems="center" spacing={1}>
-              <Typography variant="h6">
-                Active Operations ({activeOps.length})
-              </Typography>
+              <Typography variant="h6">Active Operations ({activeOps.length})</Typography>
               <Tooltip title={pinned ? 'Unpin section' : 'Pin section'}>
                 <IconButton
                   size="small"
@@ -987,11 +1042,7 @@ export default function ActivityLog() {
               >
                 Collapse All
               </Button>
-              <Button
-                size="small"
-                variant="text"
-                onClick={() => setCollapsedParents(new Set())}
-              >
+              <Button size="small" variant="text" onClick={() => setCollapsedParents(new Set())}>
                 Expand All
               </Button>
               <Button size="small" variant="outlined" onClick={handleClearStale}>
@@ -1020,7 +1071,7 @@ export default function ActivityLog() {
                 }
 
                 // Helper to get depth based on parent chain
-                const getDepth = (op: typeof activeOps[0]): number => {
+                const getDepth = (op: (typeof activeOps)[0]): number => {
                   let depth = 0;
                   let current = op;
                   while (current.parent_id && opsById[current.parent_id]) {
@@ -1033,7 +1084,7 @@ export default function ActivityLog() {
                 // Helper: is this op hidden because an ancestor is collapsed?
                 // collapsedParents is seeded on first render (see useEffect above),
                 // so size === 0 reliably means "user clicked Expand All".
-                const isHiddenByCollapse = (op: typeof activeOps[0]): boolean => {
+                const isHiddenByCollapse = (op: (typeof activeOps)[0]): boolean => {
                   let current = op;
                   while (current.parent_id && opsById[current.parent_id]) {
                     const parentId = current.parent_id;
@@ -1046,15 +1097,35 @@ export default function ActivityLog() {
                 // Partition by status so finished jobs aren't mixed with
                 // running ones. Within each section the existing
                 // parent-child hierarchy still works.
-                const TERMINAL_STATUSES = ['completed', 'failed', 'canceled', 'interrupted_dropped', 'interrupted_restart'];
+                const TERMINAL_STATUSES = [
+                  'completed',
+                  'failed',
+                  'canceled',
+                  'interrupted_dropped',
+                  'interrupted_restart',
+                ];
                 const visibleOps = activeOps.filter((op) => !isHiddenByCollapse(op));
                 const sections: { key: string; title: string; ops: typeof activeOps }[] = [
-                  { key: 'pending',   title: 'Pending',   ops: visibleOps.filter((o) => o.status === 'queued') },
-                  { key: 'active',    title: 'Active',    ops: visibleOps.filter((o) => o.status !== 'queued' && !TERMINAL_STATUSES.includes(o.status)) },
-                  { key: 'completed', title: 'Completed', ops: visibleOps.filter((o) => TERMINAL_STATUSES.includes(o.status)) },
+                  {
+                    key: 'pending',
+                    title: 'Pending',
+                    ops: visibleOps.filter((o) => o.status === 'queued'),
+                  },
+                  {
+                    key: 'active',
+                    title: 'Active',
+                    ops: visibleOps.filter(
+                      (o) => o.status !== 'queued' && !TERMINAL_STATUSES.includes(o.status)
+                    ),
+                  },
+                  {
+                    key: 'completed',
+                    title: 'Completed',
+                    ops: visibleOps.filter((o) => TERMINAL_STATUSES.includes(o.status)),
+                  },
                 ];
 
-                const renderOp = (op: typeof activeOps[0]) => {
+                const renderOp = (op: (typeof activeOps)[0]) => {
                   // 2-decimal precision so a 49915-book scan shows 1.10 → 1.11
                   // → 1.12 instead of being welded to "1%" for hundreds of
                   // books at a time. fmtPct returns "1.10" not "1.1".
@@ -1070,33 +1141,54 @@ export default function ActivityLog() {
                     <Paper
                       key={op.id}
                       variant="outlined"
-                      sx={[{
-                        p: 1.5,
-                        cursor: 'pointer',
-                        ml: indent,
-                        transition: 'all 0.2s ease'
-                      }, expandedOpId === op.id ? {
-                        border: 2
-                      } : {
-                        border: 1
-                      }, expandedOpId === op.id ? {
-                        borderColor: 'primary.main'
-                      } : {
-                        borderColor: 'divider'
-                      }]}
+                      sx={[
+                        {
+                          p: 1.5,
+                          cursor: 'pointer',
+                          ml: indent,
+                          transition: 'all 0.2s ease',
+                        },
+                        expandedOpId === op.id
+                          ? {
+                              border: 2,
+                            }
+                          : {
+                              border: 1,
+                            },
+                        expandedOpId === op.id
+                          ? {
+                              borderColor: 'primary.main',
+                            }
+                          : {
+                              borderColor: 'divider',
+                            },
+                      ]}
                       onClick={() => setExpandedOpId(expandedOpId === op.id ? null : op.id)}
                     >
-                      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.5 }}>
+                      <Stack
+                        direction="row"
+                        justifyContent="space-between"
+                        alignItems="center"
+                        sx={{ mb: 0.5 }}
+                      >
                         <Stack direction="row" spacing={1} alignItems="center">
                           {depth > 0 && (
-                            <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.75rem', minWidth: 8 }}>
+                            <Typography
+                              variant="caption"
+                              sx={{ color: 'text.disabled', fontSize: '0.75rem', minWidth: 8 }}
+                            >
                               ↳
                             </Typography>
                           )}
                           {hasChildren && (
                             <Typography
                               variant="caption"
-                              sx={{ cursor: 'pointer', color: 'text.secondary', fontSize: '0.85rem', userSelect: 'none' }}
+                              sx={{
+                                cursor: 'pointer',
+                                color: 'text.secondary',
+                                fontSize: '0.85rem',
+                                userSelect: 'none',
+                              }}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setCollapsedParents((prev) => {
@@ -1117,11 +1209,15 @@ export default function ActivityLog() {
                             size="small"
                             label={op.status === 'queued' ? 'pending' : op.status}
                             color={
-                              op.status === 'queued' ? 'default' :
-                              op.status === 'completed' ? 'success' :
-                              op.status === 'failed' ? 'error' :
-                              op.status === 'canceled' ? 'warning' :
-                              'info'
+                              op.status === 'queued'
+                                ? 'default'
+                                : op.status === 'completed'
+                                  ? 'success'
+                                  : op.status === 'failed'
+                                    ? 'error'
+                                    : op.status === 'canceled'
+                                      ? 'warning'
+                                      : 'info'
                             }
                           />
                         </Stack>
@@ -1129,7 +1225,10 @@ export default function ActivityLog() {
                           <Tooltip title="Refresh this operation">
                             <IconButton
                               size="small"
-                              onClick={(e) => { e.stopPropagation(); handleRefreshOp(op.id); }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRefreshOp(op.id);
+                              }}
                               aria-label="Refresh"
                             >
                               <RefreshIcon fontSize="small" />
@@ -1138,7 +1237,10 @@ export default function ActivityLog() {
                           <Tooltip title="Copy op summary">
                             <IconButton
                               size="small"
-                              onClick={(e) => { e.stopPropagation(); handleCopyOp(op); }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleCopyOp(op);
+                              }}
                               aria-label="Copy"
                             >
                               <ContentCopyIcon fontSize="small" />
@@ -1150,7 +1252,10 @@ export default function ActivityLog() {
                               color="error"
                               variant="outlined"
                               startIcon={<CancelIcon />}
-                              onClick={(e) => { e.stopPropagation(); handleCancelOp(op.id); }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleCancelOp(op.id);
+                              }}
                               disabled={cancelling.has(op.id)}
                             >
                               {cancelling.has(op.id) ? 'Cancelling...' : 'Cancel'}
@@ -1159,10 +1264,20 @@ export default function ActivityLog() {
                         </Stack>
                       </Stack>
                       {op.status === 'queued' ? (
-                        <Typography variant="caption" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ fontStyle: 'italic' }}
+                        >
                           Waiting to start…
                         </Typography>
-                      ) : ['completed', 'failed', 'canceled', 'interrupted_dropped', 'interrupted_restart'].includes(op.status) ? (
+                      ) : [
+                          'completed',
+                          'failed',
+                          'canceled',
+                          'interrupted_dropped',
+                          'interrupted_restart',
+                        ].includes(op.status) ? (
                         // Terminal ops: show a static full bar colored by
                         // outcome. No animation. (Pre-fix the indeterminate
                         // branch animated forever for completed ops without
@@ -1172,7 +1287,13 @@ export default function ActivityLog() {
                             <LinearProgress
                               variant="determinate"
                               value={100}
-                              color={op.status === 'completed' ? 'success' : op.status === 'failed' ? 'error' : 'warning'}
+                              color={
+                                op.status === 'completed'
+                                  ? 'success'
+                                  : op.status === 'failed'
+                                    ? 'error'
+                                    : 'warning'
+                              }
                               sx={{ height: 6, borderRadius: 1, mb: 0.5 }}
                             />
                             <Typography variant="caption" color="text.secondary">
@@ -1183,13 +1304,23 @@ export default function ActivityLog() {
                           <LinearProgress
                             variant="determinate"
                             value={100}
-                            color={op.status === 'completed' ? 'success' : op.status === 'failed' ? 'error' : 'warning'}
+                            color={
+                              op.status === 'completed'
+                                ? 'success'
+                                : op.status === 'failed'
+                                  ? 'error'
+                                  : 'warning'
+                            }
                             sx={{ height: 6, borderRadius: 1, mb: 0.5 }}
                           />
                         )
                       ) : op.total > 0 ? (
                         <Box>
-                          <LinearProgress variant="determinate" value={pctBar} sx={{ height: 6, borderRadius: 1, mb: 0.5 }} />
+                          <LinearProgress
+                            variant="determinate"
+                            value={pctBar}
+                            sx={{ height: 6, borderRadius: 1, mb: 0.5 }}
+                          />
                           <Typography variant="caption" color="text.secondary">
                             {op.progress.toLocaleString()} / {op.total.toLocaleString()} ({pct}%)
                           </Typography>
@@ -1199,13 +1330,24 @@ export default function ActivityLog() {
                         // animation is correct.
                         <LinearProgress sx={{ height: 6, borderRadius: 1, mb: 0.5 }} />
                       )}
-                      <Typography variant="caption" color="text.secondary" display="block" noWrap title={op.message}>
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        display="block"
+                        noWrap
+                        title={op.message}
+                      >
                         {op.message}
                       </Typography>
                       {op.current_item && op.status === 'running' && (
                         <Tooltip title={op.current_item} placement="bottom-start">
-                          <Typography variant="caption" color="text.disabled" display="block" noWrap
-                            sx={{ fontStyle: 'italic', fontSize: '0.75rem' }}>
+                          <Typography
+                            variant="caption"
+                            color="text.disabled"
+                            display="block"
+                            noWrap
+                            sx={{ fontStyle: 'italic', fontSize: '0.75rem' }}
+                          >
                             {op.current_item}
                           </Typography>
                         </Tooltip>
@@ -1228,12 +1370,18 @@ export default function ActivityLog() {
                           onClick={(e) => e.stopPropagation()}
                         >
                           {!opLogsLoaded ? (
-                            <Typography variant="caption" color="grey.500">Loading logs...</Typography>
+                            <Typography variant="caption" color="grey.500">
+                              Loading logs...
+                            </Typography>
                           ) : opLogs.length === 0 ? (
-                            <Typography variant="caption" color="grey.500">No logs recorded for this operation.</Typography>
+                            <Typography variant="caption" color="grey.500">
+                              No logs recorded for this operation.
+                            </Typography>
                           ) : (
                             opLogs.map((line, i) => (
-                              <Box key={i} sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{line}</Box>
+                              <Box key={i} sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                                {line}
+                              </Box>
                             ))
                           )}
                         </Box>
@@ -1353,13 +1501,27 @@ export default function ActivityLog() {
                   type={sinceFilter ? 'datetime-local' : 'text'}
                   placeholder="All time"
                   value={sinceFilter}
-                  onFocus={(e) => { if (!sinceFilter) (e.target as HTMLInputElement).type = 'datetime-local'; }}
+                  onFocus={(e) => {
+                    if (!sinceFilter) (e.target as HTMLInputElement).type = 'datetime-local';
+                  }}
                   onChange={(e) => setSinceFilter(e.target.value)}
                   InputLabelProps={{ shrink: true }}
-                  InputProps={sinceFilter ? {
-                    endAdornment: <IconButton size="small" onClick={() => setSinceFilter('')}><ClearIcon fontSize="small" /></IconButton>,
-                  } : undefined}
-                  helperText={sinceFilter === defaultSince ? `Default: last ${DEFAULT_SINCE_HOURS}h — clear for all history` : undefined}
+                  InputProps={
+                    sinceFilter
+                      ? {
+                          endAdornment: (
+                            <IconButton size="small" onClick={() => setSinceFilter('')}>
+                              <ClearIcon fontSize="small" />
+                            </IconButton>
+                          ),
+                        }
+                      : undefined
+                  }
+                  helperText={
+                    sinceFilter === defaultSince
+                      ? `Default: last ${DEFAULT_SINCE_HOURS}h — clear for all history`
+                      : undefined
+                  }
                   fullWidth
                 />
 
@@ -1369,12 +1531,22 @@ export default function ActivityLog() {
                   type={untilFilter ? 'datetime-local' : 'text'}
                   placeholder="Now"
                   value={untilFilter}
-                  onFocus={(e) => { if (!untilFilter) (e.target as HTMLInputElement).type = 'datetime-local'; }}
+                  onFocus={(e) => {
+                    if (!untilFilter) (e.target as HTMLInputElement).type = 'datetime-local';
+                  }}
                   onChange={(e) => setUntilFilter(e.target.value)}
                   InputLabelProps={{ shrink: true }}
-                  InputProps={untilFilter ? {
-                    endAdornment: <IconButton size="small" onClick={() => setUntilFilter('')}><ClearIcon fontSize="small" /></IconButton>,
-                  } : undefined}
+                  InputProps={
+                    untilFilter
+                      ? {
+                          endAdornment: (
+                            <IconButton size="small" onClick={() => setUntilFilter('')}>
+                              <ClearIcon fontSize="small" />
+                            </IconButton>
+                          ),
+                        }
+                      : undefined
+                  }
                   fullWidth
                 />
 
@@ -1395,9 +1567,12 @@ export default function ActivityLog() {
                           label={label}
                           size="small"
                           color={color}
-                          sx={[{
-                            cursor: 'pointer'
-                          }, sx ?? {}]}
+                          sx={[
+                            {
+                              cursor: 'pointer',
+                            },
+                            sx ?? {},
+                          ]}
                           variant={tagFilter.includes(tag) ? 'filled' : 'outlined'}
                           clickable
                           onClick={() => toggleTagFilter(tag)}
@@ -1412,7 +1587,17 @@ export default function ActivityLog() {
                     Action
                   </Typography>
                   <Stack direction="row" spacing={0.5} flexWrap="wrap">
-                    {['action:metadata-apply', 'action:tag-write', 'action:import', 'action:scan', 'action:dedup', 'action:fingerprint', 'action:fingerprint-scan', 'action:organizer', 'action:purge'].map((tag) => {
+                    {[
+                      'action:metadata-apply',
+                      'action:tag-write',
+                      'action:import',
+                      'action:scan',
+                      'action:dedup',
+                      'action:fingerprint',
+                      'action:fingerprint-scan',
+                      'action:organizer',
+                      'action:purge',
+                    ].map((tag) => {
                       const { color, sx, label } = tagChipProps(tag);
                       return (
                         <Chip
@@ -1420,9 +1605,12 @@ export default function ActivityLog() {
                           label={label}
                           size="small"
                           color={color}
-                          sx={[{
-                            cursor: 'pointer'
-                          }, sx ?? {}]}
+                          sx={[
+                            {
+                              cursor: 'pointer',
+                            },
+                            sx ?? {},
+                          ]}
                           variant={tagFilter.includes(tag) ? 'filled' : 'outlined'}
                           clickable
                           onClick={() => toggleTagFilter(tag)}
@@ -1445,7 +1633,10 @@ export default function ActivityLog() {
                 <Menu
                   anchorEl={compactAnchor}
                   open={Boolean(compactAnchor)}
-                  onClose={() => { setCompactAnchor(null); setCustomCompactDays(''); }}
+                  onClose={() => {
+                    setCompactAnchor(null);
+                    setCustomCompactDays('');
+                  }}
                 >
                   <MenuItem onClick={() => handleCompact(0)}>Everything (now)</MenuItem>
                   {[3, 7, 14, 30, 60].map((days) => (
@@ -1539,13 +1730,27 @@ export default function ActivityLog() {
                 type={sinceFilter ? 'datetime-local' : 'text'}
                 placeholder="All time"
                 value={sinceFilter}
-                onFocus={(e) => { if (!sinceFilter) (e.target as HTMLInputElement).type = 'datetime-local'; }}
+                onFocus={(e) => {
+                  if (!sinceFilter) (e.target as HTMLInputElement).type = 'datetime-local';
+                }}
                 onChange={(e) => setSinceFilter(e.target.value)}
                 InputLabelProps={{ shrink: true }}
-                InputProps={sinceFilter ? {
-                  endAdornment: <IconButton size="small" onClick={() => setSinceFilter('')}><ClearIcon fontSize="small" /></IconButton>,
-                } : undefined}
-                helperText={sinceFilter === defaultSince ? `Default: last ${DEFAULT_SINCE_HOURS}h — clear for all history` : undefined}
+                InputProps={
+                  sinceFilter
+                    ? {
+                        endAdornment: (
+                          <IconButton size="small" onClick={() => setSinceFilter('')}>
+                            <ClearIcon fontSize="small" />
+                          </IconButton>
+                        ),
+                      }
+                    : undefined
+                }
+                helperText={
+                  sinceFilter === defaultSince
+                    ? `Default: last ${DEFAULT_SINCE_HOURS}h — clear for all history`
+                    : undefined
+                }
                 sx={{ minWidth: 180 }}
               />
 
@@ -1555,12 +1760,22 @@ export default function ActivityLog() {
                 type={untilFilter ? 'datetime-local' : 'text'}
                 placeholder="Now"
                 value={untilFilter}
-                onFocus={(e) => { if (!untilFilter) (e.target as HTMLInputElement).type = 'datetime-local'; }}
+                onFocus={(e) => {
+                  if (!untilFilter) (e.target as HTMLInputElement).type = 'datetime-local';
+                }}
                 onChange={(e) => setUntilFilter(e.target.value)}
                 InputLabelProps={{ shrink: true }}
-                InputProps={untilFilter ? {
-                  endAdornment: <IconButton size="small" onClick={() => setUntilFilter('')}><ClearIcon fontSize="small" /></IconButton>,
-                } : undefined}
+                InputProps={
+                  untilFilter
+                    ? {
+                        endAdornment: (
+                          <IconButton size="small" onClick={() => setUntilFilter('')}>
+                            <ClearIcon fontSize="small" />
+                          </IconButton>
+                        ),
+                      }
+                    : undefined
+                }
                 sx={{ minWidth: 180 }}
               />
 
@@ -1579,7 +1794,10 @@ export default function ActivityLog() {
               <Menu
                 anchorEl={compactAnchor}
                 open={Boolean(compactAnchor)}
-                onClose={() => { setCompactAnchor(null); setCustomCompactDays(''); }}
+                onClose={() => {
+                  setCompactAnchor(null);
+                  setCustomCompactDays('');
+                }}
               >
                 <MenuItem onClick={() => handleCompact(0)}>Everything (now)</MenuItem>
                 {[3, 7, 14, 30, 60].map((days) => (
@@ -1634,7 +1852,8 @@ export default function ActivityLog() {
             color: 'warning.contrastText',
           }}
         >
-          Showing most recent {pageSize} of {total.toLocaleString()} entries. Use filters or compact old entries to reduce log size.
+          Showing most recent {pageSize} of {total.toLocaleString()} entries. Use filters or compact
+          old entries to reduce log size.
         </Typography>
       )}
 
@@ -1655,7 +1874,9 @@ export default function ActivityLog() {
       <Paper sx={{ position: 'relative' }}>
         {/* Unobtrusive top-edge indicator for background refreshes */}
         {refreshing && (
-          <LinearProgress sx={{ position: 'absolute', top: 0, left: 0, right: 0, borderRadius: '4px 4px 0 0' }} />
+          <LinearProgress
+            sx={{ position: 'absolute', top: 0, left: 0, right: 0, borderRadius: '4px 4px 0 0' }}
+          />
         )}
         {/* Four DISTINGUISHABLE states, in priority order:
               loading  — request outstanding, nothing to show yet
@@ -1664,7 +1885,10 @@ export default function ActivityLog() {
               table    — data (optionally with a stale-data warning on top)
             Before this, all four collapsed into "No activity entries found." */}
         {loading ? (
-          <Box data-testid="activity-loading" sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
+          <Box
+            data-testid="activity-loading"
+            sx={{ display: 'flex', justifyContent: 'center', py: 6 }}
+          >
             <CircularProgress />
           </Box>
         ) : error && entries.length === 0 ? (
@@ -1710,322 +1934,419 @@ export default function ActivityLog() {
               </Alert>
             )}
             <TableContainer>
-            <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Time</TableCell>
-                <TableCell>Level</TableCell>
-                <TableCell>Type</TableCell>
-                <TableCell sx={{ width: '40%' }}>Summary</TableCell>
-                {!isMobile && <TableCell>Source</TableCell>}
-                {!isMobile && <TableCell>Tags</TableCell>}
-                <TableCell />
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {entries.map((entry) => {
-                // Batched entries: collapsed/expanded list view
-                if ((entry.details as any)?.batched === true) {
-                  return (
-                    <BatchActivityEntry
-                      key={entry.id}
-                      entry={entry}
-                      tierColor={TIER_COLORS[entry.tier] ?? '#757575'}
-                    />
-                  );
-                }
-                if (entry.tier === 'digest') {
-                  const isExpanded = expandedDigests.has(String(entry.id));
-                  const details = entry.details as {
-                    date?: string;
-                    original_count?: number;
-                    counts?: Record<string, number>;
-                    tag_counts?: Record<string, Record<string, number>>;
-                    items?: Array<{
-                      type: string;
-                      tier?: string;
-                      book?: string;
-                      book_id?: string;
-                      operation_id?: string;
-                      summary: string;
-                      details?: string;
-                      timestamp?: string;
-                      tags?: string[];
-                    }>;
-                    truncated?: boolean;
-                    truncated_count?: number;
-                  } | undefined;
-                  // Pre-2026-05-20 digests won't have per-item timestamps or tags
-                  // because the source rows were already destroyed before this
-                  // field was added. Detect by checking the first item's timestamp.
-                  const isLegacyDigest = (() => {
-                    if (!details?.date) return false;
-                    const cutoff = new Date('2026-05-20');
-                    const digestDate = new Date(details.date);
-                    return digestDate < cutoff && !(details?.items?.[0]?.timestamp);
-                  })();
-                  const rawCounts = details?.counts || {};
-                  // Fall back to tag_counts.action when Counts is sparse (only
-                  // the single legacy "system_log" key) so old digests show a
-                  // meaningful breakdown rather than one undifferentiated chip.
-                  const countsKeys = Object.keys(rawCounts);
-                  const isLegacySparse =
-                    countsKeys.length === 1 && countsKeys[0] === 'system_log';
-                  const counts: Record<string, number> = isLegacySparse
-                    ? (details?.tag_counts?.action ?? rawCounts)
-                    : rawCounts;
-                  const items = details?.items || [];
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Time</TableCell>
+                    <TableCell>Level</TableCell>
+                    <TableCell>Type</TableCell>
+                    <TableCell sx={{ width: '40%' }}>Summary</TableCell>
+                    {!isMobile && <TableCell>Source</TableCell>}
+                    {!isMobile && <TableCell>Tags</TableCell>}
+                    <TableCell />
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {entries.map((entry) => {
+                    // Batched entries: collapsed/expanded list view
+                    if ((entry.details as any)?.batched === true) {
+                      return (
+                        <BatchActivityEntry
+                          key={entry.id}
+                          entry={entry}
+                          tierColor={TIER_COLORS[entry.tier] ?? '#757575'}
+                        />
+                      );
+                    }
+                    if (entry.tier === 'digest') {
+                      const isExpanded = expandedDigests.has(String(entry.id));
+                      const details = entry.details as
+                        | {
+                            date?: string;
+                            original_count?: number;
+                            counts?: Record<string, number>;
+                            tag_counts?: Record<string, Record<string, number>>;
+                            items?: Array<{
+                              type: string;
+                              tier?: string;
+                              book?: string;
+                              book_id?: string;
+                              operation_id?: string;
+                              summary: string;
+                              details?: string;
+                              timestamp?: string;
+                              tags?: string[];
+                            }>;
+                            truncated?: boolean;
+                            truncated_count?: number;
+                          }
+                        | undefined;
+                      // Pre-2026-05-20 digests won't have per-item timestamps or tags
+                      // because the source rows were already destroyed before this
+                      // field was added. Detect by checking the first item's timestamp.
+                      const isLegacyDigest = (() => {
+                        if (!details?.date) return false;
+                        const cutoff = new Date('2026-05-20');
+                        const digestDate = new Date(details.date);
+                        return digestDate < cutoff && !details?.items?.[0]?.timestamp;
+                      })();
+                      const rawCounts = details?.counts || {};
+                      // Fall back to tag_counts.action when Counts is sparse (only
+                      // the single legacy "system_log" key) so old digests show a
+                      // meaningful breakdown rather than one undifferentiated chip.
+                      const countsKeys = Object.keys(rawCounts);
+                      const isLegacySparse =
+                        countsKeys.length === 1 && countsKeys[0] === 'system_log';
+                      const counts: Record<string, number> = isLegacySparse
+                        ? (details?.tag_counts?.action ?? rawCounts)
+                        : rawCounts;
+                      const items = details?.items || [];
 
-                  return (
-                    <React.Fragment key={entry.id}>
-                      <TableRow
-                        hover
-                        sx={{ bgcolor: 'rgba(0, 137, 123, 0.06)', cursor: 'pointer' }}
-                        onClick={() => {
-                          setExpandedDigests((prev) => {
-                            const next = new Set(prev);
-                            const key = String(entry.id);
-                            if (next.has(key)) next.delete(key);
-                            else next.add(key);
-                            return next;
-                          });
-                        }}
-                      >
-                        <TableCell sx={{ whiteSpace: 'nowrap', color: 'text.secondary', fontSize: '0.75rem' }}>
-                          {details?.date || entry.timestamp}
-                        </TableCell>
-                        <TableCell>
-                          <Chip size="small" label="digest" sx={{ bgcolor: '#00897b', color: 'white' }} />
-                        </TableCell>
-                        <TableCell>
-                          <Stack direction="row" spacing={0.5} flexWrap="wrap">
-                            {Object.entries(counts).slice(0, 6).map(([type, count]) => (
-                              <Chip key={type} size="small" variant="outlined" label={`${count} ${type.replace(/_/g, ' ')}`} />
-                            ))}
-                          </Stack>
-                        </TableCell>
-                        <TableCell colSpan={isMobile ? 1 : 2}>
-                          <Typography variant="body2">
-                            {entry.summary} {isExpanded ? '▾' : '▸'}
-                          </Typography>
-                        </TableCell>
-                        {!isMobile && <TableCell />}
-                        <TableCell />
-                      </TableRow>
-                      {isExpanded && (
-                        <TableRow>
-                          <TableCell colSpan={isMobile ? 5 : 7} sx={{ py: 0, px: 2 }}>
-                            <Box sx={{ maxHeight: 400, overflow: 'auto', py: 1 }}>
-                              {isLegacyDigest && (
-                                <Typography
-                                  variant="caption"
-                                  color="text.secondary"
-                                  sx={{ display: 'block', mb: 1, fontStyle: 'italic' }}
-                                >
-                                  Pre-2026-05-20 digest — per-item timestamps and tags unavailable (source rows already compacted away)
-                                </Typography>
-                              )}
-                              {items.map((item, idx) => (
-                                <Stack
-                                  key={idx}
-                                  direction="row"
-                                  spacing={1}
-                                  alignItems="center"
-                                  flexWrap="wrap"
-                                  sx={[{
-                                    py: 0.5,
-                                    borderBottom: '1px solid',
-                                    borderColor: 'divider'
-                                  }, item.type === 'error' ? {
-                                    color: 'error.main'
-                                  } : {
-                                    color: 'text.primary'
-                                  }]}
-                                >
-                                  {item.timestamp && (
-                                    <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace', minWidth: 70 }}>
-                                      {formatItemTime(item.timestamp)}
-                                    </Typography>
-                                  )}
-                                  <Chip size="small" label={item.type.replace(/_/g, ' ')} sx={{ minWidth: 100 }} />
-                                  {item.tier === 'audit' && (
-                                    <Chip size="small" label="audit" sx={{ bgcolor: '#7c4dff', color: 'white', fontSize: '0.65rem' }} />
-                                  )}
-                                  {item.book_id ? (
-                                    <Typography
-                                      variant="body2"
-                                      component="span"
-                                      sx={{ cursor: 'pointer', color: 'primary.main', fontWeight: 500 }}
-                                      onClick={(e: React.MouseEvent) => { e.stopPropagation(); navigate(`/library/${item.book_id}`); }}
-                                    >
-                                      {item.book || item.book_id}
-                                    </Typography>
-                                  ) : (
-                                    <Typography variant="body2" component="span" sx={{ fontWeight: 500 }}>
-                                      {item.book || '—'}
-                                    </Typography>
-                                  )}
-                                  <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
-                                    {item.summary}
-                                  </Typography>
-                                  {item.operation_id && (
+                      return (
+                        <React.Fragment key={entry.id}>
+                          <TableRow
+                            hover
+                            sx={{ bgcolor: 'rgba(0, 137, 123, 0.06)', cursor: 'pointer' }}
+                            onClick={() => {
+                              setExpandedDigests((prev) => {
+                                const next = new Set(prev);
+                                const key = String(entry.id);
+                                if (next.has(key)) next.delete(key);
+                                else next.add(key);
+                                return next;
+                              });
+                            }}
+                          >
+                            <TableCell
+                              sx={{
+                                whiteSpace: 'nowrap',
+                                color: 'text.secondary',
+                                fontSize: '0.75rem',
+                              }}
+                            >
+                              {details?.date || entry.timestamp}
+                            </TableCell>
+                            <TableCell>
+                              <Chip
+                                size="small"
+                                label="digest"
+                                sx={{ bgcolor: '#00897b', color: 'white' }}
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Stack direction="row" spacing={0.5} flexWrap="wrap">
+                                {Object.entries(counts)
+                                  .slice(0, 6)
+                                  .map(([type, count]) => (
                                     <Chip
+                                      key={type}
                                       size="small"
-                                      label={item.operation_id.slice(0, 12)}
-                                      title={`op:${item.operation_id} — click to filter`}
-                                      color="info"
                                       variant="outlined"
-                                      sx={{ cursor: 'pointer', fontFamily: 'monospace', fontSize: '0.65rem' }}
+                                      label={`${count} ${type.replace(/_/g, ' ')}`}
+                                    />
+                                  ))}
+                              </Stack>
+                            </TableCell>
+                            <TableCell colSpan={isMobile ? 1 : 2}>
+                              <Typography variant="body2">
+                                {entry.summary} {isExpanded ? '▾' : '▸'}
+                              </Typography>
+                            </TableCell>
+                            {!isMobile && <TableCell />}
+                            <TableCell />
+                          </TableRow>
+                          {isExpanded && (
+                            <TableRow>
+                              <TableCell colSpan={isMobile ? 5 : 7} sx={{ py: 0, px: 2 }}>
+                                <Box sx={{ maxHeight: 400, overflow: 'auto', py: 1 }}>
+                                  {isLegacyDigest && (
+                                    <Typography
+                                      variant="caption"
+                                      color="text.secondary"
+                                      sx={{ display: 'block', mb: 1, fontStyle: 'italic' }}
+                                    >
+                                      Pre-2026-05-20 digest — per-item timestamps and tags
+                                      unavailable (source rows already compacted away)
+                                    </Typography>
+                                  )}
+                                  {items.map((item, idx) => (
+                                    <Stack
+                                      key={idx}
+                                      direction="row"
+                                      spacing={1}
+                                      alignItems="center"
+                                      flexWrap="wrap"
+                                      sx={[
+                                        {
+                                          py: 0.5,
+                                          borderBottom: '1px solid',
+                                          borderColor: 'divider',
+                                        },
+                                        item.type === 'error'
+                                          ? {
+                                              color: 'error.main',
+                                            }
+                                          : {
+                                              color: 'text.primary',
+                                            },
+                                      ]}
+                                    >
+                                      {item.timestamp && (
+                                        <Typography
+                                          variant="caption"
+                                          color="text.secondary"
+                                          sx={{ fontFamily: 'monospace', minWidth: 70 }}
+                                        >
+                                          {formatItemTime(item.timestamp)}
+                                        </Typography>
+                                      )}
+                                      <Chip
+                                        size="small"
+                                        label={item.type.replace(/_/g, ' ')}
+                                        sx={{ minWidth: 100 }}
+                                      />
+                                      {item.tier === 'audit' && (
+                                        <Chip
+                                          size="small"
+                                          label="audit"
+                                          sx={{
+                                            bgcolor: '#7c4dff',
+                                            color: 'white',
+                                            fontSize: '0.65rem',
+                                          }}
+                                        />
+                                      )}
+                                      {item.book_id ? (
+                                        <Typography
+                                          variant="body2"
+                                          component="span"
+                                          sx={{
+                                            cursor: 'pointer',
+                                            color: 'primary.main',
+                                            fontWeight: 500,
+                                          }}
+                                          onClick={(e: React.MouseEvent) => {
+                                            e.stopPropagation();
+                                            navigate(`/library/${item.book_id}`);
+                                          }}
+                                        >
+                                          {item.book || item.book_id}
+                                        </Typography>
+                                      ) : (
+                                        <Typography
+                                          variant="body2"
+                                          component="span"
+                                          sx={{ fontWeight: 500 }}
+                                        >
+                                          {item.book || '—'}
+                                        </Typography>
+                                      )}
+                                      <Typography
+                                        variant="body2"
+                                        color="text.secondary"
+                                        sx={{ flex: 1 }}
+                                      >
+                                        {item.summary}
+                                      </Typography>
+                                      {item.operation_id && (
+                                        <Chip
+                                          size="small"
+                                          label={item.operation_id.slice(0, 12)}
+                                          title={`op:${item.operation_id} — click to filter`}
+                                          color="info"
+                                          variant="outlined"
+                                          sx={{
+                                            cursor: 'pointer',
+                                            fontFamily: 'monospace',
+                                            fontSize: '0.65rem',
+                                          }}
+                                          clickable
+                                          onClick={(e: React.MouseEvent) => {
+                                            e.stopPropagation();
+                                            toggleTagFilter(`op:${item.operation_id}`);
+                                          }}
+                                        />
+                                      )}
+                                      {item.details && (
+                                        <Typography variant="caption" color="error.main">
+                                          {item.details}
+                                        </Typography>
+                                      )}
+                                      {displayTags(item.tags).length > 0 && (
+                                        <Stack direction="row" spacing={0.5} flexWrap="wrap">
+                                          {displayTags(item.tags).map((tag) => {
+                                            const { color, sx: tagSx, label } = tagChipProps(tag);
+                                            return (
+                                              <Chip
+                                                key={tag}
+                                                size="small"
+                                                label={label}
+                                                color={color}
+                                                sx={[
+                                                  {
+                                                    cursor: 'pointer',
+                                                    fontSize: '0.65rem',
+                                                  },
+                                                  tagSx ?? {},
+                                                ]}
+                                                variant={
+                                                  tagFilter.includes(tag) ? 'filled' : 'outlined'
+                                                }
+                                                clickable
+                                                onClick={(e: React.MouseEvent) => {
+                                                  e.stopPropagation();
+                                                  toggleTagFilter(tag);
+                                                }}
+                                              />
+                                            );
+                                          })}
+                                        </Stack>
+                                      )}
+                                    </Stack>
+                                  ))}
+                                  {details?.truncated && (
+                                    <Typography
+                                      variant="caption"
+                                      color="text.secondary"
+                                      sx={{ pt: 1, display: 'block' }}
+                                    >
+                                      … and {details.truncated_count?.toLocaleString()} more entries
+                                      not shown
+                                    </Typography>
+                                  )}
+                                </Box>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </React.Fragment>
+                      );
+                    }
+
+                    // Regular entry
+                    return (
+                      <TableRow
+                        key={entry.id}
+                        hover
+                        sx={[
+                          {
+                            bgcolor: rowBgColor(entry),
+                          },
+                          entry.tier === 'debug'
+                            ? {
+                                opacity: 0.6,
+                              }
+                            : {
+                                opacity: 1,
+                              },
+                        ]}
+                      >
+                        <TableCell
+                          sx={{
+                            whiteSpace: 'nowrap',
+                            color: 'text.secondary',
+                            fontSize: '0.75rem',
+                          }}
+                        >
+                          {isMobile
+                            ? formatTimestampCompact(entry.timestamp)
+                            : formatTimestamp(entry.timestamp)}
+                        </TableCell>
+                        <TableCell>{levelChip(entry.level)}</TableCell>
+                        <TableCell>
+                          <Chip size="small" label={(entry.type || '').replace(/_/g, ' ')} />
+                        </TableCell>
+                        <TableCell
+                          sx={
+                            isMobile ? { wordBreak: 'break-word', minWidth: 0 } : { maxWidth: 400 }
+                          }
+                        >
+                          <Typography variant="body2" noWrap={!isMobile} title={entry.summary}>
+                            {entry.summary}
+                          </Typography>
+                          {entry.operation_id && !operationId && (
+                            <Typography
+                              variant="caption"
+                              sx={{ cursor: 'pointer', color: 'primary.main' }}
+                              onClick={() => setOperationId(entry.operation_id!)}
+                            >
+                              view operation &rarr;
+                            </Typography>
+                          )}
+                          {entry.book_id && (
+                            <Typography
+                              variant="caption"
+                              sx={{ cursor: 'pointer', color: 'primary.main', ml: 1 }}
+                              onClick={() => navigate(`/library/${entry.book_id}`)}
+                            >
+                              book &rarr;
+                            </Typography>
+                          )}
+                        </TableCell>
+                        {!isMobile && (
+                          <TableCell>
+                            <Typography variant="caption" color="text.secondary">
+                              {entry.source}
+                            </Typography>
+                          </TableCell>
+                        )}
+                        {!isMobile && (
+                          <TableCell>
+                            {displayTags(entry.tags).length > 0 ? (
+                              <Stack direction="row" spacing={0.5} flexWrap="wrap">
+                                {displayTags(entry.tags).map((tag) => {
+                                  const { color, sx, label } = tagChipProps(tag);
+                                  return (
+                                    <Chip
+                                      key={tag}
+                                      size="small"
+                                      label={label}
+                                      color={color}
+                                      sx={[
+                                        {
+                                          cursor: 'pointer',
+                                        },
+                                        sx ?? {},
+                                      ]}
+                                      variant={tagFilter.includes(tag) ? 'filled' : 'outlined'}
                                       clickable
-                                      onClick={(e: React.MouseEvent) => {
+                                      onClick={(e) => {
                                         e.stopPropagation();
-                                        toggleTagFilter(`op:${item.operation_id}`);
+                                        toggleTagFilter(tag);
                                       }}
                                     />
-                                  )}
-                                  {item.details && (
-                                    <Typography variant="caption" color="error.main">
-                                      {item.details}
-                                    </Typography>
-                                  )}
-                                  {displayTags(item.tags).length > 0 && (
-                                    <Stack direction="row" spacing={0.5} flexWrap="wrap">
-                                      {displayTags(item.tags).map((tag) => {
-                                        const { color, sx: tagSx, label } = tagChipProps(tag);
-                                        return (
-                                          <Chip
-                                            key={tag}
-                                            size="small"
-                                            label={label}
-                                            color={color}
-                                            sx={[{
-                                              cursor: 'pointer',
-                                              fontSize: '0.65rem'
-                                            }, tagSx ?? {}]}
-                                            variant={tagFilter.includes(tag) ? 'filled' : 'outlined'}
-                                            clickable
-                                            onClick={(e: React.MouseEvent) => {
-                                              e.stopPropagation();
-                                              toggleTagFilter(tag);
-                                            }}
-                                          />
-                                        );
-                                      })}
-                                    </Stack>
-                                  )}
-                                </Stack>
-                              ))}
-                              {details?.truncated && (
-                                <Typography variant="caption" color="text.secondary" sx={{ pt: 1, display: 'block' }}>
-                                  … and {details.truncated_count?.toLocaleString()} more entries not shown
-                                </Typography>
-                              )}
-                            </Box>
+                                  );
+                                })}
+                              </Stack>
+                            ) : null}
                           </TableCell>
-                        </TableRow>
-                      )}
-                    </React.Fragment>
-                  );
-                }
-
-                // Regular entry
-                return (
-                  <TableRow
-                    key={entry.id}
-                    hover
-                    sx={[{
-                      bgcolor: rowBgColor(entry)
-                    }, entry.tier === 'debug' ? {
-                      opacity: 0.6
-                    } : {
-                      opacity: 1
-                    }]}
-                  >
-                    <TableCell sx={{ whiteSpace: 'nowrap', color: 'text.secondary', fontSize: '0.75rem' }}>
-                      {isMobile ? formatTimestampCompact(entry.timestamp) : formatTimestamp(entry.timestamp)}
-                    </TableCell>
-                    <TableCell>{levelChip(entry.level)}</TableCell>
-                    <TableCell>
-                      <Chip size="small" label={(entry.type || '').replace(/_/g, ' ')} />
-                    </TableCell>
-                    <TableCell sx={isMobile ? { wordBreak: 'break-word', minWidth: 0 } : { maxWidth: 400 }}>
-                      <Typography variant="body2" noWrap={!isMobile} title={entry.summary}>
-                        {entry.summary}
-                      </Typography>
-                      {entry.operation_id && !operationId && (
-                        <Typography
-                          variant="caption"
-                          sx={{ cursor: 'pointer', color: 'primary.main' }}
-                          onClick={() => setOperationId(entry.operation_id!)}
-                        >
-                          view operation &rarr;
-                        </Typography>
-                      )}
-                      {entry.book_id && (
-                        <Typography
-                          variant="caption"
-                          sx={{ cursor: 'pointer', color: 'primary.main', ml: 1 }}
-                          onClick={() => navigate(`/library/${entry.book_id}`)}
-                        >
-                          book &rarr;
-                        </Typography>
-                      )}
-                    </TableCell>
-                    {!isMobile && (
-                      <TableCell>
-                        <Typography variant="caption" color="text.secondary">
-                          {entry.source}
-                        </Typography>
-                      </TableCell>
-                    )}
-                    {!isMobile && (
-                      <TableCell>
-                        {displayTags(entry.tags).length > 0 ? (
-                          <Stack direction="row" spacing={0.5} flexWrap="wrap">
-                            {displayTags(entry.tags).map((tag) => {
-                              const { color, sx, label } = tagChipProps(tag);
-                              return (
-                                <Chip
-                                  key={tag}
-                                  size="small"
-                                  label={label}
-                                  color={color}
-                                  sx={[{
-                                    cursor: 'pointer'
-                                  }, sx ?? {}]}
-                                  variant={tagFilter.includes(tag) ? 'filled' : 'outlined'}
-                                  clickable
-                                  onClick={(e) => { e.stopPropagation(); toggleTagFilter(tag); }}
-                                />
-                              );
-                            })}
-                          </Stack>
-                        ) : null}
-                      </TableCell>
-                    )}
-                    <TableCell>
-                      {entry.operation_id &&
-                        (entry.type === 'organize_completed' || entry.type === 'metadata_applied') && (
-                          <Tooltip title="Revert operation">
-                            <IconButton
-                              size="small"
-                              onClick={() => setRevertEntry(entry)}
-                            >
-                              <UndoIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
                         )}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-            </Table>
+                        <TableCell>
+                          {entry.operation_id &&
+                            (entry.type === 'organize_completed' ||
+                              entry.type === 'metadata_applied') && (
+                              <Tooltip title="Revert operation">
+                                <IconButton size="small" onClick={() => setRevertEntry(entry)}>
+                                  <UndoIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
             </TableContainer>
           </>
         )}
 
-        <Stack direction="row" justifyContent="center" alignItems="center" spacing={2} sx={{ py: 2 }}>
+        <Stack
+          direction="row"
+          justifyContent="center"
+          alignItems="center"
+          spacing={2}
+          sx={{ py: 2 }}
+        >
           {totalPages > 1 && (
             <Pagination
               count={totalPages}
@@ -2039,11 +2360,16 @@ export default function ActivityLog() {
             select
             size="small"
             value={pageSize}
-            onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+            onChange={(e) => {
+              setPageSize(Number(e.target.value));
+              setPage(1);
+            }}
             sx={{ minWidth: 90 }}
           >
             {PAGE_SIZE_OPTIONS.map((n) => (
-              <MenuItem key={n} value={n}>{n} / page</MenuItem>
+              <MenuItem key={n} value={n}>
+                {n} / page
+              </MenuItem>
             ))}
           </TextField>
         </Stack>
@@ -2055,18 +2381,12 @@ export default function ActivityLog() {
         <DialogContent>
           <Typography variant="body2">
             This will undo all tracked changes from operation{' '}
-            <strong>{revertEntry?.operation_id?.slice(0, 12)}...</strong>.
-            This cannot be undone.
+            <strong>{revertEntry?.operation_id?.slice(0, 12)}...</strong>. This cannot be undone.
           </Typography>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setRevertEntry(null)}>Cancel</Button>
-          <Button
-            color="warning"
-            variant="contained"
-            onClick={handleRevert}
-            disabled={reverting}
-          >
+          <Button color="warning" variant="contained" onClick={handleRevert} disabled={reverting}>
             {reverting ? 'Reverting...' : 'Revert'}
           </Button>
         </DialogActions>

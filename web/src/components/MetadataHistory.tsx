@@ -1,5 +1,5 @@
 // file: web/src/components/MetadataHistory.tsx
-// version: 1.3.1
+// version: 1.3.2
 // guid: 8e3a7b2c-5d1f-4a9e-b6c0-2f8d4e7a1b3c
 
 import { useCallback, useEffect, useState } from 'react';
@@ -211,120 +211,119 @@ export const MetadataHistory = ({
           )}
           {!loading && history.length > 0 && (
             <TableContainer>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Field</TableCell>
-                  <TableCell>Change</TableCell>
-                  <TableCell>Type</TableCell>
-                  <TableCell>Source</TableCell>
-                  <TableCell>When</TableCell>
-                  <TableCell align="right">Undo</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {history.map((record) => {
-                  const isSearch = record.field === '__search__';
-                  return (
-                  <TableRow key={record.id} sx={isSearch ? { bgcolor: 'action.hover' } : undefined}>
-                    <TableCell>
-                      <Typography variant="body2" fontWeight={500}>
-                        {isSearch ? (
-                          <Stack direction="row" spacing={0.5} alignItems="center">
-                            <SearchIcon fontSize="small" color="action" />
-                            <span>Search</span>
-                          </Stack>
-                        ) : (
-                          fieldLabel(record.field)
-                        )}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      {isSearch ? (
-                        <Typography variant="body2" color="text.secondary">
-                          {parseJsonValue(record.new_value)}
-                        </Typography>
-                      ) : (
-                      <Stack
-                        direction="row"
-                        spacing={0.5}
-                        alignItems="center"
-                        flexWrap="wrap"
-                      >
-                        <Typography
-                          variant="body2"
-                          color="text.secondary"
-                          sx={{
-                            maxWidth: 120,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          {parseJsonValue(record.previous_value)}
-                        </Typography>
-                        <ArrowRightAltIcon
-                          fontSize="small"
-                          color="action"
-                        />
-                        <Typography
-                          variant="body2"
-                          sx={{
-                            maxWidth: 120,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          {parseJsonValue(record.new_value)}
-                        </Typography>
-                      </Stack>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Chip
-                        label={record.change_type}
-                        size="small"
-                        color={
-                          CHANGE_TYPE_COLORS[record.change_type] || 'default'
-                        }
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="body2" color="text.secondary">
-                        {record.source || '—'}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="body2" color="text.secondary">
-                        {new Date(record.changed_at).toLocaleString()}
-                      </Typography>
-                    </TableCell>
-                    <TableCell align="right">
-                      {!isSearch && latestIds.has(record.id) &&
-                      record.change_type !== 'undo' ? (
-                        <Tooltip title={`Undo this ${fieldLabel(record.field)} change`}>
-                          <span>
-                            <IconButton
-                              size="small"
-                              onClick={() => handleUndo(record.field)}
-                              disabled={undoingField === record.field}
-                            >
-                              {undoingField === record.field ? (
-                                <CircularProgress size={18} />
-                              ) : (
-                                <UndoIcon fontSize="small" />
-                              )}
-                            </IconButton>
-                          </span>
-                        </Tooltip>
-                      ) : null}
-                    </TableCell>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Field</TableCell>
+                    <TableCell>Change</TableCell>
+                    <TableCell>Type</TableCell>
+                    <TableCell>Source</TableCell>
+                    <TableCell>When</TableCell>
+                    <TableCell align="right">Undo</TableCell>
                   </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+                </TableHead>
+                <TableBody>
+                  {history.map((record) => {
+                    const isSearch = record.field === '__search__';
+                    return (
+                      <TableRow
+                        key={record.id}
+                        sx={isSearch ? { bgcolor: 'action.hover' } : undefined}
+                      >
+                        <TableCell>
+                          <Typography variant="body2" fontWeight={500}>
+                            {isSearch ? (
+                              <Stack direction="row" spacing={0.5} alignItems="center">
+                                <SearchIcon fontSize="small" color="action" />
+                                <span>Search</span>
+                              </Stack>
+                            ) : (
+                              fieldLabel(record.field)
+                            )}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          {isSearch ? (
+                            <Typography variant="body2" color="text.secondary">
+                              {parseJsonValue(record.new_value)}
+                            </Typography>
+                          ) : (
+                            <Stack
+                              direction="row"
+                              spacing={0.5}
+                              alignItems="center"
+                              flexWrap="wrap"
+                            >
+                              <Typography
+                                variant="body2"
+                                color="text.secondary"
+                                sx={{
+                                  maxWidth: 120,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {parseJsonValue(record.previous_value)}
+                              </Typography>
+                              <ArrowRightAltIcon fontSize="small" color="action" />
+                              <Typography
+                                variant="body2"
+                                sx={{
+                                  maxWidth: 120,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {parseJsonValue(record.new_value)}
+                              </Typography>
+                            </Stack>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Chip
+                            label={record.change_type}
+                            size="small"
+                            color={CHANGE_TYPE_COLORS[record.change_type] || 'default'}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Typography variant="body2" color="text.secondary">
+                            {record.source || '—'}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Typography variant="body2" color="text.secondary">
+                            {new Date(record.changed_at).toLocaleString()}
+                          </Typography>
+                        </TableCell>
+                        <TableCell align="right">
+                          {!isSearch &&
+                          latestIds.has(record.id) &&
+                          record.change_type !== 'undo' ? (
+                            <Tooltip title={`Undo this ${fieldLabel(record.field)} change`}>
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  onClick={() => handleUndo(record.field)}
+                                  disabled={undoingField === record.field}
+                                >
+                                  {undoingField === record.field ? (
+                                    <CircularProgress size={18} />
+                                  ) : (
+                                    <UndoIcon fontSize="small" />
+                                  )}
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          ) : null}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
             </TableContainer>
           )}
           {/* Version Snapshots Section */}
@@ -351,52 +350,63 @@ export const MetadataHistory = ({
             )}
             {!cowLoading && cowVersions.length === 0 && (
               <Alert severity="info" sx={{ mb: 1 }}>
-                No version snapshots recorded yet. Snapshots are created automatically when metadata is updated.
+                No version snapshots recorded yet. Snapshots are created automatically when metadata
+                is updated.
               </Alert>
             )}
             {!cowLoading && cowVersions.length > 0 && (
               <TableContainer>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Snapshot Time</TableCell>
-                    <TableCell align="right">Actions</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {cowVersions.map((version, idx) => (
-                    <TableRow key={version.timestamp}>
-                      <TableCell>
-                        <Typography variant="body2">
-                          {new Date(version.timestamp).toLocaleString()}
-                          {idx === 0 && (
-                            <Chip label="latest" size="small" color="primary" variant="outlined" sx={{ ml: 1 }} />
-                          )}
-                        </Typography>
-                      </TableCell>
-                      <TableCell align="right">
-                        <Tooltip title="Revert metadata to this snapshot">
-                          <span>
-                            <Button
-                              size="small"
-                              variant="outlined"
-                              startIcon={
-                                revertingTimestamp === version.timestamp
-                                  ? <CircularProgress size={14} />
-                                  : <RestoreIcon />
-                              }
-                              onClick={() => handleRevert(version.timestamp)}
-                              disabled={revertingTimestamp !== null || idx === 0}
-                            >
-                              {revertingTimestamp === version.timestamp ? 'Reverting...' : 'Revert'}
-                            </Button>
-                          </span>
-                        </Tooltip>
-                      </TableCell>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Snapshot Time</TableCell>
+                      <TableCell align="right">Actions</TableCell>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHead>
+                  <TableBody>
+                    {cowVersions.map((version, idx) => (
+                      <TableRow key={version.timestamp}>
+                        <TableCell>
+                          <Typography variant="body2">
+                            {new Date(version.timestamp).toLocaleString()}
+                            {idx === 0 && (
+                              <Chip
+                                label="latest"
+                                size="small"
+                                color="primary"
+                                variant="outlined"
+                                sx={{ ml: 1 }}
+                              />
+                            )}
+                          </Typography>
+                        </TableCell>
+                        <TableCell align="right">
+                          <Tooltip title="Revert metadata to this snapshot">
+                            <span>
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                startIcon={
+                                  revertingTimestamp === version.timestamp ? (
+                                    <CircularProgress size={14} />
+                                  ) : (
+                                    <RestoreIcon />
+                                  )
+                                }
+                                onClick={() => handleRevert(version.timestamp)}
+                                disabled={revertingTimestamp !== null || idx === 0}
+                              >
+                                {revertingTimestamp === version.timestamp
+                                  ? 'Reverting...'
+                                  : 'Revert'}
+                              </Button>
+                            </span>
+                          </Tooltip>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </TableContainer>
             )}
           </Box>

@@ -1,5 +1,5 @@
 // file: web/src/components/ErrorBoundary.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 
 import { Component, ReactNode, ErrorInfo } from 'react';
@@ -54,9 +54,7 @@ export class ErrorBoundary extends Component<Props, State> {
               textAlign: 'center',
             }}
           >
-            <ErrorOutlineIcon
-              sx={{ fontSize: 64, color: 'error.main', mb: 2 }}
-            />
+            <ErrorOutlineIcon sx={{ fontSize: 64, color: 'error.main', mb: 2 }} />
             <Typography variant="h5" gutterBottom>
               Something went wrong
             </Typography>

@@ -1,7 +1,7 @@
 // file: web/src/components/system/MaintenanceTab.tsx
-// version: 1.9.0
+// version: 1.9.1
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Alert,
@@ -106,7 +106,9 @@ function MaintenanceWindowCard() {
     }
   }, []);
 
-  useEffect(() => { loadStatus(); }, [loadStatus]);
+  useEffect(() => {
+    loadStatus();
+  }, [loadStatus]);
 
   // Cleanup timeouts on unmount
   useEffect(() => {
@@ -166,7 +168,9 @@ function MaintenanceWindowCard() {
       <CardHeader
         title="Maintenance Window"
         subheader={`Last run: ${lastRunLabel} · Next run: ${nextRunLabel}`}
-        action={status?.currently_running ? <CircularProgress size={20} sx={{ mt: 1, mr: 1 }} /> : null}
+        action={
+          status?.currently_running ? <CircularProgress size={20} sx={{ mt: 1, mr: 1 }} /> : null
+        }
       />
       <CardContent>
         {error && (
@@ -196,7 +200,10 @@ function MaintenanceWindowCard() {
             inputProps={{ min: 0, max: 23 }}
             value={config.window_start}
             onChange={(e) =>
-              setConfig((c) => ({ ...c, window_start: Math.min(23, Math.max(0, parseInt(e.target.value) || 0)) }))
+              setConfig((c) => ({
+                ...c,
+                window_start: Math.min(23, Math.max(0, parseInt(e.target.value) || 0)),
+              }))
             }
             sx={{ width: 155 }}
           />
@@ -207,7 +214,10 @@ function MaintenanceWindowCard() {
             inputProps={{ min: 0, max: 23 }}
             value={config.window_end}
             onChange={(e) =>
-              setConfig((c) => ({ ...c, window_end: Math.min(23, Math.max(0, parseInt(e.target.value) || 0)) }))
+              setConfig((c) => ({
+                ...c,
+                window_end: Math.min(23, Math.max(0, parseInt(e.target.value) || 0)),
+              }))
             }
             sx={{ width: 155 }}
           />
@@ -303,7 +313,9 @@ function ChapterConsolidationCard() {
           </Button>
 
           <FormControlLabel
-            control={<Switch checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} size="small" />}
+            control={
+              <Switch checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} size="small" />
+            }
             label="Dry Run"
           />
 
@@ -331,7 +343,10 @@ function ChapterConsolidationCard() {
             <strong>{mergeResult.books_merged}</strong> book record(s) across{' '}
             <strong>{mergeResult.groups_found}</strong> group(s).
             {mergeResult.books_skipped > 0 && (
-              <> Skipped <strong>{mergeResult.books_skipped}</strong>.</>
+              <>
+                {' '}
+                Skipped <strong>{mergeResult.books_skipped}</strong>.
+              </>
             )}
           </Typography>
         )}
@@ -386,7 +401,9 @@ function SHADuplicateCard() {
     }
   }, []);
 
-  useEffect(() => { void loadStats(); }, [loadStats]);
+  useEffect(() => {
+    void loadStats();
+  }, [loadStats]);
 
   const handleScan = useCallback(async () => {
     setScanning(true);
@@ -430,7 +447,9 @@ function SHADuplicateCard() {
     if (!stats) return null;
     if (stats.missing_file_hash === 0)
       return <Chip size="small" color="success" label="✓ All hashed" />;
-    return <Chip size="small" color="warning" label={`${stats.missing_file_hash} missing hashes`} />;
+    return (
+      <Chip size="small" color="warning" label={`${stats.missing_file_hash} missing hashes`} />
+    );
   })();
 
   return (
@@ -450,49 +469,97 @@ function SHADuplicateCard() {
         {/* Hash coverage stats */}
         {stats && (
           <Box sx={{ mb: 2, p: 1.5, bgcolor: 'action.hover', borderRadius: 1 }}>
-            <Typography variant="subtitle2" gutterBottom>Hash Coverage</Typography>
+            <Typography variant="subtitle2" gutterBottom>
+              Hash Coverage
+            </Typography>
             <Stack direction="row" spacing={3} flexWrap="wrap" useFlexGap>
               <Box>
-                <Typography variant="caption" color="text.secondary">Total files</Typography>
-                <Typography variant="body2" fontWeight="bold">{stats.total_book_files.toLocaleString()}</Typography>
-              </Box>
-              <Box>
-                <Typography variant="caption" color="text.secondary">With hash</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Total files
+                </Typography>
                 <Typography variant="body2" fontWeight="bold">
-                  {stats.with_file_hash.toLocaleString()} ({pct(stats.with_file_hash, stats.total_book_files)})
+                  {stats.total_book_files.toLocaleString()}
                 </Typography>
               </Box>
               <Box>
-                <Typography variant="caption" color="text.secondary">Missing hash</Typography>
-                <Typography variant="body2" fontWeight="bold" color={stats.missing_file_hash > 0 ? 'warning.main' : 'success.main'}>
+                <Typography variant="caption" color="text.secondary">
+                  With hash
+                </Typography>
+                <Typography variant="body2" fontWeight="bold">
+                  {stats.with_file_hash.toLocaleString()} (
+                  {pct(stats.with_file_hash, stats.total_book_files)})
+                </Typography>
+              </Box>
+              <Box>
+                <Typography variant="caption" color="text.secondary">
+                  Missing hash
+                </Typography>
+                <Typography
+                  variant="body2"
+                  fontWeight="bold"
+                  color={stats.missing_file_hash > 0 ? 'warning.main' : 'success.main'}
+                >
                   {stats.missing_file_hash.toLocaleString()}
                 </Typography>
               </Box>
               <Box>
-                <Typography variant="caption" color="text.secondary">With orig hash</Typography>
-                <Typography variant="body2" fontWeight="bold">{stats.with_original_hash.toLocaleString()}</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  With orig hash
+                </Typography>
+                <Typography variant="body2" fontWeight="bold">
+                  {stats.with_original_hash.toLocaleString()}
+                </Typography>
               </Box>
               <Box>
-                <Typography variant="caption" color="text.secondary">Books (no files)</Typography>
-                <Typography variant="body2" fontWeight="bold" color={stats.books_with_no_files > 0 ? 'warning.main' : 'text.primary'}>
-                  {stats.books_with_no_files.toLocaleString()} / {stats.total_books.toLocaleString()}
+                <Typography variant="caption" color="text.secondary">
+                  Books (no files)
+                </Typography>
+                <Typography
+                  variant="body2"
+                  fontWeight="bold"
+                  color={stats.books_with_no_files > 0 ? 'warning.main' : 'text.primary'}
+                >
+                  {stats.books_with_no_files.toLocaleString()} /{' '}
+                  {stats.total_books.toLocaleString()}
                 </Typography>
               </Box>
             </Stack>
 
             {(stats.by_library?.length ?? 0) > 1 && (
               <Box sx={{ mt: 1.5 }}>
-                <Typography variant="caption" color="text.secondary" display="block" gutterBottom>By Library</Typography>
+                <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
+                  By Library
+                </Typography>
                 {stats.by_library.map((lib) => (
-                  <Stack key={lib.path} direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
-                    <Typography variant="caption" sx={{ minWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={lib.path}>
+                  <Stack
+                    key={lib.path}
+                    direction="row"
+                    spacing={1}
+                    alignItems="center"
+                    sx={{ mb: 0.5 }}
+                  >
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        minWidth: 200,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                      title={lib.path}
+                    >
                       {lib.path.split('/').pop() || lib.path}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
                       {lib.with_hash}/{lib.total_files} hashed
                     </Typography>
                     {lib.missing_hash > 0 && (
-                      <Chip size="small" label={`${lib.missing_hash} missing`} color="warning" variant="outlined" />
+                      <Chip
+                        size="small"
+                        label={`${lib.missing_hash} missing`}
+                        color="warning"
+                        variant="outlined"
+                      />
                     )}
                   </Stack>
                 ))}
@@ -565,7 +632,12 @@ function SHADuplicateCard() {
                           primary={f.file_path || f.book_path}
                           secondary={f.book_title}
                         />
-                        <Chip size="small" label={fmt(f.file_size_bytes)} variant="outlined" sx={{ ml: 1 }} />
+                        <Chip
+                          size="small"
+                          label={fmt(f.file_size_bytes)}
+                          variant="outlined"
+                          sx={{ ml: 1 }}
+                        />
                       </ListItem>
                     ))}
                   </List>
@@ -598,7 +670,9 @@ function AcoustIDFingerprintCard() {
     }
   }, []);
 
-  useEffect(() => { void loadStats(); }, [loadStats]);
+  useEffect(() => {
+    void loadStats();
+  }, [loadStats]);
 
   const handleFingerprint = useCallback(async () => {
     setTriggering(true);
@@ -613,9 +687,10 @@ function AcoustIDFingerprintCard() {
     }
   }, [loadStats]);
 
-  const pct = stats && stats.total_files > 0
-    ? Math.round((stats.with_fingerprint / stats.total_files) * 100)
-    : 0;
+  const pct =
+    stats && stats.total_files > 0
+      ? Math.round((stats.with_fingerprint / stats.total_files) * 100)
+      : 0;
 
   return (
     <Card sx={{ mb: 2 }}>
@@ -631,7 +706,8 @@ function AcoustIDFingerprintCard() {
               {pct}%
             </Typography>
             <Typography variant="body2" color="text.secondary" gutterBottom>
-              {stats.with_fingerprint.toLocaleString()} / {stats.total_files.toLocaleString()} files fingerprinted
+              {stats.with_fingerprint.toLocaleString()} / {stats.total_files.toLocaleString()} files
+              fingerprinted
             </Typography>
             <Chip
               label={pct === 100 ? '✓ Complete' : 'Partial coverage'}
@@ -640,7 +716,11 @@ function AcoustIDFingerprintCard() {
             />
           </>
         ) : (
-          !loading && <Typography variant="body2" color="text.secondary">No data available</Typography>
+          !loading && (
+            <Typography variant="body2" color="text.secondary">
+              No data available
+            </Typography>
+          )
         )}
         {error && (
           <Alert severity="error" sx={{ mt: 1 }} onClose={() => setError(null)}>
@@ -691,7 +771,9 @@ function MetadataHashDuplicateCard() {
     }
   }, []);
 
-  useEffect(() => { void loadStats(); }, [loadStats]);
+  useEffect(() => {
+    void loadStats();
+  }, [loadStats]);
 
   const handleScan = useCallback(async () => {
     setScanning(true);
@@ -730,7 +812,9 @@ function MetadataHashDuplicateCard() {
     if (!stats) return null;
     if (stats.missing_metadata_hash === 0)
       return <Chip size="small" color="success" label="✓ All hashed" />;
-    return <Chip size="small" color="warning" label={`${stats.missing_metadata_hash} missing hashes`} />;
+    return (
+      <Chip size="small" color="warning" label={`${stats.missing_metadata_hash} missing hashes`} />
+    );
   })();
 
   return (
@@ -750,45 +834,92 @@ function MetadataHashDuplicateCard() {
         {/* Stats panel */}
         {stats && (
           <Box sx={{ mb: 2, p: 1.5, bgcolor: 'action.hover', borderRadius: 1 }}>
-            <Typography variant="subtitle2" gutterBottom>Metadata Hash Coverage</Typography>
+            <Typography variant="subtitle2" gutterBottom>
+              Metadata Hash Coverage
+            </Typography>
             <Stack direction="row" spacing={3} flexWrap="wrap" useFlexGap>
               <Box>
-                <Typography variant="caption" color="text.secondary">Total books</Typography>
-                <Typography variant="body2" fontWeight="bold">{stats.total_books.toLocaleString()}</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Total books
+                </Typography>
+                <Typography variant="body2" fontWeight="bold">
+                  {stats.total_books.toLocaleString()}
+                </Typography>
               </Box>
               <Box>
-                <Typography variant="caption" color="text.secondary">With metadata hash</Typography>
-                <Typography variant="body2" fontWeight="bold">{stats.with_metadata_hash.toLocaleString()} ({pct(stats.with_metadata_hash, stats.total_books)})</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  With metadata hash
+                </Typography>
+                <Typography variant="body2" fontWeight="bold">
+                  {stats.with_metadata_hash.toLocaleString()} (
+                  {pct(stats.with_metadata_hash, stats.total_books)})
+                </Typography>
               </Box>
               <Box>
-                <Typography variant="caption" color="text.secondary">Missing metadata hash</Typography>
-                <Typography variant="body2" fontWeight="bold" color={stats.missing_metadata_hash > 0 ? 'warning.main' : 'success.main'}>
+                <Typography variant="caption" color="text.secondary">
+                  Missing metadata hash
+                </Typography>
+                <Typography
+                  variant="body2"
+                  fontWeight="bold"
+                  color={stats.missing_metadata_hash > 0 ? 'warning.main' : 'success.main'}
+                >
                   {stats.missing_metadata_hash.toLocaleString()}
                 </Typography>
               </Box>
               <Box>
-                <Typography variant="caption" color="text.secondary">Has ASIN/ISBN</Typography>
-                <Typography variant="body2" fontWeight="bold">{stats.with_asin_or_isbn.toLocaleString()}</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Has ASIN/ISBN
+                </Typography>
+                <Typography variant="body2" fontWeight="bold">
+                  {stats.with_asin_or_isbn.toLocaleString()}
+                </Typography>
               </Box>
               <Box>
-                <Typography variant="caption" color="text.secondary">Missing hash but has ID</Typography>
-                <Typography variant="body2" fontWeight="bold">{stats.missing_hash_has_id.toLocaleString()}</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Missing hash but has ID
+                </Typography>
+                <Typography variant="body2" fontWeight="bold">
+                  {stats.missing_hash_has_id.toLocaleString()}
+                </Typography>
               </Box>
             </Stack>
 
             {(stats.by_library?.length ?? 0) > 1 && (
               <Box sx={{ mt: 1.5 }}>
-                <Typography variant="caption" color="text.secondary" display="block" gutterBottom>By Library</Typography>
+                <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
+                  By Library
+                </Typography>
                 {stats.by_library.map((lib) => (
-                  <Stack key={lib.path} direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
-                    <Typography variant="caption" sx={{ minWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={lib.path}>
+                  <Stack
+                    key={lib.path}
+                    direction="row"
+                    spacing={1}
+                    alignItems="center"
+                    sx={{ mb: 0.5 }}
+                  >
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        minWidth: 200,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                      title={lib.path}
+                    >
                       {lib.path.split('/').pop() || lib.path}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
                       {lib.with_metadata_hash}/{lib.total_books} hashed
                     </Typography>
                     {lib.missing_metadata_hash > 0 && (
-                      <Chip size="small" label={`${lib.missing_metadata_hash} missing`} color="warning" variant="outlined" />
+                      <Chip
+                        size="small"
+                        label={`${lib.missing_metadata_hash} missing`}
+                        color="warning"
+                        variant="outlined"
+                      />
                     )}
                   </Stack>
                 ))}
@@ -852,11 +983,13 @@ function MetadataHashDuplicateCard() {
                   <List dense disablePadding sx={{ pl: 2 }}>
                     {g.books.map((b) => (
                       <ListItem key={b.id} disableGutters>
-                        <ListItemText
-                          primary={b.title}
-                          secondary={`ID: ${b.id}`}
+                        <ListItemText primary={b.title} secondary={`ID: ${b.id}`} />
+                        <Chip
+                          size="small"
+                          label={`${b.file_count} files`}
+                          variant="outlined"
+                          sx={{ ml: 1 }}
                         />
-                        <Chip size="small" label={`${b.file_count} files`} variant="outlined" sx={{ ml: 1 }} />
                       </ListItem>
                     ))}
                   </List>
@@ -878,7 +1011,8 @@ function ManualFixesCard() {
   const [running, setRunning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    api.listMaintenanceJobs()
+    api
+      .listMaintenanceJobs()
       .then(setJobs)
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load jobs'))
       .finally(() => setLoading(false));
@@ -900,7 +1034,10 @@ function ManualFixesCard() {
 
   return (
     <Card sx={{ mb: 3 }}>
-      <CardHeader title="Manual Fixes" subheader="One-shot maintenance jobs dispatched as async operations" />
+      <CardHeader
+        title="Manual Fixes"
+        subheader="One-shot maintenance jobs dispatched as async operations"
+      />
       <CardContent>
         {error && (
           <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setError(null)}>
@@ -912,15 +1049,28 @@ function ManualFixesCard() {
         ) : (
           <Stack spacing={1}>
             {jobs.map((job) => (
-              <Box key={job.id} sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <Box
+                key={job.id}
+                sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}
+              >
                 <Box sx={{ flex: 1 }}>
-                  <Typography variant="body2" fontWeight="medium">{job.id}</Typography>
-                  <Typography variant="caption" color="text.secondary">{job.description}</Typography>
+                  <Typography variant="body2" fontWeight="medium">
+                    {job.id}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {job.description}
+                  </Typography>
                 </Box>
                 <Button
                   variant="outlined"
                   size="small"
-                  startIcon={running === job.id ? <CircularProgress size={14} color="inherit" /> : <PlayArrowIcon />}
+                  startIcon={
+                    running === job.id ? (
+                      <CircularProgress size={14} color="inherit" />
+                    ) : (
+                      <PlayArrowIcon />
+                    )
+                  }
                   disabled={running !== null}
                   onClick={() => handleRun(job.id)}
                 >
@@ -1104,19 +1254,25 @@ export function MaintenanceTab() {
                       </Box>
                       <Typography variant="caption" color="text.secondary">
                         {task.name}
-                        {task.last_run && ` · Last run: ${new Date(task.last_run).toLocaleString()}`}
+                        {task.last_run &&
+                          ` · Last run: ${new Date(task.last_run).toLocaleString()}`}
                       </Typography>
                       <Box
-                        sx={[{
-                          display: 'flex',
-                          flexWrap: 'wrap',
-                          alignItems: 'center',
-                          gap: 1
-                        }, isMobile ? {
-                          mt: 1
-                        } : {
-                          mt: 0.5
-                        }]}
+                        sx={[
+                          {
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            alignItems: 'center',
+                            gap: 1,
+                          },
+                          isMobile
+                            ? {
+                                mt: 1,
+                              }
+                            : {
+                                mt: 0.5,
+                              },
+                        ]}
                       >
                         <FormControlLabel
                           control={
@@ -1183,9 +1339,11 @@ export function MaintenanceTab() {
                           size="small"
                           fullWidth={isMobile}
                           startIcon={
-                            task.is_running
-                              ? <CircularProgress size={14} color="inherit" />
-                              : <PlayArrowIcon />
+                            task.is_running ? (
+                              <CircularProgress size={14} color="inherit" />
+                            ) : (
+                              <PlayArrowIcon />
+                            )
                           }
                           disabled={runningTask === task.name || task.is_running}
                           onClick={() => handleRun(task.name)}

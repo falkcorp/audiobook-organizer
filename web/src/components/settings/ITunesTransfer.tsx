@@ -1,5 +1,5 @@
 // file: web/src/components/settings/ITunesTransfer.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -85,16 +85,10 @@ async function downloadITL(): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
-async function uploadITL(
-  file: File,
-  install: boolean
-): Promise<UploadResponse> {
+async function uploadITL(file: File, install: boolean): Promise<UploadResponse> {
   const form = new FormData();
   form.append('library', file);
-  const resp = await fetch(
-    `${API_BASE}/upload?install=${install}`,
-    { method: 'POST', body: form }
-  );
+  const resp = await fetch(`${API_BASE}/upload?install=${install}`, { method: 'POST', body: form });
   const body = await resp.json();
   if (!resp.ok) throw new Error(body.error || `Upload failed: ${resp.status}`);
   return body;
@@ -200,10 +194,7 @@ export function ITunesTransfer() {
       const resp = await uploadITL(selectedFile, false);
       setUploadResult(resp);
       if (resp.valid) {
-        toast(
-          `Valid ITL: ${resp.tracks} tracks, ${resp.playlists} playlists`,
-          'success'
-        );
+        toast(`Valid ITL: ${resp.tracks} tracks, ${resp.playlists} playlists`, 'success');
       }
     } catch (err) {
       toast(`Validation failed: ${err}`, 'error');
@@ -264,18 +255,11 @@ export function ITunesTransfer() {
               Download Current Library
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              Download the current ITL file from the server for backup or
-              editing.
+              Download the current ITL file from the server for backup or editing.
             </Typography>
             <Button
               variant="outlined"
-              startIcon={
-                downloading ? (
-                  <CircularProgress size={18} />
-                ) : (
-                  <CloudDownloadIcon />
-                )
-              }
+              startIcon={downloading ? <CircularProgress size={18} /> : <CloudDownloadIcon />}
               onClick={handleDownload}
               disabled={downloading}
             >
@@ -291,16 +275,12 @@ export function ITunesTransfer() {
               Upload Library
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              Upload an ITL file to validate or install as the active library.
-              Installing creates an automatic backup of the current file.
+              Upload an ITL file to validate or install as the active library. Installing creates an
+              automatic backup of the current file.
             </Typography>
 
             <Stack direction="row" spacing={2} alignItems="center">
-              <Button
-                variant="outlined"
-                component="label"
-                startIcon={<CloudUploadIcon />}
-              >
+              <Button variant="outlined" component="label" startIcon={<CloudUploadIcon />}>
                 Choose File
                 <input
                   ref={fileInputRef}
@@ -331,9 +311,7 @@ export function ITunesTransfer() {
                   color="primary"
                   onClick={handleValidate}
                   disabled={uploading}
-                  startIcon={
-                    uploading ? <CircularProgress size={18} /> : undefined
-                  }
+                  startIcon={uploading ? <CircularProgress size={18} /> : undefined}
                 >
                   Validate
                 </Button>
@@ -353,23 +331,15 @@ export function ITunesTransfer() {
             {uploadResult && (
               <Alert
                 severity={uploadResult.valid ? 'success' : 'error'}
-                icon={
-                  uploadResult.valid ? (
-                    <CheckCircleIcon />
-                  ) : (
-                    <ErrorIcon />
-                  )
-                }
+                icon={uploadResult.valid ? <CheckCircleIcon /> : <ErrorIcon />}
                 sx={{ mt: 2 }}
               >
                 {uploadResult.valid ? (
                   <>
-                    <strong>
-                      {uploadResult.installed ? 'Installed' : 'Valid'}
-                    </strong>
+                    <strong>{uploadResult.installed ? 'Installed' : 'Valid'}</strong>
                     {' — '}
-                    {uploadResult.tracks} tracks, {uploadResult.playlists}{' '}
-                    playlists (v{uploadResult.version})
+                    {uploadResult.tracks} tracks, {uploadResult.playlists} playlists (v
+                    {uploadResult.version})
                   </>
                 ) : (
                   uploadResult.error || 'Invalid ITL file'
@@ -382,23 +352,12 @@ export function ITunesTransfer() {
 
           {/* Backups Section */}
           <Box>
-            <Stack
-              direction="row"
-              justifyContent="space-between"
-              alignItems="center"
-            >
+            <Stack direction="row" justifyContent="space-between" alignItems="center">
               <Typography variant="subtitle1">
-                <HistoryIcon
-                  fontSize="small"
-                  sx={{ verticalAlign: 'middle', mr: 0.5 }}
-                />
+                <HistoryIcon fontSize="small" sx={{ verticalAlign: 'middle', mr: 0.5 }} />
                 Backups
               </Typography>
-              <Button
-                size="small"
-                onClick={loadBackups}
-                disabled={backupsLoading}
-              >
+              <Button size="small" onClick={loadBackups} disabled={backupsLoading}>
                 Refresh
               </Button>
             </Stack>
@@ -406,13 +365,8 @@ export function ITunesTransfer() {
             {backupsLoading && <LinearProgress sx={{ mt: 1 }} />}
 
             {!backupsLoading && backups.length === 0 && (
-              <Typography
-                variant="body2"
-                color="text.secondary"
-                sx={{ mt: 1 }}
-              >
-                No backups found. Backups are created automatically when
-                uploading or restoring.
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                No backups found. Backups are created automatically when uploading or restoring.
               </Typography>
             )}
 
@@ -451,41 +405,29 @@ export function ITunesTransfer() {
       </CardContent>
 
       {/* Confirm Install Dialog */}
-      <Dialog
-        open={confirmInstall}
-        onClose={() => setConfirmInstall(false)}
-      >
+      <Dialog open={confirmInstall} onClose={() => setConfirmInstall(false)}>
         <DialogTitle>Install Uploaded Library?</DialogTitle>
         <DialogContent>
           <Typography>
-            This will back up the current ITL file and replace it with the
-            uploaded file. The current file can be restored from the backups
-            list.
+            This will back up the current ITL file and replace it with the uploaded file. The
+            current file can be restored from the backups list.
           </Typography>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmInstall(false)}>Cancel</Button>
-          <Button
-            variant="contained"
-            color="warning"
-            onClick={handleInstall}
-          >
+          <Button variant="contained" color="warning" onClick={handleInstall}>
             Install
           </Button>
         </DialogActions>
       </Dialog>
 
       {/* Confirm Restore Dialog */}
-      <Dialog
-        open={confirmRestore !== null}
-        onClose={() => setConfirmRestore(null)}
-      >
+      <Dialog open={confirmRestore !== null} onClose={() => setConfirmRestore(null)}>
         <DialogTitle>Restore Backup?</DialogTitle>
         <DialogContent>
           <Typography>
             This will back up the current ITL file and replace it with{' '}
-            <strong>{confirmRestore}</strong>. The backup validates before
-            restoring.
+            <strong>{confirmRestore}</strong>. The backup validates before restoring.
           </Typography>
         </DialogContent>
         <DialogActions>

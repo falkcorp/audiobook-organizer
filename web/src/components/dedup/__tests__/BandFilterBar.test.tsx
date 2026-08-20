@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/__tests__/BandFilterBar.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: a1b2c3d4-e5f6-7890-abcd-111234567890
-// last-edited: 2026-06-10
+// last-edited: 2026-08-19
 
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
@@ -19,13 +19,7 @@ const mockCounts: BandCounts = {
 
 describe('BandFilterBar', () => {
   it('renders all band chips', () => {
-    render(
-      <BandFilterBar
-        selected={null}
-        counts={mockCounts}
-        onChange={vi.fn()}
-      />
-    );
+    render(<BandFilterBar selected={null} counts={mockCounts} onChange={vi.fn()} />);
     expect(screen.getByTestId('band-chip-CERTAIN')).toBeInTheDocument();
     expect(screen.getByTestId('band-chip-HIGH')).toBeInTheDocument();
     expect(screen.getByTestId('band-chip-MEDIUM')).toBeInTheDocument();
@@ -33,13 +27,7 @@ describe('BandFilterBar', () => {
   });
 
   it('shows counts in chip labels', () => {
-    render(
-      <BandFilterBar
-        selected={null}
-        counts={mockCounts}
-        onChange={vi.fn()}
-      />
-    );
+    render(<BandFilterBar selected={null} counts={mockCounts} onChange={vi.fn()} />);
     expect(screen.getByText('Certain (5)')).toBeInTheDocument();
     expect(screen.getByText('High (12)')).toBeInTheDocument();
     expect(screen.getByText('All (55)')).toBeInTheDocument();
@@ -47,13 +35,7 @@ describe('BandFilterBar', () => {
 
   it('calls onChange with the selected band on click', () => {
     const onChange = vi.fn();
-    render(
-      <BandFilterBar
-        selected={null}
-        counts={mockCounts}
-        onChange={onChange}
-      />
-    );
+    render(<BandFilterBar selected={null} counts={mockCounts} onChange={onChange} />);
     fireEvent.click(screen.getByTestId('band-chip-CERTAIN'));
     expect(onChange).toHaveBeenCalledWith('CERTAIN' as DedupBand);
   });
@@ -61,11 +43,7 @@ describe('BandFilterBar', () => {
   it('calls onChange with null when clicking the same band again', () => {
     const onChange = vi.fn();
     render(
-      <BandFilterBar
-        selected={'CERTAIN' as DedupBand}
-        counts={mockCounts}
-        onChange={onChange}
-      />
+      <BandFilterBar selected={'CERTAIN' as DedupBand} counts={mockCounts} onChange={onChange} />
     );
     fireEvent.click(screen.getByTestId('band-chip-CERTAIN'));
     expect(onChange).toHaveBeenCalledWith(null);
@@ -74,11 +52,7 @@ describe('BandFilterBar', () => {
   it('calls onChange with null when clicking All', () => {
     const onChange = vi.fn();
     render(
-      <BandFilterBar
-        selected={'HIGH' as DedupBand}
-        counts={mockCounts}
-        onChange={onChange}
-      />
+      <BandFilterBar selected={'HIGH' as DedupBand} counts={mockCounts} onChange={onChange} />
     );
     fireEvent.click(screen.getByText('All (55)'));
     expect(onChange).toHaveBeenCalledWith(null);

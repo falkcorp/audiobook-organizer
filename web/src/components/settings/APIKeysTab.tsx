@@ -1,7 +1,7 @@
 // file: web/src/components/settings/APIKeysTab.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 import { useState, useEffect, useRef } from 'react';
 import {
   Box,
@@ -225,7 +225,11 @@ export function APIKeysTab() {
         </Stack>
       </Stack>
 
-      {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
+          {error}
+        </Alert>
+      )}
 
       {loading ? (
         <CircularProgress />
@@ -249,98 +253,131 @@ export function APIKeysTab() {
               {keys.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={showAll ? 9 : 8} align="center">
-                    <Typography color="text.secondary" variant="body2">No API keys yet</Typography>
+                    <Typography color="text.secondary" variant="body2">
+                      No API keys yet
+                    </Typography>
                   </TableCell>
                 </TableRow>
-              ) : keys.map((k) => {
-                const age = Math.floor((Date.now() - new Date(k.created_at).getTime()) / 86400000);
-                const neverUsed = k.never_used;
-                const staleUsage = !neverUsed && k.days_since_last_use != null && k.days_since_last_use > 365;
-                const warnUsage = !neverUsed && k.days_since_last_use != null && k.days_since_last_use > 30;
-                const expired = k.expires_at ? new Date(k.expires_at) < new Date() : false;
-                const expiringSoon = k.expires_at && !expired
-                  ? (new Date(k.expires_at).getTime() - Date.now()) < 14 * 86400000
-                  : false;
+              ) : (
+                keys.map((k) => {
+                  const age = Math.floor(
+                    (Date.now() - new Date(k.created_at).getTime()) / 86400000
+                  );
+                  const neverUsed = k.never_used;
+                  const staleUsage =
+                    !neverUsed && k.days_since_last_use != null && k.days_since_last_use > 365;
+                  const warnUsage =
+                    !neverUsed && k.days_since_last_use != null && k.days_since_last_use > 30;
+                  const expired = k.expires_at ? new Date(k.expires_at) < new Date() : false;
+                  const expiringSoon =
+                    k.expires_at && !expired
+                      ? new Date(k.expires_at).getTime() - Date.now() < 14 * 86400000
+                      : false;
 
-                return (
-                  <TableRow key={k.id} sx={[k.status === 'revoked' ? {
-                    opacity: 0.5
-                  } : {
-                    opacity: 1
-                  }]}>
-                    <TableCell>
-                      <Tooltip title={k.description || ''} placement="top">
-                        <Typography variant="body2" fontWeight={500}>{k.name}</Typography>
-                      </Tooltip>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="caption" fontFamily="monospace" color="text.secondary">
-                        {k.identifier}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Stack direction="row" spacing={0.5} flexWrap="wrap">
-                        {(k.scopes ?? []).map((s) => (
-                          <Chip key={s} label={s} size="small" variant="outlined" />
-                        ))}
-                        {(k.scopes ?? []).length === 0 && (
-                          <Typography variant="caption" color="text.secondary">none</Typography>
+                  return (
+                    <TableRow
+                      key={k.id}
+                      sx={[
+                        k.status === 'revoked'
+                          ? {
+                              opacity: 0.5,
+                            }
+                          : {
+                              opacity: 1,
+                            },
+                      ]}
+                    >
+                      <TableCell>
+                        <Tooltip title={k.description || ''} placement="top">
+                          <Typography variant="body2" fontWeight={500}>
+                            {k.name}
+                          </Typography>
+                        </Tooltip>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="caption" fontFamily="monospace" color="text.secondary">
+                          {k.identifier}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Stack direction="row" spacing={0.5} flexWrap="wrap">
+                          {(k.scopes ?? []).map((s) => (
+                            <Chip key={s} label={s} size="small" variant="outlined" />
+                          ))}
+                          {(k.scopes ?? []).length === 0 && (
+                            <Typography variant="caption" color="text.secondary">
+                              none
+                            </Typography>
+                          )}
+                        </Stack>
+                      </TableCell>
+                      <TableCell>{statusChip(k.status)}</TableCell>
+                      <TableCell>
+                        {neverUsed ? (
+                          <Chip label="Never" color="warning" size="small" />
+                        ) : (
+                          <Tooltip
+                            title={k.last_used_at ? new Date(k.last_used_at).toLocaleString() : ''}
+                          >
+                            <Chip
+                              label={k.last_used_at ? relativeTime(k.last_used_at) : '—'}
+                              color={staleUsage ? 'error' : warnUsage ? 'warning' : 'default'}
+                              size="small"
+                            />
+                          </Tooltip>
                         )}
-                      </Stack>
-                    </TableCell>
-                    <TableCell>{statusChip(k.status)}</TableCell>
-                    <TableCell>
-                      {neverUsed ? (
-                        <Chip label="Never" color="warning" size="small" />
-                      ) : (
-                        <Tooltip title={k.last_used_at ? new Date(k.last_used_at).toLocaleString() : ''}>
+                      </TableCell>
+                      <TableCell>
+                        {k.expires_at ? (
                           <Chip
-                            label={k.last_used_at ? relativeTime(k.last_used_at) : '—'}
-                            color={staleUsage ? 'error' : warnUsage ? 'warning' : 'default'}
+                            label={expired ? 'Expired' : relativeTime(k.expires_at)}
+                            color={expired || expiringSoon ? 'error' : 'default'}
                             size="small"
                           />
-                        </Tooltip>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {k.expires_at ? (
-                        <Chip
-                          label={expired ? 'Expired' : relativeTime(k.expires_at)}
-                          color={expired || expiringSoon ? 'error' : 'default'}
-                          size="small"
-                        />
-                      ) : (
-                        <Typography variant="caption" color="text.secondary">Never</Typography>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="caption">{age}d</Typography>
-                    </TableCell>
-                    {showAll && <TableCell><Typography variant="caption">{k.username}</Typography></TableCell>}
-                    <TableCell align="right">
-                      <Stack direction="row" spacing={0.5} justifyContent="flex-end">
-                        {k.status !== 'revoked' && (
-                          <Tooltip title={k.status === 'active' ? 'Deactivate' : 'Activate'}>
-                            <IconButton
-                              size="small"
-                              onClick={() => handleToggleStatus(k)}
-                            >
-                              {k.status === 'active' ? <CheckBoxIcon fontSize="small" /> : <CheckBoxOutlineBlankIcon fontSize="small" />}
-                            </IconButton>
-                          </Tooltip>
+                        ) : (
+                          <Typography variant="caption" color="text.secondary">
+                            Never
+                          </Typography>
                         )}
-                        {k.status !== 'revoked' && (
-                          <Tooltip title="Revoke permanently">
-                            <IconButton size="small" color="error" onClick={() => handleRevoke(k)}>
-                              <DeleteIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        )}
-                      </Stack>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="caption">{age}d</Typography>
+                      </TableCell>
+                      {showAll && (
+                        <TableCell>
+                          <Typography variant="caption">{k.username}</Typography>
+                        </TableCell>
+                      )}
+                      <TableCell align="right">
+                        <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                          {k.status !== 'revoked' && (
+                            <Tooltip title={k.status === 'active' ? 'Deactivate' : 'Activate'}>
+                              <IconButton size="small" onClick={() => handleToggleStatus(k)}>
+                                {k.status === 'active' ? (
+                                  <CheckBoxIcon fontSize="small" />
+                                ) : (
+                                  <CheckBoxOutlineBlankIcon fontSize="small" />
+                                )}
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          {k.status !== 'revoked' && (
+                            <Tooltip title="Revoke permanently">
+                              <IconButton
+                                size="small"
+                                color="error"
+                                onClick={() => handleRevoke(k)}
+                              >
+                                <DeleteIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                        </Stack>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
+              )}
             </TableBody>
           </Table>
         </TableContainer>
@@ -366,7 +403,9 @@ export function APIKeysTab() {
               onChange={(e) => setNewDesc(e.target.value)}
             />
             <Box>
-              <Typography variant="body2" gutterBottom>Scopes</Typography>
+              <Typography variant="body2" gutterBottom>
+                Scopes
+              </Typography>
               <FormGroup>
                 {ALL_SCOPES.map((s) => (
                   <FormControlLabel
@@ -381,7 +420,11 @@ export function APIKeysTab() {
                         size="small"
                       />
                     }
-                    label={<Typography variant="caption" fontFamily="monospace">{s}</Typography>}
+                    label={
+                      <Typography variant="caption" fontFamily="monospace">
+                        {s}
+                      </Typography>
+                    }
                   />
                 ))}
               </FormGroup>
@@ -394,7 +437,9 @@ export function APIKeysTab() {
                 onChange={(e) => setNewExpires(Number(e.target.value))}
               >
                 {EXPIRES_OPTIONS.map((o) => (
-                  <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
+                  <MenuItem key={o.value} value={o.value}>
+                    {o.label}
+                  </MenuItem>
                 ))}
               </Select>
             </MuiFormControl>
@@ -402,11 +447,7 @@ export function APIKeysTab() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setCreateOpen(false)}>Cancel</Button>
-          <Button
-            variant="contained"
-            onClick={handleCreate}
-            disabled={!newName.trim() || creating}
-          >
+          <Button variant="contained" onClick={handleCreate} disabled={!newName.trim() || creating}>
             {creating ? 'Creating...' : 'Create'}
           </Button>
         </DialogActions>
@@ -418,8 +459,21 @@ export function APIKeysTab() {
           <Alert severity="warning" sx={{ mb: 2 }}>
             Copy this token now. You will not be able to see it again.
           </Alert>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, bgcolor: 'action.hover', p: 1.5, borderRadius: 1 }}>
-            <Typography fontFamily="monospace" fontSize="0.8rem" sx={{ wordBreak: 'break-all', flex: 1 }}>
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              bgcolor: 'action.hover',
+              p: 1.5,
+              borderRadius: 1,
+            }}
+          >
+            <Typography
+              fontFamily="monospace"
+              fontSize="0.8rem"
+              sx={{ wordBreak: 'break-all', flex: 1 }}
+            >
               {createdToken}
             </Typography>
             <Tooltip title={copied ? 'Copied!' : 'Copy'}>
@@ -432,7 +486,10 @@ export function APIKeysTab() {
         <DialogActions>
           <Button
             variant="contained"
-            onClick={() => { setCreatedToken(null); setCopied(false); }}
+            onClick={() => {
+              setCreatedToken(null);
+              setCopied(false);
+            }}
           >
             I've saved this, close
           </Button>

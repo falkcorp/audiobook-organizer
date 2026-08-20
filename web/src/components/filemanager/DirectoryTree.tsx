@@ -1,15 +1,9 @@
 // file: web/src/components/filemanager/DirectoryTree.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6c7d8e9f-0a1b-2c3d-4e5f-6a7b8c9d0e1f
 
 import React, { useState } from 'react';
-import {
-  Box,
-  Typography,
-  IconButton,
-  Collapse,
-  CircularProgress,
-} from '@mui/material';
+import { Box, Typography, IconButton, Collapse, CircularProgress } from '@mui/material';
 import {
   Folder as FolderIcon,
   FolderOpen as FolderOpenIcon,
@@ -69,9 +63,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [children, setChildren] = useState<DirectoryNode[]>(
-    node.children || []
-  );
+  const [children, setChildren] = useState<DirectoryNode[]>(node.children || []);
 
   const handleToggle = async () => {
     if (!node.is_dir) return;
@@ -102,20 +94,25 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   return (
     <Box>
       <Box
-        sx={[{
-          display: 'flex',
-          alignItems: 'center',
-          pl: level * 2,
-          py: 0.5,
-          cursor: node.is_dir ? 'pointer' : 'default',
-          '&:hover': {
-            bgcolor: node.is_dir ? 'action.hover' : 'transparent',
-          }
-        }, isSelected ? {
-          bgcolor: 'action.selected'
-        } : {
-          bgcolor: 'transparent'
-        }]}
+        sx={[
+          {
+            display: 'flex',
+            alignItems: 'center',
+            pl: level * 2,
+            py: 0.5,
+            cursor: node.is_dir ? 'pointer' : 'default',
+            '&:hover': {
+              bgcolor: node.is_dir ? 'action.hover' : 'transparent',
+            },
+          },
+          isSelected
+            ? {
+                bgcolor: 'action.selected',
+              }
+            : {
+                bgcolor: 'transparent',
+              },
+        ]}
         onClick={handleClick}
       >
         {node.is_dir && (
@@ -135,10 +132,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
         {node.excluded ? (
           <BlockIcon sx={{ mr: 1, color: 'error.main' }} fontSize="small" />
         ) : expanded ? (
-          <FolderOpenIcon
-            sx={{ mr: 1, color: 'primary.main' }}
-            fontSize="small"
-          />
+          <FolderOpenIcon sx={{ mr: 1, color: 'primary.main' }} fontSize="small" />
         ) : (
           <FolderIcon sx={{ mr: 1, color: 'action.active' }} fontSize="small" />
         )}

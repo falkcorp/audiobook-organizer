@@ -1,7 +1,7 @@
 // file: web/src/components/BatchToolbar.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b5c6d7e8f9a0b
-// last-edited: 2026-06-21
+// last-edited: 2026-08-19
 
 import { Button, Chip, Box, Stack } from '@mui/material';
 
@@ -74,14 +74,29 @@ export const BatchToolbar = ({
       >
         Review
       </Button>
-      <Button size="small" variant="outlined" onClick={onSearchMetadataClick} disabled={!selectedCount}>
+      <Button
+        size="small"
+        variant="outlined"
+        onClick={onSearchMetadataClick}
+        disabled={!selectedCount}
+      >
         Search Metadata
       </Button>
       <Box sx={{ borderLeft: 1, borderColor: 'divider', height: 24 }} />
-      <Button size="small" variant="outlined" onClick={onSaveToFilesClick} disabled={!selectedHasActive}>
+      <Button
+        size="small"
+        variant="outlined"
+        onClick={onSaveToFilesClick}
+        disabled={!selectedHasActive}
+      >
         Save to Files
       </Button>
-      <Button size="small" variant="outlined" onClick={onOrganizeSelectedClick} disabled={!selectedHasImport}>
+      <Button
+        size="small"
+        variant="outlined"
+        onClick={onOrganizeSelectedClick}
+        disabled={!selectedHasImport}
+      >
         Organize Selected
       </Button>
       <Box sx={{ borderLeft: 1, borderColor: 'divider', height: 24 }} />

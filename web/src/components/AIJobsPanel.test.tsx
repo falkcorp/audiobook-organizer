@@ -1,5 +1,5 @@
 // file: web/src/components/AIJobsPanel.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 
 import { render, screen, waitFor } from '@testing-library/react';
@@ -58,9 +58,7 @@ describe('AIJobsPanel', () => {
   });
 
   it('renders error message on fetch failure', async () => {
-    vi.mocked(api.listAIJobs).mockRejectedValue(
-      new Error('Network error')
-    );
+    vi.mocked(api.listAIJobs).mockRejectedValue(new Error('Network error'));
     render(<AIJobsPanel />);
     await waitFor(() => {
       expect(screen.getByText(/Network error/)).toBeInTheDocument();

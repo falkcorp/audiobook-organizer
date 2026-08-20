@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/FileSelector.tsx
-// version: 2.0.0
+// version: 2.0.1
 // guid: 8f2a3b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
 
 import { Box, Checkbox, Chip, MenuItem, Select, type SelectChangeEvent } from '@mui/material';
@@ -31,13 +31,18 @@ function truncateBasename(filePath: string, maxLen = 26): string {
  * Build chip label: zero-padded track number + truncated basename.
  */
 function chipLabel(seg: BookSegment, totalDigits: number): string {
-  const trackStr = seg.track_number != null
-    ? String(seg.track_number).padStart(totalDigits, '0') + ' '
-    : '';
+  const trackStr =
+    seg.track_number != null ? String(seg.track_number).padStart(totalDigits, '0') + ' ' : '';
   return trackStr + truncateBasename(seg.file_path);
 }
 
-export const FileSelector = ({ segments, selectedIds, onToggle, onSelectAll, onClearAll }: FileSelectorProps) => {
+export const FileSelector = ({
+  segments,
+  selectedIds,
+  onToggle,
+  onSelectAll,
+  onClearAll,
+}: FileSelectorProps) => {
   // Hide for single-file books
   if (segments.length <= 1) return null;
 
@@ -53,7 +58,7 @@ export const FileSelector = ({ segments, selectedIds, onToggle, onSelectAll, onC
       const newIds = typeof val === 'string' ? val.split(',') : val;
       // Sync: toggle each difference
       const newSet = new Set(newIds);
-      for (const id of segments.map(s => s.id)) {
+      for (const id of segments.map((s) => s.id)) {
         const wasSelected = selectedIds.has(id);
         const isNowSelected = newSet.has(id);
         if (wasSelected !== isNowSelected) {
@@ -113,7 +118,13 @@ export const FileSelector = ({ segments, selectedIds, onToggle, onSelectAll, onC
         return (
           <Chip
             key={seg.id}
-            icon={<Checkbox size="small" checked={isSelected} sx={{ p: 0, '& .MuiSvgIcon-root': { fontSize: 16 } }} />}
+            icon={
+              <Checkbox
+                size="small"
+                checked={isSelected}
+                sx={{ p: 0, '& .MuiSvgIcon-root': { fontSize: 16 } }}
+              />
+            }
             label={chipLabel(seg, totalDigits)}
             variant={isSelected ? 'filled' : 'outlined'}
             color={isSelected ? 'primary' : 'default'}

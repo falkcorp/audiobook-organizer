@@ -1,7 +1,7 @@
 // file: web/src/pages/__tests__/DedupLabels.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4e0c7a92-8b15-4d63-9f20-3a6e1c8d5b09
-// last-edited: 2026-07-11
+// last-edited: 2026-08-19
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -37,8 +37,16 @@ const suspiciousRow = {
   label_source: 'rule',
   label_reason: 'part_vs_whole',
   suspicion_reasons: ['duplicate-likely band (CERTAIN)', 'cosine similarity >= 0.95'],
-  a: { title: 'The Way of Kings', primary_path: `${LIBROOT}/Sanderson/WoK/01.m4b`, total_duration_sec: 3000 },
-  b: { title: 'The Way of Kings', primary_path: `${LIBROOT}/Sanderson/WoK-dup/01.m4b`, total_duration_sec: 3010 },
+  a: {
+    title: 'The Way of Kings',
+    primary_path: `${LIBROOT}/Sanderson/WoK/01.m4b`,
+    total_duration_sec: 3000,
+  },
+  b: {
+    title: 'The Way of Kings',
+    primary_path: `${LIBROOT}/Sanderson/WoK-dup/01.m4b`,
+    total_duration_sec: 3010,
+  },
 };
 
 describe('DedupLabels page', () => {
@@ -50,11 +58,18 @@ describe('DedupLabels page', () => {
       const url = String(input);
       if (url.includes('/config')) return jsonResponse({ data: { config: { root_dir: LIBROOT } } });
       if (url.includes('/dedup/labels/stats')) {
-        return jsonResponse({ data: { total: 1, by_label: { unsure: 1 }, by_source: { rule: 1 } } });
+        return jsonResponse({
+          data: { total: 1, by_label: { unsure: 1 }, by_source: { rule: 1 } },
+        });
       }
-      if (url.includes('/override')) return jsonResponse({ data: { status: 'updated', label: 'not_dup', label_source: 'human' } });
-      if (url.includes('/dedup/labels/suspicious')) return jsonResponse({ data: { labels: [suspiciousRow], total: 1 } });
-      if (url.includes('/dedup/labels')) return jsonResponse({ data: { labels: [sampleRow], total: 1 } });
+      if (url.includes('/override'))
+        return jsonResponse({
+          data: { status: 'updated', label: 'not_dup', label_source: 'human' },
+        });
+      if (url.includes('/dedup/labels/suspicious'))
+        return jsonResponse({ data: { labels: [suspiciousRow], total: 1 } });
+      if (url.includes('/dedup/labels'))
+        return jsonResponse({ data: { labels: [sampleRow], total: 1 } });
       return jsonResponse({ data: {} });
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -91,10 +106,12 @@ describe('DedupLabels page', () => {
     await waitFor(() => {
       const call = fetchMock.mock.calls.find(([u]) => {
         const url = String(u);
-        return url.includes('/dedup/labels?')
-          && url.includes('label=true_dup')
-          && url.includes('label_source=human')
-          && url.includes('band=title_author');
+        return (
+          url.includes('/dedup/labels?') &&
+          url.includes('label=true_dup') &&
+          url.includes('label_source=human') &&
+          url.includes('band=title_author')
+        );
       });
       expect(call).toBeTruthy();
     });
@@ -110,9 +127,13 @@ describe('DedupLabels page', () => {
     fireEvent.click(screen.getByRole('button', { name: /^not$/i }));
 
     await waitFor(() => {
-      const call = fetchMock.mock.calls.find(([u]) => String(u).includes('/dedup/labels/42/override'));
+      const call = fetchMock.mock.calls.find(([u]) =>
+        String(u).includes('/dedup/labels/42/override')
+      );
       expect(call).toBeTruthy();
-      expect(JSON.parse((call![1] as RequestInit).body as string)).toMatchObject({ label: 'not_dup' });
+      expect(JSON.parse((call![1] as RequestInit).body as string)).toMatchObject({
+        label: 'not_dup',
+      });
     });
     expect(await screen.findByText('human')).toBeInTheDocument();
   });
@@ -135,7 +156,9 @@ describe('DedupLabels page', () => {
 
     // The queue was fetched from the suspicious endpoint.
     await waitFor(() => {
-      const call = fetchMock.mock.calls.find(([u]) => String(u).includes('/dedup/labels/suspicious'));
+      const call = fetchMock.mock.calls.find(([u]) =>
+        String(u).includes('/dedup/labels/suspicious')
+      );
       expect(call).toBeTruthy();
     });
   });
@@ -153,9 +176,13 @@ describe('DedupLabels page', () => {
     fireEvent.click(screen.getByRole('button', { name: /Mark true_dup/i }));
 
     await waitFor(() => {
-      const call = fetchMock.mock.calls.find(([u]) => String(u).includes('/dedup/labels/77/override'));
+      const call = fetchMock.mock.calls.find(([u]) =>
+        String(u).includes('/dedup/labels/77/override')
+      );
       expect(call).toBeTruthy();
-      expect(JSON.parse((call![1] as RequestInit).body as string)).toMatchObject({ label: 'true_dup' });
+      expect(JSON.parse((call![1] as RequestInit).body as string)).toMatchObject({
+        label: 'true_dup',
+      });
     });
     // On success the row leaves the queue (its reason chip is gone).
     await waitFor(() => {

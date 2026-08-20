@@ -1,5 +1,5 @@
 // file: web/src/pages/Works.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4b5c6d7e-8f9a-0b1c-2d3e-4f5a6b7c8d9e
 
 import { useCallback, useEffect, useState } from 'react';
@@ -27,11 +27,46 @@ import {
 } from '../components/common/ConfigurableTable';
 
 const COLUMNS: ColumnDef<api.Work>[] = [
-  { key: 'title', label: 'Title', defaultWidth: 300, sortable: true, render: (w) => w.title || 'Untitled', sortValue: (w) => w.title ?? '' },
-  { key: 'id', label: 'Work ID', defaultWidth: 230, sortable: true, render: (w) => w.id, sortValue: (w) => w.id },
-  { key: 'author_id', label: 'Author ID', defaultWidth: 100, sortable: true, render: (w) => w.author_id ?? '—', sortValue: (w) => w.author_id ?? 0 },
-  { key: 'series_id', label: 'Series ID', defaultWidth: 100, sortable: true, render: (w) => w.series_id ?? '—', sortValue: (w) => w.series_id ?? 0 },
-  { key: 'alt_titles', label: 'Alternate Titles', defaultWidth: 120, sortable: true, render: (w) => w.alt_titles?.length ?? 0, sortValue: (w) => w.alt_titles?.length ?? 0 },
+  {
+    key: 'title',
+    label: 'Title',
+    defaultWidth: 300,
+    sortable: true,
+    render: (w) => w.title || 'Untitled',
+    sortValue: (w) => w.title ?? '',
+  },
+  {
+    key: 'id',
+    label: 'Work ID',
+    defaultWidth: 230,
+    sortable: true,
+    render: (w) => w.id,
+    sortValue: (w) => w.id,
+  },
+  {
+    key: 'author_id',
+    label: 'Author ID',
+    defaultWidth: 100,
+    sortable: true,
+    render: (w) => w.author_id ?? '—',
+    sortValue: (w) => w.author_id ?? 0,
+  },
+  {
+    key: 'series_id',
+    label: 'Series ID',
+    defaultWidth: 100,
+    sortable: true,
+    render: (w) => w.series_id ?? '—',
+    sortValue: (w) => w.series_id ?? 0,
+  },
+  {
+    key: 'alt_titles',
+    label: 'Alternate Titles',
+    defaultWidth: 120,
+    sortable: true,
+    render: (w) => w.alt_titles?.length ?? 0,
+    sortValue: (w) => w.alt_titles?.length ?? 0,
+  },
 ];
 
 export function Works() {
@@ -152,7 +187,13 @@ export function Works() {
                     <TableCell
                       key={col.key}
                       align={col.align}
-                      sx={{ width: columnWidths[col.key], maxWidth: columnWidths[col.key], overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      sx={{
+                        width: columnWidths[col.key],
+                        maxWidth: columnWidths[col.key],
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
                     >
                       {col.render(work)}
                     </TableCell>

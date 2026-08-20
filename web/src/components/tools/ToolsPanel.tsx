@@ -1,12 +1,18 @@
 // file: web/src/components/tools/ToolsPanel.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: f8a9b0c1-d2e3-4567-fabc-567890123456
-// last-edited: 2026-06-15
+// last-edited: 2026-08-19
 
 import { useState, useEffect } from 'react';
 import {
-  Card, CardContent, Typography, Chip, Button,
-  CircularProgress, Tooltip, Stack,
+  Card,
+  CardContent,
+  Typography,
+  Chip,
+  Button,
+  CircularProgress,
+  Tooltip,
+  Stack,
 } from '@mui/material';
 import { getTools, installTool, ToolStatus } from '../../services/api';
 
@@ -15,7 +21,8 @@ interface ToolsPanelProps {
 }
 
 const TOOL_TOOLTIPS: Record<string, string> = {
-  ollama:  'Powers local AI deduplication — no data leaves your machine. Uses ~5GB RAM while active; stops automatically when idle. ~5GB download.',
+  ollama:
+    'Powers local AI deduplication — no data leaves your machine. Uses ~5GB RAM while active; stops automatically when idle. ~5GB download.',
   fpcalc: 'Enables audio fingerprint matching to identify duplicate recordings. ~2MB download.',
 };
 
@@ -25,11 +32,13 @@ export function ToolsPanel({ mode: _mode }: ToolsPanelProps) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    getTools().then(setTools).catch((e: Error) => setError(e.message));
+    getTools()
+      .then(setTools)
+      .catch((e: Error) => setError(e.message));
   }, []);
 
   const handleInstall = async (name: string) => {
-    setInstalling(prev => ({ ...prev, [name]: true }));
+    setInstalling((prev) => ({ ...prev, [name]: true }));
     try {
       await installTool(name);
       const updated = await getTools();
@@ -37,7 +46,7 @@ export function ToolsPanel({ mode: _mode }: ToolsPanelProps) {
     } catch (e: unknown) {
       setError((e as Error).message);
     } finally {
-      setInstalling(prev => ({ ...prev, [name]: false }));
+      setInstalling((prev) => ({ ...prev, [name]: false }));
     }
   };
 
@@ -45,7 +54,7 @@ export function ToolsPanel({ mode: _mode }: ToolsPanelProps) {
 
   return (
     <Stack spacing={2}>
-      {tools.map(tool => (
+      {tools.map((tool) => (
         <Card key={tool.name} variant="outlined">
           <CardContent>
             <Stack direction="row" alignItems="center" spacing={1} mb={1}>
@@ -59,9 +68,7 @@ export function ToolsPanel({ mode: _mode }: ToolsPanelProps) {
                 label={tool.available ? 'Available' : 'Not available'}
                 color={tool.available ? 'success' : 'default'}
               />
-              {tool.version && (
-                <Chip size="small" label={`v${tool.version}`} variant="outlined" />
-              )}
+              {tool.version && <Chip size="small" label={`v${tool.version}`} variant="outlined" />}
             </Stack>
 
             {tool.resolved_path && (

@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/AddToPlaylistDialog.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c1d2e0f-4a5b-4a70-b8c5-3d7e0f1b9a99
 
 import { useCallback, useEffect, useState } from 'react';
@@ -32,11 +32,7 @@ interface AddToPlaylistDialogProps {
   bookIds: string[];
 }
 
-export default function AddToPlaylistDialog({
-  open,
-  onClose,
-  bookIds,
-}: AddToPlaylistDialogProps) {
+export default function AddToPlaylistDialog({ open, onClose, bookIds }: AddToPlaylistDialogProps) {
   const [playlists, setPlaylists] = useState<UserPlaylist[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [newName, setNewName] = useState('');
@@ -103,11 +99,7 @@ export default function AddToPlaylistDialog({
               <ListItem key={pl.id} disablePadding>
                 <ListItemButton onClick={() => handleToggle(pl.id)} dense>
                   <ListItemIcon>
-                    <Checkbox
-                      edge="start"
-                      checked={selected.has(pl.id)}
-                      disableRipple
-                    />
+                    <Checkbox edge="start" checked={selected.has(pl.id)} disableRipple />
                   </ListItemIcon>
                   <ListItemText
                     primary={pl.name}

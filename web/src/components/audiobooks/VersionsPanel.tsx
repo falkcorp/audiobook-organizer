@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/VersionsPanel.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e3f4a2b-6c7d-4a70-b8c5-3d7e0f1b9a99
 
 import { useCallback, useEffect, useState } from 'react';
@@ -18,11 +18,7 @@ import {
   Restore as RestoreIcon,
   Star as ActiveIcon,
 } from '@mui/icons-material';
-import {
-  type BookVersion,
-  trashVersion,
-  restoreVersion,
-} from '../../services/versionApi';
+import { type BookVersion, trashVersion, restoreVersion } from '../../services/versionApi';
 
 const API_BASE = '/api/v1';
 
@@ -60,25 +56,35 @@ export default function VersionsPanel({ bookId }: VersionsPanelProps) {
     }
   }, [bookId]);
 
-  useEffect(() => { load(); }, [load]);
-
-  const handleTrash = useCallback(async (vid: string) => {
-    if (!confirm('Move this version to trash?')) return;
-    await trashVersion(bookId, vid);
+  useEffect(() => {
     load();
-  }, [bookId, load]);
+  }, [load]);
 
-  const handleRestore = useCallback(async (vid: string) => {
-    await restoreVersion(bookId, vid);
-    load();
-  }, [bookId, load]);
+  const handleTrash = useCallback(
+    async (vid: string) => {
+      if (!confirm('Move this version to trash?')) return;
+      await trashVersion(bookId, vid);
+      load();
+    },
+    [bookId, load]
+  );
+
+  const handleRestore = useCallback(
+    async (vid: string) => {
+      await restoreVersion(bookId, vid);
+      load();
+    },
+    [bookId, load]
+  );
 
   if (loading) return <Typography color="text.secondary">Loading versions...</Typography>;
   if (versions.length === 0) return null;
 
   return (
     <Box>
-      <Typography variant="h6" sx={{ mb: 1 }}>Versions</Typography>
+      <Typography variant="h6" sx={{ mb: 1 }}>
+        Versions
+      </Typography>
       <List dense>
         {versions.map((v) => (
           <ListItem

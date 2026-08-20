@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryDialogs.tsx
-// version: 1.6.0
+// version: 1.6.1
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 import React from 'react';
 import {
   Typography,
@@ -405,11 +405,17 @@ export const LibraryDialogs = ({
       onComplete={() => loadAudiobooks()}
     />
 
-    <Dialog open={mergeDialogOpen} onClose={() => setMergeDialogOpen(false)} maxWidth="sm" fullWidth>
+    <Dialog
+      open={mergeDialogOpen}
+      onClose={() => setMergeDialogOpen(false)}
+      maxWidth="sm"
+      fullWidth
+    >
       <DialogTitle>Merge as Versions</DialogTitle>
       <DialogContent>
         <Typography variant="body2" gutterBottom>
-          Merge {selectedAudiobooks.length} books into a version group. Pick which book to keep as the primary version:
+          Merge {selectedAudiobooks.length} books into a version group. Pick which book to keep as
+          the primary version:
         </Typography>
         <Box sx={{ mt: 1 }}>
           {selectedAudiobooks.map((book) => (
@@ -449,11 +455,17 @@ export const LibraryDialogs = ({
       </DialogActions>
     </Dialog>
 
-    <Dialog open={combineDialogOpen} onClose={() => setCombineDialogOpen(false)} maxWidth="sm" fullWidth>
+    <Dialog
+      open={combineDialogOpen}
+      onClose={() => setCombineDialogOpen(false)}
+      maxWidth="sm"
+      fullWidth
+    >
       <DialogTitle>Combine into One Book</DialogTitle>
       <DialogContent>
         <Typography variant="body2" gutterBottom>
-          Combine {selectedAudiobooks.length} books into a single multi-file book. Pick which book to keep as the survivor — its metadata is kept and all other files move onto it:
+          Combine {selectedAudiobooks.length} books into a single multi-file book. Pick which book
+          to keep as the survivor — its metadata is kept and all other files move onto it:
         </Typography>
         <Box sx={{ mt: 1 }}>
           {selectedAudiobooks.map((book) => (
@@ -476,7 +488,9 @@ export const LibraryDialogs = ({
           ))}
         </Box>
         <Alert severity="warning" sx={{ mt: 1 }}>
-          The other {Math.max(selectedAudiobooks.length - 1, 0)} entries will be deleted and their files attached to the survivor. Unlike &quot;Merge as Versions&quot;, this produces ONE book, not a version group. Files stay in place on disk.
+          The other {Math.max(selectedAudiobooks.length - 1, 0)} entries will be deleted and their
+          files attached to the survivor. Unlike &quot;Merge as Versions&quot;, this produces ONE
+          book, not a version group. Files stay in place on disk.
         </Alert>
         <Typography variant="body2" sx={{ mt: 2, mb: 0.5, color: 'text.secondary' }}>
           Override metadata (optional — leave blank to keep the survivor&apos;s existing values):
@@ -529,15 +543,12 @@ export const LibraryDialogs = ({
           Are you sure you want to soft delete {selectedAudiobooks.length} selected audiobooks?
         </Typography>
         <Alert severity="warning">
-          Selected books will be hidden from the library and can be restored from the
-          soft-deleted list.
+          Selected books will be hidden from the library and can be restored from the soft-deleted
+          list.
         </Alert>
       </DialogContent>
       <DialogActions>
-        <Button
-          onClick={() => setBatchDeleteDialogOpen(false)}
-          disabled={batchDeleteInProgress}
-        >
+        <Button onClick={() => setBatchDeleteDialogOpen(false)} disabled={batchDeleteInProgress}>
           Cancel
         </Button>
         <Button
@@ -637,7 +648,10 @@ export const LibraryDialogs = ({
               {(bulkWriteBackResult.renamed ?? 0) > 0
                 ? `, renamed ${bulkWriteBackResult.renamed}`
                 : ''}
-              {(bulkWriteBackResult.failed ?? 0) > 0 ? `, ${bulkWriteBackResult.failed} failed` : ''}.
+              {(bulkWriteBackResult.failed ?? 0) > 0
+                ? `, ${bulkWriteBackResult.failed} failed`
+                : ''}
+              .
             </Alert>
             {(bulkWriteBackResult.errors ?? []).length > 0 && (
               <List dense>
@@ -669,13 +683,13 @@ export const LibraryDialogs = ({
       <DialogTitle>Save All to Files</DialogTitle>
       <DialogContent>
         <Typography variant="body1" gutterBottom>
-          This will write metadata tags and rename files for all organized and imported
-          books in your library.
+          This will write metadata tags and rename files for all organized and imported books in
+          your library.
         </Typography>
         {bulkSaveAllEstimate !== null ? (
           <Alert severity="info" sx={{ mb: 2 }}>
-            {bulkSaveAllEstimate} book{bulkSaveAllEstimate === 1 ? '' : 's'} will be
-            processed. Books in protected paths (iTunes) will be skipped.
+            {bulkSaveAllEstimate} book{bulkSaveAllEstimate === 1 ? '' : 's'} will be processed.
+            Books in protected paths (iTunes) will be skipped.
           </Alert>
         ) : (
           <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}>
@@ -861,7 +875,9 @@ export const LibraryDialogs = ({
           onChange={(e) => setManualImportPath(e.target.value)}
           placeholder="/path/to/audiobook-or-folder"
           error={Boolean(manualImportError)}
-          helperText={manualImportError || 'Import one server path using the library.import operation.'}
+          helperText={
+            manualImportError || 'Import one server path using the library.import operation.'
+          }
           disabled={manualImportInProgress}
         />
         {manualImportInProgress && (
@@ -887,7 +903,11 @@ export const LibraryDialogs = ({
               }
             />
             {(manualImportOp?.progress_total ?? 0) > 0 && (
-              <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ mt: 0.5, display: 'block' }}
+              >
                 {Math.round(
                   ((manualImportOp?.progress_current ?? 0) /
                     (manualImportOp?.progress_total ?? 1)) *
@@ -900,10 +920,7 @@ export const LibraryDialogs = ({
         )}
       </DialogContent>
       <DialogActions>
-        <Button
-          onClick={() => setManualImportDialogOpen(false)}
-          disabled={manualImportInProgress}
-        >
+        <Button onClick={() => setManualImportDialogOpen(false)} disabled={manualImportInProgress}>
           Cancel
         </Button>
         <Button
@@ -951,9 +968,7 @@ export const LibraryDialogs = ({
         )}
       </DialogContent>
       <DialogActions>
-        <Button onClick={handleCancelBulkFetch}>
-          {bulkFetchInProgress ? 'Cancel' : 'Close'}
-        </Button>
+        <Button onClick={handleCancelBulkFetch}>{bulkFetchInProgress ? 'Cancel' : 'Close'}</Button>
         <Button
           variant="contained"
           onClick={handleBulkFetchMetadata}
@@ -1037,8 +1052,8 @@ export const LibraryDialogs = ({
           label="Prevent reimporting this file (block hash)"
         />
         <Alert severity="warning" sx={{ mt: 2 }}>
-          Soft deleting keeps the record for auditing and purging. Use purge to permanently
-          remove it later.
+          Soft deleting keeps the record for auditing and purging. Use purge to permanently remove
+          it later.
         </Alert>
       </DialogContent>
       <DialogActions>
@@ -1049,11 +1064,7 @@ export const LibraryDialogs = ({
           variant="contained"
           disabled={deleteInProgress}
         >
-          {deleteInProgress
-            ? 'Deleting...'
-            : deleteOptions.softDelete
-              ? 'Soft Delete'
-              : 'Delete'}
+          {deleteInProgress ? 'Deleting...' : deleteOptions.softDelete ? 'Soft Delete' : 'Delete'}
         </Button>
       </DialogActions>
     </Dialog>
@@ -1084,8 +1095,7 @@ export const LibraryDialogs = ({
           label="Also delete files from disk (if they still exist)"
         />
         <Alert severity="warning" sx={{ mt: 2 }}>
-          This cannot be undone. Purge removes the records entirely and deletes files when
-          selected.
+          This cannot be undone. Purge removes the records entirely and deletes files when selected.
         </Alert>
       </DialogContent>
       <DialogActions>
@@ -1119,8 +1129,8 @@ export const LibraryDialogs = ({
       <DialogContent>
         <Alert severity="info" sx={{ mb: 2 }}>
           <strong>Import folders</strong> are watch locations where the scanner looks for new
-          audiobooks. Files discovered here will be copied and organized into your main library
-          path (configured in Settings).
+          audiobooks. Files discovered here will be copied and organized into your main library path
+          (configured in Settings).
         </Alert>
 
         {!showServerBrowser ? (
@@ -1173,11 +1183,7 @@ export const LibraryDialogs = ({
         >
           Cancel
         </Button>
-        <Button
-          onClick={handleAddImportPath}
-          variant="contained"
-          disabled={!newImportPath.trim()}
-        >
+        <Button onClick={handleAddImportPath} variant="contained" disabled={!newImportPath.trim()}>
           Add Path
         </Button>
       </DialogActions>
@@ -1224,13 +1230,18 @@ export const LibraryDialogs = ({
               }}
             >
               <ExpandMoreIcon
-                sx={[{
-                  transition: 'transform 0.3s'
-                }, importPathsExpanded ? {
-                  transform: 'rotate(180deg)'
-                } : {
-                  transform: 'rotate(0deg)'
-                }]}
+                sx={[
+                  {
+                    transition: 'transform 0.3s',
+                  },
+                  importPathsExpanded
+                    ? {
+                        transform: 'rotate(180deg)',
+                      }
+                    : {
+                        transform: 'rotate(0deg)',
+                      },
+                ]}
               />
             </IconButton>
           </Stack>
@@ -1242,18 +1253,14 @@ export const LibraryDialogs = ({
                 <ListItemText
                   primary={path.path}
                   secondary={
-                    path.status === 'scanning'
-                      ? 'Scanning...'
-                      : `${path.book_count} books found`
+                    path.status === 'scanning' ? 'Scanning...' : `${path.book_count} books found`
                   }
                 />
                 <ListItemSecondaryAction>
                   <IconButton
                     edge="end"
                     onClick={() => handleScanImportPath(path.id)}
-                    disabled={
-                      path.status === 'scanning' || scanningPathId === path.id.toString()
-                    }
+                    disabled={path.status === 'scanning' || scanningPathId === path.id.toString()}
                     sx={{ mr: 1 }}
                   >
                     {scanningPathId === path.id.toString() ? (

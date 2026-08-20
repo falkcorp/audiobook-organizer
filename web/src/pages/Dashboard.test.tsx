@@ -1,5 +1,5 @@
 // file: web/src/pages/Dashboard.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
@@ -19,9 +19,12 @@ vi.mock('../services/api', () => ({
 
 // Mock the operations store
 vi.mock('../stores/useOperationsStore', () => ({
-  useOperationsStore: Object.assign(vi.fn(() => ({})), {
-    getState: () => ({ startPolling: vi.fn() }),
-  }),
+  useOperationsStore: Object.assign(
+    vi.fn(() => ({})),
+    {
+      getState: () => ({ startPolling: vi.fn() }),
+    }
+  ),
 }));
 
 // Mock AnnouncementBanner to avoid its own fetch calls
@@ -43,8 +46,21 @@ const mockCountAuthors = vi.mocked(countAuthors);
 const mockCountSeries = vi.mocked(countSeries);
 const mockCountBooksFiltered = vi.mocked(countBooksFiltered);
 
-const mockMemory = { alloc_bytes: 0, total_alloc_bytes: 0, sys_bytes: 0, num_gc: 0, heap_alloc: 0, heap_sys: 0 };
-const mockRuntime = { go_version: '1.24', num_goroutine: 10, num_cpu: 8, os: 'linux', arch: 'amd64' };
+const mockMemory = {
+  alloc_bytes: 0,
+  total_alloc_bytes: 0,
+  sys_bytes: 0,
+  num_gc: 0,
+  heap_alloc: 0,
+  heap_sys: 0,
+};
+const mockRuntime = {
+  go_version: '1.24',
+  num_goroutine: 10,
+  num_cpu: 8,
+  os: 'linux',
+  arch: 'amd64',
+};
 
 function mockSuccessfulAPIs() {
   mockGetSystemStatus.mockResolvedValue({
@@ -67,8 +83,14 @@ function mockSuccessfulAPIs() {
     operations: { recent: [] },
   });
   mockGetSystemStorage.mockResolvedValue({
-    path: '/', total_bytes: 0, used_bytes: 0, free_bytes: 0,
-    percent_used: 0, quota_enabled: false, quota_percent: 0, user_quotas_enabled: false,
+    path: '/',
+    total_bytes: 0,
+    used_bytes: 0,
+    free_bytes: 0,
+    percent_used: 0,
+    quota_enabled: false,
+    quota_percent: 0,
+    user_quotas_enabled: false,
   });
   mockCountAuthors.mockResolvedValue(120);
   mockCountSeries.mockResolvedValue(80);
@@ -152,12 +174,8 @@ describe('Dashboard', () => {
       renderWithProviders(<Dashboard />);
       await waitFor(() => {
         expect(screen.getByText('Quick Actions')).toBeInTheDocument();
-        expect(
-          screen.getByRole('button', { name: /Scan All Import Paths/ })
-        ).toBeInTheDocument();
-        expect(
-          screen.getByRole('button', { name: /Organize All/ })
-        ).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /Scan All Import Paths/ })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /Organize All/ })).toBeInTheDocument();
       });
     });
   });
@@ -194,9 +212,15 @@ describe('Dashboard', () => {
         },
       });
       mockGetSystemStorage.mockResolvedValue({
-    path: '/', total_bytes: 0, used_bytes: 0, free_bytes: 0,
-    percent_used: 0, quota_enabled: false, quota_percent: 0, user_quotas_enabled: false,
-  });
+        path: '/',
+        total_bytes: 0,
+        used_bytes: 0,
+        free_bytes: 0,
+        percent_used: 0,
+        quota_enabled: false,
+        quota_percent: 0,
+        user_quotas_enabled: false,
+      });
       mockCountAuthors.mockResolvedValue(5);
       mockCountSeries.mockResolvedValue(3);
       mockCountBooksFiltered.mockResolvedValue(0);

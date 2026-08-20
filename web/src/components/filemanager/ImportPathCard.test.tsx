@@ -1,5 +1,5 @@
 // file: src/components/filemanager/ImportPathCard.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: a4b5c6d7-e8f9-0a1b-2c3d-4e5f6a7b8c9d
 
 import { render, screen, fireEvent } from '@testing-library/react';
@@ -28,13 +28,7 @@ describe('ImportPathCard', () => {
   it('invokes callbacks for scan and remove', () => {
     const onScan = vi.fn();
     const onRemove = vi.fn();
-    render(
-      <ImportPathCard
-        importPath={buildPath()}
-        onScan={onScan}
-        onRemove={onRemove}
-      />
-    );
+    render(<ImportPathCard importPath={buildPath()} onScan={onScan} onRemove={onRemove} />);
 
     fireEvent.click(screen.getByLabelText('import path actions'));
     fireEvent.click(screen.getByText('Scan Now'));

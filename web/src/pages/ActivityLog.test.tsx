@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
-// last-edited: 2026-08-11
+// last-edited: 2026-08-19
 
 /**
  * Regression tests for the Activity Log outage of 2026-08-11.
@@ -74,7 +74,7 @@ const renderPage = () =>
   render(
     <MemoryRouter>
       <ActivityLog />
-    </MemoryRouter>,
+    </MemoryRouter>
   );
 
 beforeEach(() => {
@@ -185,9 +185,9 @@ describe('ActivityLog request amplification', () => {
     expect(filter?.since).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/);
 
     // The window is visible and adjustable, not a silent cap.
-    expect(
-      screen.getAllByText(/Default: last 24h — clear for all history/).length,
-    ).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Default: last 24h — clear for all history/).length).toBeGreaterThan(
+      0
+    );
   });
 
   it('passes an abort signal so a superseded request can be cancelled', async () => {

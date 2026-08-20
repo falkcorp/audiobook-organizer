@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/FolderFilesChip.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4a1c8e92-6d35-4b70-9f28-1e7a5c3d2b69
-// last-edited: 2026-06-19
+// last-edited: 2026-08-19
 
 // FolderFilesChip shows a small "Files" chip on a dedup candidate card. Clicking
 // it opens a popover that lazily fetches the book's file list (getBookFiles) and
@@ -10,7 +10,14 @@
 
 import { useState, useCallback, type MouseEvent } from 'react';
 import {
-  Chip, Popover, Box, Typography, List, ListItem, CircularProgress, Tooltip,
+  Chip,
+  Popover,
+  Box,
+  Typography,
+  List,
+  ListItem,
+  CircularProgress,
+  Tooltip,
 } from '@mui/material';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import { getBookFiles, type BookFile } from '../../services/api';
@@ -101,11 +108,15 @@ export function FolderFilesChip({ bookId, label = 'Files' }: FolderFilesChipProp
           {loading && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 1 }}>
               <CircularProgress size={16} />
-              <Typography variant="body2" color="text.secondary">Loading files…</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Loading files…
+              </Typography>
             </Box>
           )}
           {error && (
-            <Typography variant="body2" color="error.main">{error}</Typography>
+            <Typography variant="body2" color="error.main">
+              {error}
+            </Typography>
           )}
           {!loading && !error && files && (
             <>
@@ -122,14 +133,20 @@ export function FolderFilesChip({ bookId, label = 'Files' }: FolderFilesChipProp
                       <Tooltip title={f.file_path} placement="bottom-start">
                         <Typography
                           variant="body2"
-                          sx={{ fontFamily: 'monospace', fontSize: '0.75rem', color: f.missing ? 'error.main' : 'text.primary' }}
+                          sx={{
+                            fontFamily: 'monospace',
+                            fontSize: '0.75rem',
+                            color: f.missing ? 'error.main' : 'text.primary',
+                          }}
                           noWrap
                         >
                           {basename(f.file_path)}
                         </Typography>
                       </Tooltip>
                       {meta && (
-                        <Typography variant="caption" color="text.secondary">{meta}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {meta}
+                        </Typography>
                       )}
                     </ListItem>
                   );

@@ -1,5 +1,5 @@
 // file: web/src/components/KeyboardShortcutsDialog.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 
 import React from 'react';
@@ -55,7 +55,13 @@ export const KeyboardShortcutsDialog: React.FC<KeyboardShortcutsDialogProps> = (
                 <Typography variant="body2">{shortcut.description}</Typography>
                 <Box sx={{ display: 'flex', gap: 0.5 }}>
                   {shortcut.keys.split(' or ').map((k) => (
-                    <Chip key={k} label={k} size="small" variant="outlined" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }} />
+                    <Chip
+                      key={k}
+                      label={k}
+                      size="small"
+                      variant="outlined"
+                      sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}
+                    />
                   ))}
                 </Box>
               </Box>

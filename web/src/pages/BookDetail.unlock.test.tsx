@@ -1,6 +1,6 @@
 // file: web/src/pages/BookDetail.unlock.test.tsx
-// version: 1.3.1
-// last-edited: 2026-08-06
+// version: 1.3.2
+// last-edited: 2026-08-19
 // guid: 2b197bb0-4a61-49ef-8b75-1f9c6c23c84e
 
 import { render, screen, waitFor } from '@testing-library/react';
@@ -56,9 +56,7 @@ describe('BookDetail override unlock', () => {
     const user = userEvent.setup();
 
     render(
-      <MemoryRouter
-        initialEntries={['/library/book-1']}
-      >
+      <MemoryRouter initialEntries={['/library/book-1']}>
         <Routes>
           <Route path="/library/:id" element={<BookDetail />} />
         </Routes>
@@ -76,9 +74,7 @@ describe('BookDetail override unlock', () => {
     await user.click(unlockButton);
 
     await waitFor(() => {
-      expect(
-        screen.getByRole('button', { name: /lock title/i })
-      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /lock title/i })).toBeInTheDocument();
     });
   });
 });

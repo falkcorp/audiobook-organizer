@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.83.1
+// version: 1.83.2
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-08-11
+// last-edited: 2026-08-19
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -181,9 +181,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   // It is a slow page (~2,500ms / ~880ms TBT unthrottled; ~14,000ms / ~8,700ms TBT
   // at 4x — see library-load-perf.spec.ts axis A) but it is visible in the
   // address bar, survives a bookmark, and was asked for.
-  const initialItemsPerPage = clampItemsPerPage(
-    parseInt(searchParams.get('limit') || '', 10)
-  );
+  const initialItemsPerPage = clampItemsPerPage(parseInt(searchParams.get('limit') || '', 10));
   const [searchQuery, setSearchQuery] = useState(initialSearch);
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode);
@@ -217,7 +215,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   // `debouncedSearch` so the two never disagree about what is being searched.
   // See the debounce effect below for why this exists.
   const [debouncedParsedSearch, setDebouncedParsedSearch] = useState<ParsedSearch>(() =>
-    parseSearch(initialSearch),
+    parseSearch(initialSearch)
   );
   const [bulkTagDialogOpen, setBulkTagDialogOpen] = useState(false);
   const [bulkRatingDialogOpen, setBulkRatingDialogOpen] = useState(false);
@@ -646,7 +644,13 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     if (searchParams.toString() === lastWrittenSearch.current) {
       return;
     }
-    const urlPage = Math.max(1, parseInt(searchParams.get('page') || localStorage.getItem(STORAGE_KEYS.LIBRARY_PAGE) || '1', 10));
+    const urlPage = Math.max(
+      1,
+      parseInt(
+        searchParams.get('page') || localStorage.getItem(STORAGE_KEYS.LIBRARY_PAGE) || '1',
+        10
+      )
+    );
     const urlSearch = searchParams.get('search') ?? '';
     const urlSort = (searchParams.get('sort') as SortField) || SortField.Title;
     const urlOrder =
@@ -767,7 +771,17 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     // rather than -next-line: the explanation needs more than one line, and a
     // continuation comment between a -next-line directive and its target makes
     // the directive apply to the comment instead, silently suppressing nothing.
-  }, [filters, itemsPerPage, page, searchQuery, selectedTags, setSearchParams, sortBy, sortOrder, viewMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [
+    filters,
+    itemsPerPage,
+    page,
+    searchQuery,
+    selectedTags,
+    setSearchParams,
+    sortBy,
+    sortOrder,
+    viewMode,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // MUST stay declared after the write effect above. Effects run in
   // declaration order within a commit, so keeping this last is what lets that
@@ -792,20 +806,22 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   // from the updater makes React skip the re-render entirely, so the identity
   // chain never starts.
   const handleParsedSearchChange = useCallback((next: ParsedSearch) => {
-    setParsedSearch((prev) =>
-      JSON.stringify(prev) === JSON.stringify(next) ? prev : next
-    );
+    setParsedSearch((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
   }, []);
 
   const buildFieldFilters = useCallback(() => {
     const fieldFilters: Array<{ field: string; value: string; negated: boolean }> = [];
-    if (filters.author) fieldFilters.push({ field: 'author', value: filters.author, negated: false });
-    if (filters.series) fieldFilters.push({ field: 'series', value: filters.series, negated: false });
+    if (filters.author)
+      fieldFilters.push({ field: 'author', value: filters.author, negated: false });
+    if (filters.series)
+      fieldFilters.push({ field: 'series', value: filters.series, negated: false });
     if (filters.genre) fieldFilters.push({ field: 'genre', value: filters.genre, negated: false });
-    if (filters.language) fieldFilters.push({ field: 'language', value: filters.language, negated: false });
+    if (filters.language)
+      fieldFilters.push({ field: 'language', value: filters.language, negated: false });
     if (parsedSearch) {
       for (const ff of parsedSearch.fieldFilters) {
-        if (ff.field !== 'tag') fieldFilters.push({ field: ff.field, value: ff.value, negated: ff.negated });
+        if (ff.field !== 'tag')
+          fieldFilters.push({ field: ff.field, value: ff.value, negated: ff.negated });
       }
     }
     return fieldFilters;
@@ -1174,7 +1190,10 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     // Cross-page filter delete is not yet supported — it would require iterating
     // potentially 60K+ books per-ID. Ask the user to narrow the selection.
     if (crossPageFilter !== null) {
-      toast('Cross-page delete is not yet supported. Narrow your selection to the current page first.', 'info');
+      toast(
+        'Cross-page delete is not yet supported. Narrow your selection to the current page first.',
+        'info'
+      );
       setBatchDeleteDialogOpen(false);
       return;
     }
@@ -1259,13 +1278,18 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     try {
       const keepId = mergePrimaryId || selectedAudiobooks[0].id;
       const mergeIds = selectedAudiobooks.filter((b) => b.id !== keepId).map((b) => b.id);
-      const override = (combineOverrideTitle || combineOverrideAuthor || combineOverrideNarrator)
-        ? { title: combineOverrideTitle || undefined, author: combineOverrideAuthor || undefined, narrator: combineOverrideNarrator || undefined }
-        : undefined;
+      const override =
+        combineOverrideTitle || combineOverrideAuthor || combineOverrideNarrator
+          ? {
+              title: combineOverrideTitle || undefined,
+              author: combineOverrideAuthor || undefined,
+              narrator: combineOverrideNarrator || undefined,
+            }
+          : undefined;
       const result = await api.combineBooks(keepId, mergeIds, override);
       toast(
         `Combined ${result.files_moved} files into one book; removed ${result.books_deleted} entries.`,
-        'success',
+        'success'
       );
       setSelectedAudiobooks([]);
       setCrossPageFilter(null);
@@ -1342,17 +1366,14 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       // PUT requests. One round trip, one DB write loop. The
       // old path did Promise.allSettled(N × updateBook) which
       // was both slower and noisier in the activity log.
-      const result = await api.batchUpdateBooks(effectiveSelectedIds, updates as Record<string, unknown>);
+      const result = await api.batchUpdateBooks(
+        effectiveSelectedIds,
+        updates as Record<string, unknown>
+      );
       if (result.failed > 0) {
-        toast(
-          `Updated ${result.updated} audiobooks, ${result.failed} failed.`,
-          'warning'
-        );
+        toast(`Updated ${result.updated} audiobooks, ${result.failed} failed.`, 'warning');
       } else {
-        toast(
-          `Updated metadata for ${result.updated} audiobooks.`,
-          'success'
-        );
+        toast(`Updated metadata for ${result.updated} audiobooks.`, 'success');
       }
       clearLibraryCache();
       loadAudiobooks();
@@ -1412,9 +1433,8 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     try {
       // Build a SelectionSpec: use a filter for cross-page selections so the
       // server resolves IDs at execution time; use explicit IDs for page selections.
-      const selection: api.SelectionSpec = crossPageFilter !== null
-        ? { filter: crossPageFilter }
-        : { book_ids: effectiveSelectedIds };
+      const selection: api.SelectionSpec =
+        crossPageFilter !== null ? { filter: crossPageFilter } : { book_ids: effectiveSelectedIds };
       await api.startBulkMetadataFetch(selection);
       toast(
         `Metadata fetch queued for ${effectiveSelectedCount.toLocaleString()} books — watch the bell for progress.`,
@@ -1453,7 +1473,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     setBulkWriteBackInProgress(true);
     try {
       const result = await withOptimisticOperation('batch_save_to_files', () =>
-        api.batchWriteBackMetadata(ids, bulkWriteBackRename, bulkWriteBackForce),
+        api.batchWriteBackMetadata(ids, bulkWriteBackRename, bulkWriteBackForce)
       );
       toast(`Saving ${ids.length} books to files…`, 'success');
       void result;
@@ -1959,7 +1979,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     try {
       const ids = effectiveSelectedIds;
       const resp = await withOptimisticOperation('metadata_candidate_fetch', () =>
-        api.batchFetchCandidates({ book_ids: ids }),
+        api.batchFetchCandidates({ book_ids: ids })
       );
       const opId = resp.operation_id;
       if (!opId) {
@@ -1969,9 +1989,11 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       setPendingFetchOpId(opId);
       toast(
         `Metadata fetch started for ${ids.length} book${ids.length !== 1 ? 's' : ''}. Click Review when complete to open candidates.`,
-        'info',
+        'info'
       );
-    } catch { toast('Failed to start metadata fetch', 'error'); }
+    } catch {
+      toast('Failed to start metadata fetch', 'error');
+    }
   };
 
   const handleFetchAllUnmatched = async () => {
@@ -1980,7 +2002,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       // selection of "all unmatched" is slow on big libraries and the
       // user previously got zero feedback while it ran.
       const resp = await withOptimisticOperation('metadata_candidate_fetch', () =>
-        api.batchFetchCandidates({ selection: { filter: { only_unmatched: true } } }),
+        api.batchFetchCandidates({ selection: { filter: { only_unmatched: true } } })
       );
       if (!resp.operation_id) {
         toast(resp.message ?? 'All books already have matched candidates.', 'info');
@@ -1988,7 +2010,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       }
       toast(
         `Fetching metadata for ${resp.book_count ?? 'unmatched'} books — check the operations list for progress.`,
-        'info',
+        'info'
       );
     } catch {
       toast('Failed to start unmatched fetch', 'error');
@@ -1999,11 +2021,17 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     try {
       const cached = await api.listCachedCandidates('pending');
       if (!cached.entries.length) {
-        toast('No books with pending metadata candidates found. Click Fetch Selected to populate the cache.', 'info');
+        toast(
+          'No books with pending metadata candidates found. Click Fetch Selected to populate the cache.',
+          'info'
+        );
         return;
       }
       setMetadataReviewOpen(true);
-      toast(`${cached.entries.length} book${cached.entries.length === 1 ? '' : 's'} ready for review.`, 'info');
+      toast(
+        `${cached.entries.length} book${cached.entries.length === 1 ? '' : 's'} ready for review.`,
+        'info'
+      );
     } catch {
       toast('Failed to load pending review', 'error');
     }
@@ -2049,10 +2077,20 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         onFetchAllUnmatched={handleFetchAllUnmatched}
         onResumeReview={handleResumeReview}
         onSearchMetadata={() => setBulkSearchOpen(true)}
-        onSaveToFiles={() => { setBulkWriteBackResult(null); setBulkWriteBackRename(false); setBulkWriteBackDialogOpen(true); }}
+        onSaveToFiles={() => {
+          setBulkWriteBackResult(null);
+          setBulkWriteBackRename(false);
+          setBulkWriteBackDialogOpen(true);
+        }}
         onOrganizeSelected={() => setBulkOrganizeDialogOpen(true)}
-        onMergeAsVersions={() => { setMergePrimaryId(selectedAudiobooks[0]?.id || ''); setMergeDialogOpen(true); }}
-        onCombineIntoOneBook={() => { setMergePrimaryId(selectedAudiobooks[0]?.id || ''); setCombineDialogOpen(true); }}
+        onMergeAsVersions={() => {
+          setMergePrimaryId(selectedAudiobooks[0]?.id || '');
+          setMergeDialogOpen(true);
+        }}
+        onCombineIntoOneBook={() => {
+          setMergePrimaryId(selectedAudiobooks[0]?.id || '');
+          setCombineDialogOpen(true);
+        }}
         onTagClick={() => setBulkTagDialogOpen(true)}
         onRateClick={() => setBulkRatingDialogOpen(true)}
         onDeleteSelected={() => setBatchDeleteDialogOpen(true)}
@@ -2298,7 +2336,9 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         />
 
         <Dialog open={presetDialogOpen} onClose={handleClosePresetDialog}>
-          <DialogTitle>{editingPresetId ? 'Rename preset' : 'Save current filters as preset'}</DialogTitle>
+          <DialogTitle>
+            {editingPresetId ? 'Rename preset' : 'Save current filters as preset'}
+          </DialogTitle>
           <DialogContent>
             <TextField
               autoFocus
@@ -2311,7 +2351,11 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           </DialogContent>
           <DialogActions>
             <Button onClick={handleClosePresetDialog}>Cancel</Button>
-            <Button onClick={handleConfirmPresetDialog} disabled={!presetDialogName.trim()} variant="contained">
+            <Button
+              onClick={handleConfirmPresetDialog}
+              disabled={!presetDialogName.trim()}
+              variant="contained"
+            >
               Save
             </Button>
           </DialogActions>

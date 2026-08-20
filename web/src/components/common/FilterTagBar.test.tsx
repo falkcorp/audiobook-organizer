@@ -1,5 +1,5 @@
 // file: web/src/components/common/FilterTagBar.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d5e9f23-4c7a-5b8d-aef2-1b3c4d5e6f7a
 
 import { render, screen, fireEvent } from '@testing-library/react';
@@ -24,11 +24,7 @@ describe('FilterTagBar', () => {
 
   it('fires onRemove when a chip delete icon is clicked', () => {
     const onRemove = vi.fn();
-    render(
-      <FilterTagBar
-        tags={[{ id: 'status:pending', label: 'Status: pending', onRemove }]}
-      />
-    );
+    render(<FilterTagBar tags={[{ id: 'status:pending', label: 'Status: pending', onRemove }]} />);
     // MUI Chip exposes the delete icon with role=button via test-id-friendly
     // markup; click the SVG icon that lives inside the chip.
     const deleteIcons = document.querySelectorAll('.MuiChip-deleteIcon');
@@ -39,13 +35,8 @@ describe('FilterTagBar', () => {
 
   it('shows Clear all only when ≥2 tags and a handler is provided', () => {
     const onClearAll = vi.fn();
-    const oneTag = [
-      { id: 'status:pending', label: 'Status: pending', onRemove: vi.fn() },
-    ];
-    const twoTags = [
-      ...oneTag,
-      { id: 'layer:exact', label: 'Layer: exact', onRemove: vi.fn() },
-    ];
+    const oneTag = [{ id: 'status:pending', label: 'Status: pending', onRemove: vi.fn() }];
+    const twoTags = [...oneTag, { id: 'layer:exact', label: 'Layer: exact', onRemove: vi.fn() }];
 
     const { rerender } = render(<FilterTagBar tags={oneTag} onClearAll={onClearAll} />);
     expect(screen.queryByText('Clear all')).not.toBeInTheDocument();

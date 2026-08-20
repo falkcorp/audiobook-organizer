@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryBookGrid.tsx
-// version: 1.9.0
+// version: 1.9.1
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-08-08
+// last-edited: 2026-08-19
 
 import {
   Typography,
@@ -202,7 +202,8 @@ export const LibraryBookGrid = ({
   handleTagFilterChange,
 }: LibraryBookGridProps) => (
   <>
-    {libraryContentState({ bookCount: audiobooks.length, loading, loadError, searchQuery }) === 'reconnecting' ? (
+    {libraryContentState({ bookCount: audiobooks.length, loading, loadError, searchQuery }) ===
+    'reconnecting' ? (
       <Paper sx={{ p: 4, textAlign: 'center', bgcolor: 'background.default' }}>
         <CircularProgress sx={{ mb: 2 }} />
         <Alert severity="info" sx={{ textAlign: 'center' }}>
@@ -212,7 +213,8 @@ export const LibraryBookGrid = ({
             : 'Waiting for the server to respond.'}
         </Alert>
       </Paper>
-    ) : libraryContentState({ bookCount: audiobooks.length, loading, loadError, searchQuery }) === 'empty' ? (
+    ) : libraryContentState({ bookCount: audiobooks.length, loading, loadError, searchQuery }) ===
+      'empty' ? (
       <Paper sx={{ p: 4, textAlign: 'center', bgcolor: 'background.default' }}>
         <FolderOpenIcon sx={{ fontSize: 80, color: 'text.secondary', mb: 2 }} />
         <Alert severity="info" sx={{ textAlign: 'center' }}>
@@ -221,12 +223,10 @@ export const LibraryBookGrid = ({
             <>
               You haven't added any import paths yet. Get started by:
               <ul style={{ marginTop: 8, marginBottom: 0, textAlign: 'left' }}>
+                <li>Importing individual audiobook files using the "Import Files" button below</li>
                 <li>
-                  Importing individual audiobook files using the "Import Files" button below
-                </li>
-                <li>
-                  Adding import paths using the "Add Import Path" button below (watches folders
-                  for new files)
+                  Adding import paths using the "Add Import Path" button below (watches folders for
+                  new files)
                 </li>
               </ul>
             </>
@@ -306,12 +306,22 @@ export const LibraryBookGrid = ({
                 size="small"
               />
             }
-            label={<Typography variant="body2" color="text.secondary">Select All</Typography>}
+            label={
+              <Typography variant="body2" color="text.secondary">
+                Select All
+              </Typography>
+            }
           />
           {hasSelection && (
             <>
-              <Chip label={`${effectiveSelectedCount.toLocaleString()} selected`} size="small" color="primary" />
-              <Button size="small" variant="text" onClick={handleClearSelection}>Deselect</Button>
+              <Chip
+                label={`${effectiveSelectedCount.toLocaleString()} selected`}
+                size="small"
+                color="primary"
+              />
+              <Button size="small" variant="text" onClick={handleClearSelection}>
+                Deselect
+              </Button>
             </>
           )}
         </Stack>

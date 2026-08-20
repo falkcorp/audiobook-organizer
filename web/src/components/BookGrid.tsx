@@ -1,13 +1,10 @@
 // file: web/src/components/BookGrid.tsx
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6e7f8a9b-0c1d-2e3f-4a5b-6c7d8e9f0a1b
-// last-edited: 2026-07-11
+// last-edited: 2026-08-19
 
 import React from 'react';
-import {
-  Box,
-  Pagination,
-} from '@mui/material';
+import { Box, Pagination } from '@mui/material';
 import { AudiobookGrid } from './audiobooks/AudiobookGrid';
 import { AudiobookList } from './audiobooks/AudiobookList';
 import { ViewMode } from './audiobooks/SearchBar';

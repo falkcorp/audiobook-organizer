@@ -1,7 +1,7 @@
 // file: web/src/components/settings/AIBackendsSection.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-07-03
+// last-edited: 2026-08-19
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -89,7 +89,10 @@ describe('AIBackendsSection', () => {
     vi.mocked(api.getAIBackendsStatus).mockResolvedValue(status);
 
     render(
-      <AIBackendsSection config={{ ...defaultConfig, embedding_mode: 'local' }} onChange={vi.fn()} />
+      <AIBackendsSection
+        config={{ ...defaultConfig, embedding_mode: 'local' }}
+        onChange={vi.fn()}
+      />
     );
     fireEvent.click(screen.getByText('Test Connection'));
 
@@ -111,7 +114,10 @@ describe('AIBackendsSection', () => {
     vi.mocked(api.pullAIBackendModel).mockResolvedValue({ model: 'bge-m3', pulled: true });
 
     render(
-      <AIBackendsSection config={{ ...defaultConfig, embedding_mode: 'local' }} onChange={vi.fn()} />
+      <AIBackendsSection
+        config={{ ...defaultConfig, embedding_mode: 'local' }}
+        onChange={vi.fn()}
+      />
     );
     fireEvent.click(screen.getByText('Test Connection'));
 

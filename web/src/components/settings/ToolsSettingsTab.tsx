@@ -1,9 +1,17 @@
 // file: web/src/components/settings/ToolsSettingsTab.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: a9b0c1d2-e3f4-5678-abcd-678901234567
-// last-edited: 2026-06-15
+// last-edited: 2026-08-19
 
-import { Box, Typography, Switch, FormControlLabel, TextField, Divider, Button } from '@mui/material';
+import {
+  Box,
+  Typography,
+  Switch,
+  FormControlLabel,
+  TextField,
+  Divider,
+  Button,
+} from '@mui/material';
 import { ToolsPanel } from '../tools/ToolsPanel';
 import { useAdvancedSettings } from '../../hooks/useAdvancedSettings';
 
@@ -23,7 +31,9 @@ export function ToolsSettingsTab() {
 
       <Divider sx={{ my: 3 }} />
 
-      <Typography variant="subtitle1" gutterBottom>Ollama Duty Cycle</Typography>
+      <Typography variant="subtitle1" gutterBottom>
+        Ollama Duty Cycle
+      </Typography>
       <FormControlLabel
         control={<Switch />}
         label="Allow periodic Ollama (spin up when new books need embedding)"

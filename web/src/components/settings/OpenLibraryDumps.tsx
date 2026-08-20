@@ -1,5 +1,5 @@
 // file: web/src/components/settings/OpenLibraryDumps.tsx
-// version: 2.2.3
+// version: 2.2.4
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-08-19
 
@@ -50,9 +50,7 @@ function DownloadStatusChip({ dl }: { dl?: OLDownloadProgress }) {
   if (!dl || dl.status === 'idle') return null;
 
   if (dl.status === 'downloading') {
-    const pct = dl.total_size > 0
-      ? Math.round((dl.downloaded / dl.total_size) * 100)
-      : null;
+    const pct = dl.total_size > 0 ? Math.round((dl.downloaded / dl.total_size) * 100) : null;
     return (
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
         <CircularProgress size={14} />
@@ -97,7 +95,9 @@ function DumpTypeRow({
 
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5 }}>
-      <Typography variant="body2" sx={{ minWidth: 80 }}>{label}</Typography>
+      <Typography variant="body2" sx={{ minWidth: 80 }}>
+        {label}
+      </Typography>
       {loading ? (
         <CircularProgress size={16} />
       ) : hasRecords ? (
@@ -126,9 +126,7 @@ function DumpTypeRow({
             size="small"
             color="warning"
           />
-          {importing && (
-            <LinearProgress sx={{ flexGrow: 1, maxWidth: 200 }} />
-          )}
+          {importing && <LinearProgress sx={{ flexGrow: 1, maxWidth: 200 }} />}
         </>
       ) : (
         <Chip label="No data" size="small" variant="outlined" />
@@ -174,8 +172,7 @@ export function OpenLibraryDumps() {
     const ops = useOperationsStore.getState().activeOperations;
     const running = ops.find(
       (op) =>
-        op.type === 'ol_dump_import' &&
-        !['completed', 'failed', 'canceled'].includes(op.status)
+        op.type === 'ol_dump_import' && !['completed', 'failed', 'canceled'].includes(op.status)
     );
     if (running) {
       setImporting(true);
@@ -184,9 +181,8 @@ export function OpenLibraryDumps() {
 
   // Poll while downloading or importing
   useEffect(() => {
-    const hasActiveDownload = status?.downloads && Object.values(status.downloads).some(
-      d => d.status === 'downloading'
-    );
+    const hasActiveDownload =
+      status?.downloads && Object.values(status.downloads).some((d) => d.status === 'downloading');
     if (hasActiveDownload || importing) {
       pollRef.current = setInterval(() => {
         refresh();
@@ -294,29 +290,44 @@ export function OpenLibraryDumps() {
 
   return (
     <Box>
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
+      )}
 
       <Box sx={{ mb: 2 }}>
-        <DumpTypeRow label="Editions" status={status?.status?.editions} download={dl.editions} uploadedFile={uf.editions} loading={loading} importing={importing} />
-        <DumpTypeRow label="Authors" status={status?.status?.authors} download={dl.authors} uploadedFile={uf.authors} loading={loading} importing={importing} />
-        <DumpTypeRow label="Works" status={status?.status?.works} download={dl.works} uploadedFile={uf.works} loading={loading} importing={importing} />
+        <DumpTypeRow
+          label="Editions"
+          status={status?.status?.editions}
+          download={dl.editions}
+          uploadedFile={uf.editions}
+          loading={loading}
+          importing={importing}
+        />
+        <DumpTypeRow
+          label="Authors"
+          status={status?.status?.authors}
+          download={dl.authors}
+          uploadedFile={uf.authors}
+          loading={loading}
+          importing={importing}
+        />
+        <DumpTypeRow
+          label="Works"
+          status={status?.status?.works}
+          download={dl.works}
+          uploadedFile={uf.works}
+          loading={loading}
+          importing={importing}
+        />
       </Box>
 
       <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
-        <Button
-          variant="contained"
-          size="small"
-          onClick={handleDownload}
-          disabled={downloading}
-        >
+        <Button variant="contained" size="small" onClick={handleDownload} disabled={downloading}>
           {downloading ? 'Starting...' : 'Download Latest Dumps'}
         </Button>
-        <Button
-          variant="outlined"
-          size="small"
-          onClick={handleImport}
-          disabled={importing}
-        >
+        <Button variant="outlined" size="small" onClick={handleImport} disabled={importing}>
           {importing ? 'Importing...' : 'Import to Local DB'}
         </Button>
         <Button
@@ -339,30 +350,15 @@ export function OpenLibraryDumps() {
         </Typography>
         <FormControl size="small" sx={{ minWidth: 120 }}>
           <InputLabel>Type</InputLabel>
-          <Select
-            value={uploadType}
-            label="Type"
-            onChange={(e) => setUploadType(e.target.value)}
-          >
+          <Select value={uploadType} label="Type" onChange={(e) => setUploadType(e.target.value)}>
             <MenuItem value="editions">Editions</MenuItem>
             <MenuItem value="authors">Authors</MenuItem>
             <MenuItem value="works">Works</MenuItem>
           </Select>
         </FormControl>
-        <Button
-          variant="outlined"
-          size="small"
-          component="label"
-          disabled={uploading}
-        >
+        <Button variant="outlined" size="small" component="label" disabled={uploading}>
           {uploading ? 'Uploading...' : 'Upload .txt.gz'}
-          <input
-            type="file"
-            hidden
-            accept=".gz"
-            ref={fileInputRef}
-            onChange={handleUpload}
-          />
+          <input type="file" hidden accept=".gz" ref={fileInputRef} onChange={handleUpload} />
         </Button>
       </Box>
 

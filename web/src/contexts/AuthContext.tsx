@@ -1,5 +1,5 @@
 // file: web/src/contexts/AuthContext.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: 2b3c4d5e-6f70-4819-a2b3-c4d5e6f70819
 
 import {
@@ -25,11 +25,7 @@ interface AuthContextValue {
   refresh: () => Promise<void>;
   login: (username: string, password: string, rememberMe?: boolean) => Promise<void>;
   logout: () => Promise<void>;
-  setupAdmin: (payload: {
-    username: string;
-    password: string;
-    email?: string;
-  }) => Promise<void>;
+  setupAdmin: (payload: { username: string; password: string; email?: string }) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -143,17 +139,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout,
       setupAdmin,
     }),
-    [
-      initialized,
-      loading,
-      user,
-      requiresAuth,
-      bootstrapReady,
-      refresh,
-      login,
-      logout,
-      setupAdmin,
-    ]
+    [initialized, loading, user, requiresAuth, bootstrapReady, refresh, login, logout, setupAdmin]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

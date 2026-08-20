@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.race.test.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7c1d9e2a-4f5b-4a6c-9d3e-2b8f7a1c0e6d
-// last-edited: 2026-08-06
+// last-edited: 2026-08-19
 
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
@@ -10,9 +10,7 @@ import { BookDetail } from './BookDetail';
 import * as api from '../services/api';
 
 vi.mock('../services/api', async () => {
-  const actual = await vi.importActual<typeof import('../services/api')>(
-    '../services/api'
-  );
+  const actual = await vi.importActual<typeof import('../services/api')>('../services/api');
   return {
     ...actual,
     getBook: vi.fn(),
@@ -56,15 +54,19 @@ describe('BookDetail load race (BOOKDETAIL-RACE)', () => {
     let resolveA: ((book: api.Book) => void) | null = null;
     let resolveB: ((book: api.Book) => void) | null = null;
     vi.mocked(api.getBook).mockImplementation((id: string) => {
-      if (id === 'book-a') return new Promise((resolve) => { resolveA = resolve; });
-      if (id === 'book-b') return new Promise((resolve) => { resolveB = resolve; });
+      if (id === 'book-a')
+        return new Promise((resolve) => {
+          resolveA = resolve;
+        });
+      if (id === 'book-b')
+        return new Promise((resolve) => {
+          resolveB = resolve;
+        });
       return Promise.reject(new Error(`unexpected id ${id}`));
     });
 
     render(
-      <MemoryRouter
-        initialEntries={['/library/book-a']}
-      >
+      <MemoryRouter initialEntries={['/library/book-a']}>
         <NavCapture />
         <Routes>
           <Route path="/library/:id" element={<BookDetail />} />
@@ -77,13 +79,19 @@ describe('BookDetail load race (BOOKDETAIL-RACE)', () => {
 
     // Navigate to book-b BEFORE book-a's request resolves. This is the
     // "navigate quickly between books" trigger for BOOKDETAIL-RACE.
-    act(() => { capturedNavigate!('/library/book-b'); });
+    act(() => {
+      capturedNavigate!('/library/book-b');
+    });
     await waitFor(() => expect(resolveB).not.toBeNull());
 
     // Resolve book-b FIRST, then book-a: the out-of-order arrival that used
     // to let book-a's stale setBook overwrite book-b's already-rendered data.
-    await act(async () => { resolveB!(bookB); });
-    await act(async () => { resolveA!(bookA); });
+    await act(async () => {
+      resolveB!(bookB);
+    });
+    await act(async () => {
+      resolveA!(bookA);
+    });
 
     await waitFor(() => {
       expect(screen.getAllByText('Book B Title').length).toBeGreaterThan(0);

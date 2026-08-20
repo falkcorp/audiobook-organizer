@@ -1,7 +1,7 @@
 // file: web/src/pages/ReviewQueue.tsx
-// version: 2.3.0
+// version: 2.3.1
 // guid: 4c8f2a17-5e93-4d60-a1b8-7f3c6d9e0a52
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 import { useEffect, useMemo, useState } from 'react';
 import {
   Accordion,
@@ -52,10 +52,7 @@ import { formatPath, usePathVars } from '../utils/formatPath';
 // (a group can hold dozens of files; don't fire dozens of concurrent requests). A
 // member that was hard-deleted since the hold was created simply resolves to
 // undefined — the row still renders from its file path.
-async function fetchBooksByIds(
-  ids: string[],
-  signal: AbortSignal
-): Promise<Map<string, Book>> {
+async function fetchBooksByIds(ids: string[], signal: AbortSignal): Promise<Map<string, Book>> {
   const out = new Map<string, Book>();
   const unique = Array.from(new Set(ids.filter((id) => id)));
   const BATCH = 6;
@@ -140,14 +137,15 @@ function MemberRow({
             <Chip size="small" variant="outlined" label={formatDuration(duration)} />
           )}
           {size != null && <Chip size="small" variant="outlined" label={formatBytes(size)} />}
-          {bitrate != null && (
-            <Chip size="small" variant="outlined" label={`${bitrate}kbps`} />
-          )}
+          {bitrate != null && <Chip size="small" variant="outlined" label={`${bitrate}kbps`} />}
           {codec && <Chip size="small" variant="outlined" label={codec} />}
         </Stack>
         {entry.filePath && (
-          <Tooltip title={entry.filePath} placement="bottom-start"
-            componentsProps={{ tooltip: { sx: { maxWidth: 600 } } }}>
+          <Tooltip
+            title={entry.filePath}
+            placement="bottom-start"
+            componentsProps={{ tooltip: { sx: { maxWidth: 600 } } }}
+          >
             <Typography
               variant="caption"
               sx={{ fontFamily: 'monospace', fontSize: '0.65rem', display: 'block', mt: 0.5 }}
@@ -204,8 +202,8 @@ function RecommendationPanel({
       )}
       {!reason && (
         <Typography variant="body2" color="text.secondary" sx={{ mb: facts.length ? 1 : 0 }}>
-          This hold predates evidence-backed recommendations. Re-run the regroup scan to
-          refresh it, or decide it here.
+          This hold predates evidence-backed recommendations. Re-run the regroup scan to refresh it,
+          or decide it here.
         </Typography>
       )}
       {facts.length > 0 ? (
@@ -333,11 +331,19 @@ function ItemActions({
           />
         )
       )}
-      <Stack direction="row" spacing={1} sx={[withSelector ? {
-        mt: 0.5
-      } : {
-        mt: 0
-      }]}>
+      <Stack
+        direction="row"
+        spacing={1}
+        sx={[
+          withSelector
+            ? {
+                mt: 0.5,
+              }
+            : {
+                mt: 0,
+              },
+        ]}
+      >
         <Tooltip
           title={
             action
@@ -473,9 +479,10 @@ export function ReviewQueue() {
   // The last bulk run's skipped items, kept on screen until the next bulk action.
   // A toast is the wrong home for these: the whole point is that a reviewer can go
   // deal with them, which means the ids have to stay readable.
-  const [bulkSkips, setBulkSkips] = useState<
-    { kind: string; skipped: api.ReviewBulkSkip[] } | null
-  >(null);
+  const [bulkSkips, setBulkSkips] = useState<{
+    kind: string;
+    skipped: api.ReviewBulkSkip[];
+  } | null>(null);
 
   useEffect(() => {
     void loadItems({ status: 'pending' });
@@ -645,26 +652,21 @@ export function ReviewQueue() {
                   </Stack>
                 </Box>
                 {bulkSkips?.kind === bucket.kind && (
-                  <Alert
-                    severity="warning"
-                    sx={{ mb: 1 }}
-                    onClose={() => setBulkSkips(null)}
-                  >
+                  <Alert severity="warning" sx={{ mb: 1 }} onClose={() => setBulkSkips(null)}>
                     <AlertTitle>
                       {bulkSkips.skipped.length} hold
-                      {bulkSkips.skipped.length === 1 ? ' was' : 's were'} skipped — still
-                      pending
+                      {bulkSkips.skipped.length === 1 ? ' was' : 's were'} skipped — still pending
                     </AlertTitle>
                     <Typography variant="body2" sx={{ mb: 1 }}>
-                      Bulk approve uses each hold&apos;s own recommendation. These had none it
-                      would act on, so they were left alone. Open them below and choose an
-                      action.
+                      Bulk approve uses each hold&apos;s own recommendation. These had none it would
+                      act on, so they were left alone. Open them below and choose an action.
                     </Typography>
                     <Stack spacing={0.5}>
                       {bulkSkips.skipped.map((s) => (
                         <Typography key={s.id} variant="caption" display="block">
                           <code>{s.id}</code>
-                          {s.action ? ` · ${labelForAction(s.action) || s.action}` : ''} — {s.reason}
+                          {s.action ? ` · ${labelForAction(s.action) || s.action}` : ''} —{' '}
+                          {s.reason}
                         </Typography>
                       ))}
                     </Stack>

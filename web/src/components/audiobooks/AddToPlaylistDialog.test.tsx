@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/AddToPlaylistDialog.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor } from '@testing-library/react';
@@ -13,11 +13,7 @@ vi.mock('../../services/playlistApi', () => ({
   createPlaylist: vi.fn(),
 }));
 
-import {
-  listPlaylists,
-  addBooksToPlaylist,
-  createPlaylist,
-} from '../../services/playlistApi';
+import { listPlaylists, addBooksToPlaylist, createPlaylist } from '../../services/playlistApi';
 
 const mockListPlaylists = vi.mocked(listPlaylists);
 const mockAddBooksToPlaylist = vi.mocked(addBooksToPlaylist);
@@ -35,27 +31,21 @@ beforeEach(() => {
 describe('AddToPlaylistDialog', () => {
   describe('when closed', () => {
     it('does not render dialog content', () => {
-      renderWithProviders(
-        <AddToPlaylistDialog open={false} onClose={onClose} bookIds={['b1']} />
-      );
+      renderWithProviders(<AddToPlaylistDialog open={false} onClose={onClose} bookIds={['b1']} />);
       expect(screen.queryByText(/Add.*to Playlist/)).not.toBeInTheDocument();
     });
   });
 
   describe('when open with no playlists', () => {
     it('shows empty state message', async () => {
-      renderWithProviders(
-        <AddToPlaylistDialog open={true} onClose={onClose} bookIds={['b1']} />
-      );
+      renderWithProviders(<AddToPlaylistDialog open={true} onClose={onClose} bookIds={['b1']} />);
       await waitFor(() => {
         expect(screen.getByText('No static playlists yet.')).toBeInTheDocument();
       });
     });
 
     it('shows singular title for one book', async () => {
-      renderWithProviders(
-        <AddToPlaylistDialog open={true} onClose={onClose} bookIds={['b1']} />
-      );
+      renderWithProviders(<AddToPlaylistDialog open={true} onClose={onClose} bookIds={['b1']} />);
       await waitFor(() => {
         expect(screen.getByText('Add Book to Playlist')).toBeInTheDocument();
       });
@@ -63,11 +53,7 @@ describe('AddToPlaylistDialog', () => {
 
     it('shows plural title for multiple books', async () => {
       renderWithProviders(
-        <AddToPlaylistDialog
-          open={true}
-          onClose={onClose}
-          bookIds={['b1', 'b2', 'b3']}
-        />
+        <AddToPlaylistDialog open={true} onClose={onClose} bookIds={['b1', 'b2', 'b3']} />
       );
       await waitFor(() => {
         expect(screen.getByText('Add 3 Books to Playlist')).toBeInTheDocument();
@@ -89,9 +75,7 @@ describe('AddToPlaylistDialog', () => {
     });
 
     it('lists existing playlists', async () => {
-      renderWithProviders(
-        <AddToPlaylistDialog open={true} onClose={onClose} bookIds={['b1']} />
-      );
+      renderWithProviders(<AddToPlaylistDialog open={true} onClose={onClose} bookIds={['b1']} />);
       await waitFor(() => {
         expect(screen.getByText('Favorites')).toBeInTheDocument();
         expect(screen.getByText('To Read')).toBeInTheDocument();
@@ -99,18 +83,14 @@ describe('AddToPlaylistDialog', () => {
     });
 
     it('shows book count for playlists', async () => {
-      renderWithProviders(
-        <AddToPlaylistDialog open={true} onClose={onClose} bookIds={['b1']} />
-      );
+      renderWithProviders(<AddToPlaylistDialog open={true} onClose={onClose} bookIds={['b1']} />);
       await waitFor(() => {
         expect(screen.getByText('2 books')).toBeInTheDocument();
       });
     });
 
     it('enables Add button after selecting a playlist', async () => {
-      renderWithProviders(
-        <AddToPlaylistDialog open={true} onClose={onClose} bookIds={['b1']} />
-      );
+      renderWithProviders(<AddToPlaylistDialog open={true} onClose={onClose} bookIds={['b1']} />);
       await waitFor(() => {
         expect(screen.getByText('Favorites')).toBeInTheDocument();
       });
@@ -126,9 +106,7 @@ describe('AddToPlaylistDialog', () => {
     });
 
     it('calls addBooksToPlaylist when Add is clicked', async () => {
-      renderWithProviders(
-        <AddToPlaylistDialog open={true} onClose={onClose} bookIds={['b1']} />
-      );
+      renderWithProviders(<AddToPlaylistDialog open={true} onClose={onClose} bookIds={['b1']} />);
       await waitFor(() => {
         expect(screen.getByText('Favorites')).toBeInTheDocument();
       });
@@ -145,9 +123,7 @@ describe('AddToPlaylistDialog', () => {
 
   describe('creating a new playlist', () => {
     it('enables Add button when a name is typed', async () => {
-      renderWithProviders(
-        <AddToPlaylistDialog open={true} onClose={onClose} bookIds={['b1']} />
-      );
+      renderWithProviders(<AddToPlaylistDialog open={true} onClose={onClose} bookIds={['b1']} />);
       await waitFor(() => {
         expect(screen.getByText('No static playlists yet.')).toBeInTheDocument();
       });
@@ -159,11 +135,7 @@ describe('AddToPlaylistDialog', () => {
 
     it('calls createPlaylist with the book IDs', async () => {
       renderWithProviders(
-        <AddToPlaylistDialog
-          open={true}
-          onClose={onClose}
-          bookIds={['b1', 'b2']}
-        />
+        <AddToPlaylistDialog open={true} onClose={onClose} bookIds={['b1', 'b2']} />
       );
       await waitFor(() => {
         expect(screen.getByText('No static playlists yet.')).toBeInTheDocument();
@@ -187,9 +159,7 @@ describe('AddToPlaylistDialog', () => {
 
   describe('cancel', () => {
     it('calls onClose when Cancel is clicked', async () => {
-      renderWithProviders(
-        <AddToPlaylistDialog open={true} onClose={onClose} bookIds={['b1']} />
-      );
+      renderWithProviders(<AddToPlaylistDialog open={true} onClose={onClose} bookIds={['b1']} />);
       fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
       expect(onClose).toHaveBeenCalled();
     });

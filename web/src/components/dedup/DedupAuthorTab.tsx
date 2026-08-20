@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupAuthorTab.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -66,7 +66,11 @@ export function RoleDetails({ roles }: { roles: SuggestionRoles }) {
               </Typography>
             )}
             {roles.author.reason && (
-              <Typography variant="caption" display="block" sx={{ fontStyle: 'italic', color: 'text.secondary' }}>
+              <Typography
+                variant="caption"
+                display="block"
+                sx={{ fontStyle: 'italic', color: 'text.secondary' }}
+              >
                 &ldquo;{roles.author.reason}&rdquo;
               </Typography>
             )}
@@ -81,7 +85,11 @@ export function RoleDetails({ roles }: { roles: SuggestionRoles }) {
               Narrator: {roles.narrator.name}
             </Typography>
             {roles.narrator.reason && (
-              <Typography variant="caption" display="block" sx={{ fontStyle: 'italic', color: 'text.secondary' }}>
+              <Typography
+                variant="caption"
+                display="block"
+                sx={{ fontStyle: 'italic', color: 'text.secondary' }}
+              >
                 &ldquo;{roles.narrator.reason}&rdquo;
               </Typography>
             )}
@@ -96,7 +104,11 @@ export function RoleDetails({ roles }: { roles: SuggestionRoles }) {
               Publisher: {roles.publisher.name}
             </Typography>
             {roles.publisher.reason && (
-              <Typography variant="caption" display="block" sx={{ fontStyle: 'italic', color: 'text.secondary' }}>
+              <Typography
+                variant="caption"
+                display="block"
+                sx={{ fontStyle: 'italic', color: 'text.secondary' }}
+              >
                 &ldquo;{roles.publisher.reason}&rdquo;
               </Typography>
             )}
@@ -141,8 +153,12 @@ function AuthorBooksPopover({
         }
         setBooks(all);
       })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [anchorEl, authorIds]);
 
   return (
@@ -155,29 +171,70 @@ function AuthorBooksPopover({
       slotProps={{ paper: { sx: { maxWidth: 480, maxHeight: 400, overflow: 'auto', p: 1 } } }}
     >
       {loading ? (
-        <Box sx={{ p: 2, textAlign: 'center' }}><CircularProgress size={24} /></Box>
+        <Box sx={{ p: 2, textAlign: 'center' }}>
+          <CircularProgress size={24} />
+        </Box>
       ) : books.length === 0 ? (
-        <Typography sx={{ p: 2 }} variant="body2" color="text.secondary">No books found</Typography>
+        <Typography sx={{ p: 2 }} variant="body2" color="text.secondary">
+          No books found
+        </Typography>
       ) : (
         <Stack spacing={0.5}>
           {books.map((book) => (
             <Box
               key={book.id}
-              sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 0.5, cursor: 'pointer',
-                borderRadius: 1, '&:hover': { bgcolor: 'action.hover' } }}
-              onClick={() => { onClose(); navigate(`/library/${book.id}`); }}
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                p: 0.5,
+                cursor: 'pointer',
+                borderRadius: 1,
+                '&:hover': { bgcolor: 'action.hover' },
+              }}
+              onClick={() => {
+                onClose();
+                navigate(`/library/${book.id}`);
+              }}
             >
               {book.cover_url ? (
-                <Box component="img" src={book.cover_url} alt="" sx={{ width: 40, height: 56, objectFit: 'cover', borderRadius: 0.5, flexShrink: 0 }} />
+                <Box
+                  component="img"
+                  src={book.cover_url}
+                  alt=""
+                  sx={{
+                    width: 40,
+                    height: 56,
+                    objectFit: 'cover',
+                    borderRadius: 0.5,
+                    flexShrink: 0,
+                  }}
+                />
               ) : (
-                <Box sx={{ width: 40, height: 56, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  bgcolor: 'action.selected', borderRadius: 0.5, flexShrink: 0 }}>
+                <Box
+                  sx={{
+                    width: 40,
+                    height: 56,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    bgcolor: 'action.selected',
+                    borderRadius: 0.5,
+                    flexShrink: 0,
+                  }}
+                >
                   <MenuBookIcon fontSize="small" color="disabled" />
                 </Box>
               )}
               <Box sx={{ overflow: 'hidden' }}>
-                <Typography variant="body2" noWrap fontWeight="medium">{cleanDisplayTitle(book.title)}</Typography>
-                {book.author_name && <Typography variant="caption" color="text.secondary" noWrap>{book.author_name}</Typography>}
+                <Typography variant="body2" noWrap fontWeight="medium">
+                  {cleanDisplayTitle(book.title)}
+                </Typography>
+                {book.author_name && (
+                  <Typography variant="caption" color="text.secondary" noWrap>
+                    {book.author_name}
+                  </Typography>
+                )}
               </Box>
             </Box>
           ))}
@@ -204,7 +261,9 @@ export function AuthorDedupTab() {
   const [narratorFlags, setNarratorFlags] = useState<Set<string>>(new Set()); // "authorId" or "authorId:splitName" keys
   const [removedVariants, setRemovedVariants] = useState<Set<string>>(new Set()); // "canonicalId:variantId" keys
   const [validatingAuthor, setValidatingAuthor] = useState<string | null>(null); // authorId being validated
-  const [authorValidation, setAuthorValidation] = useState<Record<string, { results: { source: string; title: string; author: string }[]; query: string }>>({});
+  const [authorValidation, setAuthorValidation] = useState<
+    Record<string, { results: { source: string; title: string; author: string }[]; query: string }>
+  >({});
   const [popoverAnchor, setPopoverAnchor] = useState<HTMLElement | null>(null);
   const [popoverAuthorIds, setPopoverAuthorIds] = useState<number[]>([]);
   const [resolvingAuthor, setResolvingAuthor] = useState<number | null>(null);
@@ -226,7 +285,10 @@ export function AuthorDedupTab() {
             setSelectedGroups(new Set());
             setLoading(false);
           },
-          (msg) => { setError(msg); setLoading(false); },
+          (msg) => {
+            setError(msg);
+            setLoading(false);
+          }
         );
         return;
       }
@@ -239,17 +301,21 @@ export function AuthorDedupTab() {
     }
   }, []);
 
-  useEffect(() => { fetchDuplicates(); }, [fetchDuplicates]);
+  useEffect(() => {
+    fetchDuplicates();
+  }, [fetchDuplicates]);
 
   const handleSaveCanonicalName = async (group: AuthorDedupGroup) => {
     if (!editingCanonicalName.trim()) return;
     try {
       await api.renameAuthor(group.canonical.id, editingCanonicalName.trim());
-      setGroups((prev) => prev.map((g) =>
-        g.canonical.id === group.canonical.id
-          ? { ...g, canonical: { ...g.canonical, name: editingCanonicalName.trim() } }
-          : g
-      ));
+      setGroups((prev) =>
+        prev.map((g) =>
+          g.canonical.id === group.canonical.id
+            ? { ...g, canonical: { ...g.canonical, name: editingCanonicalName.trim() } }
+            : g
+        )
+      );
       setEditingCanonicalId(null);
       setEditingCanonicalName('');
     } catch (err) {
@@ -260,13 +326,19 @@ export function AuthorDedupTab() {
   const handleSplitAuthor = async (group: AuthorDedupGroup) => {
     try {
       // Collect which split names are narrators
-      const narratorNames = (group.split_names || []).filter((n) => narratorFlags.has(`${group.canonical.id}:${n}`));
+      const narratorNames = (group.split_names || []).filter((n) =>
+        narratorFlags.has(`${group.canonical.id}:${n}`)
+      );
       const result = await api.splitCompositeAuthor(group.canonical.id);
       // After split, reclassify any flagged narrators
       for (const na of narratorNames) {
         const match = result.authors.find((a) => a.name === na);
         if (match) {
-          try { await api.reclassifyAuthorAsNarrator(match.id); } catch { /* best effort */ }
+          try {
+            await api.reclassifyAuthorAsNarrator(match.id);
+          } catch {
+            /* best effort */
+          }
         }
       }
       setMergeSuccess(`Split "${group.canonical.name}" into ${result.authors.length} authors`);
@@ -280,7 +352,10 @@ export function AuthorDedupTab() {
     setValidatingAuthor(authorId);
     try {
       const resp = await api.validateDedupEntry(authorName, 'author');
-      setAuthorValidation((prev) => ({ ...prev, [authorId]: { results: resp.results, query: resp.query } }));
+      setAuthorValidation((prev) => ({
+        ...prev,
+        [authorId]: { results: resp.results, query: resp.query },
+      }));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Validation failed');
     } finally {
@@ -291,13 +366,23 @@ export function AuthorDedupTab() {
   const handleMerge = async (group: AuthorDedupGroup) => {
     setMergeSuccess(null);
     // Filter out removed variants and reclassify narrator-flagged ones first
-    const activeVariants = group.variants.filter((v) => !removedVariants.has(`${group.canonical.id}:${v.id}`));
-    const narratorVariantIds = activeVariants.filter((v) => narratorFlags.has(String(v.id))).map((v) => v.id);
-    const mergeVariantIds = activeVariants.filter((v) => !narratorFlags.has(String(v.id))).map((v) => v.id);
+    const activeVariants = group.variants.filter(
+      (v) => !removedVariants.has(`${group.canonical.id}:${v.id}`)
+    );
+    const narratorVariantIds = activeVariants
+      .filter((v) => narratorFlags.has(String(v.id)))
+      .map((v) => v.id);
+    const mergeVariantIds = activeVariants
+      .filter((v) => !narratorFlags.has(String(v.id)))
+      .map((v) => v.id);
 
     // Reclassify narrator-flagged variants first
     for (const nId of narratorVariantIds) {
-      try { await api.reclassifyAuthorAsNarrator(nId); } catch { /* best effort */ }
+      try {
+        await api.reclassifyAuthorAsNarrator(nId);
+      } catch {
+        /* best effort */
+      }
     }
     if (mergeVariantIds.length === 0) {
       setMergeSuccess(`Reclassified ${narratorVariantIds.length} variant(s) as narrator`);
@@ -321,7 +406,7 @@ export function AuthorDedupTab() {
           });
         }
       },
-      setError,
+      setError
     );
   };
 
@@ -331,7 +416,10 @@ export function AuthorDedupTab() {
       const key = String(group.canonical.id);
       if (!selectedGroups.has(key)) continue;
       try {
-        const initial = await api.mergeAuthors(group.canonical.id, group.variants.map((v) => v.id));
+        const initial = await api.mergeAuthors(
+          group.canonical.id,
+          group.variants.map((v) => v.id)
+        );
         setActiveOp(initial);
         await api.pollOperation(initial.id, (update) => setActiveOp(update));
       } catch (err) {
@@ -348,7 +436,10 @@ export function AuthorDedupTab() {
     setMergeSuccess(null);
     for (const group of groups) {
       try {
-        const initial = await api.mergeAuthors(group.canonical.id, group.variants.map((v) => v.id));
+        const initial = await api.mergeAuthors(
+          group.canonical.id,
+          group.variants.map((v) => v.id)
+        );
         setActiveOp(initial);
         await api.pollOperation(initial.id, (update) => setActiveOp(update));
       } catch (err) {
@@ -363,7 +454,8 @@ export function AuthorDedupTab() {
   const toggleGroup = (key: string) => {
     setSelectedGroups((prev) => {
       const next = new Set(prev);
-      if (next.has(key)) next.delete(key); else next.add(key);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
@@ -381,12 +473,26 @@ export function AuthorDedupTab() {
   return (
     <Box>
       <OperationProgress operation={activeOp} />
-      {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
-      {mergeSuccess && <Alert severity="success" sx={{ mb: 2 }} icon={<CheckCircleIcon />} onClose={() => setMergeSuccess(null)}>{mergeSuccess}</Alert>}
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
+          {error}
+        </Alert>
+      )}
+      {mergeSuccess && (
+        <Alert
+          severity="success"
+          sx={{ mb: 2 }}
+          icon={<CheckCircleIcon />}
+          onClose={() => setMergeSuccess(null)}
+        >
+          {mergeSuccess}
+        </Alert>
+      )}
 
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
         <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
-          Uses structured name comparison to detect author name variants like &quot;James S. A. Corey&quot; vs &quot;James S.A. Corey&quot;.
+          Uses structured name comparison to detect author name variants like &quot;James S. A.
+          Corey&quot; vs &quot;James S.A. Corey&quot;.
         </Typography>
         <Stack direction="row" spacing={1}>
           {groups.length > 0 && (
@@ -395,23 +501,39 @@ export function AuthorDedupTab() {
                 {selectedGroups.size === groups.length ? 'Deselect All' : 'Select All'}
               </Button>
               {selectedGroups.size > 0 && (
-                <Button variant="contained" color="primary" startIcon={<MergeIcon />}
-                  onClick={handleMergeSelected} disabled={busy}>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  startIcon={<MergeIcon />}
+                  onClick={handleMergeSelected}
+                  disabled={busy}
+                >
                   Merge Selected ({selectedGroups.size})
                 </Button>
               )}
-              <Button variant="contained" color="warning" startIcon={<MergeIcon />}
-                onClick={() => setConfirmOpen(true)} disabled={busy}>
+              <Button
+                variant="contained"
+                color="warning"
+                startIcon={<MergeIcon />}
+                onClick={() => setConfirmOpen(true)}
+                disabled={busy}
+              >
                 Merge All ({groups.length})
               </Button>
             </>
           )}
-          <Tooltip title="Refresh"><IconButton onClick={fetchDuplicates} disabled={loading || busy}><RefreshIcon /></IconButton></Tooltip>
+          <Tooltip title="Refresh">
+            <IconButton onClick={fetchDuplicates} disabled={loading || busy}>
+              <RefreshIcon />
+            </IconButton>
+          </Tooltip>
         </Stack>
       </Box>
 
       {loading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box>
+        <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+          <CircularProgress />
+        </Box>
       ) : groups.length === 0 ? (
         <Paper sx={{ p: 4, textAlign: 'center' }}>
           <CheckCircleIcon sx={{ fontSize: 48, color: 'success.main', mb: 1 }} />
@@ -419,214 +541,382 @@ export function AuthorDedupTab() {
         </Paper>
       ) : (
         <>
-        <PaginationControls total={groups.length} page={pagination.page} rowsPerPage={pagination.rowsPerPage}
-          onPageChange={pagination.setPage} onRowsPerPageChange={pagination.setRowsPerPage} />
-        <Stack spacing={2}>
-          {groups.slice(pagination.startIdx, pagination.endIdx).map((group) => {
-            const key = String(group.canonical.id);
-            return (
-              <Card key={key} variant="outlined">
-                <CardContent>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                    <Checkbox
-                      checked={selectedGroups.has(key)}
-                      onChange={() => toggleGroup(key)}
-                      disabled={busy}
-                      size="small"
-                    />
-                    {editingCanonicalId === group.canonical.id ? (
-                      <>
-                        <TextField size="small" value={editingCanonicalName}
-                          onChange={(e) => setEditingCanonicalName(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter') handleSaveCanonicalName(group); if (e.key === 'Escape') { setEditingCanonicalId(null); setEditingCanonicalName(''); } }}
-                          autoFocus sx={{ minWidth: 300 }} />
-                        <IconButton size="small" color="primary" onClick={() => handleSaveCanonicalName(group)}><SaveIcon fontSize="small" /></IconButton>
-                        <IconButton size="small" onClick={() => { setEditingCanonicalId(null); setEditingCanonicalName(''); }}><CloseIcon fontSize="small" /></IconButton>
-                      </>
-                    ) : (
-                      <>
-                        <Typography variant="subtitle1" fontWeight="bold">{cleanDisplayTitle(group.canonical.name)}</Typography>
-                        <Tooltip title="Edit canonical name">
-                          <IconButton size="small" onClick={() => { setEditingCanonicalId(group.canonical.id); setEditingCanonicalName(group.canonical.name); }}>
-                            <EditIcon fontSize="small" />
+          <PaginationControls
+            total={groups.length}
+            page={pagination.page}
+            rowsPerPage={pagination.rowsPerPage}
+            onPageChange={pagination.setPage}
+            onRowsPerPageChange={pagination.setRowsPerPage}
+          />
+          <Stack spacing={2}>
+            {groups.slice(pagination.startIdx, pagination.endIdx).map((group) => {
+              const key = String(group.canonical.id);
+              return (
+                <Card key={key} variant="outlined">
+                  <CardContent>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                      <Checkbox
+                        checked={selectedGroups.has(key)}
+                        onChange={() => toggleGroup(key)}
+                        disabled={busy}
+                        size="small"
+                      />
+                      {editingCanonicalId === group.canonical.id ? (
+                        <>
+                          <TextField
+                            size="small"
+                            value={editingCanonicalName}
+                            onChange={(e) => setEditingCanonicalName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleSaveCanonicalName(group);
+                              if (e.key === 'Escape') {
+                                setEditingCanonicalId(null);
+                                setEditingCanonicalName('');
+                              }
+                            }}
+                            autoFocus
+                            sx={{ minWidth: 300 }}
+                          />
+                          <IconButton
+                            size="small"
+                            color="primary"
+                            onClick={() => handleSaveCanonicalName(group)}
+                          >
+                            <SaveIcon fontSize="small" />
                           </IconButton>
-                        </Tooltip>
-                        {group.suggested_name && group.suggested_name !== group.canonical.name && (
-                          <Tooltip title={`Use suggested: "${group.suggested_name}"`}>
-                            <Chip label={group.suggested_name} size="small" color="info" variant="outlined"
-                              onClick={() => { setEditingCanonicalId(group.canonical.id); setEditingCanonicalName(group.suggested_name!); }}
-                              sx={{ cursor: 'pointer' }} />
+                          <IconButton
+                            size="small"
+                            onClick={() => {
+                              setEditingCanonicalId(null);
+                              setEditingCanonicalName('');
+                            }}
+                          >
+                            <CloseIcon fontSize="small" />
+                          </IconButton>
+                        </>
+                      ) : (
+                        <>
+                          <Typography variant="subtitle1" fontWeight="bold">
+                            {cleanDisplayTitle(group.canonical.name)}
+                          </Typography>
+                          <Tooltip title="Edit canonical name">
+                            <IconButton
+                              size="small"
+                              onClick={() => {
+                                setEditingCanonicalId(group.canonical.id);
+                                setEditingCanonicalName(group.canonical.name);
+                              }}
+                            >
+                              <EditIcon fontSize="small" />
+                            </IconButton>
                           </Tooltip>
-                        )}
-                      </>
-                    )}
-                    <Chip icon={<MenuBookIcon />} label={`${group.book_count} book(s)`} size="small" variant="outlined"
-                      onClick={(e) => {
-                        const ids = [group.canonical.id, ...group.variants.map((v) => v.id)];
-                        setPopoverAuthorIds(ids);
-                        setPopoverAnchor(e.currentTarget);
-                      }}
-                      sx={{ cursor: 'pointer' }} />
-                    {group.is_production_company && (
-                      <Chip label="Production Company" size="small" color="warning" />
-                    )}
-                  </Box>
-                  {group.split_names && group.split_names.length > 1 ? (
-                    <>
-                      <Divider sx={{ my: 1 }} />
-                      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                        Composite author — will split into:
-                      </Typography>
-                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                        {group.split_names.map((name) => {
-                          const flagKey = `${group.canonical.id}:${name}`;
-                          const isNarrator = narratorFlags.has(flagKey);
-                          return (
-                            <Box key={name} sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
-                              <Chip label={name} color="warning" variant="outlined" size="small" />
-                              <Chip
-                                label={isNarrator ? 'Narrator' : 'Author'}
-                                size="small"
-                                color={isNarrator ? 'secondary' : 'default'}
-                                variant={isNarrator ? 'filled' : 'outlined'}
-                                onClick={() => setNarratorFlags((prev) => {
-                                  const next = new Set(prev);
-                                  if (next.has(flagKey)) next.delete(flagKey); else next.add(flagKey);
-                                  return next;
-                                })}
-                                sx={{ cursor: 'pointer' }}
-                              />
-                            </Box>
-                          );
-                        })}
-                      </Box>
-                    </>
-                  ) : group.variants.length > 0 ? (
-                    <>
-                      <Divider sx={{ my: 1 }} />
-                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center', mb: 1 }}>
-                        <Typography variant="body2" color="text.secondary">Merge target:</Typography>
-                        <Chip label={group.canonical.name} color="primary" size="small" variant="outlined" />
-                        <Typography variant="body2" color="text.secondary" sx={{ mx: 0.5 }}>←</Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          {group.variants.filter((v) => !removedVariants.has(`${group.canonical.id}:${v.id}`)).length} variant(s) will be merged into it:
-                        </Typography>
-                      </Box>
-                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                        {group.variants.map((v) => {
-                          const removeKey = `${group.canonical.id}:${v.id}`;
-                          if (removedVariants.has(removeKey)) return null;
-                          const isNarrator = narratorFlags.has(String(v.id));
-                          const isSameAsCanonical = v.name === group.canonical.name;
-                          return (
-                            <Box key={v.id} sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
-                              <Tooltip title={isSameAsCanonical ? `"${v.name}" is the current canonical name (ID ${v.id} will be merged)` : `Click to use "${v.name}" as the merge target (canonical spelling)`}>
-                                <Chip label={v.name} color={isSameAsCanonical ? 'default' : 'warning'} variant="outlined" size="small"
-                                  onClick={isSameAsCanonical ? undefined : async () => {
-                                    try {
-                                      await api.renameAuthor(group.canonical.id, v.name);
-                                      setGroups((prev) => prev.map((g) =>
-                                        g.canonical.id === group.canonical.id
-                                          ? { ...g, canonical: { ...g.canonical, name: v.name } }
-                                          : g
-                                      ));
-                                    } catch (err) {
-                                      setError(err instanceof Error ? err.message : 'Failed to rename author');
-                                    }
+                          {group.suggested_name &&
+                            group.suggested_name !== group.canonical.name && (
+                              <Tooltip title={`Use suggested: "${group.suggested_name}"`}>
+                                <Chip
+                                  label={group.suggested_name}
+                                  size="small"
+                                  color="info"
+                                  variant="outlined"
+                                  onClick={() => {
+                                    setEditingCanonicalId(group.canonical.id);
+                                    setEditingCanonicalName(group.suggested_name!);
                                   }}
-                                  sx={[isSameAsCanonical ? {
-                                    cursor: 'default'
-                                  } : {
-                                    cursor: 'pointer'
-                                  }]} />
+                                  sx={{ cursor: 'pointer' }}
+                                />
                               </Tooltip>
-                              <Chip
-                                label={isNarrator ? 'Narrator' : 'Author'}
-                                size="small"
-                                color={isNarrator ? 'secondary' : 'default'}
-                                variant={isNarrator ? 'filled' : 'outlined'}
-                                onClick={() => setNarratorFlags((prev) => {
-                                  const next = new Set(prev);
-                                  const k = String(v.id);
-                                  if (next.has(k)) next.delete(k); else next.add(k);
-                                  return next;
-                                })}
-                                sx={{ cursor: 'pointer', minWidth: 60 }}
-                              />
-                              <Tooltip title={`Remove "${v.name}" from this merge`}>
-                                <IconButton size="small" onClick={() => setRemovedVariants((prev) => new Set(prev).add(removeKey))}
-                                  sx={{ p: 0.25 }}>
-                                  <CloseIcon fontSize="small" />
-                                </IconButton>
-                              </Tooltip>
+                            )}
+                        </>
+                      )}
+                      <Chip
+                        icon={<MenuBookIcon />}
+                        label={`${group.book_count} book(s)`}
+                        size="small"
+                        variant="outlined"
+                        onClick={(e) => {
+                          const ids = [group.canonical.id, ...group.variants.map((v) => v.id)];
+                          setPopoverAuthorIds(ids);
+                          setPopoverAnchor(e.currentTarget);
+                        }}
+                        sx={{ cursor: 'pointer' }}
+                      />
+                      {group.is_production_company && (
+                        <Chip label="Production Company" size="small" color="warning" />
+                      )}
+                    </Box>
+                    {group.split_names && group.split_names.length > 1 ? (
+                      <>
+                        <Divider sx={{ my: 1 }} />
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                          Composite author — will split into:
+                        </Typography>
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                          {group.split_names.map((name) => {
+                            const flagKey = `${group.canonical.id}:${name}`;
+                            const isNarrator = narratorFlags.has(flagKey);
+                            return (
+                              <Box
+                                key={name}
+                                sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}
+                              >
+                                <Chip
+                                  label={name}
+                                  color="warning"
+                                  variant="outlined"
+                                  size="small"
+                                />
+                                <Chip
+                                  label={isNarrator ? 'Narrator' : 'Author'}
+                                  size="small"
+                                  color={isNarrator ? 'secondary' : 'default'}
+                                  variant={isNarrator ? 'filled' : 'outlined'}
+                                  onClick={() =>
+                                    setNarratorFlags((prev) => {
+                                      const next = new Set(prev);
+                                      if (next.has(flagKey)) next.delete(flagKey);
+                                      else next.add(flagKey);
+                                      return next;
+                                    })
+                                  }
+                                  sx={{ cursor: 'pointer' }}
+                                />
+                              </Box>
+                            );
+                          })}
+                        </Box>
+                      </>
+                    ) : group.variants.length > 0 ? (
+                      <>
+                        <Divider sx={{ my: 1 }} />
+                        <Box
+                          sx={{
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            gap: 1,
+                            alignItems: 'center',
+                            mb: 1,
+                          }}
+                        >
+                          <Typography variant="body2" color="text.secondary">
+                            Merge target:
+                          </Typography>
+                          <Chip
+                            label={group.canonical.name}
+                            color="primary"
+                            size="small"
+                            variant="outlined"
+                          />
+                          <Typography variant="body2" color="text.secondary" sx={{ mx: 0.5 }}>
+                            ←
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            {
+                              group.variants.filter(
+                                (v) => !removedVariants.has(`${group.canonical.id}:${v.id}`)
+                              ).length
+                            }{' '}
+                            variant(s) will be merged into it:
+                          </Typography>
+                        </Box>
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                          {group.variants.map((v) => {
+                            const removeKey = `${group.canonical.id}:${v.id}`;
+                            if (removedVariants.has(removeKey)) return null;
+                            const isNarrator = narratorFlags.has(String(v.id));
+                            const isSameAsCanonical = v.name === group.canonical.name;
+                            return (
+                              <Box
+                                key={v.id}
+                                sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}
+                              >
+                                <Tooltip
+                                  title={
+                                    isSameAsCanonical
+                                      ? `"${v.name}" is the current canonical name (ID ${v.id} will be merged)`
+                                      : `Click to use "${v.name}" as the merge target (canonical spelling)`
+                                  }
+                                >
+                                  <Chip
+                                    label={v.name}
+                                    color={isSameAsCanonical ? 'default' : 'warning'}
+                                    variant="outlined"
+                                    size="small"
+                                    onClick={
+                                      isSameAsCanonical
+                                        ? undefined
+                                        : async () => {
+                                            try {
+                                              await api.renameAuthor(group.canonical.id, v.name);
+                                              setGroups((prev) =>
+                                                prev.map((g) =>
+                                                  g.canonical.id === group.canonical.id
+                                                    ? {
+                                                        ...g,
+                                                        canonical: { ...g.canonical, name: v.name },
+                                                      }
+                                                    : g
+                                                )
+                                              );
+                                            } catch (err) {
+                                              setError(
+                                                err instanceof Error
+                                                  ? err.message
+                                                  : 'Failed to rename author'
+                                              );
+                                            }
+                                          }
+                                    }
+                                    sx={[
+                                      isSameAsCanonical
+                                        ? {
+                                            cursor: 'default',
+                                          }
+                                        : {
+                                            cursor: 'pointer',
+                                          },
+                                    ]}
+                                  />
+                                </Tooltip>
+                                <Chip
+                                  label={isNarrator ? 'Narrator' : 'Author'}
+                                  size="small"
+                                  color={isNarrator ? 'secondary' : 'default'}
+                                  variant={isNarrator ? 'filled' : 'outlined'}
+                                  onClick={() =>
+                                    setNarratorFlags((prev) => {
+                                      const next = new Set(prev);
+                                      const k = String(v.id);
+                                      if (next.has(k)) next.delete(k);
+                                      else next.add(k);
+                                      return next;
+                                    })
+                                  }
+                                  sx={{ cursor: 'pointer', minWidth: 60 }}
+                                />
+                                <Tooltip title={`Remove "${v.name}" from this merge`}>
+                                  <IconButton
+                                    size="small"
+                                    onClick={() =>
+                                      setRemovedVariants((prev) => new Set(prev).add(removeKey))
+                                    }
+                                    sx={{ p: 0.25 }}
+                                  >
+                                    <CloseIcon fontSize="small" />
+                                  </IconButton>
+                                </Tooltip>
+                              </Box>
+                            );
+                          })}
+                        </Box>
+                        {/* Validate button */}
+                        <Box sx={{ mt: 1 }}>
+                          <Button
+                            size="small"
+                            variant="text"
+                            disabled={validatingAuthor === key}
+                            onClick={() => handleValidateAuthor(group.canonical.name, key)}
+                          >
+                            {validatingAuthor === key ? 'Searching...' : 'Search external sources'}
+                          </Button>
+                          {authorValidation[key] && (
+                            <Box sx={{ mt: 1 }}>
+                              {authorValidation[key].results.length === 0 ? (
+                                <Typography variant="caption" color="text.secondary">
+                                  No external matches found
+                                </Typography>
+                              ) : (
+                                authorValidation[key].results.map((r, i) => (
+                                  <Chip
+                                    key={i}
+                                    label={`${r.source}: ${r.author || r.title}`}
+                                    size="small"
+                                    variant="outlined"
+                                    sx={{ mr: 0.5, mb: 0.5 }}
+                                  />
+                                ))
+                              )}
                             </Box>
-                          );
-                        })}
-                      </Box>
-                      {/* Validate button */}
-                      <Box sx={{ mt: 1 }}>
-                        <Button size="small" variant="text"
-                          disabled={validatingAuthor === key}
-                          onClick={() => handleValidateAuthor(group.canonical.name, key)}>
-                          {validatingAuthor === key ? 'Searching...' : 'Search external sources'}
-                        </Button>
-                        {authorValidation[key] && (
-                          <Box sx={{ mt: 1 }}>
-                            {authorValidation[key].results.length === 0 ? (
-                              <Typography variant="caption" color="text.secondary">No external matches found</Typography>
-                            ) : authorValidation[key].results.map((r, i) => (
-                              <Chip key={i} label={`${r.source}: ${r.author || r.title}`} size="small" variant="outlined" sx={{ mr: 0.5, mb: 0.5 }} />
-                            ))}
-                          </Box>
-                        )}
-                      </Box>
-                    </>
-                  ) : null}
-                </CardContent>
-                <CardActions>
-                  {group.is_production_company ? (
-                    <Button startIcon={<SearchIcon />} variant="contained" size="small" color="warning"
-                      disabled={busy || resolvingAuthor === group.canonical.id}
-                      onClick={async () => {
-                        try {
-                          setResolvingAuthor(group.canonical.id);
-                          const op = await api.resolveProductionAuthor(group.canonical.id);
-                          await runOperationWithPolling(
-                            () => Promise.resolve(op),
-                            setActiveOp,
-                            () => { fetchDuplicates(); setResolvingAuthor(null); },
-                            (msg) => { setError(msg); setResolvingAuthor(null); },
-                          );
-                        } catch (err) {
-                          setError(err instanceof Error ? err.message : 'Failed to resolve');
-                          setResolvingAuthor(null);
-                        }
-                      }}>
-                      {resolvingAuthor === group.canonical.id ? 'Resolving...' : 'Find Real Author'}
-                    </Button>
-                  ) : group.split_names && group.split_names.length > 1 ? (
-                    <Button startIcon={<MergeIcon />} variant="contained" size="small" color="warning"
-                      onClick={() => handleSplitAuthor(group)} disabled={busy}>
-                      Split into {group.split_names.length} authors
-                    </Button>
-                  ) : (
-                    <Button startIcon={<MergeIcon />} variant="contained" size="small"
-                      onClick={() => handleMerge(group)} disabled={busy}>
-                      {`Merge into "${group.canonical.name}"`}
-                    </Button>
-                  )}
-                </CardActions>
-              </Card>
-            );
-          })}
-        </Stack>
-        <PaginationControls total={groups.length} page={pagination.page} rowsPerPage={pagination.rowsPerPage}
-          onPageChange={pagination.setPage} onRowsPerPageChange={pagination.setRowsPerPage} />
+                          )}
+                        </Box>
+                      </>
+                    ) : null}
+                  </CardContent>
+                  <CardActions>
+                    {group.is_production_company ? (
+                      <Button
+                        startIcon={<SearchIcon />}
+                        variant="contained"
+                        size="small"
+                        color="warning"
+                        disabled={busy || resolvingAuthor === group.canonical.id}
+                        onClick={async () => {
+                          try {
+                            setResolvingAuthor(group.canonical.id);
+                            const op = await api.resolveProductionAuthor(group.canonical.id);
+                            await runOperationWithPolling(
+                              () => Promise.resolve(op),
+                              setActiveOp,
+                              () => {
+                                fetchDuplicates();
+                                setResolvingAuthor(null);
+                              },
+                              (msg) => {
+                                setError(msg);
+                                setResolvingAuthor(null);
+                              }
+                            );
+                          } catch (err) {
+                            setError(err instanceof Error ? err.message : 'Failed to resolve');
+                            setResolvingAuthor(null);
+                          }
+                        }}
+                      >
+                        {resolvingAuthor === group.canonical.id
+                          ? 'Resolving...'
+                          : 'Find Real Author'}
+                      </Button>
+                    ) : group.split_names && group.split_names.length > 1 ? (
+                      <Button
+                        startIcon={<MergeIcon />}
+                        variant="contained"
+                        size="small"
+                        color="warning"
+                        onClick={() => handleSplitAuthor(group)}
+                        disabled={busy}
+                      >
+                        Split into {group.split_names.length} authors
+                      </Button>
+                    ) : (
+                      <Button
+                        startIcon={<MergeIcon />}
+                        variant="contained"
+                        size="small"
+                        onClick={() => handleMerge(group)}
+                        disabled={busy}
+                      >
+                        {`Merge into "${group.canonical.name}"`}
+                      </Button>
+                    )}
+                  </CardActions>
+                </Card>
+              );
+            })}
+          </Stack>
+          <PaginationControls
+            total={groups.length}
+            page={pagination.page}
+            rowsPerPage={pagination.rowsPerPage}
+            onPageChange={pagination.setPage}
+            onRowsPerPageChange={pagination.setRowsPerPage}
+          />
         </>
       )}
       <AuthorBooksPopover
         anchorEl={popoverAnchor}
-        onClose={() => { setPopoverAnchor(null); setPopoverAuthorIds([]); }}
+        onClose={() => {
+          setPopoverAnchor(null);
+          setPopoverAuthorIds([]);
+        }}
         authorIds={popoverAuthorIds}
       />
       <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
@@ -638,7 +928,9 @@ export function AuthorDedupTab() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmOpen(false)}>Cancel</Button>
-          <Button onClick={handleMergeAll} color="warning" variant="contained">Confirm</Button>
+          <Button onClick={handleMergeAll} color="warning" variant="contained">
+            Confirm
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>

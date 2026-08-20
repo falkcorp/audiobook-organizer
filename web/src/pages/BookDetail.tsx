@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.54.0
+// version: 1.54.1
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
-// last-edited: 2026-08-09
+// last-edited: 2026-08-19
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -16,7 +16,15 @@ import {
   Tabs,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import type { Book, BookFile, BookSegment, BookTags, SegmentTags, OverridePayload, OrganizePreviewResponse } from '../services/api';
+import type {
+  Book,
+  BookFile,
+  BookSegment,
+  BookTags,
+  SegmentTags,
+  OverridePayload,
+  OrganizePreviewResponse,
+} from '../services/api';
 import * as api from '../services/api';
 import { useToast } from '../components/toast/ToastProvider';
 import type { Audiobook } from '../types';
@@ -26,8 +34,10 @@ import { BookDetailStatusAlerts } from '../components/bookdetail/BookDetailStatu
 import { BookDetailActions } from '../components/bookdetail/BookDetailActions';
 import { BookDetailInfoTab } from '../components/bookdetail/BookDetailInfoTab';
 import { BookDetailFilesTab } from '../components/bookdetail/BookDetailFilesTab';
-import { BookDetailDialogs, type MetadataRejection } from '../components/bookdetail/BookDetailDialogs';
-
+import {
+  BookDetailDialogs,
+  type MetadataRejection,
+} from '../components/bookdetail/BookDetailDialogs';
 
 export const BookDetail = () => {
   const { id } = useParams();
@@ -45,11 +55,18 @@ export const BookDetail = () => {
   // preAIBook removed — use History to revert AI changes
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeTab = (['info', 'files'].includes(searchParams.get('tab') || '')
-    ? searchParams.get('tab')
-    : 'info') as 'info' | 'files';
+  const activeTab = (
+    ['info', 'files'].includes(searchParams.get('tab') || '') ? searchParams.get('tab') : 'info'
+  ) as 'info' | 'files';
   const setActiveTab = (v: 'info' | 'files') => {
-    setSearchParams((prev) => { const next = new URLSearchParams(prev); next.set('tab', v); return next; }, { replace: true });
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set('tab', v);
+        return next;
+      },
+      { replace: true }
+    );
   };
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [playlistDialogOpen, setPlaylistDialogOpen] = useState(false);
@@ -58,8 +75,7 @@ export const BookDetail = () => {
     blockHash: true,
   });
   const [conflictDialogOpen, setConflictDialogOpen] = useState(false);
-  const [pendingUpdate, setPendingUpdate] =
-    useState<Partial<Book> | null>(null);
+  const [pendingUpdate, setPendingUpdate] = useState<Partial<Book> | null>(null);
   const [purgeDialogOpen, setPurgeDialogOpen] = useState(false);
   const [purgeConfirmed, setPurgeConfirmed] = useState(false);
   const [versions, setVersions] = useState<Book[]>([]);
@@ -93,7 +109,9 @@ export const BookDetail = () => {
   const [expandedTagStep, setExpandedTagStep] = useState(false);
   // Sonarr-style version expansion
   const [expandedVersionIds, setExpandedVersionIds] = useState<Set<string>>(new Set());
-  const [expandedSegmentVersionIds, setExpandedSegmentVersionIds] = useState<Set<string>>(new Set());
+  const [expandedSegmentVersionIds, setExpandedSegmentVersionIds] = useState<Set<string>>(
+    new Set()
+  );
   const [versionSegments, setVersionSegments] = useState<Record<string, BookSegment[]>>({});
   const [versionFileTags, setVersionFileTags] = useState<Record<string, BookTags | null>>({});
   // versionFileTagsLoading removed — TagComparison handles its own loading
@@ -116,10 +134,17 @@ export const BookDetail = () => {
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
-    api.getBookTagsDetailed(id)
-      .then((data) => { if (!cancelled) setDetailedTags(data); })
-      .catch(() => { if (!cancelled) setDetailedTags([]); });
-    return () => { cancelled = true; };
+    api
+      .getBookTagsDetailed(id)
+      .then((data) => {
+        if (!cancelled) setDetailedTags(data);
+      })
+      .catch(() => {
+        if (!cancelled) setDetailedTags([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [id, filesRefreshKey]);
 
   // loadBook/loadVersions accept an optional `isStale` check so the
@@ -129,34 +154,37 @@ export const BookDetail = () => {
   // simply arriving after B's, used to let A's setBook overwrite B's).
   // Callers outside that effect (button handlers, onRefresh, etc.) call
   // these with no argument, which is unconditional/unchanged behavior.
-  const loadBook = useCallback(async (isStale?: () => boolean) => {
-    if (!id) return;
-    setLoading(true);
-    try {
-      const data = await api.getBook(id);
-      if (isStale?.()) return;
-      setBook(data);
-    } catch (error) {
-      if (isStale?.()) return;
-      if (error instanceof api.ApiError) {
-        if (error.status === 404) {
-          setBook(null);
-          return;
+  const loadBook = useCallback(
+    async (isStale?: () => boolean) => {
+      if (!id) return;
+      setLoading(true);
+      try {
+        const data = await api.getBook(id);
+        if (isStale?.()) return;
+        setBook(data);
+      } catch (error) {
+        if (isStale?.()) return;
+        if (error instanceof api.ApiError) {
+          if (error.status === 404) {
+            setBook(null);
+            return;
+          }
+          if (error.status === 401) {
+            toast('Session expired.', 'error');
+            navigate('/login');
+            return;
+          }
         }
-        if (error.status === 401) {
-          toast('Session expired.', 'error');
-          navigate('/login');
-          return;
-        }
+        console.error('Failed to load book', error);
+        toast('Failed to load audiobook details.', 'error');
+      } finally {
+        // Don't clear loading for a stale request — a newer request for a
+        // different id may still be in flight and already owns `loading`.
+        if (!isStale?.()) setLoading(false);
       }
-      console.error('Failed to load book', error);
-      toast('Failed to load audiobook details.', 'error');
-    } finally {
-      // Don't clear loading for a stale request — a newer request for a
-      // different id may still be in flight and already owns `loading`.
-      if (!isStale?.()) setLoading(false);
-    }
-  }, [id, navigate, toast]);
+    },
+    [id, navigate, toast]
+  );
 
   // Silent refresh: re-fetches book without showing the full-page loading spinner
   const refreshBook = useCallback(async () => {
@@ -169,18 +197,20 @@ export const BookDetail = () => {
     }
   }, [id]);
 
-  const loadVersions = useCallback(async (isStale?: () => boolean) => {
-    if (!id) return;
-    try {
-      const data = await api.getBookVersions(id);
-      if (isStale?.()) return;
-      setVersions(data);
-    } catch (error) {
-      if (isStale?.()) return;
-      console.error('Failed to load versions', error);
-    }
-  }, [id]);
-
+  const loadVersions = useCallback(
+    async (isStale?: () => boolean) => {
+      if (!id) return;
+      try {
+        const data = await api.getBookVersions(id);
+        if (isStale?.()) return;
+        setVersions(data);
+      } catch (error) {
+        if (isStale?.()) return;
+        console.error('Failed to load versions', error);
+      }
+    },
+    [id]
+  );
 
   // Primary id-keyed load. A `cancelled` flag (same idiom used elsewhere in
   // this file, e.g. the linkSearch and tag-preload effects) guards every
@@ -193,18 +223,27 @@ export const BookDetail = () => {
     loadBook(isStale);
     loadVersions(isStale);
     // Load external ID info (iTunes linkage)
-    api.getBookExternalIDs(id!).then((data) => {
-      if (cancelled) return;
-      setItunesLinked(data.itunes_linked);
-      setItunesPidCount(data.total);
-      setItunesExternalIDs(data.external_ids.filter((e) => e.source === 'itunes' && !e.tombstoned));
-    }).catch(() => {});
+    api
+      .getBookExternalIDs(id!)
+      .then((data) => {
+        if (cancelled) return;
+        setItunesLinked(data.itunes_linked);
+        setItunesPidCount(data.total);
+        setItunesExternalIDs(
+          data.external_ids.filter((e) => e.source === 'itunes' && !e.tombstoned)
+        );
+      })
+      .catch(() => {});
     // Load rejection history (META-REJ-1)
     fetch(`/api/v1/audiobooks/${id}/metadata-rejections`, { credentials: 'include' })
-      .then((r) => r.ok ? r.json() : Promise.reject(r))
-      .then((data) => { if (!cancelled) setRejections(data.rejections ?? []); })
+      .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+      .then((data) => {
+        if (!cancelled) setRejections(data.rejections ?? []);
+      })
       .catch(() => {});
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [id, loadBook, loadVersions]);
 
   // Inline version link search
@@ -215,18 +254,30 @@ export const BookDetail = () => {
       return;
     }
     const q = linkSearchQuery.trim();
-    if (!q) { setLinkSearchResults([]); return; }
+    if (!q) {
+      setLinkSearchResults([]);
+      return;
+    }
     let cancelled = false;
     setLinkSearchLoading(true);
     let timer: ReturnType<typeof setTimeout> | null = null;
     timer = setTimeout(async () => {
       try {
         const results = await api.searchBooks(q, 10);
-        if (!cancelled) setLinkSearchResults(results.filter(r => r.id !== book?.id && !versions.some(v => v.id === r.id)));
-      } catch { /* ignore */ }
-      finally { if (!cancelled) setLinkSearchLoading(false); }
+        if (!cancelled)
+          setLinkSearchResults(
+            results.filter((r) => r.id !== book?.id && !versions.some((v) => v.id === r.id))
+          );
+      } catch {
+        /* ignore */
+      } finally {
+        if (!cancelled) setLinkSearchLoading(false);
+      }
     }, 300);
-    return () => { cancelled = true; if (timer) window.clearTimeout(timer); };
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
   }, [linkSearchOpen, linkSearchQuery, book?.id, versions]);
 
   const handleInlineLinkVersion = async (targetId: string) => {
@@ -299,18 +350,21 @@ export const BookDetail = () => {
   }, []);
 
   // Load segment tags when selection changes
-  const loadSegmentTags = useCallback(async (segmentId: string) => {
-    if (!id) return;
-    setSegmentTagsLoading(true);
-    try {
-      const data = await api.getSegmentTags(id, segmentId);
-      setSegmentTags(data);
-    } catch {
-      setSegmentTags(null);
-    } finally {
-      setSegmentTagsLoading(false);
-    }
-  }, [id]);
+  const loadSegmentTags = useCallback(
+    async (segmentId: string) => {
+      if (!id) return;
+      setSegmentTagsLoading(true);
+      try {
+        const data = await api.getSegmentTags(id, segmentId);
+        setSegmentTags(data);
+      } catch {
+        setSegmentTags(null);
+      } finally {
+        setSegmentTagsLoading(false);
+      }
+    },
+    [id]
+  );
 
   useEffect(() => {
     if (isSingleSelect && singleSelectedId) {
@@ -323,9 +377,7 @@ export const BookDetail = () => {
   const handleDelete = async () => {
     if (!book) return;
     setActionLoading(true);
-    setActionLabel(
-      deleteOptions.softDelete ? 'Soft deleting...' : 'Deleting...'
-    );
+    setActionLabel(deleteOptions.softDelete ? 'Soft deleting...' : 'Deleting...');
     try {
       const result = await api.deleteBook(book.id, {
         softDelete: deleteOptions.softDelete,
@@ -339,8 +391,7 @@ export const BookDetail = () => {
           ? ' Hash blocked.'
           : ' Hash could not be blocked.'
         : '';
-      const severity =
-        deleteOptions.blockHash && !result.blocked ? 'warning' : 'success';
+      const severity = deleteOptions.blockHash && !result.blocked ? 'warning' : 'success';
       toast(`${baseMessage}${blockNotice}`, severity);
       setDeleteDialogOpen(false);
       await loadBook();
@@ -453,15 +504,10 @@ export const BookDetail = () => {
       // Re-fetch enriched book (with populated authors array) and tags
       await refreshBook();
       refreshFilesTab(); // reload tags and changelog
-      toast(
-        result.message ||
-          `Metadata refreshed from ${result.source || 'provider'}.`,
-        'success'
-      );
+      toast(result.message || `Metadata refreshed from ${result.source || 'provider'}.`, 'success');
     } catch (error: unknown) {
       console.error('Failed to fetch metadata', error);
-      const msg =
-        error instanceof Error ? error.message : 'Metadata fetch failed.';
+      const msg = error instanceof Error ? error.message : 'Metadata fetch failed.';
       toast(msg, 'error');
     } finally {
       setFetchingMetadata(false);
@@ -476,8 +522,7 @@ export const BookDetail = () => {
       toast('Transcode started. The book will be converted to M4B.', 'success');
     } catch (error: unknown) {
       console.error('Failed to start transcode', error);
-      const msg =
-        error instanceof Error ? error.message : 'Transcode failed to start.';
+      const msg = error instanceof Error ? error.message : 'Transcode failed to start.';
       toast(msg, 'error');
     } finally {
       setTranscoding(false);
@@ -495,8 +540,7 @@ export const BookDetail = () => {
       await refreshBook(); // refresh book data to reflect any changes
     } catch (error: unknown) {
       console.error('Failed to write metadata to files', error);
-      const msg =
-        error instanceof Error ? error.message : 'Write to files failed.';
+      const msg = error instanceof Error ? error.message : 'Write to files failed.';
       toast(msg, 'error');
     } finally {
       setWritingToFiles(false);
@@ -513,8 +557,7 @@ export const BookDetail = () => {
       setOrganizePreviewDialogOpen(true);
     } catch (error: unknown) {
       console.error('Failed to preview organize', error);
-      const msg =
-        error instanceof Error ? error.message : 'Preview organize failed.';
+      const msg = error instanceof Error ? error.message : 'Preview organize failed.';
       toast(msg, 'error');
     } finally {
       setOrganizePreviewLoading(false);
@@ -531,8 +574,7 @@ export const BookDetail = () => {
       await refreshBook();
     } catch (error: unknown) {
       console.error('Failed to organize book', error);
-      const msg =
-        error instanceof Error ? error.message : 'Organize failed.';
+      const msg = error instanceof Error ? error.message : 'Organize failed.';
       toast(msg, 'error');
     } finally {
       setApplyingOrganize(false);
@@ -600,69 +642,72 @@ export const BookDetail = () => {
     }
   }, [id, versions.length]);
 
-  const toggleVersionExpanded = useCallback(async (versionId: string) => {
-    setExpandedVersionIds(prev => {
-      const next = new Set(prev);
-      if (next.has(versionId)) {
-        next.delete(versionId);
-      } else {
-        next.add(versionId);
-      }
-      return next;
-    });
-    // Load files for this version if not already loaded
-    if (!versionSegments[versionId]) {
-      try {
-        const result = await api.getBookFiles(versionId);
-        if (result.files && result.files.length > 0) {
-          // Convert BookFile to BookSegment shape for versionSegments
-          const segs: BookSegment[] = result.files.map(f => ({
-            id: f.id,
-            file_path: f.file_path,
-            format: f.format || '',
-            size_bytes: f.file_size || 0,
-            duration_seconds: (f.duration || 0) / 1000,
-            track_number: f.track_number,
-            total_tracks: f.track_count,
-            active: !f.missing,
-            file_exists: f.file_exists,
-          }));
-          setVersionSegments(prev => ({ ...prev, [versionId]: segs }));
-        } else {
-          const segs = await api.getBookSegments(versionId);
-          setVersionSegments(prev => ({ ...prev, [versionId]: segs }));
-        }
-      } catch {
-        try {
-          const segs = await api.getBookSegments(versionId);
-          setVersionSegments(prev => ({ ...prev, [versionId]: segs }));
-        } catch {
-          setVersionSegments(prev => ({ ...prev, [versionId]: [] }));
-        }
-      }
-    }
-    // Load file tags if not already loaded
-    if (versionFileTags[versionId] === undefined) {
-      setVersionFileTagsLoading(prev => new Set(prev).add(versionId));
-      try {
-        const tags = await api.getBookTags(versionId);
-        setVersionFileTags(prev => ({ ...prev, [versionId]: tags }));
-      } catch {
-        setVersionFileTags(prev => ({ ...prev, [versionId]: null }));
-      } finally {
-        setVersionFileTagsLoading(prev => {
-          const next = new Set(prev);
+  const toggleVersionExpanded = useCallback(
+    async (versionId: string) => {
+      setExpandedVersionIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(versionId)) {
           next.delete(versionId);
-          return next;
-        });
+        } else {
+          next.add(versionId);
+        }
+        return next;
+      });
+      // Load files for this version if not already loaded
+      if (!versionSegments[versionId]) {
+        try {
+          const result = await api.getBookFiles(versionId);
+          if (result.files && result.files.length > 0) {
+            // Convert BookFile to BookSegment shape for versionSegments
+            const segs: BookSegment[] = result.files.map((f) => ({
+              id: f.id,
+              file_path: f.file_path,
+              format: f.format || '',
+              size_bytes: f.file_size || 0,
+              duration_seconds: (f.duration || 0) / 1000,
+              track_number: f.track_number,
+              total_tracks: f.track_count,
+              active: !f.missing,
+              file_exists: f.file_exists,
+            }));
+            setVersionSegments((prev) => ({ ...prev, [versionId]: segs }));
+          } else {
+            const segs = await api.getBookSegments(versionId);
+            setVersionSegments((prev) => ({ ...prev, [versionId]: segs }));
+          }
+        } catch {
+          try {
+            const segs = await api.getBookSegments(versionId);
+            setVersionSegments((prev) => ({ ...prev, [versionId]: segs }));
+          } catch {
+            setVersionSegments((prev) => ({ ...prev, [versionId]: [] }));
+          }
+        }
       }
-    }
-  }, [versionSegments, versionFileTags]);
+      // Load file tags if not already loaded
+      if (versionFileTags[versionId] === undefined) {
+        setVersionFileTagsLoading((prev) => new Set(prev).add(versionId));
+        try {
+          const tags = await api.getBookTags(versionId);
+          setVersionFileTags((prev) => ({ ...prev, [versionId]: tags }));
+        } catch {
+          setVersionFileTags((prev) => ({ ...prev, [versionId]: null }));
+        } finally {
+          setVersionFileTagsLoading((prev) => {
+            const next = new Set(prev);
+            next.delete(versionId);
+            return next;
+          });
+        }
+      }
+    },
+    [versionSegments, versionFileTags]
+  );
 
   // Keep current book's segments synced
   useEffect(() => {
     if (id && segments.length > 0) {
-      setVersionSegments(prev => ({ ...prev, [id]: segments }));
+      setVersionSegments((prev) => ({ ...prev, [id]: segments }));
     }
   }, [id, segments]);
 
@@ -670,21 +715,22 @@ export const BookDetail = () => {
   useEffect(() => {
     if (!id || versionFileTags[id] !== undefined) return;
     let cancelled = false;
-    setVersionFileTagsLoading(prev => new Set(prev).add(id));
-    api.getBookTags(id)
+    setVersionFileTagsLoading((prev) => new Set(prev).add(id));
+    api
+      .getBookTags(id)
       .then((tags) => {
         if (!cancelled) {
-          setVersionFileTags(prev => ({ ...prev, [id]: tags }));
+          setVersionFileTags((prev) => ({ ...prev, [id]: tags }));
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setVersionFileTags(prev => ({ ...prev, [id]: null }));
+          setVersionFileTags((prev) => ({ ...prev, [id]: null }));
         }
       })
       .finally(() => {
         if (!cancelled) {
-          setVersionFileTagsLoading(prev => {
+          setVersionFileTagsLoading((prev) => {
             const next = new Set(prev);
             next.delete(id);
             return next;
@@ -716,8 +762,7 @@ export const BookDetail = () => {
       toast(result.message || 'AI parsing completed. Use History to revert if needed.', 'success');
     } catch (error: unknown) {
       console.error('Failed to parse with AI', error);
-      const msg =
-        error instanceof Error ? error.message : 'AI parsing failed.';
+      const msg = error instanceof Error ? error.message : 'AI parsing failed.';
       toast(msg, 'error');
     } finally {
       setParsingWithAI(false);
@@ -740,8 +785,7 @@ export const BookDetail = () => {
       }, 3000);
     } catch (error: unknown) {
       console.error('Failed to rescan folder', error);
-      const msg =
-        error instanceof Error ? error.message : 'Folder rescan failed.';
+      const msg = error instanceof Error ? error.message : 'Folder rescan failed.';
       toast(msg, 'error');
     } finally {
       setRescanningFolder(false);
@@ -841,10 +885,7 @@ export const BookDetail = () => {
       narrator: updated.narrator ?? '',
       series_position: updated.series_number ?? undefined,
       audiobook_release_year:
-        updated.audiobook_release_year ||
-        updated.year ||
-        book.audiobook_release_year ||
-        undefined,
+        updated.audiobook_release_year || updated.year || book.audiobook_release_year || undefined,
       // PRESERVE-ONLY. This used to be `updated.year || book.print_year`, which
       // meant the dialog's single Year box wrote BOTH audiobook_release_year
       // (its declared meaning, per FIELD_TO_API) AND print_year.
@@ -860,11 +901,7 @@ export const BookDetail = () => {
       // 'Year'), so there is nothing here that should change print_year.
       // Removing the write removes a corruption path, not a feature.
       print_year: book.print_year || undefined,
-      isbn:
-        updated.isbn13 ||
-        updated.isbn10 ||
-        book.isbn ||
-        '',
+      isbn: updated.isbn13 || updated.isbn10 || book.isbn || '',
       author_name: updated.author ?? '',
       series_name: updated.series ?? '',
     };
@@ -875,11 +912,12 @@ export const BookDetail = () => {
       for (const field of dirtyFields) {
         const apiField = FIELD_TO_API[field];
         if (!apiField) continue;
-        const value = field === 'year'
-          ? (updated.year ?? updated.audiobook_release_year ?? null)
-          : field === 'series_number'
-            ? (updated.series_number ?? null)
-            : ((updated as unknown as Record<string, unknown>)[field] ?? null);
+        const value =
+          field === 'year'
+            ? (updated.year ?? updated.audiobook_release_year ?? null)
+            : field === 'series_number'
+              ? (updated.series_number ?? null)
+              : ((updated as unknown as Record<string, unknown>)[field] ?? null);
         overrides[apiField] = { value, locked: true };
       }
       if (Object.keys(overrides).length > 0) {
@@ -946,12 +984,7 @@ export const BookDetail = () => {
 
   if (loading) {
     return (
-      <Box
-        display="flex"
-        alignItems="center"
-        justifyContent="center"
-        height="100%"
-      >
+      <Box display="flex" alignItems="center" justifyContent="center" height="100%">
         <CircularProgress />
       </Box>
     );
@@ -980,7 +1013,9 @@ export const BookDetail = () => {
 
   return (
     <Box p={3} sx={{ height: '100%', overflowY: 'auto' }}>
-      {actionLoading && <LinearProgress sx={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999 }} />}
+      {actionLoading && (
+        <LinearProgress sx={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999 }} />
+      )}
       {actionLabel && (
         <Alert severity="info" sx={{ mb: 2 }}>
           {actionLabel}
@@ -1027,7 +1062,11 @@ export const BookDetail = () => {
         onParseWithAI={handleParseWithAI}
         onRescanFolder={handleRescanFolder}
         onRescanFiles={handleRescanFiles}
-        onRefresh={() => { loadBook(); loadVersions(); refreshFilesTab(); }}
+        onRefresh={() => {
+          loadBook();
+          loadVersions();
+          refreshFilesTab();
+        }}
         onOpenEdit={() => setEditDialogOpen(true)}
         onFetchMetadata={handleFetchMetadata}
         onOpenMetadataSearch={() => setMetadataSearchOpen(true)}
@@ -1035,12 +1074,21 @@ export const BookDetail = () => {
         onTranscode={handleTranscode}
         onPreviewOrganize={handlePreviewOrganize}
         onOpenWriteBack={() => setWriteBackDialogOpen(true)}
-        onOpenDelete={() => { setDeleteOptions({ softDelete: true, blockHash: true }); setDeleteDialogOpen(true); }}
+        onOpenDelete={() => {
+          setDeleteOptions({ softDelete: true, blockHash: true });
+          setDeleteDialogOpen(true);
+        }}
         onRestore={handleRestore}
       />
 
       <Paper sx={{ p: 2, mb: 3 }}>
-        <Tabs value={activeTab} onChange={(_, v) => setActiveTab(v)} textColor="primary" indicatorColor="primary" variant="scrollable">
+        <Tabs
+          value={activeTab}
+          onChange={(_, v) => setActiveTab(v)}
+          textColor="primary"
+          indicatorColor="primary"
+          variant="scrollable"
+        >
           <Tab label="Info" value="info" />
           <Tab label="Files &amp; History" value="files" />
         </Tabs>
@@ -1106,7 +1154,10 @@ export const BookDetail = () => {
           onExtractTrackInfo={async () => {
             try {
               const result = await api.extractTrackInfo(book.id);
-              toast(`Updated track numbers for ${result.updated} of ${result.total} files`, 'success');
+              toast(
+                `Updated track numbers for ${result.updated} of ${result.total} files`,
+                'success'
+              );
               if (id) {
                 await reloadCurrentBookFiles(id);
               }
@@ -1142,7 +1193,10 @@ export const BookDetail = () => {
         purgeConfirmed={purgeConfirmed}
         actionLoading={actionLoading}
         onSetPurgeConfirmed={setPurgeConfirmed}
-        onClosePurge={() => { setPurgeDialogOpen(false); setPurgeConfirmed(false); }}
+        onClosePurge={() => {
+          setPurgeDialogOpen(false);
+          setPurgeConfirmed(false);
+        }}
         onPurge={handlePurge}
         editDialogOpen={editDialogOpen}
         editAudiobook={mapBookToAudiobook(book)}
@@ -1161,7 +1215,9 @@ export const BookDetail = () => {
         toast={toast}
         relocateSegment={relocateSegment}
         onCloseRelocate={() => setRelocateSegment(null)}
-        onRelocated={async () => { if (id) await reloadCurrentBookFiles(id); }}
+        onRelocated={async () => {
+          if (id) await reloadCurrentBookFiles(id);
+        }}
         rejections={rejections}
         rejHistoryOpen={rejHistoryOpen}
         onSetRejHistoryOpen={setRejHistoryOpen}

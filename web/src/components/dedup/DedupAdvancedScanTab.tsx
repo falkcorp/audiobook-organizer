@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupAdvancedScanTab.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-10
+// last-edited: 2026-08-19
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Box,
@@ -46,7 +46,9 @@ export function BookDedupScanTab() {
   const [activeOp, setActiveOp] = useState<Operation | null>(null);
   const [mergeSuccess, setMergeSuccess] = useState<string | null>(null);
   const [needsRefresh, setNeedsRefresh] = useState(false);
-  const [confidenceFilter, setConfidenceFilter] = useState<'all' | 'high' | 'medium' | 'low'>('all');
+  const [confidenceFilter, setConfidenceFilter] = useState<'all' | 'high' | 'medium' | 'low'>(
+    'all'
+  );
   const pagination = usePagination(groups.length);
 
   const { loading, run: performFetch } = useAsyncAction(async () => {
@@ -59,7 +61,9 @@ export function BookDedupScanTab() {
 
   const fetchResults = useCallback(() => performFetch(), [performFetch]);
 
-  useEffect(() => { fetchResults(); }, [fetchResults]);
+  useEffect(() => {
+    fetchResults();
+  }, [fetchResults]);
 
   const handleScan = async () => {
     setMergeSuccess(null);
@@ -74,7 +78,7 @@ export function BookDedupScanTab() {
           fetchResults();
         }
       },
-      (msg) => setError(msg),
+      (msg) => setError(msg)
     );
   };
 
@@ -82,10 +86,10 @@ export function BookDedupScanTab() {
     setMergeSuccess(null);
     setError(null);
     try {
-      const bookIds = group.books.map(b => b.id);
+      const bookIds = group.books.map((b) => b.id);
       const result = await api.mergeBookDuplicatesAsVersions(bookIds);
       setMergeSuccess(result.message);
-      setGroups(prev => prev.filter(g => g.group_key !== group.group_key));
+      setGroups((prev) => prev.filter((g) => g.group_key !== group.group_key));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Merge failed');
     }
@@ -95,15 +99,14 @@ export function BookDedupScanTab() {
     setError(null);
     try {
       await api.dismissBookDuplicateGroup(group.group_key);
-      setGroups(prev => prev.filter(g => g.group_key !== group.group_key));
+      setGroups((prev) => prev.filter((g) => g.group_key !== group.group_key));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Dismiss failed');
     }
   };
 
-  const filteredGroups = confidenceFilter === 'all'
-    ? groups
-    : groups.filter(g => g.confidence === confidenceFilter);
+  const filteredGroups =
+    confidenceFilter === 'all' ? groups : groups.filter((g) => g.confidence === confidenceFilter);
 
   const confidenceCounts = useMemo(() => {
     const counts = { high: 0, medium: 0, low: 0 };
@@ -115,10 +118,14 @@ export function BookDedupScanTab() {
 
   const confidenceColor = (c: string) => {
     switch (c) {
-      case 'high': return 'error';
-      case 'medium': return 'warning';
-      case 'low': return 'info';
-      default: return 'default';
+      case 'high':
+        return 'error';
+      case 'medium':
+        return 'warning';
+      case 'low':
+        return 'info';
+      default:
+        return 'default';
     }
   };
 
@@ -142,30 +149,54 @@ export function BookDedupScanTab() {
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
         <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
-          Advanced duplicate detection using file hashes, folder structure, and fuzzy title/author matching.
+          Advanced duplicate detection using file hashes, folder structure, and fuzzy title/author
+          matching.
         </Typography>
         <Stack direction="row" spacing={1}>
-          <Button variant="contained" startIcon={<SearchIcon />} onClick={handleScan} disabled={busy}>
+          <Button
+            variant="contained"
+            startIcon={<SearchIcon />}
+            onClick={handleScan}
+            disabled={busy}
+          >
             {needsRefresh ? 'Run Scan' : 'Re-Scan'}
           </Button>
           <Tooltip title="Refresh cached results">
-            <IconButton onClick={fetchResults} disabled={loading || busy}><RefreshIcon /></IconButton>
+            <IconButton onClick={fetchResults} disabled={loading || busy}>
+              <RefreshIcon />
+            </IconButton>
           </Tooltip>
         </Stack>
       </Box>
 
       <OperationProgress operation={activeOp} label="Book Duplicate Scan" />
-      {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
-      {mergeSuccess && <Alert severity="success" sx={{ mb: 2 }} icon={<CheckCircleIcon />} onClose={() => setMergeSuccess(null)}>{mergeSuccess}</Alert>}
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
+          {error}
+        </Alert>
+      )}
+      {mergeSuccess && (
+        <Alert
+          severity="success"
+          sx={{ mb: 2 }}
+          icon={<CheckCircleIcon />}
+          onClose={() => setMergeSuccess(null)}
+        >
+          {mergeSuccess}
+        </Alert>
+      )}
 
       {loading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box>
+        <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+          <CircularProgress />
+        </Box>
       ) : needsRefresh && groups.length === 0 ? (
         <Paper sx={{ p: 4, textAlign: 'center' }}>
           <ContentCopyIcon sx={{ fontSize: 48, color: 'text.secondary', mb: 1 }} />
           <Typography variant="h6">No scan results yet</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Click &quot;Run Scan&quot; to detect duplicate books using hashes, folder structure, and metadata matching.
+            Click &quot;Run Scan&quot; to detect duplicate books using hashes, folder structure, and
+            metadata matching.
           </Typography>
         </Paper>
       ) : groups.length === 0 ? (
@@ -187,8 +218,13 @@ export function BookDedupScanTab() {
             {totalDuplicates} total duplicates across {groups.length} groups
           </Typography>
 
-          <PaginationControls total={filteredGroups.length} page={pagination.page} rowsPerPage={pagination.rowsPerPage}
-            onPageChange={pagination.setPage} onRowsPerPageChange={pagination.setRowsPerPage} />
+          <PaginationControls
+            total={filteredGroups.length}
+            page={pagination.page}
+            rowsPerPage={pagination.rowsPerPage}
+            onPageChange={pagination.setPage}
+            onRowsPerPageChange={pagination.setRowsPerPage}
+          />
 
           <Stack spacing={2}>
             {filteredGroups.slice(pagination.startIdx, pagination.endIdx).map((group) => (
@@ -203,13 +239,34 @@ export function BookDedupScanTab() {
                         by {group.books[0].author_name}
                       </Typography>
                     )}
-                    <Chip label={`${group.books.length} copies`} size="small" color="warning" variant="outlined" />
-                    <Chip label={group.confidence} size="small" color={confidenceColor(group.confidence) as 'error' | 'warning' | 'info' | 'default'} />
-                    <Typography variant="caption" color="text.secondary">{group.reason}</Typography>
+                    <Chip
+                      label={`${group.books.length} copies`}
+                      size="small"
+                      color="warning"
+                      variant="outlined"
+                    />
+                    <Chip
+                      label={group.confidence}
+                      size="small"
+                      color={
+                        confidenceColor(group.confidence) as
+                          'error' | 'warning' | 'info' | 'default'
+                      }
+                    />
+                    <Typography variant="caption" color="text.secondary">
+                      {group.reason}
+                    </Typography>
                   </Box>
                   <Divider sx={{ my: 1 }} />
                   {/* Table of duplicate books */}
-                  <Box component="table" sx={{ width: '100%', borderCollapse: 'collapse', '& td, & th': { py: 0.5, px: 1, fontSize: '0.85rem' } }}>
+                  <Box
+                    component="table"
+                    sx={{
+                      width: '100%',
+                      borderCollapse: 'collapse',
+                      '& td, & th': { py: 0.5, px: 1, fontSize: '0.85rem' },
+                    }}
+                  >
                     <thead>
                       <tr>
                         <th style={{ textAlign: 'left' }}>File Path</th>
@@ -225,14 +282,35 @@ export function BookDedupScanTab() {
                           <td>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                               <FolderIcon fontSize="small" color="action" />
-                              <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }} noWrap title={book.file_path}>
+                              <Typography
+                                variant="body2"
+                                sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}
+                                noWrap
+                                title={book.file_path}
+                              >
                                 {book.file_path}
                               </Typography>
-                              {book.itunes_persistent_id && <Chip label="iTunes" size="small" color="info" variant="outlined" sx={{ ml: 0.5 }} />}
+                              {book.itunes_persistent_id && (
+                                <Chip
+                                  label="iTunes"
+                                  size="small"
+                                  color="info"
+                                  variant="outlined"
+                                  sx={{ ml: 0.5 }}
+                                />
+                              )}
                             </Box>
                           </td>
                           <td style={{ textAlign: 'center' }}>
-                            {book.format ? <Chip label={book.format.toUpperCase()} size="small" variant="outlined" /> : '--'}
+                            {book.format ? (
+                              <Chip
+                                label={book.format.toUpperCase()}
+                                size="small"
+                                variant="outlined"
+                              />
+                            ) : (
+                              '--'
+                            )}
                           </td>
                           <td style={{ textAlign: 'center' }}>
                             {book.bitrate ? `${book.bitrate} kbps` : '--'}
@@ -245,20 +323,35 @@ export function BookDedupScanTab() {
                   </Box>
                 </CardContent>
                 <CardActions>
-                  <Button startIcon={<MergeIcon />} variant="contained" size="small"
-                    onClick={() => handleMerge(group)} disabled={busy}>
+                  <Button
+                    startIcon={<MergeIcon />}
+                    variant="contained"
+                    size="small"
+                    onClick={() => handleMerge(group)}
+                    disabled={busy}
+                  >
                     Merge as Versions
                   </Button>
-                  <Button startIcon={<VisibilityOffIcon />} size="small" color="inherit"
-                    onClick={() => handleDismiss(group)} disabled={busy}>
+                  <Button
+                    startIcon={<VisibilityOffIcon />}
+                    size="small"
+                    color="inherit"
+                    onClick={() => handleDismiss(group)}
+                    disabled={busy}
+                  >
                     Dismiss
                   </Button>
                 </CardActions>
               </Card>
             ))}
           </Stack>
-          <PaginationControls total={filteredGroups.length} page={pagination.page} rowsPerPage={pagination.rowsPerPage}
-            onPageChange={pagination.setPage} onRowsPerPageChange={pagination.setRowsPerPage} />
+          <PaginationControls
+            total={filteredGroups.length}
+            page={pagination.page}
+            rowsPerPage={pagination.rowsPerPage}
+            onPageChange={pagination.setPage}
+            onRowsPerPageChange={pagination.setRowsPerPage}
+          />
         </>
       )}
     </Box>

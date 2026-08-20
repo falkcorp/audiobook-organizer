@@ -1,14 +1,10 @@
 // file: web/src/components/audiobooks/InlineEditField.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 
 import React, { useState } from 'react';
 import { TextField, IconButton, Box } from '@mui/material';
-import {
-  Check as CheckIcon,
-  Close as CloseIcon,
-  Edit as EditIcon,
-} from '@mui/icons-material';
+import { Check as CheckIcon, Close as CloseIcon, Edit as EditIcon } from '@mui/icons-material';
 
 interface InlineEditFieldProps {
   value: string;
@@ -78,9 +74,7 @@ export const InlineEditField: React.FC<InlineEditFieldProps> = ({
 
   return (
     <Box display="flex" alignItems="center" gap={1}>
-      <Box flexGrow={1}>
-        {value || <em style={{ color: '#999' }}>Not set</em>}
-      </Box>
+      <Box flexGrow={1}>{value || <em style={{ color: '#999' }}>Not set</em>}</Box>
       {!disabled && (
         <IconButton size="small" onClick={handleEdit}>
           <EditIcon fontSize="small" />

@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/AudiobookCard.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: e1027ee2-8526-4e0c-a5ef-9e75e8a362b0
-// last-edited: 2026-07-13
+// last-edited: 2026-08-19
 
 import { render, screen } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
@@ -41,13 +41,7 @@ describe('AudiobookCard tag display', () => {
 
   it('excludes source tags from the "+N more" overflow count', () => {
     const audiobook = makeAudiobook({
-      tags: [
-        'metadata:source:audible',
-        'metadata:language:en',
-        'one',
-        'two',
-        'three',
-      ],
+      tags: ['metadata:source:audible', 'metadata:language:en', 'one', 'two', 'three'],
     });
 
     render(<AudiobookCard audiobook={audiobook} />);

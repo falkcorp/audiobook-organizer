@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/MetadataReviewDialog.tsx
-// version: 1.19.0
+// version: 1.19.1
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-08-17
+// last-edited: 2026-08-19
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -187,10 +187,7 @@ export function loadReviewPageSize(): number {
   const safe = Math.min(n, MAX_REVIEW_PAGE_SIZE);
   const corrected = PAGE_SIZE_OPTIONS.includes(safe) ? safe : MAX_REVIEW_PAGE_SIZE;
   try {
-    window.localStorage.setItem(
-      STORAGE_KEYS.METADATA_REVIEW_PAGE_SIZE,
-      String(corrected)
-    );
+    window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_PAGE_SIZE, String(corrected));
   } catch {
     // Private-mode / quota failures are non-fatal: the clamp still applies to
     // this session, it just re-clamps next open instead of persisting.
@@ -234,7 +231,9 @@ export function MetadataReviewDialog({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const [summary, setSummary] = useState({ matched: 0, no_match: 0, errors: 0, total: 0 });
-  const [totalSummary] = useState<{ matched: number; no_match: number; errors: number } | null>(null);
+  const [totalSummary] = useState<{ matched: number; no_match: number; errors: number } | null>(
+    null
+  );
   const [previewCover, setPreviewCover] = useState<string | null>(null);
   // serverPage: which page to fetch from the API. Unified with the display page —
   // one paginator, one concept of "page".
@@ -243,13 +242,17 @@ export function MetadataReviewDialog({
   const [hideApplied, setHideApplied] = useState(true);
   const [hideRejected, setHideRejected] = useState(true);
   const [hideNoMatch, setHideNoMatch] = useState(true);
-  const [hideSkipped, setHideSkipped] = useState(() => loadStrictPreset() && STRICT_PRESET.hideSkipped);
+  const [hideSkipped, setHideSkipped] = useState(
+    () => loadStrictPreset() && STRICT_PRESET.hideSkipped
+  );
   // Hide books that share a candidate with another book — the cards that render
   // with "Skip All". Those are the ambiguous ones (two parts of one book, or
   // genuine duplicates) and need a judgement call per group; this toggle gets
   // them out of the way so the unambiguous one-book-one-candidate rows can be
   // worked through on their own.
-  const [hideMultiBook, setHideMultiBook] = useState(() => loadStrictPreset() && STRICT_PRESET.hideMultiBook);
+  const [hideMultiBook, setHideMultiBook] = useState(
+    () => loadStrictPreset() && STRICT_PRESET.hideMultiBook
+  );
   const [matchLanguage, setMatchLanguage] = useState<boolean>(loadLanguageFilter);
   const [titleFilter, setTitleFilter] = useState('');
   const [onlyWithTranscription, setOnlyWithTranscription] = useState(false);
@@ -314,7 +317,9 @@ export function MetadataReviewDialog({
         }
         setRowStates((prev) => {
           const merged = new Map(prev);
-          seedStates.forEach((v, k) => { if (!merged.has(k)) merged.set(k, v); });
+          seedStates.forEach((v, k) => {
+            if (!merged.has(k)) merged.set(k, v);
+          });
           return merged;
         });
 
@@ -358,7 +363,11 @@ export function MetadataReviewDialog({
 
   const titleRegex = (() => {
     if (!titleFilter) return null;
-    try { return new RegExp(titleFilter, 'i'); } catch { return null; }
+    try {
+      return new RegExp(titleFilter, 'i');
+    } catch {
+      return null;
+    }
   })();
 
   const preGroupFiltered = results
@@ -440,7 +449,19 @@ export function MetadataReviewDialog({
   // Reset to page 1 when filters change so the user sees the first filtered result.
   useEffect(() => {
     setServerPage(1);
-  }, [sourceFilter, confidenceThreshold, hideApplied, hideRejected, hideSkipped, hideNoMatch, hideMultiBook, matchLanguage, titleFilter, onlyWithTranscription, onlyTranscriptionMatched]);
+  }, [
+    sourceFilter,
+    confidenceThreshold,
+    hideApplied,
+    hideRejected,
+    hideSkipped,
+    hideNoMatch,
+    hideMultiBook,
+    matchLanguage,
+    titleFilter,
+    onlyWithTranscription,
+    onlyTranscriptionMatched,
+  ]);
 
   // Go back to page 1 on manual refresh.
   useEffect(() => {
@@ -603,8 +624,7 @@ export function MetadataReviewDialog({
     }
   };
 
-  const handleUngroup = (bookId: string) =>
-    setUngroupedIds((prev) => new Set(prev).add(bookId));
+  const handleUngroup = (bookId: string) => setUngroupedIds((prev) => new Set(prev).add(bookId));
 
   // Paginate the filtered set client-side. Because the server returned every
   // cached row and sorted pending-matched first, page 1 reliably fills with
@@ -640,7 +660,7 @@ export function MetadataReviewDialog({
     if (g.results.length > 1) multiGroups.set(key, g);
   }
   const groupedBookIds = new Set<string>();
-  for (const g of multiGroups.values()) g.results.forEach(r => groupedBookIds.add(r.book.id));
+  for (const g of multiGroups.values()) g.results.forEach((r) => groupedBookIds.add(r.book.id));
 
   // Clamp the current page when filters shrink the result set below the
   // current page index. Previously the dialog auto-advanced through empty
@@ -718,20 +738,24 @@ export function MetadataReviewDialog({
 
   const renderGroupedCard = (group: CandidateGroup) => {
     const c = group.candidate;
-    const actionableIds = group.results.filter(r => isRowActionable(r.book.id)).map(r => r.book.id);
-    const allApplied = group.results.every(r => rowStates.get(r.book.id) === 'applied');
-    const allRejected = group.results.every(r => rowStates.get(r.book.id) === 'rejected');
+    const actionableIds = group.results
+      .filter((r) => isRowActionable(r.book.id))
+      .map((r) => r.book.id);
+    const allApplied = group.results.every((r) => rowStates.get(r.book.id) === 'applied');
+    const allRejected = group.results.every((r) => rowStates.get(r.book.id) === 'rejected');
 
     const handleRejectGroup = async () => {
       try {
         await Promise.all(actionableIds.map((id) => api.markNoMatch(id)));
-        setRowStates(prev => {
+        setRowStates((prev) => {
           const next = new Map(prev);
-          actionableIds.forEach(id => next.set(id, 'rejected'));
+          actionableIds.forEach((id) => next.set(id, 'rejected'));
           return next;
         });
         toast(`Rejected ${actionableIds.length} books`, 'info');
-      } catch { toast('Failed to reject', 'error'); }
+      } catch {
+        toast('Failed to reject', 'error');
+      }
     };
 
     return (
@@ -739,14 +763,18 @@ export function MetadataReviewDialog({
         key={group.key}
         sx={{ p: 2, mb: 1, border: 2, borderColor: 'primary.dark', borderRadius: 1 }}
       >
-        <Typography variant="caption" color="primary" sx={{ fontWeight: 700, mb: 1, display: 'block' }}>
+        <Typography
+          variant="caption"
+          color="primary"
+          sx={{ fontWeight: 700, mb: 1, display: 'block' }}
+        >
           {group.results.length} files matched to the same book
         </Typography>
         <Stack direction="row" spacing={2}>
           {/* Left: stacked book rows, each with an X to split from group */}
           <Box sx={{ flex: 1 }}>
             <Stack spacing={1.5}>
-              {group.results.map(r => (
+              {group.results.map((r) => (
                 <Stack key={r.book.id} direction="row" spacing={1} alignItems="flex-start">
                   <Tooltip title="Separate from group">
                     <IconButton size="small" onClick={() => handleUngroup(r.book.id)}>
@@ -759,21 +787,36 @@ export function MetadataReviewDialog({
                     sx={{ width: 40, height: 50 }}
                   />
                   <Box sx={{ minWidth: 0 }}>
-                    <Typography variant="body2" fontWeight="bold">{r.book.title}</Typography>
+                    <Typography variant="body2" fontWeight="bold">
+                      {r.book.title}
+                    </Typography>
                     <Stack direction="row" spacing={0.5} flexWrap="wrap">
                       {r.book.format && <Chip label={r.book.format} size="small" />}
                       {r.book.duration_seconds && (
-                        <Typography variant="caption">{formatDuration(r.book.duration_seconds)}</Typography>
+                        <Typography variant="caption">
+                          {formatDuration(r.book.duration_seconds)}
+                        </Typography>
                       )}
                       {r.book.file_size_bytes && (
-                        <Typography variant="caption">· {formatFileSize(r.book.file_size_bytes)}</Typography>
+                        <Typography variant="caption">
+                          · {formatFileSize(r.book.file_size_bytes)}
+                        </Typography>
                       )}
                     </Stack>
-                    <Typography variant="caption" display="block" sx={{ wordBreak: 'break-all', color: 'text.secondary' }}>
+                    <Typography
+                      variant="caption"
+                      display="block"
+                      sx={{ wordBreak: 'break-all', color: 'text.secondary' }}
+                    >
                       {r.book.file_path}
                     </Typography>
                     {r.book.itunes_path && (
-                      <Typography variant="caption" color="info.main" display="block" sx={{ wordBreak: 'break-all' }}>
+                      <Typography
+                        variant="caption"
+                        color="info.main"
+                        display="block"
+                        sx={{ wordBreak: 'break-all' }}
+                      >
                         iTunes: {r.book.itunes_path}
                       </Typography>
                     )}
@@ -802,18 +845,31 @@ export function MetadataReviewDialog({
                 onClick={() => c.cover_url && setPreviewCover(c.cover_url)}
               />
               <Box sx={{ minWidth: 0, flex: 1 }}>
-                <Typography variant="body2" fontWeight="bold">{c.title}</Typography>
+                <Typography variant="body2" fontWeight="bold">
+                  {c.title}
+                </Typography>
                 <Typography variant="body2">{c.author}</Typography>
                 {c.narrator && (
-                  <Typography variant="body2" color="text.secondary">Narrated by {c.narrator}</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Narrated by {c.narrator}
+                  </Typography>
                 )}
                 {c.series && (
                   <Typography variant="body2">
-                    Series: {c.series}{c.series_position ? ` · Book ${c.series_position}` : ''}
+                    Series: {c.series}
+                    {c.series_position ? ` · Book ${c.series_position}` : ''}
                   </Typography>
                 )}
-                {c.year && <Typography variant="caption" display="block">{c.year}</Typography>}
-                {c.publisher && <Typography variant="caption" display="block">{c.publisher}</Typography>}
+                {c.year && (
+                  <Typography variant="caption" display="block">
+                    {c.year}
+                  </Typography>
+                )}
+                {c.publisher && (
+                  <Typography variant="caption" display="block">
+                    {c.publisher}
+                  </Typography>
+                )}
                 <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }}>
                   <Chip
                     label={`${Math.round(c.score * 100)}%`}
@@ -837,20 +893,29 @@ export function MetadataReviewDialog({
                     >
                       Apply All ({actionableIds.length})
                     </Button>
-                    <Button size="small" variant="outlined" color="error" onClick={handleRejectGroup}>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      color="error"
+                      onClick={handleRejectGroup}
+                    >
                       Reject All
                     </Button>
                     <Button
                       size="small"
                       variant="text"
-                      onClick={() => group.results.forEach(r => handleSkip(r.book.id))}
+                      onClick={() => group.results.forEach((r) => handleSkip(r.book.id))}
                     >
                       Skip All
                     </Button>
                   </Stack>
                 )}
-                {allApplied && <Chip label="All Applied" size="small" color="success" sx={{ mt: 1 }} />}
-                {allRejected && <Chip label="All Rejected" size="small" color="error" sx={{ mt: 1 }} />}
+                {allApplied && (
+                  <Chip label="All Applied" size="small" color="success" sx={{ mt: 1 }} />
+                )}
+                {allRejected && (
+                  <Chip label="All Rejected" size="small" color="error" sx={{ mt: 1 }} />
+                )}
               </Box>
             </Stack>
           </Box>
@@ -1383,7 +1448,9 @@ export function MetadataReviewDialog({
         maxWidth="xl"
         fullWidth
       >
-        <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <DialogTitle
+          sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+        >
           <span>Review Metadata Matches &mdash; {summary.total} books</span>
           <Stack direction="row" spacing={0.5} alignItems="center">
             <Tooltip title="Reload current page from server">
@@ -1416,13 +1483,30 @@ export function MetadataReviewDialog({
               <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mb: 2, rowGap: 1 }}>
                 {totalSummary ? (
                   <>
-                    <Chip label={`${totalSummary.matched} matched (total)`} color="success" size="small" />
+                    <Chip
+                      label={`${totalSummary.matched} matched (total)`}
+                      color="success"
+                      size="small"
+                    />
                     <Chip label={`${totalSummary.no_match} no match (total)`} size="small" />
                     {totalSummary.errors > 0 && (
-                      <Chip label={`${totalSummary.errors} errors (total)`} color="error" size="small" />
+                      <Chip
+                        label={`${totalSummary.errors} errors (total)`}
+                        color="error"
+                        size="small"
+                      />
                     )}
-                    <Chip label={`${summary.matched} matched (page)`} color="success" variant="outlined" size="small" />
-                    <Chip label={`${summary.no_match} no match (page)`} variant="outlined" size="small" />
+                    <Chip
+                      label={`${summary.matched} matched (page)`}
+                      color="success"
+                      variant="outlined"
+                      size="small"
+                    />
+                    <Chip
+                      label={`${summary.no_match} no match (page)`}
+                      variant="outlined"
+                      size="small"
+                    />
                   </>
                 ) : (
                   <>
@@ -1513,7 +1597,9 @@ export function MetadataReviewDialog({
                   inputProps={{ 'aria-label': 'filter by title regex' }}
                 />
                 {titleRegex && titleFilteredPendingIds.length > 0 && (
-                  <Tooltip title={`Apply all ${titleFilteredPendingIds.length} pending matched results visible through this filter`}>
+                  <Tooltip
+                    title={`Apply all ${titleFilteredPendingIds.length} pending matched results visible through this filter`}
+                  >
                     <span>
                       <Button
                         size="small"
@@ -1528,7 +1614,9 @@ export function MetadataReviewDialog({
                   </Tooltip>
                 )}
                 {titleFilter && (
-                  <Button size="small" onClick={() => setTitleFilter('')}>Clear</Button>
+                  <Button size="small" onClick={() => setTitleFilter('')}>
+                    Clear
+                  </Button>
                 )}
               </Stack>
 
@@ -1690,7 +1778,12 @@ export function MetadataReviewDialog({
 
               {/* Single unified paginator — one page concept, one control. */}
               {(filteredResults.length > 0 || totalCount > 0) && (
-                <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+                <Stack
+                  direction="row"
+                  justifyContent="space-between"
+                  alignItems="center"
+                  sx={{ mb: 1 }}
+                >
                   <Typography variant="caption" color="text.secondary">
                     {filteredResults.length < results.length
                       ? `${pageResults.length} on page ${serverPage} of ${totalPages} · ${filteredResults.length} visible of ${totalCount} total`
@@ -1713,7 +1806,10 @@ export function MetadataReviewDialog({
                         setReviewPageSize(next);
                         setServerPage(1);
                         if (typeof window !== 'undefined') {
-                          window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_PAGE_SIZE, String(next));
+                          window.localStorage.setItem(
+                            STORAGE_KEYS.METADATA_REVIEW_PAGE_SIZE,
+                            String(next)
+                          );
                         }
                       }}
                       sx={{ minWidth: 100 }}
@@ -1736,25 +1832,25 @@ export function MetadataReviewDialog({
                   >
                     No results match current filters
                   </Typography>
-                ) : (() => {
-                  // Render in original order: grouped cards appear at first occurrence,
-                  // subsequent group members are skipped, standalones render normally.
-                  const renderedGroupKeys = new Set<string>();
-                  return pageResults.map((r) => {
-                    if (groupedBookIds.has(r.book.id)) {
-                      const key = r.candidate ? candidateKey(r.candidate) : '';
-                      const group = multiGroups.get(key);
-                      if (group && !renderedGroupKeys.has(key)) {
-                        renderedGroupKeys.add(key);
-                        return renderGroupedCard(group);
+                ) : (
+                  (() => {
+                    // Render in original order: grouped cards appear at first occurrence,
+                    // subsequent group members are skipped, standalones render normally.
+                    const renderedGroupKeys = new Set<string>();
+                    return pageResults.map((r) => {
+                      if (groupedBookIds.has(r.book.id)) {
+                        const key = r.candidate ? candidateKey(r.candidate) : '';
+                        const group = multiGroups.get(key);
+                        if (group && !renderedGroupKeys.has(key)) {
+                          renderedGroupKeys.add(key);
+                          return renderGroupedCard(group);
+                        }
+                        return null; // already rendered as part of group
                       }
-                      return null; // already rendered as part of group
-                    }
-                    return viewMode === 'compact'
-                      ? renderCompactRow(r)
-                      : renderTwoColumnCard(r);
-                  });
-                })()}
+                      return viewMode === 'compact' ? renderCompactRow(r) : renderTwoColumnCard(r);
+                    });
+                  })()
+                )}
               </Box>
             </>
           )}

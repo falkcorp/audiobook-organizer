@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/MetadataDiffTable.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8f6a7b5c-9d0e-4a70-b8c5-3d7e0f1b9a99
 //
 // Side-by-side metadata diff for dedup cluster cards (backlog 1.5).
@@ -30,12 +30,15 @@ interface DiffField {
 
 const DIFF_FIELDS: Array<{ label: string; accessor: (b: Book) => string }> = [
   { label: 'Title', accessor: (b) => b.title || '' },
-  { label: 'Author', accessor: (b) => b.authors?.map((a: { name: string }) => a.name).join(', ') || '' },
+  {
+    label: 'Author',
+    accessor: (b) => b.authors?.map((a: { name: string }) => a.name).join(', ') || '',
+  },
   { label: 'Narrator', accessor: (b) => b.narrator || '' },
   { label: 'Series', accessor: (b) => b.series_name || '' },
   { label: 'Year', accessor: (b) => String(b.print_year || b.audiobook_release_year || '') },
   { label: 'Format', accessor: (b) => b.format || '' },
-  { label: 'Duration', accessor: (b) => b.duration ? `${Math.round(b.duration / 60)}m` : '' },
+  { label: 'Duration', accessor: (b) => (b.duration ? `${Math.round(b.duration / 60)}m` : '') },
   { label: 'Publisher', accessor: (b) => b.publisher || '' },
   { label: 'Language', accessor: (b) => b.language || '' },
   { label: 'ISBN', accessor: (b) => b.isbn13 || b.isbn10 || '' },

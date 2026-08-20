@@ -1,5 +1,5 @@
 // file: web/src/components/layout/TopBar.tsx
-// version: 1.7.0
+// version: 1.7.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 
 import { useEffect, useRef, useState } from 'react';
@@ -35,9 +35,7 @@ export function TopBar({ onMenuClick, drawerWidth }: TopBarProps) {
   const [connectionState, setConnectionState] = useState<
     'open' | 'reconnecting' | 'closed' | 'error'
   >('open');
-  const [connectionMessage, setConnectionMessage] = useState<string | null>(
-    null
-  );
+  const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const lastStateRef = useRef(connectionState);
   const timeoutRef = useRef<number | null>(null);
@@ -67,10 +65,7 @@ export function TopBar({ onMenuClick, drawerWidth }: TopBarProps) {
               timeoutRef.current = null;
             }, 3000);
           }
-        } else if (
-          status.state === 'reconnecting' ||
-          status.state === 'error'
-        ) {
+        } else if (status.state === 'reconnecting' || status.state === 'error') {
           setConnectionMessage('Connection lost');
         }
       }
@@ -108,13 +103,13 @@ export function TopBar({ onMenuClick, drawerWidth }: TopBarProps) {
   return (
     <AppBar
       position="fixed"
-      sx={theme => ({
+      sx={(theme) => ({
         width: { sm: `calc(100% - ${drawerWidth}px)` },
         ml: { sm: `${drawerWidth}px` },
         transition: theme.transitions.create(['width', 'margin'], {
           easing: theme.transitions.easing.sharp,
           duration: theme.transitions.duration.leavingScreen,
-        })
+        }),
       })}
     >
       <Toolbar>
@@ -187,25 +182,13 @@ export function TopBar({ onMenuClick, drawerWidth }: TopBarProps) {
         )}
         <OperationsIndicator />
         <Tooltip title="Settings">
-          <IconButton
-            color="inherit"
-            aria-label="settings"
-            onClick={() => navigate('/settings')}
-          >
+          <IconButton color="inherit" aria-label="settings" onClick={() => navigate('/settings')}>
             <SettingsIcon />
           </IconButton>
         </Tooltip>
         <Tooltip title="Toggle color mode">
-          <IconButton
-            color="inherit"
-            aria-label="toggle color mode"
-            onClick={toggleThemeMode}
-          >
-            {themeMode === 'dark' ? (
-              <Brightness7Icon />
-            ) : (
-              <Brightness4Icon />
-            )}
+          <IconButton color="inherit" aria-label="toggle color mode" onClick={toggleThemeMode}>
+            {themeMode === 'dark' ? <Brightness7Icon /> : <Brightness4Icon />}
           </IconButton>
         </Tooltip>
         <UserMenu />

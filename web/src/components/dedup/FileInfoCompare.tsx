@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/FileInfoCompare.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: e4d5f6a7-b8c9-0123-defa-ed4567890123
-// last-edited: 2026-07-26
+// last-edited: 2026-08-19
 
 // FileInfoCompare renders a side-by-side comparison of two books' file lists.
 // Used inside CandidateCompareDrawer.
@@ -23,7 +23,13 @@ function BookFilesColumn({ book, label, pathVars }: BookFilesColumnProps) {
       <Typography
         variant="caption"
         color="text.secondary"
-        sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', mb: 0.75 }}
+        sx={{
+          fontWeight: 600,
+          textTransform: 'uppercase',
+          letterSpacing: 0.5,
+          display: 'block',
+          mb: 0.75,
+        }}
       >
         {label}
       </Typography>
