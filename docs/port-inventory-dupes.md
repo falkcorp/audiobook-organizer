@@ -1,5 +1,5 @@
 <!-- file: docs/port-inventory-dupes.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: c93b313e-8cfd-4ecc-8f28-443b071cd080 -->
 <!-- last-edited: 2026-08-20 -->
 
@@ -59,65 +59,75 @@ than left pointing at a generalisation that was examined and rejected.
 ## Behaviour to carry over
 
 ### Data layer
-- [ ] Server-paginated fetch — `limit`/`offset`/`total`, `include_breakdown=true`,
+- [x] Server-paginated fetch — `limit`/`offset`/`total`, `include_breakdown=true`,
       `include_books=true`
-- [ ] `AbortController` cancellation of the in-flight request
-- [ ] `getDedupStats` → `deriveBandCounts`, feeding the band filter's counts
-- [ ] Raw `fetch` is used because `api.getDedupCandidates` takes no `AbortSignal`.
-      Fix the API signature rather than carrying the raw call across.
+- [x] `AbortController` cancellation of the in-flight request
+- [x] Raw `fetch` no longer needed: `apiFetch` always accepted a `signal`,
+      `getDedupCandidates` simply never forwarded one. Fixed at the client.
+- [~] `deriveBandCounts` **deliberately not ported, because it did not work.**
+      The stats endpoint groups by entity_type/layer/status — there is no band
+      dimension in the schema — so the source returned a hardcoded `0` for every
+      band and only its `total` was real. Reproducing the shape would ship a map
+      whose name promises counts it cannot contain. Replaced by `pendingTotal`,
+      which is the one honest number derivable from that endpoint.
 
-### The keep decision — highest loss risk
-- [ ] `metadataQuality(book)` — weighted completeness score. Treats `"TITLE"` and
-      bare ULIDs as garbage titles, which is why it is not simply a field count.
-- [ ] `qualityChip(score)` — Rich ≥6 / Partial ≥3 / Poor
-- [ ] `recommendedKeepSide(candidate)` — returns `{keepId, label}` or `null` on a
-      tie. **Its whole purpose is that the ★ chip and the `m` shortcut call the
-      same function and cannot drift.** Porting the chip without the shortcut
-      breaks nothing visibly and turns `m` into a coin flip.
-- [ ] Tie behaviour: `m` defaults to keeping A, matching the button order.
+### The keep decision
+- [x] `metadataQuality(book)` — moved to `lanes/keepDecision.ts`
+- [x] `qualityChip(score)` — now `qualityBand()` + a `QualityChip` component, so
+      the thresholds are testable without rendering
+- [x] `recommendedKeepSide(candidate)` — shared module, imported by both the
+      chip and the `m` shortcut, which is what makes the original's "can never
+      drift" promise survive being split across a hook and a view
+- [x] Tie behaviour: `keepIdForMerge` resolves a tie to A, matching button
+      order, while `recommendedKeepSide` still returns `null` so the chip does
+      not claim a recommendation exists
 
-### Keyboard navigation — second-highest loss risk
-Nothing in `ReviewWorkspace` has focus management today, and shortcuts are the
-classic port casualty: no test goes red when they disappear.
-
-- [ ] `j` / `k` — move focus, clamped at both ends
-- [ ] `m` — merge focused (pending only), via `recommendedKeepSide`
-- [ ] `d` — dismiss focused (pending only)
-- [ ] `s` — toggle select focused
-- [ ] `Enter` — open compare drawer · `Esc` — close it
-- [ ] `Shift+A` — select all on page · `?` — toggle shortcut help
-- [ ] `isKeyboardShortcutSuppressed()` — blocks shortcuts in inputs, textareas,
-      selects, contenteditable, and anything inside `[role="dialog"]`.
-      **The queue rail is full of inputs, so this guard is load-bearing here.**
-- [ ] `Escape` is deliberately exempt from that guard — MUI gives the drawer's
-      paper `role="dialog"` and moves focus into it, so guarding Escape would
-      suppress the one shortcut whose job is to close that drawer.
-- [ ] `focusedRowIndex` resets appropriately when the filtered set changes
+### Keyboard navigation
+- [x] `j` / `k`, clamped at both ends
+- [x] `m` (pending only, via the shared keep decision)
+- [x] `d` (pending only)
+- [x] `s`, `Shift+A`, `Enter`, `Esc`, `?`
+- [x] `isKeyboardShortcutSuppressed()` — inputs, textareas, selects,
+      contenteditable, and `[role="dialog"]`
+- [x] `Escape` exempt from that guard, with the reason recorded at the call site
+- [x] Focus resets across page and filter changes. Stronger than the source's
+      clamp: with server-side pagination the previous page is still loaded while
+      the next is in flight, so a stale focus index would aim `m` at a row from
+      the page the reviewer just left.
+- [x] Shortcuts unbind when the lane is not active — a window listener that
+      outlives the lane moves a focus ring nobody can see
 
 ### Selection and bulk actions
-- [ ] `Set<number>` selection, shift-click range via `lastClickedIdxRef`
-- [ ] `handleMergeSelected` / `handleDismissSelected`
-- [ ] `handleMergeAllFiltered` — library-wide scope; belongs in the command bar's
-      `library` scope, not a row control
-- [ ] `handleRescore(apply)` and `handleScan` with `trackOp` progress
-- [ ] `bulkBusy` gating so a second dispatch cannot overlap the first
+- [x] `Set<number>` selection with shift-click range extension
+- [x] `mergeSelected` / `dismissSelected`, sequential rather than concurrent so
+      two merges cannot touch the same book
+- [x] `mergeAllFiltered`, **with the refusal** described below
+- [x] `busy` gating so a second destructive dispatch cannot overlap the first
+- [ ] `handleRescore(apply)` — still only on the legacy page. It is a
+      library-wide maintenance job rather than a review action, so it belongs in
+      the command bar's `library` scope beside "Find duplicates"; not wired yet.
 
-### URL state — not in the original brief, found while reading
-- [ ] `?band=` — deep-link into a band filter, written back with `{replace: true}`
-- [ ] `?book=` — **inbound link from `FingerprintVisualsColumn.tsx:94`**, plus its
-      dismissable "Showing candidates for book X" banner. If the lane replaces
-      `/dedup`, that navigate target must move with it or the link dead-ends.
+### URL state
+- [x] `?band=` — round-trips, written back with `{replace: true}`
+- [x] `?book=` — inbound from `FingerprintVisualsColumn.tsx:94`, now a
+      **server-side** filter, with a dismissable banner and an empty state that
+      is finally truthful
 
-### Reusable as-is
-- [x] `CandidateCompareDrawer` is already a standalone component — it needs
-      wiring, not porting.
-- [x] `EvidencePanel` already handles `evidenceKind: 'weighted'`. Dedup is the one
-      lane where a stacked share bar is arithmetically honest, and `lanes/dupes.ts`
-      already declares it.
-- [ ] `renderBookCard` — cover, garbage-title styling, path tooltip,
-      `FolderFilesChip`. Ports mechanically into `DupesSpine`.
+### Reused rather than ported
+- [x] `CandidateCompareDrawer` — wired, not rewritten
+- [x] `EvidencePanel` via `dedupEvidence` — the stacked share bar the
+      `weighted` evidence kind exists for
+- [x] `renderBookCard` → `BookSide`. Promoted from a function returning JSX to a
+      real component; as a bare function the cover image re-mounted on every
+      parent render.
 
----
+### Symmetry this leaves owing
+- [ ] The metadata lane's rail/spine/action-bar trio is still inline in
+      `ReviewWorkspace`, while dupes lives in `DupesPanel`. The shell's own
+      types.ts says "adding a fourth lane is a new descriptor rather than a new
+      branch in five components", and it now carries one branch. Lifting
+      metadata into a `MetadataPanel` is the matching change — deliberately not
+      done here, because it refactors a lane this work was not asked to touch.
 
 ## Defects found while reading, not yet fixed
 
