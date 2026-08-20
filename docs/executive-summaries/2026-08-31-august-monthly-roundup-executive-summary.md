@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: e7a3f109-52d8-4c6b-91f4-08b7c2d64e35 -->
-<!-- last-edited: 2026-08-18 -->
+<!-- last-edited: 2026-08-20 -->
 
 # Executive Summary: August 2026 Monthly Roundup
 
-**Period covered:** 2026-08-01 through 2026-08-18 (**month in progress** — this is
+**Period covered:** 2026-08-01 through 2026-08-20 (**month in progress** — this is
 updated as work lands, not a closed record).
 **Individual write-ups this consolidates:** the seven dated summaries in this directory
 from 2026-08-04 to 2026-08-09, linked inline below.
@@ -322,6 +322,56 @@ doing the work are worth recording:
 Finally, a guard was added so this cannot quietly come back: an automatic check now
 fails any future change that increases the count past 5, with a documented way to
 override it deliberately when there is a real reason.
+
+---
+
+## 9. August 20: asking what the "certain" duplicates were certain about
+
+The app keeps a queue of suspected duplicate books — pairs it thinks might be two copies
+of the same thing. About nineteen thousand of those pairs were old enough that the app had
+never written down **why** it suspected them. It had a verdict with no reasoning attached,
+which meant two of its own tools refused to touch them: neither could re-check a verdict
+whose evidence was missing.
+
+A job to go back and fill in that missing reasoning already existed, and it had been run
+in preview mode. The preview said it would fill in 18,311 pairs. What it did not say was
+what the reasoning would *look like* — and one of the sample lines was worrying. It showed
+a pair rated **"certain"** on the strength of a **single** piece of evidence, in a
+population where the most common evidence by far is "the titles and authors look similar".
+A similar title alone declaring two books identical is exactly how two genuinely different
+books get merged into one.
+
+So the job was taught to report not just how many pairs it would fill in, but **what kind
+of evidence they rest on** — how many land in each confidence level, and, for the "certain"
+ones, exactly which combination of evidence produced that rating.
+
+The answer, measured against the real library:
+
+- **Not one "certain" pair rests on a title match alone.** Every single one is backed by
+  an identical audio file, a matching ISBN, or an identical metadata record. The worrying
+  sample turned out to be an identical-file match — the strongest evidence the system has.
+- It could not have gone the other way. A title match is capped at a confidence that
+  cannot reach "certain" no matter what else supports it. The measurement confirmed the
+  cap is actually in force in the live system, which could not be checked any other way.
+- **The confidence levels are not evenly spread — the middle one is empty.** 1,469 pairs
+  are "certain", 16,582 are "medium", and **zero** are "high". That is a property of the
+  evidence itself: the weak evidence tops out just below "high" and the strong evidence
+  starts just above it, so nothing lands in between.
+- Of the 1,469 "certain" pairs, only **11** carry enough independent corroboration to be
+  eligible for automatic merging. The other 1,458 still require a person, because the
+  system asks for two *independent* strong signals, not one.
+
+With that in hand, the fill-in was run for real: **18,311 pairs, no errors**, and verified
+afterwards by a separate re-count rather than by trusting the job's own tally. No book was
+merged, deleted, or changed — only the missing reasoning was written down.
+
+One finding came out of this that is worth flagging on its own: the pairs filled in this
+way have **no "reasons to doubt" recorded against them**, because the recalculation path
+never computes them. One of the automatic-merge safety checks asks "does this pair have
+any reasons to doubt it?" — and for these eighteen thousand pairs, that check can only
+ever answer no. It is not currently reachable in a way that matters (automatic merging is
+off by default and behind a separate switch), but a safety check that structurally cannot
+fire is worth knowing about before anyone turns that switch on.
 
 ---
 
