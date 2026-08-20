@@ -215,7 +215,7 @@ export function evidenceFacts(ev: RecommendationEvidence | undefined): EvidenceF
   if (ev.structure) {
     facts.push({
       label: ev.structure,
-      hint: 'The group\'s dominant physical shape on disk: disc set, chapter run, or flat folder.',
+      hint: "The group's dominant physical shape on disk: disc set, chapter run, or flat folder.",
     });
   }
   return facts;

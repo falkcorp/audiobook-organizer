@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/CandidateCompareDrawer.tsx
-// version: 1.5.2
+// version: 1.6.0
 // guid: a6f7b8c9-d0e1-2345-fabc-af6789012345
-// last-edited: 2026-08-19
+// last-edited: 2026-08-20
 // CandidateCompareDrawer is a right-side Drawer that shows a full side-by-side
 // comparison of the two books in a dedup candidate, plus the score breakdown.
 // It fetches the breakdown data on open via GET /api/v1/dedup/candidates/:id/breakdown.
@@ -36,7 +36,8 @@ import type {
   DedupSignal,
 } from '../../services/api';
 import { ScoreBadgeRow } from './ScoreBadgeRow';
-import { ScoreBreakdownPanel } from './ScoreBreakdownPanel';
+import { EvidencePanel } from '../review/evidence/EvidencePanel';
+import { dedupEvidence } from '../review/evidence/adapters';
 import { FileInfoCompare } from './FileInfoCompare';
 import { AudioSamplePair } from './AudioSamplePair';
 import { FingerprintPair } from './FingerprintCanvas';
@@ -582,7 +583,7 @@ export function CandidateCompareDrawer({
             )}
 
             {activeTab === 1 && candidate?.score_breakdown && (
-              <ScoreBreakdownPanel breakdown={candidate.score_breakdown} />
+              <EvidencePanel evidence={dedupEvidence(candidate.score_breakdown)} />
             )}
             {activeTab === 1 && !candidate?.score_breakdown && (
               <Typography
