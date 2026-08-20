@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-08-15
 
@@ -672,7 +672,6 @@ func (mfs *Service) searchMetadataForBook(
 					asinRec.replace("asin_match", "Direct ASIN match", 1.0,
 						"This result was matched by ASIN, which is authoritative, so the "+
 							"title/author score was overridden.")
-					score = asinRec.score
 				}
 				asinDurationDelta := 0
 				if bookDurationSec > 0 && result.DurationSec > 0 {
