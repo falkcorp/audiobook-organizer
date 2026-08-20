@@ -257,8 +257,8 @@ func TestRescoreLabeledExamples_ApplyUpsertFailure_CountsError(t *testing.T) {
 		t.Fatalf("expected no ScoreBreakdown persisted after upsert failure, got %d bytes", len(got.ScoreBreakdown))
 	}
 
-	if !strings.Contains(rep.lastMsg, "upsert_errs=1") {
-		t.Fatalf("expected final summary to report upsert_errs=1, got %q", rep.lastMsg)
+	if !strings.Contains(rep.last(), "upsert_errs=1") {
+		t.Fatalf("expected final summary to report upsert_errs=1, got %q", rep.last())
 	}
 }
 

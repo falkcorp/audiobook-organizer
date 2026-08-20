@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -92,8 +93,8 @@ func TestBreakdownBackfill_SkipsHasBreakdown(t *testing.T) {
 	if got.ScoreBreakdown.Score != 88.0 || got.Band != "HIGH" {
 		t.Fatalf("existing breakdown was rewritten: score=%.1f band=%q", got.ScoreBreakdown.Score, got.Band)
 	}
-	if !strings.Contains(rep.lastMsg, "skipped_has_breakdown=1") {
-		t.Fatalf("summary should report skipped_has_breakdown=1, got %q", rep.lastMsg)
+	if !strings.Contains(rep.last(), "skipped_has_breakdown=1") {
+		t.Fatalf("summary should report skipped_has_breakdown=1, got %q", rep.last())
 	}
 }
 
@@ -123,8 +124,8 @@ func TestBreakdownBackfill_DryRunWritesNothing(t *testing.T) {
 	if got.ScoreBreakdown != nil {
 		t.Fatalf("dry-run wrote a ScoreBreakdown: %+v", got.ScoreBreakdown)
 	}
-	if !strings.Contains(rep.lastMsg, "would_backfill=1") {
-		t.Fatalf("summary should report would_backfill=1, got %q", rep.lastMsg)
+	if !strings.Contains(rep.last(), "would_backfill=1") {
+		t.Fatalf("summary should report would_backfill=1, got %q", rep.last())
 	}
 }
 
@@ -202,8 +203,8 @@ func TestBreakdownBackfill_ZeroSignalNotPersisted(t *testing.T) {
 	if got == nil || got.ScoreBreakdown != nil {
 		t.Fatalf("zero-signal pair must not get a breakdown, got %+v", got)
 	}
-	if !strings.Contains(rep.lastMsg, "zero_signal=1") {
-		t.Fatalf("summary should report zero_signal=1, got %q", rep.lastMsg)
+	if !strings.Contains(rep.last(), "zero_signal=1") {
+		t.Fatalf("summary should report zero_signal=1, got %q", rep.last())
 	}
 }
 
@@ -231,8 +232,8 @@ func TestBreakdownBackfill_UpdateFailure_CountsError(t *testing.T) {
 	if got == nil || got.ScoreBreakdown != nil {
 		t.Fatalf("failed update must leave the candidate breakdown-less, got %+v", got)
 	}
-	if !strings.Contains(rep.lastMsg, "update_errs=1") {
-		t.Fatalf("summary should report update_errs=1, got %q", rep.lastMsg)
+	if !strings.Contains(rep.last(), "update_errs=1") {
+		t.Fatalf("summary should report update_errs=1, got %q", rep.last())
 	}
 }
 
@@ -261,8 +262,8 @@ func TestBreakdownBackfill_MissingEmbeddingCosineCounted(t *testing.T) {
 	if got == nil || got.ScoreBreakdown == nil {
 		t.Fatal("pair with missing cosine should still be backfilled from remaining signals")
 	}
-	if !strings.Contains(rep.lastMsg, "missing[embedding_cosine]=1") {
-		t.Fatalf("summary should report missing[embedding_cosine]=1, got %q", rep.lastMsg)
+	if !strings.Contains(rep.last(), "missing[embedding_cosine]=1") {
+		t.Fatalf("summary should report missing[embedding_cosine]=1, got %q", rep.last())
 	}
 }
 
@@ -329,9 +330,13 @@ func (p *perPairScorer) ScorePairsForBook(_ context.Context, aID string, inputs 
 
 // reportCapturingReporter records the JSON report payload the op logs, so a
 // test can assert on the whole struct instead of on the summary substring.
+// Locked for the same reason capturingReporter is: a Reporter is called from
+// registry.RunItems' worker goroutines, so nothing may assume single-threaded
+// access even when today's caller happens to log the report from one place.
 type reportCapturingReporter struct {
 	capturingReporter
-	report string
+	reportMu sync.Mutex
+	report   string
 }
 
 func (r *reportCapturingReporter) Log(_ slog.Level, msg string, attrs ...slog.Attr) error {
@@ -340,10 +345,19 @@ func (r *reportCapturingReporter) Log(_ slog.Level, msg string, attrs ...slog.At
 	}
 	for _, a := range attrs {
 		if a.Key == "report" {
+			r.reportMu.Lock()
 			r.report = a.Value.String()
+			r.reportMu.Unlock()
 		}
 	}
 	return nil
+}
+
+// reportJSON returns the captured report payload ("" if the op never logged one).
+func (r *reportCapturingReporter) reportJSON() string {
+	r.reportMu.Lock()
+	defer r.reportMu.Unlock()
+	return r.report
 }
 
 // TestBreakdownBackfill_BandHistogram proves the dry-run report carries a band
@@ -388,13 +402,14 @@ func TestBreakdownBackfill_BandHistogram(t *testing.T) {
 	if err := runBreakdownBackfillWith(context.Background(), scorer, es, json.RawMessage(`{}`), rep); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if rep.report == "" {
+	payload := rep.reportJSON()
+	if payload == "" {
 		t.Fatal("op did not log the JSON report")
 	}
 
 	var got breakdownBackfillReport
-	if err := json.Unmarshal([]byte(rep.report), &got); err != nil {
-		t.Fatalf("unmarshal report %q: %v", rep.report, err)
+	if err := json.Unmarshal([]byte(payload), &got); err != nil {
+		t.Fatalf("unmarshal report %q: %v", payload, err)
 	}
 
 	wantBands := map[string]int{
@@ -454,8 +469,8 @@ func TestBreakdownBackfill_BandHistogram(t *testing.T) {
 	// guessing whether a missing band was measured or dropped.
 	for _, want := range []string{"CERTAIN=3", "HIGH=1", "MEDIUM=1", "REVIEW=1", "BELOW=1",
 		"certain_1sig=1", "certain_primary[0]=1", "certain_primary[2+]=1"} {
-		if !strings.Contains(rep.lastMsg, want) {
-			t.Errorf("summary missing %q; got %q", want, rep.lastMsg)
+		if !strings.Contains(rep.last(), want) {
+			t.Errorf("summary missing %q; got %q", want, rep.last())
 		}
 	}
 }
@@ -478,7 +493,7 @@ func TestBreakdownBackfill_HistogramCountedOnApply(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 	var got breakdownBackfillReport
-	if err := json.Unmarshal([]byte(rep.report), &got); err != nil {
+	if err := json.Unmarshal([]byte(rep.reportJSON()), &got); err != nil {
 		t.Fatalf("unmarshal report: %v", err)
 	}
 	if !got.Apply || got.Backfilled != 1 {
