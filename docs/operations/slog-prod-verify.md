@@ -1,7 +1,7 @@
 <!-- file: docs/operations/slog-prod-verify.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 9fce353e-76db-495b-a4ac-475536aea16f -->
-<!-- last-edited: 2026-08-11 -->
+<!-- last-edited: 2026-08-20 -->
 
 # SLOG-PROD-VERIFY — metadata fetch smoke test
 
@@ -28,7 +28,7 @@ satisfy the `SLOG-PROD-VERIFY` TODO entry.
   `PermLibraryEditMetadata` (metadata fetch) + `PermOpsRead`/`PermOpsList`.
 - **Access to prod logs** (systemd `journalctl`, Loki, CloudWatch, etc.) so you
   can search for `op:<op_id>` and `metadata-fetch` text.
-- **Prod base URL** (for example `https://audiobook-organizer.falkcorp.com`).
+- **Prod base URL** — the deployment you are verifying against.
 
 ```bash
 PROD_BASE_URL="https://<your-prod-host>"
