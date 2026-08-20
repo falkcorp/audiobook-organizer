@@ -1,7 +1,7 @@
 // file: internal/server/server_coverage_phase2_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d5e6f7a8-b9c0-1d2e-3f4a-5b6c7d8e9f0a
-// last-edited: 2026-07-03
+// last-edited: 2026-08-20
 
 package server
 
@@ -72,6 +72,7 @@ func TestGetAudiobookTagsErrors(t *testing.T) {
 			database.SetGlobalStore(mockStore)
 			defer func() { database.SetGlobalStore(oldStore) }()
 
+			allowOpDefinitionUpserts(mockStore)
 			srv := NewServer(mockStore)
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/audiobooks/"+tt.bookID+"/tags", nil)
@@ -129,6 +130,7 @@ func TestAddBlockedHashErrors(t *testing.T) {
 			database.SetGlobalStore(mockStore)
 			defer func() { database.SetGlobalStore(oldStore) }()
 
+			allowOpDefinitionUpserts(mockStore)
 			srv := NewServer(mockStore)
 
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/blocked-hashes", bytes.NewBufferString(tt.body))
@@ -162,6 +164,7 @@ func TestAddBlockedHashDatabaseError(t *testing.T) {
 	database.SetGlobalStore(mockStore)
 	defer func() { database.SetGlobalStore(oldStore) }()
 
+	allowOpDefinitionUpserts(mockStore)
 	srv := NewServer(mockStore)
 
 	body := `{"hash": "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef", "reason": "duplicate file"}`
@@ -216,6 +219,7 @@ func TestDeleteWorkErrors(t *testing.T) {
 			database.SetGlobalStore(mockStore)
 			defer func() { database.SetGlobalStore(oldStore) }()
 
+			allowOpDefinitionUpserts(mockStore)
 			srv := NewServer(mockStore)
 
 			req := httptest.NewRequest(http.MethodDelete, "/api/v1/works/"+tt.workID, nil)

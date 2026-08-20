@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.42.0
+// version: 2.43.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-08-19
+// last-edited: 2026-08-20
 
 package server
 
@@ -627,25 +627,29 @@ func NewServer(store database.Store) *Server {
 	})
 
 	// UOS-12: maintenance plugin — 26 ops migrated from scheduler_tasks.go.
-	// Guard on RootDir: tests don't configure AppConfig, so RootDir is ""
-	// and the mock store has no UpsertOpDefinitionV2 expectations.
-	if config.AppConfig.RootDir != "" {
-		if err := maintenanceplugin.New(server).Register(server.opRegistry); err != nil {
-			slog.Error("maintenance plugin register", "err", err)
-			server.opRegistrationErrs = append(server.opRegistrationErrs,
-				fmt.Errorf("maintenance plugin register: %w", err))
-		}
-		// Iterate all op registrars. Each file calls addOpRegistrar in its init()
-		// so new ops never require touching this block.
-		//
-		// Every one of the ~55 RegisterOp call sites correctly returns its
-		// error; this loop was the single place that threw them away. Collect
-		// instead, and let Start() decide -- see opRegistrationErrs.
-		for _, reg := range opRegistrars {
-			if err := reg(server, server.opRegistry); err != nil {
-				slog.Error("op registrar", "err", err)
-				server.opRegistrationErrs = append(server.opRegistrationErrs, err)
-			}
+	//
+	// Registration is UNCONDITIONAL. It used to be gated on
+	// config.AppConfig.RootDir != "" purely for test convenience (the mock
+	// store had no UpsertOpDefinitionV2 expectations), which made an unset
+	// RootDir silently drop the maintenance plugin AND every registrar in
+	// opRegistrars — a server with no operations at all, still reporting
+	// healthy. The tests now set up the expectation instead; see
+	// expectOpDefinitionUpserts in the server test helpers.
+	if err := maintenanceplugin.New(server).Register(server.opRegistry); err != nil {
+		slog.Error("maintenance plugin register", "err", err)
+		server.opRegistrationErrs = append(server.opRegistrationErrs,
+			fmt.Errorf("maintenance plugin register: %w", err))
+	}
+	// Iterate all op registrars. Each file calls addOpRegistrar in its init()
+	// so new ops never require touching this block.
+	//
+	// Every one of the ~55 RegisterOp call sites correctly returns its
+	// error; this loop was the single place that threw them away. Collect
+	// instead, and let Start() decide -- see opRegistrationErrs.
+	for _, reg := range opRegistrars {
+		if err := reg(server, server.opRegistry); err != nil {
+			slog.Error("op registrar", "err", err)
+			server.opRegistrationErrs = append(server.opRegistrationErrs, err)
 		}
 	}
 
