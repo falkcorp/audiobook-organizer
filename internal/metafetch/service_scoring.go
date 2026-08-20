@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
 // last-edited: 2026-08-20
 
@@ -137,23 +137,13 @@ func ApplyNonBaseAdjustmentsWithBreakdown(
 	baseWordCount int,
 ) (float64, []ScoreStep) {
 	k := scoringKnobs()
-	score := baseScore
-
-	steps := make([]ScoreStep, 0, 4)
-	steps = append(steps, ScoreStep{
-		ID: "base", Label: "Title/author match", Op: ScoreOpBase,
-		Operand: score, Running: score,
-		Detail: "Fuzzy F1 overlap between the search title/author and this result.",
-	})
+	rec := newScoreRecorder(baseScore, "Title/author match",
+		"Fuzzy F1 overlap between the search title/author and this result.")
 
 	// Compilation penalty
 	if isCompilation(r.Title) {
-		score *= k.CompilationPenalty
-		steps = append(steps, ScoreStep{
-			ID: "compilation", Label: "Compilation penalty", Op: ScoreOpMultiply,
-			Operand: k.CompilationPenalty, Running: score,
-			Detail: "The result title looks like a box set or collection rather than a single book.",
-		})
+		rec.mul("compilation", "Compilation penalty", k.CompilationPenalty,
+			"The result title looks like a box set or collection rather than a single book.")
 	}
 
 	// Length penalty: penalise results that are much longer than the search.
@@ -163,15 +153,10 @@ func ApplyNonBaseAdjustmentsWithBreakdown(
 		nSearch := float64(baseWordCount)
 		nResult := float64(len(resultWords))
 		if nResult > 1.5*nSearch {
-			factor := (1.5 * nSearch) / nResult
-			score *= factor
-			steps = append(steps, ScoreStep{
-				ID: "length", Label: "Length penalty", Op: ScoreOpMultiply,
-				Operand: factor, Running: score,
-				Detail: fmt.Sprintf(
+			rec.mul("length", "Length penalty", (1.5*nSearch)/nResult,
+				fmt.Sprintf(
 					"Result title has %d significant words against %d searched — over the 1.5× threshold.",
-					len(resultWords), baseWordCount),
-			})
+					len(resultWords), baseWordCount))
 		}
 	}
 
@@ -200,19 +185,15 @@ func ApplyNonBaseAdjustmentsWithBreakdown(
 		capped = true
 	}
 
-	total := score + bonus
 	if bonus > 0 {
 		detail := "Present: " + strings.Join(fields, ", ") + "."
 		if capped {
 			detail += fmt.Sprintf(" Capped at %+.3f.", k.RichMetadataBonusCap)
 		}
-		steps = append(steps, ScoreStep{
-			ID: "rich_metadata", Label: "Rich metadata", Op: ScoreOpAdd,
-			Operand: bonus, Running: total, Detail: detail, Capped: capped,
-		})
+		rec.add("rich_metadata", "Rich metadata", bonus, detail, capped)
 	}
 
-	return total, steps
+	return rec.score, rec.steps
 }
 
 // durationTiers is the ONE canonical, ratio-based classification of how

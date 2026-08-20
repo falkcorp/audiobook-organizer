@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/plugin_test.go
-// version: 3.0.0
+// version: 3.0.1
 // guid: a3b4c5d6-e7f8-9012-6789-234567890123
 // last-edited: 2026-08-20
 
@@ -30,7 +30,6 @@ import (
 // caught it one second after the def was written.
 type captureRegistry struct {
 	defs []sdk.OperationDef
-	errs []error
 }
 
 func (c *captureRegistry) RegisterOp(def sdk.OperationDef) error {
