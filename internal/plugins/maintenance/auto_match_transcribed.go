@@ -34,12 +34,17 @@ type autoMatchTranscribedParams struct {
 
 func (p *Plugin) autoMatchTranscribedDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:              "maintenance.auto-match-transcribed",
-		Liveness:        sdk.LivenessRunItems,
-		Plugin:          "maintenance",
-		DisplayName:     "Auto-match transcribed books",
-		Description:     "Walks the library and auto-applies the best metadata candidate to unreviewed books whose audio-derived transcription exactly matches a search result above a configurable score threshold. Dry-run by default — pass dry_run=false to apply. Checkpointed and cancellable.",
-		ResumePolicy:    sdk.ResumeRestart,
+		ID:           "maintenance.auto-match-transcribed",
+		Liveness:     sdk.LivenessRunItems,
+		Plugin:       "maintenance",
+		DisplayName:  "Auto-match transcribed books",
+		Description:  "Walks the library and auto-applies the best metadata candidate to unreviewed books whose audio-derived transcription exactly matches a search result above a configurable score threshold. Dry-run by default — pass dry_run=false to apply. Checkpointed and cancellable.",
+		ResumePolicy: sdk.ResumeRestart,
+		// This op APPLIES metadata candidates to books (ApplyTranscriptionCandidate),
+		// so it reads and writes the library. It declared no Capabilities at all until
+		// 2026-08-20 — permission enforcement had nothing to gate on. The gap survived
+		// because TestMaintenancePlugin_AllOpsHaveCapabilities was t.Skip'd.
+		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.auto-match-transcribed",
 		Cancellable:     true,
