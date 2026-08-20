@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/dataset_backfill_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2f8ff156-b5ec-4480-ac97-27acc54fd013
-// last-edited: 2026-07-13
+// last-edited: 2026-08-20
 
 // End-to-end test for the dedup.dataset-backfill op against a real PebbleStore
 // + EmbeddingStore, added alongside the CONC-8 memoize-then-parallelize change
@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -128,14 +129,32 @@ func (f *failingUpsertStore) UpsertLabeledExample(ex database.LabeledExample) er
 
 // capturingReporter records the last UpdateProgress message so the test can
 // assert on the human-readable summary (which embeds upsert_errs).
+//
+// The mutex is not decoration: registry.RunItems calls UpdateProgress from its
+// WORKER goroutines, so every Reporter must be goroutine-safe (the production
+// dbReporter guards the same field with progressMu). This double was
+// unsynchronised until a breakdown-backfill test first fed an op more than one
+// work item — a race no test entered is a race -race cannot see.
 type capturingReporter struct {
 	fakeReporter
+	mu      sync.Mutex
 	lastMsg string
 }
 
 func (r *capturingReporter) UpdateProgress(_, _ int, msg string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.lastMsg = msg
 	return nil
+}
+
+// last returns the most recent progress message. Callers must use this rather
+// than reading lastMsg directly, so the read is ordered against the workers'
+// writes.
+func (r *capturingReporter) last() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastMsg
 }
 
 // TestDatasetBackfill_ApplyUpsertFailure_NotDismissed is the regression test
@@ -194,8 +213,8 @@ func TestDatasetBackfill_ApplyUpsertFailure_NotDismissed(t *testing.T) {
 	}
 
 	// The summary must report the upsert failure.
-	if !strings.Contains(rep.lastMsg, "upsert_errs=1") {
-		t.Fatalf("expected final summary to report upsert_errs=1, got %q", rep.lastMsg)
+	if !strings.Contains(rep.last(), "upsert_errs=1") {
+		t.Fatalf("expected final summary to report upsert_errs=1, got %q", rep.last())
 	}
 }
 
