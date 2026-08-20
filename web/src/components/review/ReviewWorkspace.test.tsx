@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
 // last-edited: 2026-08-20
 
@@ -113,6 +113,11 @@ describe('lane default', () => {
         expect.anything()
       )
     );
+    // ...and ONLY that request. The assertion above passed while the lane still
+    // fired a first fetch for the entire unfiltered pending set and aborted it,
+    // because a matcher that inspects "any call" cannot see a wasted one. On a
+    // real library that discarded request is the expensive one.
+    expect(api.getDedupCandidates).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('dupes-deeplink-banner')).toBeInTheDocument();
   });
 

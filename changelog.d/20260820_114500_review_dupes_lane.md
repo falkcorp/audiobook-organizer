@@ -1,5 +1,5 @@
 <!-- file: changelog.d/20260820_114500_review_dupes_lane.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3f7b0c95-8d42-4a16-b73e-5c1d9e2a8047 -->
 <!-- last-edited: 2026-08-20 -->
 
@@ -44,3 +44,11 @@ further down the list showed an empty result underneath a banner naming that
 book. The filter is now applied server-side, which also makes the count beside
 it honest and the empty state truthful — it can finally say "no duplicate
 candidates for this book" and mean it.
+
+#### A `?book=` deep link fetched the whole library before narrowing
+
+Arriving at the dupes lane for a specific book rendered once with no filter applied,
+requested every pending candidate in the library, then threw that response away and
+asked again with the filter. The URL's two filters are now read once, above the lane,
+and passed in — so the first render is already correct and a deep link costs one
+request instead of two. The larger the library, the more the discarded one cost.
