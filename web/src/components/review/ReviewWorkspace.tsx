@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-08-20
 //
@@ -26,6 +26,7 @@
 // old surfaces, which is gated on docs/port-inventory.md.
 
 import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Alert,
   AlertTitle,
@@ -43,6 +44,7 @@ import ViewListIcon from '@mui/icons-material/ViewList';
 import ViewColumnIcon from '@mui/icons-material/ViewColumn';
 import AutoAwesomeMosaicIcon from '@mui/icons-material/AutoAwesomeMosaic';
 import * as api from '../../services/api';
+import type { DedupBand } from '../../services/api';
 import { useToast } from '../toast/ToastProvider';
 import { CommandBar, type CommandMenu } from './CommandBar';
 import { QueueRail } from './QueueRail';
@@ -112,7 +114,19 @@ export function ReviewWorkspace() {
   const metadata = useMetadataLane(toast, lane === 'metadata');
   // Both lanes fetch only while they are the visible one, so switching lanes
   // does not leave three requests in flight or a stray window key listener.
-  const dupes = useDupesLane(toast, lane === 'dupes');
+  // Read here, not in DupesPanel, so the hook has the URL-owned filters on its
+  // FIRST render. Passing them down beats letting the panel sync them up: an
+  // effect-based sync made every ?book= deep link fetch the whole unfiltered
+  // set before correcting itself.
+  const [dupesSearchParams] = useSearchParams();
+  const dupesUrlFilters = useMemo(
+    () => ({
+      band: dupesSearchParams.get('band') as DedupBand | null,
+      entityId: dupesSearchParams.get('book'),
+    }),
+    [dupesSearchParams],
+  );
+  const dupes = useDupesLane(toast, lane === 'dupes', dupesUrlFilters);
   // Expansion is a view concern and the two lanes key it on different id types,
   // so it is not shared state.
   const [dupesExpandedId, setDupesExpandedId] = useState<number | null>(null);

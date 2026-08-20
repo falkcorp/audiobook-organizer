@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a71c8e2-53d9-4f06-b18a-9e2c7d4a0f53
 // last-edited: 2026-08-20
 //
@@ -11,6 +11,7 @@
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import * as api from '../../../services/api';
+import type { DupesUrlFilters } from './useDupesLane';
 import { useDupesLane, MERGE_ALL_BLOCKED_REASON } from './useDupesLane';
 
 vi.mock('../../../services/api');
@@ -45,8 +46,12 @@ beforeEach(() => {
   vi.mocked(api.getDedupStats).mockResolvedValue({ stats: [] });
 });
 
-async function renderLane() {
-  const view = renderHook(() => useDupesLane(toast));
+async function renderLane(urlFilters: DupesUrlFilters = { band: null, entityId: null }) {
+  // Rendered through props so a test can change the URL-owned filters the way
+  // the router does -- a rerender -- rather than the way state used to let it.
+  const view = renderHook(({ uf }) => useDupesLane(toast, true, uf), {
+    initialProps: { uf: urlFilters },
+  });
   await waitFor(() => expect(view.result.current.loading).toBe(false));
   return view;
 }
@@ -93,9 +98,8 @@ describe('mergeAllFiltered is refused when the filter cannot be transmitted', ()
       merged: 1,
       failed: 0,
     } as unknown as api.BulkMergeDedupResult);
-    const { result } = await renderLane();
-    act(() => result.current.setFilters({ band: 'REVIEW', entityId: 'book-7' }));
-    await waitFor(() => expect(result.current.filters.band).toBe('REVIEW'));
+    const { result } = await renderLane({ band: 'REVIEW', entityId: 'book-7' });
+    expect(result.current.filters.band).toBe('REVIEW');
 
     await act(async () => {
       result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered' });
@@ -154,7 +158,19 @@ describe('pagination is server-side', () => {
     act(() => result.current.setPage(3));
     await waitFor(() => expect(result.current.page).toBe(3));
 
-    act(() => result.current.setFilters({ band: 'CERTAIN' }));
+    act(() => result.current.setFilters({ bothUnmatched: true }));
+    expect(result.current.page).toBe(1);
+  });
+
+  it('returns to page 1 when the URL-owned filters change', async () => {
+    // The reset used to ride along with setFilters. Now band arrives as a prop,
+    // so the reset has to happen on the prop change or a reviewer on page 3
+    // clicks a band chip and lands on page 3 of a different, shorter result set.
+    const { result, rerender } = await renderLane();
+    act(() => result.current.setPage(3));
+    await waitFor(() => expect(result.current.page).toBe(3));
+
+    rerender({ uf: { band: 'CERTAIN' as const, entityId: null } });
     expect(result.current.page).toBe(1);
   });
 
@@ -178,7 +194,7 @@ describe('in-flight requests are aborted', () => {
     });
     const { result } = await renderLane();
 
-    act(() => result.current.setFilters({ band: 'HIGH' }));
+    act(() => result.current.setFilters({ bothUnmatched: true }));
     await waitFor(() => expect(signals.length).toBeGreaterThan(1));
 
     // The first request's signal is aborted rather than merely ignored -- the

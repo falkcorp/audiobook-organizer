@@ -1,5 +1,5 @@
 // file: web/src/components/review/DupesPanel.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1d6f8a03-7c25-4e91-b840-2a5c9e3b7d14
 // last-edited: 2026-08-20
 //
@@ -11,7 +11,6 @@
 // in docs/port-inventory-dupes.md rather than done here, because it is a
 // refactor of a lane this change was not asked to touch.
 
-import { useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Alert,
@@ -62,15 +61,14 @@ export interface DupesPanelProps {
 export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: DupesPanelProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const bookParam = searchParams.get('book');
-  const bandParam = searchParams.get('band') as DedupBand | null;
 
-  // The URL is the source of truth for these two, so a deep link from
+  // The URL is the source of truth for `book` and `band`, so a deep link from
   // FingerprintVisualsColumn lands on the right filter and a copied address bar
-  // reproduces the view.
-  const { setFilters } = dupes;
-  useEffect(() => {
-    setFilters({ entityId: bookParam, band: bandParam });
-  }, [bookParam, bandParam, setFilters]);
+  // reproduces the view. The workspace reads them and passes them into
+  // useDupesLane; this panel only WRITES them (the band chips below). It used
+  // to also mirror them into lane state via an effect, which meant a deep link
+  // rendered once unfiltered and fetched the whole pending set before
+  // correcting itself.
 
   const selectedIds = [...dupes.selectedIds];
 

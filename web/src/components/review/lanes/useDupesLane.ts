@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
 // last-edited: 2026-08-20
 
@@ -51,11 +51,32 @@ export interface DupesFilters {
   search: string;
 }
 
-const INITIAL_FILTERS: DupesFilters = {
-  band: null,
+/**
+ * The filters this hook owns as state. `band` and `entityId` are deliberately
+ * absent: the URL owns those, and they are passed in.
+ */
+export type LocalDupesFilters = Omit<DupesFilters, 'band' | 'entityId'>;
+
+/**
+ * The two filters the URL owns, passed in rather than mirrored into state.
+ *
+ * Mirroring them was a real defect, not a style choice. The panel synced
+ * URL -> filters in an effect, so arriving at `?book=X` rendered once with no
+ * entity filter, fired a fetch for the ENTIRE unfiltered pending set, then
+ * corrected itself and fetched again. On a large library that first request is
+ * the expensive one, and it is pure waste. Deriving makes the first render
+ * already correct, so a deep link costs exactly one fetch.
+ */
+export interface DupesUrlFilters {
+  band: DedupBand | null;
+  entityId: string | null;
+}
+
+const NO_URL_FILTERS: DupesUrlFilters = { band: null, entityId: null };
+
+const INITIAL_FILTERS: LocalDupesFilters = {
   status: 'pending',
   bothUnmatched: false,
-  entityId: null,
   search: '',
 };
 
@@ -76,7 +97,11 @@ export interface DupesLane {
   setPageSize: (n: number) => void;
 
   filters: DupesFilters;
-  setFilters: (patch: Partial<DupesFilters>) => void;
+  /**
+   * Patches only the filters this hook owns. `band` and `entityId` are not
+   * accepted -- they live in the URL, and the caller changes them by navigating.
+   */
+  setFilters: (patch: Partial<LocalDupesFilters>) => void;
   /**
    * Pending candidates across the whole library, ignoring every filter. Shown
    * beside `total` so a narrow filter reads as "12 of 4,300" rather than "12".
@@ -137,13 +162,17 @@ export interface DupesLane {
  *               `lane === 'dupes'` so switching lanes neither keeps fetches in
  *               flight nor leaves a window key listener stealing `j`.
  */
-export function useDupesLane(toast: Toast, active = true): DupesLane {
+export function useDupesLane(
+  toast: Toast,
+  active = true,
+  urlFilters: DupesUrlFilters = NO_URL_FILTERS,
+): DupesLane {
   const [candidates, setCandidates] = useState<DedupCandidate[]>([]);
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<DedupStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filters, setFiltersState] = useState<DupesFilters>(INITIAL_FILTERS);
+  const [localFilters, setFiltersState] = useState<LocalDupesFilters>(INITIAL_FILTERS);
   const [page, setPageState] = useState(1);
   const [pageSize, setPageSizeState] = useState(DEFAULT_PAGE_SIZE);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -151,7 +180,26 @@ export function useDupesLane(toast: Toast, active = true): DupesLane {
   const [drawerCandidateId, setDrawerCandidateId] = useState<number | null>(null);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  const filters: DupesFilters = useMemo(
+    () => ({ ...localFilters, band: urlFilters.band, entityId: urlFilters.entityId }),
+    [localFilters, urlFilters.band, urlFilters.entityId],
+  );
   const [reloadToken, setReloadToken] = useState(0);
+
+  // A URL filter change invalidates the page number and the selection, exactly
+  // as setFilters does for the local ones. This runs DURING render rather than
+  // in an effect on purpose: React re-renders immediately without committing,
+  // so the fetch effect sees page 1 on its first run. An effect would fetch
+  // page N, then fetch page 1 -- the bug this whole change removes, relocated.
+  const urlFilterKey = `${urlFilters.band ?? ''}\u0000${urlFilters.entityId ?? ''}`;
+  const [prevUrlFilterKey, setPrevUrlFilterKey] = useState(urlFilterKey);
+  if (prevUrlFilterKey !== urlFilterKey) {
+    setPrevUrlFilterKey(urlFilterKey);
+    setPageState(1);
+    setSelectedIds(new Set());
+    setFocusedIndex(0);
+  }
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -261,7 +309,7 @@ export function useDupesLane(toast: Toast, active = true): DupesLane {
   // `m` and `d` at a row from the page the reviewer just left.
   // -------------------------------------------------------------------------
 
-  const setFilters = useCallback((patch: Partial<DupesFilters>) => {
+  const setFilters = useCallback((patch: Partial<LocalDupesFilters>) => {
     setFiltersState((prev) => ({ ...prev, ...patch }));
     // Search is client-side over the loaded page, so it does not invalidate the
     // page number. Everything else does.
