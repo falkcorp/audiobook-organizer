@@ -1,5 +1,5 @@
 <!-- file: docs/evidence-panel-audit.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 4e8b2f65-9a13-47d0-8c52-6b0f1d94a3e7 -->
 <!-- last-edited: 2026-08-20 -->
 
@@ -22,7 +22,7 @@ This is that audit. **The risk is real for one lane of the three.**
 | Lane | Per-signal evidence | Reaches the browser | Work required |
 |---|---|---|---|
 | **Dupes** | Yes — `DedupScoreBreakdown` | Yes | None |
-| **Regroup** | Yes — `RecommendationEvidence` | Yes, but undeclared in TS | Frontend adapter only |
+| **Regroup** | Yes — `RecommendationEvidence` | Yes — declared + adapted already | Reuse existing adapter |
 | **Metadata** | **No — collapsed to a scalar** | Only fragments | **Backend change** |
 
 ## Dupes — already correct
@@ -40,8 +40,17 @@ serialized and embedded in the group payload as `json:"recommendationEvidence"`
 `members`, `durationsKnown`, `bookLengthMembers`, `medianKnownSec`, `longestKnownSec`,
 `distinctStems`, `numberedMembers`, `structure`.
 
-It is **not declared anywhere in `web/src/services/api.ts`**, so nothing in the frontend
-can consume it today. That is an adapter and a type declaration — no backend work.
+**Correction (v1.2.0):** the first version of this audit said the type was "not declared
+anywhere in `web/src/services/api.ts`, so nothing in the frontend can consume it today."
+The first half is true and the second half is false, and acting on it would have meant
+rebuilding something that already works. `RecommendationEvidence` **is** declared — in
+`web/src/lib/reviewPayload.ts:21`, not in `services/api.ts` — and `evidenceFacts()`
+(same file) already adapts it into labelled, tooltipped chips with a `warn` flag for the
+known-runtime gap. `ReviewQueue.tsx:799` renders them. It is covered by tests.
+
+Regroup's remaining work is therefore **smaller** than stated: not "declare a type and
+write an adapter" but "reuse the adapter that exists from the shared panel". Searching
+one file and generalising from its absence is what produced the wrong call.
 
 Note the shape difference: this is a set of named scalars, not a weighted `signals[]`.
 The adapter maps facts to rows; there are no weights to render, so the contribution bar
@@ -104,3 +113,61 @@ singled out — and a partial version undermines the reason for promoting it in 
 place.
 
 The dupes and regroup lanes are unblocked and can proceed independently.
+
+## Addendum — the panel has three evidence *kinds*, not one
+
+The recommendation above ("retain the components and plumb them through") is correct
+but underspecified, and the missing part changes the JSON contract. Written before
+checking how `ScoreBreakdownPanel` actually draws its bar:
+
+```ts
+const totalWeight = signals.reduce((sum, s) => sum + Math.max(0, s.weight), 0);
+share = Math.max(0, s.weight) / totalWeight;   // width of the segment
+```
+
+The bar is a **share of total weight**. That is truthful for dedup, whose score is a
+weighted sum. It is meaningless for metadata, whose pipeline is
+
+```
+score = (base × compilationPenalty × lengthPenalty) + richMetadataBonus
+```
+
+A *multiplicative* factor has no share of a total. To force one you would have to pick
+a decomposition (log-space, or delta-from-counterfactual), and neither maps onto
+`weight`. This is the same defect the audit already rejected in option 2, reached from
+the other direction: option 2 renders a bar that **omits** the dominant signal; a
+weight-shaped metadata breakdown renders a bar whose segments **sum to nothing
+meaningful**. The second is worse, because it looks complete.
+
+So the three lanes need three renderings, discriminated by the shape of the evidence:
+
+| Lane | Arithmetic | Rendering |
+|---|---|---|
+| Dupes | weighted sum | stacked share bar (today's panel, unchanged) |
+| Regroup | named facts, no weights, no score | fact rows, no bar |
+| Metadata | `(base × factors) + terms` | **waterfall** — running total after each step |
+
+A waterfall is the honest visual for a mixed pipeline: each row shows the value going
+in, the operation, and the running total coming out. It also gives the decomposition a
+**property to test rather than an observation to hope for** — replaying the steps must
+reproduce the shipped score exactly:
+
+```
+recompose(breakdown) == ScoreOneResult(r, searchWords)
+```
+
+Passing the golden fixtures only proves the *tested* cases still agree; that property
+proves the breakdown is a decomposition of the number actually shipped, for any input.
+If it cannot be written, what the backend is returning is annotations, not a breakdown —
+still worth shipping, but then it must not drive a contribution bar.
+
+### Revised order of work
+
+1. **Define the evidence union** (frontend) — a discriminated type over the three kinds.
+2. **Dupes + regroup adapters** (frontend only, no Go, no fixture risk). Regroup is what
+   forces the no-bar mode to exist.
+3. **Metadata backend** — design the Go struct against a panel that already handles
+   non-weighted evidence, so the JSON contract is written once.
+
+Committing the Go struct before step 2 risks a second backend change plus an adapter
+rewrite, which is why the order matters more than it looks.

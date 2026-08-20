@@ -1,7 +1,7 @@
 // file: web/src/lib/reviewPayload.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f9c7b41-6d38-4a05-8e17-0b3d5c9a2e68
-// last-edited: 2026-08-06
+// last-edited: 2026-08-20
 
 // Parsing + shaping for a review-queue item's JSON payload. Kept out of the
 // ReviewQueue component file so these pure helpers are unit-testable and don't trip
@@ -18,6 +18,10 @@
  *  arithmetic behind a recommendation, so a reviewer can CHECK the machine instead
  *  of trusting it. Every field is optional here because a hold written before
  *  2026-08-06 carries no evidence block at all. */
+import type { EvidenceFact } from '../components/review/evidence/types';
+
+export type { EvidenceFact };
+
 export interface RecommendationEvidence {
   members?: number;
   durationsKnown?: number;
@@ -155,15 +159,6 @@ export function humanRuntime(sec: number | undefined): string {
   return `${Math.round(sec / 60)} min`;
 }
 
-export interface EvidenceFact {
-  label: string;
-  value: string;
-  /** Longer explanation for a tooltip — what the number means, not just its name. */
-  hint: string;
-  /** True when this fact is the reason a recommendation could not be decisive. */
-  warn?: boolean;
-}
-
 /** evidenceFacts turns the evidence block into the chips a reviewer reads.
  *
  *  Returns [] when there is no evidence at all (a pre-2026-08-06 hold), so the UI can
@@ -176,7 +171,6 @@ export function evidenceFacts(ev: RecommendationEvidence | undefined): EvidenceF
   const facts: EvidenceFact[] = [
     {
       label: `${members} member${members === 1 ? '' : 's'}`,
-      value: '',
       hint: 'Files grouped into this hold.',
     },
     {
@@ -184,7 +178,6 @@ export function evidenceFacts(ev: RecommendationEvidence | undefined): EvidenceF
       // an absent runtime is not evidence, and a majority of unknowns is exactly why
       // a recommendation lands on insufficient-evidence.
       label: `${known}/${members} runtimes known`,
-      value: '',
       hint:
         'Members with a real duration. An absent duration is never treated as evidence, ' +
         'so a group where most runtimes are unknown cannot get a decisive recommendation.',
@@ -192,26 +185,22 @@ export function evidenceFacts(ev: RecommendationEvidence | undefined): EvidenceF
     },
     {
       label: `${bookLength} book-length`,
-      value: '',
       hint:
         'Members running 90 minutes or more — long enough to BE a book on their own. ' +
         'A majority here means these are probably separate novels, not chapters.',
     },
     {
       label: `median ${humanRuntime(ev.medianKnownSec)}`,
-      value: '',
       hint: 'Median runtime across members with a known duration (unknowns excluded).',
     },
     {
       label: `longest ${humanRuntime(ev.longestKnownSec)}`,
-      value: '',
       hint: 'The longest single member. "15.8 h" reads as "that is a novel" on its own.',
     },
   ];
   if (typeof ev.distinctStems === 'number') {
     facts.push({
       label: `${ev.distinctStems} distinct title${ev.distinctStems === 1 ? '' : 's'}`,
-      value: '',
       hint:
         'Distinct title stems among the members — the anthology / over-merge signal. ' +
         'Many distinct titles in one folder means combining would fuse different works.',
@@ -220,14 +209,12 @@ export function evidenceFacts(ev: RecommendationEvidence | undefined): EvidenceF
   if (typeof ev.numberedMembers === 'number' && ev.numberedMembers > 0) {
     facts.push({
       label: `${ev.numberedMembers} numbered`,
-      value: '',
       hint: 'Members carrying a parseable chapter or track ordinal.',
     });
   }
   if (ev.structure) {
     facts.push({
       label: ev.structure,
-      value: '',
       hint: 'The group\'s dominant physical shape on disk: disc set, chapter run, or flat folder.',
     });
   }
