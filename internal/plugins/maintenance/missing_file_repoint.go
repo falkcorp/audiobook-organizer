@@ -113,6 +113,11 @@ func (p *Plugin) missingFileRepointDef() sdk.OperationDef {
 			"claimed by another row.",
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.missing-file-repoint",
+		// ResumeDrop, matching missing-file-audit and missing-file-repair: this op
+		// WRITES, and an apply interrupted midway must not silently pick itself back
+		// up. Re-running is cheap and safe (a repointed row is no longer missing, so
+		// it is simply not selected again), so dropping loses nothing.
+		ResumePolicy:    sdk.ResumeDrop,
 		// CapLibraryWrite: this op mutates book_file rows (FilePath only).
 		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		Run: func(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
