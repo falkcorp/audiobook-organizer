@@ -1,7 +1,7 @@
 // file: internal/itunes/cross_type_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6d1f8b40-2a95-4c73-8e60-3b7a1c9e0d58
-// last-edited: 2026-07-24
+// last-edited: 2026-08-20
 
 package itunes
 
@@ -47,8 +47,8 @@ func TestComputeCrossTypeCollisions(t *testing.T) {
 
 	store := &pidCensusMock{
 		files: []database.BookFileCore{
-			bf("f_ok", "b_ok", "/mnt/x/audiobooks/ok.m4b", "AAAAAAAA00000001"),   // owns an audiobook track
-			bf("f_bad", "b_bad", "/mnt/x/music/song.mp3", "BBBBBBBB00000002"),    // owns a MUSIC track → collision
+			bf("f_ok", "b_ok", "/mnt/x/audiobooks/ok.m4b", "AAAAAAAA00000001"), // owns an audiobook track
+			bf("f_bad", "b_bad", "/mnt/x/music/song.mp3", "BBBBBBBB00000002"),  // owns a MUSIC track → collision
 		},
 		books: map[string]*database.Book{
 			"b_ok":  {ID: "b_ok", IsPrimaryVersion: &primary},

@@ -1,7 +1,7 @@
 // file: internal/tools/registry_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a7b8c9d0-e1f2-3456-abcd-456789012345
-// last-edited: 2026-06-15
+// last-edited: 2026-08-20
 
 package tools_test
 
@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/falkcorp/audiobook-organizer/internal/tools"
 )
 
 func TestRegistry_SystemMode_Found(t *testing.T) {

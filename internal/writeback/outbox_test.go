@@ -1,7 +1,7 @@
 // file: internal/writeback/outbox_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-05-01
+// last-edited: 2026-08-20
 
 package writeback
 
@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/gin-gonic/gin"
 )
 
 func TestWriteBackOutbox_EnqueueAndDequeue(t *testing.T) {

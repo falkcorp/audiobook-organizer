@@ -1,6 +1,6 @@
 // file: internal/batch/service_test.go
-// version: 1.1.0
-// last-edited: 2026-07-11
+// version: 1.1.1
+// last-edited: 2026-08-20
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
 package batch
@@ -143,8 +143,8 @@ func (m *MockBookStore) GetBooksByMetadataSourceHash(hash string) ([]database.Bo
 func (m *MockBookStore) SearchBooks(query string, limit, offset int) ([]database.Book, error) {
 	return nil, nil
 }
-func (m *MockBookStore) CountPrimaryBooks() (int, error)               { return len(m.books), nil }
-func (m *MockBookStore) CountAllBooks() (int, error)                   { return len(m.books), nil }
+func (m *MockBookStore) CountPrimaryBooks() (int, error)         { return len(m.books), nil }
+func (m *MockBookStore) CountAllBooks() (int, error)             { return len(m.books), nil }
 func (m *MockBookStore) GetDistinctGenres() ([]string, error)    { return nil, nil }
 func (m *MockBookStore) GetDistinctLanguages() ([]string, error) { return nil, nil }
 func (m *MockBookStore) ListSoftDeletedBooks(limit, offset int, olderThan *time.Time) ([]database.Book, error) {

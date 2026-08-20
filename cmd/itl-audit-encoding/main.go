@@ -1,6 +1,7 @@
 // file: cmd/itl-audit-encoding/main.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9d7cc6c7-ae41-4594-b773-93ab73c0a191
+// last-edited: 2026-08-20
 
 // itl-audit-encoding walks every mhoh string block in an iTunes-authored .itl
 // file and emits a per-hohmType histogram of the byte fields that control
@@ -87,4 +88,3 @@ func main() {
 	}
 	fmt.Printf("Report written to %s\n", outPath)
 }
-

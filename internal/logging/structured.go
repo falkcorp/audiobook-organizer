@@ -1,12 +1,12 @@
 // file: internal/logging/structured.go
-// version: 1.1.0
+// version: 1.1.1
 
 package logging
 
 import (
 	"context"
-	"log/slog"
 	"encoding/json"
+	"log/slog"
 )
 
 // opAttrs builds a list of slog attributes from an OpContext.
@@ -26,7 +26,6 @@ func opAttrs(op *OpContext) []any {
 	}
 	return attrs
 }
-
 
 // sanitizeArgs escapes CR/LF in string-typed attribute VALUES (odd positions
 // in slog's alternating key,value convention). Keys are program constants and

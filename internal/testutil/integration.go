@@ -1,7 +1,7 @@
 // file: internal/testutil/integration.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-03
+// last-edited: 2026-08-20
 
 package testutil
 
@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/realtime"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 

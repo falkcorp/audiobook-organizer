@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering_pushdown_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c9e7a41-2b5d-4f80-9c16-8a2e5d0b1f7c
-// last-edited: 2026-07-11
+// last-edited: 2026-08-20
 
 package audiobooks
 
@@ -53,7 +53,7 @@ func seedPushdownBooks(t *testing.T, ps *database.PebbleStore) []pushdownFixture
 	fixtures := make([]pushdownFixture, 0, 51)
 	for i := 0; i < 51; i++ {
 		f := pushdownFixture{
-			title:        // spread titles so a title sort would reorder vs ID order
+			title:// spread titles so a title sort would reorder vs ID order
 			string(rune('a'+(i%26))) + "-book",
 			libraryState: states[i%len(states)],
 			genre:        genres[i%len(genres)],

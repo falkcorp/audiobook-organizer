@@ -1,5 +1,5 @@
 // file: cmd/dedup_bench_crossval.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3c4d5e6f-7a8b-9012-cdef-333333333333
 // last-edited: 2026-08-20
 
@@ -203,7 +203,7 @@ func runDedupBenchCrossval(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	slog.Info("Check results later", "command", "dedup-bench check " + runDir)
+	slog.Info("Check results later", "command", "dedup-bench check "+runDir)
 	return nil
 }
 

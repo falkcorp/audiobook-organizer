@@ -1,7 +1,7 @@
 // file: internal/itunes/service/transfer.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-06-16
+// last-edited: 2026-08-20
 //
 // ITL file transfer handlers: download, upload+validate, backup
 // list, and restore. Part of backlog 6.4.
@@ -18,10 +18,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
+	"github.com/gin-gonic/gin"
 )
 
 // maxITLUploadSize is the maximum allowed ITL upload (500 MB).

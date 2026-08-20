@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-07-16
+// last-edited: 2026-08-20
 
 package audiobooks
 
@@ -571,4 +571,3 @@ func ApplyOverrideToPayload(payload *AudiobookUpdate, field string, value any) {
 		}
 	}
 }
-

@@ -1,7 +1,7 @@
 // file: internal/itunes/mhoh_encoding_table.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: a0dacfc4-01c3-4a83-9404-b510ca4d051a
-// last-edited: 2026-07-03
+// last-edited: 2026-08-20
 
 // ITunesMhohEncoding is the authoritative per-hohmType encoding constant table
 // for mhoh string blocks in iTunes-authored .itl files.
@@ -40,10 +40,11 @@
 //   - bytes +32..+39 all zero: true for all text string types.
 //
 // Encoding indicator values at byte +24 (not +27 as our old code assumed):
-//   0 = ASCII/percent-encoded (used exclusively by 0x0B LocalURL and similar)
-//   1 = UTF-16LE (used for non-Latin text with characters > U+00FF)
-//   2 = UTF-8 / pure ASCII (used by 0x0B LocalURL for encoded URLs)
-//   3 = Windows-1252 / Latin-1 (used for Latin text)
+//
+//	0 = ASCII/percent-encoded (used exclusively by 0x0B LocalURL and similar)
+//	1 = UTF-16LE (used for non-Latin text with characters > U+00FF)
+//	2 = UTF-8 / pure ASCII (used by 0x0B LocalURL for encoded URLs)
+//	3 = Windows-1252 / Latin-1 (used for Latin text)
 //
 // K16 CORRECTION (2026-07-03): the 2026-06-09 derivation recorded the VALUE
 // SETS correctly but assigned the 1/3 semantics backwards. Byte-level probes

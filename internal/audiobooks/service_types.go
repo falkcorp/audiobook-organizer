@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-06-28
+// last-edited: 2026-08-20
 
 package audiobooks
 
@@ -85,11 +85,11 @@ type ListFilters struct {
 	LibraryState       string
 	Tag                string
 	Tags               []string
-	SortBy           string        // column sort key
-	SortOrder        string        // "asc" or "desc"
-	FieldFilters     []FieldFilter // advanced field-specific filters (book-global)
-	PerUserFilters   []FieldFilter // per-user filters (read_status, progress_pct, last_played)
-	UserID           string        // caller's user ID; required for PerUserFilters
+	SortBy             string        // column sort key
+	SortOrder          string        // "asc" or "desc"
+	FieldFilters       []FieldFilter // advanced field-specific filters (book-global)
+	PerUserFilters     []FieldFilter // per-user filters (read_status, progress_pct, last_played)
+	UserID             string        // caller's user ID; required for PerUserFilters
 	// Fingerprinting filters
 	FingerprintStatus  string // "none", "partial", "complete", or "" for any
 	CoveragePercentMin *int   // minimum coverage percentage (inclusive)

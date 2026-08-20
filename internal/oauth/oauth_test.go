@@ -1,6 +1,7 @@
 // file: internal/oauth/oauth_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0b7e2c94-3a18-4d56-9f07-1a6c5b0e9d24
+// last-edited: 2026-08-20
 
 package oauth
 
@@ -15,11 +16,11 @@ func TestIsEmailAllowed(t *testing.T) {
 		email string
 		want  bool
 	}{
-		{"owner@example.com", true},        // case-insensitive
-		{"OWNER@EXAMPLE.COM", true},         // case-insensitive
-		{"family@example.com", true},        // trimmed on load
-		{"stranger@example.com", false},     // not on list
-		{"", false},                         // empty denied
+		{"owner@example.com", true},           // case-insensitive
+		{"OWNER@EXAMPLE.COM", true},           // case-insensitive
+		{"family@example.com", true},          // trimmed on load
+		{"stranger@example.com", false},       // not on list
+		{"", false},                           // empty denied
 		{"owner@example.com.evil.com", false}, // no substring match
 	}
 	for _, tc := range cases {

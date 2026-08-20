@@ -1,6 +1,7 @@
 // file: internal/ai/telemetry.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c3d4e5f6-a7b8-0004-cdef-000000000004
+// last-edited: 2026-08-20
 
 package ai
 
@@ -18,12 +19,13 @@ var aiTracer = otel.Tracer("audiobook-organizer/ai")
 // Creates a span with the given operation name and optional attributes.
 //
 // Usage:
-//   result, err := WithOpenAISpan(ctx, "parse_filename",
-//     func(spanCtx context.Context) (*ParsedMetadata, error) {
-//       return p.parseFilenameWithoutInstrumentation(spanCtx)
-//     },
-//     attribute.String("filename", filename),
-//   )
+//
+//	result, err := WithOpenAISpan(ctx, "parse_filename",
+//	  func(spanCtx context.Context) (*ParsedMetadata, error) {
+//	    return p.parseFilenameWithoutInstrumentation(spanCtx)
+//	  },
+//	  attribute.String("filename", filename),
+//	)
 func WithOpenAISpan(ctx context.Context, opName string, fn func(context.Context) (interface{}, error), attrs ...attribute.KeyValue) (interface{}, error) {
 	_, span := aiTracer.Start(ctx, opName, trace.WithAttributes(attrs...))
 	defer span.End()

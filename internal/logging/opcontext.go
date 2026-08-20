@@ -1,5 +1,5 @@
 // file: internal/logging/opcontext.go
-// version: 1.0.0
+// version: 1.0.1
 
 package logging
 
@@ -13,10 +13,10 @@ const opContextKey contextKey = "opContext"
 // It's passed through context.Context so all logs in the operation's
 // call stack automatically get tagged with operation ID, type, and status.
 type OpContext struct {
-	ID       string                 // Unique operation identifier (UUID or operation ID from DB)
-	Type     string                 // Operation type: metadata-fetch, dedup, organize, etc.
-	Status   string                 // pending, success, failed
-	Entities map[string][]string    // Entity refs: {"books": ["id1"], "genres": ["rock"], "playlists": ["main"]}
+	ID       string              // Unique operation identifier (UUID or operation ID from DB)
+	Type     string              // Operation type: metadata-fetch, dedup, organize, etc.
+	Status   string              // pending, success, failed
+	Entities map[string][]string // Entity refs: {"books": ["id1"], "genres": ["rock"], "playlists": ["main"]}
 }
 
 // WithOp returns a new context with the operation context attached.

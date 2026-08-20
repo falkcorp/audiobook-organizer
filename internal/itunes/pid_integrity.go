@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_integrity.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e2f7a1c4-6b90-4d38-8a5e-1c3f9d2b7e60
-// last-edited: 2026-07-24
+// last-edited: 2026-08-20
 //
 // READ-ONLY book_file iTunes-PID integrity census. A PID is minted unique per
 // book_file (TrackProvisioner.Provision → GeneratePIDHex → crypto/rand), so the
@@ -54,7 +54,7 @@ type PIDOwner struct {
 	FilePath       string `json:"file_path"`
 	IsPrimary      bool   `json:"is_primary"`
 	SoftDeleted    bool   `json:"soft_deleted"`
-	HasMergeLink   bool   `json:"has_merge_link"`             // MergedIntoBookID set
+	HasMergeLink   bool   `json:"has_merge_link"` // MergedIntoBookID set
 	MergedInto     string `json:"merged_into_book_id,omitempty"`
 	VersionGroupID string `json:"version_group_id,omitempty"`
 	Title          string `json:"title,omitempty"`
@@ -66,20 +66,20 @@ type DuplicatePID struct {
 	Owners         []PIDOwner `json:"owners"`
 	Classification string     `json:"classification"` // "same_file" | "diff_file"
 	InITL          bool       `json:"in_itl"`
-	PrimaryOwners  int        `json:"primary_owners"`  // live primary owners
-	DistinctPaths  int        `json:"distinct_paths"`  // distinct FilePaths among owners
+	PrimaryOwners  int        `json:"primary_owners"` // live primary owners
+	DistinctPaths  int        `json:"distinct_paths"` // distinct FilePaths among owners
 }
 
 // PIDIntegrityReport is the full census. All counts are over book_file rows.
 type PIDIntegrityReport struct {
-	TracksInITL         int `json:"tracks_in_itl"`
-	FilesWithPID        int `json:"files_with_pid"`          // book_file rows carrying a non-empty PID
-	DistinctPIDs        int `json:"distinct_pids"`
-	DuplicatePIDs       int `json:"duplicate_pids"`          // PIDs owned by >1 book_file
-	DupSameFile         int `json:"dup_same_file"`           // all owners share FilePath
-	DupDiffFile         int `json:"dup_diff_file"`           // owners point at different files
-	DupInITL            int `json:"dup_in_itl"`              // duplicate PIDs present in the library
-	FilesToClear        int `json:"files_to_clear"`          // owner rows losing the PID (owners−1 per dup PID)
+	TracksInITL   int `json:"tracks_in_itl"`
+	FilesWithPID  int `json:"files_with_pid"` // book_file rows carrying a non-empty PID
+	DistinctPIDs  int `json:"distinct_pids"`
+	DuplicatePIDs int `json:"duplicate_pids"` // PIDs owned by >1 book_file
+	DupSameFile   int `json:"dup_same_file"`  // all owners share FilePath
+	DupDiffFile   int `json:"dup_diff_file"`  // owners point at different files
+	DupInITL      int `json:"dup_in_itl"`     // duplicate PIDs present in the library
+	FilesToClear  int `json:"files_to_clear"` // owner rows losing the PID (owners−1 per dup PID)
 	// Relocate-correctness probe (findings §1.5): a PID on >1 PRIMARY, live
 	// book_file with differing paths makes relocate's first-wins order-dependent.
 	PIDsOnMultiplePrimariesDiffPath int `json:"pids_on_multiple_primaries_diff_path"`
@@ -219,15 +219,15 @@ const (
 
 // OrphanSample is one attributed AO-.itl track, kept for the JSON detail view.
 type OrphanSample struct {
-	PID          string       `json:"pid"`
-	Bucket       OrphanBucket `json:"bucket"`
-	OwnerFileID  string       `json:"owner_file_id,omitempty"`
-	OwnerBookID  string       `json:"owner_book_id,omitempty"`
-	Title        string       `json:"title,omitempty"`
-	InLoserSet   bool         `json:"in_loser_set"`             // owner book ∈ merge-loser provenance
-	LoserSource  string       `json:"loser_source,omitempty"`   // "journal" | "merged_into" | "both"
-	SHAMatch     bool         `json:"sha_match"`                // a live-primary book_file shares this file's FileHash
-	FileHash     string       `json:"file_hash,omitempty"`
+	PID         string       `json:"pid"`
+	Bucket      OrphanBucket `json:"bucket"`
+	OwnerFileID string       `json:"owner_file_id,omitempty"`
+	OwnerBookID string       `json:"owner_book_id,omitempty"`
+	Title       string       `json:"title,omitempty"`
+	InLoserSet  bool         `json:"in_loser_set"`           // owner book ∈ merge-loser provenance
+	LoserSource string       `json:"loser_source,omitempty"` // "journal" | "merged_into" | "both"
+	SHAMatch    bool         `json:"sha_match"`              // a live-primary book_file shares this file's FileHash
+	FileHash    string       `json:"file_hash,omitempty"`
 }
 
 // MergeOrphanCensus is the decision-relevant output. The bucket counts partition
@@ -236,9 +236,9 @@ type MergeOrphanCensus struct {
 	TracksInITL int `json:"tracks_in_itl"`
 
 	// Loser provenance (spec §6.5 reconciles BOTH sources).
-	JournalLoserIDs   int `json:"journal_loser_ids"`    // distinct LoserID in AutoMergeJournalEntry
-	MergedIntoLosers  int `json:"merged_into_losers"`   // distinct owner-books with MergedIntoBookID set (among .itl owners)
-	DistinctLoserSet  int `json:"distinct_loser_set"`   // |journal ∪ merged_into| restricted to .itl owners actually seen
+	JournalLoserIDs  int `json:"journal_loser_ids"`  // distinct LoserID in AutoMergeJournalEntry
+	MergedIntoLosers int `json:"merged_into_losers"` // distinct owner-books with MergedIntoBookID set (among .itl owners)
+	DistinctLoserSet int `json:"distinct_loser_set"` // |journal ∪ merged_into| restricted to .itl owners actually seen
 
 	// Bucketing of every AO-.itl track by its CURRENT live owner.
 	Healthy     int `json:"healthy"`

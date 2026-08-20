@@ -1,6 +1,7 @@
 // file: internal/itunes/itl_le_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: c5f9e038-7d4a-4b92-af13-g8c4d9e5f67b
+// last-edited: 2026-08-20
 
 package itunes
 
@@ -571,11 +572,11 @@ func buildMithLEWithChildren(trackID int, pid [8]byte, size, totalTime int, mhoh
 func TestParseLE_TrackStrings(t *testing.T) {
 	pid := [8]byte{0x22, 0x11, 0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA}
 
-	wantName     := "The Great Audiobook"
-	wantAlbum    := "Great Series Vol 1"
-	wantArtist   := "Jane Narrator"
-	wantGenre    := "Audiobooks"
-	wantKind     := "AAC audio file"
+	wantName := "The Great Audiobook"
+	wantAlbum := "Great Series Vol 1"
+	wantArtist := "Jane Narrator"
+	wantGenre := "Audiobooks"
+	wantKind := "AAC audio file"
 	wantLocation := `W:\audiobooks\Great Series Vol 1\chapter.m4b`
 	wantLocalURL := "file://localhost/W:/audiobooks/Great+Series+Vol+1/chapter.m4b"
 
@@ -642,8 +643,8 @@ func TestParseLE_TrackStrings(t *testing.T) {
 func TestParseLE_TrackStrings_ViaMiah(t *testing.T) {
 	pid := [8]byte{0x44, 0x33, 0x22, 0x11, 0x88, 0x77, 0x66, 0x55}
 
-	wantName     := "Miah-Nested Book"
-	wantArtist   := "Miah Author"
+	wantName := "Miah-Nested Book"
+	wantArtist := "Miah Author"
 	wantLocation := `W:\audiobooks\Miah Author\Miah-Nested Book\chapter.m4b`
 
 	mhohChildren := [][]byte{

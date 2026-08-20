@@ -1,7 +1,7 @@
 // file: internal/matcher/fuzzy.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-11
+// last-edited: 2026-08-20
 
 package matcher
 
@@ -176,9 +176,9 @@ func TokenSetRatio(a, b string) float64 {
 	sort.Strings(onlyA)
 	sort.Strings(onlyB)
 
-	t0 := strings.Join(inter, " ")                                        // shared tokens
-	t1 := strings.TrimSpace(t0 + " " + strings.Join(onlyA, " "))          // shared + a-only
-	t2 := strings.TrimSpace(t0 + " " + strings.Join(onlyB, " "))          // shared + b-only
+	t0 := strings.Join(inter, " ")                               // shared tokens
+	t1 := strings.TrimSpace(t0 + " " + strings.Join(onlyA, " ")) // shared + a-only
+	t2 := strings.TrimSpace(t0 + " " + strings.Join(onlyB, " ")) // shared + b-only
 
 	return max(tokenSimilarity(t0, t1), tokenSimilarity(t0, t2), tokenSimilarity(t1, t2))
 }

@@ -1,25 +1,20 @@
-- [ ] **GOFMT-SWEEP** `gofmt -l` reports **43 unformatted Go files across 24
-      packages** on `main` (measured 2026-08-20, excluding `web/`). Deferred out
-      of the bench-build/sdkguard PR deliberately: formatting 43 files is a
-      different change from fixing two broken gates, and would bury that diff.
+- [x] **GOFMT-SWEEP** `gofmt -l` reported **43 unformatted Go files across 24
+      packages** on `main` (measured 2026-08-20, excluding `web/`). Root cause was
+      the same one behind `sdkguard` and the bench build: **`gofmt` was verified
+      nowhere** — `grep -rn 'gofmt' .github/workflows/ Makefile` returned zero
+      hits, so there was no format check in CI and no `make fmt`/`fmt-check`
+      target, and drift accumulated silently.
 
-      Root cause is the same one that PR fixed twice over: **`gofmt` is verified
-      nowhere.** `grep -rn 'gofmt' .github/workflows/ Makefile` returns zero
-      hits — there is no format check in CI and no `make fmt`/`make fmt-check`
-      target, so drift accumulates silently and nothing ever reports it.
+      **Done.** Both steps landed together, in the required order: the 43 files
+      were swept, and only then did a `make fmt-check` target join `make ci` and
+      the CI job (renamed `Repo Guards`, since it now covers three checks). The
+      gate could not have preceded its own sweep without being red on 43
+      pre-existing files.
 
-      Two pieces of work, in this order:
-      1. Sweep — `gofmt -w` the 43 files. Purely mechanical, no behaviour
-         change, but it touches 24 packages, so land it alone and rebase
-         in-flight branches after rather than before.
-      2. Add a `fmt-check` target (`gofmt -l` with a non-empty result failing),
-         put it in `make ci` next to `sdkguard` and `bench-check`, and add it to
-         the `SDK Deps & Bench Build` job in `ci.yml`. Without step 2 the sweep
-         is a one-off and the debt just re-accrues.
-
-      Note the ordering constraint: step 2 must not land before step 1, or CI
-      goes red on 43 pre-existing files — the exact failure mode the
-      `--enable-only nolintlint` comment in `ci.yml` describes for errcheck, and
-      the reason `interfacebloat` is kept out of that selector.
-
-      Reproduce: `gofmt -l . | grep -v '^web/'`
+      Verified semantically inert: `gofmt` is idempotent on the result, and all
+      24 affected packages pass `go test -short` (22 with tests, 2 without).
+      Note the sweep was **not** whitespace-only, as first assumed — alongside
+      indentation, `gofmt` split `stmt; os.Exit(1)` onto separate lines, expanded
+      inline struct definitions, and normalised doc comments to the Go 1.19+
+      heading form. `git diff -w` was therefore not empty; the tests are what
+      establish inertness, not the whitespace-ignoring diff.

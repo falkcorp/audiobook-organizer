@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.5.0
+# version: 3.6.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-08-20
 
@@ -142,7 +142,11 @@ jobs:
       - name: Check interface width against baseline
         run: bash scripts/check-interface-width.sh
 
-  # Project-specific: the two checks that nothing was running.
+  # Project-specific: the checks that nothing was running.
+  #
+  # Renamed from "SDK Deps & Bench Build" on 2026-08-20 when gofmt joined it. The
+  # name is not yet load-bearing anywhere — the job had not been added to the
+  # required-checks list, so nothing referenced it by name.
   #
   # Both gates below existed only in the local Makefile (`make sdkguard`, and
   # `sdkguard` as a prerequisite of `make ci`). Neither appeared in any workflow
@@ -162,16 +166,23 @@ jobs:
   # compiled them, so the tree did not build under -tags bench for the next four
   # months and no run ever said so.
   #
+  # gofmt is the third instance of the same oversight, found while fixing the
+  # first two: `grep -rn 'gofmt' .github/workflows/ Makefile` returned ZERO hits,
+  # and 43 files across 24 packages had drifted out of shape as a result. The
+  # sweep that fixed them landed in the same change that added this step — a
+  # format gate cannot precede its own sweep without being red on 43 pre-existing
+  # files, which is the trap the --enable-only comment above describes.
+  #
   # ⚠️ THIS JOB REPORTS BUT DOES NOT BLOCK — same caveat as the interface-width
   # ratchet above. Read 2026-08-20, main's required checks are exactly "Minimal
   # CI / Minimal CI Summary", "Require changelog fragment", and "TODO Fragment
-  # Headers". This job is none of them, so a PR that re-breaks either check goes
-  # red here and merges anyway. Making it binding means adding "SDK Deps & Bench
-  # Build" to the required-checks list, which is a branch-protection change and
+  # Headers". This job is none of them, so a PR that re-breaks any of these three
+  # checks goes red here and merges anyway. Making it binding means adding "Repo
+  # Guards" to the required-checks list, which is a branch-protection change and
   # therefore a human action — not something to work around by smuggling these
   # steps into an unrelated job that happens to already be required.
-  sdk-deps-and-bench:
-    name: SDK Deps & Bench Build
+  repo-guards:
+    name: Repo Guards
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -217,6 +228,9 @@ jobs:
       # other. See the Makefile for why bench-check is not `build-bench`.
       - name: Typecheck bench-tagged code
         run: make bench-check
+
+      - name: Check Go formatting
+        run: make fmt-check
 
   # Project-specific: verify mockery mocks are not stale
   mocks-check:

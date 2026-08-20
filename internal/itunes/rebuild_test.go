@@ -1,6 +1,6 @@
 // file: internal/itunes/rebuild_test.go
-// version: 1.0.9
-// last-edited: 2026-07-11
+// version: 1.0.10
+// last-edited: 2026-08-20
 // guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
 
 package itunes
@@ -89,7 +89,7 @@ func (m *mockRebuildStore) GetBooksByIDs(ids []string) ([]database.Book, error) 
 	return books, nil
 }
 
-func (m *mockRebuildStore) CountAllBooks() (int, error)     { return 0, nil }
+func (m *mockRebuildStore) CountAllBooks() (int, error) { return 0, nil }
 func (m *mockRebuildStore) CountPrimaryBooks() (int, error) {
 	return len(m.books), nil
 }
@@ -322,8 +322,8 @@ func TestBuildNewTrackFromBookWithDefaults(t *testing.T) {
 	title := "Minimal Audiobook"
 
 	book := &database.Book{
-		ID:       bookID,
-		Title:    title,
+		ID:    bookID,
+		Title: title,
 		// Book-level FilePath is used when there are no book files.
 		FilePath: "/mnt/library/Minimal/01.m4b",
 	}

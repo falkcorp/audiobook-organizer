@@ -1,6 +1,7 @@
 // file: internal/sweep/archive_sweep_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d4c3b2a1-9087-6543-2109-fedcba987654
+// last-edited: 2026-08-20
 
 package sweep
 
@@ -9,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/gin-gonic/gin"
 )
 
 func TestSweepArchivedBooks_SkipsNonDeletedBooks(t *testing.T) {

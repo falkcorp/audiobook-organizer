@@ -1,7 +1,7 @@
 // file: internal/search/bleve_index.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 3c8e1a2f-4d9b-4f70-a5c6-2f8d0e1b9a47
-// last-edited: 2026-08-14
+// last-edited: 2026-08-20
 //
 // BleveIndex is the single-package wrapper around a Bleve v2 scorch
 // index backing library search (spec DES-1 / backlog §4.7). The
@@ -57,7 +57,7 @@ type BleveIndex struct {
 // with. It is bleve's stock English chain MINUS the stopword filter:
 // unicode tokenizer, possessive stripper, lowercase, porter stemmer.
 //
-// WHY NOT THE STOCK `en` ANALYZER
+// # WHY NOT THE STOCK `en` ANALYZER
 //
 // The stop filter deletes tokens without renumbering the positions of the
 // survivors, and MatchPhraseQuery rebuilds the phrase from those positions

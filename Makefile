@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.22.0
+# version: 2.23.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-08-20
 
@@ -22,7 +22,7 @@ BACKUP_DIR  ?= $(CURDIR)/backups
         web-install web-build web-dev web-test web-lint web-lint-memory \
         test test-short test-all test-all-short test-nightly test-frontend test-e2e test-e2e-demo \
         coverage coverage-check coverage-check-short ci \
-        vet mocks mocks-check staticcheck oplint sdkguard bench-check \
+        vet mocks mocks-check staticcheck oplint sdkguard bench-check fmt-check \
         docker docker-run docker-stop \
         release-dry-run release-snapshot version \
         build-mtls-bridge build-mtls-bridge-windows \
@@ -60,6 +60,7 @@ help:
 	@echo "  make coverage-check - Verify 30% coverage threshold"
 	@echo "  make sdkguard       - Assert pkg/plugin/sdk has no unexpected internal/ deps"
 	@echo "  make bench-check    - Typecheck the //go:build bench code"
+	@echo "  make fmt-check      - Assert every Go file is gofmt-clean"
 	@echo "  make ci             - Fast CI: short tests + coverage (prop tests skipped)"
 	@echo ""
 	@echo "Docker:"
@@ -388,6 +389,33 @@ bench-check:
 	@go build -tags bench -gcflags=-e ./...
 	@echo "✅ Bench check passed"
 
+## fmt-check: Assert every Go file is gofmt-clean (verified nowhere until 2026-08-20)
+#
+# The third instance of the pattern that produced sdkguard and bench-check:
+# `grep -rn 'gofmt' .github/workflows/ Makefile` returned ZERO hits, so nothing
+# had ever checked formatting, and 43 files across 24 packages had drifted by
+# 2026-08-20. The sweep that fixed them had to land before this target could,
+# or the gate would have been red on 43 pre-existing files from its first run --
+# the same trap the --enable-only comment in ci.yml describes for errcheck.
+#
+# Reports rather than rewriting: a gate that silently edits a contributor's tree
+# hides the very drift it is meant to surface. `gofmt -w` is the stated remedy.
+#
+# web/ is excluded because it holds no Go; the grep also drops any stray vendored
+# path. grep exits 1 when it matches nothing, hence the `|| true` -- without it
+# the recipe dies on a CLEAN tree under make's -e shell.
+fmt-check:
+	@echo "🔍 Checking gofmt..."
+	@unformatted=$$(gofmt -l . | grep -v '^web/' || true); \
+	if [ -n "$$unformatted" ]; then \
+		echo "❌ not gofmt-clean:"; \
+		echo "$$unformatted"; \
+		echo ""; \
+		echo "Fix with: gofmt -w <files>"; \
+		exit 1; \
+	fi
+	@echo "✅ gofmt clean"
+
 ## test-all: Run all tests (backend full + frontend)
 test-all: test web-test
 
@@ -540,7 +568,7 @@ coverage-check-short:
 	echo "✅ Coverage $$coverage% meets floor $$floor%"
 
 ## ci: Fast CI check (short tests — prop tests skipped; use test-nightly for full suite)
-ci: mocks-check staticcheck sdkguard bench-check test-all-short coverage-check-short
+ci: mocks-check staticcheck sdkguard bench-check fmt-check test-all-short coverage-check-short
 	@echo "✅ All CI checks passed!"
 
 ## build-mtls-bridge: Build the mTLS bridge binary (macOS)

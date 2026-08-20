@@ -1,7 +1,7 @@
 // file: internal/dedup/unified/config_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4f7a2c9b-8e3d-4b6f-a1c5-9e7b3d2f6a8c
-// last-edited: 2026-07-18
+// last-edited: 2026-08-20
 
 package unified
 
@@ -234,7 +234,7 @@ func TestValidate_NegativeReviewMin(t *testing.T) {
 // TestValidate_MediumHighOrderingError verifies band_high_min > band_medium_min.
 func TestValidate_MediumHighOrderingError(t *testing.T) {
 	cfg := DefaultScoreConfig()
-	cfg.BandHighMin = 70.0  // lower than medium
+	cfg.BandHighMin = 70.0 // lower than medium
 	cfg.BandMediumMin = 80.0
 	// Now band_high < band_medium — invalid.
 
@@ -246,7 +246,7 @@ func TestValidate_MediumHighOrderingError(t *testing.T) {
 // TestValidate_MediumReviewOrderingError verifies band_medium_min > band_review_min.
 func TestValidate_MediumReviewOrderingError(t *testing.T) {
 	cfg := DefaultScoreConfig()
-	cfg.BandMediumMin = 55.0  // lower than review
+	cfg.BandMediumMin = 55.0 // lower than review
 	cfg.BandReviewMin = 60.0
 
 	if err := cfg.Validate(); err == nil {

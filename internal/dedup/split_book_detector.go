@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_detector.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9c1f0a3e-b7d2-4e84-8c12-3fa8e1d6b9c0
-// last-edited: 2026-08-19
+// last-edited: 2026-08-20
 
 // Package dedup — split-book backfill detector.
 //
@@ -41,7 +41,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-
 )
 
 // SplitBookCandidate is one detected cluster of Books that look like
