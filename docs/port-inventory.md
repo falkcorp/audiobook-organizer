@@ -1,5 +1,5 @@
 <!-- file: docs/port-inventory.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 3e7b2f18-64a0-4c95-b1d7-8f2e5c0a9b43 -->
 <!-- last-edited: 2026-08-20 -->
 
@@ -93,9 +93,10 @@ changing either is a deliberate act rather than a tidy-up.
 - [ ] `handleBulkApply` — apply all selected
 - [ ] `handleReject` / `handleUnreject` — reject is **undoable** (see the "click to undo" chip)
 - [ ] `handleSkip` — skip is **undoable** (same pattern)
-- [ ] `handleRejectGroup` — reject an entire multi-book group
+- [x] `handleRejectGroup` — reject an entire multi-book group (now a dispatched
+      `rejectGroup` carrying only the still-actionable ids)
 - [ ] `handleSkipAllUnmatched` — bulk skip
-- [ ] `handleUngroup` — "Separate from group"; feeds `ungroupedIds`
+- [x] `handleUngroup` — "Separate from group"; feeds `ungroupedIds`
 - [ ] `toggleSelected` — selection
 - [ ] `handleClose` — refreshes the parent only when `hasChangesRef` is set
 - [ ] `handleApplyError` — per-row error state, not a global toast
@@ -116,14 +117,27 @@ changing either is a deliberate act rather than a tidy-up.
 
 ## 4. Renderers (become `CompareSpine` view modes)
 
-- [ ] `renderGroupedCard` (:719) — multi-book grouping, "Skip All"
-- [ ] `renderCompactRow` (:862) — dense single-line
-- [ ] `renderTwoColumnCard` (:1157) — current vs proposed
-- [ ] dispatch between them (:1755)
-- [ ] `<ToggleButtonGroup>` (:1536-1545) — the user's explicit choice, **preserved**
-- [ ] **New:** `auto` mode collapsing on `container-type: inline-size`. The existing
-      `renderTwoColumnCard` uses `Stack direction="row"` with `flex: 1 / flex: 1` and has
-      *no* responsive collapse — it squishes. This is the one fix the plan authorises.
+Ported into `spine/CompareSpine.tsx` by **mechanical substitution** of closure
+references, not by rewriting: `rowStates.get(id)` → `ctx.rowState(id)`,
+`handleApplyOne(id)` → a dispatched action, and so on. The JSX is otherwise untouched.
+Line numbers below are PLAN.md's; the actual bodies are :739-974, :976-1318, :1320-1587.
+
+- [x] `renderGroupedCard` → `GroupedCard` — multi-book grouping, "Skip All", per-book
+      "Separate from group", All Applied / All Rejected states
+- [x] `renderCompactRow` → `CompactRow` — dense single-line, plus its expanded
+      current-vs-proposed detail
+- [x] `renderTwoColumnCard` → `TwoColumnCard` — current vs proposed
+- [x] dispatch between them — now `CompareSpine`'s `viewMode` switch
+- [ ] `<ToggleButtonGroup>` — the control itself belongs to the workspace toolbar, not the
+      spine; **still to port** (`CompareSpine` accepts `viewMode`, nothing sets it yet)
+- [x] **New:** `auto` mode on `container-type: inline-size`, declared on the spine itself
+      so the query measures the spine and not the row. jsdom cannot evaluate container
+      queries — the declaration is asserted, the reflow is a visual-harness question.
+
+**One semantic change, deliberate:** the dialog's `handleSkip` (:592) toggled
+`'skipped' ↔ 'pending'`, so the Skip button and the "Skipped" chip called the same
+function and meant opposite things. The port dispatches `skip` and `unskip`. Net
+behaviour identical; intent now readable at the call site.
 
 ---
 
