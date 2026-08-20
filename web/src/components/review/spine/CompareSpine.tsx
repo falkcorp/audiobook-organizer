@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/CompareSpine.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1e5b8d72-4c30-49a6-8f21-0b7e3a6c9d54
 // last-edited: 2026-08-20
 //
@@ -33,9 +33,17 @@
 //
 // Not generic over lanes. These renderers are metadata-shaped throughout
 // (`CandidateResult`, `duration_delta_sec`, provider chips), and a type
-// parameter here would be an abstraction over one real case and two guesses.
-// The dupes and regroup lanes generalise it when they arrive; `ReviewWorkspace`
-// holds the lane switch in the meantime.
+// parameter here would have been an abstraction over one real case and two
+// guesses.
+//
+// The second real case has now arrived and the answer held: see
+// ./DupesSpine.tsx. A CandidateResult is one book plus a proposal about it; a
+// DedupCandidate is two books plus a claim about the pair, keyed on a number
+// rather than a string. They share a page layout, not a row shape, so the dupes
+// lane got a sibling rather than a generic, and `ReviewWorkspace` keeps the lane
+// switch permanently rather than as a stopgap. Revisit only if regroup turns
+// out to be genuinely the same shape as one of these two -- it is a third
+// comparison (a proposed grouping change), so expect a third renderer.
 
 import {
   Avatar,

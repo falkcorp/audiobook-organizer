@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-08-20
 //
@@ -48,13 +48,14 @@ import { CommandBar, type CommandMenu } from './CommandBar';
 import { QueueRail } from './QueueRail';
 import { ActionBar } from './ActionBar';
 import { CompareSpine, type SpineViewMode } from './spine/CompareSpine';
+import { DupesPanel } from './DupesPanel';
+import { useDupesLane } from './lanes/useDupesLane';
 import { useMetadataLane } from './lanes/useMetadataLane';
 import { LANES, LANE_ORDER } from './lanes';
 import type { ReviewLane } from './reviewActions';
 
 /** Where each unported lane's surface still lives, so the panel can point at it. */
 const UNPORTED: Partial<Record<ReviewLane, { where: string; href: string }>> = {
-  dupes: { where: 'the Dedup page', href: '/dedup' },
   regroup: { where: 'the Dedup page', href: '/dedup' },
 };
 
@@ -109,6 +110,12 @@ export function ReviewWorkspace() {
   const [viewMode, setViewMode] = useState<SpineViewMode>('compact');
 
   const metadata = useMetadataLane(toast, lane === 'metadata');
+  // Both lanes fetch only while they are the visible one, so switching lanes
+  // does not leave three requests in flight or a stray window key listener.
+  const dupes = useDupesLane(toast, lane === 'dupes');
+  // Expansion is a view concern and the two lanes key it on different id types,
+  // so it is not shared state.
+  const [dupesExpandedId, setDupesExpandedId] = useState<number | null>(null);
 
   const unmatchedCount = useMemo(
     () => metadata.results.filter((r) => r.status === 'no_match' || r.status === 'error').length,
@@ -359,7 +366,14 @@ export function ReviewWorkspace() {
         </ToggleButtonGroup>
       </Box>
 
-      {unported ? (
+      {lane === 'dupes' ? (
+        <DupesPanel
+          dupes={dupes}
+          viewMode={viewMode}
+          expandedId={dupesExpandedId}
+          onToggleExpand={(id) => setDupesExpandedId((cur) => (cur === id ? null : id))}
+        />
+      ) : unported ? (
         <Box sx={{ p: 3 }} data-testid={`lane-unported-${lane}`}>
           <Alert severity="info">
             <AlertTitle>{LANES[lane].label} is not in the workspace yet</AlertTitle>

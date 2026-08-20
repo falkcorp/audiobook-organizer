@@ -224,7 +224,7 @@ describe('keyboard shortcuts', () => {
       } as Partial<api.DedupCandidate>),
     ]);
     vi.mocked(api.mergeDedupCandidate).mockResolvedValue(undefined);
-    const { result } = await renderLane();
+    await renderLane();
 
     press('m');
 
@@ -330,6 +330,54 @@ describe('client-side search', () => {
 
     expect(result.current.candidates).toHaveLength(1);
     expect(vi.mocked(api.getDedupCandidates).mock.calls.length).toBe(callsBefore);
+  });
+});
+
+describe('selection', () => {
+  it('extends a range on shift-click and adds to what is already selected', async () => {
+    mockList([makeCandidate(1), makeCandidate(2), makeCandidate(3), makeCandidate(4)]);
+    const { result } = await renderLane();
+
+    act(() => result.current.toggleSelect(1, 0));
+    act(() => result.current.toggleSelect(3, 2, true));
+
+    // The span, inclusive of both ends.
+    expect([...result.current.selectedIds].sort()).toEqual([1, 2, 3]);
+
+    // Adds rather than replaces, so a selection can be assembled from several
+    // ranges -- the behaviour of every file list.
+    act(() => result.current.toggleSelect(4, 3));
+    expect(result.current.selectedIds.has(4)).toBe(true);
+    expect(result.current.selectedIds.has(1)).toBe(true);
+  });
+});
+
+describe('stats', () => {
+  it('reports the pending total and does NOT claim a per-band breakdown', async () => {
+    // The stats endpoint groups by entity_type/layer/status; there is no band
+    // dimension in the schema. The source shipped a deriveBandCounts that
+    // hardcoded zero for every band, so only the total was ever real.
+    vi.mocked(api.getDedupStats).mockResolvedValue({
+      stats: [
+        { entity_type: 'book', layer: 'embedding', status: 'pending', count: 30 },
+        { entity_type: 'book', layer: 'exact', status: 'pending', count: 12 },
+        { entity_type: 'book', layer: 'exact', status: 'merged', count: 99 },
+      ],
+    });
+    const { result } = await renderLane();
+
+    await waitFor(() => expect(result.current.pendingTotal).toBe(42));
+    expect(result.current).not.toHaveProperty('bandCounts');
+  });
+
+  it('keeps the lane usable when stats fail', async () => {
+    // Band counts are decoration on the filter chips; the candidates are the
+    // page. A stats failure must not blank the lane.
+    vi.mocked(api.getDedupStats).mockRejectedValue(new Error('stats down'));
+    const { result } = await renderLane();
+
+    expect(result.current.candidates).toHaveLength(2);
+    expect(result.current.error).toBeNull();
   });
 });
 

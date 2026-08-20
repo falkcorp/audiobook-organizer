@@ -77,10 +77,25 @@ export interface DupesLane {
 
   filters: DupesFilters;
   setFilters: (patch: Partial<DupesFilters>) => void;
-  bandCounts: Record<string, number>;
+  /**
+   * Pending candidates across the whole library, ignoring every filter. Shown
+   * beside `total` so a narrow filter reads as "12 of 4,300" rather than "12".
+   *
+   * NOT a per-band breakdown. The stats endpoint groups by entity_type, layer
+   * and status -- there is no band dimension in the schema -- so the source's
+   * deriveBandCounts returned a hardcoded zero for every band and only the
+   * total was real. Reproducing that shape here would ship a map whose name
+   * promises counts it cannot contain.
+   */
+  pendingTotal: number;
 
   selectedIds: Set<number>;
-  toggleSelect: (id: number) => void;
+  /**
+   * `index` and `shiftKey` come from the row so a shift-click can extend from
+   * the last row clicked, the way a file list does. Passing them is optional
+   * only because the `s` shortcut has no click to extend from.
+   */
+  toggleSelect: (id: number, index?: number, shiftKey?: boolean) => void;
   selectAllOnPage: () => void;
   clearSelection: () => void;
 
@@ -230,14 +245,10 @@ export function useDupesLane(toast: Toast, active = true): DupesLane {
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
-  const bandCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const s of stats) {
-      if (s.status !== 'pending') continue;
-      counts[s.layer] = (counts[s.layer] ?? 0) + s.count;
-    }
-    return counts;
-  }, [stats]);
+  const pendingTotal = useMemo(
+    () => stats.filter((s) => s.status === 'pending').reduce((sum, s) => sum + s.count, 0),
+    [stats]
+  );
 
   const mergeAllFilteredDisabledReason = filters.bothUnmatched ? MERGE_ALL_BLOCKED_REASON : null;
 
@@ -277,14 +288,39 @@ export function useDupesLane(toast: Toast, active = true): DupesLane {
   // Selection
   // -------------------------------------------------------------------------
 
-  const toggleSelect = useCallback((id: number) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
+  const lastClickedIndexRef = useRef<number | null>(null);
+
+  const toggleSelect = useCallback(
+    (id: number, index?: number, shiftKey = false) => {
+      const anchor = lastClickedIndexRef.current;
+      // A shift-click extends the range rather than toggling one row. It ADDS
+      // the span rather than replacing the selection, matching the source and
+      // making a selection assembled from several ranges possible.
+      if (shiftKey && index != null && anchor != null && anchor !== index) {
+        const [lo, hi] = anchor < index ? [anchor, index] : [index, anchor];
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          for (const c of visible.slice(lo, hi + 1)) next.add(c.id);
+          return next;
+        });
+        lastClickedIndexRef.current = index;
+        return;
+      }
+      if (index != null) lastClickedIndexRef.current = index;
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+    },
+    // Depends on `visible` rather than reading it from a ref. Writing a ref
+    // during render is unsafe under concurrent rendering -- React can discard a
+    // render pass, leaving the ref holding values from work that never
+    // committed. The identity churn this costs is free in practice: a change to
+    // `visible` is a new array, so every row re-renders regardless.
+    [visible]
+  );
 
   const selectAllOnPage = useCallback(() => {
     setSelectedIds(new Set(visible.map((c) => c.id)));
@@ -525,7 +561,7 @@ export function useDupesLane(toast: Toast, active = true): DupesLane {
     setPageSize,
     filters,
     setFilters,
-    bandCounts,
+    pendingTotal,
     selectedIds,
     toggleSelect,
     selectAllOnPage,

@@ -1,9 +1,10 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
 // last-edited: 2026-08-20
 
 import { render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import * as api from '../../services/api';
@@ -28,11 +29,16 @@ function makeResult(id: string, overrides: Partial<api.CandidateResult> = {}) {
   } as unknown as api.CandidateResult;
 }
 
-function renderWorkspace() {
+function renderWorkspace(initialEntries: string[] = ['/review']) {
+  // The dupes lane reads ?book= and ?band= from the URL -- a deep link from the
+  // fingerprint column is one of its entry points -- so the workspace now needs
+  // a router in tests as well as in the app.
   return render(
-    <ToastProvider>
-      <ReviewWorkspace />
-    </ToastProvider>
+    <MemoryRouter initialEntries={initialEntries}>
+      <ToastProvider>
+        <ReviewWorkspace />
+      </ToastProvider>
+    </MemoryRouter>
   );
 }
 
@@ -46,6 +52,8 @@ beforeEach(() => {
     no_match: 0,
     errors: 0,
   });
+  vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [], total: 0 });
+  vi.mocked(api.getDedupStats).mockResolvedValue({ stats: [] });
 });
 
 describe('lane default', () => {
@@ -60,18 +68,52 @@ describe('lane default', () => {
   });
 
   it('explains an unported lane instead of showing an empty spine', async () => {
+    // regroup, not dupes -- dupes now renders. This test outlives the port
+    // because SOME lane is unported until the last one lands, and the failure
+    // it guards against ("nothing here", with no next step) is the same one.
+    const user = userEvent.setup();
+    renderWorkspace();
+    await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
+
+    await user.click(screen.getByTestId('lane-tab-regroup'));
+
+    const panel = await screen.findByTestId('lane-unported-regroup');
+    expect(panel).toBeInTheDocument();
+    // It must say where the surface actually is; "nothing here" with no next
+    // step is the failure this replaces.
+    expect(panel).toHaveTextContent(/Dedup page/i);
+    expect(screen.queryByTestId('compare-spine')).not.toBeInTheDocument();
+  });
+
+  it('renders the dupes lane rather than pointing at the old page', async () => {
     const user = userEvent.setup();
     renderWorkspace();
     await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
 
     await user.click(screen.getByTestId('lane-tab-dupes'));
 
-    const panel = await screen.findByTestId('lane-unported-dupes');
-    expect(panel).toBeInTheDocument();
-    // It must say where the surface actually is; "nothing here" with no next
-    // step is the failure this replaces.
-    expect(panel).toHaveTextContent(/Dedup page/i);
-    expect(screen.queryByTestId('compare-spine')).not.toBeInTheDocument();
+    expect(await screen.findByTestId('dupes-rail')).toBeInTheDocument();
+    expect(screen.queryByTestId('lane-unported-dupes')).not.toBeInTheDocument();
+  });
+
+  it('carries a ?book= deep link into the lane as a server-side filter', async () => {
+    // The entry point from FingerprintVisualsColumn. This used to narrow the
+    // loaded page client-side, so a book whose candidate sat on page 2 showed
+    // an empty list under a banner naming it.
+    const user = userEvent.setup();
+    renderWorkspace(['/review?book=book-7']);
+    await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
+
+    await user.click(screen.getByTestId('lane-tab-dupes'));
+    await screen.findByTestId('dupes-rail');
+
+    await waitFor(() =>
+      expect(api.getDedupCandidates).toHaveBeenCalledWith(
+        expect.objectContaining({ entity_id: 'book-7' }),
+        expect.anything()
+      )
+    );
+    expect(screen.getByTestId('dupes-deeplink-banner')).toBeInTheDocument();
   });
 
   it('stops fetching the metadata set while another lane is showing', async () => {
