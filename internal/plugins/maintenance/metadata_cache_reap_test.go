@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/metadata_cache_reap_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f7a5c81-9de3-4b06-8c14-a35f7e290bd6
 // last-edited: 2026-08-20
 
@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -345,4 +346,105 @@ func TestMetadataCacheReap_ListFailureAborts(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "list metadata cache")
 	require.Empty(t, cache.deletedSorted())
+}
+
+// ---- run-level tests ----
+//
+// Everything above drives planMetadataCacheReap directly, which leaves the
+// wiring untested: params decoding, the deps nil checks, and the report write.
+// The params tags matter more here than in a read-only op — a typo in
+// `json:"apply"` would ship a delete op that ignores its own dry-run default,
+// and not one of the plan-level tests would notice.
+
+// reapMockStore builds a database.Store whose cache holds the given book IDs and
+// whose library holds `present`. Deletes are recorded.
+func reapMockStore(ids []string, present map[string]bool, deleted *[]string) *database.MockStore {
+	var mu sync.Mutex
+	rows := make([]database.MetadataCacheSummary, 0, len(ids))
+	for _, id := range ids {
+		rows = append(rows, database.MetadataCacheSummary{BookID: id, CandidateCount: 1})
+	}
+	return &database.MockStore{
+		ListMetadataCacheKeysFunc: func() ([]database.MetadataCacheSummary, error) {
+			return rows, nil
+		},
+		DeleteMetadataCacheFunc: func(bookID string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			*deleted = append(*deleted, bookID)
+			return nil
+		},
+		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			if present[id] {
+				return &database.Book{ID: id}, nil
+			}
+			return nil, nil
+		},
+	}
+}
+
+// The default params object must be a DRY RUN. This is the test that stands
+// between a mis-tagged param and an unrequested purge.
+//
+// On what "mis-tagged" can mean: encoding/json falls back to a CASE-INSENSITIVE
+// field match when no tag matches exactly, so `json:"Apply"` still binds
+// {"apply":true} and a case typo is not a defect. A rename is — verified by
+// mutation, `json:"do_apply"` turns TestMetadataCacheReap_RunAppliesWhenAsked
+// red while the case variant leaves it green.
+func TestMetadataCacheReap_RunDefaultsToDryRun(t *testing.T) {
+	var deleted []string
+	store := reapMockStore([]string{"b1", "b2", "b3"}, map[string]bool{"b1": true}, &deleted)
+	p := New(fakeDeps{store: store})
+
+	reportPath := filepath.Join(t.TempDir(), "reap.tsv")
+	body := fmt.Sprintf(`{"reportPath":%q}`, reportPath)
+	require.NoError(t, p.runMetadataCacheReap(context.Background(), []byte(body), &fakeReporter{}))
+
+	require.Empty(t, deleted, "an empty/absent apply flag must delete nothing")
+
+	// And it must still leave the artifact behind — a dry run whose decisions
+	// cannot be read cannot inform the decision it exists to inform.
+	raw, err := os.ReadFile(reportPath)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), "orphaned\tb2")
+	require.Contains(t, string(raw), "resolves\tb1")
+}
+
+func TestMetadataCacheReap_RunAppliesWhenAsked(t *testing.T) {
+	var deleted []string
+	store := reapMockStore([]string{"b1", "b2", "b3"}, map[string]bool{"b1": true}, &deleted)
+	p := New(fakeDeps{store: store})
+
+	reportPath := filepath.Join(t.TempDir(), "reap.tsv")
+	body := fmt.Sprintf(`{"apply":true,"reportPath":%q}`, reportPath)
+	require.NoError(t, p.runMetadataCacheReap(context.Background(), []byte(body), &fakeReporter{}))
+
+	sort.Strings(deleted)
+	require.Equal(t, []string{"b2", "b3"}, deleted)
+}
+
+// Malformed params must fail the op rather than fall through to zero-valued
+// defaults — which, for this op, would mean a silent dry run that the caller
+// believes was an apply.
+func TestMetadataCacheReap_RunRejectsBadParams(t *testing.T) {
+	var deleted []string
+	store := reapMockStore([]string{"b1"}, nil, &deleted)
+	p := New(fakeDeps{store: store})
+
+	err := p.runMetadataCacheReap(context.Background(), []byte(`{"apply":`), &fakeReporter{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "decode params")
+	require.Empty(t, deleted)
+}
+
+// The def must keep the flags that make the op safe. These are one-line
+// assertions guarding decisions argued at length in the file header.
+func TestMetadataCacheReap_DefDeclaresWriteCapabilityAndDropsOnResume(t *testing.T) {
+	def := New(fakeDeps{}).metadataCacheReapDef()
+
+	require.Equal(t, "maintenance.metadata-cache-reap", def.ID)
+	require.Equal(t, sdk.ResumeDrop, def.ResumePolicy,
+		"a delete pass interrupted midway must not silently resume")
+	require.Contains(t, def.Capabilities, sdk.CapLibraryWrite,
+		"a delete op must not claim to be read-only")
 }
