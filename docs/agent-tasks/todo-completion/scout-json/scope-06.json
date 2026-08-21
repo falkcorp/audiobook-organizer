@@ -1,0 +1,1176 @@
+[
+ {
+  "todo_line": 3790,
+  "src_id": null,
+  "title": "Collapse internal whitespace in util.NormalizeAuthor so double-spaced names dedupe correctly",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/util/normalize.go:26-28 NormalizeAuthor only does strings.ToLower(strings.TrimSpace(s)) -- it does NOT collapse internal whitespace runs, and a CollapseSpaces helper already exists unused for this purpose in the same file (grep -n \"func CollapseSpaces\" internal/util/normalize.go -> 1 hit L36). util.NormalizeAuthor is already the index key for author:name:, author_alias:name:, narrator_name:, series:name: etc (grep -n \"util.NormalizeAuthor\" internal/database/pebble_store_authors.go -> 12 hits incl. L96, L138), so 'Raymond  L.  Weil' (double internal space) normalizes to a DIFFERENT key than 'Raymond L. Weil' and both rows can coexist.",
+  "domain": "internal/util",
+  "exact_files": [
+   "internal/util/normalize.go",
+   "internal/util/normalize_test.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "NormalizeAuthor only trims+lowercases, no internal-whitespace collapse",
+    "grep_cmd": "grep -n \"func NormalizeAuthor\" internal/util/normalize.go",
+    "expect": "1 hit L26"
+   },
+   {
+    "claim": "CollapseSpaces already exists in the same package, unused by NormalizeAuthor",
+    "grep_cmd": "grep -n \"func CollapseSpaces\" internal/util/normalize.go",
+    "expect": "1 hit L36"
+   },
+   {
+    "claim": "Author creation/lookup indexes through util.NormalizeAuthor",
+    "grep_cmd": "grep -n \"util.NormalizeAuthor(name)\" internal/database/pebble_store_authors.go",
+    "expect": ">=3 hits incl L96, L138, L241"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "CollapseSpaces",
+    "file": "internal/util/normalize.go",
+    "verify_grep": "grep -n \"func CollapseSpaces\" internal/util/normalize.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "single-function one-line body change plus a couple of test cases; no call sites need touching because every author/series/role/playlist index already funnels through this helper.",
+  "review_critical": true,
+  "goal": "Change internal/util/normalize.go's NormalizeAuthor to also collapse runs of internal whitespace (via the existing CollapseSpaces helper) so 'Raymond  L.  Weil' and 'Raymond L. Weil' produce byte-identical normalized keys, closing the gap that let author 45616 be minted as a duplicate of 40775/42117.",
+  "background": [
+   "NormalizeAuthor is used as the index key for author:name:, author_alias:name:, narrator_name:, and series:name: (verified: internal/database/pebble_store_authors.go, pebble_store_auth.go:148/257, pebble_store_playlists.go:220, pebble_store_series.go:99 etc all call util.NormalizeAuthor).",
+   "CollapseSpaces(s string) string already exists in the same file (internal/util/normalize.go:36) and has its own passing test (TestCollapseSpaces, internal/util/normalize_test.go:78) -- it is a ready-made building block, not new logic to invent."
+  ],
+  "steps": [
+   "1. Open internal/util/normalize.go. Change the body of `func NormalizeAuthor(s string) string` (line 26-28) from `return strings.ToLower(strings.TrimSpace(s))` to `return CollapseSpaces(strings.ToLower(s))` -- CollapseSpaces already trims, so the explicit TrimSpace becomes redundant and can be dropped.",
+   "2. Update the doc comment directly above (line 25) to read: 'NormalizeAuthor trims whitespace, collapses internal whitespace runs, and lowercases an author name for comparison.'",
+   "3. Bump the file's version header (currently 1.0.0) and last-edited date per the repo's mandatory file-header rule.",
+   "4. In internal/util/normalize_test.go, add a case to TestNormalizeAuthor's `cases` slice: {\"Raymond  L.  Weil\", \"raymond l. weil\"} (double internal space collapses to one) and {\"J.R.R.\\tTolkien\", \"j.r.r. tolkien\"} (internal tab collapses too).",
+   "5. Do NOT touch any of the ~15 call sites in internal/database/*.go -- they already call util.NormalizeAuthor for their index keys, so the fix propagates automatically."
+  ],
+  "tests": [
+   "internal/util/normalize_test.go TestNormalizeAuthor -- add double-internal-space and internal-tab cases asserting the collapsed, lowercased result."
+  ],
+  "acceptance": [
+   "go test ./internal/util/... -run TestNormalizeAuthor -v exits 0.",
+   "grep -n 'CollapseSpaces(strings.ToLower(s))' internal/util/normalize.go returns 1 hit inside NormalizeAuthor."
+  ],
+  "edge_cases": [
+   "Empty string -> \"\" (CollapseSpaces already handles this, verified by existing TestCollapseSpaces case {\"   \", \"\"}).",
+   "All-whitespace string -> \"\".",
+   "String with only a case difference, no whitespace difference -> unaffected, still lowercases correctly."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "This fixes the FORWARD path only (prevents new duplicates). It does not retroactively fix the 4 already-existing type-3 duplicate groups from the 2026-08-14 snapshot (Karen Joy Fowler, Valery Starsky, Raymond L. Weil, Time Pebbles) -- that is TODO L3795's merge op. Also does not touch NormalizeTitle/NormalizeString, which the TODO does not ask about and which are out of scope per the 'stay on target' rule.",
+  "review_notes": [
+   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th",
+   "[simplicity-scope.json] Every brief points at a package-level protocol document that does not exist. 212 files in the package reference `docs/agent-tasks/ORCHESTRATION.md` (as `../ORCHESTRATION.md` / `../../ORCHESTRATION.md`), including the line in each brief '(Protocol also in `docs/agent-tasks/ORCHESTRATION.md` \u2014 the inl"
+  ]
+ },
+ {
+  "todo_line": 3795,
+  "src_id": null,
+  "title": "New maintenance op: merge an operator-confirmed list of duplicate real-author rows",
+  "verdict": "actionable",
+  "verdict_evidence": "p.mergeAuthorInto (internal/plugins/maintenance/author_conjunction_repair.go:288) already implements the exact relink-then-delete semantics needed (BookAuthor join-slice rewrite + AuthorID hydration), verified via grep -n \"func (p \\*Plugin) mergeAuthorInto\" internal/plugins/maintenance/author_conjunction_repair.go -> 1 hit L288. No existing op does a general name-duplicate merge (grep -rn \"author-duplicate\\|author-dedup\" internal/plugins/maintenance -> 0 hits).",
+  "domain": "internal/plugins/maintenance",
+  "exact_files": [
+   "changelog.d/20260821_metadata_081.md",
+   "internal/metafetch/service_apply.go",
+   "internal/metafetch/service_apply_test.go",
+   "internal/plugins/maintenance/author_duplicate_merge.go",
+   "internal/plugins/maintenance/author_duplicate_merge_test.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "mergeAuthorInto moves every BookAuthor link and deletes the losing row",
+    "grep_cmd": "grep -n \"func (p \\*Plugin) mergeAuthorInto\" internal/plugins/maintenance/author_conjunction_repair.go",
+    "expect": "1 hit L288"
+   },
+   {
+    "claim": "GetAllAuthors exists for enumerating the 9,320-row table",
+    "grep_cmd": "grep -n \"func (p \\*PebbleStore) GetAllAuthors\" internal/database/pebble_store_authors.go",
+    "expect": "1 hit L21"
+   },
+   {
+    "claim": "no existing op already merges general name-duplicate authors (maintenance.author-dedup-scan exists but only refreshes the duplicate-group cache; it does not merge)",
+    "grep_cmd": "grep -rn 'author-duplicate-merge\\|author-merge\\|merge-author\\|MergeAuthors\\b' internal/plugins/maintenance",
+    "expect": "0 hits"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "mergeAuthorInto",
+    "file": "internal/plugins/maintenance/author_conjunction_repair.go",
+    "verify_grep": "grep -n \"func (p \\*Plugin) mergeAuthorInto\" internal/plugins/maintenance/author_conjunction_repair.go"
+   },
+   {
+    "name": "util.NormalizeAuthor (post-L3790 fix)",
+    "file": "internal/util/normalize.go",
+    "verify_grep": "grep -n \"func NormalizeAuthor\" internal/util/normalize.go"
+   },
+   {
+    "name": "sdk.NewProgress / dryRun-default param pattern",
+    "file": "internal/plugins/maintenance/author_conjunction_repair.go",
+    "verify_grep": "grep -n \"DryRun \\*bool\" internal/plugins/maintenance/author_conjunction_repair.go"
+   }
+  ],
+  "polarity": "removal",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Deletes author rows and rewrites book links on a prod data path; needs a deliberately narrow, explicit-allowlist design (see notes) plus full dry-run/canonical-selection test coverage, not a mechanical change.",
+  "review_critical": true,
+  "goal": "Add a new maintenance op (e.g. 'maintenance.author-duplicate-merge') that merges ONLY author-name groups the operator explicitly lists (a Names []string param, matched after util.NormalizeAuthor), never an auto-detected 'looks like a real name' heuristic. For each listed group, group live authors by normalized name, pick the canonical row (most books via GetAllAuthorBookCounts, tie-break lowest ID), and call p.mergeAuthorInto for every other row in the group into it. Dry-run true by default, per the repo's own precedent in author_conjunction_repair.go.",
+  "background": [
+   "TODO.md's 2026-08-14 snapshot names 4 known type-3 groups needing merge: Karen Joy Fowler, Valery Starsky, Raymond L. Weil, Time Pebbles -- but the owner's decision list explicitly warns 'counts to re-measure before acting', so the op must not hardcode these names; it must accept them as a runtime param.",
+   "L3799 (types 1/2 -- book-title/disc-label rows masquerading as authors) is UNRESOLVED (needs_design, see that item) and L3803 warns against a single op that treats all three kinds alike. Requiring an explicit Names allowlist (rather than any automatic 'is this a real name' classifier) sidesteps that ambiguity entirely: the op can never accidentally merge a junk group because it only acts on names the operator names.",
+   "mergeAuthorInto's doc comment (author_conjunction_repair.go:280-287) already states it moves BookAuthor join-slice links, not just Book.AuthorID -- the correct mechanism, already used and tested by author-conjunction-repair."
+  ],
+  "steps": [
+   "1. Add `func displayOrNone(s string) string { if s == \"\" { return \"(none)\" }; return s }` directly in internal/metafetch/service_apply.go, next to RecordChangeHistory (do NOT add it to service.go \u2014 keep the change confined to the one file already in scope).",
+   "2. In service_apply.go's RecordChangeHistory, change the Summary line (currently L242) to: `title := book.Title; if title == \"\" { title = book.ID }; Summary: fmt.Sprintf(\"%s: Applied %s: %s \u2192 %s\", title, c.field, displayOrNone(truncateActivity(c.oldVal, 50)), truncateActivity(c.newVal, 50))`.",
+   "3. Bump the version header on internal/metafetch/service_apply.go only."
+  ],
+  "tests": [
+   "internal/plugins/maintenance/author_duplicate_merge_test.go: TestAuthorDuplicateMerge_MergesListedGroupOnly -- 2 groups exist (one listed, one not), assert only the listed group's rows merge.",
+   "TestAuthorDuplicateMerge_CanonicalIsHighestBookCount -- 3-row group, assert the row with the most books survives.",
+   "TestAuthorDuplicateMerge_DryRunDefaultTrue -- no DryRun param supplied, assert no rows are deleted.",
+   "TestAuthorDuplicateMerge_EmptyNamesIsNoop -- Names=[] or nil, assert zero merges even if duplicate groups exist in the fixture (anti-over-suppression / anti-laundering check)."
+  ],
+  "acceptance": [
+   "go test ./internal/plugins/maintenance/... -run TestAuthorDuplicateMerge -v exits 0.",
+   "grep -n 'maintenance.author-duplicate-merge' internal/plugins/maintenance/author_duplicate_merge.go returns >=1 hit (op ID registered)."
+  ],
+  "edge_cases": [
+   "A listed name normalizes to a group of exactly 1 live row -- no-op, log 'no duplicate found'.",
+   "A listed name matches zero live authors (already merged or typo) -- log and continue, not an error.",
+   "Two listed names normalize to the SAME group -- dedupe the group list before processing so it isn't processed twice.",
+   "Canonical row has a tombstone entry from a prior merge -- reuse CreateAuthorTombstone/GetAuthorTombstone if applicable (see pebble_store_authors.go:832-840); confirm this doesn't already happen inside mergeAuthorInto before adding it again."
+  ],
+  "anti_over_suppression": "TestAuthorDuplicateMerge_EmptyNamesIsNoop and TestAuthorDuplicateMerge_MergesListedGroupOnly -- together they prove the op only acts on what it is explicitly told to, which is the anti-laundering guard for this task (see feedback_stripping_without_corroboration_is_laundering, cited directly by L3803).",
+  "depends_on_lines": [
+   3790
+  ],
+  "gate": "make ci",
+  "notes": "Soft dependency on L3790 (whitespace-normalization fix) only in the sense that re-measuring duplicate groups after L3790 ships will show fewer/different groups; this op works correctly either way since it groups by util.NormalizeAuthor at call time.",
+  "review_notes": [
+   "[verify-1.json] Source-line re-find grep `grep -n \"Prefix metadata-apply activity\" TODO.md` returns 0 hits. Unlike TASK-079/080, this task has NO working bold-id fallback \u2014 its 'TODO id' in the skeleton is just 'L3517' (a line number), not a distinguishing acronym, so the brief's own '(re-find it: ... or by the bol",
+   "[verify-1.json] Step 1 says 'Add a small helper near truncateActivity in internal/metafetch/service.go (or inline in service_apply.go)' \u2014 this is a genuine either/or left to the executor's judgment. Two reasonable models would produce different diffs: one adds `displayOrNone` as a new exported/unexported function i"
+  ]
+ },
+ {
+  "todo_line": 3799,
+  "src_id": null,
+  "title": "Decide what to do with type-1/2 author rows (book titles / disc labels stored as authors)",
+  "verdict": "needs_design",
+  "verdict_evidence": "TODO.md:3799-3802 explicitly asks to 'Decide what to DO with types 1 and 2' -- re-parse the books vs retire the author rows and re-attribute -- and states this is 'a different operation from dedupe'. No item in the owner-decision list (SCOUT-INSTRUCTIONS.md items 1-14) addresses this question; it is not covered by the author-merge decision (which only covers type 3, real-name duplicates).",
+  "domain": "internal/plugins/maintenance",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "Type 1/2 example rows exist as of the 2026-08-14 snapshot (re-measure needed)",
+    "grep_cmd": "grep -n \"Cthulhu Armageddon\" TODO.md",
+    "expect": ">=1 hit"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "opus",
+  "why_tier": "This is a design decision, not code -- needs an architecture-level call on data provenance (can the 25 Cthulhu Armageddon books be re-parsed from their original tags, or must the author link simply be dropped and the books left author-less pending manual re-attribution).",
+  "review_critical": true,
+  "goal": "Get an explicit owner decision on ONE of: (a) re-run the metadata parser against these books' original file tags/paths to derive a correct author, (b) drop the AuthorID/BookAuthor link entirely and leave the book unattributed for manual fix-up, or (c) leave the junk rows as-is and only suppress them from user-facing author listings. Whichever is chosen becomes a new, separate maintenance op from the type-3 merge in L3795.",
+  "background": [
+   "TODO.md:3768-3776 (type 2, disc labels 'CD 13' etc) and :3758-3767 (type 1, book titles like 'Cthulhu Armageddon (Unabridged)') describe the same underlying disease as the already-fixed stranded-ampersand bug: a metadata parse wrote a non-author string into the author field.",
+   "L3803 explicitly forbids treating these the same as type-3 (mergeable) duplicates -- a merge op would consolidate 25 junk rows into 1 and make the junk look intentional (the laundering failure mode)."
+  ],
+  "steps": [
+   "1. Present the owner with the three options above, each with its cost: (a) re-parse requires locating original source tags/paths for the 25+10+... affected books and re-running the metadata parser -- expensive, may not be possible if source files were already renamed; (b) drop-the-link is cheap and safe (never deletes data, matches the repo's 'never delete, REPOINT' standing rule) but leaves books author-less in the UI; (c) suppress-only requires a UI-side filter and leaves the underlying junk rows in place indefinitely.",
+   "2. Once a decision is made, scope it as its own actionable ticket -- do not fold it into L3795's merge op."
+  ],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Re-measure the type-1/2 population before deciding -- the 2026-08-14 counts are explicitly flagged stale by the owner's own TODO text."
+ },
+ {
+  "todo_line": 3803,
+  "src_id": null,
+  "title": "(constraint, not a task) Do not build one op that treats type-1/2/3 author duplicates the same",
+  "verdict": "not_a_task",
+  "verdict_evidence": "This TODO line is a warning/constraint aimed at whoever implements L3795 and L3799 ('An op that merges everything would consolidate the junk and make it look intentional'), not an independent deliverable with its own files or acceptance criteria. It is already honored by L3795's design (explicit Names allowlist, never an auto-classifier) -- verified by inspection of the L3795 brief in this same scope.",
+  "domain": "internal/plugins/maintenance",
+  "exact_files": [],
+  "verified_anchors": [],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "N/A -- no code task.",
+  "review_critical": false,
+  "goal": "N/A -- this is a design constraint, tracked here only so the coordinator does not accidentally spin it up as a separate ticket.",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   3795,
+   3799
+  ],
+  "gate": "n/a (docs)",
+  "notes": "If a coordinator wants a standalone checklist item for this, fold it into L3795's code review checklist ('reviewer must confirm the op never merges an unlisted group') rather than a separate task."
+ },
+ {
+  "todo_line": 3884,
+  "src_id": null,
+  "title": "Fix the author-path post-filter to treat nil IsPrimaryVersion as primary, matching storage's default",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/audiobooks/service_query.go:346 computes `bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion` (nil treated as NOT primary), which disagrees with the storage-side convention `eff := book.IsPrimaryVersion == nil || *book.IsPrimaryVersion` at internal/database/pebble_store.go:953 and the memdb index default `Default: true` at internal/database/memdb_schema.go:165. This exact line (service_query.go:345-350) is the post-filter applied only on the authorID!=nil branch (service_query.go:150-162 calls store.GetBooksByAuthorIDCore, which already excludes explicit-false rows -- see pebble_store.go:1865's `if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion { continue }` -- so a nil-flagged book survives into this post-filter and is then misclassified as non-primary).",
+  "domain": "internal/audiobooks",
+  "exact_files": [
+   "internal/audiobooks/service_query.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "The author-path post-filter treats nil as false",
+    "grep_cmd": "grep -n \"bPrimary := b.IsPrimaryVersion\" internal/audiobooks/service_query.go",
+    "expect": "1 hit L346"
+   },
+   {
+    "claim": "Storage's PebbleStore filter treats nil as true (primary)",
+    "grep_cmd": "grep -n \"eff := book.IsPrimaryVersion == nil\" internal/database/pebble_store.go",
+    "expect": "1 hit L953"
+   },
+   {
+    "claim": "memdb IsPrimaryVersion index defaults nil to true",
+    "grep_cmd": "grep -n \"Default: true\" internal/database/memdb_schema.go",
+    "expect": "1 hit L165"
+   },
+   {
+    "claim": "authorID branch calls GetBooksByAuthorIDCore, which already excludes explicit-false rows before the post-filter runs",
+    "grep_cmd": "grep -n \"booksCore, err = svc.store.GetBooksByAuthorIDCore\" internal/audiobooks/service_query.go",
+    "expect": "1 hit L156"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "One-line fix but on a prod-data-shaped read path with subtle nil semantics -- worth a careful reviewer, not pure mechanical.",
+  "review_critical": true,
+  "goal": "Change internal/audiobooks/service_query.go line 346 so a nil IsPrimaryVersion is treated as primary (true), matching the storage-layer convention already used by pebble_store.go:953 and the memdb index default, so the author path and library path classify the same book identically.",
+  "background": [
+   "GetBooksByAuthorIDCore (both the memdb and Pebble-scan implementations) already excludes explicitly-false rows before returning, per its own doc comment: 'Non-primary versions are duplicates of a book already in the list, so it excludes them' (internal/database/memdb_reads.go:510-511). So an explicitly-false book like 01KNDB8NWHXV2DKRQESBA9SDRA (author 42623) never reaches this post-filter at all under ANY is_primary_version query value -- confirmed by the TODO's own measurement (author_id=42623&is_primary_version=false -> 0 rows).",
+   "A nil-flagged book DOES survive into `books` (nil counts as primary at the getter level) and is then handed to the buggy post-filter, which misclassifies it as non-primary when is_primary_version=false is requested -- explaining the TODO's measured author_id=38542&is_primary_version=false -> 1 row, is_primary_version: null."
+  ],
+  "steps": [
+   "Create internal/audiobooks/service_query_isprimary_conformance_test.go using the same test-store setup helper other service_query_*_test.go files in this package use (check service_query_heavyfilter_sort_test.go for the setup pattern).",
+   "Seed one Author and three Books all linked to it: bookNil (IsPrimaryVersion left nil), bookTrue (IsPrimaryVersion=boolPtr(true)), bookFalse (IsPrimaryVersion=boolPtr(false)).",
+   "Call svc.GetAudiobooksWithTotal(ctx, 50, 0, \"\", nil, nil, ListFilters{IsPrimaryVersion: boolPtr(false)}) (library path, no authorID) and record which of the 3 books come back.",
+   "Call svc.GetAudiobooksWithTotal(ctx, 50, 0, \"\", &authorID, nil, ListFilters{IsPrimaryVersion: boolPtr(false)}) (author path) and record which of the 3 books come back.",
+   "Assert the two result sets are identical for is_primary_version=false, is_primary_version=true, and no filter.",
+   "Name the test TestIsPrimaryVersion_LibraryAndAuthorPathsAgree."
+  ],
+  "tests": [
+   "See L3889 in this scope -- the conformance test added there (fixture with nil/true/false rows) is the correctness proof for this fix; do not duplicate a narrower test here."
+  ],
+  "acceptance": [
+   "grep -n 'bPrimary := b.IsPrimaryVersion == nil' internal/audiobooks/service_query.go returns 1 hit.",
+   "The L3889 conformance test (once added) passes: go test ./internal/audiobooks/... -run IsPrimaryVersion -v exits 0."
+  ],
+  "edge_cases": [
+   "A book with IsPrimaryVersion explicitly false never reaches this filter (excluded earlier by GetBooksByAuthorIDCore) -- this fix does not change that behavior, and should not attempt to: L3893 (needs_design) is where 'should the author listing expose non-primary books at all' gets decided."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "This is a narrow, surgical fix per the owner's own guidance in the TODO text ('Default: true is already the storage answer, so the post-filter is the side that should change'). Do not also change GetBooksByAuthorIDCore's exclusion behavior in the same task -- that's the separate, undecided question in L3893.",
+  "review_notes": [
+   "[verify-3.json] Step 3/4's example call and the Tests section both use `ptrBool(false)`, but no such symbol exists anywhere in internal/audiobooks. The real package-local helper is `boolPtr` (internal/audiobooks/helpers.go:33: `func boolPtr(b bool) *bool { return &b }`). Verified: `grep -rn 'func ptrBool' internal/",
+   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
+   "[verify-3.json] Step 3/4's example call and the Tests section both use `ptrBool(false)`, but no such symbol exists anywhere in internal/audiobooks. The real package-local helper is `boolPtr` (internal/audiobooks/helpers.go:33: `func boolPtr(b bool) *bool { return &b }`). Verified: `grep -rn 'func ptrBool' internal/",
+   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+  ]
+ },
+ {
+  "todo_line": 3889,
+  "src_id": null,
+  "title": "Add a conformance test asserting the library path and author path classify nil/true/false IsPrimaryVersion identically",
+  "verdict": "actionable",
+  "verdict_evidence": "The repo already has an established 'MemDBAndPebbleAgree'-style conformance-test pattern (grep -n '^func Test' internal/database/book_visibility_conformance_test.go -> TestGetAllBooksCore_MemDBAndPebbleAgree etc, and internal/database/author_getter_conformance_test.go -> TestGetBooksByAuthorIDCore_MemDBAndPebbleAgree at L223), but none of them compare the LIBRARY path against the AUTHOR path for a nil-flagged book -- confirmed by grep -rn 'IsPrimaryVersion' internal/audiobooks/*_test.go returning no existing nil-vs-author-path assertion.",
+  "domain": "internal/audiobooks",
+  "exact_files": [
+   "internal/audiobooks/service_query_isprimary_conformance_test.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "Existing conformance-test naming/structure precedent to follow",
+    "grep_cmd": "grep -n \"^func Test\" internal/database/book_visibility_conformance_test.go",
+    "expect": ">=1 hit e.g. TestGetAllBooksCore_MemDBAndPebbleAgree"
+   },
+   {
+    "claim": "GetAudiobooksWithTotal is the single entry point exercising both the library (authorID=nil) and author (authorID!=nil) branches",
+    "grep_cmd": "grep -n \"func (svc \\*AudiobookService) GetAudiobooksWithTotal\" internal/audiobooks/service_query.go",
+    "expect": "1 hit L41"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "GetAudiobooksWithTotal",
+    "file": "internal/audiobooks/service_query.go",
+    "verify_grep": "grep -n \"func (svc \\*AudiobookService) GetAudiobooksWithTotal\" internal/audiobooks/service_query.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Requires understanding both call paths (library pushdown vs authorID branch + post-filter) well enough to build a fixture that actually exercises the divergent nil handling -- a naive fixture without a nil-flagged row would not catch the bug per the TODO's own warning.",
+  "review_critical": true,
+  "goal": "Add a new test file that seeds one author with three books -- nil IsPrimaryVersion, explicit true, explicit false -- and asserts svc.GetAudiobooksWithTotal(...) returns the identical primary/non-primary classification whether called via the library path (authorID=nil, is_primary_version filter set) or the author path (authorID=that author, same filter).",
+  "background": [
+   "TODO.md:3889-3892 explicitly requires 'one fixture containing a nil-flag book, an explicit-true book and an explicit-false book' and warns 'a fixture without a nil-flag row cannot catch this.'",
+   "This test should be written to FAIL against pre-L3884 code (nil-as-false bug at service_query.go:346) and PASS after L3884's one-line fix -- write it before or alongside L3884 as the regression proof."
+  ],
+  "steps": [
+   "Add `OnlyParsedTranscription bool` to `ListFilters` in internal/audiobooks/service_types.go:78-96 (near FingerprintStatus).",
+   "In internal/server/handlers/audiobooks/handler.go, parse `only_parsed_transcription` via `httputil.ParseQueryBoolPtr` or the plain-bool helper used for `show_quarantined` at L595 (note: ListFilters.OnlyParsedTranscription is a plain bool, so parse as `c.Query(\"only_parsed_transcription\") == \"true\"`, matching the show_quarantined pattern, not the *bool pattern used for IsPrimaryVersion) into the `filters := audiobookspkg.ListFilters{...}` literal at ~L513-523.",
+   "Add `\"only_parsed_transcription\": {}` to `bareParamAllowList` (L256-259) with a one-line comment explaining why.",
+   "In internal/audiobooks/service_filtering.go buildBookSummaryFilterWithLookupCount (~L994-1039): change line 994's `hasFPFilters := f.FingerprintStatus != \"\" || f.CoveragePercentMin != nil || f.CoveragePercentMax != nil` to also include `|| f.OnlyParsedTranscription`, THEN add the predicate: if `f.OnlyParsedTranscription && (b.TranscribedTitle == nil || strings.TrimSpace(*b.TranscribedTitle) == \"\")`, exclude the book -- copy the exact predicate from metadata_ops.go:524-527 verbatim.",
+   "In internal/audiobooks/service_query.go: change line 71's `hasFingerprintingFilters := f.FingerprintStatus != \"\" || f.CoveragePercentMin != nil || f.CoveragePercentMax != nil` to also include `|| f.OnlyParsedTranscription`, THEN add the same predicate in the fingerprinting-filters application block (~L400-415) as the sibling of the FingerprintStatus check.",
+   "Bump file-header versions on all 4 touched files."
+  ],
+  "tests": [
+   "internal/audiobooks/service_query_isprimary_conformance_test.go TestIsPrimaryVersion_LibraryAndAuthorPathsAgree -- the test itself IS the deliverable for this item."
+  ],
+  "acceptance": [
+   "go test ./internal/audiobooks/... -run TestIsPrimaryVersion_LibraryAndAuthorPathsAgree -v exits 0 AFTER L3884's fix is applied.",
+   "Temporarily reverting L3884's one-line change and re-running the test must FAIL (confirms the test actually exercises the bug)."
+  ],
+  "edge_cases": [
+   "Book present via BOTH the legacy Book.AuthorID field and a BookAuthor junction row for the same author -- must not be double-counted (mirrors the existing dedup logic in getBooksByAuthorID)."
+  ],
+  "anti_over_suppression": "TestIsPrimaryVersion_LibraryAndAuthorPathsAgree itself -- it is the anti-regression check for L3884's fix.",
+  "depends_on_lines": [
+   3884
+  ],
+  "gate": "make ci",
+  "notes": "Write this alongside or just before L3884 so it can be run against the buggy code first to confirm it actually fails (mutation-test discipline).",
+  "review_notes": [
+   "[verify-3.json] Steps 4 and 5 tell the model to add the OnlyParsedTranscription predicate INSIDE blocks that are gated by booleans the steps never instruct it to update, so the new filter would silently be skipped whenever it is the ONLY active list filter. Verified: (a) service_filtering.go:994 `hasFPFilters := f.",
+   "[verify-3.json] Steps 4 and 5 tell the model to add the OnlyParsedTranscription predicate INSIDE blocks that are gated by booleans the steps never instruct it to update, so the new filter would silently be skipped whenever it is the ONLY active list filter. Verified: (a) service_filtering.go:994 `hasFPFilters := f."
+  ]
+ },
+ {
+  "todo_line": 3893,
+  "src_id": null,
+  "title": "Decide whether the author listing should be able to expose non-primary books at all",
+  "verdict": "needs_design",
+  "verdict_evidence": "TODO.md:3893-3895 explicitly frames this as a decision ('Decide whether the author listing SHOULD expose non-primary books at all... Today it cannot... but it means the UI has no way to show a book on the author page it is genuinely attached to'), and confirmed at HEAD: GetBooksByAuthorIDCore unconditionally excludes explicit-false rows regardless of any is_primary_version query param (internal/database/pebble_store.go:1865, internal/database/memdb_reads.go:569 both hardcode primaryOnly=true for this getter with no param threaded through). No owner decision in SCOUT-INSTRUCTIONS.md covers this.",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "GetBooksByAuthorIDCore always excludes explicit-false rows, with no way to opt out via a query param",
+    "grep_cmd": "grep -n \"primaryOnly && b.IsPrimaryVersion\" internal/database/memdb_reads.go",
+    "expect": "1 hit L569"
+   },
+   {
+    "claim": "A complete-set variant already exists for a DIFFERENT purpose (merge/delete correctness, not listing)",
+    "grep_cmd": "grep -n \"func (m \\*MemStore) GetBooksByAuthorIDAllVersions\" internal/database/memdb_reads.go",
+    "expect": "1 hit L524"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "GetBooksByAuthorIDAllVersions (precedent for a complete-set getter)",
+    "file": "internal/database/memdb_reads.go",
+    "verify_grep": "grep -n \"func (m \\*MemStore) GetBooksByAuthorIDAllVersions\" internal/database/memdb_reads.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "opus",
+  "why_tier": "Product/API-shape decision: does GET /authors/:id/books need a new query param or a separate endpoint to surface non-primary versions, and does the frontend author page need a new section for them? Not resolvable from code alone.",
+  "review_critical": true,
+  "goal": "Get an explicit decision on: should GET /authors/:id/books (or a sibling endpoint) be able to return a book whose IsPrimaryVersion is explicitly false, when that book's ONLY author link points at this author? If yes, design the query-param/response shape; if no, document that the listing is deliberately primary-only and is_primary_version on this endpoint should be rejected or ignored rather than silently no-op.",
+  "background": [
+   "The TODO's own handoff note (TODO.md:3897-3900) says this ambiguity is why the 46627 author-merge could not be verified: 'Every available instrument for which books does author X have is either primary-only or disagrees about nil, so 0 non-primary books for 43791 is not evidence the merge failed.' This decision has downstream correctness implications for verifying past and future author merges."
+  ],
+  "steps": [
+   "1. Present the two options with cost: (a) add an opt-in `all_versions=true` (or honor `is_primary_version=false`) param on GET /authors/:id/books that switches to GetBooksByAuthorIDAllVersions -- moderate frontend work to add a 'other versions' section to the author page; (b) leave it primary-only by design and instead make the CURRENTLY-SILENT is_primary_version param on this endpoint return an explicit 400 (or be documented as ignored) so a caller can no longer mistake 'no rows' for 'this book doesn't exist'.",
+   "2. Once decided, file it as its own actionable ticket separate from L3884's post-filter nil fix."
+  ],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   3884
+  ],
+  "gate": "n/a (docs)",
+  "notes": "L3884's fix (nil==primary) should ship regardless of this decision -- it's a correctness fix independent of whether non-primary books become visible here."
+ },
+ {
+  "todo_line": 3910,
+  "src_id": "PERF-4",
+  "title": "MEASURE SearchBooks(q, 0, 0) limit-0 semantics (already resolved at HEAD)",
+  "verdict": "stale_done",
+  "verdict_evidence": "PERF-4's limit-0 semantics were already fixed and are covered by a NAMED regression test: internal/database/pebble_store_test.go:626-650 TestSearchBooksUnlimited explicitly asserts 'limit=0 should return all matches, not zero' and its doc comment reads '(regression for PERF-4: count < 0 was always false, producing zero results)'. The implementation at internal/database/pebble_store.go:2928-2929 has the comment '// limit == 0 means no limit (return all matches)'.",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "SearchBooks treats limit=0 as unlimited, not zero",
+    "grep_cmd": "grep -n \"limit == 0 means\" internal/database/pebble_store.go",
+    "expect": "1 hit ~L2928"
+   },
+   {
+    "claim": "A named PERF-4 regression test already exists and passes",
+    "grep_cmd": "grep -n \"TestSearchBooksUnlimited\" internal/database/pebble_store_test.go",
+    "expect": "1 hit L628"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "N/A -- already done, no work to size.",
+  "review_critical": false,
+  "goal": "N/A -- the measurement this item asked for already exists as a passing, named regression test at HEAD.",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [
+   "go test ./internal/database/... -run TestSearchBooksUnlimited -v exits 0 (verify before closing the TODO checkbox)."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Check off the TODO.md box for this line; the underlying store-level bug was already fixed, dated before this scout run, unrelated to the still-open handler-level concern in L3918."
+ },
+ {
+  "todo_line": 3914,
+  "src_id": "PERF-4",
+  "title": "(conditional branch, premise false) 'if SearchBooks(0,0) returns nothing, fix it'",
+  "verdict": "not_a_task",
+  "verdict_evidence": "This TODO line is one branch of a conditional investigation ('If it returns nothing: ... fix with a bounded call'). Measured at HEAD (see L3910): SearchBooks(q, 0, 0) returns ALL matches, not nothing -- the premise of this branch is false, so the branch's prescribed fix does not apply. The real, applicable branch is the next one (L3918, 'if it returns everything...').",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "limit=0 returns everything, not nothing, falsifying this branch's premise",
+    "grep_cmd": "grep -n \"TestSearchBooksUnlimited\" internal/database/pebble_store_test.go",
+    "expect": "1 hit L628, asserts >=5 results not 0"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "N/A",
+  "review_critical": false,
+  "goal": "N/A -- conditional premise false, no action needed under this branch.",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   3910
+  ],
+  "gate": "n/a (docs)",
+  "notes": "The real actionable finding from this investigation is captured in L3918 (the 'returns everything -> wants a limit anyway' branch), not this line."
+ },
+ {
+  "todo_line": 3918,
+  "src_id": "PERF-4",
+  "title": "Bound the iTunes search handler's unbounded SearchBooks(search, 0, 0) call",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/server/handlers/itunes.go:709 calls h.store.SearchBooks(search, 0, 0), and per L3910's measurement limit=0 means UNBOUNDED (returns every title/author/narrator substring match across the whole library, materializing all of them before the ITunesPersistentID post-filter at itunes.go:714-718 narrows the set). Confirmed live at HEAD: grep -n 'SearchBooks(search, 0, 0)' internal/server/handlers/itunes.go -> 1 hit L709.",
+  "domain": "internal/server/handlers",
+  "exact_files": [
+   "internal/server/handlers/itunes.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "The unbounded call is still live at HEAD",
+    "grep_cmd": "grep -n \"SearchBooks(search, 0, 0)\" internal/server/handlers/itunes.go",
+    "expect": "1 hit L709"
+   },
+   {
+    "claim": "An established over-fetch-with-warning precedent already exists elsewhere in the codebase for this exact shape of problem",
+    "grep_cmd": "grep -n \"const searchPostFilterWindow\" internal/audiobooks/service_query.go",
+    "expect": "1 hit L649, value 10000"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "searchPostFilterWindow pattern (bound + warn-on-truncation)",
+    "file": "internal/audiobooks/service_query.go",
+    "verify_grep": "grep -n \"searchPostFilterWindow\" internal/audiobooks/service_query.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Requires picking a sane bound and wiring a truncation warning without breaking the existing PID post-filter's correctness (a bound that's too small could hide legitimate iTunes-linked matches).",
+  "review_critical": false,
+  "goal": "Replace the unbounded SearchBooks(search, 0, 0) call in ListBooks (internal/server/handlers/itunes.go:709) with a bounded call (mirroring the existing searchPostFilterWindow=10000 precedent in internal/audiobooks/service_query.go), and log a warning when the bound is hit so a truncated result is never silently reported as complete.",
+  "background": [
+   "This call is unbounded on purpose in one sense -- it must over-fetch because the actual filter (has a non-empty ITunesPersistentID) narrows AFTER the substring search, so a small limit could return zero PID-tagged results even when PID-tagged matches exist further down the scan. A hard local limit (not literally 0/unlimited) with an explicit truncation warning fixes the DoS-shaped worst case without breaking that narrowing logic.",
+   "internal/audiobooks/service_query.go already solved this exact shape of problem for the Bleve-backed search + post-filter combo: it over-fetches to searchPostFilterWindow=10000 and logs a Warn when the window is exhausted (service_query.go:133-138), rather than fetching literally everything."
+  ],
+  "steps": [
+   "1. In internal/server/handlers/itunes.go, define a local const (e.g. `const itunesSearchOverfetchWindow = 10000`) near the top of the file or next to ListBooks, with a comment citing the internal/audiobooks/service_query.go precedent.",
+   "2. Change line 709 from `h.store.SearchBooks(search, 0, 0)` to `h.store.SearchBooks(search, itunesSearchOverfetchWindow, 0)`.",
+   "3. After the call, if `len(allBooks) >= itunesSearchOverfetchWindow`, log a slog.Warn (e.g. 'itunes ListBooks: search over-fetch window exhausted; iTunes-tagged results may be a lower bound') including the search query and window size.",
+   "4. Bump the file's version header."
+  ],
+  "tests": [
+   "internal/server/handlers/itunes_test.go (or wherever ListBooks is already tested): add a case with >itunesSearchOverfetchWindow matching books in a mock store, asserting the handler still returns the PID-tagged subset it can see within the window and does not error."
+  ],
+  "acceptance": [
+   "grep -n 'itunesSearchOverfetchWindow' internal/server/handlers/itunes.go returns >=2 hits (const def + call site).",
+   "go test ./internal/server/handlers/... -run ListBooks -v exits 0."
+  ],
+  "edge_cases": [
+   "search=\"\" -- this branch is not entered at all (the `else` branch at itunes.go:719 uses the pushdown ListBooksByITunesPID(0,0) path instead), so this fix only affects the search!=\"\" path.",
+   "A library with fewer than itunesSearchOverfetchWindow total books -- the bound never triggers, behavior unchanged."
+  ],
+  "anti_over_suppression": "N/A -- this is a perf/DoS bound, not a filter/skip.",
+  "depends_on_lines": [
+   3910,
+   3914
+  ],
+  "gate": "make ci",
+  "notes": "Route-through-Bleve-IDs alternative mentioned in the TODO is a larger rewrite (would need a Bleve query for ITunesPersistentID != \"\" ANDed with the text query) -- the bounded-call fix above is the smaller, sufficient fix for the currently-measured behavior (unbounded materialization), not a cosmetic shortcut: it directly addresses the actual defect PERF-4 measured.",
+  "review_notes": [
+   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
+   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n"
+  ]
+ },
+ {
+  "todo_line": 3921,
+  "src_id": null,
+  "title": "Propagate v2 op terminal status onto its paired legacy operation row (already shipped)",
+  "part": 1,
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/operations/registry/legacy_op_status.go (version 1.1.0, last-edited 2026-08-16 -- AFTER this TODO's 2026-08-14 write-up) implements exactly the described fix: propagateLegacyOpStatus mirrors a v2 op's terminal status onto its paired v1 legacy row, called from publishOpTerminal on every terminal transition (per its own doc comment). Confirmed: grep -n 'func (r \\*Registry) propagateLegacyOpStatus' internal/operations/registry/legacy_op_status.go -> 1 hit L91.",
+  "domain": "internal/operations/registry",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "propagateLegacyOpStatus exists and mirrors v2 terminal status onto the legacy row",
+    "grep_cmd": "grep -n \"func (r \\*Registry) propagateLegacyOpStatus\" internal/operations/registry/legacy_op_status.go",
+    "expect": "1 hit L91"
+   },
+   {
+    "claim": "It is wired to run on every terminal transition, per its own doc comment",
+    "grep_cmd": "grep -n \"This runs from publishOpTerminal\" internal/operations/registry/legacy_op_status.go",
+    "expect": "1 hit ~L86"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "N/A -- already done.",
+  "review_critical": false,
+  "goal": "N/A -- already implemented.",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [
+   "go test ./internal/operations/registry/... -run LegacyOpStatus -v exits 0."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "This file's own comments show it already went through one bugfix iteration (v1.1.0, matching non-'interrupted'-exact statuses by prefix) after the initial ship -- the forward-going propagation mechanism is solid. See parts 2 and 3 for what is still genuinely outstanding from this TODO item."
+ },
+ {
+  "todo_line": 3921,
+  "src_id": null,
+  "title": "Backfill-repair legacy operation rows stuck at 'pending' from before the propagation fix shipped",
+  "part": 2,
+  "verdict": "prod_run",
+  "verdict_evidence": "No backfill job/script exists for already-stuck rows (grep -rn 'backfill.*legacy\\|legacy.*backfill' internal/ --include=\"*.go\" -> only unrelated migrations.go/embedding_store.go hits, nothing that repairs pre-fix stuck rows). This is a one-time data repair against already-written prod rows, not new standing code.",
+  "domain": "internal/operations/registry",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "No existing backfill for pre-fix stuck legacy op rows",
+    "grep_cmd": "grep -rln \"backfill.*legacy\\|legacy.*backfill\\|stuck.*pending\" internal/ --include=\"*.go\"",
+    "expect": "no hits relevant to this repair"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "propagateLegacyOpStatus's status-mapping logic (legacyStatusFor)",
+    "file": "internal/operations/registry/legacy_op_status.go",
+    "verify_grep": "grep -n \"func legacyStatusFor\" internal/operations/registry/legacy_op_status.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Small, one-off admin script/job reusing existing lookup logic, but it writes to production operation rows so it deserves a careful reviewer even though the code itself is simple.",
+  "review_critical": true,
+  "goal": "Build a small one-off repair (an admin CLI command or a maintenance job, per the owner's 'every PROD RUN goes to docs/operations/pending-prod-actions.md' standing rule) that scans legacy operation rows still at status 'pending', finds each one's v2 twin via its saved Params.legacy_op_id reverse-lookup, and calls the same terminal-status mirroring logic propagateLegacyOpStatus already uses for any twin that is itself terminal.",
+  "background": [
+   "TODO.md:3932-3934 explicitly calls for 'backfill-repair the day's stuck rows' as a companion to the forward-going propagation fix (part 1, already shipped)."
+  ],
+  "steps": [
+   "1. Write a small Go program or a one-shot maintenance job that: (a) scans all v1 Operation rows with status=='pending', (b) for each, finds the v2 op row whose Params JSON contains matching legacy_op_id (reverse of legacyOpParams.LegacyOpID), (c) if that v2 row's status is terminal, call the same mapping logic as legacyStatusFor + UpdateOperationStatus that legacy_op_status.go already implements.",
+   "2. Because legacyStatusFor and the store methods it needs (legacyOpStore interface) live in the unexported internal/operations/registry package, either export a small helper from that package for one-off reuse, or duplicate the ~10-line mapping switch in the repair script with a comment pointing at the canonical copy.",
+   "3. Dry-run by default: print what WOULD be updated before writing.",
+   "4. Document the run in docs/operations/pending-prod-actions.md per the owner's standing instruction (decision #14 in this scope's owner-decision list) -- do not auto-run it."
+  ],
+  "tests": [
+   "Unit test the reverse-lookup + status-mapping logic against a fixture store with a mix of stuck-pending rows with terminal and non-terminal v2 twins."
+  ],
+  "acceptance": [
+   "Dry-run output lists every stuck 'pending' legacy row with a terminal v2 twin and its would-be new status; a real run (owner-executed) reduces GET /api/v1/operations?limit=20's stuck-pending count to zero for rows with a terminal twin."
+  ],
+  "edge_cases": [
+   "A stuck row whose v2 twin is itself still running (op interrupted before v2 completed) -- must NOT be marked terminal; leave it pending.",
+   "A stuck row with no v2 twin at all (pre-migration op) -- leave untouched, out of scope for this repair."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   3921
+  ],
+  "gate": "make ci",
+  "notes": "The RUN of this repair against production is itself a prod_run per the owner's standing instruction; only the code to build/dry-run it is a normal PR."
+ },
+ {
+  "todo_line": 3921,
+  "src_id": null,
+  "title": "Ops UI: render live v2 progress for a legacy operation row that has a running v2 twin",
+  "part": 3,
+  "verdict": "needs_design",
+  "verdict_evidence": "No association is currently exposed from backend to frontend for 'this legacy row has a live v2 twin' -- confirmed by grep -rn 'v2_op_id|V2OpID|linkedV2' web/src internal/server/handlers -> 0 hits. propagateLegacyOpStatus (part 1) only writes on TERMINAL transitions, so a currently-RUNNING legacy-paired job still shows 0%/pending progress in the ops UI even after part 1 shipped.",
+  "domain": "internal/server",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "No v2-twin association field is exposed to the frontend today",
+    "grep_cmd": "grep -rn \"v2_op_id\\|V2OpID\\|linkedV2\" web/src internal/server/handlers",
+    "expect": "0 hits"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "opus",
+  "why_tier": "Needs a design decision on where the association lives (new field on the v1 Operation row vs a lookup endpoint) before any frontend or backend code can be written.",
+  "review_critical": false,
+  "goal": "Decide how the ops UI discovers that a 'pending' legacy row has a live v2 twin, and if so, how it should render that twin's progress instead of the stale legacy row's own progress fields.",
+  "background": [
+   "TODO.md:3934-3935: 'the ops UI should render v2 state when a legacy row has a live v2 twin'. This is a UX improvement layered on top of part 1's terminal-status propagation -- it addresses the IN-FLIGHT progress display, not just the final status."
+  ],
+  "steps": [
+   "1. Decide: expose the v2 op ID as a new field on the v1 GET /operations response (requires a DB/API change), or add a lightweight GET /api/v1/operations/:id/v2-twin lookup endpoint the frontend calls opportunistically for rows still at 'pending'.",
+   "2. Once decided, scope the frontend change (likely in the ops/activity bell component) and backend change as their own ticket."
+  ],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   3921
+  ],
+  "gate": "n/a (docs)",
+  "notes": "Lower priority than parts 1-2: part 1 (shipped) already fixes the worst symptom (jobs stuck at pending FOREVER after completion); this part only improves live-progress fidelity while a job is still running."
+ },
+ {
+  "todo_line": 3939,
+  "src_id": null,
+  "title": "(stale operational follow-up) Check GitHub CI on a specific historical merge commit",
+  "verdict": "not_a_task",
+  "verdict_evidence": "This TODO line is a one-time operational follow-up on a specific past PR merge ('Merged on an explicit instruction to skip the CI wait... Only the GitHub-side result is unread'), dated 2026-08-14. As of this scout run (2026-08-21, per system context), that CI result -- whatever it was -- has long since resolved one way or the other; there is no code change a coding agent can brief here, only a status check the operator must have already looked at or should look up directly on GitHub.",
+  "domain": "ci/scripts",
+  "exact_files": [],
+  "verified_anchors": [],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "N/A -- not a code task.",
+  "review_critical": false,
+  "goal": "N/A.",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "If genuinely still open, the fix is a 30-second `gh pr checks <number>` by the operator, not a briefable engineering task -- and the TODO text does not even name the PR/commit SHA, so a cold agent has nothing to check against."
+ },
+ {
+  "todo_line": 3948,
+  "src_id": "C510",
+  "title": "opstate:<id>/opstate:<id>:params retention sweep (already shipped in retention-and-hygiene)",
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/maintenance/jobs/retention_and_hygiene.go (version 1.8.0, last-edited 2026-08-17 -- after this TODO's 2026-08-14 write-up) already implements exactly the requested sweep: deleteStaleOperationState (line 288) scans the opstate: prefix, collapses opstate:<id> and opstate:<id>:params to one entry per op, and deletes both together via store.DeleteOperationState for any op whose status is terminal (per terminalOpStatuses), called from the job's Run at line 113 with an explanatory comment citing the exact '2 of 34' fact this TODO item cites.",
+  "domain": "internal/maintenance",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "deleteStaleOperationState exists and sweeps both opstate:<id> and opstate:<id>:params",
+    "grep_cmd": "grep -n \"func deleteStaleOperationState\" internal/maintenance/jobs/retention_and_hygiene.go",
+    "expect": "1 hit L288"
+   },
+   {
+    "claim": "It is called from retention-and-hygiene's Run, with a comment citing the same '2 of 34 jobs call ClearState' fact",
+    "grep_cmd": "grep -n \"Only 2 of the 34 maintenance jobs\" internal/maintenance/jobs/retention_and_hygiene.go",
+    "expect": "1 hit ~L109"
+   },
+   {
+    "claim": "DeleteOperationState deletes both keys in one batch",
+    "grep_cmd": "grep -n \"opstate:%s:params\" internal/database/pebble_store_operations.go",
+    "expect": ">=2 hits"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "N/A -- already done.",
+  "review_critical": false,
+  "goal": "N/A -- already implemented and wired into the retention-and-hygiene job.",
+  "background": [],
+  "steps": [],
+  "tests": [
+   "go test ./internal/maintenance/jobs/... -run RetentionAndHygiene -v (verify the existing test suite for this sweep still passes)."
+  ],
+  "acceptance": [
+   "grep -n 'func deleteStaleOperationState' internal/maintenance/jobs/retention_and_hygiene.go returns 1 hit."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Check off the TODO.md box for this line -- the fix landed 3 days after the TODO was written."
+ },
+ {
+  "todo_line": 3960,
+  "src_id": null,
+  "title": "Verify the dry-run default on production after deploy",
+  "verdict": "prod_run",
+  "verdict_evidence": "This is a live-prod verification step ('POST a job that advertises dry_run:true with no body and confirm the run reports a preview'), matching the owner-decision pattern elsewhere in this scope (e.g. decision #8 'verify prod state and record it only; no flip'). No code deliverable -- it is an operator action against the running production server.",
+  "domain": "internal/server",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "GET /api/v1/maintenance/jobs publishes default_params including dry_run, matching the TODO's described probe surface",
+    "grep_cmd": "grep -n \"DefaultParams any\" internal/server/maintenance_dispatcher.go",
+    "expect": "1 hit ~L32"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "N/A -- operational verification, not code.",
+  "review_critical": true,
+  "goal": "N/A for code -- operator runs POST /api/v1/maintenance/jobs/scan-composer-tags with an empty body against production and confirms the response/journaled summary indicates a preview (no writes), not a real run.",
+  "background": [
+   "TODO.md:3960-3965 explicitly names scan-composer-tags as the safe probe and explicitly warns AGAINST probing with cleanup-series or cleanup-empty-folders (both destructive)."
+  ],
+  "steps": [
+   "Operator action only: POST to /api/v1/maintenance/jobs/scan-composer-tags with no body on prod <the server>, read back the operation's journaled summary/result, confirm it self-reports as a dry run.",
+   "Record the result in docs/operations/pending-prod-actions.md per the owner's standing instruction (decision #14)."
+  ],
+  "tests": [],
+  "acceptance": [
+   "Journaled operation summary for the probe run contains a 'dry run' / 'preview' marker, not an applied-changes count."
+  ],
+  "edge_cases": [
+   "Do NOT probe with cleanup-series or cleanup-empty-folders -- explicitly called out as unsafe in TODO.md:3960's own text."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (prod verification)",
+  "notes": "No code change implied by this item at all -- it is purely a post-deploy verification checklist item for the human operator."
+ },
+ {
+  "todo_line": 3966,
+  "src_id": null,
+  "title": "Add a dry-run parameter to dedup.series-dedup",
+  "part": 1,
+  "verdict": "actionable",
+  "verdict_evidence": "internal/dedup/series_dedup.go:266 `func DedupSeries(_ context.Context, store Store, progress ProgressReporter) (SeriesDedupResult, error)` has NO dry-run/params argument at all (confirmed: grep -n 'DryRun\\|dry_run' internal/dedup/series_dedup.go returns 0 hits) and applies unconditionally on every call.",
+  "domain": "internal/dedup",
+  "exact_files": [
+   "internal/dedup/series_dedup.go",
+   "internal/dedup/series_dedup_test.go",
+   "internal/server/duplicates_ops.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "DedupSeries has no dry-run parameter",
+    "grep_cmd": "grep -n \"func DedupSeries\" internal/dedup/series_dedup.go",
+    "expect": "1 hit L266, signature has no DryRun/params arg"
+   },
+   {
+    "claim": "No DryRun/dry_run token exists anywhere in the file",
+    "grep_cmd": "grep -n \"DryRun\\|dry_run\" internal/dedup/series_dedup.go",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "Series-prune (a sibling op) has the DryRun pattern to model this on",
+    "grep_cmd": "grep -n \"p.LegacyOpID\" internal/server/duplicates_ops.go",
+    "expect": "hits at L513/L522 for the series-prune op, a nearby sibling to wire similarly"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "authorConjunctionRepairParams.DryRun *bool default-true pattern",
+    "file": "internal/plugins/maintenance/author_conjunction_repair.go",
+    "verify_grep": "grep -n \"DryRun \\*bool\" internal/plugins/maintenance/author_conjunction_repair.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Threading a new param through DedupSeries and its call site (internal/server/duplicates_ops.go's dedup.series-dedup op) plus a dry-run-preserves-state test.",
+  "review_critical": true,
+  "goal": "Add a DryRun bool parameter to DedupSeries (default true at the call site until explicitly opted out) so a preview run reports what WOULD merge without writing, matching the pattern already used by author_conjunction_repair.go and the sibling dedup ops in duplicates_ops.go.",
+  "background": [
+   "TODO.md:3966-3969 states this op 'has never run in production (0 of 10,161 operations), so there is no existing damage; it is a latent hazard only' -- meaning this is safe to change without a data-repair companion, unlike L3795/L3921 which touch already-written rows."
+  ],
+  "steps": [
+   "1. Change DedupSeries's signature in internal/dedup/series_dedup.go:266 to accept a `dryRun bool` parameter (or a small params struct if the package's other dedup entry points use one -- check dedup.MergeSeries's signature for the local convention).",
+   "2. In the merge loop (the branches around lines 344-366, 492-536, 565+ that call store.GetBooksBySeriesIDCore / store.DeleteSeries), gate every mutating call (book reassignment, DeleteSeries) behind `if !dryRun`.",
+   "3. When dryRun is true, still compute and report SeriesDedupResult.TotalMerged as the count that WOULD merge, so the preview is informative.",
+   "4. Update the call site in internal/server/duplicates_ops.go (the dedup.series-dedup op, around where DedupSeries is invoked -- grep for its call) to thread a DryRun param from the op's request body, defaulting to true.",
+   "5. Add a doc comment on DedupSeries noting the default and citing this TODO."
+  ],
+  "tests": [
+   "internal/dedup/series_dedup_test.go: TestDedupSeries_DryRunMakesNoChanges -- seed 2 duplicate series with books, call DedupSeries(ctx, store, progress, true), assert store still has both series rows and no books were reassigned.",
+   "TestDedupSeries_RealRunMerges -- same fixture, dryRun=false, assert the merge actually happens (existing coverage, if any, should already cover this)."
+  ],
+  "acceptance": [
+   "go test ./internal/dedup/... -run TestDedupSeries -v exits 0."
+  ],
+  "edge_cases": [
+   "dryRun=true with zero duplicate groups -- TotalMerged=0, no error."
+  ],
+  "anti_over_suppression": "TestDedupSeries_RealRunMerges -- proves dryRun=false still does the real work (the dry-run flag doesn't silently become the only path).",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Pair with part 2 of this same TODO line (switch to an all-versions series getter) before this op is wired to any production trigger -- both are prerequisites the TODO explicitly lists together."
+ },
+ {
+  "todo_line": 3966,
+  "src_id": null,
+  "title": "Add GetBooksBySeriesIDAllVersions and switch DedupSeries's merge loop to it before DeleteSeries",
+  "part": 2,
+  "verdict": "actionable",
+  "verdict_evidence": "DedupSeries's merge loop calls the LISTING getter store.GetBooksBySeriesIDCore (grep -n 'GetBooksBySeriesIDCore' internal/dedup/series_dedup.go -> hits at L105, L344, L492, L565) which filters trashed and non-primary rows, before calling store.DeleteSeries unconditionally (grep -n 'DeleteSeries(' internal/dedup/series_dedup.go -> hits at L366, L536) -- the exact mechanism the TODO says strands books on a deleted series ID. No GetBooksBySeriesIDAllVersions equivalent to author's GetBooksByAuthorIDAllVersions exists yet (grep -n 'func.*GetBooksBySeriesID' internal/database/*.go -> only the Core-typed, primary-filtered getters).",
+  "domain": "internal/database",
+  "exact_files": [
+   "internal/database/memdb_reads.go",
+   "internal/database/pebble_store.go",
+   "internal/database/iface_book.go",
+   "internal/dedup/series_dedup.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "DedupSeries's merge loop uses the primary-filtered listing getter",
+    "grep_cmd": "grep -n \"GetBooksBySeriesIDCore\" internal/dedup/series_dedup.go",
+    "expect": ">=3 hits incl L344, L492, L565"
+   },
+   {
+    "claim": "No series equivalent of GetBooksByAuthorIDAllVersions exists yet",
+    "grep_cmd": "grep -n \"func.*GetBooksBySeriesID\" internal/database/memdb_reads.go internal/database/pebble_store.go",
+    "expect": "only Core-typed getters, no AllVersions variant"
+   },
+   {
+    "claim": "The author-side precedent this should mirror",
+    "grep_cmd": "grep -n \"func (m \\*MemStore) GetBooksByAuthorIDAllVersions\" internal/database/memdb_reads.go",
+    "expect": "1 hit L524"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "GetBooksByAuthorIDAllVersions / getBooksByAuthorID(primaryOnly=false) as the pattern to mirror for series",
+    "file": "internal/database/memdb_reads.go",
+    "verify_grep": "grep -n \"func (m \\*MemStore) GetBooksByAuthorIDAllVersions\" internal/database/memdb_reads.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "New store-interface method across MemStore + PebbleStore + the Store interface + MockStore, plus updating the dedup call site -- more surface than part 1 but still a mechanical mirror of an existing, already-reviewed pattern.",
+  "review_critical": true,
+  "goal": "Add GetBooksBySeriesIDAllVersions (mirroring GetBooksByAuthorIDAllVersions's primaryOnly=false pattern) to MemStore and PebbleStore, add it to the database.Store interface and MockStore, and switch DedupSeries's merge loop to call it instead of GetBooksBySeriesIDCore before DeleteSeries, so a book on a non-primary version of a to-be-deleted series is relinked rather than orphaned.",
+  "background": [
+   "TODO.md:3966-3969's stated mechanism: 'its merge loop reassigns books via the listing getter GetBooksBySeriesIDCore (which filters trashed and non-primary rows) before calling DeleteSeries unconditionally -- the mechanism that strands books on a deleted series ID.'",
+   "The author-side fix for the identical class of bug already exists and is documented with a measured incident (memdb_reads.go:503-523's GetBooksByAuthorIDAllVersions doc comment: '86 books relinked... vs 84 warm... two missing links were co-author credits on non-primary versions')."
+  ],
+  "steps": [
+   "1. In internal/database/memdb_reads.go, near GetBooksBySeriesIDCore (line 453), add `func (m *MemStore) GetBooksBySeriesIDAllVersions(seriesID int, limit, offset int) ([]BookCore, error)` that calls the same underlying scan without the primary-version filter -- mirror the primaryOnly-bool-parameter refactor pattern used for getBooksByAuthorID/GetBooksByAuthorIDAllVersions.",
+   "2. In internal/database/pebble_store.go, near GetBooksBySeriesIDCore (line 1811), add the PebbleStore-side equivalent, mirroring GetBooksByAuthorIDWithRoleCore's 'complete set' semantics (pebble_store.go:2018).",
+   "3. Add the new method to the database.Store interface (internal/database/iface_book.go, next to the existing GetBooksBySeriesIDCore declaration around line 101-109) and to internal/database/mock_store.go's MockStore.",
+   "4. In internal/dedup/series_dedup.go, change the three call sites at lines 344, 492, 565 from store.GetBooksBySeriesIDCore(...) to store.GetBooksBySeriesIDAllVersions(...) so DeleteSeries never runs against an incomplete view of the series' books.",
+   "5. Add a conformance test in the shape of internal/database/series_getter_conformance_test.go asserting GetBooksBySeriesIDAllVersions returns a superset of GetBooksBySeriesIDCore (mirror TestAuthorGetters_WithRoleIsASupersetOfCore at internal/database/author_getter_conformance_test.go:270)."
+  ],
+  "tests": [
+   "internal/database/series_getter_conformance_test.go: new test mirroring TestAuthorGetters_WithRoleIsASupersetOfCore for the series pair.",
+   "internal/dedup/series_dedup_test.go: TestDedupSeries_RelinksNonPrimaryVersionBooks -- a book with a non-primary version linked only to the series-to-be-deleted must be relinked, not orphaned, after the merge."
+  ],
+  "acceptance": [
+   "go test ./internal/database/... ./internal/dedup/... -run 'SeriesID|DedupSeries' -v exits 0."
+  ],
+  "edge_cases": [
+   "A series with zero books at all -- AllVersions returns empty slice, not error.",
+   "A book present via both the AllVersions series getter and already counted in the primary-only set -- must not be double-relinked (mirror the author-side dedup-by-bookID logic already used in getBooksByAuthorID)."
+  ],
+  "anti_over_suppression": "TestDedupSeries_RelinksNonPrimaryVersionBooks -- proves the fix actually catches the orphaning case, not just that the code compiles.",
+  "depends_on_lines": [
+   3966
+  ],
+  "gate": "make ci",
+  "notes": "Do this together with part 1 (dry-run param) before dedup.series-dedup is wired to any trigger -- the TODO explicitly says 'before anything wires it to a trigger', and it currently has 0 production runs so there is no urgency, only correctness debt to close before it goes live.",
+  "review_notes": [
+   "[simplicity-scope.json] Busywork occupying a wave slot. TASK-033 'Repoint store.go:17's broken doc reference to the archived design spec' is a one-comment-line edit, yet it is wave 2 of the five-deep internal/database/store.go chain, which means TASK-037 and TASK-039 (real schema work) each wait an extra merge round-trip f",
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ]
+ },
+ {
+  "todo_line": 3976,
+  "src_id": null,
+  "title": "Make the maintenance-job resume fallback observable via a metric (already shipped)",
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/server/server_lifecycle.go:292-305 already implements exactly this: when LoadParams fails or returns nil for an interrupted maintenance job, it calls metrics.RecordMaintenanceResumeParamsFallback(jobID, reason) (reason='load_error' or 'no_saved_params') in addition to the slog.Info/Warn line the TODO cites. The metric is a real Prometheus counter, not a stub: grep -n 'maintenance_resume_params_fallback_total' internal/metrics/metrics.go -> 1 hit L162.",
+  "domain": "internal/server",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "The fallback path calls a dedicated metric, not just a log line",
+    "grep_cmd": "grep -n \"metrics.RecordMaintenanceResumeParamsFallback\" internal/server/server_lifecycle.go",
+    "expect": "2 hits, L293 and L302"
+   },
+   {
+    "claim": "The metric is a real registered Prometheus counter",
+    "grep_cmd": "grep -n \"maintenance_resume_params_fallback_total\" internal/metrics/metrics.go",
+    "expect": "1 hit L162"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "N/A -- already done.",
+  "review_critical": false,
+  "goal": "N/A -- already implemented, with both a load_error and a no_saved_params reason label.",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [
+   "grep -n 'RecordMaintenanceResumeParamsFallback' internal/server/server_lifecycle.go returns 2 hits."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Check off the TODO.md box for this line."
+ },
+ {
+  "todo_line": 3982,
+  "src_id": null,
+  "title": "Metadata matcher: shift-click range selection (already shipped)",
+  "verdict": "stale_done",
+  "verdict_evidence": "web/src/components/audiobooks/fieldRangeSelect.ts already implements exactly this: applyFieldClick's own doc comment reads 'implements file-manager selection semantics', it is unit-tested (fieldRangeSelect.test.ts), and it is wired into BOTH MetadataSearchDialog.tsx and BulkMetadataSearchDialog.tsx (grep -rn 'applyFieldClick' web/src -> hits in both dialogs plus the shared helper and its test). BulkMetadataSearchDialog.tsx's version header (1.5.2, last-edited 2026-08-19) postdates this TODO's 2026-08-14 write-up.",
+  "domain": "web",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "A shared file-manager-style range-select helper exists and is tested",
+    "grep_cmd": "grep -n \"applyFieldClick\" web/src/components/audiobooks/fieldRangeSelect.ts",
+    "expect": ">=1 hit, function definition"
+   },
+   {
+    "claim": "It is wired into the matcher dialog with an anchor ref for shift-click",
+    "grep_cmd": "grep -n \"fieldAnchorRef\" web/src/components/audiobooks/BulkMetadataSearchDialog.tsx",
+    "expect": ">=1 hit"
+   },
+   {
+    "claim": "It has its own dedicated test file",
+    "grep_cmd": "grep -n \"describe('applyFieldClick'\" web/src/components/audiobooks/fieldRangeSelect.test.ts",
+    "expect": "1 hit"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "N/A -- already done.",
+  "review_critical": false,
+  "goal": "N/A -- already implemented and tested.",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [
+   "npm --prefix web run test -- fieldRangeSelect passes."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Check off the TODO.md box for this line. Note the shift-click here is over metadata FIELD checkboxes within one candidate card, not over book rows in a list -- this matches the TODO's own wording ('like a file manager') and its own applyFieldClick doc comment; if the owner specifically meant book-row selection instead, re-open as a new, differently-scoped item."
+ },
+ {
+  "todo_line": 3988,
+  "src_id": null,
+  "title": "Metadata matcher: hide-multiples control for multi-match groups (already shipped as 'Hide multi-book matches')",
+  "verdict": "stale_done",
+  "verdict_evidence": "web/src/components/review/lanes/useMetadataLane.ts (version 1.4.0, last-edited 2026-08-20) already implements this as the `hideMultiBook` filter: its doc comment reads 'Hides any book that shares a match with another book, AND takes those books out of Apply Selected' (line 244-247), it is surfaced as a labeled toggle 'Hide multi-book matches' in web/src/components/review/QueueRail.tsx:76-83, and it is ON by default as part of the persisted Strict-review preset (STRICT_PRESET.hideMultiBook=true, saved/loaded via saveStrictPreset/loadStrictPreset to localStorage).",
+  "domain": "web",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "hideMultiBook filter exists with the described 'hide multi-match, remove from bulk apply' behavior",
+    "grep_cmd": "grep -n \"hideMultiBook\" web/src/components/review/lanes/useMetadataLane.ts",
+    "expect": ">=8 hits"
+   },
+   {
+    "claim": "Surfaced as a labeled UI toggle",
+    "grep_cmd": "grep -n \"Hide multi-book matches\" web/src/components/review/QueueRail.tsx",
+    "expect": "1 hit ~L78"
+   },
+   {
+    "claim": "Persisted via localStorage as part of the Strict-review preset",
+    "grep_cmd": "grep -n \"saveStrictPreset\\|loadStrictPreset\" web/src/components/review/lanes/useMetadataLane.ts",
+    "expect": ">=2 hits"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "N/A -- already done.",
+  "review_critical": false,
+  "goal": "N/A -- already implemented.",
+  "background": [],
+  "steps": [],
+  "tests": [
+   "web/src/components/review/lanes/useMetadataLane.test.ts describe('hideMultiBook', ...) already covers this (grep -n \"describe('hideMultiBook'\" web/src/components/review/lanes/useMetadataLane.test.ts -> 1 hit L266)."
+  ],
+  "acceptance": [
+   "npm --prefix web run test -- useMetadataLane passes."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "One gap versus the TODO's exact wording: toggling hideMultiBook standalone (outside the Strict-review preset bundle) is not independently persisted to localStorage today -- only the `strict` boolean is saved, and hideMultiBook derives from it. If the owner wants standalone persistence of this one filter regardless of the strict preset, that is a small follow-up (mirror saveLanguageFilter's pattern), not a re-open of this item."
+ },
+ {
+  "todo_line": 3995,
+  "src_id": null,
+  "title": "Metadata matcher: honest session-timeout message + refresh-and-report on batch apply (already shipped)",
+  "verdict": "stale_done",
+  "verdict_evidence": "web/src/components/review/lanes/useMetadataLane.ts:661-683 handleApplyError already implements exactly this fix, with a doc comment describing the EXACT bug and its measured production evidence: 'a 250-book apply ran 2m0s, the origin returned 200, 67 files were written, and the user was told nothing had happened... So: keep the detection, report it accurately, and re-read server state rather than guess.' On an auth-redirect error it now calls refresh() and toasts 'Session expired -- sign in again. Any books already applied were kept; the list has been refreshed.' -- never claiming 'no changes were made'.",
+  "domain": "web",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "handleApplyError detects the auth-redirect case and reports it accurately instead of claiming nothing happened",
+    "grep_cmd": "grep -n \"isAuthRedirectError(err)\" web/src/components/review/lanes/useMetadataLane.ts",
+    "expect": "1 hit L673"
+   },
+   {
+    "claim": "It refreshes server state rather than reverting rows to pending on a guess",
+    "grep_cmd": "grep -n \"Any books already applied were kept\" web/src/components/review/lanes/useMetadataLane.ts",
+    "expect": "1 hit ~L675"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "N/A -- already done.",
+  "review_critical": false,
+  "goal": "N/A -- already implemented, and its own comment documents the exact same production-measured evidence this TODO item cites.",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [
+   "grep -n 'Session expired' web/src/components/review/lanes/useMetadataLane.ts returns 1 hit."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   4007
+  ],
+  "gate": "n/a (docs)",
+  "notes": "This fix lives in the NEWER review-lane component (useMetadataLane.ts, last-edited 2026-08-20), not the older per-book BulkMetadataSearchDialog.tsx (still live, still used from web/src/components/library/LibraryDialogs.tsx) -- that older dialog's handleApplyAll/handleApplySelected (lines 248-308) still just does `toast(err.message)` on any error with no isAuthRedirectError-specific handling. If the owner considers BulkMetadataSearchDialog.tsx also 'the metadata matcher', this fix has NOT propagated there and would be a small follow-up (thread the same handleApplyError pattern through it)."
+ },
+ {
+  "todo_line": 4007,
+  "src_id": null,
+  "title": "Metadata matcher: dispatch multi-file write-to-files as a background operation (already shipped)",
+  "verdict": "stale_done",
+  "verdict_evidence": "Two independent confirmations. (1) The review lane's batch path already dispatches asynchronously: runApplyOp (useMetadataLane.ts:687-703) calls api.batchApplyFromCache, which enqueues the 'metadata.batch-apply-cached' v2 op (internal/server/batch_apply_op.go:61) and returns immediately with an op id the UI polls via pollOperationV2 -- 'watch the bell for progress'. (2) The single-book apply-metadata endpoint (used by BulkMetadataSearchDialog.tsx) ALSO already backgrounds its file I/O: internal/server/handlers/metadata/handler.go:606-643 submits cover-download + ApplyMetadataFileIO + WriteBackMetadataForBook to h.fileIOPool and returns the HTTP response before that work runs, regardless of how many files the book has. Both files postdate this TODO's 2026-08-14 write-up (batch_apply_op.go's registering file and handler.go are dated 2026-08-16).",
+  "domain": "web",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "Batch apply dispatches via a v2 op and returns immediately, UI polls for progress",
+    "grep_cmd": "grep -n \"batchApplyFromCache\" web/src/components/review/lanes/useMetadataLane.ts",
+    "expect": "1 hit L689"
+   },
+   {
+    "claim": "The v2 op backing it exists server-side",
+    "grep_cmd": "grep -n \"metadata.batch-apply-cached\" internal/server/batch_apply_op.go",
+    "expect": "1 hit L61"
+   },
+   {
+    "claim": "The single-book apply-metadata endpoint already backgrounds its file I/O regardless of file count",
+    "grep_cmd": "grep -n \"pool.Submit(bookID\" internal/server/handlers/metadata/handler.go",
+    "expect": "1 hit L622"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "N/A -- already done.",
+  "review_critical": false,
+  "goal": "N/A -- both the batch (multi-book) and single-book (multi-file-within-one-book) apply paths already dispatch their slow I/O off the request-handling goroutine.",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [
+   "grep -n 'pool.Submit' internal/server/handlers/metadata/handler.go returns 1 hit."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   3995
+  ],
+  "gate": "n/a (docs)",
+  "notes": "The single-book path (handler.go:606-643) is fire-and-forget with only server-side logging on failure -- it does NOT expose an op id the frontend can poll, unlike the batch path. If the owner wants ops-UI-visible progress for the single-book write-back specifically (not just non-blocking-ness), that is a smaller follow-up layered on already-async code, not a re-open of the original blocking complaint this TODO line described."
+ }
+]

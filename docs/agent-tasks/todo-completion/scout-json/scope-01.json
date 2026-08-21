@@ -1,0 +1,2081 @@
+[
+ {
+  "todo_line": 17,
+  "src_id": "MERGE-UNDO",
+  "part": 1,
+  "title": "Journal every review-lane merge (already fixed \u2014 check the box)",
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/dedup/merge_journaled.go:50 defines Engine.MergeJournaled which writes a provisional PutAutoMergeJournalEntry BEFORE merging and patches it with real winner/loser + pre-merge snapshot timestamps AFTER; internal/server/handlers/dedup/handler.go:1414 (the review-lane merge-candidate endpoint) now calls h.dedupEngine.MergeJournaled(...) instead of h.mergeService.MergeBooks(...) directly, and its comment at handler.go:1403-1408 explicitly refuses (503) when h.dedupEngine is nil 'because the undo journal cannot be written'. grep -n \"MergeJournaled\" internal/dedup/auto_resolve.go shows the Tier-1 auto path (auto_resolve.go:299) also now calls the same shared MergeJournaled. `grep -n \"func (de \\*Engine) MergeJournaled\" internal/dedup/merge_journaled.go` -> 1 hit L50.",
+  "domain": "internal/dedup",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "MergeJournaled exists and is called from the review-lane merge endpoint",
+    "grep_cmd": "grep -n \"MergeJournaled\" internal/server/handlers/dedup/handler.go",
+    "expect": "hit at handler.go:1414 calling h.dedupEngine.MergeJournaled(...)"
+   },
+   {
+    "claim": "MergeJournaled is also the auto-resolve Tier-1 path's merge call",
+    "grep_cmd": "grep -n \"de.MergeJournaled\" internal/dedup/auto_resolve.go",
+    "expect": "1 hit ~L299"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Pure verification: confirm at HEAD, then check the TODO.md box for this sub-bullet only (the other two gaps below remain open).",
+  "review_critical": false,
+  "goal": "Confirm gap 1 of MERGE-UNDO ('only the auto-resolve path journals') is resolved at HEAD and check off just that clause in TODO.md L17-19, leaving the rest of the MERGE-UNDO item (external-ID reversal, no endpoint) open as separate tasks.",
+  "background": [
+   "internal/dedup/merge_journaled.go (guid 1d7c3e58, version 1.0.0, last-edited 2026-08-21 i.e. TODAY at HEAD) implements MergeJournaled exactly as the follow-on task the TODO describes: 'Centralising it here is what makes every merge is reversible a property of the engine rather than a habit of one caller.'",
+   "handler.go:1414 (POST /api/v1/dedup/candidates/:id/merge, the review-lane dispatch) now calls dedupEngine.MergeJournaled instead of mergeService.MergeBooks directly \u2014 verified via grep, this is the human-triggered keyboard-shortcut merge path the TODO calls out by name.",
+   "The journal key is only logged (slog.Info at handler.go:1451), not returned in the JSON response body \u2014 relevant to part 3 of this item (no endpoint to invoke undo)."
+  ],
+  "steps": [
+   "1. Run `grep -n \"MergeJournaled\" internal/server/handlers/dedup/handler.go internal/dedup/auto_resolve.go` and confirm both call sites exist as described above.",
+   "2. In TODO.md, edit the MERGE-UNDO item's first sub-bullet ('Only the auto-resolve path journals...') from `- [ ]` phrasing embedded in the parent bullet to note it is done \u2014 do NOT check the parent MERGE-UNDO box itself, since gaps 2 and 3 (external-ID reversal, no endpoint) are still open. Add a short parenthetical '(fixed 2026-08-21 via Engine.MergeJournaled, see internal/dedup/merge_journaled.go)' after that sub-bullet's text.",
+   "3. Add a changelog.d fragment (headerless, per repo convention) noting the review-lane merge path now journals via MergeJournaled."
+  ],
+  "tests": [
+   "No new test required \u2014 merge_journaled.go already has coverage per its own package tests (internal/dedup/*_test.go) and handler_test.go:575,602,631,1089 already assert MergeJournaled is called with expected args."
+  ],
+  "acceptance": [
+   "`grep -n \"h.dedupEngine.MergeJournaled\" internal/server/handlers/dedup/handler.go` returns exactly 1 hit.",
+   "TODO.md diff shows only the annotation/checkbox-adjacent text changed, no code changes."
+  ],
+  "edge_cases": [
+   "N/A \u2014 documentation-only task."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "This is the ONLY one of the three MERGE-UNDO gaps that is done. Parts 2 and 3 below (same todo_line 17) are still real, open work \u2014 do not let this stale_done verdict cause the whole MERGE-UNDO checkbox to be checked."
+ },
+ {
+  "todo_line": 17,
+  "src_id": "MERGE-UNDO",
+  "part": 2,
+  "title": "Make UnmergeAuto reverse external-ID reassignment and iTunes write-back removals, not just the book record",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/dedup/auto_resolve.go:383-388 documents the scope limit explicitly ('does NOT reverse the external-ID reassignment... nor any enqueued iTunes write-back removals'); internal/merge/service.go:236-268 shows MergeBooks calling eidStore.ReassignExternalIDs(loserID, winnerID) (irreversibly moves ALL of the loser's ext-id mappings) and ms.writeBackBatcher.EnqueueRemove(pid) for each loser iTunes PID, with no corresponding reverse capture anywhere in the journal (database.AutoMergeJournalEntry at internal/database/dedup_automerge_journal.go:36-60 has no external-ID or PID fields).",
+  "domain": "internal/dedup",
+  "exact_files": [
+   "internal/database/dedup_automerge_journal.go",
+   "internal/database/pebble_store_externalids.go",
+   "internal/database/mock_store.go",
+   "internal/merge/service.go",
+   "internal/dedup/merge_journaled.go",
+   "internal/dedup/auto_resolve.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "MergeBooks reassigns ALL of a loser's external IDs to the winner, irreversibly, with no record kept of the pre-reassignment owner",
+    "grep_cmd": "grep -n \"ReassignExternalIDs(book.ID, resolvedPrimaryID)\" internal/merge/service.go",
+    "expect": "1 hit ~L254"
+   },
+   {
+    "claim": "ReassignExternalIDs moves ALL mappings for oldBookID to newBookID, it is not scoped to a subset",
+    "grep_cmd": "grep -n \"func (p \\*PebbleStore) ReassignExternalIDs\" internal/database/pebble_store_externalids.go",
+    "expect": "1 hit ~L148, body iterates GetExternalIDsForBook(oldBookID) unconditionally"
+   },
+   {
+    "claim": "AutoMergeJournalEntry has no field to record the loser's pre-merge external IDs or removed iTunes PIDs",
+    "grep_cmd": "grep -n \"type AutoMergeJournalEntry struct\" -A 25 internal/database/dedup_automerge_journal.go",
+    "expect": "struct fields are Key/CandidateID/WinnerID/LoserID/WinnerPreMergeTS/LoserPreMergeTS/Tag/MergedAt only, no ext-id or PID field"
+   },
+   {
+    "claim": "UnmergeAuto only calls RevertBookToVersion on both books, nothing else",
+    "grep_cmd": "grep -n \"RevertBookToVersion\" internal/dedup/auto_resolve.go",
+    "expect": "2 hits inside UnmergeAuto ~L403,L410"
+   },
+   {
+    "claim": "WriteBackEnqueuer has no reverse (add-back) method, only EnqueueRemove",
+    "grep_cmd": "grep -n \"type WriteBackEnqueuer interface\" -A 4 internal/merge/service.go",
+    "expect": "interface has exactly one method, EnqueueRemove(pid string)"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "GetExternalIDsForBook",
+    "file": "internal/database/pebble_store_externalids.go",
+    "verify_grep": "grep -n \"func (p \\*PebbleStore) GetExternalIDsForBook\" internal/database/pebble_store_externalids.go"
+   },
+   {
+    "name": "AsExternalIDReassigner",
+    "file": "internal/merge/service.go",
+    "verify_grep": "grep -n \"func AsExternalIDReassigner\" internal/merge/service.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "L",
+  "tier": "opus",
+  "why_tier": "Touches a prod-data correctness surface (external-ID mapping table, iTunes write-back queue) across three packages (database/merge/dedup) with a locking discipline (mergeSerializeMu) that must not be broken; needs a new interface method and careful reasoning about partial-failure ordering, not mechanical edits.",
+  "review_critical": true,
+  "goal": "Capture, at merge time, exactly which external-ID mappings the loser owned before ReassignExternalIDs moved them to the winner, and which iTunes PIDs were enqueued for removal \u2014 then give UnmergeAuto a way to move those specific mappings back to the loser and re-enqueue those PIDs, so an undo restores the FULL pre-merge state (book record + external identity + iTunes write-back), not just the book record.",
+  "background": [
+   "internal/merge/service.go:236-268 is the loser-cleanup loop inside Service.MergeBooks: for each loser it (a) collects iTunes PIDs via GetExternalIDsForBook, (b) calls eidStore.ReassignExternalIDs(loserID, winnerID) which moves ALL the loser's mappings (not just iTunes) to the winner, (c) enqueues EnqueueRemove(pid) for the iTunes PIDs, (d) soft-deletes the loser.",
+   "ReassignExternalIDs (internal/database/pebble_store_externalids.go:148) is a blunt wholesale move \u2014 calling it a second time with (winnerID, loserID) after undo would move BACK every mapping the winner now holds, including ones the winner legitimately had before the merge, which is wrong. A correct undo needs a NEW targeted primitive that moves back only the mappings captured before the merge.",
+   "merge.Result (internal/merge/service.go:74-78) currently only carries PrimaryID/VersionGroupID/MergedCount \u2014 it has no field for per-loser reversal data, so MergeJournaled (internal/dedup/merge_journaled.go) cannot currently persist what it would need to reverse.",
+   "The iTunes write-back removal (WriteBackEnqueuer.EnqueueRemove) is fire-and-forget into an async batcher; by the time an undo runs the removal may already be applied to the ITL on disk. Full reversal of that side needs a new batcher capability (e.g. EnqueueUpsert/EnqueueAdd) that can reconstruct the track entry \u2014 this is the part of the task most likely to need a follow-up design call if the batcher's internals make an 'add back' non-trivial; flag rather than silently drop this half if it proves out of proportion to the rest."
+  ],
+  "steps": [
+   "1. internal/database/dedup_automerge_journal.go: add two fields to AutoMergeJournalEntry: `LoserExternalIDs []ExternalIDMapping \\`json:\"loser_external_ids,omitempty\\`` (the loser's full mapping set captured BEFORE ReassignExternalIDs ran) and `RemovedITunesPIDs []string \\`json:\"removed_itunes_pids,omitempty\\`` (the PIDs enqueued for removal). Bump the file's version header and last-edited date.",
+   "2. internal/merge/service.go: extend `Result` (line 74) with `LoserExternalIDs map[string][]database.ExternalIDMapping` and `RemovedPIDs map[string][]string`, both keyed by loser book ID. Populate them inside the loop at lines 236-268: before calling eidStore.ReassignExternalIDs, snapshot `mappings` (already fetched at step (a), line 244) into `result.LoserExternalIDs[book.ID]`; snapshot `dupPIDs` into `result.RemovedPIDs[book.ID]` at step (c).",
+   "3. internal/database/pebble_store_externalids.go: add a new method `func (p *PebbleStore) ReassignSpecificExternalIDs(mappings []ExternalIDMapping, newBookID string) error` that, for each given mapping, deletes its current reverse key (`ext_id:book:<currentOwner>:<source>:<id>`) and rewrites it under newBookID \u2014 mirroring ReassignExternalIDs' batch logic (lines 154-180) but iterating the PASSED-IN mapping list instead of re-fetching by old book ID (the old book ID may have already been re-merged into something else by the time undo runs, so re-deriving 'current owner' from the mapping's own persisted BookID field, not from a caller-supplied oldBookID, is the correct semantics). Add it to the ExternalIDReassigner-shaped interface set as needed and to internal/database/mock_store.go's MockStore with a matching Func field.",
+   "4. internal/dedup/merge_journaled.go: after `de.mergeService.MergeBooks(...)` returns `result`, thread `result.LoserExternalIDs[loserID]` and `result.RemovedPIDs[loserID]` into the second `PutAutoMergeJournalEntry` call (the patch at line 110) as the two new journal fields.",
+   "5. internal/dedup/auto_resolve.go: in UnmergeAuto (line 389), after both RevertBookToVersion calls succeed, call the new store method to move `entry.LoserExternalIDs` back onto `entry.LoserID` (via a store-capability check analogous to merge.AsExternalIDReassigner \u2014 Engine will need its own accessor since it does not import internal/merge). For RemovedITunesPIDs: if a write-back batcher accessor exists on Engine, re-enqueue an add/upsert for each PID; if no such capability exists yet, log a warn per PID naming them explicitly (`slog.Warn(\"unmerge-auto: iTunes write-back removal not reversed, manual re-sync required\", \"pid\", pid)`) rather than silently dropping the information \u2014 do not claim full reversal in the doc comment until the write-back half is actually implemented.",
+   "6. Update the SCOPE LIMIT doc comment at auto_resolve.go:383-388 to reflect what is now reversed vs. what still requires manual iTunes re-sync (if step 5's batcher capability is deferred)."
+  ],
+  "tests": [
+   "internal/database/pebble_store_externalids_test.go: TestReassignSpecificExternalIDs_MovesOnlyGivenMappings \u2014 merge two books' external IDs via ReassignExternalIDs, then reverse a SUBSET with ReassignSpecificExternalIDs and assert only that subset moved back, the rest stayed on the winner.",
+   "internal/dedup/auto_resolve_test.go: TestUnmergeAuto_RestoresExternalIDOwnership \u2014 merge two fixture books with distinct external-ID mappings via MergeJournaled, call UnmergeAuto with the returned journal key, assert GetExternalIDsForBook(loserID) returns the original mappings and GetExternalIDsForBook(winnerID) no longer includes them.",
+   "internal/merge/service_test.go: TestService_MergeBooks_ResultCarriesLoserExternalIDsAndPIDs \u2014 assert Result.LoserExternalIDs and Result.RemovedPIDs are populated correctly for a merge with a stubbed eidStore/writeBackBatcher."
+  ],
+  "acceptance": [
+   "`go test ./internal/database/... ./internal/merge/... ./internal/dedup/... -run 'ExternalID|UnmergeAuto|ResultCarries' -v` all pass.",
+   "`grep -n \"LoserExternalIDs\\|RemovedITunesPIDs\" internal/database/dedup_automerge_journal.go` returns 2+ hits."
+  ],
+  "edge_cases": [
+   "A loser with zero external-ID mappings: LoserExternalIDs is nil/empty, ReassignSpecificExternalIDs must be a no-op, not an error.",
+   "A mapping whose current owner is neither winner nor loser (a THIRD merge already moved it again since): ReassignSpecificExternalIDs must skip it rather than steal it back \u2014 check the mapping's live BookID before moving, per step 3's note.",
+   "UnmergeAuto called twice on the same journal key (double-undo): the second call's RevertBookToVersion will target a book_ver snapshot timestamp that no longer represents 'pre-merge' since the first undo already restored it \u2014 document this as a known no-op/idempotent-ish case but not guaranteed safe; consider marking a journal entry 'reverted' after first successful undo and refusing a second."
+  ],
+  "anti_over_suppression": "N/A \u2014 this is additive reversal logic, not a filter/guard.",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Part 3 below (endpoint wiring) depends on this part existing, since a real undo endpoint should call the FULLY reversing UnmergeAuto, not the book-record-only version, to avoid shipping a fake-safe 'undo' button. Owner should decide whether the iTunes write-back reversal (step 5's batcher gap) is in-scope now or gets its own follow-up TODO if it turns out to need real design work in the write-back batcher.",
+  "review_notes": [
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+  ]
+ },
+ {
+  "todo_line": 17,
+  "src_id": "MERGE-UNDO",
+  "part": 3,
+  "title": "Expose UnmergeAuto through an admin undo-merge endpoint (list + invoke)",
+  "verdict": "actionable",
+  "verdict_evidence": "No route or handler calls UnmergeAuto anywhere outside tests: `grep -rn UnmergeAuto internal/server` returns only a comment (handler.go:1405) and a test-file comment (handler_test.go:1059); ListAutoMergeJournalEntries (internal/database/dedup_automerge_journal.go:105) is documented as 'Intended for a follow-on admin undo merge listing; not used by the auto-resolve op itself' and has zero non-test callers.",
+  "domain": "internal/server/handlers/dedup",
+  "exact_files": [
+   "internal/server/handlers/dedup/handler.go",
+   "internal/server/handlers/dedup/interfaces.go",
+   "internal/server/wire_dedup_routes.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "UnmergeAuto has no production caller",
+    "grep_cmd": "grep -rn \"UnmergeAuto\" internal/server internal/plugins",
+    "expect": "only a comment hit at handler.go:1405, no functional call site"
+   },
+   {
+    "claim": "ListAutoMergeJournalEntries exists and is documented as unused, built for this follow-on",
+    "grep_cmd": "grep -n \"ListAutoMergeJournalEntries\" internal/database/dedup_automerge_journal.go",
+    "expect": "1 hit ~L105, doc comment says 'Intended for a follow-on admin undo merge listing'"
+   },
+   {
+    "claim": "MergeJournaled's interface is already exported to the dedup handler package for mocking",
+    "grep_cmd": "grep -n \"MergeJournaled\" internal/server/handlers/dedup/interfaces.go",
+    "expect": "1 hit in the DedupEngine interface"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "DedupEngine interface (h.dedupEngine)",
+    "file": "internal/server/handlers/dedup/interfaces.go",
+    "verify_grep": "grep -n \"type DedupEngine interface\" internal/server/handlers/dedup/interfaces.go"
+   },
+   {
+    "name": "httputil.RespondWithOK / RespondWithBadRequest / RespondWithNotFound",
+    "file": "internal/server/handlers/dedup/handler.go",
+    "verify_grep": "grep -n \"httputil.RespondWith\" internal/server/handlers/dedup/handler.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Mostly mechanical handler + route wiring following the existing handler.go conventions (auth, error responses, event publishing), but touches a prod merge/undo surface so needs care on authz and idempotency, not pure boilerplate.",
+  "review_critical": true,
+  "goal": "Add two admin-only endpoints: GET /api/v1/dedup/merges (list recent AutoMergeJournalEntry rows via ListAutoMergeJournalEntries, newest first, capped) and POST /api/v1/dedup/merges/:key/undo (calls Engine.UnmergeAuto(key) \u2014 the fully-reversing version from part 2 once that lands \u2014 and returns 200 on success, 404 if the journal key does not exist, 409 if already reverted).",
+  "background": [
+   "handler.go:1414's MergeJournaled call logs journalKey via slog.Info but never returns it in the HTTP response body (result set at handler.go:1478 has no journal_key field) \u2014 the undo flow currently has no way for an operator to discover a journal key except reading server logs.",
+   "DedupEngine interface (internal/server/handlers/dedup/interfaces.go:76-83) already exports MergeJournaled for mocking; UnmergeAuto and a listing method need the same treatment to be reachable/mockable from the handler package.",
+   "This repo's dedup routes are registered in internal/server/wire_dedup_routes.go (confirm exact filename via `grep -rln \"RegisterDedupRoutes\\|dedup.*router.GET\" internal/server/*.go` before editing, since the file may be named differently)."
+  ],
+  "steps": [
+   "1. Confirm the actual dedup route-registration file: run `grep -rln \"DismissDedupCandidate\\|MergeDedupCandidate\" internal/server/*.go` to find where dedup handler methods are wired to gin routes (do not assume the filename).",
+   "2. internal/server/handlers/dedup/interfaces.go: add `UnmergeAuto(journalKey string) error` and `ListAutoMergeJournalEntries(limit int) ([]database.AutoMergeJournalEntry, error)` to the DedupEngine interface (or a narrower sub-interface if the file follows a narrowing convention \u2014 check for an existing pattern before widening DedupEngine).",
+   "3. internal/server/handlers/dedup/handler.go: add `ListMergeJournal(c *gin.Context)` (GET) parsing an optional `?limit=` query param, calling h.dedupEngine.ListAutoMergeJournalEntries, and `UndoMerge(c *gin.Context)` (POST) taking `:key` as a URL param (note: journal keys contain a colon, e.g. `dedup:automerge:...` \u2014 confirm the key is safely embeddable as a single gin URL param or needs to be a body field instead; PREFER a JSON body `{\"journal_key\": \"...\"}` on the POST to avoid colon-in-path routing issues) that calls h.dedupEngine.UnmergeAuto(key) and returns 200 `{\"status\": \"unmerged\"}`, or 404 if the entry doesn't exist (UnmergeAuto currently returns a plain fmt.Errorf for that case \u2014 check whether a sentinel/typed error is needed to distinguish 404 from 500; if not, add one as part of this task rather than string-matching, unlike the pre-existing MAYDEPLOY-B2 workaround at handler.go:1426).",
+   "4. Register both routes in the dedup route-registration file found in step 1, gated behind whatever auth middleware the other dedup mutation routes (merge/dismiss) already use.",
+   "5. In handler.go's existing MergeDedupCandidate response (~line 1483, `httputil.RespondWithOK(c, gin.H{\"status\": \"merged\", \"result\": result, \"keep_id\": keepID})`), add `\"journal_key\": journalKey` to the response body so a client/operator can discover the undo key without reading logs."
+  ],
+  "tests": [
+   "internal/server/handlers/dedup/handler_test.go: TestUndoMerge_Success \u2014 mock DedupEngine.UnmergeAuto to succeed, POST the endpoint, assert 200.",
+   "internal/server/handlers/dedup/handler_test.go: TestUndoMerge_UnknownKey_404 \u2014 mock UnmergeAuto to return the 'no journal entry' error, assert 404 not 500.",
+   "internal/server/handlers/dedup/handler_test.go: TestListMergeJournal_ReturnsEntries \u2014 mock ListAutoMergeJournalEntries, assert response shape.",
+   "internal/server/handlers/dedup/handler_test.go: TestMergeDedupCandidate_ResponseIncludesJournalKey \u2014 assert the existing merge endpoint's JSON body now has a non-empty journal_key field."
+  ],
+  "acceptance": [
+   "`go test ./internal/server/handlers/dedup/... -run Undo -v` passes.",
+   "`grep -n \"UndoMerge\\|ListMergeJournal\" internal/server/handlers/dedup/handler.go` returns both new handler funcs."
+  ],
+  "edge_cases": [
+   "Empty journal (no merges yet): ListMergeJournal returns an empty array, not null/error.",
+   "limit=0 or missing: default to a sane cap (e.g. 50) \u2014 ListAutoMergeJournalEntries(0) currently means UNLIMITED per its doc comment, so the handler must supply a real default rather than passing through a raw 0.",
+   "Undo called on a Tier-1 auto-merge journal entry vs a review-lane one: both share the same AutoMergeJournalEntry shape, so no special-casing should be needed \u2014 verify with a test using both origins."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Should land AFTER part 2 (full external-ID + write-back reversal) so the exposed endpoint does not advertise a bigger guarantee ('undo this merge') than UnmergeAuto currently delivers (book-record-only). If shipped before part 2, the endpoint doc/response must say explicitly that external-ID and iTunes state are NOT reverted yet.",
+  "review_notes": [
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ]
+ },
+ {
+  "todo_line": 53,
+  "src_id": "ABS-N1",
+  "part": 1,
+  "title": "N-1: /socket.io/ 404 fix (already shipped \u2014 check the box)",
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/server/spa_fallback.go:54-58 lists nonSPAPrefixes = [\"/api\", \"/auth/\", \"/socket.io/\"] with nonSPAExact including \"/socket.io\" (line 60), and the file's own header shows version 1.1.0, last-edited 2026-08-12 (one day after the 2026-08-11 audit), with a 15-line doc comment explicitly describing the exact Engine.IO handshake bug the TODO names.",
+  "domain": "internal/server",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "/socket.io/ is in nonSPAPrefixes",
+    "grep_cmd": "grep -n \"socket.io\" internal/server/spa_fallback.go",
+    "expect": "2+ hits, in nonSPAPrefixes and nonSPAExact"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification + checkbox only.",
+  "review_critical": false,
+  "goal": "Confirm N-1 fixed at HEAD and check off that sub-bullet in TODO.md's ABS coverage gaps list (docs/audits/2026-08-11-abs-coverage-gap-audit.md N-1).",
+  "background": [
+   "spa_fallback.go's doc comment (lines 10-52) narrates the exact AudioBooth /auth/openid precedent and the socket.io recurrence, matching the TODO text nearly verbatim \u2014 strong signal this was fixed in direct response to the audit."
+  ],
+  "steps": [
+   "1. Verify via the grep above.",
+   "2. Check the N-1 sub-bullet in TODO.md (~L59-65) as done, citing spa_fallback.go:54-60.",
+   "3. If docs/audits/2026-08-11-abs-coverage-gap-audit.md has a per-finding status table, mark N-1 fixed there too."
+  ],
+  "tests": [
+   "Existing regression test should already exist \u2014 confirm with `grep -rn \"socket.io\" internal/server/*_test.go` and cite it in the TODO annotation; if absent, add TestSocketIOProbe404 in internal/server/spa_fallback_test.go asserting GET /socket.io/?EIO=4&transport=polling returns 404 with no Location header."
+  ],
+  "acceptance": [
+   "`grep -n 'socket.io' internal/server/spa_fallback.go` shows the prefix present."
+  ],
+  "edge_cases": [
+   "N/A"
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Part of the larger L53 ABS-coverage-gaps item; only this N-1 sub-finding is being marked stale_done here."
+ },
+ {
+  "todo_line": 53,
+  "src_id": "ABS-N2",
+  "part": 2,
+  "title": "N-2: value-comparison conformance gate (already shipped \u2014 check the box)",
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/server/handlers/abs/abs_test.go:474 and internal/server/handlers/abs/library_fake_test.go:1153 both call CompareBody with conformance.Options{IgnoreExtra: true, CompareValues: true}; abs_test.go:460-467's doc comment says explicitly 'CompareValues was off until 2026-08-12... Strictness is now the DEFAULT'.",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "assertConformant sets CompareValues: true",
+    "grep_cmd": "grep -n \"CompareValues\" internal/server/handlers/abs/abs_test.go",
+    "expect": "hit at L474 inside CompareBody options, plus comment at L460"
+   },
+   {
+    "claim": "assertConformantExcept (the allowance-based variant) also sets CompareValues: true",
+    "grep_cmd": "grep -n \"CompareValues\" internal/server/handlers/abs/library_fake_test.go",
+    "expect": "1 hit ~L1153"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification + checkbox only.",
+  "review_critical": false,
+  "goal": "Confirm N-2 (the value-comparison gate) is on by default at HEAD and check off that sub-bullet. This is the SAME underlying gate that item L127 (further down TODO.md) asks to align fixtures against \u2014 do not duplicate work, cross-reference L127 instead.",
+  "background": [
+   "This is the load-bearing fix the audit called 'nothing else on this list stays fixed without it' \u2014 since it is already done, N-3 through N-10 below can be (and were) evaluated against a REAL value-comparing gate rather than a shape-only one.",
+   "assertConformantPending likely still exists as an escape hatch for endpoints that cannot yet meet the oracle \u2014 check `grep -n assertConformantPending internal/server/handlers/abs/*.go` and cross-reference with item L127's fixture-alignment work, since call sites still on the pending/weak path are exactly what L127 targets."
+  ],
+  "steps": [
+   "1. Verify via the greps above.",
+   "2. Check the N-2 sub-bullet in TODO.md.",
+   "3. Add a note pointing at item L127 (the fixture-alignment follow-on) so the two are not independently re-derived."
+  ],
+  "tests": [
+   "N/A \u2014 already covered by the full abs handler test suite now running with CompareValues:true."
+  ],
+  "acceptance": [
+   "`grep -c CompareValues internal/server/handlers/abs/abs_test.go internal/server/handlers/abs/library_fake_test.go` shows CompareValues used at both sites."
+  ],
+  "edge_cases": [
+   "N/A"
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   127
+  ],
+  "gate": "n/a (docs)",
+  "notes": "See item L127 in this same scope file for the still-open follow-on work (aligning fixtures so the now-enabled value gate stays green rather than red)."
+ },
+ {
+  "todo_line": 53,
+  "src_id": "ABS-N3",
+  "part": 3,
+  "title": "N-3: stop advertising Delete/Update permissions the library surface cannot honor",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/server/handlers/abs/dto.go defaultPermissions() (~L283-297) sets Delete:true, Update:true unconditionally; internal/server/handlers/abs/handler.go:181-188's LibraryStore interface embeds only 6 reader interfaces (LibraryBookReader/LibrarySummaryReader/LibrarySearchReader/LibraryCreditReader/LibraryAuthorReader/LibrarySeriesReader) with no writer, and no PUT/POST/DELETE routes for /api/libraries or /api/items exist (grep for router.PUT/POST/DELETE on those paths returns 0 hits).",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+   "internal/server/handlers/abs/dto.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "defaultPermissions sets Delete and Update true",
+    "grep_cmd": "grep -n \"Delete: *true\\|Update: *true\" internal/server/handlers/abs/dto.go",
+    "expect": "2 hits inside defaultPermissions()"
+   },
+   {
+    "claim": "LibraryStore has no write methods",
+    "grep_cmd": "grep -n \"type LibraryStore interface\" -A 8 internal/server/handlers/abs/handler.go",
+    "expect": "6 embedded *Reader interfaces only"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Small, localized DTO change, but requires judgment about what value is truthful (false vs. omit) and checking no client hard-requires true regardless of capability \u2014 worth a careful read of the ABS client contract doc, not pure mechanics.",
+  "review_critical": false,
+  "goal": "Set userPermissions.Delete and .Update to false in defaultPermissions() (internal/server/handlers/abs/dto.go) so Absorb/AudioBooth do not render edit/delete affordances this server cannot service, matching the honesty principle already applied elsewhere on this surface (e.g. N-1's socket.io fix, PlayMethod always 0).",
+  "background": [
+   "The comment directly above defaultPermissions() (dto.go, just before L283) already says 'update/delete/download must be present and true or the clients disable working features' \u2014 this claim needs to be RE-VERIFIED against docs/reference/abs-target-client-contract.md before flipping the values, since if it is accurate, flipping breaks a currently-working feature (this is exactly the kind of stale in-code justification CLAUDE.md's 'verify the claim before believing it' rule warns about).",
+   "The correct fix depends on what update/delete are gating client-side: if they gate ONLY server-management actions (which we do not implement) it is safe to set false; if they also gate something we DO support (e.g. per-item progress/bookmark deletion, which /api/me DOES implement per userdata.go's UserDataLibraryStore), setting Update/Delete false wholesale would break a working feature \u2014 this needs the client-contract doc check as step 1, not a blind flip."
+  ],
+  "steps": [
+   "1. Read docs/reference/abs-target-client-contract.md for what `update`/`delete` on the user-permissions object gate client-side (search for 'permissions' or 'Delete' in that doc).",
+   "2. If update/delete gate ONLY unimplemented server-management actions: in internal/server/handlers/abs/dto.go's defaultPermissions(), change `Delete: true` to `Delete: false` and `Update: true` to `Update: false`, updating the adjacent comment to explain why (cite this TODO / the audit finding).",
+   "3. If update/delete ALSO gate something implemented (e.g. bookmark/progress deletion), instead leave them true but add a comment citing the specific implemented capability that requires it, and downgrade this TODO sub-item to not_a_task/false-positive in a follow-up docs note rather than silently closing it.",
+   "4. Bump the file version header per repo convention."
+  ],
+  "tests": [
+   "internal/server/handlers/abs/abs_test.go: TestUserPermissions_DeleteUpdateReflectCapability \u2014 assert the /api/me user object's permissions.delete/update match whatever step 2/3 decided, with a comment citing the client-contract doc line that justifies it."
+  ],
+  "acceptance": [
+   "`grep -n 'Delete:\\|Update:' internal/server/handlers/abs/dto.go` shows the corrected values with a comment citing this decision."
+  ],
+  "edge_cases": [
+   "A client that treats permissions.delete=false as 'hide the button' vs 'grey it out and 403 on click' \u2014 either way false is more honest than true when no route backs it; do not overthink beyond checking the contract doc."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Read the client-contract doc FIRST (step 1) \u2014 the existing in-code comment claiming true is required may itself be stale, per the worked example in this repo's CLAUDE.md about not trusting an unre-verified justification comment.",
+  "review_notes": [
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ]
+ },
+ {
+  "todo_line": 53,
+  "src_id": "ABS-N4",
+  "part": 4,
+  "title": "N-4: unimplemented /api/* namespaces 301 vs 404 (already resolved by the redirect/collision redesign \u2014 check the box)",
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/server/wire_abs_routes.go now distinguishes namespaces WITH a real /api/v1 twin (authors/series/users/playlists/collections \u2014 kept in absAppAPICollisions to redirect, by design, since redirecting to a real endpoint is correct, not the N-4 bug) from namespaces WITHOUT one (podcasts \u2014 moved to absReservedPaths so it 404s). internal/server/wire_abs_routes_test.go:209-235 TestUnimplementedABSNamespacesAre404NotRedirect asserts, for every entry in absUnimplementedNamespaces, both a 404 and an empty Location header. Collections is now a real feature (internal/server/handlers/abs/collections.go, internal/database CollectionStore) as of 2026-08-16 per wire_abs_routes.go:280-285's comment, so it is no longer 'unimplemented' at all \u2014 see item L468 in this scope, also stale_done for the same reason.",
+  "domain": "internal/server",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "podcasts moved out of the redirect-collision list to the 404 path",
+    "grep_cmd": "grep -n \"api/podcasts\" internal/server/wire_abs_routes.go",
+    "expect": "1 hit in absReservedPaths/absUnimplementedNamespaces area with a comment explaining the move"
+   },
+   {
+    "claim": "a regression test derives its assertions from the live namespace list, not a hardcoded copy",
+    "grep_cmd": "grep -n \"TestUnimplementedABSNamespacesAre404NotRedirect\" internal/server/wire_abs_routes_test.go",
+    "expect": "1 hit, test body at L209-235 iterates absUnimplementedNamespaces"
+   },
+   {
+    "claim": "authors/series/users/playlists/collections are DELIBERATELY redirected (real app-API twins), not an oversight",
+    "grep_cmd": "grep -n \"absAppAPICollisions = \\[\\]string\" -A 20 internal/server/wire_abs_routes.go",
+    "expect": "comment block explaining each entry's real twin"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification + checkbox only; the redesign already happened across several commits.",
+  "review_critical": false,
+  "goal": "Confirm N-4's originally-flagged 6 paths are all now resolved (2 became real features, 4 correctly redirect to real app-API twins by deliberate design or now 404) and check the N-4 sub-bullet.",
+  "background": [
+   "This finding aged out because of substantial follow-on work: collections shipped 2026-08-16 as a real ABS feature (not a wiring fix \u2014 see L468), and the redirect-vs-404 distinction was formalized into absAppAPICollisions (redirect, real twin exists) vs absUnimplementedNamespaces (404, no twin) with a regression test deriving from the live list rather than a hardcoded copy that could drift."
+  ],
+  "steps": [
+   "1. Verify via the greps above.",
+   "2. Check the N-4 sub-bullet, noting the two sub-resolutions (collections/playlists became real features; authors/series/users redirect-to-real-twin is now understood as correct behavior, not a bug; podcasts 404s).",
+   "3. Cross-reference item L468 in TODO.md (collections) so it is not independently re-flagged as missing."
+  ],
+  "tests": [
+   "Already covered: internal/server/wire_abs_routes_test.go TestUnimplementedABSNamespacesAre404NotRedirect and TestNonABSPathsStillRedirect."
+  ],
+  "acceptance": [
+   "`go test ./internal/server/... -run 'UnimplementedABSNamespaces|NonABSPathsStillRedirect' -v` passes."
+  ],
+  "edge_cases": [
+   "N/A"
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   468
+  ],
+  "gate": "n/a (docs)",
+  "notes": "Strongly cross-reference item L468 (todo_line 468) in this same scope \u2014 that item's TODO text ('Collections do not exist') is now FALSE at HEAD; both should be closed together citing the same evidence."
+ },
+ {
+  "todo_line": 53,
+  "src_id": "ABS-N5",
+  "part": 5,
+  "title": "N-5: /search narrators must omit numBooks, not emit 0",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/server/handlers/abs/browse.go:1338 (inside the /search handler) still has `resp.Narrators = append(resp.Narrators, gin.H{\"name\": n.Name, \"numBooks\": 0})`, hardcoding numBooks to 0 for every narrator match rather than omitting the field as /narrators does.",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+   "internal/server/handlers/abs/browse.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the /search narrator block hardcodes numBooks: 0",
+    "grep_cmd": "grep -n 'numBooks.: 0' internal/server/handlers/abs/browse.go",
+    "expect": "1 hit ~L1338"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "/narrators handler's omission pattern (whatever gin.H shape it uses without numBooks)",
+    "file": "internal/server/handlers/abs/browse.go",
+    "verify_grep": "grep -n 'func (h \\*Handler) .*Narrators' internal/server/handlers/abs/browse.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "One-line field removal mirroring an existing sibling handler's shape in the same file \u2014 fully mechanical once the reference pattern is located.",
+  "review_critical": false,
+  "goal": "Remove the numBooks key from the narrator objects emitted by the /search handler (browse.go:1338) so they match the shape /narrators already emits (no numBooks field at all), per the ABS contract which says omit rather than report a fake 0.",
+  "background": [
+   "The sibling /narrators endpoint already omits numBooks correctly (per the TODO text); the /search endpoint's narrator block is the only one still emitting the field with a hardcoded 0."
+  ],
+  "steps": [
+   "1. Locate the /narrators handler's gin.H construction for a narrator entry (grep above) to confirm its exact key set as the target shape.",
+   "2. In browse.go at the numBooks:0 line (~1338), change `gin.H{\"name\": n.Name, \"numBooks\": 0}` to `gin.H{\"name\": n.Name}`.",
+   "3. Bump browse.go's version header."
+  ],
+  "tests": [
+   "internal/server/handlers/abs/abs_test.go or browse_test.go: TestSearch_NarratorsOmitNumBooks \u2014 GET /api/libraries/:id/search?q=<narrator substring>, assert the returned narrator objects' map does NOT contain a \"numBooks\" key (use `_, ok := narrator[\"numBooks\"]; require.False(t, ok)`), not merely that it's 0."
+  ],
+  "acceptance": [
+   "`go test ./internal/server/handlers/abs/... -run TestSearch_NarratorsOmitNumBooks -v` passes.",
+   "`grep -n 'numBooks' internal/server/handlers/abs/browse.go` no longer shows a hardcoded 0 in the search block."
+  ],
+  "edge_cases": [
+   "Zero search matches: Narrators slice stays empty/nil, unaffected by this change."
+  ],
+  "anti_over_suppression": "N/A \u2014 field removal, not a filter.",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "If this now runs under the N-2 value-comparison conformance gate (CompareValues:true), re-run the existing /search conformance test to see if it was ALREADY catching this \u2014 if IgnoreExtra:true is masking it (extra/wrong-shape fields are ignored, not just wrong values on expected fields), note that explicitly since it affects how much the N-2 fix actually covers N-5-shaped bugs.",
+  "review_notes": [
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ]
+ },
+ {
+  "todo_line": 53,
+  "src_id": "ABS-N6",
+  "part": 6,
+  "title": "N-6: log + metric when listening-stats read fails (currently silent 0)",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/server/handlers/abs/stats.go's ListeningStats handler (~L62-84) has a comment at L73-76 explaining WHY it returns 0 rather than 5xx on a read failure ('a 5xx trips the SAME connection-error indicator'), but there is no slog.Warn call and no metric anywhere in the function \u2014 `grep -n 'slog.Warn\\|metric' internal/server/handlers/abs/stats.go` returns 0 hits.",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+   "internal/server/handlers/abs/stats.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "ListeningStats swallows the ListenedSeconds error with no logging or metric",
+    "grep_cmd": "grep -n 'ListenedSeconds\\|slog.Warn\\|metric' internal/server/handlers/abs/stats.go",
+    "expect": "ListenedSeconds hit inside an if err == nil branch; no slog.Warn/metric hit anywhere in the file"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "an existing Prometheus counter pattern in internal/metrics/metrics.go (not internal/server \u2014 metrics live in their own package)",
+    "file": "internal/metrics/metrics.go",
+    "verify_grep": "grep -n 'prometheus.NewCounterVec\\|promauto' internal/metrics/metrics.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Small, localized addition of a log line and a metric increment inside an existing error branch \u2014 mechanical once an existing metrics helper pattern is located to copy.",
+  "review_critical": false,
+  "goal": "Keep the 200/total=0 response on a listening-stats read failure (deliberately, per the existing comment \u2014 do not change the status code), but add slog.Warn(...) with the user ID and error, and increment a Prometheus counter, so the silent failure becomes observable without changing client-visible behavior.",
+  "background": [
+   "Confirmed via CLAUDE.md's own MEMORY.md note ('Prometheus gap \u2014 bare /metrics 401 is BY DESIGN') that this repo does have a metrics surface; find its existing helper conventions before adding a new one from scratch."
+  ],
+  "steps": [
+   "1. Run the reuse grep above to find how other handlers register/increment Prometheus counters in this codebase (likely a shared internal/server/metrics.go or similar).",
+   "2. In internal/server/handlers/abs/stats.go's ListeningStats, inside the `if seconds, err := h.userData.ListenedSeconds(user.ID); err == nil { total = seconds }` block, add an `else` branch: `slog.Warn(\"abs listening-stats read failed, reporting 0\", \"user_id\", user.ID, \"err\", err)` plus an increment of a new/reused counter (e.g. `absListeningStatsReadFailures.Inc()` or labeled by endpoint).",
+   "3. Bump stats.go's version header."
+  ],
+  "tests": [
+   "internal/server/handlers/abs/stats_test.go: TestListeningStats_ReadFailureLogsAndCountsButReturns200 \u2014 stub h.userData.ListenedSeconds to return an error, assert response is still 200 with TotalTime:0 (unchanged behavior), and assert the new counter incremented (or capture log output if no metric helper is reused)."
+  ],
+  "acceptance": [
+   "`go test ./internal/server/handlers/abs/... -run TestListeningStats_ReadFailure -v` passes."
+  ],
+  "edge_cases": [
+   "h.userData itself nil (no store configured): falls into the same total=0 path today without even attempting ListenedSeconds \u2014 decide whether that also deserves a warn/metric (it's a config gap, not a transient read failure) or is out of scope; note the distinction in the log message rather than conflating the two causes."
+  ],
+  "anti_over_suppression": "N/A \u2014 logging addition, not a filter.",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Do not change the HTTP status code \u2014 the existing comment's reasoning (5xx flips the client's connection dot) is a deliberate, still-valid decision per the TODO text itself ('Keep the 200... but log at warn + add a metric')."
+ },
+ {
+  "todo_line": 53,
+  "src_id": "ABS-N7",
+  "part": 7,
+  "title": "N-7: golden fixtures never loaded by any test (appears resolved \u2014 verify then check the box)",
+  "verdict": "stale_done",
+  "verdict_evidence": "Diffing every *.json file in testdata/abs-fixtures/ (28 files) against every quoted \\*.json string literal referenced across internal/server/handlers/abs/*_test.go shows zero fixtures on disk that are not referenced by name in some test file (`comm -23` of the two sorted lists is empty).",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "every fixture file is referenced by a string literal in some test",
+    "grep_cmd": "comm -23 <(ls testdata/abs-fixtures/*.json | xargs -n1 basename | sort) <(grep -rohE '\\\"[a-z_]+\\\\.json\\\"' internal/server/handlers/abs/*_test.go | tr -d '\\\"' | sort -u)",
+    "expect": "empty output (no orphans)"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification + checkbox; if the above check ever comes back non-empty, wiring an unused fixture into a real assertConformant/assertConformantExcept call is still mechanical.",
+  "review_critical": false,
+  "goal": "Confirm all fixtures are referenced by some test at HEAD (they are) and check the N-7 sub-bullet. NOTE the caveat below before fully trusting this.",
+  "background": [
+   "Being referenced by string literal is necessary but not fully sufficient proof of being LOADED AND ASSERTED \u2014 a fixture name could appear in a comment or an assertConformantPending (weak) call rather than a real assertConformant(strict) call. A careful closer would grep specifically for `LoadFixture` and `assertConformant(` call sites rather than any string literal."
+  ],
+  "steps": [
+   "1. Re-run the comm-based check above to reconfirm at execution time (HEAD may have moved).",
+   "2. For extra rigor, also run `grep -n 'assertConformantPending' internal/server/handlers/abs/*_test.go` and manually confirm none of the 28 fixtures are ONLY reachable through the weak/pending path \u2014 if any are, downgrade this specific fixture to 'actionable' (needs promotion to assertConformant) rather than fully closing N-7.",
+   "3. Check the N-7 sub-bullet."
+  ],
+  "tests": [
+   "N/A if step 2 confirms no pending-only fixtures; otherwise write TestFixtureX_UsesStrictConformance per the affected fixture."
+  ],
+  "acceptance": [
+   "The comm command above returns empty output."
+  ],
+  "edge_cases": [
+   "A fixture referenced only in a code comment (not an actual LoadFixture/assertConformant call) would false-positive this check \u2014 step 2 exists specifically to catch that."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Medium confidence stale_done \u2014 recommend the executor re-run step 2's pending-path check before checking the TODO box, since the string-literal grep alone is a necessary-not-sufficient proof."
+ },
+ {
+  "todo_line": 53,
+  "src_id": "ABS-N8",
+  "part": 8,
+  "title": "N-8: absRouteList() route-coverage guard now includes all registered routes (already fixed \u2014 check the box)",
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/server/wire_abs_routes.go:600-608 explicitly documents the fix: 'OpenID web-flow endpoints... Absent from this list from their introduction until 2026-08-14, which made the list's \"every registered route\" claim false \u2014 the N-8 audit finding, confirmed against a runtime router.Routes() dump (47 listed vs 49 real...). GET /auth/openid and GET /auth/openid/callback are now present at lines 607-608.",
+  "domain": "internal/server",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the N-8 gap is named and fixed in-code with a dated comment",
+    "grep_cmd": "grep -n 'N-8' internal/server/wire_abs_routes.go",
+    "expect": "1 hit inside absRouteList's doc comment, dated 2026-08-14"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification + checkbox only.",
+  "review_critical": false,
+  "goal": "Confirm N-8 fixed at HEAD (absRouteList now matches the real registered route count) and check the sub-bullet.",
+  "background": [
+   "The comment even self-cites the audit finding by name (N-8) and gives before/after counts (47 vs 49), which is unusually strong first-party confirmation."
+  ],
+  "steps": [
+   "1. Verify via the grep above.",
+   "2. Optionally re-run the route-count guard test (`grep -rn 'router.Routes()' internal/server/*_test.go`) to reconfirm 0 drift at HEAD.",
+   "3. Check the N-8 sub-bullet."
+  ],
+  "tests": [
+   "Whatever existing test asserts absRouteList() length against router.Routes() \u2014 locate via `grep -rln 'absRouteList()' internal/server/*_test.go` and cite it."
+  ],
+  "acceptance": [
+   "`go test ./internal/server/... -run RouteList -v` (or the actual test name found in step above) passes."
+  ],
+  "edge_cases": [
+   "N/A"
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "N/A"
+ },
+ {
+  "todo_line": 53,
+  "src_id": "ABS-N9",
+  "part": 9,
+  "title": "N-9: play-session mediaMetadata over-emits fields vs. the oracle capture",
+  "verdict": "needs_design",
+  "verdict_evidence": "internal/server/handlers/abs/dto_play.go:44 embeds bookMetadataDTO (22 fields, internal/server/handlers/abs/dto_library.go:103-125) into playSessionResponse.MediaMetadata; the N-2 conformance fix (ABS-N2, this same scope) still runs with `IgnoreExtra: true` (confirmed at abs_test.go:474 and library_fake_test.go:1153), which by definition does NOT flag EXTRA emitted fields the oracle lacks \u2014 only wrong VALUES on fields the oracle also has. An over-emission bug is therefore structurally invisible to the now-fixed value gate, so N-9 cannot be assumed fixed just because N-2 is.",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+   "internal/server/handlers/abs/dto_play.go",
+   "internal/server/handlers/abs/dto_library.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the conformance gate ignores extra fields, so it cannot catch over-emission",
+    "grep_cmd": "grep -n 'IgnoreExtra: true' internal/server/handlers/abs/abs_test.go internal/server/handlers/abs/library_fake_test.go",
+    "expect": "2 hits, both IgnoreExtra:true"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Requires diffing the current playSessionResponse.MediaMetadata field set against a real ABS 2.36.0 play-session capture field-by-field to identify which 6 fields are the extras named by the audit \u2014 that identification step is a judgment call needing the actual oracle fixture, not something derivable from a single grep, hence needs_design first.",
+  "review_critical": false,
+  "goal": "Identify (against the real oracle capture referenced by the 2026-08-11 audit) exactly which of bookMetadataDTO's 22 fields the real ABS play-session response omits, then either omit them from the MediaMetadata block specifically for play-session responses (may need a slimmer sibling DTO) or confirm the audit's '6 fields' claim is stale and downgrade to not_a_task.",
+  "background": [
+   "The open QUESTION this needs_design flags: does the play-session oracle fixture (get_api_items_id_play or similar under testdata/abs-fixtures/, need to confirm exact filename) actually exist and show a narrower mediaMetadata shape than bookMetadataDTO? If the fixture never captured a play-session response's exact field list (unlike N-7 which is about whether fixtures are LOADED, this is about whether a play-session-specific oracle field list was ever compared), the '6 extra fields' claim itself needs re-verification, not just an implementation.",
+   "IgnoreExtra:true is IN THIS REPO a deliberate, documented choice for forward-compatibility reasons elsewhere \u2014 flipping it off globally to catch over-emission would be a much bigger change (likely reddening many endpoints) than fixing this one DTO, so the fix should be scoped to dto_play.go specifically once the field list is confirmed, not to the whole conformance harness."
+  ],
+  "steps": [
+   "1. Locate the play-session golden fixture: `ls testdata/abs-fixtures/ | grep -i play` and confirm it captures a mediaMetadata object.",
+   "2. Diff bookMetadataDTO's 22 JSON keys (dto_library.go:104-124) against the fixture's mediaMetadata keys by hand or with `jq 'keys' <fixture> | diff - <(list of DTO json tags)`.",
+   "3. If real extras are found: either add a narrower `playSessionMediaMetadataDTO` used only by dto_play.go's MediaMetadata field, or set the extra fields to omitempty/remove them from bookMetadataDTO if they are truly never used by ANY caller (check other callers of bookMetadataDTO first via `grep -rn bookMetadataDTO internal/server/handlers/abs/*.go` \u2014 it's likely shared with the library-item DTO, so do not remove fields the library-item response legitimately needs).",
+   "4. Add a dedicated assertConformant call (or extend the existing play-session test) with IgnoreExtra:false specifically for the mediaMetadata sub-object, OR write a targeted field-set-equality test that does not depend on IgnoreExtra at all."
+  ],
+  "tests": [
+   "internal/server/handlers/abs/play_test.go: TestPlaySession_MediaMetadataFieldsMatchOracleExactly \u2014 decode both the real handler response and the oracle fixture's mediaMetadata into map[string]any, assert the key SETS are equal (not just that shared keys have equal values)."
+  ],
+  "acceptance": [
+   "The new field-set-equality test passes against the real oracle fixture."
+  ],
+  "edge_cases": [
+   "bookMetadataDTO is very likely shared between the library-item response (where the full 22 fields ARE correct) and the play-session response (where 6 may be extra) \u2014 do not blindly trim the shared struct; confirm via step 3's caller check before removing anything, since doing so could reintroduce N-2-style breakage for the library-item shape."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Marked needs_design because step 1-2 (does the oracle fixture even exist, and which fields are genuinely extra) must happen before any code change can be briefed concretely \u2014 a cold model handed only 'remove the 6 extra fields' with no fixture-diff would guess wrong."
+ },
+ {
+  "todo_line": 53,
+  "src_id": "ABS-N10",
+  "part": 10,
+  "title": "N-10: advertised login rate limit (10/10min) does not match the real throttle (15/15min)",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/server/handlers/abs/dto.go sets RateLimitLoginRequests: 10 and RateLimitLoginWindow: 600000 (10 minutes in ms) in the advertised /status response; internal/server/absauth/throttle.go:31-35 defines the REAL policy as MaxFailuresPerIP = 15 over Window = 15 * time.Minute.",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+   "internal/server/handlers/abs/dto.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "advertised limits are 10 requests / 600000ms",
+    "grep_cmd": "grep -n 'RateLimitLoginRequests\\|RateLimitLoginWindow' internal/server/handlers/abs/dto.go",
+    "expect": "RateLimitLoginRequests: 10, RateLimitLoginWindow: 600000"
+   },
+   {
+    "claim": "the real throttle is 15 failures / 15 minutes",
+    "grep_cmd": "grep -n 'MaxFailuresPerIP\\|Window =' internal/server/absauth/throttle.go",
+    "expect": "MaxFailuresPerIP = 15, Window = 15 * time.Minute"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "absauth.MaxFailuresPerIP / absauth.Window constants",
+    "file": "internal/server/absauth/throttle.go",
+    "verify_grep": "grep -n 'MaxFailuresPerIP\\|^ Window' internal/server/absauth/throttle.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Two-constant correction, using already-exported values from absauth \u2014 fully mechanical, no design judgment needed since the real values are the source of truth.",
+  "review_critical": false,
+  "goal": "Make the advertised /status rate-limit values in dto.go derive from (or exactly match) the real absauth throttle constants, so a client that paces itself to the advertisement is not surprised by the real 429 threshold.",
+  "background": [
+   "absauth is already imported somewhere in the abs handler package or its wiring \u2014 check `grep -rn '\"github.com/falkcorp/audiobook-organizer/internal/server/absauth\"' internal/server/handlers/abs/*.go` to see whether dto.go can import it directly without a cycle, or whether the values need to be passed in via Handler config at construction time instead."
+  ],
+  "steps": [
+   "1. Check for an import cycle risk: `grep -rn 'absauth' internal/server/handlers/abs/*.go` and `grep -n 'handlers/abs' internal/server/absauth/*.go` \u2014 if absauth does not import the abs package, dto.go can safely import absauth directly.",
+   "2. In internal/server/handlers/abs/dto.go, replace the hardcoded `RateLimitLoginRequests: 10` with `RateLimitLoginRequests: absauth.MaxFailuresPerIP` and `RateLimitLoginWindow: 600000` with `RateLimitLoginWindow: absauth.Window.Milliseconds()`.",
+   "3. Add the absauth import if not already present; bump dto.go's version header."
+  ],
+  "tests": [
+   "internal/server/handlers/abs/abs_test.go: TestStatus_RateLimitMatchesRealThrottle \u2014 GET /status, assert RateLimitLoginRequests == absauth.MaxFailuresPerIP and RateLimitLoginWindow == absauth.Window.Milliseconds()."
+  ],
+  "acceptance": [
+   "`go test ./internal/server/handlers/abs/... -run TestStatus_RateLimitMatchesRealThrottle -v` passes.",
+   "`grep -n 'absauth.MaxFailuresPerIP' internal/server/handlers/abs/dto.go` returns 1 hit."
+  ],
+  "edge_cases": [
+   "If step 1 finds an import cycle, fall back to passing the two values into abs.Handler via its constructor/config struct instead of importing absauth directly \u2014 do not introduce a cycle to satisfy this cosmetic fix."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "N/A",
+  "review_notes": []
+ },
+ {
+  "todo_line": 42,
+  "src_id": null,
+  "title": "Decide whether 22 gha-* repos + magnet-handler keep classic branch protection",
+  "verdict": "needs_design",
+  "verdict_evidence": "This item is entirely about GitHub org-level settings on 22 OTHER repositories, none of which live in this repo's tree \u2014 there is no file/grep evidence obtainable from audiobook-organizer for it, and it is a pure policy decision (keep protection vs. remove it, matching this repo's 2026-08-20 removal) with no code deliverable here.",
+  "domain": "docs",
+  "exact_files": [],
+  "verified_anchors": [],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "If the owner decides to standardize, the execution (toggling branch protection via gh api/gh repo edit across 22 repos) is mechanical scripting, but the decision itself is out of scope for a code agent.",
+  "review_critical": false,
+  "goal": "Get an explicit owner decision: do the 22 gha-* repos and magnet-handler keep classic branch protection (PR review + set-auto-merge check) as a deliberate template, or should they be brought in line with audiobook-organizer's 2026-08-20 removal?",
+  "background": [
+   "Per this repo's own MEMORY.md: 'NEVER add branch protection here' \u2014 auto-revert replaces it after a deadlocked todo-collect. The 22 gha-* repos look like an intentional template (shared set-auto-merge check across all of them) rather than drift, per the TODO text itself."
+  ],
+  "steps": [
+   "1. This is a decision-only item; once the owner decides, if 'standardize to no-protection', script it as: for each of the 22 repos + magnet-handler, `gh api -X DELETE repos/falkcorp/<repo>/branches/main/protection`. If 'keep as-is', simply record the decision in a docs note and close.",
+   "2. No code change to audiobook-organizer itself is implied either way."
+  ],
+  "tests": [
+   "N/A"
+  ],
+  "acceptance": [
+   "An explicit written decision exists (e.g. a docs/operations note) stating keep-or-remove for the 22 repos."
+  ],
+  "edge_cases": [
+   "N/A"
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Out of scope for any code change in THIS repo; purely an org-governance decision plus, if 'remove', a short gh-cli script against other repos."
+ },
+ {
+  "todo_line": 46,
+  "src_id": null,
+  "title": "Add a scheduled detect-only backstop workflow for auto-revert.yml",
+  "verdict": "actionable",
+  "verdict_evidence": ".github/workflows/auto-revert.yml (328 lines) triggers only on `workflow_run` of 'Continuous Integration' completing or manual workflow_dispatch \u2014 there is no `schedule:` cron trigger anywhere in the file (`grep -n schedule: .github/workflows/auto-revert.yml` returns 0 hits), so a missed workflow_run event (runner outage, cancelled run) leaves red main with nothing watching it, exactly as the TODO describes.",
+  "domain": "ci/scripts",
+  "exact_files": [
+   ".github/workflows/auto-revert-backstop.yml"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "auto-revert.yml has no cron trigger",
+    "grep_cmd": "grep -n 'schedule:\\|cron:' .github/workflows/auto-revert.yml",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "the existing issue-filing step creates issues with no pre-check",
+    "grep_cmd": "grep -n 'gh issue create' .github/workflows/auto-revert.yml",
+    "expect": "1 hit at L305"
+   },
+   {
+    "claim": "no pre-check gh issue list/search exists before filing (the dedupe gap)",
+    "grep_cmd": "grep -n 'gh issue list' .github/workflows/auto-revert.yml",
+    "expect": "0 hits \u2014 no pre-check list/search exists before the gh issue create call"
+   }
+  ],
+  "reuse": [
+   {
+    "name": ".github/workflows/scripts/auto_revert.py's latest_conclusion_by_sha/select_span helpers (for computing which SHA the current CI gate ran against)",
+    "file": ".github/workflows/scripts/auto_revert.py",
+    "verify_grep": "grep -n 'def latest_conclusion_by_sha\\|def select_span' .github/workflows/scripts/auto_revert.py"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "New standalone workflow file with real logic (find the CI run for main's tip, age-check it, dedupe against open issues) \u2014 needs careful gh-cli scripting and a dedupe check the existing workflow itself lacks, not pure boilerplate.",
+  "review_critical": false,
+  "goal": "Add a new scheduled workflow (e.g. every 15 minutes) that checks whether main's HEAD has a failed 'Continuous Integration' run older than 30 minutes with no matching open auto-revert issue, and if so files a detect-only issue (never pushes/reverts) so a missed workflow_run event cannot leave red main silently unwatched.",
+  "background": [
+   "The existing auto-revert.yml already has all the issue-body rendering and gh-issue-create machinery (lines 264-305) \u2014 the backstop should reuse the SAME label set (bug, ci, automation) so it is discoverable the same way, but must NOT duplicate an issue if one is already open for the same failing SHA (the existing workflow's 'File the bug' step has no such dedupe check either \u2014 worth flagging as a shared gap, not just adding it to the new workflow).",
+   "gh run list --workflow 'Continuous Integration' --branch main --limit 1 --json conclusion,headSha,createdAt,url gives the latest gate run for main's tip without needing to call the revert-decision script at all \u2014 this workflow only needs to detect and report, not decide what to revert."
+  ],
+  "steps": [
+   "1. Create .github/workflows/auto-revert-backstop.yml with `on: schedule: - cron: '*/15 * * * *'` plus `workflow_dispatch:` for manual testing.",
+   "2. permissions: issues: write (read-only otherwise \u2014 this workflow never pushes or reverts, hence 'detect-only').",
+   "3. Step 'Find latest CI run for main': `gh run list --repo \"$GITHUB_REPOSITORY\" --workflow 'Continuous Integration' --branch main --limit 1 --json conclusion,headSha,createdAt,url --jq '.[0]'` capture into outputs.",
+   "4. Step 'Check age and conclusion': fail-soft/skip (not error) if conclusion != 'failure', or if `createdAt` is within 30 minutes of now (use `date -u -d\"$CREATED_AT\" +%s` / `date +%s` diff, matching the 30-minute threshold from the TODO).",
+   "5. Step 'Check for existing open issue': `gh issue list --repo \"$GITHUB_REPOSITORY\" --label ci --label automation --state open --search \"CI red on main at ${FAILING_SHA:0:8}\" --json number --jq 'length'` \u2014 if >0, skip filing (this is the dedupe the main workflow itself lacks).",
+   "6. Step 'File backstop issue': only if steps 4 and 5 both indicate 'act' \u2014 `gh issue create --repo \"$GITHUB_REPOSITORY\" --title \"CI red on main, auto-revert did not fire (backstop)\" --body \"...\" --label bug --label ci --label automation --label auto-revert-backstop`, explaining in the body that this is a DETECT-ONLY alert (auto-revert.yml normally handles this via workflow_run and did not).",
+   "7. Add a step summary block mirroring the existing workflow's Summary step for consistency."
+  ],
+  "tests": [
+   "No unit test framework applies to a GitHub Actions workflow file directly; validate with `workflow_dispatch` manual runs against a deliberately-red test branch, and add a short comment block documenting that manual validation path (mirroring how auto-revert.yml documents its dry_run input)."
+  ],
+  "acceptance": [
+   "`gh workflow view auto-revert-backstop.yml` shows the schedule trigger.",
+   "A manual `gh workflow run auto-revert-backstop.yml` against a known-red main (or a fork test) files exactly one issue, and a second immediate run does not file a duplicate."
+  ],
+  "edge_cases": [
+   "No CI runs yet on a brand-new repo/branch: `gh run list` returns empty \u2014 treat as 'nothing to check', not an error.",
+   "CI run still in progress (conclusion null, not yet 'failure' or 'success'): skip, do not treat as failure.",
+   "Rate limiting from running every 15 minutes indefinitely: gh api calls here are read-mostly and cheap, but note the interval choice in the workflow's header comment so a future editor does not need to re-derive why 15 minutes was chosen against the TODO's 30-minute threshold."
+  ],
+  "anti_over_suppression": "The dedupe check (step 5) must not swallow a genuinely NEW red-main incident that happens to share a title substring with an old resolved one \u2014 scope the --search to also require --state open (already done) so a closed prior incident's issue never suppresses a new one.",
+  "depends_on_lines": [],
+  "gate": "n/a (docs) \u2014 GitHub Actions workflow, validated by manual workflow_dispatch runs rather than make ci",
+  "notes": "Consider whether the dedupe gap found in step 5 (the EXISTING auto-revert.yml's own issue-filing step has no dedupe check either) deserves its own follow-up TODO \u2014 a flapping CI failure that auto-revert.yml itself handles repeatedly could already be filing duplicate issues today, independent of this backstop.",
+  "review_notes": [
+   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th",
+   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th"
+  ]
+ },
+ {
+  "todo_line": 50,
+  "src_id": null,
+  "title": "Wire scripts/test_check_memory_leaks.py into a CI job (repo-guards)",
+  "verdict": "actionable",
+  "verdict_evidence": ".github/workflows/ci.yml's repo-guards job (line 182) has a step 'Test the auto-revert span selector' (line 237-238) whose comment explicitly names scripts/test_check_memory_leaks.py as the motivating case ('scripts/test_check_memory_leaks.py sits in this repo executed by nothing') but its actual command `python3 -m unittest discover -s .github/workflows/scripts -p 'test_*.py' -v` only discovers test files under .github/workflows/scripts \u2014 scripts/test_check_memory_leaks.py lives in scripts/ (repo root) and is never matched, so the comment's own stated goal is not met by the command beneath it.",
+  "domain": "ci/scripts",
+  "exact_files": [
+   ".github/workflows/ci.yml"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the discover command only searches .github/workflows/scripts, not scripts/",
+    "grep_cmd": "grep -n 'unittest discover' .github/workflows/ci.yml",
+    "expect": "1 hit at L238, -s .github/workflows/scripts"
+   },
+   {
+    "claim": "scripts/test_check_memory_leaks.py exists at repo root scripts/, a different directory",
+    "grep_cmd": "ls scripts/test_check_memory_leaks.py",
+    "expect": "file exists"
+   },
+   {
+    "claim": "the checker it tests (check-memory-leaks.py) IS actively run elsewhere, so deleting the test would remove coverage of a live tool, not dead code",
+    "grep_cmd": "grep -n 'check-memory-leaks.py' Makefile .github/workflows/memory-leak-scan.yml",
+    "expect": "hits in both \u2014 Makefile:157 and memory-leak-scan.yml:48,110"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "One-line addition to an existing CI step, no new logic \u2014 just add a second unittest discover invocation (or widen the existing one) pointed at scripts/.",
+  "review_critical": false,
+  "goal": "Make .github/workflows/ci.yml's repo-guards job actually execute scripts/test_check_memory_leaks.py, since check-memory-leaks.py itself is a live, actively-used tool (Makefile `make check-memory-leaks`-style target and memory-leak-scan.yml both invoke it) \u2014 the test for it should not be dead weight.",
+  "background": [
+   "scripts/ contains exactly one test_*.py file today (`ls scripts/test_*.py` \u2192 scripts/test_check_memory_leaks.py only), so widening the discovery to include scripts/ will not accidentally pick up unrelated tests.",
+   "Deleting scripts/test_check_memory_leaks.py instead (the TODO's other named option) is the WRONG choice here: check-memory-leaks.py is actively wired into memory-leak-scan.yml and the Makefile, so its regression test is worth keeping \u2014 only the wiring is missing."
+  ],
+  "steps": [
+   "1. In .github/workflows/ci.yml, at the 'Test the auto-revert span selector' step (~L237-238), add a second line: `python3 -m unittest discover -s scripts -p 'test_*.py' -v` right after the existing discover command (or rename the step to cover both, e.g. 'Test the auto-revert span selector and repo scripts').",
+   "2. Update the step's preceding comment (lines 233-236) to no longer claim the file is 'executed by nothing' once this lands.",
+   "3. Bump ci.yml's version-header-equivalent (workflow files in this repo may not carry the standard header \u2014 confirm via `head -5 .github/workflows/ci.yml`; if it has one, bump it)."
+  ],
+  "tests": [
+   "The CI job itself IS the test \u2014 a subsequent `git push` / PR run of repo-guards must show the scripts/test_check_memory_leaks.py test cases executing (visible in the Actions log), not just the .github/workflows/scripts ones."
+  ],
+  "acceptance": [
+   "`grep -n \"discover -s scripts\" .github/workflows/ci.yml` returns 1 hit.",
+   "A CI run's repo-guards job log contains output from scripts/test_check_memory_leaks.py's unittest cases (e.g. test names from `TestUntrackedListeners` or similar)."
+  ],
+  "edge_cases": [
+   "If a future contributor adds an unrelated test_*.py to scripts/ root, it will now also run in this step \u2014 acceptable, since that is the same convention already used for .github/workflows/scripts."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs) \u2014 CI workflow change, verified by a live Actions run"
+ },
+ {
+  "todo_line": 90,
+  "src_id": "N-11",
+  "title": "Log ABS_API_ENABLED's actual boot-time value unconditionally (currently silent when disabled)",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/server/wire_abs_routes.go's wireABSRoutes (~L323-327): `if !snap.ABSAPIEnabled { return }` with no log line in that branch, while the enabled branch DOES log ('abs: Audiobookshelf-compatible surface enabled...' at line 545) \u2014 so an operator scanning logs sees positive evidence only when it's ON, and total silence (indistinguishable from 'never checked') when it's OFF.",
+  "domain": "internal/server",
+  "exact_files": [
+   "internal/server/wire_abs_routes.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the disabled branch returns silently with no log",
+    "grep_cmd": "grep -n 'if !snap.ABSAPIEnabled' -A 3 internal/server/wire_abs_routes.go",
+    "expect": "1 hit ~L325, body is just `return`"
+   },
+   {
+    "claim": "the enabled branch does log",
+    "grep_cmd": "grep -n 'abs: Audiobookshelf-compatible surface enabled' internal/server/wire_abs_routes.go",
+    "expect": "1 hit ~L545"
+   },
+   {
+    "claim": "abs_api_enabled defaults false and deploy/local.conf (where prod would set it) is gitignored, so the tree cannot answer the question",
+    "grep_cmd": "grep -n 'abs_api_enabled.*false' internal/config/abs_config.go",
+    "expect": "1 hit ~L28"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "One log line added to an already-identified branch.",
+  "review_critical": false,
+  "goal": "Make wireABSRoutes log its enabled/disabled state unconditionally at boot (not just when enabled), so `journalctl`/log-grepping for 'abs:' on a running prod instance always answers the N-11 question definitively without needing repo access to deploy/local.conf.",
+  "background": [
+   "This does not answer 'is ABS enabled in prod today' by itself \u2014 it only makes FUTURE boots self-report. The current-state question is a separate prod_run check (see notes)."
+  ],
+  "steps": [
+   "1. In internal/server/wire_abs_routes.go's wireABSRoutes function, before the `if !snap.ABSAPIEnabled { return }` check, add: `slog.Info(\"abs: Audiobookshelf-compatible surface\", \"enabled\", snap.ABSAPIEnabled)`.",
+   "2. Remove or keep the existing enabled-only log line at ~L545 (redundant once step 1 lands, but it carries more detail \u2014 e.g. condense both into the single new line if the extra detail is easy to include there, otherwise leave both).",
+   "3. Bump the file's version header."
+  ],
+  "tests": [
+   "internal/server/wire_abs_routes_test.go: TestWireABSRoutes_LogsStateEvenWhenDisabled \u2014 capture slog output (or use a test logger handler) with ABSAPIEnabled=false, assert a log record with msg containing 'Audiobookshelf-compatible surface' and enabled=false is emitted."
+  ],
+  "acceptance": [
+   "`go test ./internal/server/... -run LogsStateEvenWhenDisabled -v` passes."
+  ],
+  "edge_cases": [
+   "N/A \u2014 pure logging addition, no behavior change."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Separately, and NOT a code task: the owner should check the ACTUAL current prod value once this ships and a restart has happened, by grepping prod logs for the new line (see the server-logs skill / reference_prod_log_access.md in this repo's memory). Until then, prod state genuinely cannot be determined \u2014 this code change only fixes it going forward.",
+  "review_notes": [
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+  ]
+ },
+ {
+  "todo_line": 96,
+  "src_id": "N-12",
+  "title": "Persist per-stream audio language from the scanner so ABS's per-file language field is no longer always null",
+  "verdict": "needs_design",
+  "verdict_evidence": "internal/server/handlers/abs/mapper.go's fileLanguage function (`func fileLanguage(v *itemView) *string { return nil }`) has an explicit doc comment confirming: 'our scan pipeline runs ffprobe for duration only and persists no per-stream language, and BookFile has no column for one... The fix belongs in the scanner (capture the ffprobe stream language), not here' \u2014 this is a scanner + schema change (new BookFile column), not a mapper fix, and needs a decision on where/how to store it before implementation can be briefed concretely.",
+  "domain": "internal/scanner",
+  "exact_files": [
+   "internal/scanner/process_file.go",
+   "internal/database/pebble_store.go (BookFile schema)",
+   "internal/server/handlers/abs/mapper.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "fileLanguage is a hardcoded nil with a doc comment naming the real fix location",
+    "grep_cmd": "grep -n 'func fileLanguage' -B 8 internal/server/handlers/abs/mapper.go",
+    "expect": "1 hit, doc comment cites 'BookFile has no column for one'"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "existing ffprobe invocation in the scan pipeline (wherever duration is captured)",
+    "file": "internal/scanner/process_file.go",
+    "verify_grep": "grep -n 'ffprobe\\|Duration' internal/scanner/process_file.go | head -10"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Needs a new BookFile column/migration plus a scanner change parsing ffprobe's stream-level language tag \u2014 schema-touching but well-scoped once the design question (below) is answered; not opus-level correctness risk since it's purely additive (new nullable field, no existing data reinterpreted).",
+  "review_critical": false,
+  "goal": "Once the design question is answered, add a per-file Language field to BookFile, populate it during scanning from ffprobe's stream `tags.language`, and change fileLanguage() in mapper.go to read it instead of returning nil unconditionally.",
+  "background": [
+   "The doc comment is explicit that Book.Language (curated, UI-facing) must NOT be reused for this \u2014 the oracle capture shows they legitimately differ (metadata.language null, stream 'und') for the same file, so copying one into the other would misrepresent a curated value as a file fact.",
+   "This is marked needs_design because the OPEN QUESTION is schema shape: does BookFile gain a single `Language *string` column (one language for the whole file, matching ffprobe's typical single-audio-stream case), or does it need a per-STREAM structure (a file can theoretically have multiple audio streams with different languages)? The TODO text says 'per-stream language' but ABS's own DTO field (mapper.go's fileLanguage) is per-FILE, so the simpler single-column design likely suffices \u2014 but this should be confirmed against how audioFiles[].language is actually consumed by mapper.go before adding schema complexity nobody needs."
+  ],
+  "steps": [
+   "1. Confirm the DESIGN QUESTION above: read the call site(s) of fileLanguage() in mapper.go to see if it's called once per BookFile (supporting a simple `*string` column) or expected to vary within one file.",
+   "2. Add `Language *string` (or equivalent) to the BookFile struct in internal/database (find the exact struct location via `grep -rn 'type BookFile struct' internal/database/*.go`) plus its Pebble (de)serialization.",
+   "3. In the scanner's ffprobe invocation (internal/scanner/process_file.go), parse the audio stream's `tags.language` field from ffprobe's JSON output (`-show_streams` presumably already used for duration) and persist it onto the new BookFile.Language field.",
+   "4. Update mapper.go's fileLanguage to `return v.file.Language` (or the correct field path) instead of `return nil`, preserving the explicit non-backfill-from-Book.Language rule from the existing doc comment.",
+   "5. Existing files scanned before this change will have Language=nil until re-scanned \u2014 document this as expected (no backfill migration needed, matches the 'zero client impact today' note in the existing comment)."
+  ],
+  "tests": [
+   "internal/scanner/process_file_test.go: TestScanFile_CapturesStreamLanguage \u2014 feed a fixture audio file (or mocked ffprobe output) with a known language tag, assert the resulting BookFile.Language matches.",
+   "internal/server/handlers/abs/mapper_test.go: TestFileLanguage_ReturnsPersistedValue and TestFileLanguage_NilWhenUnset \u2014 both cases."
+  ],
+  "acceptance": [
+   "`go test ./internal/scanner/... ./internal/server/handlers/abs/... -run Language -v` passes."
+  ],
+  "edge_cases": [
+   "A file with no language tag in its container (common for older/ripped audiobooks): store nil, mapper returns nil \u2014 same as today, not a regression.",
+   "A file with multiple audio streams (rare for audiobooks): design question above should settle whether to take the first, or the one matching the container's primary track."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "needs_design specifically on schema shape (single-column vs per-stream) \u2014 everything else is a standard additive scanner+schema change."
+ },
+ {
+  "todo_line": 101,
+  "part": 1,
+  "src_id": null,
+  "title": "Resolve the dedup prod-drain TODO.md-vs-docs contradiction (check stale boxes)",
+  "verdict": "stale_done",
+  "verdict_evidence": "docs/operations/pending-prod-actions.md:25-26 and docs/dedup/STATUS.md:62-73 both clearly and consistently state the 2026-07-18 drain executed on production (dismissed 7,891, exact-pending 9,074\u21921,311, 0 errors) with matching evidence \u2014 there is no live contradiction between these two docs at HEAD; if TODO.md still shows the corresponding items unchecked, that is a stale checkbox in TODO.md alone, not a genuine two-source disagreement.",
+  "domain": "docs",
+  "exact_files": [
+   "TODO.md"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "pending-prod-actions.md records the drain as DONE with hard numbers",
+    "grep_cmd": "grep -n '9,074\\|1,311\\|7,891' docs/operations/pending-prod-actions.md",
+    "expect": "hits confirming DONE ON PROD 2026-07-18"
+   },
+   {
+    "claim": "dedup/STATUS.md agrees with the same numbers",
+    "grep_cmd": "grep -n '9,074\\|1,311\\|7,891' docs/dedup/STATUS.md",
+    "expect": "hits confirming the same drain, same numbers"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Locate and check off two stale TODO.md boxes by content search (the line numbers cited in the source TODO text, ~4988/~5311, may have drifted since TODO.md is fragment-assembled and reflows \u2014 search by the surrounding text 'dedup prod drain' / 'T04' instead of trusting the raw line numbers).",
+  "review_critical": false,
+  "goal": "Check off the TODO.md items describing the 2026-07-18 dedup drain and the T04 backlog drain as done, citing docs/operations/pending-prod-actions.md and docs/dedup/STATUS.md as evidence, since both docs already agree the run happened.",
+  "background": [
+   "The TODO text's claimed line numbers (TODO.md:4988, TODO.md:5311) did not match this content when spot-checked (`grep -n . TODO.md | sed -n '4986,4990p'` landed on unrelated CI-flake content) \u2014 TODO.md has been re-assembled by the fragment system since the audit was written, so locate the real items by searching for distinctive text ('dedup prod drain was never executed', 'T04') rather than the stale line numbers."
+  ],
+  "steps": [
+   "1. `grep -n 'dedup prod drain\\|never executed\\|T04' TODO.md` to find the current line numbers of the two relevant checkboxes.",
+   "2. Check both boxes, adding a citation to docs/operations/pending-prod-actions.md:25-26 and docs/dedup/STATUS.md:68-73.",
+   "3. This is also the blocker the TODO names for archiving the dedup-pipeline-hardening package \u2014 if that package has its own status doc, update it too."
+  ],
+  "tests": [
+   "N/A \u2014 docs only."
+  ],
+  "acceptance": [
+   "The two TODO.md items are checked with citations."
+  ],
+  "edge_cases": [
+   "If step 1's grep finds the items ALREADY checked (i.e. this was fixed between the audit and now), this whole sub-item collapses to nothing further \u2014 verify before editing."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)"
+ },
+ {
+  "todo_line": 101,
+  "part": 2,
+  "src_id": null,
+  "title": "Union-merge docs/openapi.yaml into docs/api/openapi.json (already done \u2014 check the box)",
+  "verdict": "stale_done",
+  "verdict_evidence": "docs/openapi.yaml no longer exists at its original location; `find docs -iname openapi.yaml` finds it only at docs/archive/openapi.yaml, meaning the union merge already happened and the source YAML was archived afterward \u2014 consistent with item L296 in this same scope, whose own text opens with 'After the 2026-08-12 union merge, docs/api/openapi.json was diffed against the real route table', confirming the merge is a past event, not open work.",
+  "domain": "docs",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "docs/openapi.yaml is gone from its live location and now lives under archive/",
+    "grep_cmd": "find docs -iname openapi.yaml",
+    "expect": "exactly 1 hit: docs/archive/openapi.yaml"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification + checkbox only.",
+  "review_critical": false,
+  "goal": "Confirm the union merge already happened and check the box; the follow-on work (the 48 stale group-relative/removed-maintenance paths it surfaced) is tracked separately as item L296 in this scope.",
+  "background": [
+   "This item's own aftermath is what CREATED item L296's finding (48 documented-but-unserved endpoints) \u2014 the merge succeeded at producing a fuller spec, it just also imported stale paths that need individual cleanup, which is L296's job, not this one's."
+  ],
+  "steps": [
+   "1. Verify via the grep above.",
+   "2. Check this sub-bullet.",
+   "3. Cross-reference item L296 (todo_line 296) so the follow-on cleanup isn't lost."
+  ],
+  "tests": [
+   "N/A"
+  ],
+  "acceptance": [
+   "`find docs -iname openapi.yaml` shows only the archive copy."
+  ],
+  "edge_cases": [
+   "N/A"
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   296
+  ],
+  "gate": "n/a (docs)"
+ },
+ {
+  "todo_line": 101,
+  "part": 3,
+  "src_id": null,
+  "title": "Decide the 11 uncertain docs from the 2026-08-11 docs inventory",
+  "verdict": "needs_design",
+  "verdict_evidence": "The TODO text points at 'the 11 UNCERTAIN docs (list in the inventory \u00a74)' inside docs/audits/2026-08-11-docs-inventory.md \u2014 this is a per-document keep/archive/merge judgment call for each of 11 specific docs, not something a grep or code change can resolve; it requires reading each doc's current relevance and is explicitly the kind of decision this scout cannot make on the owner's behalf.",
+  "domain": "docs",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the inventory document exists and has a \u00a74 list",
+    "grep_cmd": "grep -n '\u00a74\\|## 4' docs/audits/2026-08-11-docs-inventory.md",
+    "expect": "at least 1 hit"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Once the owner or a docs-focused pass decides keep/archive/merge per doc, executing (moving files, updating cross-links) is mechanical; the judgment itself needs a human or a dedicated docs-audit pass reading all 11, not a blind mechanical sweep.",
+  "review_critical": false,
+  "goal": "Read docs/audits/2026-08-11-docs-inventory.md \u00a74's list of 11 uncertain docs, and for each decide keep/archive/merge, then execute that decision (move to docs/archive/, or merge content into a surviving doc, updating any cross-references).",
+  "background": [
+   "This is one of six related docs-consolidation follow-ups in the same TODO item (L101); parts 4-6 below cover the others. All six trace back to the same 2026-08-11 audit."
+  ],
+  "steps": [
+   "1. Read docs/audits/2026-08-11-docs-inventory.md \u00a74 for the 11-doc list.",
+   "2. For each doc, check its last-edited date and whether anything still links to it (`grep -rln '<doc-basename>' docs/ TODO.md .github/`).",
+   "3. Decide keep/archive/merge per doc and execute.",
+   "4. Update the inventory doc itself to record the resolution."
+  ],
+  "tests": [
+   "N/A \u2014 docs only."
+  ],
+  "acceptance": [
+   "The 2026-08-11 inventory's \u00a74 section shows a resolution (not 'uncertain') for all 11 entries."
+  ],
+  "edge_cases": [
+   "A doc still cross-linked from active code comments or other live docs must not be archived without updating those links first."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)"
+ },
+ {
+  "todo_line": 101,
+  "part": 5,
+  "src_id": null,
+  "title": "Make run-sweep.sh fail loudly on an unparseable workstream package (already fixed \u2014 check the box)",
+  "verdict": "stale_done",
+  "verdict_evidence": "docs/agent-tasks/run-sweep.sh:50-70 already implements exactly the fix the TODO asks for: `if [[ ${#TASK_FILES[@]} -eq 0 ]]; then` prints an explicit 'ERROR: no TASK-*.md files in workstream ... \u2014 nothing to drive.' message, lists the workstream's actual files, and checks for the AWAIT-APPROVAL.md/HOLD-STATUS.md/TASKS.md alternates by name \u2014 the comment directly above it (lines 50-62) narrates the exact bug the TODO describes, past tense, as already fixed.",
+  "domain": "ci/scripts",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the zero-TASK-files case now errors loudly instead of silently proceeding",
+    "grep_cmd": "grep -n 'ERROR: no TASK-.*.md files' docs/agent-tasks/run-sweep.sh",
+    "expect": "1 hit ~L65"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification + checkbox only.",
+  "review_critical": false,
+  "goal": "Confirm the fix is live and check the sub-bullet.",
+  "background": [
+   "Also explicitly names the 4 packages that use the alternate status-doc convention (community-fingerprint-index, workflow-system, responses-api-migration, error-correction-2026-07) matching this repo's owner-decision list items 3/4/5 (INIT-6/INIT-8/INIT-7 all parked) \u2014 the script now correctly distinguishes 'parked, expected' from 'broken, unparseable'."
+  ],
+  "steps": [
+   "1. Verify via the grep above.",
+   "2. Check the sub-bullet."
+  ],
+  "tests": [
+   "Manually run `docs/agent-tasks/run-sweep.sh <a workstream with no TASK-*.md files>` and confirm non-zero exit with the ERROR message, if not already covered by an existing shell test."
+  ],
+  "acceptance": [
+   "`docs/agent-tasks/run-sweep.sh nonexistent-workstream-xyz; echo $?` (or similar) exits non-zero with the ERROR text visible."
+  ],
+  "edge_cases": [
+   "N/A"
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)"
+ },
+ {
+  "todo_line": 127,
+  "src_id": null,
+  "title": "Align ABS conformance fixtures with the oracle so CompareValues stays green permanently",
+  "verdict": "actionable",
+  "verdict_evidence": "The value-comparison gate this item targets is now ALREADY ON by default (see item L53/ABS-N2 in this scope: abs_test.go:474 and library_fake_test.go:1153 both set CompareValues:true) \u2014 so the remaining work is exactly what this item describes: making the fake library's seed data match the oracle capture (The Odyssey) by construction so the now-mandatory gate stays green, plus whitelisting the two deliberate divergences (user.type, Source) and deciding the two open questions (track title = filename vs display title; /personalized author ordering).",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+   "internal/server/handlers/abs/library_fake_test.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the value gate is already default-on, so this item's premise ('so the value gate can be turned on permanently') is partially satisfied already \u2014 the remaining gap is the 12 red tests, not the gate switch itself",
+    "grep_cmd": "grep -n 'CompareValues: true' internal/server/handlers/abs/abs_test.go internal/server/handlers/abs/library_fake_test.go",
+    "expect": "2 hits, matching ABS-N2's evidence"
+   },
+   {
+    "claim": "library_fake_test.go is the large fixture-seeding file this item says is bounded-but-not-small (767 lines per the TODO)",
+    "grep_cmd": "wc -l internal/server/handlers/abs/library_fake_test.go",
+    "expect": "line count near 767 (may have grown/shrunk slightly since the TODO was written)"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "assertConformantExcept + allowance map (already exists for whitelisting deliberate divergences)",
+    "file": "internal/server/handlers/abs/library_fake_test.go",
+    "verify_grep": "grep -n 'func assertConformantExcept\\|type allowance' internal/server/handlers/abs/library_fake_test.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "L",
+  "tier": "opus",
+  "why_tier": "767-line fixture-seeding file, 12 currently-red tests to diagnose one by one (distinguishing genuine fixture drift from real bugs from deliberate divergences), plus two named open design questions (track title source, author ordering) that need an actual decision before the corresponding tests can be written \u2014 this is judgment-heavy, not mechanical field renaming.",
+  "review_critical": false,
+  "goal": "Re-seed the fake ABS library test fixture (library_fake_test.go) FROM the oracle capture (The Odyssey) so size/duration/publishedYear/track-titles/timeBase etc. match by construction rather than by coincidence, keep the deliberate divergences (user.type='user', Source='audiobook-organizer') whitelisted via assertConformantExcept, get an explicit decision on the two open questions, and leave the gate on (CompareValues:true, already default) permanently green.",
+  "background": [
+   "The TODO is explicit that most of the 12 currently-red findings are FIXTURE drift (synthetic book vs real Odyssey capture), not code bugs \u2014 size 4096 vs 1.20828875e8, duration 9975 vs 9975.480544, publishedYear '800' vs '800BC', track titles 'The Odyssey: Book 06' vs 'odyssey_06_homer_butler_64kb.mp3', timeBase '1/1000' vs '1/14112000'.",
+   "normalize.go:19-20 already documents a firm decision NOT to normalize size/duration/progress/currentTime/startOffset \u2014 this task must re-seed the FIXTURE to match those real values, never loosen the comparison for them.",
+   "Two real decisions are named as open: (a) should media.tracks[].title be the filename (as real ABS sends) rather than a display title \u2014 this affects mapper.go's track-title construction, not just the fixture; (b) /personalized author ordering \u2014 also a real behavior question, not fixture drift."
+  ],
+  "steps": [
+   "1. Run the ABS handler test suite and capture the current 12 failing test names: `go test ./internal/server/handlers/abs/... -run Conformance -v 2>&1 | grep -E 'FAIL|--- FAIL'` (adjust the -run filter to whatever actually matches the conformance-tagged tests).",
+   "2. For each failure, classify it: fixture-drift (re-seed library_fake_test.go's synthetic book fields to match the Odyssey oracle's real values) vs. deliberate (add/confirm an assertConformantExcept allowance) vs. real-decision-needed (the two named ones).",
+   "3. Re-seed library_fake_test.go's fake book/file/track construction so size, duration, publishedYear, timeBase, and track titles are copied from (or computed to match) the oracle fixture's actual values, not hand-picked round numbers.",
+   "4. For user.type and Source: confirm both are already covered by an assertConformantExcept allowance (they should be, per dto.go's existing comment at line ~276); if not yet whitelisted under the now-default-on strict gate, add them explicitly with a comment citing this decision.",
+   "5. Get the owner's decision on (a) track title = filename vs display title, and (b) /personalized author ordering \u2014 these are real product-behavior questions, not test-fixture questions; do NOT guess an answer to unblock the fixture work, leave those two specific assertions using assertConformantExcept with an explicit TODO comment until decided.",
+   "6. Once all 12 are resolved (fixed, whitelisted, or explicitly deferred per step 5), confirm the full abs test package is green with the gate on and stays that way."
+  ],
+  "tests": [
+   "The existing conformance test suite itself IS the test surface here \u2014 no new test files needed, only fixture data changes inside library_fake_test.go and possibly new/updated allowance entries."
+  ],
+  "acceptance": [
+   "`go test ./internal/server/handlers/abs/... -v` is fully green (0 failures) after the fixture re-seed, with any remaining deliberately-deferred assertions clearly marked via assertConformantExcept and a comment, not silently skipped."
+  ],
+  "edge_cases": [
+   "Re-seeding the fixture to match one specific book (The Odyssey) risks over-fitting the fake library to that book's exact shape in a way that stops exercising OTHER code paths (e.g. multi-author books, series membership) that the synthetic data previously covered for other tests sharing the same fixture \u2014 check whether library_fake_test.go's fixture is shared across non-conformance tests before wholesale replacing it; if so, consider a SEPARATE oracle-matched fixture used only by the conformance tests rather than mutating the shared one."
+  ],
+  "anti_over_suppression": "Do NOT chase green by widening normalize.go's normalized-field list (size/duration/progress/currentTime/startOffset) \u2014 the TODO explicitly forbids this ('that is the end of what normalization can honestly fix'); the only acceptable levers are re-seeding fixture data and adding narrowly-scoped assertConformantExcept allowances with named justifications.",
+  "depends_on_lines": [
+   53
+  ],
+  "gate": "make ci",
+  "notes": "Also still open per the TODO: 4 golden fixtures never loaded by any test \u2014 cross-reference item L53/ABS-N7 in this scope (marked stale_done there with a caveat to re-verify the pending-vs-strict distinction); if that re-verification finds real gaps, they belong here too.",
+  "review_notes": [
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
+   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n"
+  ]
+ },
+ {
+  "todo_line": 157,
+  "src_id": null,
+  "title": "Classify the current 5,947 exact-pending candidates in dry-run to determine whether the source bug is still live or this is normal regrowth",
+  "verdict": "prod_run",
+  "verdict_evidence": "The classification tool already exists and needs no new code: internal/plugins/dedup/breakdown_backfill.go's comment (line 14) confirms 'maintenance.dedup-exact-triage classifies every nil-breakdown row' and the op is registered/invokable today \u2014 the TODO's own 'first step is measurement, not code' framing matches; this is purely running an existing op in dry-run mode and comparing its output against the 2026-07-18 report's population mix, no code deliverable.",
+  "domain": "internal/plugins/dedup",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the exact-triage op already exists and is referenced as invocable on the whole backlog",
+    "grep_cmd": "grep -n 'maintenance.dedup-exact-triage' internal/plugins/dedup/breakdown_backfill.go",
+    "expect": "1+ hits describing it as an existing, callable op"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Running an existing registered maintenance op in dry-run and diffing two population-mix reports is an operator action, not a coding task.",
+  "review_critical": true,
+  "goal": "Run maintenance.dedup-exact-triage in DRY-RUN (apply:false) against the current backlog, capture the population mix (purgeable/keep/review/stale-drain/stale-fp counts), and compare against the 2026-07-18 report's mix (purgeable 7,891 / keep 278 / review 2,150) to determine whether the source iTunes-importer bugs are still emitting leaky titles (mix looks the same) or this is normal library growth (mix shifted toward review).",
+  "background": [
+   "Per this repo's own MEMORY.md ('Prod-apply review gate'), any apply:true op against prod dedup data needs explicit human sign-off \u2014 this item is scoped to dry-run only, which does not mutate anything and needs no such gate.",
+   "stale-drain=3,059 and stale-fp=384 are NEW exact-layer statuses that did not exist in the 2026-07-18 accounting \u2014 worth understanding via the same dry-run output before drawing conclusions from the raw pending count alone, per the TODO's own caveat."
+  ],
+  "steps": [
+   "1. Via the server's ops API (or CLI equivalent), invoke maintenance.dedup-exact-triage with apply:false against production.",
+   "2. Record the returned population breakdown (purgeable/keep/review/stale-drain/stale-fp counts).",
+   "3. Compare against the 2026-07-18 report (docs/dedup/STATUS.md:68, purgeable 7,891/keep 278/review 2,150) \u2014 compute the SAME ratios (per feedback_a_ratio_needs_a_shared_denominator in this repo's memory: compare proportions of the CURRENT total, not raw counts against a different-sized backlog).",
+   "4. Write the result to docs/operations/pending-prod-actions.md or docs/dedup/STATUS.md as a new dated entry, stating explicitly whether the mix looks like the same source bug (recurrence) or organic growth (false alarm).",
+   "5. If recurrence is confirmed, THIS becomes a new, separate needs_design/actionable item (find and fix the still-live iTunes-importer title-leak bug or the exact-layer keying gap) \u2014 do not conflate that follow-on work with this measurement step."
+  ],
+  "tests": [
+   "N/A \u2014 this is an operator measurement action against a live prod op, not new code."
+  ],
+  "acceptance": [
+   "A dated entry exists in docs/dedup/STATUS.md or pending-prod-actions.md recording the 2026-08-2X dry-run population mix and an explicit verdict (recurrence vs. organic growth)."
+  ],
+  "edge_cases": [
+   "A running dedup.full-scan or embedding backfill concurrent with this dry-run could skew the classification (candidates changing status mid-measurement) \u2014 per this repo's standing rule ('A running scan CLOBBERS applied metadata'), confirm no scan is in flight before running the triage op, even in dry-run, to keep the measurement clean."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a \u2014 production operator action",
+  "notes": "This is a MEASUREMENT gate for a possible future code fix, not the fix itself \u2014 keep the two separate per the TODO's own framing ('a second drain would... teach us nothing; the question is what keeps emitting these candidates')."
+ },
+ {
+  "todo_line": 1143,
+  "src_id": null,
+  "title": "Decide whether to wire Engine.SetLSHStore/SetAcoustIDBookFileStore into production, or delete the dead collectors",
+  "verdict": "needs_design",
+  "verdict_evidence": "internal/dedup/engine.go:201,207 define SetAcoustIDBookFileStore and SetLSHStore; `grep -rn 'SetLSHStore\\|SetAcoustIDBookFileStore' internal` shows only their own definitions and doc-comment mentions at engine.go:116,120 \u2014 zero call sites in production wiring or tests, confirming the TODO's claim exactly, and the TODO itself frames this as an open EITHER/OR decision ('wire them in registry_wire.go's dedup engine factory... or delete the collectors and setters together') not yet made.",
+  "domain": "internal/dedup",
+  "exact_files": [
+   "internal/dedup/engine.go",
+   "internal/dedup/collectors_acoustid.go",
+   "internal/server/registry_wire.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "no call sites for either setter anywhere in the repo outside their own definitions",
+    "grep_cmd": "grep -rn 'SetLSHStore\\|SetAcoustIDBookFileStore' internal",
+    "expect": "hits only at engine.go:116,120 (comments) and 201,207 (definitions) \u2014 no assignment call sites"
+   },
+   {
+    "claim": "the guarded collectors exist and are structurally unreachable (nil check always true)",
+    "grep_cmd": "grep -n 'lshAcoustIDStore != nil\\|acoustidBookFileStore != nil' internal/dedup/engine.go internal/dedup/rescore.go",
+    "expect": "4 hits (engine.go:530,536 and rescore.go:233,239 per the TODO)"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "database.AsPebbleStore (the correct resolution pattern named explicitly by the TODO, as opposed to a bare type assertion)",
+    "file": "internal/database",
+    "verify_grep": "grep -rn 'func AsPebbleStore' internal/database/*.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "opus",
+  "why_tier": "The decision itself (wire vs delete) has real product consequences either way \u2014 wiring turns on a whole dormant scoring signal (AcoustID-based exact/LSH matching) across the entire dedup pipeline in production for the first time, which is a correctness-and-performance-surface change on a prod data path; deleting removes tested code. Either branch needs careful judgment, not mechanical execution.",
+  "review_critical": true,
+  "goal": "Get an explicit decision on whether CollectLSHAcoustID/CollectExactAcoustID should actually run in production (wire the two setters into registry_wire.go's dedup engine factory via database.AsPebbleStore) or whether the dead code (setters + collectors + their guards) should be deleted together, then execute that decision.",
+  "background": [
+   "This is exactly the kind of dead-vs-dormant-code question this repo's memory flags repeatedly ('NAMING a type is not DEPENDING on it', 'prove dead code by the GUARD not the name') \u2014 the nil-guard pattern here (`if de.lshAcoustIDStore != nil`) is precisely the guard-based proof the memory notes call for, and it confirms these ARE currently dead in production, not merely under-tested.",
+   "Wiring them is not purely mechanical: it means AcoustID fingerprint data starts influencing live dedup candidate scoring for the first time, which could change candidate counts/composition \u2014 worth sizing the impact (e.g. a dry-run comparison of Rescore output with vs without) before flipping it on for real."
+  ],
+  "steps": [
+   "1. Present both options with their real costs to the owner: (a) WIRE \u2014 in registry_wire.go's dedup engine construction, after building *database.PebbleStore, call `engine.SetAcoustIDBookFileStore(database.AsPebbleStore(store))` and `engine.SetLSHStore(database.AsPebbleStore(store))` (confirm PebbleStore actually implements both the ExactAcoustIDStore and LSHAcoustIDStore interfaces via a compile-time assertion first); (b) DELETE \u2014 remove SetLSHStore/SetAcoustIDBookFileStore, their backing fields, CollectLSHAcoustID/CollectExactAcoustID, and their guarded call sites at engine.go:530,536 and rescore.go:233,239, plus any now-orphaned tests.",
+   "2. If WIRE is chosen: add the compile-time interface assertions (`var _ ExactAcoustIDStore = (*database.PebbleStore)(nil)` etc., matching the existing pattern used elsewhere in this codebase e.g. wire_abs_routes.go:26), wire the setters in registry_wire.go, and run a dry-run comparison (Rescore with and without the new signal active) to size the impact before considering it done.",
+   "3. If DELETE is chosen: remove the dead code paths listed above and their now-unused test coverage, keeping only what's still exercised."
+  ],
+  "tests": [
+   "If WIRE: internal/dedup/engine_test.go \u2014 a wiring-level test asserting the dedup engine factory in registry_wire.go actually sets both fields non-nil when constructed against a real *database.PebbleStore.",
+   "If DELETE: no new test; existing tests referencing the removed symbols must be removed or updated, verified by `go build ./...` succeeding."
+  ],
+  "acceptance": [
+   "Either `grep -rn 'SetLSHStore\\|SetAcoustIDBookFileStore' internal/server/registry_wire.go` returns 2 hits (wired) or `grep -rn 'SetLSHStore\\|SetAcoustIDBookFileStore\\|CollectLSHAcoustID\\|CollectExactAcoustID' internal` returns 0 hits (deleted) \u2014 one of the two, not left in the current dead-either-way state."
+  ],
+  "edge_cases": [
+   "If WIRE is chosen and the impact sizing in step 2 reveals a large candidate-count shift, that itself may need its own review-critical decision before shipping to prod (see this repo's standing prod-apply review gate norm) \u2014 do not silently ship a wired-but-unmeasured change."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Marked needs_design because the wire-vs-delete choice is explicitly still open per the TODO text and has real product consequences either way; this is NOT covered by any of the 14 owner decisions already made for this scope."
+ },
+ {
+  "todo_line": 1162,
+  "src_id": null,
+  "title": "Run dedup.purge-stale with apply:true to clean up the 2,504 already-orphaned dedup candidates (code exists; awaiting owner go-ahead)",
+  "verdict": "prod_run",
+  "verdict_evidence": "internal/dedup/engine.go:3010 PurgeStaleCandidates already implements exactly this cleanup and is exposed as the dedup.purge-stale operation per the TODO; internal/plugins/dedup/purge_stale.go's OperationDef has no Schedule field set (`grep -n 'Schedule' internal/plugins/dedup/purge_stale.go` returns 0 hits), confirming it only runs manually or as a step inside dedup.full-scan/embedding-backfill \u2014 no new code is needed, only an apply:true run gated on owner sign-off (the TODO's own words: 'Blocked on a user decision').",
+  "domain": "internal/dedup",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "PurgeStaleCandidates already exists and does exactly this cleanup",
+    "grep_cmd": "grep -n 'func (de \\*Engine) PurgeStaleCandidates' internal/dedup/engine.go",
+    "expect": "1 hit ~L3010"
+   },
+   {
+    "claim": "dedup.purge-stale has no Schedule set on its OperationDef",
+    "grep_cmd": "grep -n 'Schedule' internal/plugins/dedup/purge_stale.go",
+    "expect": "0 hits"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Running an existing, already-tested op with an owner-approved apply:true flag is an operator action.",
+  "review_critical": true,
+  "goal": "Once the owner approves, run dedup.purge-stale with apply:true against production to hard-delete the 2,504 pending candidates whose book row was already deleted before the DeleteBook cascade existed, then re-run maintenance.dedup-exact-triage or dedup.breakdown-backfill in dry-run to confirm skipped_no_book returns to 0, confirming the recurrence source (the missing cascade) is genuinely closed and no scheduling is needed.",
+  "background": [
+   "The recurrence source is ALREADY fixed per the TODO's own text: PebbleStore.DeleteBook now cascades pending-candidate teardown at all 16 call sites, so this is purely a one-time backlog cleanup of pre-existing orphans, not an ongoing leak needing a recurring schedule.",
+   "The op is documented to delete ONLY pending rows \u2014 merged/dismissed rows (the Merged/Dismissed tab history) are explicitly preserved by both PurgeStaleCandidates and the DeleteBook cascade, so this run does not touch user-visible history."
+  ],
+  "steps": [
+   "1. Get explicit owner sign-off to run dedup.purge-stale with apply:true (same gate dedup.breakdown-backfill's apply is waiting behind, per the TODO).",
+   "2. Run it against production; record the number of rows deleted and any errors.",
+   "3. Re-run dedup.breakdown-backfill in dry-run and confirm skipped_no_book == 0 (or explain any nonzero residual).",
+   "4. If skipped_no_book stays 0 across a follow-up check some days later, confirm no Schedule: is needed on dedup.purge-stale's OperationDef and record that conclusion in docs/dedup/STATUS.md; if it creeps back up, THAT becomes a new actionable item (add a Schedule: to the OperationDef) \u2014 do not preemptively schedule it without evidence it's needed."
+  ],
+  "tests": [
+   "N/A \u2014 production operator action against already-tested code."
+  ],
+  "acceptance": [
+   "A dated entry in docs/dedup/STATUS.md records the purge-stale apply:true run's row count and the follow-up skipped_no_book==0 confirmation."
+  ],
+  "edge_cases": [
+   "Run this only when no dedup.full-scan or embedding backfill is concurrently in flight, since PurgeStaleCandidates is also invoked as a step inside those \u2014 running it standalone mid-scan risks the same 'running scan clobbers applied metadata' standing hazard this repo already guards against elsewhere."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a \u2014 production operator action",
+  "notes": "No new code is needed for the cleanup itself \u2014 only for the OPTIONAL Schedule: addition, and only if the post-cleanup dry-run check in step 4 shows it's actually needed."
+ },
+ {
+  "todo_line": 1194,
+  "src_id": null,
+  "title": "PebbleStore struct split \u2014 deliberately parked, do not re-derive",
+  "verdict": "parked",
+  "verdict_evidence": "The TODO item itself states this is 'LOWEST PRIORITY. Literally do anything else before working on this' and 'Deliberately parked, not abandoned', citing docs/plans/2026-08-19-pebblestore-struct-split-decision.md which shows only 14/558 (2.5%) of *PebbleStore methods touch any domain-local field, with 408/558 (73.1%) touching only the shared db handle \u2014 the split has been costed and rejected twice already per the doc's own Corrections section.",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the decision doc exists and documents the parked status with the 14/558 figure",
+    "grep_cmd": "grep -n '14.*558\\|2.5%' docs/plans/2026-08-19-pebblestore-struct-split-decision.md",
+    "expect": "1+ hits"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "L",
+  "tier": "opus",
+  "why_tier": "N/A \u2014 parked, not to be executed.",
+  "review_critical": false,
+  "goal": "No execution \u2014 this task exists only to stay visible so it is not re-derived from scratch a fourth time. If ever revisited, re-read docs/plans/2026-08-19-pebblestore-struct-split-decision.md's Corrections section FIRST (two prior independent costing passes both mis-classified libGen and counterMu as domain-local, arriving at 20/3.6% instead of the correct 14/2.5%, because the census reproduced a wrong field-classification DEFINITION, not a wrong count).",
+  "background": [
+   "Two traps are explicitly named for whoever picks this up next: (1) a 'core' extraction step alone moves zero methods and is strictly worse than doing nothing until steps 2-6 also land; (2) libGen and counterMu are CORE (shared), not domain-local, despite look-alike naming."
+  ],
+  "steps": [
+   "N/A \u2014 parked. Do not schedule engineering time against this without a NEW reason: either the 14/558 ratio moves materially, or domain separation becomes wanted for build-time/ownership/testability reasons unrelated to field-sharing (per the decision doc's own 'Revisit if' clause)."
+  ],
+  "tests": [
+   "N/A"
+  ],
+  "acceptance": [
+   "N/A"
+  ],
+  "edge_cases": [
+   "N/A"
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a \u2014 parked",
+  "notes": "Matches an explicit owner-adjacent decision already recorded IN the TODO text itself and its linked decision doc \u2014 treat as settled, do not re-cost."
+ },
+ {
+  "todo_line": 1227,
+  "src_id": null,
+  "title": "Finish killing database.Store \u2014 narrow the remaining references per the existing 3-bucket plan",
+  "verdict": "actionable",
+  "verdict_evidence": "docs/plans/2026-08-18-decouple-database-layer.md exists and the TODO's own text gives a precise 7+3+8=18 breakdown (composition root, test helpers, Server.Store() chain); a naive `grep -rl 'database\\.Store\\b' internal | grep -v internal/database | grep -v _test` returns 82 FILES (not references) at HEAD, which is far too broad and almost certainly dominated by unrelated matches (comments, other `Store` types, incidental substring hits) \u2014 the precise 18-reference count must be re-derived using the same AST/compile-probe methodology the plan doc used (per this repo's own memory note 'a naming grep is NOT a census \u2014 count by STRUCTURE'), not trusted from a flat grep.",
+  "domain": "internal/database",
+  "exact_files": [
+   "internal/plugins/maintenance/deps.go",
+   "internal/server/server_maintenance_deps.go",
+   "internal/server/server.go",
+   "internal/server/indexed_store.go",
+   "internal/testutil/integration.go",
+   "internal/database/dbtest/invariants.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the decoupling plan doc exists",
+    "grep_cmd": "ls docs/plans/2026-08-18-decouple-database-layer.md",
+    "expect": "file exists"
+   },
+   {
+    "claim": "a naive grep overcounts wildly vs. the TODO's precise 18",
+    "grep_cmd": "grep -rl 'database\\.Store\\b' internal | grep -v '^internal/database/' | grep -v _test | wc -l",
+    "expect": "82 (illustrating why a flat grep is not the right instrument here \u2014 re-derive via the plan doc's method)"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "the 3-bucket classification already done in the TODO text/plan doc (composition root / test helpers / Server.Store() chain)",
+    "file": "docs/plans/2026-08-18-decouple-database-layer.md",
+    "verify_grep": "grep -n 'phase' docs/plans/2026-08-18-decouple-database-layer.md"
+   }
+  ],
+  "polarity": "removal",
+  "effort": "L",
+  "tier": "opus",
+  "why_tier": "The only remaining bucket that is NOT explicitly 'by design' or blocked is the 8-reference Server.Store() chain (internal/plugins/maintenance/deps.go \u00d73, internal/server/server_maintenance_deps.go \u00d72, plus callers) \u2014 and the TODO explicitly warns that deps.go forwards into missing_file_repair.go/missing_file_audit.go, a hands-off prod lane the owner said not to touch without asking first, making this a judgment-heavy narrowing task, not mechanical search-and-replace.",
+  "review_critical": true,
+  "goal": "Narrow the remaining reachable-and-narrowable database.Store references (the Server.Store() chain: internal/plugins/maintenance/deps.go and internal/server/server_maintenance_deps.go plus their callers) to the minimal interface each caller actually needs, per this repo's established narrowing pattern (see the CLAUDE.md worked example removing the OrganizeStore/database.Store coupling entirely rather than shrinking the interface) \u2014 while explicitly NOT touching missing_file_repair.go/missing_file_audit.go without asking first, and leaving the 7 by-design composition-root references and 3 test-helper references alone (both already justified per the TODO).",
+  "background": [
+   "The 7 'left by design' references (server.go's store field/Store()/NewServer/nil-store error text, indexed_store.go's embedded database.Store/StoreUnwrapper/Unwrap()) are explicitly NOT this task's job \u2014 they go away only when PebbleStore itself is split (item L1194, PARKED) making database.Store unreachable, not by narrowing them now.",
+   "The 3 test-helper references (internal/testutil/integration.go, internal/database/dbtest/invariants.go \u00d72) already have a verified-genuine rationale per the TODO ('integration tests poke at any domain a scenario needs') \u2014 leave alone.",
+   "This repo's CLAUDE.md worked example (2026-08-18) is directly on point: the correct fix for a callback/parameter threading a wide store interface for the sake of 1-2 methods is usually to REMOVE the parameter entirely (the implementor closes over its own store), not merely narrow the interface \u2014 apply that same judgment here rather than mechanically shrinking database.Store to a smaller-but-still-too-wide interface."
+  ],
+  "steps": [
+   "1. Re-derive the precise reference set using the plan doc's own method (read docs/plans/2026-08-18-decouple-database-layer.md for how it counted \u2014 likely an AST-based tool under tools/cmd/, not a flat grep) rather than trusting either the TODO's stated 18 or this scout's flat 82-file grep.",
+   "2. For the Server.Store() chain specifically: read internal/plugins/maintenance/deps.go's 3 references and internal/server/server_maintenance_deps.go's 2 references plus their call sites, and determine for each whether the CLAUDE.md pattern applies (implementor already has its own store reference and the wide param can be deleted) or a genuinely narrower interface is needed.",
+   "3. Do NOT touch any code path that deps.go forwards into missing_file_repair.go or missing_file_audit.go without first asking the owner \u2014 these run against prod and are explicitly hands-off per the TODO.",
+   "4. Execute the narrowing/removal for whatever remains after step 3's exclusion, updating Server.Store()'s own signature only if ALL its callers have been narrowed (partial narrowing leaves Server.Store() itself unchanged)."
+  ],
+  "tests": [
+   "Existing tests for the touched files must continue to pass; no new test is implied unless step 2 reveals an interface split, in which case add a narrow interface-conformance test (`var _ NarrowInterface = (*database.PebbleStore)(nil)`) matching this codebase's existing convention."
+  ],
+  "acceptance": [
+   "`go build ./... && go vet ./...` succeeds after the change.",
+   "The re-derived reference count (step 1) drops from its current value, with the reduction fully accounted for in the PR description (which buckets closed, which remain and why)."
+  ],
+  "edge_cases": [
+   "A reference inside missing_file_repair.go/missing_file_audit.go's call chain must be left untouched per the standing hands-off instruction, even if narrowing it would be mechanically easy \u2014 ask first, per CLAUDE.md."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   1194
+  ],
+  "gate": "make ci",
+  "notes": "Depends conceptually on L1194 (PebbleStore split, PARKED) only for the 7 by-design composition-root references, which are explicitly NOT part of this task's scope \u2014 this task is just the Server.Store()-chain bucket. Re-verify the precise count via the plan doc's real methodology before starting; do not trust a flat grep (illustrated above returning 82 files vs. the claimed 18 references).",
+  "review_notes": [
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ]
+ },
+ {
+  "todo_line": 229,
+  "src_id": null,
+  "title": "Capture a goroutine dump from the next stuck-test failure (process discipline, not code)",
+  "verdict": "not_a_task",
+  "verdict_evidence": "This TODO entry is a standing runbook instruction ('Do NOT gh run rerun before saving the log') aimed at whoever next observes the stuck-test CI failure \u2014 it has no code deliverable, no file to edit, and cannot be executed proactively since it is conditioned on a future CI failure occurring; it is a procedural reminder, not a task with resolvable anchors.",
+  "domain": "docs",
+  "exact_files": [],
+  "verified_anchors": [],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "N/A \u2014 not executable work.",
+  "review_critical": false,
+  "goal": "N/A \u2014 this is a standing operator instruction for the NEXT occurrence of the stuck-test CI failure, not a task to execute now.",
+  "background": [
+   "The evidence from the prior occurrence was already destroyed by a premature `gh run rerun`, per the TODO text \u2014 this entry exists purely to prevent repeating that mistake next time, and items L232/L235/L238 below are the real follow-on engineering work, gated on this capture actually happening."
+  ],
+  "steps": [
+   "N/A \u2014 no action possible until the next occurrence; when it happens, save the Actions log/goroutine dump BEFORE re-running."
+  ],
+  "tests": [
+   "N/A"
+  ],
+  "acceptance": [
+   "N/A"
+  ],
+  "edge_cases": [
+   "N/A"
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "Consider whether this deserves a lightweight CI safeguard instead of relying on human discipline (e.g. a workflow step that archives the log/goroutine dump as an artifact automatically on failure, before any human has a chance to re-run) \u2014 that WOULD be actionable code work, but it is a different, more robust solution than what this TODO literally asks for; flag as a possible upgrade rather than inventing it as this item's own scope."
+ },
+ {
+  "todo_line": 296,
+  "part": 1,
+  "src_id": null,
+  "title": "Delete the 34 group-relative duplicate paths from docs/api/openapi.json (safe to delete on sight)",
+  "verdict": "actionable",
+  "verdict_evidence": "Sampling the TODO's own list of 48 stale paths against the live spec confirms 34/36 sampled entries (e.g. /login, /logout, /books, /me, /sessions, /invites, /{id}, /status) are still present in docs/api/openapi.json's paths object at HEAD \u2014 these are documented as group-relative duplicates (the generator missed Gin group prefixes) whose correctly-prefixed twins (/auth/login, /itunes/books, /ai/scans/{id}, etc.) already exist in the spec from the YAML union-merge.",
+  "domain": "docs",
+  "exact_files": [
+   "docs/api/openapi.json"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "34 of 36 sampled stale paths are still present in the live spec",
+    "grep_cmd": "python3 -c \"import json; d=json.load(open('docs/api/openapi.json')); print(sum(1 for p in ['/login','/logout','/books','/me','/sessions','/status','/invites'] if p in d['paths']))\"",
+    "expect": "7 (all sampled group-relative duplicates still present)"
+   }
+  ],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Mechanical JSON-path deletion, but requires care not to delete a path that ALSO happens to be a legitimately root-level route (verify each against the real router table before deleting, per the TODO's own caution that this needs 'individual confirmation').",
+  "review_critical": false,
+  "goal": "Remove the group-relative duplicate path entries from docs/api/openapi.json's paths object \u2014 the ones whose correctly-prefixed twin (e.g. /auth/login for /login) already exists in the spec \u2014 after confirming each against the real router table via s.router.Routes(), not by grepping code.",
+  "background": [
+   "The TODO's full list (37 group-relative + torrents + maintenance entries, minus /path and /compare already removed) spans: DELETE /invites/{token}, DELETE /sessions/{id}, DELETE /{id}, GET /books, GET /import-status/{id}, GET /invites, GET /library-status, GET /me, GET /sessions, GET /status, GET /{id}, GET /{id}/results, POST /accept-invite, POST /import, POST /import-status/bulk, POST /invite, POST /login, POST /logout, POST /rebuild, POST /setup, POST /sync, POST /test-connection, POST /test-mapping, POST /validate, POST /write-back, POST /write-back-all, POST /write-back/preview, POST /{id}/apply, POST /{id}/cancel, POST /{id}/deactivate, POST /{id}/reactivate, POST /{id}/reset-password."
+  ],
+  "steps": [
+   "1. Write a small throwaway Go test (or reuse an existing one, e.g. under internal/server) that calls s.router.Routes() on a fully-wired test server and dumps the real route table to a file for comparison \u2014 do not trust a static code grep for this, per the TODO's own stated methodology.",
+   "2. For each path in the list above, confirm the REAL route table has a correctly-prefixed twin (e.g. /auth/login for /login) and that the bare group-relative form is NOT itself a registered route.",
+   "3. Delete each confirmed-duplicate path (and its method entries) from docs/api/openapi.json's `paths` object, preserving valid JSON structure.",
+   "4. If a docs/api generation/lint script exists (`grep -rln openapi.json Makefile .github/workflows/`), re-run it to confirm the edited spec still validates."
+  ],
+  "tests": [
+   "If an OpenAPI schema-validation CI step exists, re-running it locally is the acceptance check; otherwise validate with a JSON schema linter (`python3 -c \"import json; json.load(open('docs/api/openapi.json'))\"`, or a proper OpenAPI validator if the repo has one wired in)."
+  ],
+  "acceptance": [
+   "The 34 confirmed-duplicate paths are absent from docs/api/openapi.json's paths object, and `python3 -c \"import json; json.load(open('docs/api/openapi.json'))\"` still parses without error."
+  ],
+  "edge_cases": [
+   "A route registered through BOTH a direct top-level path AND inside a group (unlikely but possible for back-compat) must not be deleted \u2014 this is exactly why step 2 requires checking the REAL route table, not assuming from the list alone."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Split from the same L296 TODO item; part 2 covers the 16 removed-maintenance-endpoint paths (need individual triage, not blind deletion) and part 3 covers /torrents.",
+  "review_notes": []
+ },
+ {
+  "todo_line": 296,
+  "part": 2,
+  "src_id": null,
+  "title": "Triage the 16 removed POST /maintenance/* paths in openapi.json \u2014 delete, or document as ops-API equivalents",
+  "verdict": "actionable",
+  "verdict_evidence": "The TODO explicitly separates these from the safe-to-delete group above: 'the maintenance ones should be checked against whether an ops-API equivalent should be documented instead' \u2014 these are genuine functionality (now dispatched through the registry ops API as maintenance.dedup-books etc.) rather than pure duplicates, so blind deletion would silently un-document real capability.",
+  "domain": "docs",
+  "exact_files": [
+   "TODO.md",
+   "docs/api/openapi.json"
+  ],
+  "verified_anchors": [],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Each of the 16 needs an individual judgment call (delete vs. redocument as its registry-op equivalent) plus writing new OpenAPI entries for the ops-API dispatch pattern if that's the chosen path \u2014 more design-adjacent than part 1's pure deletion.",
+  "review_critical": false,
+  "goal": "For each of the 16 POST /maintenance/* paths still in openapi.json (backfill-book-files, cleanup-backups, cleanup-empty-folders, cleanup-organize-mess, cleanup-series, dedup-books, enrich-book-files, fix-author-narrator-swap, fix-book-file-paths, fix-library-states, fix-read-by-narrator, fix-version-groups, generate-itl-tests, recompute-itunes-paths, refetch-missing-authors \u2014 15 named plus /maintenance/wipe which is confirmed to still be a real POST route and should be LEFT ALONE), confirm it has no real route (per the TODO, only /maintenance/wipe survived as an actual POST), then either delete the stale entry or replace it with documentation of its registry-ops-API equivalent (e.g. POST /api/v1/operations/maintenance.dedup-books or whatever this repo's actual ops-dispatch endpoint shape is).",
+  "background": [
+   "Find the real ops-API dispatch route shape first: `grep -rn 'operations.*POST\\|ops.*router.POST' internal/server/*.go` to see the actual endpoint pattern these operations are invoked through today, so the redocumented spec entries (if that path is chosen) are accurate rather than invented."
+  ],
+  "steps": [
+   "1. Confirm /maintenance/wipe is the only surviving real POST /maintenance/* route via the real router table (reuse part 1's route-dump approach) and leave its openapi.json entry untouched.",
+   "2. For each of the other 15, verify via the real route table that no route exists at that exact path.",
+   "3. For each confirmed-gone path: EITHER delete the entry from openapi.json, OR (preferred, since these represent real ongoing capability) replace it with an accurate documentation of how to invoke the same operation today via the registry ops API \u2014 confirm the real dispatch endpoint shape from the grep in Background before writing new spec entries.",
+   "4. Get owner input on which of the two (delete vs. redocument) is preferred overall, since it applies uniformly across all 15 \u2014 this is a small policy call worth surfacing rather than guessing silently."
+  ],
+  "tests": [
+   "Same JSON-validity check as part 1."
+  ],
+  "acceptance": [
+   "Each of the 15 non-wipe maintenance paths is either removed or replaced with an accurate ops-API-equivalent doc entry, and /maintenance/wipe's entry is unchanged."
+  ],
+  "edge_cases": [
+   "If the real ops-API dispatch endpoint is generic (e.g. a single POST /api/v1/operations/:opID for ALL registry ops, not 15 separate paths), redocumenting as 15 separate OpenAPI paths would be WRONG \u2014 in that case a single generic entry with an enum of valid opID values is the more accurate representation; confirm the real shape before choosing."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "This needs a quick owner check-in on delete-vs-redocument policy before executing at scale, even though each individual path's 'is it gone' fact is independently verifiable.",
+  "review_notes": [
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+  ]
+ },
+ {
+  "todo_line": 296,
+  "part": 3,
+  "src_id": null,
+  "title": "Delete the /torrents group-relative fragment from openapi.json",
+  "verdict": "actionable",
+  "verdict_evidence": "GET /torrents is documented by the TODO as a group-relative fragment of the Deluge integration group (i.e. the real route is prefixed, e.g. /deluge/torrents or similar) \u2014 same class of bug as part 1's group-relative duplicates, called out separately only because it belongs to a different integration group than the auth/itunes/ai examples.",
+  "domain": "docs",
+  "exact_files": [
+   "docs/api/openapi.json"
+  ],
+  "verified_anchors": [],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Single-path deletion, same mechanical pattern as part 1.",
+  "review_critical": false,
+  "goal": "Confirm GET /torrents has no direct registered route (only its prefixed Deluge-group twin does) via the real route table, then delete the bare entry from docs/api/openapi.json.",
+  "background": [
+   "Could be folded into part 1's batch execution since it's the identical bug class \u2014 kept as a separate JSON object here only because the source TODO called it out as its own numbered group (group 3 of 3)."
+  ],
+  "steps": [
+   "1. Confirm via the real route table (reuse part 1's dump) that /torrents has no direct route, only a Deluge-group-prefixed twin.",
+   "2. Delete the /torrents entry from docs/api/openapi.json."
+  ],
+  "tests": [
+   "Same JSON-validity check as part 1."
+  ],
+  "acceptance": [
+   "/torrents is absent from docs/api/openapi.json's paths object."
+  ],
+  "edge_cases": [
+   "N/A"
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Trivially batchable with part 1's execution \u2014 separated here only to mirror the source TODO's own grouping."
+ },
+ {
+  "todo_line": 376,
+  "src_id": "SEC-9",
+  "title": "Move OpenAI API key validation server-side (currently sent from the browser)",
+  "verdict": "actionable",
+  "verdict_evidence": "web/src/components/wizard/WelcomeWizard.tsx:160 still calls `fetch('https://api.openai.com/v1/models', ...)` directly from the client with the user's raw OpenAI key in the Authorization header; no server-side OpenAI-key-validation endpoint exists anywhere in internal/server/handlers (`grep -rln 'openai.*valid\\|validate.*openai' internal/server/handlers` returns 0 hits).",
+  "domain": "web",
+  "exact_files": [
+   "web/src/components/wizard/WelcomeWizard.tsx",
+   "internal/server/handlers/setup.go (or wherever the setup-wizard's other server-side calls live \u2014 confirm exact file)"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the browser calls api.openai.com directly with the raw key",
+    "grep_cmd": "grep -n \"api.openai.com/v1/models\" web/src/components/wizard/WelcomeWizard.tsx",
+    "expect": "1 hit ~L160"
+   },
+   {
+    "claim": "no server-side validation endpoint exists yet",
+    "grep_cmd": "grep -rln 'openai' internal/server/handlers/*.go",
+    "expect": "0 hits, or only unrelated config-plumbing hits \u2014 confirm none is a validation ENDPOINT"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "existing setup-wizard handler file(s) this new endpoint should live alongside",
+    "file": "internal/server/handlers/ (search for the wizard/setup handler)",
+    "verify_grep": "grep -rln 'setup\\|wizard' internal/server/handlers/*.go | grep -v _test"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "A small, well-scoped new backend endpoint plus a frontend call-site swap \u2014 standard proxy-validation pattern, not architecturally tricky, but touches both Go and TS so worth sonnet over haiku for the cross-stack coordination.",
+  "review_critical": false,
+  "goal": "Add a POST /api/v1/setup/validate-openai-key (or similarly-named) backend endpoint that receives the user's typed OpenAI key in the request body, calls https://api.openai.com/v1/models server-side with it, and returns {\"valid\": true/false} \u2014 then change WelcomeWizard.tsx to call this new backend endpoint instead of api.openai.com directly, so the raw key never appears in the browser's network log, an extension's request-access hooks, or a corporate TLS-inspecting proxy.",
+  "background": [
+   "Sibling findings from the same audit (SEC-1, SEC-3, SEC-4, TOOL-2, TOOL-8) are already confirmed fixed per this scope's L397 item, so this codebase does actively work through this audit's backlog \u2014 SEC-9 is the one still-live finding from the 2026-08-12 spot-check.",
+   "The user-visible wizard flow must not change \u2014 the fix is purely about WHERE the api.openai.com call happens (server vs. browser), not the UX."
+  ],
+  "steps": [
+   "1. Read web/src/components/wizard/WelcomeWizard.tsx around lines 147-160 to see the exact current request/response shape expected by the wizard's validation UI (loading state, success/failure messaging).",
+   "2. Add a new Go handler (in whichever file houses the setup/wizard's other backend endpoints \u2014 locate via the reuse grep above) that accepts `{\"api_key\": \"...\"}` POST body, makes the server-side call to https://api.openai.com/v1/models with `Authorization: Bearer <key>`, and returns `{\"valid\": bool}` (translate a 401 from OpenAI into valid:false, a network/5xx error into a distinct error response so the wizard can show 'could not verify' vs 'invalid key').",
+   "3. Register the new route in whatever file wires up the other setup-wizard routes.",
+   "4. In WelcomeWizard.tsx, replace the direct `fetch('https://api.openai.com/v1/models', ...)` call with a call to the new backend endpoint (using this repo's existing API client pattern rather than a raw fetch, if one exists \u2014 check for an apiClient/axios wrapper already used elsewhere in web/src).",
+   "5. Never log the raw key server-side; ensure the new Go handler does not slog.Info/Debug the key value itself."
+  ],
+  "tests": [
+   "Go: internal/server/handlers/<file>_test.go \u2014 TestValidateOpenAIKey_ValidKey (mock the OpenAI call via an httptest server, assert valid:true) and TestValidateOpenAIKey_InvalidKey (mock a 401, assert valid:false) and TestValidateOpenAIKey_NetworkError (mock a timeout/5xx, assert a distinguishable error, not silently valid:false).",
+   "Web: web/src/components/wizard/WelcomeWizard.test.tsx (or wherever this repo's wizard tests live) \u2014 assert the component now calls the local backend endpoint, not api.openai.com, using a network mock/spy."
+  ],
+  "acceptance": [
+   "`grep -n 'api.openai.com' web/src/components/wizard/WelcomeWizard.tsx` returns 0 hits.",
+   "`go test ./internal/server/handlers/... -run ValidateOpenAIKey -v` passes.",
+   "`npm --prefix web test -- WelcomeWizard` passes."
+  ],
+  "edge_cases": [
+   "Rate limiting from OpenAI on repeated validation attempts during setup (user retyping a key several times): the server-side endpoint inherits whatever OpenAI's own rate limit does; no special handling needed beyond passing through OpenAI's error faithfully.",
+   "A key that is syntactically well-formed but revoked: OpenAI's /v1/models call itself already distinguishes this (401), no extra client-side format-checking needed."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci && npm --prefix web run lint && npm --prefix web test",
+  "notes": "Cross-reference item L397 (todo_line 397) in this scope \u2014 SEC-9 is the one still-open finding from that audit's otherwise-mostly-fixed backlog.",
+  "review_notes": [
+   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
+   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for "
+  ]
+ },
+ {
+  "todo_line": 397,
+  "src_id": null,
+  "title": "Give the 2026-06-22 security sweep a status column (already done \u2014 check the box, then decide on retirement)",
+  "verdict": "stale_done",
+  "verdict_evidence": "docs/audits/2026-06-22-repo-optimization-security-sweep.md already has a 'Status column \u2014 every finding verified against HEAD f9dd8701 (2026-08-14)' section (line 57) with a full ID|Status|Evidence table covering all 41 finding IDs (`grep -cE '^\\| (ARCH|FE|PERF|SEC|TOOL)-[0-9]+ \\|'` returns 82, i.e. 41 findings \u00d7 2 table appearances \u2014 the summary line and the detail table \u2014 matching FIXED 14 \u00b7 PARTIAL 8 \u00b7 OPEN 13 \u00b7 UNVERIFIED 5 \u00b7 OBSOLETE 1 = 41 exactly).",
+  "domain": "docs",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the status-column section exists with the exact verification date and counts",
+    "grep_cmd": "grep -n 'Status column' docs/audits/2026-06-22-repo-optimization-security-sweep.md",
+    "expect": "1 hit ~L57, with FIXED/PARTIAL/OPEN/UNVERIFIED/OBSOLETE counts summing to 41"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification + checkbox only; the actual per-finding audit pass is already done.",
+  "review_critical": false,
+  "goal": "Confirm the status-column pass is complete at HEAD, check the TODO.md box, and execute the item's stated follow-on: move the still-OPEN findings (13 per the table) into TODO.md as real tracked items if they are not already there, then the audit doc itself can be archived.",
+  "background": [
+   "SEC-9 (item L376 in this scope) is one of the still-open findings surfaced by this exact status pass, confirming the mechanism worked as intended \u2014 it caught a real live gap distinct from the 4-of-5-fixed spot-check the TODO itself cites."
+  ],
+  "steps": [
+   "1. Verify via the grep above.",
+   "2. Read the 13 OPEN rows in the status table and cross-check each against TODO.md to confirm it already has a tracked entry (SEC-9/L376 does; verify the other 12).",
+   "3. For any OPEN finding NOT yet tracked in TODO.md, add a todo.d/ fragment for it (per this repo's fragment-system convention, headerless).",
+   "4. Once all 13 are tracked, move docs/audits/2026-06-22-repo-optimization-security-sweep.md to docs/archive/ per this repo's docs-retirement convention, and check the TODO.md box for this item."
+  ],
+  "tests": [
+   "N/A \u2014 docs only."
+  ],
+  "acceptance": [
+   "All 13 OPEN findings have a corresponding TODO.md entry, and the audit doc is either archived or explicitly kept live with a note explaining why."
+  ],
+  "edge_cases": [
+   "Some of the 13 OPEN findings may already be superseded by newer, more specific audits (e.g. the ABS coverage gap audit, the docs inventory) \u2014 cross-check before blindly creating duplicate TODO.md entries for something already tracked under a different name."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   376
+  ],
+  "gate": "n/a (docs)",
+  "notes": "The HARD part (verifying 41 findings against HEAD) is done; what remains is the mechanical bookkeeping (steps 2-4) to make the doc actually retirable."
+ },
+ {
+  "todo_line": 468,
+  "src_id": null,
+  "title": "Collections now exist as a real feature \u2014 this TODO item's premise is false at HEAD (check the box)",
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/database/iface_catalog.go:18-24 defines CollectionStore with a full CRUD contract (CreateCollection/GetCollection/GetCollectionByName/ListCollections/UpdateCollection/DeleteCollection \u2014 confirmed via mock_store.go:296-300 and pebble_store_collections.go:39,98,115,135,181), internal/database/iface_assert.go:31 asserts `_ CollectionStore = (*PebbleStore)(nil)`, and internal/server/handlers/abs/collections.go implements the ABS-surface routes (added 2026-08-16 per wire_abs_routes.go:280-286's comment) with absCollisionDetailRoutes entries for GET/POST/PATCH/DELETE /api/collections and /api/collections/:id/book[/:bookId] (wire_abs_routes.go:143-151) \u2014 directly contradicting the TODO's claim 'there is no Collection model, store, or route anywhere in internal/database.'",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "CollectionStore interface exists with a full CRUD contract",
+    "grep_cmd": "grep -n 'type CollectionStore interface' -A 8 internal/database/iface_catalog.go",
+    "expect": "1 hit, interface with 6 methods"
+   },
+   {
+    "claim": "PebbleStore implements it, compile-time asserted",
+    "grep_cmd": "grep -n 'CollectionStore.*=.*PebbleStore' internal/database/iface_assert.go",
+    "expect": "1 hit ~L31"
+   },
+   {
+    "claim": "the ABS-surface collections handler exists",
+    "grep_cmd": "ls internal/server/handlers/abs/collections.go",
+    "expect": "file exists"
+   },
+   {
+    "claim": "ABS collection routes are registered with method-aware, flag-gated detail routes",
+    "grep_cmd": "grep -n 'api/collections' internal/server/wire_abs_routes.go",
+    "expect": "6+ hits across absCollisionDetailRoutes"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification + checkbox only \u2014 the feature was fully built 2026-08-16, five days after this TODO's likely authoring; no further engineering work is implied by this item's own text.",
+  "review_critical": false,
+  "goal": "Confirm at HEAD that Collections are a fully real feature (model, store, and ABS routes all exist) and check this TODO.md item as done, since its explicit premise ('this is a FEATURE, not a wiring fix... cost it before starting') is now moot \u2014 it was already built.",
+  "background": [
+   "This directly resolves part of item L53/ABS-N4 in this same scope (the /api/collections 301-vs-404 confusion) \u2014 both should be closed together citing the same evidence, since collections shipping as a real feature is WHY N-4's redirect-vs-404 distinction needed the absAppAPICollisions/absCollisionDetailRoutes split in the first place."
+  ],
+  "steps": [
+   "1. Verify via the greps above.",
+   "2. Check this TODO.md item as done, citing internal/database/iface_catalog.go:18, pebble_store_collections.go, and internal/server/handlers/abs/collections.go.",
+   "3. Cross-reference item L53 (todo_line 53, ABS-N4 part) so both are closed together."
+  ],
+  "tests": [
+   "Existing coverage should already exist for the collections feature \u2014 confirm via `grep -rln 'TestCollection' internal/database internal/server/handlers/abs` and cite it rather than assuming untested."
+  ],
+  "acceptance": [
+   "`go test ./internal/database/... ./internal/server/handlers/abs/... -run Collection -v` passes."
+  ],
+  "edge_cases": [
+   "N/A"
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   53
+  ],
+  "gate": "n/a (docs)",
+  "notes": "Strong finding \u2014 this scout initially assumed the TODO's premise was current, then discovered via handler.go/wire_abs_routes.go grep that a full collections feature landed 2026-08-16. Also relevant to item L497 (todo_line 497) in this scope, whose 'safe to stub' list still names collections as stubbable \u2014 that doc entry is now doubly stale (both playlists AND collections)."
+ },
+ {
+  "todo_line": 484,
+  "src_id": null,
+  "title": "Series list now honors limit and page \u2014 this TODO item's premise is false at HEAD (check the box)",
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/server/handlers/abs/browse.go's LibrarySeries handler (L493-574) now reads `limit := queryInt(c, \"limit\", 0)` and `page := queryInt(c, \"page\", 0)` and slices the sorted series list accordingly (L561-574), with an in-code comment dated 2026-08-13 documenting the exact bug this TODO describes ('page/limit/sort WERE ACCEPTED AND IGNORED... limit=100 and limit=500 both returned all 14,625 series') as already fixed, including the deliberate design note that limit=0/absent still returns everything (byte-identical for callers relying on that).",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "LibrarySeries now reads and applies limit/page",
+    "grep_cmd": "grep -n 'queryInt(c, \"limit\"\\|queryInt(c, \"page\"' internal/server/handlers/abs/browse.go",
+    "expect": "hits inside LibrarySeries (~L562-563)"
+   },
+   {
+    "claim": "the fix is dated 2026-08-13 with an explicit before/after measurement",
+    "grep_cmd": "grep -n '14,625 series' internal/server/handlers/abs/browse.go",
+    "expect": "1+ hits in the fix's doc comment"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification + checkbox only.",
+  "review_critical": false,
+  "goal": "Confirm LibrarySeries honors limit/page at HEAD and check this TODO.md item as done.",
+  "background": [
+   "The fix also deliberately preserves old behavior for limit=0/absent (return everything) rather than imposing a surprise default page size \u2014 exactly avoiding the 'behaviour change needing its own decision' risk this TODO originally flagged as the reason NOT to fix it casually."
+  ],
+  "steps": [
+   "1. Verify via the greps above.",
+   "2. Check this TODO.md item as done, citing browse.go:550-574."
+  ],
+  "tests": [
+   "internal/server/handlers/abs/browse_test.go \u2014 confirm an existing test asserts limit/page are honored (`grep -n 'TestLibrarySeries.*[Ll]imit\\|TestLibrarySeries.*[Pp]age' internal/server/handlers/abs/browse_test.go`); if none exists yet despite the fix landing, that is a real (small) test-coverage gap worth flagging separately, not a reason to reopen this item."
+  ],
+  "acceptance": [
+   "`grep -n 'queryInt(c, \"limit\"' internal/server/handlers/abs/browse.go` shows it used inside LibrarySeries."
+  ],
+  "edge_cases": [
+   "N/A"
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "If step 2's test-existence check comes up empty, spin that off as a tiny separate actionable item (add pagination test coverage for LibrarySeries) rather than reopening this one."
+ },
+ {
+  "todo_line": 491,
+  "src_id": null,
+  "title": "Re-capture the series ABS fixture against a populated library (it currently contains zero series)",
+  "verdict": "hold TASK-160 until the scout resolves the server-side file",
+  "verdict_evidence": "[simplicity-scope.json] exact_files contains a prose sentence instead of a path: 'internal/server/handlers/setup.go (or wherever the setup-wizard's other server-side calls live \u2014 confirm exact file)'. Any mechanical consumer of exact_files (the collision matrix, the wave computation, the coordinator's rebase/conflict check) treats that whole string as a filename, so the real file TASK-160 will edit participates in no collision edge at all. TASK-160 is scheduled in web wave 1 alongside 10 other tasks. | testdata/abs-fixtures/get_api_libraries_id_series.json's response.body.results array has length 0 at HEAD (confirmed by loading and inspecting the fixture JSON directly), matching the TODO's claim exactly and confirming this has NOT been fixed despite the related series-pagination code fix (item L484) having landed.",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+   "testdata/abs-fixtures/get_api_libraries_id_series.json"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the fixture's results array is empty",
+    "grep_cmd": "python3 -c \"import json; d=json.load(open('testdata/abs-fixtures/get_api_libraries_id_series.json')); print(len(d['response']['body']['results']))\"",
+    "expect": "0"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "whatever capture tooling/process produced the other 27 fixtures (find via a header/comment in one of the newer fixtures, or a docs/testdata README)",
+    "file": "testdata/abs-fixtures/",
+    "verify_grep": "find testdata/abs-fixtures -iname 'README*' -o -iname '*.md'"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Requires actually running a real capture (hitting a populated library's /api/libraries/:id/series endpoint against a live server, presumably real ABS or this server itself pointed at a populated library) and hand-curating the result into fixture format \u2014 not a pure code edit, needs an environment with real data.",
+  "review_critical": false,
+  "goal": "Re-capture get_api_libraries_id_series.json against a library that actually has series membership (unlike the current empty-library capture), so the fixture can genuinely serve as an oracle for the `books` field's contract (per item L127's fixture-alignment work, which this fixture is also relevant to) rather than proving nothing.",
+  "background": [
+   "The TODO notes the shape currently used in tests came from the upstream API reference doc instead of a real capture \u2014 same failure mode as the sessions fixture holding only 3 items against a page size of 10 (a related, not-in-this-scope fixture gap worth noting but not fixing here)."
+  ],
+  "steps": [
+   "1. Locate or stand up a populated ABS-compatible library (real audiobookshelf server, or this repo's own server with ABS_API_ENABLED=true pointed at a library with actual series data) to capture against.",
+   "2. Issue the real GET /api/libraries/:id/series request against it with a library known to have series membership.",
+   "3. Save the response into testdata/abs-fixtures/get_api_libraries_id_series.json in the same {request, response: {body, headers, status}} shape as the existing fixtures.",
+   "4. Re-run any test currently asserting against this fixture (search via `grep -rn get_api_libraries_id_series internal/server/handlers/abs/*_test.go`) and confirm it still passes (or now correctly fails if the current handler doesn't yet match the real `books` shape \u2014 that would be a genuine finding, not a fixture bug)."
+  ],
+  "tests": [
+   "Whatever existing test(s) load this fixture \u2014 confirmed passing (or a newly-surfaced real gap documented) after the re-capture."
+  ],
+  "acceptance": [
+   "`python3 -c \"import json; d=json.load(open('testdata/abs-fixtures/get_api_libraries_id_series.json')); assert len(d['response']['body']['results']) > 0\"` succeeds."
+  ],
+  "edge_cases": [
+   "If no real ABS server is available to capture against, this may need to be re-scoped as 'construct a realistic fixture by hand from the upstream API reference plus a manually-verified real single-series response from THIS server' rather than a true external-oracle capture \u2014 note which approach was actually used in the fixture's own accompanying documentation/comment."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   127
+  ],
+  "gate": "make ci",
+  "notes": "Directly feeds item L127's fixture-alignment work in this same scope \u2014 coordinate so the two are not done independently and inconsistently.",
+  "review_notes": []
+ },
+ {
+  "todo_line": 497,
+  "src_id": null,
+  "title": "Re-verify docs/reference/abs-target-client-contract.md \u00a711's 'safe to stub' list \u2014 playlists AND collections are now both falsified",
+  "verdict": "actionable",
+  "verdict_evidence": "docs/reference/abs-target-client-contract.md:488-505's \u00a711 'Safe to stub' list still names 'playlists, collections, series detail, authors' (line ~505) as safe to stub, but the doc's own last-edited date (line 4) is still 2026-08-11 \u2014 UNCHANGED since the audit \u2014 while at HEAD: playlists got real data 2026-08-13 (wire_abs_routes.go comment), collections shipped as a full feature 2026-08-16 (item L468 in this scope), and series pagination was fixed 2026-08-13 (item L484 in this scope) \u2014 three of the four listed 'safe to stub' entries are now demonstrably wrong.",
+  "domain": "docs",
+  "exact_files": [
+   "docs/reference/abs-target-client-contract.md"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the doc still lists playlists, collections, series detail, authors as safe to stub",
+    "grep_cmd": "grep -n 'Safe to stub' -A 1 docs/reference/abs-target-client-contract.md",
+    "expect": "1 hit listing all 4 names"
+   },
+   {
+    "claim": "the doc has not been edited since the 2026-08-11 audit, despite the playlists/collections/series fixes landing 2026-08-13/2026-08-16",
+    "grep_cmd": "grep -n 'last-edited' docs/reference/abs-target-client-contract.md",
+    "expect": "2026-08-11"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Requires re-checking each \u00a711 entry (not just the 3 already known-stale) against real app/client behavior per the TODO's own instruction ('re-check every other entry in that list against real app behaviour rather than against the corpus') \u2014 a genuine verification pass, not a mechanical text edit, even though the edit itself is small.",
+  "review_critical": false,
+  "goal": "Update \u00a711 of docs/reference/abs-target-client-contract.md to remove playlists and collections from 'safe to stub' (both are now real, fully-implemented features per items L468 and the playlists fix), re-verify 'series detail' and 'authors' against actual current behavior (not just the fixture corpus, which the TODO notes proves absence-of-evidence rather than evidence-of-absence), and re-check every OTHER entry in the full \u00a711 list the same way.",
+  "background": [
+   "The TODO's root insight generalizes beyond playlists: 'The \u00a711 list rests on the same fixture corpus that contains zero playlist requests \u2014 absence there bounds what the fixtures prove, never what the client does.' The same reasoning applies to collections (also fixed since) and potentially other \u00a711 entries never audited against real app behavior.",
+   "This doc entry being stale is now proven THREE ways independently in this same scope (L468 for collections, L484 for series, and the wire_abs_routes.go playlists comment) \u2014 strong convergent evidence this doc genuinely needs the full re-check the TODO asks for, not just a spot patch."
+  ],
+  "steps": [
+   "1. Read the full \u00a711 list in docs/reference/abs-target-client-contract.md (lines ~488-545).",
+   "2. Remove 'playlists' and 'collections' from the 'safe to stub' line, citing the fixes (playlists: 2026-08-13, wire_abs_routes.go; collections: 2026-08-16, handlers/abs/collections.go).",
+   "3. For 'series detail' and 'authors' (the two remaining entries) and every other \u00a711 claim, re-verify against real registered routes/handlers (not the fixture corpus) whether each is still genuinely unimplemented \u2014 use the same method as this scope's L468/L484 investigations (grep for a real handler/store, not fixture presence).",
+   "4. Update the doc's last-edited date and version header per this repo's mandatory file-header convention.",
+   "5. Add a short doc note explaining WHY this drifted (fixtures proving absence-of-evidence, not evidence-of-absence) so future audits don't repeat the same trap \u2014 cross-reference the TODO's own framing."
+  ],
+  "tests": [
+   "N/A \u2014 docs only, but step 3's verification should cite real grep evidence for each remaining \u00a711 entry in the doc's own text or an accompanying commit message, not just be asserted."
+  ],
+  "acceptance": [
+   "docs/reference/abs-target-client-contract.md's \u00a711 no longer lists playlists or collections as safe to stub, and every remaining entry has been re-verified against real routes/handlers rather than left as an artifact of the fixture corpus."
+  ],
+  "edge_cases": [
+   "'series detail' specifically may still be genuinely stubbed even though the series LIST was fixed (L484) \u2014 list-level pagination and detail-route implementation are different pieces of work; verify detail specifically, don't assume the list fix covers it."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   468,
+   484
+  ],
+  "gate": "n/a (docs)",
+  "notes": "Depends on L468 and L484's findings in this same scope for two of the four corrections; the other two (series detail, authors) need fresh verification not yet done by this scout.",
+  "review_notes": [
+   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for "
+  ]
+ }
+]

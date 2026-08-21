@@ -1,0 +1,1485 @@
+[
+ {
+  "todo_line": 9020,
+  "src_id": null,
+  "title": "Re-run maintenance.regroup-shattered-ai after relink and re-measure the review queue",
+  "verdict": "prod_run",
+  "verdict_evidence": "The op already exists and is registered: `grep -n 'ID:.*maintenance.regroup-shattered-ai' internal/plugins/maintenance/regroup_shattered_ai.go` -> hit at line 106. The item asks only to re-run it on prod and compare against the 357-pending baseline; no code changes are described.",
+  "domain": "internal/plugins/maintenance",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "maintenance.regroup-shattered-ai is a registered op at HEAD",
+    "grep_cmd": "grep -n 'maintenance.regroup-shattered-ai' internal/plugins/maintenance/regroup_shattered_ai.go",
+    "expect": "hits at lines 6, 106, 117"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Running an existing op via the ops API/UI and diffing two measurement snapshots; no code to write",
+  "review_critical": false,
+  "goal": "Not a code task. Record in docs/operations/pending-prod-actions.md that maintenance.regroup-shattered-ai should be re-run against prod now that relink (#2614 follow-up) has populated durations, then re-measure the review-queue pending count against the 357 (217 ambiguous / 138 multidisc / 1 anthology / 1 version-group) baseline cited in the TODO. This measurement decides how much of the classifier backlog was really a data problem.",
+  "background": [
+   "The op is fully built and registered: internal/plugins/maintenance/regroup_shattered_ai.go:106 `ID: \"maintenance.regroup-shattered-ai\"`.",
+   "relink_unlinked.go:20 documents that relink must run BEFORE regroup-shattered-ai because the latter derives DurationSec from linked files."
+  ],
+  "steps": [
+   "1. Do not write code. Add an entry to docs/operations/pending-prod-actions.md (follow the file's existing entry format) describing: run maintenance.relink-unlinked, then maintenance.regroup-shattered-ai against prod, then compare the new pending/ambiguous/multidisc/anthology/version-group counts to the 357/217/138/1/1 baseline referenced at TODO.md L9020.",
+   "2. Bump the file's version header per file-headers.md when editing pending-prod-actions.md."
+  ],
+  "tests": [
+   "N/A \u2014 documentation-only, no code path changes"
+  ],
+  "acceptance": [
+   "docs/operations/pending-prod-actions.md contains a new dated entry naming maintenance.regroup-shattered-ai with the 357-baseline comparison instructions"
+  ],
+  "edge_cases": [
+   "N/A"
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Owner decision list does not exclude this item; it is simply an operation to run and measure, not a code deliverable, per the 'prod_run' verdict definition."
+ },
+ {
+  "todo_line": 9259,
+  "src_id": null,
+  "title": "Corrected book aggregates invisible until memdb refresh \u2014 buffer/replay fix already covers the delete path",
+  "verdict": "stale_done",
+  "verdict_evidence": "The item's own 2026-08-10 trace concluded the RecomputeBookAggregates early-return is NOT the cause and that a delete-during-warmup race in the memdb buffer was the leading unverified hypothesis. That exact mechanism (buffer writes during warmup, replay before publish) is implemented in internal/database/memdb_pending.go (last-edited 2026-08-06, i.e. already shipped when the trace ran) and DeleteBookFilesFromMemDB funnels through it: `grep -n 'p.memSync(\"DeleteBookFiles\"' internal/database/memdb_sync.go` -> hit at line 261, and memPending buffering/replay in memdb_pending.go closes the exact window the trace was worried about.",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "RecomputeBookAggregates still early-returns without UpdateBook when values are unchanged (the originally-blamed suspect)",
+    "grep_cmd": "grep -n 'existingDuration == wantDuration && existingFileSize == wantFileSize' internal/database/pebble_store_book_aggregates.go",
+    "expect": "1 hit ~L132"
+   },
+   {
+    "claim": "total_file_count is derived at read time from memdb, not a stored field RecomputeBookAggregates could stale",
+    "grep_cmd": "grep -n 'TotalFileCount = len(files)' internal/server/audiobooks_helpers.go internal/server/handlers/audiobooks/handler.go",
+    "expect": "2 hits"
+   },
+   {
+    "claim": "DeleteBookFilesByIDs (the op's real batched delete path) removes rows from memdb via DeleteBookFilesFromMemDB",
+    "grep_cmd": "grep -n 'DeleteBookFilesFromMemDB(resolvedIDs)' internal/database/pebble_store_bookfiles.go",
+    "expect": "1 hit ~L1073"
+   },
+   {
+    "claim": "DeleteBookFilesFromMemDB funnels through memSync, which buffers during warmup instead of dropping",
+    "grep_cmd": "grep -n 'p.memSync(\"DeleteBookFiles\"' internal/database/memdb_sync.go",
+    "expect": "1 hit ~L261"
+   },
+   {
+    "claim": "the buffer-and-replay fix for the exact warmup-drop window exists and predates the 2026-08-10 trace",
+    "grep_cmd": "grep -n 'last-edited' internal/database/memdb_pending.go",
+    "expect": "1 hit, 2026-08-06"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "memPendingBuffer / publishWarmMemStore",
+    "file": "internal/database/memdb_pending.go",
+    "verify_grep": "grep -n 'func (p \\*PebbleStore) publishWarmMemStore' internal/database/memdb_pending.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Not a build task; requires reading and reasoning about two subsystems (aggregate recompute + memdb warmup buffering) to confirm the checkbox is safe to close, and writing a one-time verification note",
+  "review_critical": true,
+  "goal": "Close out this TODO item as fixed by a prior, unrelated change (the memdb warmup pending-buffer added 2026-08-06), rather than building anything new. If the owner wants certainty rather than inference, the one remaining step is to run a single canary: delete book_file rows for a multi-file book WHILE a fresh process is still warming memdb (first ~2 minutes after start), then read total_file_count without restarting and confirm it already reflects the deletion.",
+  "background": [
+   "The 2026-08-03 canary observed stale total_file_count until a service restart; the 2026-08-10 trace shows this cannot be explained by RecomputeBookAggregates' early return, since TotalFileCount is derived from memdb at read time, not stored.",
+   "memdb_pending.go's doc comment describes precisely the failure mode hypothesized in the trace ('a write landing after the iterator exists but before memPtr.Store is dropped') and implements buffer+replay to close it, with the invariant stated at the top of the file: 'No write that succeeds in Pebble may be absent from the published memdb.'",
+   "DeleteBookFilesFromMemDB (used by the actual op, maintenance.dedupe-book-file-rows via store.DeleteBookFilesByIDs) is one of the helpers that funnels through memSync, so it is covered by the buffer/replay fix, not bypassed."
+  ],
+  "steps": [
+   "1. No code change. In TODO.md, check off the box for the L9259 item (and the duplicate note at L9671) with a short note citing internal/database/memdb_pending.go and memdb_sync.go:261 as the fix.",
+   "2. Add a changelog.d fragment (headerless, per changelog.d/README.md) noting the memdb-warmup-buffer fix (already shipped, this is documentation catch-up) closes the 'corrected aggregates invisible until restart' symptom for the book_file delete path.",
+   "3. Optional (recommended, not required to close the box): schedule one real canary run of maintenance.dedupe-book-file-rows against a freshly-restarted process during its warmup window and confirm total_file_count is correct without a second restart \u2014 record the result in docs/operations/pending-prod-actions.md as a prod_run rather than blocking this TODO on it."
+  ],
+  "tests": [
+   "N/A for the doc-only close-out. If the optional canary step is taken, no new automated test is proposed here \u2014 it is a manual prod observation."
+  ],
+  "acceptance": [
+   "TODO.md's L9259 checkbox is checked with a citation to memdb_pending.go",
+   "changelog.d/ has a new fragment referencing the memdb warmup buffer fix's relevance to this symptom"
+  ],
+  "edge_cases": [
+   "If a future canary run DOES reproduce staleness even with the buffer in place, re-open this item \u2014 the fix covers 'write dropped during warmup', not every possible staleness cause (e.g. a second, unbuffered write path not funneling through memSync would need its own investigation)."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   9671
+  ],
+  "gate": "n/a (docs)",
+  "notes": "This is an inference from static code reading, not a live reproduction \u2014 flagged per the 'verify the instrument' project discipline. If the owner wants proof rather than inference, keep the item open and use the optional canary step in the goal/steps above instead of closing it."
+ },
+ {
+  "todo_line": 9659,
+  "src_id": null,
+  "title": "'The Trapped Mind Project' book-level file_size/file_exists disagreement \u2014 evidence, not a discrete task",
+  "verdict": "not_a_task",
+  "verdict_evidence": "The item itself says 'Nothing to restore' and explicitly points at the duration/filesize aggregation item as the real work ('See the duration/filesize aggregation item \u2014 same family of defect'). It is a single-book observation offered as supporting evidence for the aggregation-defect investigation (TODO L9259/L9671), not an independent, briefable task.",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "n/a \u2014 no work item",
+  "review_critical": false,
+  "goal": "No separate deliverable. If the owner wants this specific defect (book.FileSize wildly wrong for a 91KB stub, file_exists=true for an absent path) chased as its own item, fold it into the L9259 aggregation-defect writeup as a second reproduction case rather than opening new work here.",
+  "background": [
+   "book.FileSize is preserved rather than overwritten by RecomputeBookAggregates' partial-data rule when the current file set has zero files with a nonzero FileSize (pebble_store_book_aggregates.go:96-105), which is a plausible mechanism for a wildly stale value surviving indefinitely on a book whose real file shrank to a 91KB stub.",
+   "'file_exists: true' for an absent path is the missing-file lane's territory, which owner decision #12 already scopes to a REPORT-ONLY REPOINT repair; this single book does not change that scope."
+  ],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   9259
+  ],
+  "gate": "n/a (docs)",
+  "notes": "Honest 'not_a_task' verdict per instructions \u2014 do not invent a discrete engineering task from a single anecdotal book observation that the item's own author already routed elsewhere."
+ },
+ {
+  "todo_line": 9666,
+  "src_id": null,
+  "title": "Detect multi-copy books (distinct file sets under different paths) and route them to regroup + review queue instead of row-dedup",
+  "verdict": "needs_design",
+  "verdict_evidence": "No existing detector distinguishes 'multi-copy' (same book, disjoint file sets, different folders) from an ordinary row-duplicate or a version-group: `grep -rln 'multi.copy\\|MultiCopy' internal/dedup internal/plugins/maintenance` returns no hits. The classification kinds that DO exist (regroup.multidisc/version-group/anthology/ambiguous, `grep -n 'KindMultidisc\\|KindVersionGroup\\|KindAnthology\\|KindAmbiguous' internal/itunes/service/fs_regroup_shape.go` -> hits at lines 72-75) are all folder-shape classifiers for the iTunes-shattered-folder regroup path, not a general 'this looks like the same book copied to two library locations' detector across the whole DB \u2014 whether that's the right home for this signal, or a new detector belongs in internal/dedup instead, is a design call the owner decisions above do not make.",
+  "domain": "internal/dedup",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "no multi-copy detector exists today",
+    "grep_cmd": "grep -rln 'multi.copy\\|MultiCopy\\|distinct.paths.*same.book' internal/dedup internal/plugins/maintenance",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "the closest existing classification kinds are folder-shape kinds in the iTunes regroup path, not a general multi-copy detector",
+    "grep_cmd": "grep -n 'KindMultidisc\\|KindVersionGroup\\|KindAnthology\\|KindAmbiguous' internal/itunes/service/fs_regroup_shape.go",
+    "expect": "4 hits ~L72-75"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "ClassifyShatteredFolders / RegroupGroup",
+    "file": "internal/itunes/service/fs_regroup_shape.go",
+    "verify_grep": "grep -n 'func ClassifyShatteredFolders' internal/itunes/service/fs_regroup_shape.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "opus",
+  "why_tier": "The open question is architectural (which existing pipeline, if any, should own this signal, and what distinguishes it from a version-group) before any code can be written",
+  "review_critical": true,
+  "goal": "NOT briefable yet. Owner must decide: (1) is 'multi-copy, distinct file sets, different paths, same book' a new dedup candidate-generation signal, or does it belong in the existing iTunes-folder regroup classifier (fs_regroup_shape.go), or is it a variant of the existing version-group detector; (2) what threshold distinguishes 'multi-copy' from a legitimate multi-edition version-group (e.g. abridged vs unabridged) so the review queue doesn't get flooded with false positives.",
+  "background": [
+   "TODO evidence: 5 books observed 2026-08-04 with disjoint files under different paths for what is clearly the same book (Wind and Truth: 426 files; Ajax's Ascension: 272 files), and the item explicitly rejects row-dedup as the tool ('Deduping rows is the wrong tool')."
+  ],
+  "steps": [
+   "BLOCKED on the design question above \u2014 do not brief implementation steps until the owner names which pipeline owns this."
+  ],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [
+   "A true multi-edition (abridged + unabridged, or two different translations) must NOT be auto-classified as a duplicate multi-copy \u2014 this is exactly the version-group boundary the design decision must draw."
+  ],
+  "anti_over_suppression": "N/A \u2014 no filter exists yet to check",
+  "depends_on_lines": [],
+  "gate": "n/a (blocked on design)",
+  "notes": "Only 5 books observed so far (2026-08-04 status snapshot); before committing to a new detector, worth first checking whether re-running maintenance.regroup-shattered-ai (L9020, already queued) surfaces these same 5 as 'ambiguous' holds, which would mean the review-queue routing already exists and the only gap is the row-dedup pipeline incorrectly claiming them first."
+ },
+ {
+  "todo_line": 9669,
+  "src_id": null,
+  "title": "'Call to Arms' \u2014 96 distinct files unchanged by dedupe run \u2014 undiagnosed third shape",
+  "verdict": "not_a_task",
+  "verdict_evidence": "The item states outright 'A third shape, not yet diagnosed' \u2014 it is a raw observation from a 2026-08-04 status snapshot with no proposed fix, no named root cause, and no actionable request; per the verdict rubric this is evidence, not work, until someone diagnoses it.",
+  "domain": "internal/dedup",
+  "exact_files": [],
+  "verified_anchors": [],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "n/a \u2014 no work item, diagnosis first",
+  "review_critical": false,
+  "goal": "No deliverable can be briefed until this book is diagnosed. If prioritized, the diagnosis step itself (pull this book's 96 file rows and compare against the multi-copy shape in L9666 and the row-duplicate shape dedupe already handles) would be the first task, not a fix.",
+  "background": [
+   "96 distinct files, 9,957 hours total duration, unaffected by an already-run dedupe pass \u2014 same 2026-08-04 status session that produced the L9666 multi-copy observation, but explicitly called out as a different, unclassified shape."
+  ],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   9666
+  ],
+  "gate": "n/a (docs)",
+  "notes": "Honest 'not_a_task' \u2014 do not invent a diagnosis or a fix the item's own author did not reach."
+ },
+ {
+  "todo_line": 9671,
+  "src_id": null,
+  "title": "'Corrected aggregates invisible until memdb refresh' \u2014 duplicate pointer to the L9259 entry",
+  "verdict": "not_a_task",
+  "verdict_evidence": "The item text is a one-line cross-reference ('see the 2026-08-04 entry on RecomputeBookAggregates') to the same defect fully investigated under todo_line 9259 in this same scope file; it carries no new claim or evidence beyond that pointer.",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "n/a \u2014 duplicate reference, not independent work",
+  "review_critical": false,
+  "goal": "No separate deliverable \u2014 see the todo_line 9259 object in this same output for the verdict (stale_done) and evidence. When TODO.md is updated, close this checkbox alongside L9259's.",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   9259
+  ],
+  "gate": "n/a (docs)",
+  "notes": "Same underlying defect as todo_line 9259; do not double-count as two work items."
+ },
+ {
+  "todo_line": 10290,
+  "src_id": "ABS-SYNC",
+  "title": "Exempt the ABS router group from the global BasicAuth() middleware",
+  "verdict": "actionable",
+  "verdict_evidence": "Confirmed both halves of the collision: BasicAuth() is registered globally on the whole router (`grep -n 'router.Use(servermiddleware.BasicAuth())' internal/server/server.go` -> 1 hit at L469) and the ABS group is a plain child group with no override (`grep -n 'absGroup := s.router.Group' internal/server/wire_abs_routes.go` -> 1 hit at L504). The middleware's own exemption list only covers health endpoints and static assets, not ABS: `grep -n 'Exempt' internal/server/middleware/basicauth.go` -> 2 hits (L28, L34), neither mentioning ABS or /api/items, /api/libraries, etc.",
+  "domain": "internal/server/middleware",
+  "exact_files": [
+   "internal/server/middleware/basicauth.go",
+   "internal/server/middleware/basicauth_test.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "BasicAuth() is applied globally to s.router",
+    "grep_cmd": "grep -n 'router.Use(servermiddleware.BasicAuth())' internal/server/server.go",
+    "expect": "1 hit ~L469"
+   },
+   {
+    "claim": "the ABS group is a child of s.router with no BasicAuth exemption",
+    "grep_cmd": "grep -n 'absGroup := s.router.Group' internal/server/wire_abs_routes.go",
+    "expect": "1 hit ~L504"
+   },
+   {
+    "claim": "BasicAuth()'s current exemption list is health endpoints + static assets only",
+    "grep_cmd": "grep -n 'Exempt' internal/server/middleware/basicauth.go",
+    "expect": "2 hits ~L28, L34"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "path-prefix exemption pattern already used for /assets/",
+    "file": "internal/server/middleware/basicauth.go",
+    "verify_grep": "grep -n 'strings.HasPrefix(path, \"/assets/\")' internal/server/middleware/basicauth.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Small, surgical middleware change, but it is a security-boundary edit (auth exemption) so it needs careful precision on the path-prefix match and a test proving BOTH the exemption and that non-ABS paths still enforce basic auth",
+  "review_critical": true,
+  "goal": "In internal/server/middleware/basicauth.go's BasicAuth(), add an ABS-path exemption alongside the existing health/static-asset exemptions so that when config.AppConfig.BasicAuthEnabled is true, requests under the ABS surface (paths registered on absGroup: /api/authorize, /api/me*, /api/libraries*, /api/items*, /api/session*, /public/session*, /api/playlists/:id, /login, /logout, /auth/*, /status, /ping \u2014 see internal/server/handlers/abs/handler.go:432 Register for the full list) skip HTTP Basic Auth entirely, since ABS clients authenticate via their own bearer/session/CF-assertion scheme (internal/server/middleware/absauth.go ABSRequireAuth) and cannot also send Authorization: Basic on the same header.",
+  "background": [
+   "BasicAuth() gin middleware currently exempts only /api/health, /api/v1/health, and static asset extensions (basicauth.go:28-44).",
+   "The ABS handler group is mounted at absGroup := s.router.Group(\"\") (wire_abs_routes.go:504) as a direct child of the globally-BasicAuth()'d router, so it inherits BasicAuth() with no override today.",
+   "ABS's own auth middleware (ABSRequireAuth, internal/server/middleware/absauth.go:467) already enforces its own scheme (CF assertion / bearer / API key) and must be the ONLY auth gate on that surface, or a device sending Authorization: Basic per RFC would collide with ABS's own use of the Authorization header for its bearer token."
+  ],
+  "steps": [
+   "1. Read internal/server/handlers/abs/handler.go's Register method (func (h *Handler) Register(r gin.IRouter), ~L432) to enumerate every literal path prefix it registers, so the exemption is precise rather than a blanket '/api' prefix (which would also exempt the real /api/v1 app surface \u2014 NOT wanted).",
+   "2. In internal/server/middleware/basicauth.go's BasicAuth(), add a new exemption block after the existing static-asset check (after line ~44) that returns c.Next() early when the request path matches one of the ABS route prefixes gathered in step 1. Prefer an explicit prefix list (e.g. '/api/me', '/api/libraries', '/api/items', '/api/session', '/public/session', '/api/authorize', '/api/playlists', '/auth/openid', '/status', '/ping') defined as a package-level []string or via strings.HasPrefix checks, matching the existing code style (see the /assets/ check for the pattern).",
+   "3. Bump the file version header per file-headers.md (this is a Go file: file/version/guid/last-edited comment block at the top).",
+   "4. Document the mutual-exclusion caveat: add a one-line comment above the new exemption noting that BasicAuth and ABS bearer auth cannot both gate the same Authorization header, so ABS paths are exempt from BasicAuth by design, not by oversight."
+  ],
+  "tests": [
+   "internal/server/middleware/basicauth_test.go: add TestBasicAuth_ABSPathsExempt \u2014 set config.AppConfig.BasicAuthEnabled=true, hit an ABS path (e.g. GET /api/me with no Basic Auth header, no ABS credential either) through the middleware alone, and assert it is NOT aborted with 401 by BasicAuth specifically (i.e. c.Next() was reached) \u2014 this test should stub/skip the downstream ABS auth check or assert only on the BasicAuth layer's behavior.",
+   "internal/server/middleware/basicauth_test.go: keep/extend the existing non-exempt-path test (a plain /api/v1/... path) to prove BasicAuth STILL enforces basic auth outside the new ABS exemption \u2014 this is the anti-over-suppression check: the fix must not accidentally exempt the whole /api prefix."
+  ],
+  "acceptance": [
+   "`go test ./internal/server/middleware/... -run TestBasicAuth` passes, including the new ABS-exemption test and the existing non-ABS enforcement test",
+   "`grep -n 'ABS' internal/server/middleware/basicauth.go` shows the new exemption block with a comment explaining the mutual-exclusion rationale"
+  ],
+  "edge_cases": [
+   "A path like /api/libraries that ALSO happens to prefix-match an app-API route must not be exempted if app-API and ABS ever share a literal path \u2014 verify by diffing against internal/server (app API) route registrations, not just ABS's.",
+   "BasicAuthEnabled=false (the default) must remain a full no-op \u2014 the exemption branch should never even be reached in that case, matching the existing early-return at the top of BasicAuth()."
+  ],
+  "anti_over_suppression": "TestBasicAuth_NonABSPathStillEnforced (or equivalent) \u2014 proves the exemption is scoped to ABS paths only, not a blanket bypass",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "basic_auth_enabled is off by default in prod per the item text, so this is a latent bug, not an active incident \u2014 still worth fixing before anyone turns basic auth on.",
+  "review_notes": [
+   "[simplicity-scope.json] Two different deliverables in one task: TASK-150 both writes an audit document (docs/audits/2026-08-21-apply-endpoint-fileio-audit.md) and edits six production handlers (ai.go, diagnostics.go, metadata/handler.go, metadata_cache.go, organize.go, review/handler.go) to add missing tag/file-I/O writeba",
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ]
+ },
+ {
+  "todo_line": 10298,
+  "src_id": "ABS-SYNC",
+  "title": "Prune expired abs_sess: records on the existing session-cleanup schedule",
+  "verdict": "actionable",
+  "verdict_evidence": "PebbleStore.DeleteExpiredABSSessions exists and is tested but has zero non-test callers: `grep -rn 'DeleteExpiredABSSessions' internal/database/pebble_store_abssession.go` shows only the definition (L308) and its own doc comment; nothing outside _test.go calls it. Meanwhile DeleteExpiredSessions (browser keyspace) IS on a 10-minute ticker: `grep -n 's.Ops().DeleteExpiredSessions(time.Now())' internal/server/server_lifecycle.go` -> 1 hit at L619, inside the sweep block starting L608.",
+  "domain": "internal/server",
+  "exact_files": [
+   "internal/server/server_lifecycle.go",
+   "internal/server/server_ops_store.go",
+   "internal/database/mock_store.go",
+   "internal/database/mocks/mock_store.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "DeleteExpiredABSSessions is implemented on PebbleStore but has no production caller",
+    "grep_cmd": "grep -rn 'DeleteExpiredABSSessions' internal/database/pebble_store_abssession.go",
+    "expect": "hits only in the func def (~L308) and its doc comment (~L306-307)"
+   },
+   {
+    "claim": "the existing session-cleanup sweep calls DeleteExpiredSessions on a 10-minute ticker",
+    "grep_cmd": "grep -n 's.Ops().DeleteExpiredSessions(time.Now())' internal/server/server_lifecycle.go",
+    "expect": "1 hit ~L619"
+   },
+   {
+    "claim": "serverCredentialStore is the narrow interface s.Ops() exposes for this sweep and does not yet include the ABS method",
+    "grep_cmd": "grep -n 'DeleteExpiredSessions(now time.Time)' internal/server/server_ops_store.go",
+    "expect": "1 hit ~L226, inside serverCredentialStore"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "the 10-minute sessionCleanupTicker loop shape",
+    "file": "internal/server/server_lifecycle.go",
+    "verify_grep": "grep -n 'sessionCleanupTicker := time.NewTicker' internal/server/server_lifecycle.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Mechanical: add one interface method + one call inside an already-existing loop, following an adjacent line's exact pattern",
+  "review_critical": false,
+  "goal": "Add DeleteExpiredABSSessions(now time.Time) (int, error) to the serverCredentialStore interface in internal/server/server_ops_store.go, and call it from the same ticker loop in server_lifecycle.go that already calls DeleteExpiredSessions, so revoked/expired abs_sess: records are pruned on the same 10-minute cadence instead of accumulating forever.",
+  "background": [
+   "PebbleStore.DeleteExpiredABSSessions(now time.Time) (int, error) at internal/database/pebble_store_abssession.go:308 removes revoked/past-expiry ABS sessions plus both of their index entries \u2014 it mirrors DeleteExpiredSessions per its own doc comment (L307).",
+   "server_lifecycle.go:608-629 already runs a background goroutine on a 10-minute ticker calling s.Ops().DeleteExpiredSessions(time.Now()) and logging deleted>0 at Info, warn on error.",
+   "server_ops_store.go's ServerOpsStore interface (L36-45) embeds serverAuthStore -> serverCredentialStore (L223-227), which is the narrow interface s.Ops() satisfies for auth/session methods; DeleteExpiredABSSessions is not yet a member.",
+   "Neither internal/database/mock_store.go nor internal/database/mocks/mock_store.go has a DeleteExpiredABSSessions stub yet, confirmed by grep returning 0 hits in both."
+  ],
+  "steps": [
+   "1. In internal/server/server_ops_store.go, add `DeleteExpiredABSSessions(now time.Time) (int, error)` as a new line inside the `serverCredentialStore` interface (~L224-227), alphabetically placed the way its sibling methods are (after CreateSession, before ListAllAPIKeys, matching the existing ordering convention in that interface).",
+   "2. In internal/server/server_lifecycle.go, inside the existing `for { select { case <-sessionCleanupTicker.C: ... } }` block (~L616-627), add a second call right after the existing `s.Ops().DeleteExpiredSessions(time.Now())` block: `if deletedABS, err := s.Ops().DeleteExpiredABSSessions(time.Now()); err != nil { sessionLog.Warn(\"failed to clean up expired ABS sessions: %v\", err) } else if deletedABS > 0 { sessionLog.Info(\"cleaned up %d expired/revoked ABS sessions\", deletedABS) }` \u2014 same log style as the existing call, sharing the same sessionLog and ticker (do not add a second ticker).",
+   "3. Add a `DeleteExpiredABSSessionsFunc func(now time.Time) (int, error)` field + method to internal/database/mock_store.go's MockStore, following the exact pattern of the adjacent DeleteExpiredSessionsFunc (~L252, L1454-1456).",
+   "4. Regenerate or hand-add the mockery-style mock in internal/database/mocks/mock_store.go for DeleteExpiredABSSessions, mirroring the DeleteExpiredSessions block there (~L8444-8499) \u2014 check whether this repo runs `go generate` for mocks (look for a //go:generate mockery directive near the top of iface_auth.go or similar) and prefer running that over hand-editing if so.",
+   "5. Bump version headers on every touched Go file per file-headers.md."
+  ],
+  "tests": [
+   "internal/server/server_lifecycle_test.go (or a new focused test file): assert that the session-cleanup goroutine calls both DeleteExpiredSessions and DeleteExpiredABSSessions on tick \u2014 use a mock/fake Ops() store that records calls, advance a fake/injected ticker (or reduce the ticker interval via a test hook if one already exists for the sibling test), and assert both methods were invoked.",
+   "internal/database/pebble_store_abssession_test.go: confirm the existing DeleteExpiredABSSessions unit tests still pass unchanged (no signature change to the underlying PebbleStore method, only wiring it into a new caller)."
+  ],
+  "acceptance": [
+   "`grep -n 'DeleteExpiredABSSessions' internal/server/server_lifecycle.go` shows a call inside the session-cleanup ticker block",
+   "`go build ./...` succeeds with the new interface method (proves PebbleStore already satisfies it structurally, since pebble_store_abssession.go:308 has the matching signature)",
+   "`make ci` passes"
+  ],
+  "edge_cases": [
+   "ABS may not always be enabled/wired (s.Ops() can be nil per the existing `if s.Ops() != nil` guard at L609) \u2014 the new call must live inside that same existing guard, not add a second one.",
+   "If DeleteExpiredABSSessions errors independently of DeleteExpiredSessions, both must be logged and neither should abort the other's cleanup for that tick."
+  ],
+  "anti_over_suppression": "N/A \u2014 this is a straightforward wiring addition, not a filter/guard",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Low risk, additive-only change; no data migration needed since DeleteExpiredABSSessions already exists and is tested standalone.",
+  "review_notes": [
+   "[simplicity-scope.json] Two different deliverables in one task: TASK-150 both writes an audit document (docs/audits/2026-08-21-apply-endpoint-fileio-audit.md) and edits six production handlers (ai.go, diagnostics.go, metadata/handler.go, metadata_cache.go, organize.go, review/handler.go) to add missing tag/file-I/O writeba",
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ]
+ },
+ {
+  "todo_line": 10303,
+  "src_id": "ABS-SYNC",
+  "title": "Decide the authoritative DRM detection path and wire it into the scanner as unplayable-with-reason",
+  "verdict": "needs_design",
+  "verdict_evidence": "Both DRM paths exist independently and neither is wired into the scanner: `grep -n 'func DetectDRM' internal/audioutil/drm.go` -> 1 hit (L38); `grep -n 'HasActiveDRM' internal/diagnosis/probe.go` -> field + logic, not a func (L53,135); `grep -rn 'DetectDRM\\|HasActiveDRM' internal/scanner/*.go` -> 0 hits in either direction. There is also no existing 'unplayable' concept anywhere in scanner or database to hang a DRM-reason off of: `grep -rln 'unplayable' internal/scanner internal/database` -> 0 hits. Deciding which detector is authoritative AND what 'unplayable-with-reason' means as a schema/UI surface are both open questions the 14 owner decisions do not answer.",
+  "domain": "internal/scanner",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "extension-based DetectDRM exists, unused by the scanner",
+    "grep_cmd": "grep -n 'func DetectDRM' internal/audioutil/drm.go",
+    "expect": "1 hit ~L38"
+   },
+   {
+    "claim": "mediainfo-based HasActiveDRM diagnostic exists, unused by the scanner",
+    "grep_cmd": "grep -n 'HasActiveDRM' internal/diagnosis/probe.go",
+    "expect": "hits at L53 (field), L135 (classify logic)"
+   },
+   {
+    "claim": "neither is called from the scanner package",
+    "grep_cmd": "grep -rn 'DetectDRM\\|HasActiveDRM' internal/scanner/",
+    "expect": "0 hits"
+   },
+   {
+    "claim": ".aax/.aaxc are in the default supported-extensions list with no DRM awareness",
+    "grep_cmd": "grep -n '\\.aax\\\", \\\".aaxc' internal/config/config.go",
+    "expect": "3 hits ~L1618, L1624, L2533"
+   },
+   {
+    "claim": "no 'unplayable' concept exists to attach a DRM reason to today",
+    "grep_cmd": "grep -rln 'unplayable' internal/scanner internal/database",
+    "expect": "0 hits"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "internal/diagnosis FailureReason enum pattern (ReasonActiveDRM etc.) as a possible model for an 'unplayable reason' schema",
+    "file": "internal/diagnosis/probe.go",
+    "verify_grep": "grep -n 'ReasonActiveDRM' internal/diagnosis/probe.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "opus",
+  "why_tier": "Requires an authoritative-source decision plus new schema/UI surface design before any scanner code can be written; not mechanical",
+  "review_critical": true,
+  "goal": "NOT briefable without owner input. Decide: (1) which of DetectDRM (extension-based, internal/audioutil/drm.go) or the mediainfo-based diagnosis.probe HasActiveDRM/Encryption detection is authoritative for scan-time DRM detection (or whether both are needed \u2014 cheap extension pre-filter, then the richer probe only for .aax/.aaxc candidates); (2) what 'unplayable-with-reason' means concretely: a new BookFile field, a scan-time skip + activity-log entry, or a review-queue surface; (3) confirm ffmpeg's 'aax' demuxer (CRIWARE game audio) is never used as a detection signal, per the item's explicit caution.",
+  "background": [
+   "PR #2067 added internal/audioutil/drm.go's DetectDRM (extension-based, cheap, presumably a fast pre-filter).",
+   "internal/diagnosis/probe.go already has a richer mediainfo-based Encryption/DRM-channel-error detector (HasActiveDRM/WasOriginallyDRM fields, ReasonActiveDRM/ReasonOriginallyDRM), built for a different purpose (post-hoc file diagnosis, not scan-time gating).",
+   ".aax/.aaxc are already accepted extensions in the scanner's default config (internal/config/config.go ~L2016 region) with zero DRM awareness, so today they import and fail at play time rather than being flagged during scan."
+  ],
+  "steps": [
+   "BLOCKED \u2014 do not brief scanner wiring steps until the authoritative-path decision and the unplayable-reason schema are settled by the owner."
+  ],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [
+   "ffmpeg's own 'aax' demuxer name is CRIWARE game audio, NOT Audible AAX \u2014 any detection heuristic keyed off ffmpeg's demuxer/format string must not conflate the two, per the item's explicit warning."
+  ],
+  "anti_over_suppression": "N/A \u2014 no filter to test yet",
+  "depends_on_lines": [],
+  "gate": "n/a (blocked on design)",
+  "notes": "Genuine two-implementation drift risk per the 'two impls need a conformance test' project discipline \u2014 once a decision is made, a conformance test between DetectDRM and HasActiveDRM's classification agreement (or a documented reason they diverge) should be part of the resulting brief."
+ },
+ {
+  "todo_line": 10313,
+  "src_id": "ABS-SYNC-TASK-12",
+  "title": "TASK-12 identity-gap closure \u2014 all three paths are already hooked at HEAD",
+  "verdict": "stale_done",
+  "verdict_evidence": "All three named gaps are closed. (1) dedup.MergeBooks calls the sync follower: `grep -n 'merge.FollowMergeWithStore(store, keepID' internal/dedup/book_dedup.go` -> 1 hit ~L456. (2) CombineBooks (in internal/merge/service.go, not book_dedup.go as the item guessed) also calls it: `grep -n 'FollowMerge(ms.db, ms.syncFollower, survivor.ID' internal/merge/service.go` -> 1 hit ~L425. (3) The untagged-move scanner path calls it too: `grep -n 'merge.FollowBookIDChange(getStore(), supersededID, newBookID)' internal/scanner/scanner.go` -> 1 hit ~L2494, invoked from followSyncIdentityOnVersionLink at the version-link call site (~L2419). A dedicated survival suite already exercises rename/move-tagged/retag/file-replace/redirect-chain/composed-lifecycle scenarios (internal/merge/sync_identity_survival_test.go) and documents untagged-move as covered end-to-end by internal/scanner/sync_identity_move_test.go's TestSaveBookToDatabase_UntaggedMove_CarriesSyncIdentity.",
+  "domain": "internal/merge",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "dedup.MergeBooks (the hard-delete path) now calls merge.FollowMergeWithStore before the delete",
+    "grep_cmd": "grep -n 'merge.FollowMergeWithStore(store, keepID' internal/dedup/book_dedup.go",
+    "expect": "1 hit ~L456"
+   },
+   {
+    "claim": "CombineBooks calls FollowMerge before its hard delete",
+    "grep_cmd": "grep -n 'FollowMerge(ms.db, ms.syncFollower, survivor.ID' internal/merge/service.go",
+    "expect": "1 hit ~L425"
+   },
+   {
+    "claim": "the untagged-move scanner path calls merge.FollowBookIDChange at its version-link call site",
+    "grep_cmd": "grep -n 'merge.FollowBookIDChange(getStore(), supersededID, newBookID)' internal/scanner/scanner.go",
+    "expect": "1 hit ~L2494"
+   },
+   {
+    "claim": "a dedicated identity-survival test suite exists covering rename/move-tagged/retag/file-replace/redirect-chain/composed-lifecycle",
+    "grep_cmd": "grep -n '^func Test' internal/merge/sync_identity_survival_test.go",
+    "expect": "7 hits"
+   },
+   {
+    "claim": "mergeSerializeMu already provides the single critical section TASK-12 asked to reuse",
+    "grep_cmd": "grep -n 'mergeSerializeMu' internal/merge/serialize.go",
+    "expect": "\u22651 hit"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Verification-only close-out; no code to write",
+  "review_critical": true,
+  "goal": "Check off TODO.md L10313 (TASK-12). All three identity gaps it names are closed at HEAD: dedup.MergeBooks and CombineBooks both call the sync follower before their hard deletes, and the untagged-move scanner path calls merge.FollowBookIDChange -> RepointSyncItem at its version-link call site. No further P1 work is needed for the three named paths themselves.",
+  "background": [
+   "The item's claim #1 (dedup.MergeBooks unhooked) is now false \u2014 book_dedup.go:456 calls merge.FollowMergeWithStore inside the same mergeSerializeMu critical section as every other merge-family path, per its own comment.",
+   "The item's claim #2 (CombineBooks 'same file as the hooked merge, unhooked') mis-located CombineBooks \u2014 it actually lives in internal/merge/service.go alongside MergeBooks, not in book_dedup.go \u2014 and it IS hooked (service.go:425).",
+   "The item's claim #3 (scanner untagged-move never calls RepointSyncItem) is contradicted by scanner.go:2481-2494's followSyncIdentityOnVersionLink, called from the version-link site at scanner.go:2419."
+  ],
+  "steps": [
+   "1. No code change. Check off the TASK-12 checkbox in TODO.md (or the corresponding docs/agent-tasks/abs-sync/TASK-12 tracking doc if one exists) citing the three grep anchors above.",
+   "2. If a -race concurrent-merge test was part of TASK-12's acceptance bar and does not yet exist, verify internal/merge/service_concurrent_test.go's TestMergeFamily_CombineAndMerge_ShareOneLock (already found in this codebase) satisfies it before declaring TASK-12 fully closed; if it only covers Combine+Merge and not dedup.MergeBooks racing the other two, that narrow gap (a 3-way race test) would be the one legitimately remaining piece \u2014 flag it to the owner rather than assuming it's covered."
+  ],
+  "tests": [
+   "Verify (do not write, unless the gap above is confirmed) that a -race test exercises dedup.MergeBooks concurrently with merge.Service.MergeBooks/CombineBooks, given this repo's prior race history on MergeBooks."
+  ],
+  "acceptance": [
+   "`go test -race ./internal/merge/... ./internal/dedup/...` passes",
+   "TODO.md's TASK-12 item is checked off with citations to book_dedup.go:456, service.go:425, scanner.go:2494"
+  ],
+  "edge_cases": [
+   "If the 3-way race (dedup.MergeBooks vs MergeBooks vs CombineBooks, all three, not just two) is untested, that is the one legitimate residual gap \u2014 worth a follow-up TODO fragment rather than silently closing TASK-12 as 100% done."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Strong instance of 'hand-verify machine-flagged findings' \u2014 the TODO's own claims about which file CombineBooks lives in and whether it's hooked were both stale/wrong at HEAD."
+ },
+ {
+  "todo_line": 10329,
+  "src_id": "ABS-SYNC-wave2",
+  "title": "ABS-SYNC wave 2 (TASK-03 merge-follow, TASK-07 chapter scan hook, TASK-09 bookmarks) \u2014 all shipped",
+  "verdict": "stale_done",
+  "verdict_evidence": "TASK-03: merge-follow hook exists and is wired (internal/merge/sync_follow.go, and confirmed called from MergeBooks/CombineBooks per the L10313 finding above). TASK-07: `grep -n 'PersistChaptersForBook' internal/scanner/scanner.go` -> 2 hits (L954, L1138), i.e. wired into the scanner at two call sites, backed by internal/scanner/process_file.go:205's implementation and a full test suite in internal/scanner/chapter_persistence_test.go. TASK-09: the item's own text already marks this SHIPPED ('full CRUD registered and value-asserted').",
+  "domain": "internal/scanner",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "PersistChaptersForBook is implemented",
+    "grep_cmd": "grep -n 'func PersistChaptersForBook' internal/scanner/process_file.go",
+    "expect": "1 hit ~L205"
+   },
+   {
+    "claim": "PersistChaptersForBook is called from two scan call sites",
+    "grep_cmd": "grep -n 'PersistChaptersForBook(ctx' internal/scanner/scanner.go",
+    "expect": "2 hits ~L954, L1138"
+   },
+   {
+    "claim": "merge-follow hook exists in internal/merge",
+    "grep_cmd": "grep -n 'sync-identity merge-follow' internal/merge/sync_follow.go",
+    "expect": "\u22651 hit"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Verification-only close-out",
+  "review_critical": false,
+  "goal": "Check off TODO.md L10329 (ABS-SYNC wave 2). All three named tasks (TASK-03, TASK-07, TASK-09) are complete and wired into production call paths at HEAD.",
+  "background": [
+   "docs/agent-tasks/abs-sync/TASK-03-merge-follow-hook.md, TASK-07-scanner-chapter-hook.md, TASK-09-bookmarks.md exist as the original briefs; docs/reference/abs-implementation-status.md (2026-08-14) independently confirms the bookmark routes are VC (value-conformant) in the served ABS surface."
+  ],
+  "steps": [
+   "1. No code change. Check off TODO.md L10329's three sub-items citing the anchors above and docs/reference/abs-implementation-status.md."
+  ],
+  "tests": [],
+  "acceptance": [
+   "TODO.md L10329 is checked off"
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Part of a broader pattern in this scope: several ABS-SYNC TODO items are stale because ABS implementation progressed substantially past what TODO.md reflects \u2014 see docs/reference/abs-implementation-status.md for the authoritative current-state doc, which should probably be linked from TODO.md going forward."
+ },
+ {
+  "todo_line": 10333,
+  "part": 1,
+  "src_id": "ABS-SYNC-TASK-04",
+  "title": "TASK-04: build the idempotent sync-ID backfill over the existing library (bounded worker pool required)",
+  "verdict": "actionable",
+  "verdict_evidence": "No backfill of sync IDs exists: `grep -rln 'backfill' internal/plugins/maintenance/*.go | xargs grep -l 'SyncItem\\|SyncID\\|sync_id'` returns 0 files, unlike TASK-05 (survival tests) and TASK-03/07/09 which are all shipped. The brief exists at docs/agent-tasks/abs-sync/TASK-04-syncid-backfill.md but nothing implements it yet.",
+  "domain": "internal/plugins/maintenance",
+  "exact_files": [
+   "internal/plugins/maintenance/backfill_sync_id.go",
+   "internal/plugins/maintenance/backfill_sync_id_test.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "no existing maintenance op backfills sync IDs",
+    "grep_cmd": "grep -rln 'backfill' internal/plugins/maintenance/*.go",
+    "expect": "several hits, none combined with SyncItem/SyncID in the same file per a follow-up grep -l"
+   },
+   {
+    "claim": "the TASK-04 brief already exists and defines scope",
+    "grep_cmd": "ls docs/agent-tasks/abs-sync/TASK-04-syncid-backfill.md",
+    "expect": "file exists"
+   },
+   {
+    "claim": "the reusable bounded-worker-pool sibling pattern exists in the AcoustID backfill",
+    "grep_cmd": "grep -n 'registry.RunItems' internal/plugins/acoustid/backfill.go",
+    "expect": "\u22651 hit ~L125"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "registry.RunItems bounded-worker-pool op pattern",
+    "file": "internal/plugins/acoustid/backfill.go",
+    "verify_grep": "grep -n 'registry.RunItems(ctx, reporter, slice' internal/plugins/acoustid/backfill.go"
+   },
+   {
+    "name": "RepointSyncItem (Pebble primitive already merged, #2070)",
+    "file": "internal/database/pebble_store_syncid.go",
+    "verify_grep": "grep -n 'func (p \\*PebbleStore) RepointSyncItem' internal/database/pebble_store_syncid.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "opus",
+  "why_tier": "Full-library maintenance op with a mandatory bounded worker pool (CLAUDE.md concurrency rule) touching prod sync identity \u2014 needs careful idempotency and review",
+  "review_critical": true,
+  "goal": "Read docs/agent-tasks/abs-sync/TASK-04-syncid-backfill.md in full and implement it: a new maintenance op (following the registry.RunItems pattern from internal/plugins/acoustid/backfill.go, NOT a bare `for range books` loop, per CLAUDE.md's mandatory concurrency rule) that walks every book lacking a sync identity and mints/repoints one idempotently, safe to re-run.",
+  "background": [
+   "The three sync-identity repoint primitives this backfill needs are already merged: RepointSyncItem (#2070, internal/database/pebble_store_syncid.go:249), RepointSyncFile (#2068, internal/database/pebble_store_syncfile.go:207).",
+   "internal/plugins/acoustid/backfill.go is the canonical worked example of a bounded-worker-pool, resumable, RunItems-based maintenance backfill in this codebase \u2014 CLAUDE.md explicitly calls this out as the pattern to copy for new full-library ops instead of writing a fresh sequential loop."
+  ],
+  "steps": [
+   "1. Read docs/agent-tasks/abs-sync/TASK-04-syncid-backfill.md end to end for the exact scope/acceptance bar the brief author defined.",
+   "2. Create internal/plugins/maintenance/backfill_sync_id.go modeled on internal/plugins/acoustid/backfill.go's structure: an op definition (sdk.LivenessRunItems), a ListBookIDs-style memdb-cap-safe enumeration, and a registry.RunItems call with a bounded worker count (runtime.NumCPU() or similar) processing each book.",
+   "3. Per-book logic: check whether the book already has a sync identity (idempotency check via whatever getter pairs with RepointSyncItem/the abs_sess or sync-identity store \u2014 trace database.AsSyncIdentityStore usage in internal/merge/sync_follow.go for the accessor pattern); if absent, mint one and write it via the store's create/repoint primitive; if present, skip (no-op) so the op is safe to re-run.",
+   "4. Register the op in whatever registry the acoustid backfill registers itself in (grep the acoustid backfill's init/registration call site and mirror it).",
+   "5. Bump version headers on all new/touched files."
+  ],
+  "tests": [
+   "internal/plugins/maintenance/backfill_sync_id_test.go: TestBackfillSyncID_MintsForBooksWithoutIdentity \u2014 seed books with no sync identity, run the op, assert each now has one.",
+   "TestBackfillSyncID_Idempotent_SkipsAlreadyBackfilled \u2014 run the op twice, assert the second run performs zero mutations (no double-minting, no overwritten IDs).",
+   "TestBackfillSyncID_ConcurrentSafety \u2014 with the bounded worker pool active, assert no two workers mint conflicting IDs for the same book (a -race run)."
+  ],
+  "acceptance": [
+   "`go test -race ./internal/plugins/maintenance/... -run BackfillSyncID` passes",
+   "the op appears in the op registry the way other maintenance ops do (verify via the existing operations-listing test/endpoint)"
+  ],
+  "edge_cases": [
+   "A book with a PARTIAL sync identity (e.g. a SyncItem row but no matching SyncFile rows) must be handled explicitly \u2014 decide whether that counts as 'already backfilled' or needs completion, per the brief."
+  ],
+  "anti_over_suppression": "TestBackfillSyncID_MintsForBooksWithoutIdentity is the happy-path counterpart to the idempotent-skip test \u2014 proves the skip logic doesn't also skip books that genuinely need backfilling",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Must use a bounded worker pool per CLAUDE.md's MANDATORY concurrency rule \u2014 this is exactly the whole-library-scale, per-item-DB-write shape that rule targets."
+ },
+ {
+  "todo_line": 10333,
+  "part": 2,
+  "src_id": "ABS-SYNC-TASK-05",
+  "title": "TASK-05: ID-survival suite \u2014 already built, covers all required scenarios",
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/merge/sync_identity_survival_test.go implements the full scenario list the item demands: `grep -n '^func Test' internal/merge/sync_identity_survival_test.go` -> 7 hits (Rename, MoveTagged, Retag, FileReplace_SameID, FileReplace_Primitive, RedirectChain_PathologicalCycle, ComposedLifecycle), and the file's own comment (~L133-148) documents that MoveUntagged is deliberately NOT duplicated there because it already has real end-to-end coverage via internal/scanner/sync_identity_move_test.go's TestSaveBookToDatabase_UntaggedMove_CarriesSyncIdentity, which drives the actual production saveBookToDatabase entry point.",
+  "domain": "internal/merge",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the survival suite covers rename/move-tagged/retag/file-replace(x2)/redirect-chain/composed-lifecycle",
+    "grep_cmd": "grep -n '^func Test' internal/merge/sync_identity_survival_test.go",
+    "expect": "7 hits"
+   },
+   {
+    "claim": "untagged-move is covered separately, end-to-end, at the real production entry point",
+    "grep_cmd": "grep -n 'TestSaveBookToDatabase_UntaggedMove_CarriesSyncIdentity' internal/scanner/sync_identity_move_test.go",
+    "expect": "\u22651 hit"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Verification-only close-out",
+  "review_critical": false,
+  "goal": "Check off the TASK-05 half of TODO.md L10333. The ID-survival suite (rename / move tagged+untagged / retag / merge / file-replace) is fully built across two test files.",
+  "background": [
+   "The item lists 'merge' as one of the required survival scenarios; TestSyncIdentitySurvives_ComposedLifecycle and the file-replace tests exercise the merge-family primitives (FollowMerge/RepointSyncItem) directly, and L10313's finding confirms all three merge-family call sites (dedup.MergeBooks, CombineBooks, untagged-move) are hooked in production, so the survival suite's coverage claims hold against real call paths, not just primitives in isolation."
+  ],
+  "steps": [
+   "1. No code change. Check off the TASK-05 half of TODO.md L10333, citing internal/merge/sync_identity_survival_test.go and internal/scanner/sync_identity_move_test.go."
+  ],
+  "tests": [
+   "`go test ./internal/merge/... ./internal/scanner/... -run 'TestSyncIdentitySurvives|TestSaveBookToDatabase_UntaggedMove'` \u2014 confirm all pass at HEAD before checking the box"
+  ],
+  "acceptance": [
+   "the above test command exits 0"
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "TASK-04 (part 1 of this same todo_line) is the one piece of wave 3 still genuinely unbuilt."
+ },
+ {
+  "todo_line": 10337,
+  "src_id": "ABS-SYNC-TASK-11",
+  "title": "TASK-11 auth core (both credential modes) \u2014 already built, including the no-fail-open guard",
+  "verdict": "stale_done",
+  "verdict_evidence": "A full unified identity resolver already exists implementing exactly the \u00a73.0.1 order the item specifies: `grep -n 'func (r \\*ABSIdentityResolver)' internal/server/middleware/absauth.go` shows ResolveCFAssertion, ResolveBearer, ResolveAPIKey, and Resolve (the ordering entry point) at L171/238/305/351. The mandated no-fail-open behavior is explicit in the code comment: `grep -n 'ABSRequireAuth is the ABS group' internal/server/middleware/absauth.go` -> 1 hit ~L465-467, 'It never falls [open]'. argon2id password hashing exists (internal/server/absauth/password.go) and the ABS session store has a 'design spec \u00a73.3' 30-day-TTL-shaped schema (internal/database/pebble_store_abssession.go).",
+  "domain": "internal/server/middleware",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "ABSIdentityResolver implements CF-assertion, bearer, and API-key resolution plus a unified Resolve() entry point",
+    "grep_cmd": "grep -n 'func (r \\*ABSIdentityResolver) Resolve' internal/server/middleware/absauth.go",
+    "expect": "1 hit ~L351"
+   },
+   {
+    "claim": "ABSRequireAuth documents and enforces no fail-open behavior",
+    "grep_cmd": "grep -n 'ABSRequireAuth is the ABS group' internal/server/middleware/absauth.go",
+    "expect": "1 hit ~L465"
+   },
+   {
+    "claim": "argon2id password hashing exists for the ABS auth path",
+    "grep_cmd": "grep -rn 'argon2' internal/server/absauth/password.go",
+    "expect": "\u22651 hit"
+   },
+   {
+    "claim": "ABS-compatible DB-backed sessions exist per design spec \u00a73.3",
+    "grep_cmd": "grep -n 'design spec \u00a73.3' internal/database/pebble_store_abssession.go",
+    "expect": "1 hit ~L16"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Verification-only close-out",
+  "review_critical": true,
+  "goal": "Check off TODO.md L10337 (TASK-11). Unified identity resolution (CF assertion -> our own JWT/bearer -> API key -> 401), DB-backed ABS sessions, argon2id, and the ABS-group-must-not-fail-open requirement are all implemented. The 'Brief not yet written' note in the TODO is stale \u2014 either write the TASK-11 brief retroactively documenting what was built (for traceability) or simply close the checkbox with the anchors above.",
+  "background": [
+   "The item demanded the ABS router group must NOT inherit the /api/v1 fail-open cfaccess behavior \u2014 ABSRequireAuth's own doc comment explicitly claims this property at HEAD (absauth.go:465-467).",
+   "The item required exactly three resolution branches in order (CF assertion -> own JWT -> 401 for mode B; CF assertion with JIT provisioning, fail closed, for modes A/C) \u2014 ResolveCFAssertion/ResolveBearer/ResolveAPIKey plus the ordering Resolve() method implement this.",
+   "30d access TTL (not 1h) and DB-backed sessions were the Mode B requirement \u2014 internal/database/pebble_store_abssession.go's ABSSession schema and internal/server/absauth/config.go's TTL constants are the place to double check the literal 30d value if the owner wants byte-for-byte confirmation before closing the box."
+  ],
+  "steps": [
+   "1. No code change required to close the checkbox. Optionally: grep internal/server/absauth/config.go for the TTL constant and confirm it reads 30 days (30*24*time.Hour or similar), not 1h, to fully settle the one numeric detail called out in the item text before checking the box.",
+   "2. Check off TODO.md L10337 citing internal/server/middleware/absauth.go's Resolve/ABSRequireAuth and the argon2id/session-store anchors above.",
+   "3. Optional: write a short retroactive TASK-11 brief at docs/agent-tasks/abs-sync/TASK-11-auth-core.md documenting what shipped, purely for the historical record \u2014 not required for functionality."
+  ],
+  "tests": [
+   "Verify (do not write, unless missing) that a test in internal/server/middleware/absauth_test.go or toplevel_auth_chain_test.go pins 'ABS group never falls open' as an assertion, not just a comment \u2014 grep for 'fail.open\\|FailOpen' in those test files turned up 0 hits in this scout's pass, so this may be the one real residual gap: a named test asserting the no-fail-open property, versus it only being true by code inspection."
+  ],
+  "acceptance": [
+   "`go test ./internal/server/middleware/... -run ABS` passes"
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "REVIEW-CRITICAL because it's an auth boundary, even though the verdict is stale_done \u2014 flag to a human reviewer specifically to confirm the missing explicit 'never fails open' test exists somewhere this scout's greps didn't catch, since only a code comment (not a grep-visible test name) was found asserting the property in this pass."
+ },
+ {
+  "todo_line": 10344,
+  "src_id": "ABS-SYNC-Phase3",
+  "title": "Phase 3 DTO mapping + library browse \u2014 client contract already implemented and code-commented against the same spec sections",
+  "verdict": "stale_done",
+  "verdict_evidence": "Every named contract requirement is implemented with in-code comments citing the SAME spec section numbers as the TODO item. publishedYear as *string: `grep -n 'PublishedYear.*\\*string' internal/server/handlers/abs/dto_library.go` -> 1 hit ~L118, plus a comment at dto_library.go:12 stating 'publishedYear / publishedDate / series[].sequence are STRINGS or null, never'. userDefaultLibraryId non-null string: `grep -n 'UserDefaultLibraryID string' internal/server/handlers/abs/dto.go` -> 1 hit ~L171, comment at dto.go:28 citing \u00a71.8.2. Never-empty audioTracks (omit instead of []): dto_play.go:15-28 and mapper.go:579-584 both implement and comment the omitempty behavior citing \u00a71.8.5. Un-paginated mediaProgress: `grep -n 'never paginated' internal/server/handlers/abs/dto.go internal/server/handlers/abs/progress.go` -> 2 hits citing \u00a71.8.1.",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "publishedYear is rendered as a nullable string, never a number",
+    "grep_cmd": "grep -n 'PublishedYear.*\\*string\\|yearString renders publishedYear' internal/server/handlers/abs/dto_library.go internal/server/handlers/abs/mapper.go",
+    "expect": "\u22652 hits"
+   },
+   {
+    "claim": "userDefaultLibraryId is a non-null string field on the login/auth DTO",
+    "grep_cmd": "grep -n 'UserDefaultLibraryID string' internal/server/handlers/abs/dto.go",
+    "expect": "1 hit ~L171"
+   },
+   {
+    "claim": "audioTracks is omitted (not emitted as []) when empty",
+    "grep_cmd": "grep -n 'AudioTracks.*omitempty' internal/server/handlers/abs/dto_play.go",
+    "expect": "1 hit ~L28"
+   },
+   {
+    "claim": "mediaProgress is documented and implemented as the complete, never-paginated list",
+    "grep_cmd": "grep -n 'never paginated' internal/server/handlers/abs/dto.go internal/server/handlers/abs/progress.go",
+    "expect": "2 hits"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Verification-only close-out",
+  "review_critical": false,
+  "goal": "Check off TODO.md L10344 (Phase 3). Every named DTO contract requirement (publishedYear as String, non-null userDefaultLibraryId, unpaginated mediaProgress, integer total/numBooks, flat authorName/narratorName, omitted-not-empty audioTracks) is implemented at HEAD, each with a code comment citing the same spec section the TODO cites (\u00a71.7-1.8), which is strong corroboration this was built directly against the verified client contract, not coincidentally.",
+  "background": [
+   "docs/reference/abs-implementation-status.md (2026-08-14) independently tallies the served ABS surface as 22 value-conformant (VC) + 13 handler-tested (HT) + 6 fixture-referenced (REF) + 7 untested-depth (UT) + 1 stub (collections) \u2014 i.e. Phase 3's DTO/browse work is done and even has its own residual-gap tracking doc already, separate from this TODO item."
+  ],
+  "steps": [
+   "1. No code change. Check off TODO.md L10344 citing docs/reference/abs-implementation-status.md as the authoritative current-state doc, and the dto.go/dto_library.go/dto_play.go/mapper.go anchors above.",
+   "2. Consider replacing this TODO entry with a pointer to docs/reference/abs-implementation-status.md's 'Gap list' section (items 1-7, e.g. the Collections stub, REF/UT assertion-depth gaps) so future tracking references the live status doc instead of a stale phase description."
+  ],
+  "tests": [
+   "`go test ./internal/server/handlers/abs/... -run TestABS` (or the equivalent conformance suite entry point in abs_test.go) \u2014 confirm still green before closing the box"
+  ],
+  "acceptance": [
+   "abs conformance test suite passes"
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   10337,
+   10329
+  ],
+  "gate": "make ci",
+  "notes": "docs/reference/abs-implementation-status.md is the doc this TODO section should defer to going forward \u2014 it lists 7 concrete residual gaps (Collections stub, series pagination, REF/UT assertion depth, etc.) that are the REAL remaining Phase-3-adjacent work, distinct from what this TODO item described."
+ },
+ {
+  "todo_line": 10350,
+  "src_id": "ABS-SYNC-Phase5b",
+  "title": "Phase 5b playback routes \u2014 all three routes registered and implemented using the merged httputil Range helper",
+  "verdict": "stale_done",
+  "verdict_evidence": "All three named routes exist in the router registration: `grep -n 'items/:id/play\\|items/:id/file/:ino\\|public/session/:id/track/:index' internal/server/handlers/abs/handler.go` -> hits at L508 (POST play), L509-510/532-533 (GET/HEAD file/:ino and /download), L542 (GET public track, unauthenticated by design). ItemFile is implemented in internal/server/handlers/abs/stream.go:65. docs/reference/abs-implementation-status.md's route table independently classifies POST /api/items/:id/play as VC (value-conformant, play_test.go) and the file/:ino and public/session routes as UT (registered, tested).",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "all three Phase 5b routes are registered on the ABS handler",
+    "grep_cmd": "grep -n 'items/:id/play\\|items/:id/file/:ino\\|public/session/:id/track/:index' internal/server/handlers/abs/handler.go",
+    "expect": "5 hits total across L508-510, L532-533, L542"
+   },
+   {
+    "claim": "ItemFile (the file/:ino handler) is implemented",
+    "grep_cmd": "grep -n 'func (h \\*Handler) ItemFile' internal/server/handlers/abs/stream.go",
+    "expect": "1 hit ~L65"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Verification-only close-out",
+  "review_critical": false,
+  "goal": "Check off TODO.md L10350 (Phase 5b). POST /api/items/:id/play, GET /api/items/:id/file/:ino, and the unauthenticated GET /public/session/:id/track/:index are all registered and implemented.",
+  "background": [
+   "Direct play (no HLS) matches the item's stated scope ('Direct play only; HLS must degrade cleanly') \u2014 no HLS-specific code was found in this pass, which is consistent with the item's own scope, not a gap."
+  ],
+  "steps": [
+   "1. No code change. Check off TODO.md L10350 citing handler.go:508-542 and stream.go:65.",
+   "2. Optionally verify HLS degrades cleanly (returns a clear error/fallback rather than crashing) as a small follow-up smoke test if not already covered \u2014 not blocking the checkbox."
+  ],
+  "tests": [
+   "`go test ./internal/server/handlers/abs/... -run TestPlay` \u2014 confirm play_test.go's existing coverage is green"
+  ],
+  "acceptance": [
+   "play_test.go passes"
+  ],
+  "edge_cases": [
+   "Confirm (not verified in this pass) that ItemFile actually uses internal/httputil's Range helper as the item specifies, rather than a bespoke range implementation \u2014 a quick follow-up grep for 'httputil.' inside stream.go would settle this before fully trusting the 'Uses the merged internal/httputil Range helper' claim."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Verified the routes and handler existence; did NOT verify stream.go's internal Range-handling implementation calls internal/httputil specifically rather than reimplementing range logic \u2014 flag for a quick follow-up grep before fully closing, in case that specific sub-claim needs its own small fix."
+ },
+ {
+  "todo_line": 10354,
+  "src_id": "ABS-SYNC-Phase7",
+  "title": "Phase 7 \u2014 socket.io for Absorb (deprioritized by the item's own text; still unbuilt)",
+  "verdict": "actionable",
+  "verdict_evidence": "Confirmed unbuilt: `grep -rn 'socket.io\\|socketio\\|emit.*auth' internal/server/handlers/abs/*.go` -> 0 hits. Not covered by any of the 14 owner decisions above (none mention socket.io/Absorb), so this cannot be marked 'parked' on that basis \u2014 but the item's own text already deprioritizes it ('Deprioritized: the primary client ships without it'), so it is scoped here as low-effort/low-priority rather than dropped outright.",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+   "internal/server/handlers/abs/socketio.go",
+   "internal/server/wire_abs_routes.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "no socket.io implementation exists in the ABS handler package",
+    "grep_cmd": "grep -rn 'socket.io\\|socketio' internal/server/handlers/abs/*.go",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "socket.io IS already excluded from the SPA-fallback 200-HTML bug for the AudioBooth/Absorb clients",
+    "grep_cmd": "grep -n 'socket.io' internal/server/spa_fallback.go",
+    "expect": "\u22652 hits (nonSPAPrefixes/nonSPAExact per abs-implementation-status.md's N-1 finding)"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "absGroup registration pattern to add a new route group",
+    "file": "internal/server/wire_abs_routes.go",
+    "verify_grep": "grep -n 'absGroup := s.router.Group' internal/server/wire_abs_routes.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "New protocol surface (socket.io) with a narrow scope (Absorb-only, one auth handshake), but nontrivial because it needs an actual socket.io-compatible server, not just a REST handler",
+  "review_critical": false,
+  "goal": "Implement a minimal socket.io endpoint sufficient to stop Absorb going offline after 5 failed reconnects: accept the socket.io handshake, respond to `emit('auth', <raw token string>)` by validating the token through the existing ABSIdentityResolver, and keep the connection alive. AudioBooth needs none of this (verified against its Package.swift per the item) \u2014 scope strictly to Absorb compatibility.",
+  "background": [
+   "AudioBooth (the primary client, per the item) ships without any websocket dependency; only Absorb requires this, and only to avoid its own reconnect-storm/offline behavior \u2014 this is a compatibility shim, not a feature AO needs for its own sake."
+  ],
+  "steps": [
+   "1. Confirm no existing Go socket.io library is already vendored (`grep -n 'socket.io\\|googollee' go.mod go.sum`) before choosing a dependency; TASK-11's owner-decision note in this same scope ('Only this task may touch go.mod') suggests go.mod changes are gated \u2014 check whether TASK-11 has already landed and closed that gate, or whether adding a socket.io dependency needs the same sign-off.",
+   "2. Add a minimal socket.io v2/v3-compatible handshake handler (either via a vendored library or a hand-rolled minimal implementation, given the tiny surface needed: handshake + one 'auth' event) registered on the ABS router group in internal/server/wire_abs_routes.go.",
+   "3. On receiving `emit('auth', <token>)`, validate the token via the existing internal/server/middleware/absauth.go ABSIdentityResolver.ResolveBearer (or equivalent) and keep the socket open on success; close it (or respond with an auth-failure event) on failure \u2014 do not silently accept unauthenticated sockets.",
+   "4. Bump version headers on new/touched files."
+  ],
+  "tests": [
+   "internal/server/handlers/abs/socketio_test.go: TestSocketIOHandshake_AcceptsValidToken and TestSocketIOHandshake_RejectsInvalidToken \u2014 simulate the handshake + auth emit with a valid/invalid bearer token and assert the connection is kept/closed accordingly."
+  ],
+  "acceptance": [
+   "`go test ./internal/server/handlers/abs/... -run SocketIO` passes"
+  ],
+  "edge_cases": [
+   "A socket that never sends the auth event within a reasonable timeout should be closed, not left open indefinitely (resource leak)."
+  ],
+  "anti_over_suppression": "N/A \u2014 this is new functionality, not a filter",
+  "depends_on_lines": [
+   10337
+  ],
+  "gate": "make ci",
+  "notes": "Item's own text explicitly deprioritizes this ('the primary client ships without it') \u2014 recommend the owner confirm it's still worth building before spending an M-effort task on it, rather than this scout assuming 'parked' on their behalf.",
+  "review_notes": [
+   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
+   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+  ]
+ },
+ {
+  "todo_line": 10358,
+  "src_id": "ABS-SYNC-Phase8",
+  "title": "Phase 8 \u2014 write the ABS topology, runbook, and migration guide (Cloudflare Access ordering, cover/image bypass, client compat matrix)",
+  "verdict": "actionable",
+  "verdict_evidence": "No such doc exists yet: `find docs -iname '*runbook*' -o -iname '*topology*'` combined with the existing ABS doc set (`find docs/specs docs/reference docs/handoffs -iname '*abs*'`) shows abs-sync-api-design.md, abs-target-client-contract.md, abs-client-network-audit.md, abs-implementation-status.md, abs-upstream-api-reference.md, and a handoff doc \u2014 none of which is a topology/runbook/migration guide.",
+  "domain": "docs",
+  "exact_files": [
+   "docs/reference/abs-sync-topology-runbook.md"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "no topology/runbook doc scoped to ABS-sync exists today (generic runbook/topology docs do exist elsewhere, e.g. docs/system/runbooks.md, but none is ABS-specific)",
+    "grep_cmd": "find docs \\( -iname '*runbook*' -o -iname '*topology*' \\) | grep -i abs",
+    "expect": "0 hits \u2014 no existing runbook/topology doc is ABS-scoped"
+   },
+   {
+    "claim": "the sibling reference docs this new doc should match in structure/location already exist",
+    "grep_cmd": "ls docs/reference/abs-target-client-contract.md docs/reference/abs-implementation-status.md",
+    "expect": "both files exist"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Pure documentation synthesis task pulling together several already-known operational facts (CF Access policy ordering, cover bypass, tunnel JWT, client matrix) into one runbook \u2014 no code, but requires care to get the security-critical ordering advice right",
+  "review_critical": true,
+  "goal": "Write docs/reference/abs-sync-topology-runbook.md covering: (1) the Cloudflare Access service-token requirement to sit in a DEDICATED Service Auth policy ordered FIRST (both AudioBooth and Absorb's issue trackers hit this as a footgun); (2) the cover/image bypass (\u00a71.9.5 of the client contract \u2014 grep docs/reference/abs-target-client-contract.md for the exact requirement); (3) tunnel-level JWT enforcement notes; (4) a client compatibility matrix (AudioBooth vs Absorb: websocket need, cover bypass need, etc.); (5) the two operational gotchas the item names explicitly: 'never trust an app's reachability checkmark' (Access returns HTTP 200 with HTML on failure, which looks like a JSON-decode error to the client) and 'AudioBooth's first-server-add cover bug is upstream, not ours.'",
+  "background": [
+   "docs/reference/abs-target-client-contract.md already documents the byte-level DTO contract (\u00a71.7-1.9) this runbook should cross-reference rather than duplicate.",
+   "docs/reference/abs-implementation-status.md already documents the served-route inventory and gap list this runbook should link to for 'what's implemented' rather than re-deriving it."
+  ],
+  "steps": [
+   "1. Read docs/reference/abs-target-client-contract.md \u00a71.9.5 (cover/image bypass) and \u00a71.7-1.8 (DTO contract) to extract the exact requirements to cite, not re-derive.",
+   "2. Read docs/reference/abs-client-network-audit.md (if it covers CF Access ordering already) to avoid duplicating content \u2014 link to it instead where it already covers a topic.",
+   "3. Write docs/reference/abs-sync-topology-runbook.md with sections: Topology (tunnel + CF Access + AO server), CF Access Service Auth Policy Ordering (the dedicated-policy-first requirement, with a worked example of the wrong vs right policy order), Cover/Image Bypass, Tunnel-level JWT Enforcement, Client Compatibility Matrix (a markdown table: feature x AudioBooth x Absorb), and Known Client-Side Gotchas (reachability-checkmark trap, AudioBooth first-server-add cover bug).",
+   "4. Add the required file header (docs use the Markdown header format per file-headers.md: file/version/guid/last-edited).",
+   "5. Link this new doc from docs/reference/abs-implementation-status.md or the ABS-SYNC section of TODO.md so it's discoverable."
+  ],
+  "tests": [
+   "N/A \u2014 documentation only"
+  ],
+  "acceptance": [
+   "docs/reference/abs-sync-topology-runbook.md exists with all 5 required sections",
+   "a markdown linter or `make ci`'s doc-lint step (if any) passes on the new file"
+  ],
+  "edge_cases": [
+   "The CF Access policy-ordering advice must be stated as an explicit DO/DON'T with a concrete example, since the item calls this out as 'the trap that bit users in both clients' issue trackers' \u2014 a vague description would not prevent the same mistake."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Depends conceptually on TASK-11 (auth core) being complete for the JWT-enforcement section to describe the real implemented behavior rather than aspirational design \u2014 TASK-11 is confirmed stale_done (L10337) so this doc can describe the ACTUAL shipped auth flow."
+ },
+ {
+  "todo_line": 10366,
+  "src_id": "REGROUP-PARTCHAPTER-PARSER",
+  "title": "Add a Part->disc / Chapter->track filename parser so 'P0-C0'-style folders stop falling to ambiguous",
+  "verdict": "actionable",
+  "verdict_evidence": "No Part/Chapter filename pattern exists among the folder-shape regexes: `grep -n 'discDirRe\\|chapterSubdirRe\\|leadNumRe\\|trailNumRe' internal/itunes/service/fs_regroup_shape.go` shows only disc-dir and chapter-SUBDIR patterns (folder names like 'Disc 1', 'Title - N'), none matching a per-FILE 'P<n>-C<n>' token inside a filename like '01 P0-C0.mp3'. Per owner decision 2026-07-26 (documented at fs_regroup_shape.go:1130-1140), collapsed books never persist a real disc number \u2014 DiscNumber is always 0 and TrackNumber is sequential play-order \u2014 so this task is purely a CLASSIFICATION fix (recognize the naming as a single collapsible book instead of holding it KindAmbiguous), not a numbering-persistence fix.",
+  "domain": "internal/itunes/service",
+  "exact_files": [
+   "internal/itunes/service/fs_regroup_shape.go",
+   "internal/itunes/service/fs_regroup_shape_test.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "no P#/C# filename pattern exists among the current naming regexes",
+    "grep_cmd": "grep -n 'regexp.MustCompile' internal/itunes/service/fs_regroup_shape.go",
+    "expect": "~12 hits, none matching a Part/Chapter token pattern"
+   },
+   {
+    "claim": "KindAmbiguous is the fallback classification such folders receive today",
+    "grep_cmd": "grep -n 'KindAmbiguous' internal/itunes/service/fs_regroup_shape.go",
+    "expect": "\u22655 hits"
+   },
+   {
+    "claim": "disc numbers are never persisted from folder structure \u2014 always 0, sequential track order \u2014 so this is a classification-only fix, not a renumbering fix",
+    "grep_cmd": "grep -n 'DiscNumber is ALWAYS 0' internal/itunes/service/fs_regroup_shape.go",
+    "expect": "1 hit ~L1131"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "chapterSubdirRe / discDirRe as the pattern-matching style to follow",
+    "file": "internal/itunes/service/fs_regroup_shape.go",
+    "verify_grep": "grep -n 'var chapterSubdirRe = regexp.MustCompile' internal/itunes/service/fs_regroup_shape.go"
+   },
+   {
+    "name": "assignDiscTrack \u2014 already correct, do not modify; new parser only affects classification, not this function",
+    "file": "internal/itunes/service/fs_regroup_shape.go",
+    "verify_grep": "grep -n 'func assignDiscTrack' internal/itunes/service/fs_regroup_shape.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "opus",
+  "why_tier": "Adds a new pattern into a dense, carefully evidence-ranked classification decision tree (classifyGroup, ~L832-1075) where ordering and guard interactions with existing rules (anthology markers, generic-title guard, edition markers) matter \u2014 a naive regex add risks reclassifying folders that should stay ambiguous for other reasons",
+  "review_critical": true,
+  "goal": "Add a filename-level regex recognizing the 'P<n>-C<n>' (Part/Chapter) naming convention (e.g. '01 P0-C0.mp3', '07 P1-C6.mp3' \u2014 non-contiguous chapter numbers across parts) and feed it into classifyGroup (~fs_regroup_shape.go:832) as a new confident-collapse signal, parallel to the existing discDirRe/chapterSubdirRe folder-shape signals, so such folders classify as KindMultidisc (or a new dedicated kind if Part/Chapter shouldn't be conflated with true multi-disc \u2014 this call is left to implementation judgment guided by assignDiscTrack's existing 'no real discs' invariant) instead of falling through to KindAmbiguous.",
+  "background": [
+   "The Mistborn-style case has files like '01 P0-C0.mp3', '07 P1-C6.mp3' inside one folder \u2014 a Part/Chapter naming scheme with NON-CONTIGUOUS chapter numbers across parts (so a naive 'are these numbers contiguous' check would reject it).",
+   "assignDiscTrack (fs_regroup_shape.go:1142) already treats ALL collapsed books as DiscNumber=0 with sequential TrackNumber by owner decision (2026-07-26) \u2014 so recognizing this naming pattern only needs to change WHICH kind classifyGroup assigns, not how numbering is persisted afterward.",
+   "The existing disc/track fix mentioned in the item (multi-disc folder detection) is unaffected by this gap \u2014 Part/Chapter is a DIFFERENT naming convention from 'Disc N' folders, requiring its own regex."
+  ],
+  "steps": [
+   "1. Read internal/itunes/service/fs_regroup_shape.go's classifyGroup function (~L832-1075) end to end to understand the existing decision order (anthology check, edition-marker check, disc-dir check, generic-title guard, etc.) before inserting a new branch.",
+   "2. Add a new regex, e.g. `var partChapterRe = regexp.MustCompile(`(?i)\\bP(\\d+)[-_]C(\\d+)\\b`)`, near the other filename-token regexes (~L461-519), with a doc comment explaining the non-contiguous-numbering caveat (chapter numbers restart or skip across parts; the Part index, not the Chapter index, is the grouping key).",
+   "3. In classifyGroup, add a detection step: if a majority of a folder's member filenames match partChapterRe, treat the group as a confident collapse (mirror the existing discDirRe-driven branch's structure) rather than falling through to the KindAmbiguous default. Sort members by (Part, Chapter) numeric value (not lexical) before calling sortMembers/assignDiscTrack, since 'P1-C6' before 'P10-C1' would sort wrong lexically.",
+   "4. Ensure assignDiscTrack is called AFTER the new sort so DiscNumber stays 0 and TrackNumber is sequential per the existing owner decision \u2014 do not change assignDiscTrack itself.",
+   "5. Bump the file's version header."
+  ],
+  "tests": [
+   "internal/itunes/service/fs_regroup_shape_test.go: TestClassifyGroup_PartChapterNaming_CollapsesAsMultidisc \u2014 construct a synthetic folder with files '01 P0-C0.mp3'..'07 P1-C6.mp3' (non-contiguous chapter numbers, exactly the Mistborn case from the item) and assert classifyGroup returns a confident (non-ambiguous) kind with TrackNumber running 1..N in Part-then-Chapter order.",
+   "TestClassifyGroup_PartChapterNaming_MixedWithOtherFiles_StaysAmbiguous \u2014 a folder where only SOME files match the P#-C# pattern and others don't should NOT be force-collapsed (anti-over-suppression: prove the new regex doesn't over-eagerly claim folders it shouldn't)."
+  ],
+  "acceptance": [
+   "`go test ./internal/itunes/service/... -run TestClassifyGroup_PartChapter` passes",
+   "a manual dry-run of maintenance.regroup-shattered-ai against a fixture containing the Mistborn-style folder now reports it as a confident collapse instead of ambiguous"
+  ],
+  "edge_cases": [
+   "Part and Chapter numbers can both start at 0 (P0-C0) \u2014 the parser must not treat 0 as 'missing/invalid' the way some of the other numeric regexes in this file treat a bare leading zero.",
+   "Chapter numbers are NON-CONTIGUOUS across parts by design per the item \u2014 do not add a 'chapters must be 1..N contiguous' validation gate, since that would reject the exact case this task exists to fix."
+  ],
+  "anti_over_suppression": "TestClassifyGroup_PartChapterNaming_MixedWithOtherFiles_StaysAmbiguous",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "The item frames this as a 'fast-follow, consider' item, not a hard requirement \u2014 still fully actionable and briefable, just lower urgency than the security/data-loss items in this scope.",
+  "review_notes": []
+ },
+ {
+  "todo_line": 10372,
+  "src_id": null,
+  "title": "Retire the unsafe cleanup_merged.go handler as a guarded no-op (owner decision: MEASURE-AND-STOP, no bulk removal)",
+  "verdict": "actionable",
+  "verdict_evidence": "The handler is STILL LIVE and can still apply a real removal today: `grep -n 'func (s \\*Server) cleanupMergedHandler' internal/server/itl_cleanup.go` -> 1 hit ~L27, and reading the full 61-line file shows no guard at all \u2014 dry_run=false runs itunesservice.SafeWriteITL and actually removes tracks (L53), gated only by SafeWriteITL's generic bounded-delta cap, not by any 'this handler is disabled' check. The file's version header (1.0.0, last-edited 2026-07-22) is unchanged, confirming no guard has been added since the owner's MEASURE-AND-STOP decision. Owner decision #14 in the scope preamble is explicit: this handler must become a guarded no-op, and bulk removal must NOT be built.",
+  "domain": "internal/server",
+  "exact_files": [
+   "internal/server/itl_cleanup.go",
+   "internal/server/itl_cleanup_test.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "cleanupMergedHandler is live and can still apply a real ITL track removal (dry_run=false path)",
+    "grep_cmd": "grep -n 'SafeWriteITL(itlPath, \\*ops)' internal/server/itl_cleanup.go",
+    "expect": "1 hit ~L53"
+   },
+   {
+    "claim": "the handler has no disabled/no-op guard today",
+    "grep_cmd": "grep -n 'no-op\\|noop\\|disabled\\|guard' internal/server/itl_cleanup.go",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "the removal criterion the handler relies on is IsPrimaryVersion==false, which the owner separately flagged unsafe (see TODO L10435)",
+    "grep_cmd": "grep -n 'IsPrimaryVersion' internal/itunes/cleanup_merged.go",
+    "expect": "1 hit ~L87"
+   }
+  ],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Small diff, but it is a prod data-loss guard on a route that currently CAN delete real library tracks \u2014 precision matters more than size",
+  "review_critical": true,
+  "goal": "Make POST /api/v1/itunes/cleanup-merged a guarded no-op: dry_run continues to return the preview (harmless, useful for future re-derivation), but the apply path (dry_run=false or omitted) must refuse to call SafeWriteITL and instead respond with a clear 'retired, dry-run only' message. Do not build any new bulk-removal machinery \u2014 this is a retirement, not a redesign.",
+  "background": [
+   "Owner's P0 cleanup provenance census (97,999 .itl tracks) found provable merge orphans = 1 and SHA-gated removable = 0 \u2014 i.e. there is essentially nothing safe to remove today, and the existing IsPrimaryVersion==false criterion this handler's preview/removal logic depends on is separately documented (TODO L10435) as UNSAFE because it would delete real chapter files, not just true duplicates.",
+   "cleanupMergedHandler is registered and reachable in production today (internal/server/itl_cleanup.go implements POST /api/v1/itunes/cleanup-merged) with no guard preventing an operator from calling it with dry_run=false and actually removing tracks."
+  ],
+  "steps": [
+   "1. In internal/server/itl_cleanup.go's cleanupMergedHandler, after computing ops/preview via itunes.ComputeMergedTrackCleanup (line 34), change the `if c.Query(\"dry_run\") == \"true\"` branch (line 40) to be the ONLY successful path: keep it as-is, but replace the block below it (lines 44-60, the apply path) with an unconditional refusal \u2014 e.g. `httputil.RespondWithSuccess(c, http.StatusGone, gin.H{\"applied\": false, \"preview\": preview, \"error\": \"cleanup-merged apply is retired (P3 decision: MEASURE-AND-STOP); dry_run=true only\"})` \u2014 never calling itunesservice.SafeWriteITL.",
+   "2. Update the function's doc comment (lines 24-26) to state the apply path is permanently retired, citing the P0 census finding (0 SHA-gated removable) and pointing to docs/specs/2026-07-23-itunes-2way-p0-findings.md \u00a7F4.",
+   "3. Do NOT remove ComputeMergedTrackCleanup or the dry_run preview path \u2014 the item explicitly wants the measurement capability kept, only the apply/removal path retired.",
+   "4. Bump the file's version header."
+  ],
+  "tests": [
+   "internal/server/itl_cleanup_test.go: TestCleanupMergedHandler_DryRun_StillReturnsPreview \u2014 dry_run=true still returns a 200 with the preview payload (proves the measurement capability survives).",
+   "internal/server/itl_cleanup_test.go: TestCleanupMergedHandler_Apply_RefusesAndNeverWrites \u2014 dry_run=false (or omitted) returns the retirement error, and (via a spy/mock on SafeWriteITL or by asserting the .itl fixture file's bytes are unchanged on disk after the call) proves no write occurred."
+  ],
+  "acceptance": [
+   "`go test ./internal/server/... -run TestCleanupMergedHandler` passes both new tests",
+   "a manual curl of `POST /api/v1/itunes/cleanup-merged?dry_run=false` against a test server returns the retirement message and the target .itl file's mtime/bytes are unchanged"
+  ],
+  "edge_cases": [
+   "ops.IsEmpty() (line 45 today) becomes unreachable/irrelevant once apply always refuses \u2014 remove or repurpose that branch rather than leaving dead code."
+  ],
+  "anti_over_suppression": "TestCleanupMergedHandler_DryRun_StillReturnsPreview is the anti-over-suppression check \u2014 proves the retirement did not also kill the harmless measurement path",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "This is a live prod data-loss path today (an operator or a stale UI button could still trigger a real removal via an unsafe criterion) \u2014 treat as review-critical and prioritize over the lower-urgency ABS-SYNC items in this scope.",
+  "review_notes": [
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ]
+ },
+ {
+  "todo_line": 10383,
+  "src_id": null,
+  "title": "iTunes 2-way-sync remaining P0 measurements \u2014 run the already-built measurement infrastructure against real/prod data",
+  "verdict": "prod_run",
+  "verdict_evidence": "Both measurement primitives already exist as code, awaiting execution against real data rather than needing to be built. (a) Cross-type PID collision detection exists: `grep -rln 'CrossType' internal/itunes/*.go` -> cross_type.go + cross_type_test.go. (b) The byte-preservation proof is an env-gated test built for exactly this purpose: `grep -n 'ITL_PRESERVE_PROOF_PATH' internal/itunes/itl_preserve_proof_test.go` -> 1 hit ~L123, with a t.Skip() unless a real .itl path is supplied, and its own doc/log lines describe relocating ~300 tracks and removing ~30 others through SafeWriteITL then byte-comparing \u2014 precisely the 'relocate AND a track-remove ... byte-compare every untouched track's record' the item asks for.",
+  "domain": "internal/itunes",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "cross-type PID collision detection code exists",
+    "grep_cmd": "grep -n 'func ' internal/itunes/cross_type.go",
+    "expect": "\u22651 hit"
+   },
+   {
+    "claim": "an env-gated real-.itl byte-preservation proof test exists, built for a relocate+remove combined run",
+    "grep_cmd": "grep -n 'ITL_PRESERVE_PROOF_PATH' internal/itunes/itl_preserve_proof_test.go",
+    "expect": "1 hit ~L123"
+   },
+   {
+    "claim": "the test explicitly samples ~300 relocates and ~30 removes in one run, matching the item's ask",
+    "grep_cmd": "grep -n 'wantRelo, wantRemove = 300, 30' internal/itunes/itl_preserve_proof_test.go",
+    "expect": "1 hit"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "TestITLPreservationByteProof (env-gated, run don't rewrite)",
+    "file": "internal/itunes/itl_preserve_proof_test.go",
+    "verify_grep": "grep -n 'func TestITLPreservationByteProof' internal/itunes/itl_preserve_proof_test.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "No code to write \u2014 running an existing env-gated Go test against a ZFS clone of the real .itl, and querying prod for the PID-collision count",
+  "review_critical": true,
+  "goal": "Not a code task. (a) Query prod for cross-type PID collisions using the existing cross_type.go detection to confirm the count stays 0 post pid-repair. (b) Take a ZFS clone of the live AO writeback .itl, set ITL_PRESERVE_PROOF_PATH to a copy of it, and run `go test ./internal/itunes/ -run TestITLPreservationByteProof -v` to get the real byte-proof the item asks for (a synthetic-fixture run does NOT satisfy this ask \u2014 per the 'round-trip against a real artifact' project discipline, only a run against the actual prod-derived .itl counts as the P0 proof).",
+  "background": [
+   "internal/itunes/cross_type_test.go already covers the detection logic in isolation; what remains is running it against a live count.",
+   "TestITLPreservationByteProof is deliberately env-gated (t.Skip when ITL_PRESERVE_PROOF_PATH is unset) specifically so it can be pointed at a real .itl copy rather than only running against synthetic fixtures in CI."
+  ],
+  "steps": [
+   "1. Take a ZFS clone of the live AO writeback library's .itl (per the file-mapping reference: the AO library lives on the NAS at the writeback root).",
+   "2. Run `ITL_PRESERVE_PROOF_PATH=/path/to/clone/iTunes\\ Music\\ Library.itl go test ./internal/itunes/ -run TestITLPreservationByteProof -v` and confirm PASS (zero unexpected byte changes to untouched tracks).",
+   "3. Separately, run the cross-type PID collision check (whatever CLI/op wraps cross_type.go \u2014 confirm one exists as a runnable entry point before assuming it's a one-liner; if only a library function exists with no CLI/op wrapper, that wrapper would itself become a small actionable follow-up) against prod and record the count.",
+   "4. Record both results in docs/operations/pending-prod-actions.md or the P0 findings doc (docs/specs/2026-07-23-itunes-2way-p0-findings.md) as completed measurements, per owner decision to proceed to P1/P2 only after these are confirmed."
+  ],
+  "tests": [
+   "N/A \u2014 running an existing test against real data is the deliverable, not new test code"
+  ],
+  "acceptance": [
+   "TestITLPreservationByteProof passes when pointed at a real ZFS-cloned .itl",
+   "the cross-type PID collision count is recorded as 0 (or a non-zero finding is escalated) in the P0 findings doc"
+  ],
+  "edge_cases": [
+   "If the byte-proof test FAILS against the real .itl, that is a genuine finding, not a test bug \u2014 do not silently retry or loosen the assertion; escalate per 'mutation-test before trusting a green test' discipline in reverse (a red result here is real signal)."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (prod measurement, not a code gate)",
+  "notes": "Verify whether a runnable CLI/op wrapper exists for the cross-type PID check before assuming step 3 is push-button \u2014 if not, that narrow wrapper is the one piece of genuinely new (tiny) code this item might need."
+ },
+ {
+  "todo_line": 10390,
+  "src_id": null,
+  "title": "P2 relocate-only sync cycle \u2014 the composed cycle already exists (RunRelocateSyncCycle); wire it to a caller and add an end-to-end test",
+  "verdict": "actionable",
+  "verdict_evidence": "The exact 5-step composition the item describes (PLAN/GUARD/VERIFY/QUIESCE/COMMIT) is already implemented, using the same section names: `grep -n 'func RunRelocateSyncCycle' internal/itunes/relocate_sync_cycle.go` -> 1 hit ~L114, with the file's own top-of-file comment enumerating the same 5 steps the TODO item lists almost verbatim. HOWEVER it has zero callers anywhere in the codebase (`grep -rln 'RunRelocateSyncCycle' internal/` matches only its own defining file) and its own test file (internal/itunes/relocate_sync_cycle_test.go) only exercises its small helper functions (acquireSyncWriteLock, FileActivityLibraryCheck, relocatedPIDSet, restoreITLBackup) \u2014 RunRelocateSyncCycle itself has NO test invoking it end-to-end. So the composition function exists but is neither wired to any operational entry point (CLI/op/handler) nor covered by its own test.",
+  "domain": "internal/itunes",
+  "exact_files": [
+   "internal/server/itl_sync_cycle.go",
+   "internal/itunes/relocate_sync_cycle_test.go",
+   "internal/server/server_lifecycle.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "RunRelocateSyncCycle already composes PLAN/GUARD/VERIFY/QUIESCE/COMMIT exactly as the item describes",
+    "grep_cmd": "grep -n 'func RunRelocateSyncCycle' internal/itunes/relocate_sync_cycle.go",
+    "expect": "1 hit ~L114"
+   },
+   {
+    "claim": "it has no caller anywhere in the codebase outside its own file",
+    "grep_cmd": "grep -rln 'RunRelocateSyncCycle' internal/",
+    "expect": "1 file: internal/itunes/relocate_sync_cycle.go itself"
+   },
+   {
+    "claim": "its own test file does not directly test RunRelocateSyncCycle, only its helpers",
+    "grep_cmd": "grep -n '^func Test' internal/itunes/relocate_sync_cycle_test.go",
+    "expect": "4 hits, none named RunRelocateSyncCycle"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "RunRelocateSyncCycle + SyncCycleConfig (do not rebuild \u2014 wire and test only)",
+    "file": "internal/itunes/relocate_sync_cycle.go",
+    "verify_grep": "grep -n 'type SyncCycleConfig struct' internal/itunes/relocate_sync_cycle.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "opus",
+  "why_tier": "The hard/dangerous part (the composition, guard wiring, quiescence, oracle) is already built and reviewed-in; what remains is wiring a real write path to prod data plus an end-to-end test, which still needs careful review given the review_critical blast radius even though the diff is smaller than building the cycle from scratch",
+  "review_critical": true,
+  "goal": "Do NOT rebuild the relocate-only sync cycle \u2014 RunRelocateSyncCycle already implements it faithfully to the design. The remaining work is: (1) an end-to-end test that actually calls RunRelocateSyncCycle against a fixture library and asserts a full dry-run cycle completes with the expected SyncCycleResult; (2) an operational entry point (an HTTP handler or a maintenance op, following the existing itunes-sync handler patterns in internal/server) so an operator can actually invoke it, wired with cfg.Apply defaulting to false per this repo's standing 'apply=false default, owner runs apply' rule.",
+  "background": [
+   "relocate_sync_cycle.go's own top-of-file comment already documents the 5-step PLAN/GUARD/VERIFY/QUIESCE/COMMIT design matching the TODO item's steps almost word for word, plus explicit SAFETY notes on single-flight locking and quiescence.",
+   "Every prerequisite primitive the item lists as merged (LibrarySet #2040, cleanup census P3 no-op, cross-type+preservation proofs, VerifyRelocateWrite #2043, RefreshLibraryIdentity+PartitionedTrackCount #2044, AllowedWritebackRoot #2045) is referenced directly in relocate_sync_cycle.go's own doc comment, confirming the composition really does draw on all of them as designed.",
+   "internal/server/itl_rebuild.go and internal/server/itl_cleanup.go are the existing sibling handlers for other iTunes operations \u2014 the new entry point should follow their registration pattern (see server_lifecycle.go's itunesGroup.POST(...) registrations, e.g. line ~1563 for rebuild-full)."
+  ],
+  "steps": [
+   "1. Read internal/itunes/relocate_sync_cycle.go end to end (all ~330 lines) including its PRE-APPLY VERIFICATION warning comment (~L34-38) before wiring anything \u2014 the warning explicitly says do not set Apply=true until a manual dry-run has confirmed the relocate targets match the AO library's real .itunes-writeback/iTunes Media/ root.",
+   "2. Create internal/server/itl_sync_cycle.go implementing a handler (e.g. syncCycleHandler) modeled on itl_cleanup.go's structure: resolve the ITL write path, build a SyncCycleConfig with AllowedWritebackRoot wired from the AO library's own LibrarySet media root (per the item's explicit instruction), Apply defaulting to false, call itunes.RunRelocateSyncCycle, and return the SyncCycleResult as JSON.",
+   "3. Register the new route in internal/server/server_lifecycle.go's itunesGroup alongside the existing rebuild-full registration (~L1563), e.g. `itunesGroup.POST(\"/sync-cycle\", s.perm(auth.PermLibraryEditMetadata), s.syncCycleHandler)`.",
+   "4. Add internal/itunes/relocate_sync_cycle_e2e_test.go: TestRunRelocateSyncCycle_DryRun_ComputesPlanWithoutWriting \u2014 build a small fixture .itl + a matching book_file store, call RunRelocateSyncCycle with Apply=false, and assert the returned plan/result matches expectations and the fixture .itl file is byte-identical on disk afterward (dry-run never writes).",
+   "5. Bump version headers on all new/touched files."
+  ],
+  "tests": [
+   "internal/itunes/relocate_sync_cycle_e2e_test.go: TestRunRelocateSyncCycle_DryRun_ComputesPlanWithoutWriting (see above).",
+   "internal/itunes/relocate_sync_cycle_e2e_test.go: TestRunRelocateSyncCycle_Apply_WritesAndVerifies \u2014 with Apply=true against a fixture, assert the write happens, VerifyRelocateWrite passes, and a subsequent read of the .itl reflects the relocated paths.",
+   "internal/server/itl_sync_cycle_test.go: TestSyncCycleHandler_DefaultsApplyFalse \u2014 POST with no apply param and assert cfg.Apply was false (no write occurred)."
+  ],
+  "acceptance": [
+   "`go test ./internal/itunes/... ./internal/server/... -run 'SyncCycle'` passes",
+   "`make ci` passes"
+  ],
+  "edge_cases": [
+   "The PRE-APPLY VERIFICATION warning in the source must be respected operationally, not just in code \u2014 the new handler's default MUST be Apply=false and any UI/CLI surface added on top of it should require an explicit, separate confirmation step before ever setting Apply=true against prod, consistent with this repo's standing apply=false-default rule."
+  ],
+  "anti_over_suppression": "N/A \u2014 not a filter/guard addition",
+  "depends_on_lines": [
+   10383
+  ],
+  "gate": "make ci",
+  "notes": "Depends conceptually on L10383's byte-preservation proof being run first (the PRE-APPLY VERIFICATION comment in relocate_sync_cycle.go effectively says the same thing) before this is ever pointed at prod with Apply=true.",
+  "review_notes": [
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+  ]
+ },
+ {
+  "todo_line": 10406,
+  "src_id": null,
+  "title": "isAudiobookITL under-classifies audiobooks \u2014 needs an owner decision on re-deriving GuardRebuildTarget's threshold before broadening the heuristic",
+  "verdict": "needs_design",
+  "verdict_evidence": "Confirmed both under-classification claims: `sed -n '35,49p' internal/itunes/library_shape.go` shows isAudiobookITL checks `strings.Contains(kind, \"audiobook\")` (no space variant) and only genre-matches 'audiobook'/'spoken', missing every literary genre the item names (Science Fiction, Fantasy, Suspense, Comedy). GuardRebuildTarget (internal/itunes/library_shape.go:86) consumes this classification for its 'looks like a real library' safety threshold. The item itself states the open question precisely: broadening the heuristic LOWERS the non-audiobook count and could drop a real library below GuardRebuildTarget's threshold, so the threshold must be re-derived in the SAME PR \u2014 that re-derivation number is not decided by any of the 14 owner decisions above.",
+  "domain": "internal/itunes",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "isAudiobookITL only matches the no-space 'audiobook' substring, not 'audio book'/'Audio Book'",
+    "grep_cmd": "grep -n 'strings.Contains(kind, \"audiobook\")' internal/itunes/library_shape.go",
+    "expect": "1 hit ~L40"
+   },
+   {
+    "claim": "genre matching is limited to 'audiobook'/'spoken', missing literary genres",
+    "grep_cmd": "grep -n 'strings.Contains(genre, \"audiobook\") || strings.Contains(genre, \"spoken\")' internal/itunes/library_shape.go",
+    "expect": "1 hit ~L44"
+   },
+   {
+    "claim": "GuardRebuildTarget consumes a library-shape classification that depends on isAudiobookITL's count",
+    "grep_cmd": "grep -n 'func GuardRebuildTarget' internal/itunes/library_shape.go",
+    "expect": "1 hit ~L86"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "opus",
+  "why_tier": "The fix itself would be a small regex/genre-list change, but it cannot be briefed responsibly without the owner first deciding the new GuardRebuildTarget threshold \u2014 get that wrong and the guard silently stops protecting a real library",
+  "review_critical": true,
+  "goal": "NOT briefable for implementation yet. Owner must decide: (1) the exact broadened match set (add a word-boundary space variant for 'audio book', and name which literary genres to add \u2014 Science Fiction, Fantasy, Suspense, Comedy, and any others); (2) what GuardRebuildTarget's new 'looks real' threshold should be once the non-audiobook count drops, informed by re-running the classification against the actual prod library census (3,436 AO-owned audiobooks currently misclassified) to see the new ratio; (3) confirm isAudiobookITL is never used as a relocate/cleanup targeting filter anywhere (item's constraint (a)) before or after the change.",
+  "background": [
+   "P0 cross-type census (\u00a7F5) already measured the blast radius: 705 tracks miss the space-variant genre string, and 3,436 AO-owned audiobooks total are misclassified as non-audiobook across all literary genres combined.",
+   "Today's misclassification is FAIL-SAFE for GuardRebuildTarget (inflates the non-audiobook count, making the guard MORE likely to block a rebuild) \u2014 so there is no urgent safety bug requiring an immediate fix; the risk is entirely in getting the FIX wrong, which is why it needs a design decision rather than a fire-and-forget briefing."
+  ],
+  "steps": [
+   "BLOCKED on the owner decisions above \u2014 do not write isAudiobookITL implementation steps or a new GuardRebuildTarget threshold until they are made."
+  ],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [
+   "A too-aggressive genre broadening (e.g. adding 'Comedy' without qualification) could pull in non-audiobook comedy-genre music tracks if any exist in a mixed library \u2014 the genre list needs to be reviewed against real prod genre strings before being finalized, not just matched to the 4 examples in the item."
+  ],
+  "anti_over_suppression": "N/A \u2014 blocked pending design",
+  "depends_on_lines": [],
+  "gate": "n/a (blocked on design)",
+  "notes": "Constraint (a) from the item ('never use isAudiobookITL as a relocate/cleanup targeting filter') should be turned into a codified guard (e.g. a comment + grep-checkable convention, or a lint rule) as part of whatever PR eventually fixes this, so the constraint survives beyond a TODO comment."
+ },
+ {
+  "todo_line": 10418,
+  "src_id": null,
+  "title": "P2 BLOCKER \u2014 location-form guard rejecting the whole AO library \u2014 already fixed via AllowedWritebackRoot scoping (owner's preferred option 1)",
+  "verdict": "stale_done",
+  "verdict_evidence": "The owner's preferred fix (scope the staging-marker check to the write target via the LibrarySet mode facts / AllowedWritebackRoot) is fully implemented: `grep -n 'AllowedWritebackRoot scopes the location-form' internal/itunes/itl_safety_contract.go` -> 1 hit ~L137, and the guard function itself uses it: `grep -n 'allowedRoot := normalizeStagingPath(cfg.AllowedWritebackRoot)' internal/itunes/itl_safety_contract.go` -> 1 hit ~L562, feeding into `stagingMarkerIsLeak(pair.val, allowedRoot)` at the actual violation check (~L577). The same field is also wired end-to-end by relocate_sync_cycle.go's SyncCycleConfig.AllowedWritebackRoot (per L10390's finding), so the P2 relocate op is no longer structurally blocked by this guard once AllowedWritebackRoot is set to the AO library's own root.",
+  "domain": "internal/itunes",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "guardLocationForm scopes the staging-marker check to cfg.AllowedWritebackRoot",
+    "grep_cmd": "grep -n 'allowedRoot := normalizeStagingPath(cfg.AllowedWritebackRoot)' internal/itunes/itl_safety_contract.go",
+    "expect": "1 hit ~L562"
+   },
+   {
+    "claim": "the violation check uses stagingMarkerIsLeak(val, allowedRoot) rather than a blanket reject",
+    "grep_cmd": "grep -n 'stagingMarkerIsLeak(pair.val, allowedRoot)' internal/itunes/itl_safety_contract.go",
+    "expect": "1 hit ~L577"
+   },
+   {
+    "claim": "AllowedWritebackRoot is documented as the F7 fix, citing the exact spec section the item cites",
+    "grep_cmd": "grep -n 'F7:' internal/itunes/itl_safety_contract.go",
+    "expect": "\u22651 hit ~L561"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Verification-only close-out",
+  "review_critical": true,
+  "goal": "Check off TODO.md L10418 (F7 blocker). The location-form guard now scopes its '.itunes-writeback/' staging-marker rejection to paths OUTSIDE the caller-supplied AllowedWritebackRoot, so writing the AO library (whose own root legitimately contains '.itunes-writeback/') no longer trips the guard when AllowedWritebackRoot is set correctly. This was owner's stated preferred fix (option 1).",
+  "background": [
+   "TestITLRelocateContractStatus (env-gated, referenced by the item as reproducing the blocker) should now be re-run to confirm it passes with AllowedWritebackRoot wired, closing the loop on whether the fix actually resolves the specific 82,976-track rejection the item measured."
+  ],
+  "steps": [
+   "1. No code change needed for the guard itself. Re-run (or have the owner re-run) TestITLRelocateContractStatus with the env gate enabled against the real library shape to confirm the previously-measured 82,976-track rejection no longer occurs \u2014 this closes the loop from 'code inspection says fixed' to 'measured fixed'.",
+   "2. Check off TODO.md L10418 citing itl_safety_contract.go:561-577 as the fix, once step 1 confirms it.",
+   "3. Cross-reference L10390 (P2 relocate sync cycle) \u2014 that item's wiring work should set AllowedWritebackRoot from the AO library's LibrarySet root, which is the operational half of actually exercising this fix in the real relocate path."
+  ],
+  "tests": [
+   "Re-run internal/itunes/itl_safe_write_test.go / itl_location_form_scope_test.go's existing guardLocationForm coverage, plus the env-gated TestITLRelocateContractStatus, to confirm green"
+  ],
+  "acceptance": [
+   "`go test ./internal/itunes/... -run 'LocationForm|RelocateContract'` passes"
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   10390
+  ],
+  "gate": "make ci",
+  "notes": "This being fixed removes a hard structural blocker on L10390's relocate sync cycle wiring \u2014 the two items should be closed/tracked together."
+ },
+ {
+  "todo_line": 10435,
+  "src_id": null,
+  "title": "iTunes 2-way-sync continuation: P3 redefine, reverse sync, and rebuild-guard deprecation \u2014 three separate open design decisions",
+  "verdict": "needs_design",
+  "verdict_evidence": "This item bundles three genuinely separate pieces of unresolved design, none settled by the 14 owner decisions above. (1) P3 redefine: the item itself says the current IsPrimaryVersion==false removal criterion is UNSAFE and needs redefinition to provable-duplicates-only via version_group/MergedIntoBookID linkage \u2014 confirmed the field is still the live criterion (`grep -n 'IsPrimaryVersion' internal/itunes/cleanup_merged.go` -> 1 hit ~L87) and no MergedIntoBookID-based redefinition exists there. (2) Reverse sync (iTunes -> writeback -> AO): confirmed unbuilt, `grep -rln 'ReverseSync\\|reverse.sync' internal/itunes/` -> 0 hits. (3) rebuild/rebuild-full deprecation: the routes are still live and unguarded beyond existing contract checks: `grep -n 'rebuild-full' internal/server/server_lifecycle.go` -> 1 hit ~L1563 registering the route with no deprecation flag found.",
+  "domain": "docs",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the unsafe IsPrimaryVersion criterion is still what cleanup_merged.go uses",
+    "grep_cmd": "grep -n 'IsPrimaryVersion' internal/itunes/cleanup_merged.go",
+    "expect": "1 hit ~L87"
+   },
+   {
+    "claim": "no reverse-sync (iTunes->AO) code exists",
+    "grep_cmd": "grep -rln 'ReverseSync\\|reverse.sync' internal/itunes/",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "rebuild-full is still a live, registered route",
+    "grep_cmd": "grep -n 'rebuild-full' internal/server/server_lifecycle.go",
+    "expect": "1 hit ~L1563"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "L",
+  "tier": "opus",
+  "why_tier": "Three independent open designs bundled in one TODO item, each requiring its own owner decision (safe redefinition criterion, source-of-truth model for reverse sync, adopt-base steady-state definition) before any implementation brief can be written",
+  "review_critical": true,
+  "goal": "NOT briefable as one task. Recommend the owner split this into three separate decisions, each producing its own actionable brief afterward: (1) redefine P3 removal to a provable-duplicates-only criterion anchored on version_group/MergedIntoBookID linkage, and separately explain the 4,298 shared-PID oddity the item flags as unexplained; (2) decide reverse sync's source-of-truth model (does iTunes-side edits/plays/playlists get imported FROM the writeback library, and via what mechanism) before any code is written; (3) decide the adopt-base steady-state and whether/how to guard or deprecate /rebuild and /rebuild-full against the now-real (97,782-track) library rather than a throwaway prototype.",
+  "background": [
+   "docs/plans/2026-07-23-itunes-2way-sync-continuation.md is the existing plan doc this item summarizes \u2014 read it in full before drafting the three-way split, since it likely already has partial answers to some of these questions that a grep-only pass would miss.",
+   "P1 relocate is already applied+verified on prod per the item (6,414 tracks), so this continuation work is scoped to what comes AFTER relocate, not blocking it."
+  ],
+  "steps": [
+   "BLOCKED \u2014 three separate owner decisions needed before any of the three sub-threads can be briefed. Recommend the coordinator route this back to the owner as three distinct questions rather than one task."
+  ],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [
+   "Any destructive apply (merged-track removal under a redefined criterion, or a /rebuild-full guard change) must go through dry-run + sample + explicit owner sign-off per the item's own closing instruction \u2014 this is a hard requirement on whatever brief eventually comes out of the design decision, not optional."
+  ],
+  "anti_over_suppression": "N/A \u2014 blocked pending design",
+  "depends_on_lines": [
+   10372
+  ],
+  "gate": "n/a (blocked on design)",
+  "notes": "L10372 (P3 retire cleanup_merged.go as a guarded no-op) is the SAFE, already-decided subset of this item's P3 concern and is independently actionable now \u2014 see that object. This L10435 entry covers only the harder, undecided remainder (redefinition to provable-duplicates, reverse sync, rebuild guard)."
+ },
+ {
+  "todo_line": 10457,
+  "src_id": null,
+  "title": "iTunes 2-way sync writeback: edit-in-place surgical relocate \u2014 blocked on the design doc's own \u00a78 open decisions",
+  "verdict": "needs_design",
+  "verdict_evidence": "The primitive this item wants to use for edit-in-place writeback already exists (`grep -n 'func UpdateITLLocations' internal/itunes/itl.go` -> 1 hit ~L699), so the gap is not a missing primitive \u2014 it is that the item explicitly names five open decisions in docs/specs/2026-07-22-itunes-2way-sync-writeback-design.md \u00a78 (PID persistence, bookmark mhod, read-back scope, base selection, cadence) that must be resolved BEFORE implementation, none of which are covered by the 14 owner decisions in this scope's preamble.",
+  "domain": "docs",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the surgical edit-in-place primitive (UpdateITLLocations) already exists and could be reused once the design is settled",
+    "grep_cmd": "grep -n 'func UpdateITLLocations' internal/itunes/itl.go",
+    "expect": "1 hit ~L699"
+   },
+   {
+    "claim": "the design doc this item points to exists and presumably still carries its open \u00a78 decisions",
+    "grep_cmd": "ls docs/specs/2026-07-22-itunes-2way-sync-writeback-design.md",
+    "expect": "file exists"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "UpdateITLLocations (surgical location-only write primitive, IsAudiobook scope-gated per the item)",
+    "file": "internal/itunes/itl.go",
+    "verify_grep": "grep -n 'UpdateITLLocations reads an ITL file' internal/itunes/itl.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "L",
+  "tier": "opus",
+  "why_tier": "A real prod library rewrite strategy change (discard the lossy 12,193-track rebuild-full prototype in favor of surgical edit-in-place against the real 97,782/356 library) with five explicitly-named open design decisions \u2014 high blast radius, not mechanical",
+  "review_critical": true,
+  "goal": "NOT briefable for implementation yet. The owner must resolve \u00a78 of docs/specs/2026-07-22-itunes-2way-sync-writeback-design.md first: (1) PID persistence strategy across the edit-in-place rewrite; (2) bookmark mhod (chunk) handling; (3) read-back scope (what gets verified after a write); (4) base-library selection (which .itl is the starting point once the lossy rebuild-full prototype is discarded); (5) cadence (how often edit-in-place runs). Only after those are answered can Phased P0-P4 implementation steps be briefed.",
+  "background": [
+   "The currently-deployed rebuild-full writeback regenerates a 12,193-track/14-playlist library, materially smaller and lossier (no play counts, ratings, bookmarks, music/podcasts, user playlists) than the real 97,782-track/356-playlist library \u2014 this item wants that discarded in favor of the surgical approach once \u00a78 is resolved.",
+   "This item overlaps significantly with L10435's reverse-sync and rebuild-guard threads (both touch /rebuild-full's future) \u2014 the two should likely be resolved together by the same owner decision session rather than independently, since a decision on one affects the other."
+  ],
+  "steps": [
+   "BLOCKED on the 5 named \u00a78 decisions in docs/specs/2026-07-22-itunes-2way-sync-writeback-design.md \u2014 do not brief P0-P4 implementation steps until they are resolved."
+  ],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [
+   "The 2 MB prototype library discard step must be treated as destructive/irreversible in whatever brief eventually comes out of this \u2014 confirm a backup or the ability to regenerate it exists before discarding."
+  ],
+  "anti_over_suppression": "N/A \u2014 blocked pending design",
+  "depends_on_lines": [
+   10435
+  ],
+  "gate": "n/a (blocked on design)",
+  "notes": "Strongly recommend the coordinator batch this item's owner-decision request together with L10435's three decisions into one design session, since all four concern the same underlying question of what the iTunes writeback strategy should be going forward."
+ }
+]
