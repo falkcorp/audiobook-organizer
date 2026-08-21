@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
 // last-edited: 2026-08-21
 
@@ -369,7 +369,7 @@ func TestGetConfigIncludesPathAliases(t *testing.T) {
 	h, d := newTestHandler(t)
 	d.cfgUpd.EXPECT().MaskSecrets(mock.Anything).Return(config.Config{
 		PathAliases: []config.PathAlias{
-			{Root: "/library/books", Windows: "W:", SMBURL: "smb://host/books"},
+			{Root: "/library/books", Windows: "W:", UNC: `\\host\books`, SMBURL: "smb://host/books"},
 		},
 	})
 
@@ -394,6 +394,7 @@ func TestGetConfigIncludesPathAliases(t *testing.T) {
 	require.Len(t, resp.Data.Config.PathAliases, 1)
 	assert.Equal(t, "/library/books", resp.Data.Config.PathAliases[0]["root"])
 	assert.Equal(t, "W:", resp.Data.Config.PathAliases[0]["windows"])
+	assert.Equal(t, `\\host\books`, resp.Data.Config.PathAliases[0]["unc"])
 	assert.Equal(t, "smb://host/books", resp.Data.Config.PathAliases[0]["smb_url"])
 }
 
