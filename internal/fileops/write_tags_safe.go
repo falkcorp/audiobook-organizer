@@ -1,15 +1,17 @@
 // file: internal/fileops/write_tags_safe.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b4c5d6e7-f8a9-0b1c-2d3e-4f5a6b7c8d9e
-// last-edited: 2026-08-15
+// last-edited: 2026-08-21
 
 package fileops
 
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -20,6 +22,25 @@ type WriteTagsSafeOptions struct {
 	BookFileID string
 	// Store receives the pre- and post-write hashes. Nil = skip DB update.
 	Store database.BookFileHashUpdater
+	// Provenance receives an append-only record of this write. Nil = skip.
+	//
+	// Store overwrites two hash columns and so keeps only the most recent
+	// pair; Provenance keeps every pair ever recorded. They are separate
+	// fields because the columns are what existing queries read, and the
+	// ledger is what makes a hash from before this write still resolvable
+	// after it.
+	Provenance database.FileProvenanceRecorder
+	// Actor names what is performing the write (an op, plugin, or user). It is
+	// recorded on the provenance events and is otherwise unused.
+	Actor string
+	// Detail is a human-readable note about what this write changes, e.g.
+	// `author: "" -> "Brandon Sanderson"`. Recorded on the tags_written event.
+	Detail string
+	// TorrentHash is the Deluge infohash of the release the file came from,
+	// normally BookFile.DelugeHash. It identifies the source rather than the
+	// bytes, so unlike either SHA it is unchanged by this write — which makes
+	// it the most durable link back to a pristine original.
+	TorrentHash string
 }
 
 // WriteTagsSafe writes audio metadata tags to path safely:
@@ -47,7 +68,10 @@ func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTa
 	// ComputeFileHash streams the ENTIRE audio file through SHA-256 with no size
 	// cap and no mtime/size shortcut, twice per call. On NAS-backed audiobooks
 	// that dominated the cost of a tag write.
-	wantHashes := opts.BookFileID != "" && opts.Store != nil
+	// Provenance needs the same two digests the columns do, so either
+	// destination is reason enough to compute them. Without this the ledger
+	// would silently record empty digests whenever Store was nil.
+	wantHashes := (opts.BookFileID != "" && opts.Store != nil) || opts.Provenance != nil
 
 	// Step 1: fingerprint the original file before any modification.
 	if wantHashes {
@@ -56,6 +80,11 @@ func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTa
 			return "", "", fmt.Errorf("WriteTagsSafe: hash original %s: %w", path, err)
 		}
 	}
+
+	// Step 1b: record the pre-write state BEFORE touching anything. If the
+	// process dies during the write, this row is what survives — recording it
+	// afterwards would lose precisely the case the ledger exists for.
+	recordEvent(opts, database.FileEventObserved, path, originalHash, "", "pre-write")
 
 	// Step 2: create temp file in the same directory so os.Rename is atomic
 	// (same filesystem mount). Use the same extension so taglib can detect
@@ -98,11 +127,62 @@ func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTa
 			return originalHash, "", fmt.Errorf("WriteTagsSafe: hash result %s: %w", path, err)
 		}
 
-		// Step 7: best-effort DB recording (non-fatal; caller has both hashes).
-		_ = opts.Store.UpdateBookFileHashes(opts.BookFileID, originalHash, postHash)
+		// Step 7: record the completed write in the append-only ledger.
+		recordEvent(opts, database.FileEventTagsWritten, path, postHash, opts.Detail, "")
+
+		// Step 8: update the two hash columns. The bytes are already on disk, so
+		// a failure here cannot fail the write — returning an error would invite
+		// the caller to retry and write the file twice. It must not be silent
+		// either: this used to be `_ =`, which is how the columns could drift
+		// from the files without anyone noticing.
+		if opts.BookFileID != "" && opts.Store != nil {
+			if uerr := opts.Store.UpdateBookFileHashes(opts.BookFileID, originalHash, postHash); uerr != nil {
+				slog.Warn("WriteTagsSafe: hash columns not updated; file was written and the ledger holds the record",
+					"book_file_id", opts.BookFileID, "path", path, "error", uerr)
+			}
+		}
 	}
 
 	return originalHash, postHash, nil
+}
+
+// recordEvent appends one provenance event, if a recorder is configured.
+//
+// Provenance is observational: a failure to record must never fail or alter the
+// file operation being observed. It is logged rather than returned for that
+// reason — but it is logged, because a ledger with silent gaps is worse than no
+// ledger, since it reads as authoritative.
+func recordEvent(opts WriteTagsSafeOptions, kind database.FileEventKind, path, sha, detail, note string) {
+	if opts.Provenance == nil {
+		return
+	}
+	if sha == "" && opts.BookFileID == "" {
+		// Would be rejected as an unadoptable orphan; skip rather than log noise.
+		return
+	}
+	digest := database.FileDigest{
+		SHA256Full:  sha,
+		TorrentHash: opts.TorrentHash,
+	}
+	if fi, err := os.Stat(path); err == nil {
+		digest.SizeBytes = fi.Size()
+	}
+	if note != "" && detail == "" {
+		detail = note
+	}
+	ev := database.FileEvent{
+		BookFileID: opts.BookFileID,
+		Path:       path,
+		Kind:       kind,
+		At:         time.Now(),
+		Digest:     digest,
+		Detail:     detail,
+		Actor:      opts.Actor,
+	}
+	if err := opts.Provenance.AppendFileEvent(ev); err != nil {
+		slog.Warn("WriteTagsSafe: provenance event not recorded",
+			"kind", kind, "path", path, "book_file_id", opts.BookFileID, "error", err)
+	}
 }
 
 // copyFileContents copies src → dst, preserving the source file mode.
