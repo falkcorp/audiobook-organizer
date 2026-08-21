@@ -1,5 +1,5 @@
 // file: internal/config/path_alias_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 864e867a-dbd9-47fb-a731-300899c5e5b8
 // last-edited: 2026-08-21
 
@@ -69,4 +69,76 @@ func TestValidatePathAliasesAcceptsAgreement(t *testing.T) {
 
 	assert.NoError(t, ValidatePathAliases(aliases, mappings),
 		"extra fields on the alias are fine; only a differing Windows prefix is a contradiction")
+}
+
+// TestSeedPathAliasesNormalizesWindowsPrefix pins the shapes a mapping prefix
+// actually arrives in. extractPathPrefixes emits a percent-encoded
+// file://localhost/ URL and the Settings UI auto-populates the From field with
+// it, so a verbatim copy renders
+// "file://localhost/W:/itunes/iTunes%20Media\Author\Title.m4b" on the review
+// page -- labelled, tooltipped and copyable as if it were authoritative.
+func TestSeedPathAliasesNormalizesWindowsPrefix(t *testing.T) {
+	cases := []struct {
+		name        string
+		from        string
+		to          string
+		wantWindows string
+		wantRoot    string
+	}{
+		{"a bare drive letter is already valid", "W:", "/library/books", `W:`, "/library/books"},
+		{"forward slashes become backslashes", "W:/audiobook-organizer", "/mnt/x/books", `W:\audiobook-organizer`, "/mnt/x/books"},
+		{"a file url is stripped and percent-decoded", "file://localhost/W:/itunes/iTunes%20Media", "/x", `W:\itunes\iTunes Media`, "/x"},
+		{"a file:/// url is stripped too", "file:///W:/itunes", "/x", `W:\itunes`, "/x"},
+		{"trailing separators are trimmed on both halves", "Z:/", "/x/", `Z:`, "/x"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := SeedPathAliases(nil, []ITunesPathMap{{From: tc.from, To: tc.to}})
+			assert.Equal(t, []PathAlias{{Root: tc.wantRoot, Windows: tc.wantWindows}}, got)
+		})
+	}
+}
+
+// TestSeedThenValidateIsSilent is the trap guard. Normalizing the seed without
+// normalizing the validator would leave the seeded Windows value no longer
+// equal to the raw From it came from, so every correctly-seeded install would
+// log a contradiction at error level on every config load. Seeding and
+// validating the same mappings must always agree.
+func TestSeedThenValidateIsSilent(t *testing.T) {
+	for _, from := range []string{
+		"W:",
+		"W:/audiobook-organizer",
+		"file://localhost/W:/itunes/iTunes%20Media",
+		"Z:/",
+	} {
+		t.Run(from, func(t *testing.T) {
+			mappings := []ITunesPathMap{{From: from, To: "/library/books/"}}
+			assert.NoError(t, ValidatePathAliases(SeedPathAliases(nil, mappings), mappings),
+				"a freshly seeded alias can never contradict the mapping it was seeded from")
+		})
+	}
+}
+
+// TestValidatePathAliasesNormalizesRootsBeforeComparing pins the second half of
+// the same missing mechanism: the root was keyed on an exact string while the
+// frontend trims trailing slashes, so an alias root of "/x" against a mapping
+// To of "/x/" never compared at all and the guard failed open on precisely the
+// drift it exists to catch.
+func TestValidatePathAliasesNormalizesRootsBeforeComparing(t *testing.T) {
+	aliases := []PathAlias{{Root: "/library/books", Windows: "Z:"}}
+	mappings := []ITunesPathMap{{From: "W:", To: "/library/books/"}}
+
+	assert.Error(t, ValidatePathAliases(aliases, mappings),
+		"a trailing slash on the mapping root must not hide a genuine contradiction")
+}
+
+// TestValidatePathAliasesComparesNormalizedWindows keeps the guard from firing
+// on two spellings of the same prefix -- a hand-written alias and a mapping
+// that merely differ in separator or encoding do not contradict each other.
+func TestValidatePathAliasesComparesNormalizedWindows(t *testing.T) {
+	aliases := []PathAlias{{Root: "/x", Windows: `W:\itunes\iTunes Media`}}
+	mappings := []ITunesPathMap{{From: "file://localhost/W:/itunes/iTunes%20Media", To: "/x"}}
+
+	assert.NoError(t, ValidatePathAliases(aliases, mappings),
+		"the same prefix written two ways is agreement, not drift")
 }

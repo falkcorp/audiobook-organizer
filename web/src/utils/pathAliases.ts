@@ -1,5 +1,5 @@
 // file: web/src/utils/pathAliases.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b3e5c02-91af-4d68-a15c-3f8092d6b4e1
 // last-edited: 2026-08-21
 
@@ -67,8 +67,13 @@ function matchAlias(path: string, aliases: PathAlias[]): { alias: PathAlias; res
 }
 
 /** Joins with backslashes. See the separator contract in the spec. */
-const toWindows = (prefix: string, rest: string) =>
-  rest ? `${prefix}\\${rest.replace(/\//g, '\\')}` : prefix;
+const toWindows = (prefix: string, rest: string) => {
+  // Trim a trailing separator so an explicitly-configured `W:\` cannot render
+  // `W:\\Author`. Seeded aliases are already normalized in Go
+  // (normalizeWindowsPrefix); this only guards a hand-written one.
+  const base = prefix.replace(/[\\/]+$/, '');
+  return rest ? `${base}\\${rest.replace(/\//g, '\\')}` : base;
+};
 
 /** Percent-encodes each segment, leaving the separators alone. */
 const toSmbURL = (base: string, rest: string) =>
