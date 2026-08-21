@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-08-12
+// last-edited: 2026-08-21
 
 package config
 
@@ -896,6 +896,17 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 	// wins over every persisted layer, matching viper's normal env>config precedence.
 	ApplyEnvAuthoritativeConfig()
 
+	// Seed path aliases from the iTunes path mappings when none are configured
+	// (see SeedPathAliases), then check the two fields for drift. A config
+	// contradiction here is a display defect, not a data-integrity threat, so
+	// it is logged and NOT treated as a load failure.
+	Mutate(func(c *Config) {
+		c.PathAliases = SeedPathAliases(c.PathAliases, c.ITunes.PathMappings)
+		if err := ValidatePathAliases(c.PathAliases, c.ITunes.PathMappings); err != nil {
+			slog.Error("path_aliases contradicts itunes.path_mappings", "err", err)
+		}
+	})
+
 	return nil
 }
 
@@ -1183,6 +1194,11 @@ func applySetting(key, value, typ string) error {
 			var mappings []ITunesPathMap
 			if err := json.Unmarshal([]byte(value), &mappings); err == nil {
 				c.ITunes.PathMappings = mappings
+			}
+		case "path_aliases":
+			var aliases []PathAlias
+			if err := json.Unmarshal([]byte(value), &aliases); err == nil {
+				c.PathAliases = aliases
 			}
 
 		// Maintenance window
