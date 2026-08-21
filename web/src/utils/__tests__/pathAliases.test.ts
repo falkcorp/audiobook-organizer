@@ -1,5 +1,5 @@
 // file: web/src/utils/__tests__/pathAliases.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f1c9a55-6d84-4b0e-9a37-8e5b0c14d7a2
 // last-edited: 2026-08-21
 
@@ -31,6 +31,29 @@ describe('renderPath', () => {
     const rs = renderPath(P, ALIASES, VARS, 'macOS');
     expect(by(rs, 'windows').copyText).toBe('W:\\Some Author\\Some Title\\part1.m4b');
     expect(by(rs, 'unc').copyText).toBe('\\\\host\\books\\Some Author\\Some Title\\part1.m4b');
+  });
+
+  it('joins a multi-segment windows prefix without touching its separators', () => {
+    // The Go seam normalizes a seeded prefix to this shape (a file:// URL,
+    // percent-decoded and backslashed). Rendering must not re-flip it.
+    const aliases: PathAlias[] = [
+      { root: '/library/books', windows: 'W:\\itunes\\iTunes Media' },
+    ];
+    const rs = renderPath(P, aliases, VARS, 'macOS');
+    expect(by(rs, 'windows').copyText).toBe(
+      'W:\\itunes\\iTunes Media\\Some Author\\Some Title\\part1.m4b',
+    );
+  });
+
+  it('does not double a separator when the prefix already ends in one', () => {
+    const aliases: PathAlias[] = [
+      { root: '/library/books', windows: 'W:\\', unc: '\\\\host\\books\\' },
+    ];
+    const rs = renderPath(P, aliases, VARS, 'macOS');
+    expect(by(rs, 'windows').copyText).toBe('W:\\Some Author\\Some Title\\part1.m4b');
+    expect(by(rs, 'unc').copyText).toBe(
+      '\\\\host\\books\\Some Author\\Some Title\\part1.m4b',
+    );
   });
 
   it('never puts an href on a windows or unc rendering', () => {

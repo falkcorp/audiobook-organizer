@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.81.0
+// version: 1.82.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-08-21
 
@@ -8,6 +8,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -47,6 +48,39 @@ type PathAlias struct {
 	SMBURL  string `json:"smb_url"` // "smb://host/books"
 }
 
+// normalizeWindowsPrefix turns a raw iTunes path-mapping prefix into a Windows
+// path prefix. Mappings arrive in three shapes and only the first is already
+// usable: a bare drive letter ("W:"), a drive plus directories written with
+// forward slashes ("W:/audiobook-organizer"), and the percent-encoded URL that
+// extractPathPrefixes produces and the Settings UI auto-populates the From
+// field with ("file://localhost/W:/itunes/iTunes%20Media" -- see the
+// ITunesPathMap doc comment above). Copying a raw value of the latter two
+// shapes into PathAlias.Windows renders a path like
+// "file://localhost/W:/itunes/iTunes%20Media\Author\Title.m4b" on the review
+// page, presented with a label and a copy button as though it were valid.
+//
+// A prefix that cannot be percent-decoded is kept as-is rather than rejected:
+// an odd mapping must degrade to a wrong-looking path, never break config load.
+func normalizeWindowsPrefix(prefix string) string {
+	s := strings.TrimPrefix(prefix, "file://localhost/")
+	if s == prefix {
+		s = strings.TrimPrefix(prefix, "file:///")
+	}
+	if decoded, err := url.PathUnescape(s); err == nil {
+		s = decoded
+	}
+	s = strings.ReplaceAll(s, "/", `\`)
+	return strings.TrimRight(s, `\`)
+}
+
+// normalizeRoot trims trailing separators from a POSIX root so the two sides of
+// the drift guard compare the same way the frontend matches. trimRoot in
+// web/src/utils/pathAliases.ts does exactly this; keeping them symmetric is the
+// point, so a root configured either way behaves identically.
+func normalizeRoot(root string) string {
+	return strings.TrimRight(root, "/")
+}
+
 // SeedPathAliases returns aliases unchanged when any are configured. Otherwise
 // it derives one alias per complete ITunes path mapping, so the W: fact is
 // entered once and copied rather than retyped into a second config field.
@@ -61,7 +95,7 @@ func SeedPathAliases(aliases []PathAlias, mappings []ITunesPathMap) []PathAlias 
 		if m.From == "" || m.To == "" {
 			continue
 		}
-		seeded = append(seeded, PathAlias{Root: m.To, Windows: m.From})
+		seeded = append(seeded, PathAlias{Root: normalizeRoot(m.To), Windows: normalizeWindowsPrefix(m.From)})
 	}
 	return seeded
 }
@@ -74,12 +108,15 @@ func ValidatePathAliases(aliases []PathAlias, mappings []ITunesPathMap) error {
 	byRoot := make(map[string]string, len(mappings))
 	for _, m := range mappings {
 		if m.From != "" && m.To != "" {
-			byRoot[m.To] = m.From
+			byRoot[normalizeRoot(m.To)] = m.From
 		}
 	}
 	for _, a := range aliases {
-		want, ok := byRoot[a.Root]
-		if ok && a.Windows != "" && a.Windows != want {
+		want, ok := byRoot[normalizeRoot(a.Root)]
+		// Compare normalized: the same prefix written two ways (a file:// URL
+		// vs a backslashed path) is agreement, not drift. Comparing raw here
+		// would make every correctly-seeded install report a contradiction.
+		if ok && a.Windows != "" && normalizeWindowsPrefix(a.Windows) != normalizeWindowsPrefix(want) {
 			return fmt.Errorf(
 				"path alias for %q maps to %q but itunes.path_mappings maps it to %q; "+
 					"these must agree or the review page will render a path the importer disagrees with",
