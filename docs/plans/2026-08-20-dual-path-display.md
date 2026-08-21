@@ -1,7 +1,7 @@
 <!-- file: docs/plans/2026-08-20-dual-path-display.md -->
 <!-- version: 1.1.0 -->
 <!-- guid: f9f6af37-76d8-487e-af1e-3da0467b8937 -->
-<!-- last-edited: 2026-08-20 -->
+<!-- last-edited: 2026-08-21 -->
 
 # Dual-Path Display Implementation Plan
 
