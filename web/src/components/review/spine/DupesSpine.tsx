@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/DupesSpine.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c4e7b21-6a58-4d03-8b7f-1e5d2a9c6403
 // last-edited: 2026-08-20
 //
@@ -33,6 +33,7 @@ import StarIcon from '@mui/icons-material/Star';
 import type { Book, DedupCandidate } from '../../../services/api';
 import type { DupesAction } from '../reviewActions';
 import { dedupEvidence } from '../evidence/adapters';
+import { primarySignals } from '../evidence/signalLabels';
 import { EvidencePanel } from '../evidence/EvidencePanel';
 import { FolderFilesChip } from '../../dedup/FolderFilesChip';
 import { metadataQuality, qualityBand, recommendedKeepSide } from '../lanes/keepDecision';
@@ -261,6 +262,24 @@ function CandidateRow({
           <Chip label={`Score ${candidate.score.toFixed(0)}`} size="small" variant="outlined" />
         )}
         <Chip label={candidate.layer} size="small" variant="outlined" />
+        {/*
+          Why the pair is here, without expanding anything. `layer` above names
+          the collector that FOUND it; these name the evidence that justifies
+          it, which is the question the reviewer is actually answering -- most
+          of this queue is a single-signal pair, and none of the certain ones
+          rest on a fuzzy title, so this is a read rather than a judgement.
+          Supporting signals are deliberately absent -- see primarySignals.
+        */}
+        {primarySignals(candidate.score_breakdown).map((sig) => (
+          <Chip
+            key={sig.kind}
+            label={sig.label}
+            size="small"
+            variant="outlined"
+            color="info"
+            data-testid={`signal-chip-${sig.kind}`}
+          />
+        ))}
         {decided && <Chip label={candidate.status} size="small" />}
 
         <Box sx={{ ml: 'auto' }}>

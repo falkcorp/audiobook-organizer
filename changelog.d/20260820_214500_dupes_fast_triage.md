@@ -1,5 +1,5 @@
 <!-- file: changelog.d/20260820_214500_dupes_fast_triage.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3c9f5a02-7d41-4e86-b0a3-8e15d7c46b29 -->
 <!-- last-edited: 2026-08-20 -->
 
@@ -50,3 +50,22 @@ list. `visible[focusedIndex]` was then undefined, which the handler reads as "no
 focused row" — every shortcut became a silent no-op until the refetch landed.
 The pointer is now clamped where it is read rather than corrected afterwards, so
 the out-of-range value is never observable.
+
+#### Rows say which signal put the pair on screen
+
+The `layer` chip names the collector that FOUND a candidate; nothing on the row
+said what evidence justified it, so answering "why is this pair here" meant
+expanding the evidence panel — once per pair, across a queue where most pairs
+rest on a single signal.
+
+Primary signals now render as chips on the row itself: `exact file`,
+`ISBN/ASIN`, `same source record`, and the rest. Since no certain pair in this
+queue rests on a fuzzy title match, that turns most of the triage from a
+judgement into a read.
+
+Supporting signals (`duration`, `folder_path`) are deliberately left off the
+row. The scorer excludes them from the noisy-OR product and a supporting-only
+set can never reach an eligible score, so they can corroborate a pair but never
+be the reason one exists — a chip beside the primaries would claim otherwise.
+They remain in the evidence panel. An unrecognised kind renders its own raw
+name rather than an empty chip, so a new collector cannot go invisible.
