@@ -9,3 +9,10 @@
       caches persist across a test file, so today every test shares one
       seeded alias set; a future test needing different alias data per
       case will get a stale answer with no obvious cause.
+- [ ] Decide how `path_aliases` re-derives after a normalization change.
+      `SeedPathAliases` short-circuits on `len(aliases) > 0`, so once a value is
+      persisted it is never re-seeded, and `ValidatePathAliases` cannot tell a
+      stale persisted value from a correct one. Harmless today (the feature has
+      never been deployed, so no config_blob holds a pre-normalization value),
+      but any future change to `normalizeWindowsPrefix` inherits the same
+      problem — a stored alias will not pick it up.
