@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -571,7 +572,8 @@ func TestMergeDedupCandidate_MergeSuccess(t *testing.T) {
 	h, d := newHandler(t)
 	allowLabelCaptureReads(d)
 	id, aID, bID := insertCandidate(t, d.es, "book-aaa", "book-bbb")
-	d.merge.EXPECT().MergeBooks([]string{aID, bID}, "").Return(&merge.Result{PrimaryID: aID}, nil).Once()
+	d.engine.EXPECT().MergeJournaled(id, aID, bID, "", mock.Anything).
+		Return(&merge.Result{PrimaryID: aID}, "dedup:automerge:key", nil).Once()
 	d.engine.EXPECT().CleanupCandidatesAfterMerge(mock.Anything).Return(0).Once()
 	w := doReq(t, h.MergeDedupCandidate, http.MethodPost,
 		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/merge", nil,
@@ -597,7 +599,8 @@ func TestMergeDedupCandidate_KeepIDEcho(t *testing.T) {
 			if side == "B" {
 				keep = bID
 			}
-			d.merge.EXPECT().MergeBooks([]string{aID, bID}, keep).Return(&merge.Result{PrimaryID: keep}, nil).Once()
+			d.engine.EXPECT().MergeJournaled(id, aID, bID, keep, mock.Anything).
+				Return(&merge.Result{PrimaryID: keep}, "dedup:automerge:key", nil).Once()
 			d.engine.EXPECT().CleanupCandidatesAfterMerge(mock.Anything).Return(0).Once()
 			w := doReq(t, h.MergeDedupCandidate, http.MethodPost,
 				"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/merge",
@@ -625,8 +628,8 @@ func TestMergeDedupCandidate_AlreadyMergedConflict(t *testing.T) {
 	h, d := newHandler(t)
 	allowLabelCaptureReads(d)
 	id, aID, bID := insertCandidate(t, d.es, "book-aaa", "book-bbb")
-	d.merge.EXPECT().MergeBooks([]string{aID, bID}, "").
-		Return(nil, errNotFound{}).Once()
+	d.engine.EXPECT().MergeJournaled(id, aID, bID, "", mock.Anything).
+		Return(nil, "", errNotFound{}).Once()
 	w := doReq(t, h.MergeDedupCandidate, http.MethodPost,
 		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/merge", nil,
 		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
@@ -1047,5 +1050,50 @@ func TestRescoreDedupCandidates_NoEngine(t *testing.T) {
 	w := doReq(t, h.RescoreDedupCandidates, http.MethodPost, "/api/v1/dedup/rescore", nil, nil)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d want 503; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// A merge that cannot be journalled must not happen.
+//
+// Merging through MergeService.MergeBooks writes no journal entry, so
+// Engine.UnmergeAuto would have nothing to revert to. Merges dispatched by
+// keystroke from the review lane are the fastest and least deliberated in the
+// system, which makes silently making them irreversible the worst option
+// available. Refusing is the deliberate choice, and 503 matches how every other
+// engine-dependent endpoint on this handler behaves.
+func TestMergeDedupCandidateRefusesWhenTheUndoJournalCannotBeWritten(t *testing.T) {
+	h, d := newHandler(t, noEngine)
+	allowLabelCaptureReads(d)
+	id, _, _ := insertCandidate(t, d.es, "book-aaa", "book-bbb")
+
+	w := doReq(t, h.MergeDedupCandidate, http.MethodPost,
+		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/merge", nil,
+		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want 503; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "undo journal") {
+		t.Fatalf("the refusal must say why it refused; body=%s", w.Body.String())
+	}
+}
+
+// The merge must go through the journaled path, not the raw merge service.
+// Asserting no MergeBooks expectation is set on d.merge is what makes this a
+// real guard: mockery fails the test if an unexpected call is made.
+func TestMergeDedupCandidateUsesTheJournaledMergePath(t *testing.T) {
+	h, d := newHandler(t)
+	allowLabelCaptureReads(d)
+	id, aID, bID := insertCandidate(t, d.es, "book-aaa", "book-bbb")
+
+	d.engine.EXPECT().MergeJournaled(id, aID, bID, "", mock.Anything).
+		Return(&merge.Result{PrimaryID: aID}, "dedup:automerge:0000", nil).Once()
+	d.engine.EXPECT().CleanupCandidatesAfterMerge(mock.Anything).Return(0).Once()
+
+	w := doReq(t, h.MergeDedupCandidate, http.MethodPost,
+		"/api/v1/dedup/candidates/"+strconv.FormatInt(id, 10)+"/merge", nil,
+		gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
 	}
 }

@@ -17,7 +17,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
-	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
 // autoResolveSampleCapDefault bounds the per-run sample list in the dry-run
@@ -290,56 +289,16 @@ func (de *Engine) autoResolveEligible(c database.DedupCandidate, bookA, bookB *d
 // patch failure is logged (the provisional entry already stands) rather than
 // unwinding a completed merge.
 func (de *Engine) autoMergeCertain(c database.DedupCandidate) (string, error) {
-	// Capture the newest pre-existing book_ver snapshot timestamp for each side
-	// BEFORE the merge. MergeBooks calls UpdateBook for every book (which writes
-	// the pre-update state to book_ver), so the earliest snapshot NEWER than
-	// this baseline is the genuine pre-merge record — the loser gets a second
-	// (soft-delete) snapshot on top, which is why "newest after merge" is wrong.
-	baseA := de.newestSnapshotNanos(c.EntityAID)
-	baseB := de.newestSnapshotNanos(c.EntityBID)
-
-	// Predict the winner the SAME way MergeBooks will (auto-pick via
-	// merge.BookIsBetter over [EntityAID, EntityBID] — books[0] == EntityAID,
-	// so A wins unless B is strictly better). This is only for the provisional
-	// journal record; MergeBooks re-derives the authoritative winner and we
-	// overwrite the entry with it afterward, so there is no semantic drift.
-	bookA, errA := de.bookStore.GetBookByID(c.EntityAID)
-	bookB, errB := de.bookStore.GetBookByID(c.EntityBID)
-	if errA != nil || errB != nil || bookA == nil || bookB == nil {
-		return "", fmt.Errorf("load books before merge (a=%v b=%v): %v/%v", c.EntityAID, c.EntityBID, errA, errB)
-	}
-	predWinner, predLoser := c.EntityAID, c.EntityBID
-	if merge.BookIsBetter(bookB, bookA) {
-		predWinner, predLoser = c.EntityBID, c.EntityAID
-	}
-
 	tag := "dedup:merge-survivor:auto-certain"
-	// mergedAt fixes the journal key so the post-merge patch overwrites the same
-	// entry instead of creating a second one.
-	mergedAt := time.Now().UnixNano()
-	provisional := database.AutoMergeJournalEntry{
-		CandidateID: c.ID,
-		WinnerID:    predWinner,
-		LoserID:     predLoser,
-		Tag:         tag,
-		MergedAt:    mergedAt,
-		// Pre-merge snapshot timestamps are unknown until MergeBooks writes
-		// them; patched in after the merge.
-	}
-	if _, err := de.embedStore.PutAutoMergeJournalEntry(provisional); err != nil {
-		// HARD error: do not perform an irreversible merge with no journal.
-		return "", fmt.Errorf("write provisional journal entry (merge skipped): %w", err)
-	}
 
-	result, mergeErr := de.mergeService.MergeBooks(
-		[]string{c.EntityAID, c.EntityBID},
-		"", // auto-pick primary via bookIsBetter
-	)
-	if mergeErr != nil {
-		return "", fmt.Errorf("merge books: %w", mergeErr)
-	}
-	if result == nil || result.PrimaryID == "" {
-		return "", fmt.Errorf("merge returned no primary id")
+	// The baseline capture, provisional-journal write, merge, and journal patch
+	// all live in MergeJournaled now. They used to live here, which meant this
+	// was the only reversible merge in the system; the review lane's merge
+	// wrote no journal at all. Sharing the sequence is what makes
+	// reversibility a property of the engine instead of a habit of one caller.
+	result, _, err := de.MergeJournaled(c.ID, c.EntityAID, c.EntityBID, "", tag)
+	if err != nil {
+		return "", err
 	}
 
 	winnerID := result.PrimaryID
@@ -364,26 +323,6 @@ func (de *Engine) autoMergeCertain(c database.DedupCandidate) (string, error) {
 	// Clean up residual pending candidates referencing either merged-away book
 	// so they don't drift into the stale-candidate backlog.
 	de.CleanupCandidatesAfterMerge([]string{loserID})
-
-	// Locate the pre-merge snapshots and PATCH the provisional journal entry
-	// (same MergedAt key) with the authoritative winner/loser + timestamps.
-	winnerTS := de.preMergeSnapshotNanos(winnerID, baselineFor(winnerID, c.EntityAID, baseA, baseB))
-	loserTS := de.preMergeSnapshotNanos(loserID, baselineFor(loserID, c.EntityAID, baseA, baseB))
-
-	entry := database.AutoMergeJournalEntry{
-		CandidateID:      c.ID,
-		WinnerID:         winnerID,
-		LoserID:          loserID,
-		WinnerPreMergeTS: winnerTS,
-		LoserPreMergeTS:  loserTS,
-		Tag:              tag,
-		MergedAt:         mergedAt,
-	}
-	if _, err := de.embedStore.PutAutoMergeJournalEntry(entry); err != nil {
-		// The provisional entry already provides a reversibility breadcrumb;
-		// the merge is complete, so log rather than fail the (done) merge.
-		slog.Error("dedup auto-resolve: patch journal entry failed (provisional entry stands)", "candidate", c.ID, "err", err)
-	}
 
 	slog.Info("dedup auto-resolve merged CERTAIN pair",
 		"candidate", c.ID, "winner", winnerID, "loser", loserID)
