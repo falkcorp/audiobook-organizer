@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-08-20-dual-path-display.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: d87b37ef-85ee-4494-b629-6ef01de479af -->
 <!-- last-edited: 2026-08-20 -->
 
@@ -191,7 +191,38 @@ export interface PathRendering {
 `display` may be abbreviated to `$(libroot)/…`; `copyText` must always be the
 full literal path, because an abbreviated path pasted into Explorer is useless.
 
-### Decision 5: all five render sites, not one
+### Decision 5: an anchor is rendered only where a handler is known to exist
+
+The spec originally rendered the POSIX line as an `smb://` anchor whenever
+`SMBURL` was configured. That is wrong, and wrong in the worst direction.
+
+**`smb:` handler support is not universal, it is per-client-OS:**
+
+| Client OS | `smb:` URI handler | Result of an anchor |
+| --- | --- | --- |
+| macOS | Finder, `apple-default` (verified via LaunchServices) | works |
+| Linux desktop | gvfs / kio under GNOME/KDE | works |
+| **Windows** | **none** — Explorer consumes UNC (`\\host\share`), not the URI scheme | **dead link** |
+
+A Windows user is precisely who this feature exists for, and under the original
+rule they would get a styled, cursor-changing, entirely dead link on the POSIX
+line. An inert anchor is worse than plain text: it looks live, so a user
+concludes the *app* is broken rather than that the scheme is unsupported. It
+also contradicts the choice made for the Windows line — copy-only was chosen
+deliberately, and handing Windows a dead link through the back door undoes it.
+
+**Rule: `href` is non-null only when the client OS is known to register a
+handler for the scheme. Unknown or undetected OS renders as text plus copy —
+fail closed.** Detection via `navigator.userAgentData?.platform` where present,
+falling back to `navigator.platform`; neither is trusted beyond choosing
+between "anchor" and "text", so a wrong guess degrades to a copy button rather
+than to a broken link.
+
+Consequence: on Windows both lines are text + copy, which is exactly the
+approved behaviour. Line order does not change — POSIX stays on top, Windows
+underneath, as requested.
+
+### Decision 6: all five render sites, not one
 
 Today only one of the five goes through the formatter:
 
@@ -251,6 +282,9 @@ Config (DB blob)
 - **`SMBURL` empty on a matched alias** — render the POSIX line as text with a
   copy button and no anchor. A partially configured alias degrades; it does not
   produce a broken link.
+- **Client OS has no handler for the scheme, or could not be detected** — same
+  treatment: text plus copy, never an anchor. See Decision 5. This is the
+  common case on Windows, not an edge case.
 - **Clipboard unavailable** — `navigator.clipboard` is undefined outside a
   secure context. Six existing call sites in this app use it bare, so the
   established pattern is followed; the copy button surfaces a failure toast
@@ -285,6 +319,9 @@ Config (DB blob)
 - `web/src/components/common/PathLinks.test.tsx` — anchor present iff
   `href !== null`; `copyText` is the unabbreviated path; renders one line when
   no alias matches.
+- `href` is null for a simulated Windows client and for an undetectable
+  platform, and non-null for macOS and Linux, with `SMBURL` configured
+  identically in all four — the anchor gate is the only variable.
 - **Three-string consistency (the test that matters).** One row produces three
   different strings for one file: the abbreviated `display`
   (`$(books)/Brandon Sanderson/…`), the literal `copyText`
@@ -307,6 +344,20 @@ Config default is the empty slice, so the deployed feature is dormant until
 configured; clearing `path_aliases` reverts the UI without a deploy. Code
 rollback is a branch revert — the change is additive except for the five spine
 render sites, which revert to rendering a string.
+
+## Coordination
+
+`DupesSpine.tsx` is also touched by PR #2650 (`feat/dupes-fast-triage`, branched
+off the same `feb0bfb7`), which adds primary-signal chips to the row chip strip
+and bumps that file's header `1.0.0` → `1.1.0`. This work touches the path
+render at line 99, not the chip strip, so a textual conflict at worst. **After
+rebasing on #2650, `DupesSpine.tsx` must go to `1.2.0`, not `1.1.0`.**
+
+Also from that lane: `dupes.candidates` no longer strictly mirrors server state
+— it is server state minus locally-decided rows, deliberately, so a decided row
+disappears immediately instead of lingering as `pending`. Nothing in this design
+reads that collection beyond `book.file_path` on a rendered row, so it is
+recorded rather than acted on.
 
 ## Open questions
 
