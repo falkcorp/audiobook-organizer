@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.80.1
+// version: 1.81.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-08-20
+// last-edited: 2026-08-21
 
 package config
 
@@ -25,6 +25,68 @@ import (
 type ITunesPathMap struct {
 	From string `json:"from"` // iTunes path prefix
 	To   string `json:"to"`   // Local path prefix
+}
+
+// PathAlias renders a server-side filesystem path in a form a remote client can
+// act on: the Windows drive form, the UNC form, and an smb:// URL. Aliases are
+// matched most-specific-first, the same ordering contract pathutil.PathVars
+// uses, so a nested root wins over its parent.
+//
+// Separator contract: whenever Windows or UNC is non-empty, every separator in
+// the remainder of that rendering is flipped to a backslash, unconditionally.
+// There is deliberately no Separator field -- a root that must keep forward
+// slashes would populate neither.
+//
+// This is presentation config. It is intentionally NOT the same field as
+// ITunes.PathMappings, which is owned by import healing (reconcile.TranslateITunesPath);
+// see docs/design/2026-08-20-dual-path-display.md Decision 1.
+type PathAlias struct {
+	Root    string `json:"root"`    // "/library/books"
+	Windows string `json:"windows"` // "W:"            -> W:\Author\Title\
+	UNC     string `json:"unc"`     // `\\host\books`  -> \\host\books\Author\Title\
+	SMBURL  string `json:"smb_url"` // "smb://host/books"
+}
+
+// SeedPathAliases returns aliases unchanged when any are configured. Otherwise
+// it derives one alias per complete ITunes path mapping, so the W: fact is
+// entered once and copied rather than retyped into a second config field.
+// Seeded aliases carry no UNC or SMBURL, so the Windows line appears while the
+// smb:// anchor and UNC line stay dark until a share is configured.
+func SeedPathAliases(aliases []PathAlias, mappings []ITunesPathMap) []PathAlias {
+	if len(aliases) > 0 {
+		return aliases
+	}
+	seeded := make([]PathAlias, 0, len(mappings))
+	for _, m := range mappings {
+		if m.From == "" || m.To == "" {
+			continue
+		}
+		seeded = append(seeded, PathAlias{Root: m.To, Windows: m.From})
+	}
+	return seeded
+}
+
+// ValidatePathAliases reports a contradiction between the two places the
+// Windows prefix for a root can be recorded. Seeding copies the fact once;
+// nothing stops a later edit to one field alone, so this turns that drift into
+// a failure rather than a silently wrong path in the review UI.
+func ValidatePathAliases(aliases []PathAlias, mappings []ITunesPathMap) error {
+	byRoot := make(map[string]string, len(mappings))
+	for _, m := range mappings {
+		if m.From != "" && m.To != "" {
+			byRoot[m.To] = m.From
+		}
+	}
+	for _, a := range aliases {
+		want, ok := byRoot[a.Root]
+		if ok && a.Windows != "" && a.Windows != want {
+			return fmt.Errorf(
+				"path alias for %q maps to %q but itunes.path_mappings maps it to %q; "+
+					"these must agree or the review page will render a path the importer disagrees with",
+				a.Root, a.Windows, want)
+		}
+	}
+	return nil
 }
 
 // MetadataSource represents a metadata provider configuration
@@ -515,12 +577,13 @@ type ScheduledTasksConfig struct {
 // Config holds application configuration
 type Config struct {
 	// Core paths
-	RootDir       string `json:"root_dir"`
-	DatabasePath  string `json:"database_path"`
-	DatabaseType  string `json:"database_type"` // "pebble" (default) or "sqlite"
-	EnableSQLite  bool   `json:"enable_sqlite"` // Must be true to use SQLite (safety flag)
-	PlaylistDir   string `json:"playlist_dir"`
-	SetupComplete bool   `json:"setup_complete"`
+	RootDir       string      `json:"root_dir"`
+	PathAliases   []PathAlias `json:"path_aliases"   mapstructure:"path_aliases"`
+	DatabasePath  string      `json:"database_path"`
+	DatabaseType  string      `json:"database_type"` // "pebble" (default) or "sqlite"
+	EnableSQLite  bool        `json:"enable_sqlite"` // Must be true to use SQLite (safety flag)
+	PlaylistDir   string      `json:"playlist_dir"`
+	SetupComplete bool        `json:"setup_complete"`
 
 	// Library organization
 	OrganizationStrategy    string `json:"organization_strategy"` // 'auto', 'copy', 'hardlink', 'reflink', 'symlink'
