@@ -1,5 +1,5 @@
 <!-- file: changelog.d/20260820_214500_dupes_fast_triage.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 3c9f5a02-7d41-4e86-b0a3-8e15d7c46b29 -->
 <!-- last-edited: 2026-08-20 -->
 
