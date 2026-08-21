@@ -1,15 +1,14 @@
 // file: web/src/components/review/DupesPanel.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1d6f8a03-7c25-4e91-b840-2a5c9e3b7d14
-// last-edited: 2026-08-20
+// last-edited: 2026-08-21
 //
 // The dupes lane's full surface: filter rail, spine, bulk bar, compare drawer.
 //
 // Assembled here rather than in ReviewWorkspace so the shell keeps its one-line
-// lane branch. The metadata lane's equivalent is still inline in the shell;
-// lifting it into a MetadataPanel is the symmetry this leaves owing, recorded
-// in docs/port-inventory-dupes.md rather than done here, because it is a
-// refactor of a lane this change was not asked to touch.
+// lane branch. The metadata lane now has the matching MetadataPanel, so all
+// three lanes own their own layout and the shell owns only lane selection and
+// the cross-lane chrome.
 
 import { useSearchParams } from 'react-router-dom';
 import {
