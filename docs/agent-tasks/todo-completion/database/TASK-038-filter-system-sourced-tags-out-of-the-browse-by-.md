@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-038-filter-system-sourced-tags-out-of-the-browse-by-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: d933113b-7a9d-472c-a20c-0aa8cd323113 -->
+<!-- guid: b7f4e20a-84db-47ff-96d7-16a09c3cc167 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-038 — Filter system-sourced tags out of the Browse-by-Tag cloud (TODO.md L10526)
@@ -75,9 +75,9 @@ Anti-over-suppression: N/A
 ## How to test
 
 ```bash
-make ci
+go build ./... && go vet ./... && go test ./internal/audiobooks/... ./internal/database/... ./internal/database/mocks/... -count=1
 ```
-If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<changed-pkg>/... && go test ./<changed-pkg>/... -count=1` (or `npm --prefix web test -- <file>` for web), then the full gate once before reporting done.
+Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
 ## Acceptance criteria
 
@@ -85,7 +85,7 @@ If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<c
 - [ ] A manual check: create a book with tag 'metadata:source:audible' via AddBookTagWithSource(id, tag, "system") and a user tag 'my-favorite' via the normal user-tag path; GET /tags must list only 'my-favorite'.
 - [ ] Anti-over-suppression: N/A
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `make ci` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/audiobooks/... ./internal/database/... ./internal/database/mocks/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_database_038.md`.
 

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 27522599-5c3a-45f1-9d19-613e2faafa6f -->
+<!-- guid: 49692306-d5af-4fe2-8eb3-535e6bd24d28 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — ci-tooling workstream (todo-completion)
@@ -12,21 +12,21 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK005[TASK-005 add-a-scheduled-detect-only-]
-      TASK006[TASK-006 wire-scripts-test-check-memo]
-      TASK007[TASK-007 bump-the-ghcommon-reusable-w]
-      TASK008[TASK-008 teach-the-abs-fixture-captur]
-      TASK010[TASK-010 pin-sha256-checksums-for-doc]
-      TASK011[TASK-011 scripts-setup-prometheus-aut]
-      TASK012[TASK-012 build-a-report-only-scan-for]
-      TASK013[TASK-013 remove-committed-mtls-bridge]
+      TASK006[TASK-006 add-a-scheduled-detect-only-]
+      TASK007[TASK-007 wire-scripts-test-check-memo]
+      TASK008[TASK-008 bump-the-ghcommon-reusable-w]
+      TASK009[TASK-009 teach-the-abs-fixture-captur]
+      TASK011[TASK-011 pin-sha256-checksums-for-doc]
+      TASK012[TASK-012 scripts-setup-prometheus-aut]
+      TASK013[TASK-013 build-a-report-only-scan-for]
+      TASK014[TASK-014 remove-committed-mtls-bridge]
     end
     subgraph Wave2
-      TASK009[TASK-009 add-top-level-permissions-bl]
-      TASK014[TASK-014 stop-committing-series-dedup]
+      TASK010[TASK-010 add-top-level-permissions-bl]
+      TASK015[TASK-015 stop-committing-series-dedup]
     end
-    TASK007 --> TASK009
-    TASK013 --> TASK014
+    TASK008 --> TASK010
+    TASK014 --> TASK015
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.

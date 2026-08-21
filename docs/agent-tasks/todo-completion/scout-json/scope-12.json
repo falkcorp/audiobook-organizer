@@ -114,6 +114,7 @@
   "verdict_evidence": "web/package.json's overrides block still pins react-is to ^19.0.0, but TODO-MUI-3 itself instructs removing it once on React 19 ('no longer needed on React 19'), and this repo is already on react ^19.2.8.",
   "domain": "web",
   "exact_files": [
+   "web/package-lock.json",
    "web/package.json"
   ],
   "verified_anchors": [
@@ -161,7 +162,7 @@
   "gate": "npm --prefix web run lint && npm --prefix web test",
   "notes": "Low-risk cleanup. package.json has no repo-wide version-header convention (not a .go/.md/.yml doc file), so no header bump applies.",
   "review_notes": [
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+   "[simplicity-scope.json] TASK-102 is 'TypeScript 6.0.3 \u2192 7.0.2 migration', tier Opus / effort L, with exact_files = ['web/package.json'] \u2014 a single dependency-version string. A TS major bump changes compiler defaults and will touch web/tsconfig.json (and web/tsconfig.node.json) plus every source file that trips a new error;"
   ]
  },
  {
@@ -616,8 +617,7 @@
   "anti_over_suppression": "TestSanitizeReturn_AcceptsOrdinaryInternalPaths",
   "depends_on_lines": [],
   "gate": "npm --prefix web run lint && npm --prefix web test",
-  "notes": "Explicitly do NOT touch or loosen internal/server/handlers/oauth_login.go's sanitizeReturn itself \u2014 the TODO item flags a separate TODO-SSO-EDGE entry (~TODO.md L1040) as off-limits for that reason; that entry is a functional gap, not a vulnerability.",
-  "review_notes": []
+  "notes": "Explicitly do NOT touch or loosen internal/server/handlers/oauth_login.go's sanitizeReturn itself \u2014 the TODO item flags a separate TODO-SSO-EDGE entry (~TODO.md L1040) as off-limits for that reason; that entry is a functional gap, not a vulnerability."
  },
  {
   "todo_line": 8236,
@@ -672,7 +672,6 @@
   "verdict_evidence": "The recommender logic that decides separate vs duplicate-of vs combine for a regroup.multidisc hold lives in internal/plugins/maintenance/regroup_shattered_ai.go (has Recommend-named logic); no test today pins its behavior specifically for these three real, equal-runtime, two-member holds.",
   "domain": "internal/plugins/maintenance",
   "exact_files": [
-   "internal/plugins/maintenance/plugin.go",
    "internal/plugins/maintenance/regroup_shattered_ai_test.go"
   ],
   "verified_anchors": [
@@ -723,10 +722,7 @@
   "anti_over_suppression": "TestRecommend_DistinctRuntimes_ReturnsDifferentDefaultThanEqualRuntimes",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "This is a narrow slice; the item's real ask ('feed them to the duplicate-detection track') is the still-unbuilt L8943 (never-delete-re-associate) \u2014 this test just locks in today's safe default so it can't silently drift while that larger work is pending.",
-  "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
-  ]
+  "notes": "This is a narrow slice; the item's real ask ('feed them to the duplicate-detection track') is the still-unbuilt L8943 (never-delete-re-associate) \u2014 this test just locks in today's safe default so it can't silently drift while that larger work is pending."
  },
  {
   "todo_line": 8273,
@@ -735,8 +731,10 @@
   "verdict_evidence": "typescript is currently ^6.0.3 in web/package.json, not yet 7.x. Every OTHER package in the item's cheapest-value-first order is already at its named 'latest' target: react ^19.2.8, @mui/material ^9.3.1, vite ^8.2.1, eslint ^10.8.1, zustand ^5.0.15, jsdom ^30.0.1 \u2014 all already done.",
   "domain": "web",
   "exact_files": [
-   "internal/plugins/maintenance/plugin.go",
-   "web/package.json"
+   "web/package-lock.json",
+   "web/package.json",
+   "web/tsconfig.json",
+   "web/tsconfig.node.json"
   ],
   "verified_anchors": [
    {
@@ -785,8 +783,7 @@
   "gate": "make build && npm --prefix web run lint && npm --prefix web test && npm --prefix web run test:e2e",
   "notes": "The item's own text lists MUI 5\u21929 as 'do last, purely maintenance' \u2014 but MUI is ALREADY at 9.3.1 in this repo, so that step is moot; TS7 is now the only remaining piece of the whole L8273 survey. HARD BLOCKED on the e2e suite being fixed first, per the item's own explicit instruction.",
   "review_notes": [
-   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th",
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+   "[simplicity-scope.json] TASK-102 is 'TypeScript 6.0.3 \u2192 7.0.2 migration', tier Opus / effort L, with exact_files = ['web/package.json'] \u2014 a single dependency-version string. A TS major bump changes compiler defaults and will touch web/tsconfig.json (and web/tsconfig.node.json) plus every source file that trips a new error;"
   ]
  },
  {
@@ -883,6 +880,7 @@
   "verdict_evidence": "IntroTranscription and TranscribeStatus are both real Book fields already written by the transcribe pipeline (internal/plugins/maintenance/intro_transcribe.go references IntroTranscription extensively), but no existing op cross-tabulates status against non-empty transcript content or compares attempted-vs-transcribed timestamps to distinguish stale drift from a live failure.",
   "domain": "internal/plugins/maintenance",
   "exact_files": [
+   "internal/plugins/maintenance/plugin.go",
    "internal/plugins/maintenance/transcribe_status_drift_report.go",
    "internal/plugins/maintenance/transcribe_status_drift_report_test.go"
   ],
@@ -945,7 +943,7 @@
   "gate": "make ci",
   "notes": "Matches decision 13's 'categorizing REPORT op only' pattern for a sibling item (book_file rows with no bytes) \u2014 same shape, applied here to transcribe-status drift. Diagnostic-only; whether the tiered backfill's 'needs work' query needs fixing based on the findings is a follow-up, not part of this task.",
   "review_notes": [
-   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
   ]
  },
  {
@@ -1084,7 +1082,8 @@
   "domain": "internal/plugins/maintenance",
   "exact_files": [
    "internal/plugins/maintenance/chapters_backfill_from_duplicate.go",
-   "internal/plugins/maintenance/chapters_backfill_from_duplicate_test.go"
+   "internal/plugins/maintenance/chapters_backfill_from_duplicate_test.go",
+   "internal/plugins/maintenance/plugin.go"
   ],
   "verified_anchors": [
    {
@@ -1146,7 +1145,7 @@
   "gate": "make ci",
   "notes": "Owner was explicit that borrowing offsets from a different edition is WORSE than no chapters \u2014 the near-exact-match gate is the single most important correctness property of this op; do not loosen it under time pressure.",
   "review_notes": [
-   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
   ]
  },
  {
@@ -1260,7 +1259,11 @@
   "anti_over_suppression": "TestResolveEntriesToBookFiles_UnresolvedEntriesReportedNotDropped",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Sequence after relink-unlinked-books-derived work per the item's own 38.2% warning."
+  "notes": "Sequence after relink-unlinked-books-derived work per the item's own 38.2% warning.",
+  "review_notes": [
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
+   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th"
+  ]
  },
  {
   "todo_line": 8646,
@@ -1317,7 +1320,10 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Playlist entries carrying explicit timings (cue-derived) are a separate future chapter-offset source per this item's own cross-reference to chapters-backfill-from-duplicates (L8611) \u2014 out of scope for export itself."
+  "notes": "Playlist entries carrying explicit timings (cue-derived) are a separate future chapter-offset source per this item's own cross-reference to chapters-backfill-from-duplicates (L8611) \u2014 out of scope for export itself.",
+  "review_notes": [
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+  ]
  },
  {
   "todo_line": 8675,
@@ -1380,10 +1386,7 @@
   "anti_over_suppression": "TestMediaProgress_RatingAbsentDoesNotClearIsFinished",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Verify against real clients, not just a spec guess \u2014 the item explicitly warns AudioBooth and Absorb differ in which endpoints they call.",
-  "review_notes": [
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
-  ]
+  "notes": "Verify against real clients, not just a spec guess \u2014 the item explicitly warns AudioBooth and Absorb differ in which endpoints they call."
  },
  {
   "todo_line": 8707,
@@ -1449,10 +1452,7 @@
   "anti_over_suppression": "TestParseTorrentNameMetadata_LowConfidenceOnAmbiguousNames",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Pairs with L8738 (same Deluge RPC connection, different purpose \u2014 grouping evidence, not identity metadata); build/share the credential/client plumbing once if both are picked up in the same wave.",
-  "review_notes": [
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
-  ]
+  "notes": "Pairs with L8738 (same Deluge RPC connection, different purpose \u2014 grouping evidence, not identity metadata); build/share the credential/client plumbing once if both are picked up in the same wave."
  },
  {
   "todo_line": 8738,
@@ -1529,7 +1529,8 @@
   "domain": "internal/plugins/maintenance",
   "exact_files": [
    "internal/plugins/maintenance/multidisc_snapshot.go",
-   "internal/plugins/maintenance/multidisc_snapshot_test.go"
+   "internal/plugins/maintenance/multidisc_snapshot_test.go",
+   "internal/plugins/maintenance/plugin.go"
   ],
   "verified_anchors": [
    {
@@ -1582,7 +1583,7 @@
   "gate": "make ci",
   "notes": "This is the prerequisite for the actual canary APPLY, which is PARKED per decision 8 (review_apply_enabled: verify prod state and record only; no flip) \u2014 see the sibling parked object, same todo_line part 2. Build and land this snapshot tool regardless of when/whether the flag gets flipped; it has standing audit value on its own.",
   "review_notes": [
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
   ]
  },
  {
@@ -1704,6 +1705,7 @@
   "exact_files": [
    "internal/plugins/maintenance/first_aid_orchestrator.go",
    "internal/plugins/maintenance/first_aid_orchestrator_test.go",
+   "internal/plugins/maintenance/plugin.go",
    "web/src/pages/SystemMaintenance.tsx"
   ],
   "verified_anchors": [
@@ -1770,8 +1772,8 @@
   "gate": "make ci && npm --prefix web run lint && npm --prefix web test",
   "notes": "Owner design 2026-08-05, architecture LOCKED per the referenced note \u2014 do not redesign the tier boundaries, only implement the sequencer/orchestrator around the already-built ops.",
   "review_notes": [
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
-   "[ops-rollback.json] TASK-124 makes the operations registry AUTO-ENQUEUE producer ops with no operator involvement, and is marked review_critical=false. It never says the enqueued producer inherits the requester's dry_run/apply posture, so a First Aid dry run (TASK-123, apply=false by design) can cause real mutating pro"
+   "[ops-rollback.json] TASK-124 makes the operations registry AUTO-ENQUEUE producer ops with no operator involvement, and is marked review_critical=false. It never says the enqueued producer inherits the requester's dry_run/apply posture, so a First Aid dry run (TASK-123, apply=false by design) can cause real mutating pro",
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
   ]
  },
  {
@@ -1842,7 +1844,8 @@
   "gate": "make ci",
   "notes": "This is core operations-registry infrastructure, not First Aid-specific \u2014 First Aid (part 3) is its first real consumer, but review this change with the same care the item says its one prior review needed.",
   "review_notes": [
-   "[ops-rollback.json] TASK-124 makes the operations registry AUTO-ENQUEUE producer ops with no operator involvement, and is marked review_critical=false. It never says the enqueued producer inherits the requester's dry_run/apply posture, so a First Aid dry run (TASK-123, apply=false by design) can cause real mutating pro"
+   "[ops-rollback.json] TASK-124 makes the operations registry AUTO-ENQUEUE producer ops with no operator involvement, and is marked review_critical=false. It never says the enqueued producer inherits the requester's dry_run/apply posture, so a First Aid dry run (TASK-123, apply=false by design) can cause real mutating pro",
+   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th"
   ]
  },
  {
@@ -1853,7 +1856,8 @@
   "domain": "internal/plugins/maintenance",
   "exact_files": [
    "internal/plugins/maintenance/combine_by_template.go",
-   "internal/plugins/maintenance/combine_by_template_test.go"
+   "internal/plugins/maintenance/combine_by_template_test.go",
+   "internal/plugins/maintenance/plugin.go"
   ],
   "verified_anchors": [
    {
@@ -1917,7 +1921,10 @@
   "anti_over_suppression": "TestCombineByTemplate_NeverDeletesARow",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "This is the umbrella 'never-delete-re-associate' track referenced by L8245 (3 real duplicate-shaped multidisc holds usable as future test fixtures, though those specifically default to 'separate', not this combine path), L8094 (the ~180 bracketed-number shattered-series books are input candidates for this exact mechanism once built), and L8890 part 2 (the First Aid roster's identical sub-bullet \u2014 do not build it twice, this is the canonical spec)."
+  "notes": "This is the umbrella 'never-delete-re-associate' track referenced by L8245 (3 real duplicate-shaped multidisc holds usable as future test fixtures, though those specifically default to 'separate', not this combine path), L8094 (the ~180 bracketed-number shattered-series books are input candidates for this exact mechanism once built), and L8890 part 2 (the First Aid roster's identical sub-bullet \u2014 do not build it twice, this is the canonical spec).",
+  "review_notes": [
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+  ]
  },
  {
   "todo_line": 9000,

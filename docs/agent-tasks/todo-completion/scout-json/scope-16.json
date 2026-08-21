@@ -108,8 +108,8 @@
   "gate": "npm --prefix web run lint && npm --prefix web test",
   "notes": "Server-side PATCH /config already accepts path_aliases (internal/config/persistence.go:904-905 calls SeedPathAliases/ValidatePathAliases on load) -- confirm during implementation whether the config PATCH handler round-trips path_aliases unchanged (it should, since Config is decoded generically), but this was not independently verified by this scout pass; if the PATCH handler drops unknown/optional fields, that's a small additional backend fix, not a redesign.",
   "review_notes": [
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
+   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n"
   ]
  },
  {
@@ -231,8 +231,8 @@
   "gate": "npm --prefix web run lint && npm --prefix web test",
   "notes": "Purely a test-isolation hardening task; ships independently of items #1/#2/#4 in this fragment.",
   "review_notes": [
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
+   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n"
   ]
  },
  {

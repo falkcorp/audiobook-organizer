@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f7cf8ca2-3d62-483c-9873-e521589b6882 -->
+<!-- guid: 1e4f99b3-4569-4537-94b4-94d38c0b321f -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — docs workstream (todo-completion)
@@ -12,15 +12,18 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK053[TASK-053 record-the-docs-system-vs-to]
-      TASK054[TASK-054 write-file-header-for-the-35]
-      TASK055[TASK-055 delete-the-34-group-relative]
-      TASK056[TASK-056 re-verify-docs-reference-abs]
-      TASK057[TASK-057 document-the-todo-d-fragment]
-      TASK058[TASK-058 consolidate-the-august-execu]
-      TASK059[TASK-059 phase-8-write-the-abs-topolo]
-      TASK060[TASK-060 update-execution-manifest-do]
-      TASK061[TASK-061 docs-truth-up-with-measured-]
+      TASK182[TASK-182 record-the-docs-system-vs-to]
+      TASK183[TASK-183 write-file-header-for-the-35]
+      TASK051[TASK-051 delete-the-34-group-relative]
+      TASK052[TASK-052 triage-the-16-removed-post-m]
+      TASK053[TASK-053 delete-the-torrents-group-re]
+      TASK054[TASK-054 re-verify-docs-reference-abs]
+      TASK055[TASK-055 document-the-todo-d-fragment]
+      TASK056[TASK-056 consolidate-the-august-execu]
+      TASK057[TASK-057 phase-8-write-the-abs-topolo]
+      TASK058[TASK-058 update-execution-manifest-do]
+      TASK059[TASK-059 close-out-the-2026-05-01-re-]
+      TASK060[TASK-060 docs-truth-up-with-measured-]
     end
 
 ```

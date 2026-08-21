@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-001-add-a-short-ttl-cache-to-the-search-branch-of-ge.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: c8658a0b-ca4c-44ce-8441-40fab4df2848 -->
+<!-- guid: 688278f3-6479-4ab1-8bf6-edb5fe89dcfe -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-001 — Add a short-TTL cache to the search branch of GetAudiobooksWithTotal (explicit first-cut, defer full dirty-set wiring) (SEARCH-CACHE)
@@ -76,9 +76,9 @@ Anti-over-suppression test: `TestSearchCache_DifferentUserID_CacheMiss (differen
 ## How to test
 
 ```bash
-make ci
+go build ./... && go vet ./... && go test ./internal/audiobooks/... -count=1
 ```
-If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<changed-pkg>/... && go test ./<changed-pkg>/... -count=1` (or `npm --prefix web test -- <file>` for web), then the full gate once before reporting done.
+Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
 ## Acceptance criteria
 
@@ -86,7 +86,7 @@ If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<c
 - [ ] Manual: repeat the same search request twice within 45s and confirm (via added instrumentation/log count) the second request does not re-run searchWithBleve.
 - [ ] Anti-over-suppression test: `TestSearchCache_DifferentUserID_CacheMiss (different UserID with per-user filters active must never reuse another user's cached result)` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `make ci` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/audiobooks/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_audiobooks_001.md`.
 

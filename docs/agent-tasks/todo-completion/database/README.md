@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 2f4fda7e-3a86-4ae4-b59e-eed87ff2acdb -->
+<!-- guid: 8c6c739f-cca5-41b3-bd7e-1ec364b5521b -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — database (todo-completion)
@@ -9,9 +9,9 @@
 
 | Task | TODO id | Title | Priority | Effort | Tier | Wave |
 |------|---------|-------|----------|--------|------|------|
-| TASK-020 | L238 | Reduce internal/database's -short test-run wall-clock cost (currently  | P2 | M | Sonnet-class | 1 |
-| TASK-021 | L969 | database.Store (40) -- build the AST/go-types CI gate that makes it un | P2 | L | Opus-class | 2 |
-| TASK-022 | L1227 | Finish killing database.Store — narrow the remaining references per th | P1 | L | Opus-class | 2 |
+| TASK-177 | L235 | Add a per-test deadline (context.WithTimeout) to internal/database's r | P2 | M | Sonnet-class | 1 |
+| TASK-178 | L238 | Reduce internal/database's -short test-run wall-clock cost (currently  | P2 | M | Sonnet-class | 2 |
+| TASK-179 | L969 | database.Store (40) -- build the AST/go-types CI gate that makes it un | P2 | L | Opus-class | 2 |
 | TASK-023 | MERGE-CACHE-EVICT | Investigate then evict/dirty-flag merged-away book/file IDs from every | P1 | L | Opus-class | 2 |
 | TASK-024 | VGBACKFILL-BOUNDS-FRAGILE | Replace fragile [0x30-0x3A]-only book:0..book:; bounds in the version- | P2 | S | Sonnet-class | 1 |
 | TASK-025 | L1970 | Make WipeAllActivity cancellable (currently an uncancellable full scan | P2 | M | Sonnet-class | 1 |
@@ -35,38 +35,34 @@
 - Worktree per task (the ⛔ START HERE block in each brief). Never edit `main`.
 - Gate for every task in this workstream:
   ```bash
-  make ci ; make ci && npm --prefix web run lint && npm --prefix web test
+  go build ./... && go vet ./... && go test ./internal/audiobooks/... ./internal/database/... ./internal/database/mocks/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/dedup/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/server/handlers/audiobooks/... -count=1 && npm --prefix web run lint && npm --prefix web test ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/server/handlers/entities/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/server/... ./internal/server/handlers/system/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/merge/... ./internal/search/... -count=1 ; go build ./... && go vet ./... && go test ./tools/cmd/reconcile-book-counts/... -count=1 ; go build ./... && go vet ./... && go test ./tools/cmd/storewidthgate/... -count=1
   ```
 - **Verify every file:line anchor with `grep` before editing** — line numbers in each brief are a starting point, not a guarantee.
 - Review-critical tasks (prod-data paths) are Opus-class and their PRs stay open for the owner.
 
 ## Collision / wave note
 
-- `.github/workflows/ci.yml`: TASK-006, TASK-021 → serialize by wave (TASK-006=w1, TASK-021=w2)
+- `.github/workflows/ci.yml`: TASK-007, TASK-179 → serialize by wave (TASK-007=w1, TASK-179=w2)
 - `internal/database/bookcore.go`: TASK-037, TASK-039 → serialize by wave (TASK-037=w6, TASK-039=w3)
-- `internal/database/dbtest/invariants.go`: TASK-022, TASK-085 → serialize by wave (TASK-022=w2, TASK-085=w4)
 - `internal/database/memdb_summaries.go`: TASK-026, TASK-039 → serialize by wave (TASK-026=w1, TASK-039=w3)
-- `internal/database/pebble_store.go`: TASK-029, TASK-039, TASK-085 → serialize by wave (TASK-029=w2, TASK-039=w3, TASK-085=w4)
+- `internal/database/pebble_store.go`: TASK-029, TASK-039, TASK-186 → serialize by wave (TASK-029=w2, TASK-039=w3, TASK-186=w5)
 - `internal/database/pebble_store_authors.go`: TASK-035, TASK-036 → serialize by wave (TASK-035=w1, TASK-036=w2)
-- `internal/database/store.go`: TASK-019, TASK-031, TASK-033, TASK-037, TASK-039 → serialize by wave (TASK-019=w4, TASK-031=w1, TASK-033=w2, TASK-037=w6, TASK-039=w3)
-- `internal/dedup/series_dedup.go`: TASK-029, TASK-044, TASK-046 → serialize by wave (TASK-029=w2, TASK-044=w1, TASK-046=w3)
-- `internal/merge/service.go`: TASK-023, TASK-040, TASK-043, TASK-048, TASK-050 → serialize by wave (TASK-023=w2, TASK-040=w1, TASK-043=w3, TASK-048=w4, TASK-050=w5)
-- `internal/plugins/maintenance/deps.go`: TASK-022, TASK-069, TASK-073 → serialize by wave (TASK-022=w2, TASK-069=w1, TASK-073=w5)
-- `internal/search/bleve_index.go`: TASK-023, TASK-129 → serialize by wave (TASK-023=w2, TASK-129=w1)
-- `internal/search/index_builder.go`: TASK-023, TASK-129 → serialize by wave (TASK-023=w2, TASK-129=w1)
-- `internal/server/handlers/audiobooks/handler.go`: TASK-004, TASK-037, TASK-099, TASK-102 → serialize by wave (TASK-004=w1, TASK-037=w6, TASK-099=w2, TASK-102=w3)
-- `internal/server/indexed_store.go`: TASK-022, TASK-137 → serialize by wave (TASK-022=w2, TASK-137=w1)
-- `internal/server/maintenance_fixups.go`: TASK-025, TASK-133 → serialize by wave (TASK-025=w1, TASK-133=w2)
-- `internal/server/server.go`: TASK-022, TASK-026 → serialize by wave (TASK-022=w2, TASK-026=w1)
-- `internal/server/server_lifecycle.go`: TASK-026, TASK-068, TASK-132, TASK-136, TASK-144 → serialize by wave (TASK-026=w1, TASK-068=w5, TASK-132=w2, TASK-136=w3, TASK-144=w4)
-- `internal/server/server_maintenance_deps.go`: TASK-022, TASK-069, TASK-073 → serialize by wave (TASK-022=w2, TASK-069=w1, TASK-073=w5)
-- `web/src/pages/BookDetail.tsx`: TASK-037, TASK-104, TASK-170 → serialize by wave (TASK-037=w6, TASK-104=w1, TASK-170=w8)
-- `web/src/services/api.ts`: TASK-037, TASK-073 → serialize by wave (TASK-037=w6, TASK-073=w5)
+- `internal/database/pebble_store_test.go`: TASK-177, TASK-178 → serialize by wave (TASK-177=w1, TASK-178=w2)
+- `internal/database/store.go`: TASK-020, TASK-031, TASK-033, TASK-037, TASK-039 → serialize by wave (TASK-020=w4, TASK-031=w1, TASK-033=w2, TASK-037=w6, TASK-039=w3)
+- `internal/dedup/series_dedup.go`: TASK-029, TASK-043, TASK-044 → serialize by wave (TASK-029=w2, TASK-043=w1, TASK-044=w3)
+- `internal/merge/service.go`: TASK-023, TASK-040, TASK-042, TASK-046, TASK-048 → serialize by wave (TASK-023=w2, TASK-040=w1, TASK-042=w3, TASK-046=w4, TASK-048=w5)
+- `internal/search/bleve_index.go`: TASK-023, TASK-125 → serialize by wave (TASK-023=w2, TASK-125=w1)
+- `internal/search/index_builder.go`: TASK-023, TASK-125 → serialize by wave (TASK-023=w2, TASK-125=w1)
+- `internal/server/handlers/audiobooks/handler.go`: TASK-005, TASK-037, TASK-095, TASK-098 → serialize by wave (TASK-005=w1, TASK-037=w6, TASK-095=w2, TASK-098=w3)
+- `internal/server/maintenance_fixups.go`: TASK-025, TASK-129 → serialize by wave (TASK-025=w1, TASK-129=w2)
+- `internal/server/server_lifecycle.go`: TASK-026, TASK-065, TASK-128, TASK-131, TASK-139 → serialize by wave (TASK-026=w1, TASK-065=w5, TASK-128=w2, TASK-131=w3, TASK-139=w4)
+- `web/src/pages/BookDetail.tsx`: TASK-037, TASK-100, TASK-165 → serialize by wave (TASK-037=w6, TASK-100=w1, TASK-165=w8)
+- `web/src/services/api.ts`: TASK-037, TASK-070 → serialize by wave (TASK-037=w6, TASK-070=w5)
 
 | Wave | Tasks | Prereq | Parallel-safe because |
 |------|-------|--------|-----------------------|
-| 1 | TASK-020, TASK-024, TASK-025, TASK-026, TASK-027, TASK-028, TASK-030, TASK-031, TASK-032, TASK-034, TASK-035, TASK-038 | none | disjoint files within the wave (computed collision matrix) |
-| 2 | TASK-021, TASK-022, TASK-023, TASK-029, TASK-033, TASK-036 | wave 1 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
+| 1 | TASK-177, TASK-024, TASK-025, TASK-026, TASK-027, TASK-028, TASK-030, TASK-031, TASK-032, TASK-034, TASK-035, TASK-038 | none | disjoint files within the wave (computed collision matrix) |
+| 2 | TASK-178, TASK-179, TASK-023, TASK-029, TASK-033, TASK-036 | wave 1 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
 | 3 | TASK-039 | wave 2 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
 | 6 | TASK-037 | wave 5 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
 

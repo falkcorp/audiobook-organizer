@@ -113,14 +113,14 @@
    "internal/config/config_unit_test.go:654 \u2014 test row asserting the json-tag round-trip: `{\"write_back_metadata\", func() bool { return AppConfig.WriteBackMetadata }}`."
   ],
   "steps": [
-   "1. In internal/config/config.go:649, rename the field to `AutoWriteTagsOnFetch bool` and its json tag to `json:\"auto_write_tags_on_fetch\"`.",
-   "2. In internal/config/config.go:1213, change `viper.SetDefault(\"write_back_metadata\", false)` to `viper.SetDefault(\"auto_write_tags_on_fetch\", false)`.",
-   "3. In internal/config/config.go around L1660 (the struct-literal load inside InitConfig/LoadConfig), replace the bare `WriteBackMetadata: viper.GetBool(\"write_back_metadata\")` with alias-aware logic: read `auto_write_tags_on_fetch` if viper has it explicitly set (`viper.IsSet(\"auto_write_tags_on_fetch\")`); otherwise fall back to `viper.GetBool(\"write_back_metadata\")` and `slog.Warn(\"config: using deprecated key write_back_metadata; rename to auto_write_tags_on_fetch\")` once. Put this in a small local helper near the load site rather than inline if the surrounding code already uses helpers for other renamed keys (grep for an existing pattern first: `grep -n 'deprecated' internal/config/config.go`).",
-   "4. In internal/config/persistence.go:1084-1086 (the legacy flat-key DB-row loader), KEEP the `case \"write_back_metadata\": c.WriteBackMetadata = b` case (renamed field) as-is \u2014 this is exactly the deprecated-alias path for old persisted rows, do not delete it \u2014 and ADD a new `case \"auto_write_tags_on_fetch\": c.AutoWriteTagsOnFetch = b` case for newly-saved config.",
-   "5. In internal/metafetch/service_fetch.go:309, change `config.AppConfig.WriteBackMetadata` to `config.AppConfig.AutoWriteTagsOnFetch`.",
-   "6. In internal/config/config_unit_test.go:654, rename the test row's key string to `auto_write_tags_on_fetch` and its accessor to `AppConfig.AutoWriteTagsOnFetch`.",
-   "7. Add a new unit test (see tests below) proving the alias: set only `write_back_metadata=true` via viper (simulating prod's persisted snapshot), load config, assert `AppConfig.AutoWriteTagsOnFetch == true` and that the WARN log fired once.",
-   "8. Grep once more for stragglers before finishing: `grep -rn 'WriteBackMetadata\\|write_back_metadata' --include='*.go' .` must show zero non-comment hits outside the alias-handling code path."
+   "In internal/config/config.go:649, rename the field to `AutoWriteTagsOnFetch bool` and its json tag to `json:\"auto_write_tags_on_fetch\"`.",
+   "In internal/config/config.go:1213, change `viper.SetDefault(\"write_back_metadata\", false)` to `viper.SetDefault(\"auto_write_tags_on_fetch\", false)`.",
+   "In internal/config/config.go around L1660, replace `WriteBackMetadata: viper.GetBool(\"write_back_metadata\")` with a call to a new small helper, e.g. `AutoWriteTagsOnFetch: boolWithDeprecatedAlias(\"auto_write_tags_on_fetch\", \"write_back_metadata\", false)`, defined near the load site as: if `viper.IsSet(newKey)` return `viper.GetBool(newKey)`; else if `viper.IsSet(oldKey)` log WARN once and return `viper.GetBool(oldKey)`; else return the default. A struct-literal field position cannot hold an if/else, so this MUST be a function call, not inline logic.",
+   "In internal/config/persistence.go:1084-1086, KEEP the case LABEL `case \"write_back_metadata\":` (the persisted key string does not change) but change the assignment target to the RENAMED field: `case \"write_back_metadata\": if b, err := strconv.ParseBool(value); err == nil { c.AutoWriteTagsOnFetch = b }`. ADD a new `case \"auto_write_tags_on_fetch\": if b, err := strconv.ParseBool(value); err == nil { c.AutoWriteTagsOnFetch = b } }` for newly-saved rows.",
+   "In internal/metafetch/service_fetch.go:309, change `config.AppConfig.WriteBackMetadata` to `config.AppConfig.AutoWriteTagsOnFetch`.",
+   "In internal/config/config_unit_test.go:654, rename the test row's key string to `auto_write_tags_on_fetch` and its accessor to `AppConfig.AutoWriteTagsOnFetch`.",
+   "Add a new unit test proving the alias: set only `write_back_metadata=true` via viper (simulating prod's persisted snapshot), load config, assert `AppConfig.AutoWriteTagsOnFetch == true` and that the WARN log fired once.",
+   "Grep once more for stragglers before finishing: `grep -rn 'WriteBackMetadata\\|write_back_metadata' --include='*.go' .` -- every remaining `c.WriteBackMetadata`/`WriteBackMetadata:` hit outside a string literal or comment is a compile error waiting to happen."
   ],
   "tests": [
    "internal/config/config_unit_test.go \u2014 extend/add TestConfigDeprecatedAliases (or similar existing table) with a case for auto_write_tags_on_fetch, asserting the renamed field round-trips through the new key.",
@@ -143,9 +143,9 @@
   "gate": "make ci",
   "notes": "Owner decision context: this item's own instructions require the alias migration (see item text 'Migration matters \u2014 do not do a bare rename'). review_critical=true because a broken alias silently changes whether the app writes tags to the user's audio files during auto-fetch, in prod, without any explicit action.",
   "review_notes": [
-   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin",
-   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin",
-   "[ops-rollback.json] The config rename is forward-compatible but not BACKWARD-compatible, so the PR cannot be cleanly reverted. After it lands the app persists only the new key auto_write_tags_on_fetch (step 4 adds a new save case); roll the binary back and the old code reads write_back_metadata, which the new binary ne"
+   "[verify-3.json] Step 4 tells the model to 'KEEP the `case \"write_back_metadata\": c.WriteBackMetadata = b` case (renamed field) as-is' in internal/config/persistence.go. But step 1 renames the struct field itself (`WriteBackMetadata bool` -> `AutoWriteTagsOnFetch bool`), so after step 1 the identifier `c.WriteBackMe",
+   "[ops-rollback.json] The config rename is forward-compatible but not BACKWARD-compatible, so the PR cannot be cleanly reverted. After it lands the app persists only the new key auto_write_tags_on_fetch (step 4 adds a new save case); roll the binary back and the old code reads write_back_metadata, which the new binary ne",
+   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin"
   ]
  },
  {
@@ -249,9 +249,8 @@
   "gate": "make ci",
   "notes": "Part of CFG-AUDIT triage decision #1 from the owner's 2026-08-21 list (item 8 in the decisions is about review_apply_enabled, not this \u2014 this sub-item is independently actionable and not blocked by any owner decision).",
   "review_notes": [
-   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA",
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
-   "[ops-rollback.json] TASK-139 converts an option that currently cannot disable rate limiting into one that can, i.e. it makes a fail-open switch live - and it is marked review_critical=false, sonnet tier, with no step to check what production has persisted. The code's own warning text calls the disabled state 'vulnerabl"
+   "[ops-rollback.json] TASK-139 converts an option that currently cannot disable rate limiting into one that can, i.e. it makes a fail-open switch live - and it is marked review_critical=false, sonnet tier, with no step to check what production has persisted. The code's own warning text calls the disabled state 'vulnerabl",
+   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin"
   ]
  },
  {
@@ -362,9 +361,6 @@
   "gate": "make ci",
   "notes": "Low risk, but the changelog fragment must say this changes default behavior for fresh installs, not just fixes a doc mismatch.",
   "review_notes": [
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin",
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
    "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin"
   ]
  },
@@ -428,8 +424,6 @@
   "notes": "Flag this one for prod-deploy coordination per edge_cases above \u2014 verify the owner's prod snapshot has an explicit local_base_url before shipping, per 'never flip a config default that prod silently depends on' caution.",
   "review_notes": [
    "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin",
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
    "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin"
   ]
  },
@@ -487,11 +481,7 @@
   "notes": "Simplest, lowest-risk sub-item of the CFG-AUDIT triage \u2014 good haiku candidate.",
   "review_notes": [
    "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin",
-   "[simplicity-scope.json] Busywork occupying a wave slot. TASK-033 'Repoint store.go:17's broken doc reference to the archived design spec' is a one-comment-line edit, yet it is wave 2 of the five-deep internal/database/store.go chain, which means TASK-037 and TASK-039 (real schema work) each wait an extra merge round-trip f",
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin",
-   "[simplicity-scope.json] Busywork occupying a wave slot. TASK-033 'Repoint store.go:17's broken doc reference to the archived design spec' is a one-comment-line edit, yet it is wave 2 of the five-deep internal/database/store.go chain, which means TASK-037 and TASK-039 (real schema work) each wait an extra merge round-trip f"
+   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin"
   ]
  },
  {
@@ -575,7 +565,8 @@
   "notes": "This is a clean removal once decided; the only judgment call is what the error message should say about migration since the referenced subcommand never existed \u2014 flag that specific wording choice for the owner rather than inventing a migration story.",
   "review_notes": [
    "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)"
+   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin",
+   "[simplicity-scope.json] Busywork occupying a wave slot. TASK-033 'Repoint store.go:17's broken doc reference to the archived design spec' is a one-comment-line edit, yet it is wave 2 of the five-deep internal/database/store.go chain, which means TASK-037 and TASK-039 (real schema work) each wait an extra merge round-trip f"
   ]
  },
  {
@@ -638,10 +629,7 @@
   "verdict_evidence": "Confirmed at internal/metafetch/service_scoring.go:693-712: `ScoreOneResultWithBreakdown`'s base==0 early-return hand-builds `Steps: []ScoreStep{{ID: \"base\", Label: \"Title/author match\", Op: ScoreOpBase, Operand: 0, Running: 0, Detail: \"...\"}}` (starts L704) instead of calling `newScoreRecorder(0, \"Title/author match\", detail).breakdown()`. Confirmed `grep -n 'ScoreStep{' internal/metafetch/*.go | grep -v _test.go` shows exactly 7 hits: 6 inside score_breakdown.go's scoreRecorder methods (the canonical builder) and this 1 hand-rolled site \u2014 the last outside score_breakdown.go, matching the item's 'last hand-rolled ScoreStep site' claim.",
   "domain": "internal/metafetch",
   "exact_files": [
-   "internal/server/handlers/abs/browse.go",
-   "internal/server/handlers/abs/browse_test.go",
-   "internal/server/handlers/abs/library_fake_test.go",
-   "changelog.d/20260821_missing-file-lane_089.md"
+   "internal/metafetch/service_scoring.go"
   ],
   "verified_anchors": [
    {
@@ -705,10 +693,7 @@
   "anti_over_suppression": "N/A \u2014 no filter/guard is being added; the mutation-test step above IS the anti-over-suppression check for this refactor (per project convention: 'mutation-test before trusting a green test').",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "This is the direct completion of #2639's sibling conversion \u2014 same shape, same file family, low risk.",
-  "review_notes": [
-   "[verify-1.json] The Tests section instructs 'Add a table-driven or standalone test ... that injects a failing GetAllSeriesBookCounts on a fake library store' (internal/server/handlers/abs/browse_test.go), implying the existing fakeLibrary (internal/server/handlers/abs/library_fake_test.go) already supports error in"
-  ]
+  "notes": "This is the direct completion of #2639's sibling conversion \u2014 same shape, same file family, low risk."
  },
  {
   "todo_line": 1350,
@@ -777,9 +762,9 @@
   "gate": "npm --prefix web run lint && npm --prefix web test",
   "notes": "Combine with part 2 (metadata: prefix reformat) in the same PR since both touch the same renderChip function and same file.",
   "review_notes": [
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
-   "[correctness.json] Three tasks redefine what the Browse-by-Tag cloud shows, using two INCOMPATIBLE definitions of 'hide', in the same and adjacent waves, with no depends_on between them. TASK-169 (wave 1, frontend) hides by NAMESPACE (dedup:*, metadata:source:*). TASK-040 (wave 1, backend) changes /tags to return only"
+   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
+   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
   ]
  },
  {
@@ -834,8 +819,7 @@
   "gate": "npm --prefix web run lint && npm --prefix web test",
   "notes": "Ship in the same PR as part 1 (same file, same renderChip function).",
   "review_notes": [
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
-   "[correctness.json] Three tasks redefine what the Browse-by-Tag cloud shows, using two INCOMPATIBLE definitions of 'hide', in the same and adjacent waves, with no depends_on between them. TASK-169 (wave 1, frontend) hides by NAMESPACE (dedup:*, metadata:source:*). TASK-040 (wave 1, backend) changes /tags to return only"
+   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n"
   ]
  },
  {
@@ -1054,11 +1038,7 @@
    1517
   ],
   "gate": "make ci",
-  "notes": "review_critical=true: this creates real UserPlaylist rows from a resolved book mapping \u2014 a resolution bug would silently populate playlists with wrong books. Depends on part 1 (PID coverage measurement) passing before this ships to the owner's real library.",
-  "review_notes": [
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] TASK-069's gate field concedes that the package-wide gate is red on main \u2014 'make ci is known-red on main per the plan doc; do not read a red make ci as a signal from this work' \u2014 which directly contradicts the coordinator protocol printed in every orchestration.md: 'A wave MUST NOT start while ... t"
-  ]
+  "notes": "review_critical=true: this creates real UserPlaylist rows from a resolved book mapping \u2014 a resolution bug would silently populate playlists with wrong books. Depends on part 1 (PID coverage measurement) passing before this ships to the owner's real library."
  },
  {
   "todo_line": 1517,
@@ -1191,7 +1171,9 @@
   "gate": "make ci",
   "notes": "review_critical=true: this is exactly the class of prod-data-path bug (merge/dedup apply visibility) called out in CLAUDE.md's review-critical definition. High owner-trust impact per the item ('a merge that visibly does nothing teaches the owner not to believe the merge button').",
   "review_notes": [
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th",
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
+   "[simplicity-scope.json] Every brief points at a package-level protocol document that does not exist. 212 files in the package reference `docs/agent-tasks/ORCHESTRATION.md` (as `../ORCHESTRATION.md` / `../../ORCHESTRATION.md`), including the line in each brief '(Protocol also in `docs/agent-tasks/ORCHESTRATION.md` \u2014 the inl"
   ]
  },
  {
@@ -1244,9 +1226,7 @@
   "gate": "npm --prefix web run lint && npm --prefix web test",
   "notes": "Low severity/low frequency (observed twice total, both times passed on re-run) \u2014 reasonable to timebox this investigation rather than block other work on it.",
   "review_notes": [
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
-   "[simplicity-scope.json] All three tasks close the SAME TODO.md line, and that line is not a checkbox at all, so the brief's close-out instruction is inapplicable and will be improvised three different ways by three agents in the same wave. TODO.md:10660 is '36. **1.16 \u2014 resizable/sortable columns** (H1:2750) \u2014 remaining: d"
+   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n"
   ]
  },
  {
@@ -1398,12 +1378,7 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "n/a (docs)",
-  "notes": "Real 2026-08-10 incident: PR #2272 (04:25 EDT) added a fragment, assemble_todo.py folded+deleted it at 04:51 EDT (26 minutes later), PR #2273 (05:12 EDT) did the actual work and 'deleted' the already-gone fragment \u2014 leaving a stale unchecked TODO.md entry, cleaned up by hand in #2274.",
-  "review_notes": [
-   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
-   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for "
-  ]
+  "notes": "Real 2026-08-10 incident: PR #2272 (04:25 EDT) added a fragment, assemble_todo.py folded+deleted it at 04:51 EDT (26 minutes later), PR #2273 (05:12 EDT) did the actual work and 'deleted' the already-gone fragment \u2014 leaving a stale unchecked TODO.md entry, cleaned up by hand in #2274."
  },
  {
   "todo_line": 1945,
@@ -1452,7 +1427,7 @@
   "steps": [
    "1. In internal/database/pebble_store_versiongroup_backfill.go, change L98-99 from `LowerBound: []byte(\"book:0\"), UpperBound: []byte(\"book:;\")` to `LowerBound: []byte(\"book:\"), UpperBound: []byte(\"book;\")`.",
    "2. Bump the file's version header (currently 1.2.1) and last-edited date per the mandatory file-header rule.",
-   "3. Since this changes what the scan visits, and the sentinel key (`versionGroupBackfillKey = \"system:backfill:versiongroup_index_v2_done\"`) gates a ONE-TIME run, decide whether this correctness fix warrants bumping the sentinel to v3 so existing deployments (which already ran v2 successfully under the old, narrower bounds) re-run once under the wider bounds \u2014 recommend bumping to v3 given the file's own precedent comment explains exactly why silent incompleteness needs a forced rebuild ('their index can be incomplete... could never heal'). Follow the same versionGroupBackfillKey bump pattern already documented at L23-30 (v1\u2192v2 rationale) for a v2\u2192v3 bump.",
+   "3. Bump the sentinel from `versionGroupBackfillKey = \"system:backfill:versiongroup_index_v2_done\"` to a v3 key (`..._v3_done`), following the same v1->v2 bump pattern documented at L23-30, so every deployment (including ones that already completed v2 under the narrower bounds) re-runs once under the wider bounds. This is MANDATORY, not optional \u2014 the bound fix has no effect on already-existing letter-leading book IDs unless the one-time gate is forced to re-run.",
    "4. Add or extend a unit test with a synthetic book ID starting with a letter (e.g. 'A01...') stored under `book:A01...`, asserting it is now included by the widened scan and correctly indexed if it has a VersionGroupID."
   ],
   "tests": [
@@ -1461,7 +1436,12 @@
   ],
   "acceptance": [
    "`go test ./internal/database/... -run BackfillVersionGroupIndex` passes including the new letter-ID case.",
-   "`grep -n 'book:\\\"\\\\)' internal/database/pebble_store_versiongroup_backfill.go` confirms the widened bounds are in place."
+   "`grep -n 'LowerBound: \\[\\]byte(\"book:\"),' internal/database/pebble_store_versiongroup_backfill.go` confirms the widened bounds are in place.",
+   "Anti-over-suppression: N/A",
+   "Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).",
+   "Gate green: `make ci` exits 0; `go vet`/lint clean.",
+   "File headers bumped on every changed file (`grep -n \"last-edited: 2026-08-21\" <file>` hits for each).",
+   "Changelog fragment present: `test -f changelog.d/20260821_database_024.md`."
   ],
   "edge_cases": [
    "If the sentinel is bumped to force a re-run (step 3), the re-run must still be idempotent per the file's own design (deterministic key\u2192value writes) \u2014 confirm this holds for the wider scan too, not just re-verify the v1\u2192v2 precedent."
@@ -1471,8 +1451,8 @@
   "gate": "make ci",
   "notes": "Genuinely low urgency per the item's own framing ('not the cause of any observed under-scan') \u2014 safe to schedule opportunistically.",
   "review_notes": [
-   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA",
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
+   "[verify-2.json] Acceptance criterion `grep -n 'book:\\\"\\\\)' internal/database/pebble_store_versiongroup_backfill.go` is malformed and will NOT match the post-edit line even when the fix is applied correctly. Verified: piping the correct post-edit line `LowerBound: []byte(\"book:\"),` through the literal acceptance-cri",
+   "[verify-2.json] Step 3 leaves the highest-impact decision in the whole task ambiguous: 'decide whether this correctness fix warrants bumping the sentinel to v3 ... recommend bumping to v3 given the file's own precedent comment' \u2014 this is advisory phrasing ('decide', 'recommend'), not a mandate. Two reasonable weak ",
    "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
   ]
  },
@@ -1542,11 +1522,7 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "This bug was noted inline during the activity-cancellation work on branch fix/activityquery and deliberately deferred there as out of scope \u2014 this item is the deferred follow-up.",
-  "review_notes": [
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
-   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA"
-  ]
+  "notes": "This bug was noted inline during the activity-cancellation work on branch fix/activityquery and deliberately deferred there as out of scope \u2014 this item is the deferred follow-up."
  },
  {
   "todo_line": 1970,
@@ -1627,7 +1603,6 @@
   "gate": "make ci",
   "notes": "Lower severity than the read-path cancellation work per the item's own framing ('a wipe is rare and operator-initiated, not fired on every page load') \u2014 reasonable to schedule after L1957 (same file, same handler) rather than urgently. Prune/Summarize/CompactByDay share this exact defect shape per the item but are explicitly out of this item's stated scope \u2014 flag to the coordinator as a likely follow-up sweep.",
   "review_notes": [
-   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA",
    "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
   ]
  },
@@ -1711,9 +1686,6 @@
   "review_notes": [
    "[verify-3.json] The existing non-search cache (which the brief tells the model to mirror) is NOT a plain TTL/LRU cache \u2014 its key is built through `svc.libGen.Key(...)` (service_query.go:191-194), a generation counter that advances on every create/update/delete, giving correctness-grade invalidation for free. The br",
    "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
-   "[simplicity-scope.json] Every brief points at a package-level protocol document that does not exist. 212 files in the package reference `docs/agent-tasks/ORCHESTRATION.md` (as `../ORCHESTRATION.md` / `../../ORCHESTRATION.md`), including the line in each brief '(Protocol also in `docs/agent-tasks/ORCHESTRATION.md` \u2014 the inl",
-   "[verify-3.json] The existing non-search cache (which the brief tells the model to mirror) is NOT a plain TTL/LRU cache \u2014 its key is built through `svc.libGen.Key(...)` (service_query.go:191-194), a generation counter that advances on every create/update/delete, giving correctness-grade invalidation for free. The br",
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
    "[simplicity-scope.json] Every brief points at a package-level protocol document that does not exist. 212 files in the package reference `docs/agent-tasks/ORCHESTRATION.md` (as `../ORCHESTRATION.md` / `../../ORCHESTRATION.md`), including the line in each brief '(Protocol also in `docs/agent-tasks/ORCHESTRATION.md` \u2014 the inl"
   ]
  },
@@ -1791,9 +1763,8 @@
   "gate": "npm --prefix web run lint && npm --prefix web test",
   "notes": "review_critical=true: this sits directly on the version-group primary-election bug (L2373) and the apply-writes-tags fix \u2014 both are prod-data-correctness paths. Explicitly sequence AFTER L2373 part 1 lands, per the item's own 'Blocked-ish \u2014 read first' framing.",
   "review_notes": [
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
-   "[simplicity-scope.json] All three tasks close the SAME TODO.md line, and that line is not a checkbox at all, so the brief's close-out instruction is inapplicable and will be improvised three different ways by three agents in the same wave. TODO.md:10660 is '36. **1.16 \u2014 resizable/sortable columns** (H1:2750) \u2014 remaining: d"
+   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
   ]
  },
  {
@@ -2009,9 +1980,6 @@
   "anti_over_suppression": "N/A \u2014 this is a correctness fix ensuring an invariant, not a filter; the invariant test above IS the safeguard against silently continuing to allow two primaries.",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "review_critical=true: directly on the merge/version-group write path, the canonical prod-data-correctness class per CLAUDE.md's definition. This is a hard prerequisite for L2025 (REVIEW-COMBINE-FIRST, this same scope) per that item's own explicit 'Blocked-ish' warning.",
-  "review_notes": [
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
-  ]
+  "notes": "review_critical=true: directly on the merge/version-group write path, the canonical prod-data-correctness class per CLAUDE.md's definition. This is a hard prerequisite for L2025 (REVIEW-COMBINE-FIRST, this same scope) per that item's own explicit 'Blocked-ish' warning."
  }
 ]

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/search/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: ffafaf6c-5ebc-4cc1-9746-073d9fa4c03d -->
+<!-- guid: b1022db6-ad23-4f7c-bded-5a6082bd28b3 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — search workstream (todo-completion)
@@ -12,8 +12,8 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK129[TASK-129 index-track-names-on-bookdoc]
-      TASK130[TASK-130 surface-to-the-user-when-all]
+      TASK125[TASK-125 index-track-names-on-bookdoc]
+      TASK126[TASK-126 surface-to-the-user-when-all]
     end
 
 ```
@@ -24,7 +24,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`make ci`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/search/... -count=1 ; go build ./... && go vet ./... && go test ./internal/search/... ./internal/server/handlers/... -count=1`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

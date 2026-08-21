@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-023-investigate-then-evict-dirty-flag-merged-away-bo.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 7fb11d29-3e74-4a02-8996-e84dea6fa4c4 -->
+<!-- guid: 2083c33c-7915-4870-8053-3281c3676969 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-023 — Investigate then evict/dirty-flag merged-away book/file IDs from every read cache so losers stop appearing after a merge (MERGE-CACHE-EVICT)
@@ -79,9 +79,9 @@ Anti-over-suppression test: `N/A — this is a correctness/visibility fix, not a
 ## How to test
 
 ```bash
-make ci
+go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/merge/... ./internal/search/... -count=1
 ```
-If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<changed-pkg>/... && go test ./<changed-pkg>/... -count=1` (or `npm --prefix web test -- <file>` for web), then the full gate once before reporting done.
+Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
 ## Acceptance criteria
 
@@ -89,7 +89,7 @@ If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<c
 - [ ] `go test ./internal/merge/... ./internal/dedup/... ./internal/search/...` passes.
 - [ ] Anti-over-suppression test: `N/A — this is a correctness/visibility fix, not a filter; the anti-pattern to avoid here is the inverse: a test that passes only because it slept long enough for the reconciler, which the item explicitly calls out as 'measuring the reconciler, not the fix.'` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `make ci` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/merge/... ./internal/search/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_database_023.md`.
 

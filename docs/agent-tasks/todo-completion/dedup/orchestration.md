@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f27d5c36-a063-408a-ac9f-1e6ba5b09df3 -->
+<!-- guid: 39f28385-7af8-490a-9704-df9699529c29 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — dedup workstream (todo-completion)
@@ -14,36 +14,39 @@ flowchart LR
     subgraph Wave1
       TASK040[TASK-040 make-unmergeauto-reverse-ext]
       TASK041[TASK-041 audit-remaining-we-use-the-w]
-      TASK042[TASK-042 measure-whether-dedup-durati]
-      TASK044[TASK-044 add-a-dry-run-parameter-to-d]
-      TASK047[TASK-047 build-a-dry-run-report-only-]
+      TASK180[TASK-180 measure-whether-dedup-durati]
+      TASK043[TASK-043 add-a-dry-run-parameter-to-d]
+      TASK045[TASK-045 build-a-dry-run-report-only-]
     end
     subgraph Wave2
-      TASK045[TASK-045 find-the-createbook-path-s-t]
-      TASK049[TASK-049 narrow-collectduration-s-tag]
-      TASK051[TASK-051 acoustic-confirm-signal-prom]
+      TASK181[TASK-181 find-the-createbook-path-s-t]
+      TASK047[TASK-047 narrow-collectduration-s-tag]
+      TASK049[TASK-049 acoustic-confirm-signal-prom]
     end
     subgraph Wave3
-      TASK043[TASK-043 forward-fix-demote-pre-exist]
-      TASK046[TASK-046 apply-the-unfiltered-ref-cou]
-      TASK052[TASK-052 shattered-book-reassembly-ma]
+      TASK042[TASK-042 forward-fix-demote-pre-exist]
+      TASK044[TASK-044 apply-the-unfiltered-ref-cou]
     end
     subgraph Wave4
-      TASK048[TASK-048 route-merge-asexternalidreas]
+      TASK046[TASK-046 route-merge-asexternalidreas]
     end
     subgraph Wave5
-      TASK050[TASK-050 physically-co-locate-a-combi]
+      TASK048[TASK-048 physically-co-locate-a-combi]
     end
-    TASK040 --> TASK043
+    subgraph Wave8
+      TASK050[TASK-050 shattered-book-reassembly-ma]
+    end
+    TASK021 --> TASK050
+    TASK040 --> TASK042
+    TASK040 --> TASK046
     TASK040 --> TASK048
-    TASK040 --> TASK050
-    TASK040 --> TASK051
-    TASK041 --> TASK049
-    TASK043 --> TASK048
-    TASK043 --> TASK050
-    TASK044 --> TASK046
-    TASK048 --> TASK050
-    TASK051 --> TASK052
+    TASK040 --> TASK049
+    TASK041 --> TASK047
+    TASK042 --> TASK046
+    TASK042 --> TASK048
+    TASK043 --> TASK044
+    TASK046 --> TASK048
+    TASK049 --> TASK050
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -52,7 +55,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`make ci`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/dedup/... ./internal/merge/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/maintenance/jobs/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/itunes/service/... ./internal/scanner/... -count=1 ; go build ./... && go vet ./... && go test ./internal/merge/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

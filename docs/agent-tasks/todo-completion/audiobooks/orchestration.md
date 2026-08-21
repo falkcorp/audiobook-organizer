@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b48c3428-26f8-4a68-af48-0ae803523647 -->
+<!-- guid: 870656a9-b6e2-45e4-b48c-be3e31237ad0 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — audiobooks workstream (todo-completion)
@@ -12,14 +12,28 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK002[TASK-002 build-a-read-only-census-too]
-      TASK003[TASK-003 add-a-conformance-test-asser]
-      TASK004[TASK-004 wire-onlyparsedtranscription]
+      TASK176[TASK-176 build-a-read-only-census-too]
+      TASK005[TASK-005 wire-onlyparsedtranscription]
+    end
+    subgraph Wave2
+      TASK002[TASK-002 fix-the-3-way-disagreement-i]
     end
     subgraph Wave3
       TASK001[TASK-001 add-a-short-ttl-cache-to-the]
     end
-    TASK004 --> TASK001
+    subgraph Wave4
+      TASK003[TASK-003 fix-the-author-path-post-fil]
+    end
+    subgraph Wave5
+      TASK004[TASK-004 add-a-conformance-test-asser]
+    end
+    TASK001 --> TASK003
+    TASK002 --> TASK001
+    TASK002 --> TASK003
+    TASK003 --> TASK004
+    TASK005 --> TASK001
+    TASK005 --> TASK002
+    TASK005 --> TASK003
     TASK023 --> TASK001
 ```
 
@@ -29,7 +43,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`make ci`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/audiobooks/... -count=1 ; go build ./... && go vet ./... && go test ./internal/audiobooks/... ./internal/server/handlers/audiobooks/... -count=1 ; go build ./... && go vet ./... && go test ./tools/cmd/orphan-nonprimary-census/... -count=1`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

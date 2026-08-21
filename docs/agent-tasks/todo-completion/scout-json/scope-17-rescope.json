@@ -215,8 +215,8 @@
   "todo_line": 235,
   "src_id": null,
   "title": "Add a per-test deadline (context.WithTimeout) to internal/database's riskiest unbounded-wait test helpers",
-  "verdict": "stale_done",
-  "verdict_evidence": "[verify-2.json] The brief's premise is that an 8-reference 'Server.Store() chain' (internal/plugins/maintenance/deps.go x3, internal/server/server_maintenance_deps.go x2, plus callers) remains to be narrowed. At HEAD, `grep -n 'func (s \\*Server) Store()' internal/server/server.go` returns ZERO hits \u2014 there is no Server.Store() method returning database.Store anymore. deps.go and server_maintenance_deps.go already only expose narrow per-capability accessors (OpsStore(), ReconcileStore(), PlaylistStore() database.UserPlaylistStore, MetadataCacheStore() database.MetadataCacheStore, FileProvenanceStore() database.FileProvenanceStore) via a StoreProvider interface; the only remaining textual hits for 'database.Store' in those two files are inside comments describing the *historical* state ('These interfaces replaced a single `Store() database.Store` accessor...', 'They used to thread a database.Store -- 398...'). The 8-reference bucket this task targets appears to already be closed at HEAD (matches project memory: '\u2705 BOTH wide-store accessors SPLIT \u2014 #2612 + #2617' / '\u2705 Store decoupling DONE'). A weak model following the brief's Step 2 ('read internal/plugins/maintenance/deps.go's 3 references... and internal/server/server_maintenance_deps.go's 2 references') would find no live references to narrow and have no guidance on what to do next \u2014 the acceptance criterion 'the re-derived reference count (step 1) drops from its current value' cannot be satisfied by any code change because there is nothing left to narrow in the named bucket. | Confirmed at HEAD: go.mod targets Go 1.24+ (t.Context() available), zero existing t.Context() usages in internal/database, and exactly 12 test files contain an unbounded-wait pattern (.Wait()/<-chan/.Lock()) with no surrounding deadline -- an exhaustive, grep-verified candidate list, distinct from L232's blocked root-cause-fix item.",
+  "verdict": "actionable",
+  "verdict_evidence": "Confirmed at HEAD: go.mod targets Go 1.24+ (t.Context() available), zero existing t.Context() usages in internal/database, and exactly 12 test files contain an unbounded-wait pattern (.Wait()/<-chan/.Lock()) with no surrounding deadline -- an exhaustive, grep-verified candidate list, distinct from L232's blocked root-cause-fix item.",
   "domain": "internal/database",
   "exact_files": [
    "internal/database/dataloss_concurrency_test.go",
@@ -290,15 +290,7 @@
   "gate": "make ci",
   "notes": "Independent of L232/L238 -- can be done in parallel or first. Corrects the prior scout's assumption that shared blocking helpers live in internal/database/dbtest/ (that directory only contains invariants.go/invariants_fires_test.go, unrelated to this pattern); the real candidates are the 12 _test.go files listed.",
   "_scope": "scope-01.json",
-  "_section": "Tasks",
-  "review_notes": [
-   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th",
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
-   "[simplicity-scope.json] Every brief points at a package-level protocol document that does not exist. 212 files in the package reference `docs/agent-tasks/ORCHESTRATION.md` (as `../ORCHESTRATION.md` / `../../ORCHESTRATION.md`), including the line in each brief '(Protocol also in `docs/agent-tasks/ORCHESTRATION.md` \u2014 the inl",
-   "[verify-2.json] The brief's premise is that an 8-reference 'Server.Store() chain' (internal/plugins/maintenance/deps.go x3, internal/server/server_maintenance_deps.go x2, plus callers) remains to be narrowed. At HEAD, `grep -n 'func (s \\*Server) Store()' internal/server/server.go` returns ZERO hits \u2014 there is no Se",
-   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th",
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
-  ]
+  "_section": "Tasks"
  },
  {
   "todo_line": 238,
@@ -345,22 +337,16 @@
    "The absence of any TestMain across 123 test files in this package is itself suggestive: per-test setup/teardown that could be shared may instead be duplicated 123 times, though this must be confirmed by timing data, not assumed from file count alone."
   ],
   "steps": [
-   "1. In internal/database/pebble_store_versiongroup_backfill.go, change L98-99 from `LowerBound: []byte(\"book:0\"), UpperBound: []byte(\"book:;\")` to `LowerBound: []byte(\"book:\"), UpperBound: []byte(\"book;\")`.",
-   "2. Bump the file's version header (currently 1.2.1) and last-edited date per the mandatory file-header rule.",
-   "3. Bump the sentinel from `versionGroupBackfillKey = \"system:backfill:versiongroup_index_v2_done\"` to a v3 key (`..._v3_done`), following the same v1->v2 bump pattern documented at L23-30, so every deployment (including ones that already completed v2 under the narrower bounds) re-runs once under the wider bounds. This is MANDATORY, not optional \u2014 the bound fix has no effect on already-existing letter-leading book IDs unless the one-time gate is forced to re-run.",
-   "4. Add or extend a unit test with a synthetic book ID starting with a letter (e.g. 'A01...') stored under `book:A01...`, asserting it is now included by the widened scan and correctly indexed if it has a VersionGroupID."
+   "1. Run `go test ./internal/database/... -short -v -json > /tmp/db_test_timing.json` and parse per-test durations (via `go tool test2json` output or a small script) to rank the slowest individual tests.",
+   "2. For the top offenders, check whether they share expensive per-test setup (e.g. a full Pebble DB open/close per test, as suggested by pebble_store_test.go's naming and size) that could be hoisted to a shared package-level fixture with per-test key-space isolation.",
+   "3. Check whether independent tests are unnecessarily serialized (missing `t.Parallel()`) where parallelization would be safe -- verify no shared mutable global/package-level state before adding it.",
+   "4. Apply the highest-leverage fix(es) found (likely landing primarily in pebble_store_test.go given its central role, but confirm against the actual profiling output rather than assuming) and re-measure."
   ],
   "tests": [
    "No new test needed -- success is measured by the suite's own wall-clock time; ensure no existing test's correctness assumptions are broken by any added parallelism."
   ],
   "acceptance": [
-   "`go test ./internal/database/... -run BackfillVersionGroupIndex` passes including the new letter-ID case.",
-   "`grep -n 'LowerBound: \\[\\]byte(\"book:\"),' internal/database/pebble_store_versiongroup_backfill.go` confirms the widened bounds are in place.",
-   "Anti-over-suppression: N/A",
-   "Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).",
-   "Gate green: `make ci` exits 0; `go vet`/lint clean.",
-   "File headers bumped on every changed file (`grep -n \"last-edited: 2026-08-21\" <file>` hits for each).",
-   "Changelog fragment present: `test -f changelog.d/20260821_database_024.md`."
+   "`time go test ./internal/database/... -short` shows a measurably lower wall-clock time than the 200-280s baseline, with before/after numbers recorded in the PR description."
   ],
   "edge_cases": [
    "Adding t.Parallel() to tests that share an underlying Pebble DB instance without proper key-space isolation could introduce flaky cross-test interference -- verify isolation before parallelizing."
@@ -370,15 +356,7 @@
   "gate": "make ci",
   "notes": "exact_files lists pebble_store_test.go as the most likely landing site based on file-count/naming evidence, but the actual fix location must be confirmed by the step-1 profiling pass before editing -- this is a best-effort placeholder for the collision matrix, not a guarantee of where the diff lands. Independent of L229/L232.",
   "_scope": "scope-01.json",
-  "_section": "Tasks",
-  "review_notes": [
-   "[verify-2.json] Acceptance criterion `grep -n 'book:\\\"\\\\)' internal/database/pebble_store_versiongroup_backfill.go` is malformed and will NOT match the post-edit line even when the fix is applied correctly. Verified: piping the correct post-edit line `LowerBound: []byte(\"book:\"),` through the literal acceptance-cri",
-   "[verify-2.json] Step 3 leaves the highest-impact decision in the whole task ambiguous: 'decide whether this correctness fix warrants bumping the sentinel to v3 ... recommend bumping to v3 given the file's own precedent comment' \u2014 this is advisory phrasing ('decide', 'recommend'), not a mandate. Two reasonable weak ",
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
-   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th",
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
-   "[simplicity-scope.json] Every brief points at a package-level protocol document that does not exist. 212 files in the package reference `docs/agent-tasks/ORCHESTRATION.md` (as `../ORCHESTRATION.md` / `../../ORCHESTRATION.md`), including the line in each brief '(Protocol also in `docs/agent-tasks/ORCHESTRATION.md` \u2014 the inl"
-  ]
+  "_section": "Tasks"
  },
  {
   "todo_line": 969,
@@ -471,23 +449,20 @@
    "The 91-file baseline is the number a new gate would need to grandfather at introduction time; the plan doc separately measured grep undercounting the true count by ~15% (11 seen vs 87 real in one measurement), so the AST tool's own baseline-seeding run should be trusted over this grep number if they diverge."
   ],
   "steps": [
-   "1. In internal/database/pebble_store_versiongroup_backfill.go, change L98-99 from `LowerBound: []byte(\"book:0\"), UpperBound: []byte(\"book:;\")` to `LowerBound: []byte(\"book:\"), UpperBound: []byte(\"book;\")`.",
-   "2. Bump the file's version header (currently 1.2.1) and last-edited date per the mandatory file-header rule.",
-   "3. Bump the sentinel from `versionGroupBackfillKey = \"system:backfill:versiongroup_index_v2_done\"` to a v3 key (`..._v3_done`), following the same v1->v2 bump pattern documented at L23-30, so every deployment (including ones that already completed v2 under the narrower bounds) re-runs once under the wider bounds. This is MANDATORY, not optional \u2014 the bound fix has no effect on already-existing letter-leading book IDs unless the one-time gate is forced to re-run.",
-   "4. Add or extend a unit test with a synthetic book ID starting with a letter (e.g. 'A01...') stored under `book:A01...`, asserting it is now included by the widened scan and correctly indexed if it has a VersionGroupID."
+   "1. Write tools/cmd/storewidthgate/main.go using golang.org/x/tools/go/packages to load the module and go/types to resolve every func/method parameter, struct field, and var declaration, flagging any whose resolved type is github.com/falkcorp/audiobook-organizer/internal/database.Store.",
+   "2. Seed .store-width-gate-baseline from the tool's own first run against HEAD (not the raw 91-file grep, since the plan doc warns grep undercounts by ~15% -- trust the AST tool's own count once it exists).",
+   "3. Exempt internal/database itself (the type's home package) entirely from the gate.",
+   "4. Wire `go run ./tools/cmd/storewidthgate` into a new Makefile target (e.g. `store-width-gate`) and add it either as a new step in the existing 'Interface Width Ratchet' job (.github/workflows/ci.yml:101-146) or a new job following that job's structure (Go setup, cache restore, golangci-lint install is NOT needed here since this is a custom tool, not a golangci-lint invocation).",
+   "5. Provide an escape hatch (e.g. adding a file to the baseline in the same PR) for a genuinely justified new wide use, mirroring the interfacebloat //nolint-with-reason convention.",
+   "6. Update docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md to mark Phase 2 item 2 complete, and correct item 3's status to reflect the regrouping-not-narrowing outcome if not already noted there."
   ],
   "tests": [
    "tools/cmd/storewidthgate/main_test.go: a small fixture module with one file using database.Store as a parameter type is correctly flagged when NOT in the baseline, and correctly passed when it IS.",
    "A synthetic PR-diff fixture (or a dry-run mode) proving the gate fires when wired into the workflow, not just in a local unit test."
   ],
   "acceptance": [
-   "`go test ./internal/database/... -run BackfillVersionGroupIndex` passes including the new letter-ID case.",
-   "`grep -n 'LowerBound: \\[\\]byte(\"book:\"),' internal/database/pebble_store_versiongroup_backfill.go` confirms the widened bounds are in place.",
-   "Anti-over-suppression: N/A",
-   "Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).",
-   "Gate green: `make ci` exits 0; `go vet`/lint clean.",
-   "File headers bumped on every changed file (`grep -n \"last-edited: 2026-08-21\" <file>` hits for each).",
-   "Changelog fragment present: `test -f changelog.d/20260821_database_024.md`."
+   "The new tool run against current HEAD reports the true count (expected close to but possibly above 91, per the plan doc's undercount warning) with zero unexpected new hits once the baseline is seeded from its own output.",
+   "A synthetic test file added with a database.Store parameter and NOT added to the baseline causes the CI job to fail."
   ],
   "edge_cases": [
    "database.MockStore (399 methods, 108 files) is explicitly NOT in scope per the plan doc -- the gate must target database.Store specifically, not MockStore or any test-only type.",
@@ -498,13 +473,7 @@
   "gate": "make ci (once the new gate is wired into CI, it becomes part of this)",
   "notes": "Corrects the prior scout's proposed reuse target: tools/cmd/oplint uses go/parser (syntax only), which cannot resolve `database.Store` as a TYPE across package boundaries -- the new tool needs go/packages + go/types (type-checked), a materially bigger dependency than oplint's plain AST walk. This is real, unstarted work despite the interfacebloat linter score having already been fixed by the store.go regrouping -- do not let a green Interface Width Ratchet run be mistaken for this item being done; they measure different things, exactly as store.go's own comment warns.",
   "_scope": "scope-02.json",
-  "_section": "Interface width: the five the sweep did not reach",
-  "review_notes": [
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
-   "[verify-2.json] Acceptance criterion `grep -n 'book:\\\"\\\\)' internal/database/pebble_store_versiongroup_backfill.go` is malformed and will NOT match the post-edit line even when the fix is applied correctly. Verified: piping the correct post-edit line `LowerBound: []byte(\"book:\"),` through the literal acceptance-cri",
-   "[verify-2.json] Step 3 leaves the highest-impact decision in the whole task ambiguous: 'decide whether this correctness fix warrants bumping the sentinel to v3 ... recommend bumping to v3 given the file's own precedent comment' \u2014 this is advisory phrasing ('decide', 'recommend'), not a mandate. Two reasonable weak ",
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
-  ]
+  "_section": "Interface width: the five the sweep did not reach"
  },
  {
   "todo_line": 1350,
@@ -584,11 +553,7 @@
   "gate": "make ci",
   "notes": "Explicitly separate from any display-cleanup work per the owner's own instruction: 'Do not fix it by hiding the tag -- measure whether the abridged detection is correct first.'",
   "_scope": "scope-03.json",
-  "_section": "Config",
-  "review_notes": [
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
-  ]
+  "_section": "Config"
  },
  {
   "todo_line": 1517,
@@ -599,10 +564,9 @@
   "verdict_evidence": "Confirmed GetBookByITunesPersistentID exists (internal/database/pebble_store.go:1179) and that internal/itunes already parses track-level Persistent IDs from an XML plist (internal/itunes/plist_parser.go:35/503, Tracks map at L28). Found a closely related but DISTINCT existing census (internal/itunes/pid_integrity.go) that checks for DUPLICATE PIDs across book_file rows using the same ParseITL/lib.Tracks[i].PersistentID plumbing -- it does NOT compute the coverage/resolution-rate measurement this item asks for, so this remains genuinely unbuilt, with strong reusable infrastructure and a clear extension point (cmd/pid-census).",
   "domain": "internal/itunes",
   "exact_files": [
-   "cmd/pid-census/main.go",
    "internal/itunes/pid_coverage.go",
    "internal/itunes/pid_coverage_test.go",
-   "internal/plugins/maintenance/plugin.go"
+   "cmd/pid-census/main.go"
   ],
   "verified_anchors": [
    {
@@ -674,11 +638,7 @@
   "gate": "make ci",
   "notes": "This gates the actual snapshot-import feature (not in this scope) -- do not build that until this measurement shows acceptable coverage, per the item's own explicit instruction. pid_integrity.go is a close sibling doing a related but distinct census (duplicate PIDs, not coverage) -- do not confuse a green pid_integrity run with this item being done.",
   "_scope": "scope-03.json",
-  "_section": "Config",
-  "review_notes": [
-   "[simplicity-scope.json] TASK-069's gate field concedes that the package-wide gate is red on main \u2014 'make ci is known-red on main per the plan doc; do not read a red make ci as a signal from this work' \u2014 which directly contradicts the coordinator protocol printed in every orchestration.md: 'A wave MUST NOT start while ... t",
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
-  ]
+  "_section": "Config"
  },
  {
   "todo_line": 1727,
@@ -753,13 +713,7 @@
   "gate": "npm --prefix web run lint && npm --prefix web test",
   "notes": "The deeper root-cause investigation this TODO item's title names is NOT resolved by this item and is not further advanced by this rescope -- theme.ts's own 2026-08-20 comment already represents the most current, most rigorous investigation on record in this repo, explicitly declining to guess further without new evidence. Re-opening that investigation (rather than the concrete MuiMenu hardening scoped here) would need new tooling/instrumentation access this rescope does not have, and should be treated as a separate, genuinely open-ended spike if pursued.",
   "_scope": "scope-03.json",
-  "_section": "Config",
-  "review_notes": [
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
-   "[simplicity-scope.json] All three tasks close the SAME TODO.md line, and that line is not a checkbox at all, so the brief's close-out instruction is inapplicable and will be improvised three different ways by three agents in the same wave. TODO.md:10660 is '36. **1.16 \u2014 resizable/sortable columns** (H1:2750) \u2014 remaining: d",
-   "[simplicity-scope.json] Every brief points at a package-level protocol document that does not exist. 212 files in the package reference `docs/agent-tasks/ORCHESTRATION.md` (as `../ORCHESTRATION.md` / `../../ORCHESTRATION.md`), including the line in each brief '(Protocol also in `docs/agent-tasks/ORCHESTRATION.md` \u2014 the inl"
-  ]
+  "_section": "Config"
  },
  {
   "todo_line": 2181,
@@ -834,10 +788,7 @@
   "gate": "n/a (investigation; make ci only if code changes result from a follow-up)",
   "notes": "This rescope found the definitive answer to the item's core question (yes, unwired -- and precisely where) rather than leaving it fully open; whoever picks this up should spend most of their time on the report-writing and the two remaining unconfirmed questions (4 and 5), not re-deriving what's already cited here. The actual fix (wiring the stub) is a natural follow-on TODO once Wave 5 lands, but is explicitly out of scope for this item.",
   "_scope": "scope-03.json",
-  "_section": "Config",
-  "review_notes": [
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)"
-  ]
+  "_section": "Config"
  },
  {
   "todo_line": 2238,
@@ -942,11 +893,9 @@
   "exact_files": [
    "internal/audiobooks/service_filtering.go",
    "internal/audiobooks/service_query.go",
-   "internal/database/dbtest/invariants.go",
    "internal/database/pebble_store.go",
    "internal/organizer/service.go",
    "internal/plugins/maintenance/itunes_regroup.go",
-   "internal/plugins/maintenance/regroup_apply.go",
    "internal/reconcile/elect_primaries.go",
    "internal/reconcile/elect_primaries_test.go",
    "internal/reconcile/reconcile.go",
@@ -1031,7 +980,6 @@
   "_scope": "scope-03.json",
   "_section": "Config",
   "review_notes": [
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
    "[correctness.json] TASK-002 canonizes 'nil IsPrimaryVersion == primary' but scopes itself to internal/audiobooks (exact_files = service_filtering.go, service_query.go). Partitioning every non-test use of the field BY STRUCTURE (not by naming grep) shows 13 sites implementing the opposite rule; TASK-002 fixes 2 of them"
   ]
  },
@@ -1039,8 +987,8 @@
   "todo_line": 2431,
   "src_id": "UI-LOCKUP-2",
   "title": "Reproduce and classify the persistent UI lockup (backend vs frontend vs warmup-sequencing) with DevTools evidence, before writing any fix",
-  "verdict": "actionable",
-  "verdict_evidence": "Confirmed the specific candidate files named by the item exist at HEAD: internal/audiobooks/service_query.go's searchWithBleve (the SEARCH-CACHE-related candidate) and internal/server/maintenance_fixups.go (the activity-log/WipeAllActivity-cancellation candidate). This remains a live-reproduction task (requires DevTools Network tab against a running instance across a fresh-restart vs warmed-up server) that cannot be reduced to a static code-edit file list ahead of time -- the deliverable is a report, matching this item's own explicit framing ('State which of the two it is, with evidence, before writing any fix').",
+  "verdict": "prod_run",
+  "verdict_evidence": "[correctness.json] Mis-bucketed: an interactive human investigation is filed as a Bucket-1 agent brief. TASK-139 (L2431, wave 1, sonnet, review_critical=false) asks an agent to reproduce a UI freeze 'with browser DevTools Network tab open, on both a freshly-restarted server (within the ~10min warmup window) and a warmed-up one' and to 'use the React DevTools Profiler'. That needs a running prod-like server, a server restart, and a human at a browser. Its only exact_file is a docs/audits/ markdown file that does not exist yet, tests is empty, and its acceptance is a judgment ('states ... which of the three is the binding constraint'), not a checkable exit condition. The package's own gate field admits it: 'n/a (investigation; make ci only if code changes result from a follow-up)' - it is 1 of only 2 tasks in Bucket 1 with an investigation gate. | Confirmed the specific candidate files named by the item exist at HEAD: internal/audiobooks/service_query.go's searchWithBleve (the SEARCH-CACHE-related candidate) and internal/server/maintenance_fixups.go (the activity-log/WipeAllActivity-cancellation candidate). This remains a live-reproduction task (requires DevTools Network tab against a running instance across a fresh-restart vs warmed-up server) that cannot be reduced to a static code-edit file list ahead of time -- the deliverable is a report, matching this item's own explicit framing ('State which of the two it is, with evidence, before writing any fix').",
   "domain": "internal/server",
   "exact_files": [
    "docs/audits/2026-08-21-ui-lockup-classification.md"
@@ -1101,7 +1049,7 @@
   "_scope": "scope-03.json",
   "_section": "Config",
   "review_notes": [
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+   "[correctness.json] Mis-bucketed: an interactive human investigation is filed as a Bucket-1 agent brief. TASK-139 (L2431, wave 1, sonnet, review_critical=false) asks an agent to reproduce a UI freeze 'with browser DevTools Network tab open, on both a freshly-restarted server (within the ~10min warmup window) and a warm"
   ]
  },
  {
@@ -1154,12 +1102,10 @@
    "internal/database/file_provenance.go (NOT 'internal/ledger', which does not exist -- correcting the prior scout's citation) is the real provenance-tracking package landed in commit 8f6d0d99, but it tracks FILE moves specifically, not general book-field writes -- it may not directly explain who set IsPrimaryVersion=false on these 41 rows; CreatedAt/UpdatedAt correlation against known job runs is the more directly applicable approach."
   ],
   "steps": [
-   "Before any edit, run `grep -n \"bPrimary := b.IsPrimaryVersion\" internal/audiobooks/service_query.go`.",
-   "If it shows `== nil || *b.IsPrimaryVersion` at L346 (i.e. TASK-002 already landed this exact change), this task is a no-op for the code change -- do NOT re-edit the line. Skip to the comment-only step.",
-   "If it still shows `!= nil && *b.IsPrimaryVersion` at L346, apply the change: `bPrimary := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion`.",
-   "In either case, add the explanatory comment above line 346: '// nil counts as primary, matching pebble_store.go's filter and the memdb index default (memdb_schema.go Default: true) -- see TODO.md is_primary_version investigation.' if not already present.",
-   "Bump the file's version header and last-edited date.",
-   "Add the changelog fragment and TODO.md close-out as before."
+   "1. Write tools/cmd/orphan-nonprimary-census/main.go following reconcile-paths's read-only CLI structure: accept --db/--api flags, filter for VersionGroupID == nil/empty AND IsPrimaryVersion != nil && *IsPrimaryVersion == false.",
+   "2. Run it against a snapshot/copy of the store data (never write) to get the actual list of book IDs (expect ~41, confirming or correcting the sampled figure).",
+   "3. For each match, output CreatedAt/UpdatedAt timestamps for correlation against known import/dedup/merge job runs (no ledger/provenance package directly tracks book-field writes, per the correction above -- timestamp correlation is the available approach).",
+   "4. Write findings to a new docs/audits/ file or todo.d fragment describing the root cause, once found, as a candidate for a targeted fix distinct from ElectMissingPrimaries (which only helps books that DO have a version group)."
   ],
   "tests": [
    "N/A for the diagnostic itself (read-only report, similar to reconcile-paths which has no dedicated test file). If a writer bug is found, its fix needs a regression test mirroring the pattern in internal/itunes/service/importer_primary_version_test.go."
@@ -1172,21 +1118,12 @@
   ],
   "anti_over_suppression": "N/A",
   "depends_on_lines": [
-   3348
+   3340
   ],
   "gate": "n/a (docs) for the diagnostic; make ci (Go) if a fix follows",
   "notes": "Corrects the prior scout's reuse target: 'internal/ledger' does not exist in this repo; the provenance work from commit 8f6d0d99 landed as internal/database/file_provenance.go and tracks file moves, not general book-field writes, so it likely does not directly explain this anomaly -- CreatedAt/UpdatedAt correlation is the practical approach instead.",
   "_scope": "scope-04.json",
-  "_section": "Search / version-group census corrections (2026-08-13)",
-  "review_notes": [
-   "[verify-3.json] TASK-003's entire code change (internal/audiobooks/service_query.go:346, `bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion` -> `== nil || *b.IsPrimaryVersion`) is IDENTICAL to a subset of what TASK-002 (wave 1, same collision-matrix file) already does at the SAME line 346 (TASK-002 fixes",
-   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
-   "[verify-3.json] TASK-003's entire code change (internal/audiobooks/service_query.go:346, `bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion` -> `== nil || *b.IsPrimaryVersion`) is IDENTICAL to a subset of what TASK-002 (wave 1, same collision-matrix file) already does at the SAME line 346 (TASK-002 fixes",
-   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
-   "[correctness.json] Type error in the dependency schema plus a garbage verified_anchor. TASK-003.depends_on_lines is `[\"TASK-002\"]` \u2014 a task ID string in a field that every other task populates with integer TODO line numbers, and that my coverage/dependency tooling (and presumably the wave scheduler and plan-auditor) p"
-  ]
+  "_section": "Search / version-group census corrections (2026-08-13)"
  },
  {
   "todo_line": 4222,

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-037-omnibus-anthology-book-type-field-part-1-of-the-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: d5c0c33f-ffa9-41bb-8c9a-3d56f880c4ee -->
+<!-- guid: e2d2aeaa-cffd-47cb-bb7c-5377e786349f -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-037 — Omnibus/anthology book_type field — Part 1 of the omnibus-detection-and-dedup spec (TODO.md L10523)
@@ -72,9 +72,9 @@ Anti-over-suppression: N/A
 ## How to test
 
 ```bash
-make ci && npm --prefix web run lint && npm --prefix web test
+go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/server/handlers/audiobooks/... -count=1 && npm --prefix web run lint && npm --prefix web test
 ```
-If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<changed-pkg>/... && go test ./<changed-pkg>/... -count=1` (or `npm --prefix web test -- <file>` for web), then the full gate once before reporting done.
+Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
 ## Acceptance criteria
 
@@ -82,7 +82,7 @@ If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<c
 - [ ] A PATCH /api/v1/audiobooks/:id with {"book_type":"omnibus"} followed by GET returns book_type="omnibus".
 - [ ] Anti-over-suppression: N/A
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `make ci && npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/server/handlers/audiobooks/... -count=1 && npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_database_037.md`.
 

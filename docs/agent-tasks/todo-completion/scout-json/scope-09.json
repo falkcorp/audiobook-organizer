@@ -82,8 +82,8 @@
   "gate": "make ci",
   "notes": "Preventive hardening, matching the item's own framing: 'production-critical the moment a GetGlobalStore() call is reintroduced' into a hot path. No known live incident.",
   "review_notes": [
-   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA",
-   "[simplicity-scope.json] Tier/effort mismatch in the direction that costs a rerun: TASK-034 is the only Haiku-class task at effort L \u2014 '~86 hardwired-zero-return methods' in a 1000+ line hand-written mock \u2014 and it sits at wave 3 of a seven-deep chain, so a botched pass by the weakest tier stalls TASK-035/038/040/139 behind "
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
+   "[simplicity-scope.json] Busywork occupying a wave slot. TASK-033 'Repoint store.go:17's broken doc reference to the archived design spec' is a one-comment-line edit, yet it is wave 2 of the five-deep internal/database/store.go chain, which means TASK-037 and TASK-039 (real schema work) each wait an extra merge round-trip f"
   ]
  },
  {
@@ -152,8 +152,7 @@
   "verdict_evidence": "internal/database/iface_assert.go has exactly 36 `var _ X = (*PebbleStore)(nil)` entries (grep -c \"_ .* = (\\*PebbleStore)(nil)\" internal/database/iface_assert.go = 36) and is missing OAuthIdentityStore, MetadataCacheStore, RejectedMetadataStore, ReviewStore, all of which exist as interfaces (iface_oauth.go:9, iface_metadata.go:65, iface_metadata.go:123, iface_review.go:12) and are already implemented by PebbleStore (oauth_identity.go:36, pebble_store_metadata_cache.go:24, pebble_store_metadata.go:153, review_store.go:152).",
   "domain": "internal/database",
   "exact_files": [
-   "internal/database/iface_assert.go",
-   "internal/database/mocks/mock_store.go"
+   "internal/database/iface_assert.go"
   ],
   "verified_anchors": [
    {
@@ -217,9 +216,7 @@
   "gate": "make ci",
   "notes": "Pure hardening; catches a future silent regression at compile time instead of at a runtime type-assertion failure.",
   "review_notes": [
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
-   "[simplicity-scope.json] Tasks that add a method to a database sub-interface omit the mock implementations from exact_files, so they cannot compile, and the collision matrix under-counts the two hottest mock files. `database.Store` embeds BookStore/NarratorStore/TagStore, and both MockStore implementations are compile-asser",
-   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA"
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
   ]
  },
  {
@@ -303,8 +300,7 @@
   "gate": "make ci",
   "notes": "review_critical=true: a silent skip here means merge.MergeBooks completes 'successfully' while dropping the loser book's iTunes PID/ASIN reassignment \u2014 a prod-data-path defect class, even though today's wiring is unaffected. Correction to the TODO item's own citation: internal/plugins/acoustid/reset_all.go:69 (cited by the item as a live 'same shape' instance) is NOT a live bug \u2014 it is a comment describing the ALREADY-FIXED resolveFingerprintResetter helper (the fast path at reset_all.go:69-78 calls resolveFingerprintResetter, not a bare assertion). Only lsh_backfill.go:86 (this todo_line, part 2) is a live instance of the same shape.",
   "review_notes": [
-   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three",
-   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three"
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
   ]
  },
  {
@@ -444,10 +440,7 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Marked review_critical=false because the item itself says no capability lookup currently runs through prodSchedulerStore \u2014 this is pure preventive hardening matching the audit's stated pattern (SERVER-GLOBAL-STORE-AUDIT / the third-capability-lost incident at server_lifecycle.go:1737-1766). If serviceregistry.Get's per-generic-type resolution turns out not to return the same singleton for KeyStore under two different type parameters, downgrade this to needs_design and ask: does the container guarantee identity across generic Get[T] calls on the same key?",
-  "review_notes": [
-   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin"
-  ]
+  "notes": "Marked review_critical=false because the item itself says no capability lookup currently runs through prodSchedulerStore \u2014 this is pure preventive hardening matching the audit's stated pattern (SERVER-GLOBAL-STORE-AUDIT / the third-capability-lost incident at server_lifecycle.go:1737-1766). If serviceregistry.Get's per-generic-type resolution turns out not to return the same singleton for KeyStore under two different type parameters, downgrade this to needs_design and ask: does the container guarantee identity across generic Get[T] calls on the same key?"
  },
  {
   "todo_line": 4714,
@@ -624,11 +617,7 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Low-risk, purely additive-narrowing change; both call sites already satisfy the tighter type so no ripple beyond this one file.",
-  "review_notes": [
-   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three",
-   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three"
-  ]
+  "notes": "Low-risk, purely additive-narrowing change; both call sites already satisfy the tighter type so no ripple beyond this one file."
  },
  {
   "todo_line": 4721,
@@ -693,8 +682,7 @@
   "gate": "n/a (docs)",
   "notes": "Tiny, isolated fix; safe for a haiku-tier pass alongside item L4694 (same file family, same PR is reasonable, but keep as separate commits since they touch different lines for different reasons).",
   "review_notes": [
-   "[simplicity-scope.json] Busywork occupying a wave slot. TASK-033 'Repoint store.go:17's broken doc reference to the archived design spec' is a one-comment-line edit, yet it is wave 2 of the five-deep internal/database/store.go chain, which means TASK-037 and TASK-039 (real schema work) each wait an extra merge round-trip f",
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+   "[simplicity-scope.json] Busywork occupying a wave slot. TASK-033 'Repoint store.go:17's broken doc reference to the archived design spec' is a one-comment-line edit, yet it is wave 2 of the five-deep internal/database/store.go chain, which means TASK-037 and TASK-039 (real schema work) each wait an extra merge round-trip f"
   ]
  },
  {
@@ -770,7 +758,8 @@
   "gate": "make ci",
   "notes": "L-effort, not S/M, because of the sheer method count (~86), even though each individual edit is trivial \u2014 flagged per CLAUDE.md's 'Fix It Right: depth' rule rather than silently downgrading to a partial pass over 'the important ones'. Good candidate for the repo's parallel-refactor-sweep skill given \u226520 similar call sites.",
   "review_notes": [
-   "[simplicity-scope.json] Busywork occupying a wave slot. TASK-033 'Repoint store.go:17's broken doc reference to the archived design spec' is a one-comment-line edit, yet it is wave 2 of the five-deep internal/database/store.go chain, which means TASK-037 and TASK-039 (real schema work) each wait an extra merge round-trip f"
+   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA",
+   "[simplicity-scope.json] Tier/effort mismatch in the direction that costs a rerun: TASK-034 is the only Haiku-class task at effort L \u2014 '~86 hardwired-zero-return methods' in a 1000+ line hand-written mock \u2014 and it sits at wave 3 of a seven-deep chain, so a botched pass by the weakest tier stalls TASK-035/038/040/139 behind "
   ]
  },
  {
@@ -840,11 +829,7 @@
   "anti_over_suppression": "TestOrganizeService_PerformOrganize_WithBooks",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "This scope's L4728 item (MockStore Func-field audit) is a prerequisite in spirit but not a hard dependency: GetAllBooksCoreFunc already exists on MockStore today, so this fix does not need L4728 to land first.",
-  "review_notes": [
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
-   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,"
-  ]
+  "notes": "This scope's L4728 item (MockStore Func-field audit) is a prerequisite in spirit but not a hard dependency: GetAllBooksCoreFunc already exists on MockStore today, so this fix does not need L4728 to land first."
  },
  {
   "todo_line": 4739,
@@ -911,11 +896,7 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Pairs naturally with the sibling L4743 item (internal/operations/mocks) as one small cleanup PR, but keep them as two commits since the operations/mocks item has a wrinkle (see that item's notes) this one does not.",
-  "review_notes": [
-   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
-  ]
+  "notes": "Pairs naturally with the sibling L4743 item (internal/operations/mocks) as one small cleanup PR, but keep them as two commits since the operations/mocks item has a wrinkle (see that item's notes) this one does not."
  },
  {
   "todo_line": 4743,
@@ -996,10 +977,7 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "The item as literally written ('effectively unreferenced') undersells what was found: the sole referencer isn't just unreferenced-in-spirit, it's dead code that doesn't even compile under the only tag that would include it. Worth a wider grep (see edge_cases) for siblings before closing this out as a one-file fix.",
-  "review_notes": [
-   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin"
-  ]
+  "notes": "The item as literally written ('effectively unreferenced') undersells what was found: the sole referencer isn't just unreferenced-in-spirit, it's dead code that doesn't even compile under the only tag that would include it. Worth a wider grep (see edge_cases) for siblings before closing this out as a one-file fix."
  },
  {
   "todo_line": 4832,
@@ -1199,10 +1177,7 @@
    4832
   ],
   "gate": "n/a (docs)",
-  "notes": "Explicitly a REPORT-only deliverable per owner decision #9's precedent and the item's own 'Report counts before proposing any restore. Do not mass-restore rows.' Depends on L4832's find_bogus_dirs() (already built, not blocking).",
-  "review_notes": [
-   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
-  ]
+  "notes": "Explicitly a REPORT-only deliverable per owner decision #9's precedent and the item's own 'Report counts before proposing any restore. Do not mass-restore rows.' Depends on L4832's find_bogus_dirs() (already built, not blocking)."
  },
  {
   "todo_line": 4848,
@@ -1356,8 +1331,7 @@
   "anti_over_suppression": "TestIsPermanentAIFailure_TransientErrorNotFlagged",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "This is a 'hand-rolled = weaker copy' finding (see this repo's own standing feedback lesson of that name): the correct fix already exists in a sibling file and predates the workaround by 6 weeks; the workaround's own comment even names the right destination (a typed error) without noticing it had already arrived. Flagging per CLAUDE.md's 'Fix It Right: depth' \u2014 the minimal patch would be to just add one more substring marker; the correct fix is to consume the classification that already exists.",
-  "review_notes": []
+  "notes": "This is a 'hand-rolled = weaker copy' finding (see this repo's own standing feedback lesson of that name): the correct fix already exists in a sibling file and predates the workaround by 6 weeks; the workaround's own comment even names the right destination (a typed error) without noticing it had already arrived. Flagging per CLAUDE.md's 'Fix It Right: depth' \u2014 the minimal patch would be to just add one more substring marker; the correct fix is to consume the classification that already exists."
  },
  {
   "todo_line": 4861,

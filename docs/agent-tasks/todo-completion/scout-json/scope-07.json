@@ -266,11 +266,7 @@
    4295
   ],
   "gate": "make ci",
-  "notes": "review_critical=true because series-prune and other maintenance ops here are the same family that deleted 326 series with zero audit trail on 2026-08-14 (see L4295's background) \u2014 a wrong opID payload here silently reintroduces the same class of bug.",
-  "review_notes": [
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
-  ]
+  "notes": "review_critical=true because series-prune and other maintenance ops here are the same family that deleted 326 series with zero audit trail on 2026-08-14 (see L4295's background) \u2014 a wrong opID payload here silently reintroduces the same class of bug."
  },
  {
   "todo_line": 4144,
@@ -407,7 +403,7 @@
   "gate": "make ci",
   "notes": "This is a NEW report op, not covered verbatim by any owner decision in the scope file, but follows the same 'report ops actionable, mutating ops parked' principle as owner decision 9 (PH-2b) and decision 11 (generateTargetPath counter) \u2014 flagging for coordinator confirmation since it is inferred by analogy, not an explicit decision line.",
   "review_notes": [
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
   ]
  },
  {
@@ -767,7 +763,7 @@
   "gate": "make ci",
   "notes": "See part 2 (same todo_line) for the second, unnamed-in-TODO-but-identical-pattern loop at BackfillITunesTrackPIDs (lines 178-184 in the same file) \u2014 Fix It Right's depth rule says this should be fixed alongside part 1 rather than left as a sequential duplicate of the same bug.",
   "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for "
   ]
  },
  {
@@ -779,8 +775,7 @@
   "verdict_evidence": "A second, structurally identical offset-pagination loop exists in the same file, unmentioned by the TODO item's line range but sharing the exact defect: grep -n \"offset := 0\" internal/itunes/backfill.go returns a second hit at L178, feeding GetAllBooksCore(10000, offset) at L184.",
   "domain": "internal/itunes",
   "exact_files": [
-   "internal/itunes/backfill.go",
-   "internal/plugins/maintenance/plugin.go"
+   "internal/itunes/backfill.go"
   ],
   "verified_anchors": [
    {
@@ -824,7 +819,8 @@
   "gate": "make ci",
   "notes": "Same file/PR as part 1 \u2014 do this as one combined change, not two separate PRs, since they're the identical bug pattern in the same file.",
   "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
   ]
  },
  {
@@ -926,8 +922,7 @@
   "verdict_evidence": "The two panic call sites named in the TODO are unchanged at HEAD: grep -n \"panic(fmt.Sprintf\" internal/serviceregistry/container.go returns exactly 2 hits at L248 and L255, matching 'container.go:248,:255' verbatim.",
   "domain": "internal/serviceregistry",
   "exact_files": [
-   "internal/serviceregistry/container.go",
-   "web/package-lock.json"
+   "internal/serviceregistry/container.go"
   ],
   "verified_anchors": [
    {
@@ -969,10 +964,7 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "This is a partial, incremental step toward ARCH-8's full recommendation, not a wholesale registry redesign \u2014 matches the TODO's own framing of it as 'the smallest' of the five ARCH items.",
-  "review_notes": [
-   "[simplicity-scope.json] TASK-102 is 'TypeScript 6.0.3 \u2192 7.0.2 migration', tier Opus / effort L, with exact_files = ['web/package.json'] \u2014 a single dependency-version string. A TS major bump changes compiler defaults and will touch web/tsconfig.json (and web/tsconfig.node.json) plus every source file that trips a new error;"
-  ]
+  "notes": "This is a partial, incremental step toward ARCH-8's full recommendation, not a wholesale registry redesign \u2014 matches the TODO's own framing of it as 'the smallest' of the five ARCH items."
  },
  {
   "todo_line": 4214,
@@ -1130,10 +1122,7 @@
    4281
   ],
   "gate": "make ci",
-  "notes": "review_critical=true: same class of bug that stranded 13,322 books behind 6,893 dangling series on prod (2026-08-14) \u2014 this closes the remaining 2 of what appear to have been (at least) 3 total unguarded call sites.",
-  "review_notes": [
-   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
-  ]
+  "notes": "review_critical=true: same class of bug that stranded 13,322 books behind 6,893 dangling series on prod (2026-08-14) \u2014 this closes the remaining 2 of what appear to have been (at least) 3 total unguarded call sites."
  },
  {
   "todo_line": 4295,
@@ -1257,7 +1246,7 @@
   "gate": "make ci",
   "notes": "This satisfies the 'dry-run that emits the list' half of the TODO item. The '~40 hand-audit' and 'its own apply gate' halves are explicitly NOT part of this task \u2014 see part 2 (parked).",
   "review_notes": [
-   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
   ]
  },
  {
@@ -1406,10 +1395,8 @@
   "gate": "make ci",
   "notes": "review_critical=true: this decorator sits on every book mutation server-wide; a mistake here either re-breaks the soft-delete leak (under-fix) or breaks restore/normal updates (over-fix).",
   "review_notes": [
-   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,",
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,",
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
   ]
  },
  {
@@ -1472,7 +1459,8 @@
   "gate": "make ci",
   "notes": "Implement this together with L4329 (todo_line 4329) as one PR \u2014 the test has no standalone value against the current buggy code beyond proving the bug exists, and the coordinator should not schedule these as two independently-mergeable tasks.",
   "review_notes": [
-   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,"
+   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
   ]
  }
 ]

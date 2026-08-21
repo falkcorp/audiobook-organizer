@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/metadata/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: c7b3c340-ced7-45c6-ba52-a0e60b9f3ec5 -->
+<!-- guid: d15df63d-d2af-4c97-8dc7-bfca8a986d42 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — metadata workstream (todo-completion)
@@ -12,15 +12,11 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK082[TASK-082 route-scoreoneresultwithbrea]
+      TASK079[TASK-079 route-scoreoneresultwithbrea]
+      TASK080[TASK-080 assess-the-2-critical-go-req]
+      TASK081[TASK-081 prefix-metadata-apply-activi]
     end
-    subgraph Wave2
-      TASK084[TASK-084 prefix-metadata-apply-activi]
-    end
-    subgraph Wave5
-      TASK083[TASK-083 assess-the-2-critical-go-req]
-    end
-    TASK082 --> TASK083
+
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -29,7 +25,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`make ci`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/covers/... ./internal/metadata/... -count=1 ; go build ./... && go vet ./... && go test ./internal/metafetch/... -count=1`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

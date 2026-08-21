@@ -153,15 +153,20 @@
   "review_critical": false,
   "goal": "Add config.AppConfig.ActivityLogRetentionDays (json key activity_log_retention_days, default 7, 0 = never compact) and use it to drive the existing maintenance.cleanup-activity-log op's compaction cutoff instead of (or alongside) the current ActivityLogCompactionDays constant, then expose a control to edit it directly on the ActivityLog page (not buried in general Settings), with a header line reading 'entries older than N days are compacted automatically' (or 'automatic compaction is off' when N=0).",
   "background": [
-   "internal/metadata/cover.go:117 already calls validateCoverURL() (scheme allowlist) before the fetch at cover.go:137, and the client used there is built with a custom safeCoverDialContext (cover.go:71-89) that resolves the host and rejects private/loopback/link-local IPv4 AND IPv6 ranges. This is real, comprehensive SSRF protection already in place for alert #662.",
-   "internal/covers/covers.go:82's http.Get(coverURL) has exactly one caller: internal/server/covers.go's handleCoverProxy, which calls covers.IsAllowedCoverSource(coverURL) (a 4-domain allowlist: openlibrary/google books/amazon) and rejects before ever calling FetchAndCacheCover. This is real, comprehensive SSRF protection already in place for alert #645.",
-   "internal/metadata/cover_test.go already asserts a 169.254.169.254 cover URL is SSRF-blocked; internal/covers/covers_test.go already has TestIsAllowedCoverSource asserting both the blocked case and several legitimate URLs pass. Do not re-add these tests \u2014 verify they exist and pass."
+   "internal/plugins/maintenance/cleanup.go:150-165 runCleanupActivityLog already calls p.deps.CompactActivityLog(ctx, p.deps.ActivityLogCompactionDays(), p.deps.ActivityLogRetentionChangeDays(), p.deps.ActivityLogRetentionDebugDays())",
+   "internal/server/server_maintenance_deps.go:233-266 CompactActivityLog treats compactionDays<=0 as 'fall back to 14', not 'skip'; this must change to 'skip entirely' for the new 0=never key",
+   "internal/server/audiobooks_helpers.go:211-217 runAutoPurgeSoftDeleted already implements a real 0=never gate as precedent: `if config.AppConfig.PurgeSoftDeletedAfterDays <= 0 { return }`",
+   "The maintenance.cleanup-activity-log op runs on schedule '0 0 * * *' (midnight daily) \u2014 internal/plugins/maintenance/cleanup.go:131"
   ],
   "steps": [
-   "1. Read internal/metadata/cover.go top-to-bottom around lines 20-137: confirm validateCoverURL (scheme allowlist) and safeCoverDialContext (private/loopback/link-local IPv4+IPv6 block via DNS-resolved-IP check) are both wired into the client used at line 137.",
-   "2. Read internal/covers/covers.go's only caller (internal/server/covers.go:24-45) and confirm covers.IsAllowedCoverSource(coverURL) gates every call to FetchAndCacheCover.",
-   "3. Given both sites have real, host/IP-resolved validation already present, add `// lgtm[go/request-forgery]` directly above cover.go:137 and covers.go:82, each citing the exact validating function/file:line found above (do not add a duplicate/parallel validator).",
-   "4. Run `grep -n 169.254 internal/metadata/cover_test.go` and `grep -n TestIsAllowedCoverSource internal/covers/covers_test.go` to confirm the anti-over-suppression and blocked-case tests already exist and pass; do not add duplicate tests."
+   "1. In internal/config/config.go, add `ActivityLogRetentionDays int json:\"activity_log_retention_days\"` near the existing ActivityLogCompactionDays/ActivityLogRetentionChangeDays/ActivityLogRetentionDebugDays fields (~L783-785), and set its default to 7 in the defaults block (~L2352-2354).",
+   "2. In internal/plugins/maintenance/deps.go, add `ActivityLogRetentionDays() int` to the ServerDeps interface next to the other three ActivityLog*Days() methods (~L337-339).",
+   "3. In internal/server/server_maintenance_deps.go, add `func (s *Server) ActivityLogRetentionDays() int { return config.AppConfig.ActivityLogRetentionDays }` next to ActivityLogCompactionDays (~L302-304).",
+   "4. Change CompactActivityLog's compaction-cutoff logic (server_maintenance_deps.go:238-241) so that when the days value is 0 the compaction step is skipped entirely (mirroring the PurgeSoftDeletedAfterDays<=0 pattern), rather than falling back to 14. Keep negative values treated the same as 0.",
+   "5. In internal/plugins/maintenance/cleanup.go's runCleanupActivityLog, pass p.deps.ActivityLogRetentionDays() as the primary compaction-days argument instead of p.deps.ActivityLogCompactionDays() (or thread both through if the coordinator decides compaction and change-summarization should stay independently configurable \u2014 flag this as a sub-decision, not a blocker).",
+   "6. Add a config GET/PUT round trip for activity_log_retention_days in web/src/services/api.ts's config type (mirroring purge_soft_deleted_after_days at line 901).",
+   "7. On web/src/pages/ActivityLog.tsx, add a small settings control (a numeric TextField or similar) near the page header that reads/writes activity_log_retention_days via the existing config API, and a header line rendering 'entries older than {days} days are compacted automatically' or 'automatic compaction is off' when days===0.",
+   "8. Bump version headers on every touched file per repo convention."
   ],
   "tests": [
    "internal/server/server_maintenance_deps_test.go: new test asserting CompactActivityLog(ctx, 0, changeDays, debugDays) does NOT call activityService.CompactByDay",
@@ -183,9 +188,8 @@
   "gate": "make ci  (Go) | npm --prefix web run lint && npm --prefix web test (web)",
   "notes": "D111 'Stored zeros must not shadow defaults' (docs/handoffs/2026-08-14-task-board.md:83) is still open design status ('\u2b1c design') and is the general version of this field's 0-vs-absent ambiguity; PurgeSoftDeletedAfterDays already ships the same 0=never pattern without D111 being resolved, so this is not a hard blocker, but flag the D111 dependency to the coordinator in case a general resolution lands first and changes the config-loading convention.",
   "review_notes": [
-   "[verify-1.json] Background section is materially stale/wrong and would mislead the executing model. Verified at HEAD: internal/metadata/cover.go ALREADY has full SSRF protection on the exact flagged line (client.Get(coverURL) at cover.go:137) \u2014 validateCoverURL() (scheme allowlist, called at cover.go:117) PLUS safe",
-   "[verify-1.json] TODO.md's SEC-CODEQL-BACKLOG item (line 2595) is a single checkbox covering all 326 alerts (302 log-injection, 17 high, 3 medium workflow-permission, etc.), of which only the 2 critical SSRF alerts are this task's scope. The brief's generic instruction 'If the task is a TODO.md close-out, check the ",
-   "[ops-rollback.json] TASK-080 quietly changes the behaviour of a daily scheduled job on every existing install, in two ways, with no rollout or rollback note: (1) the effective compaction window drops from 14 days to 7, because the new ActivityLogRetentionDays (default 7) replaces ActivityLogCompactionDays as the argume"
+   "[ops-rollback.json] TASK-080 quietly changes the behaviour of a daily scheduled job on every existing install, in two ways, with no rollout or rollback note: (1) the effective compaction window drops from 14 days to 7, because the new ActivityLogRetentionDays (default 7) replaces ActivityLogCompactionDays as the argume",
+   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)"
   ]
  },
  {
@@ -252,7 +256,9 @@
   "verdict_evidence": "internal/metafetch/service_apply.go:242 builds the Summary as `fmt.Sprintf(\"Applied %s: %s \u2192 %s\", c.field, truncateActivity(c.oldVal, 50), truncateActivity(c.newVal, 50))` with no book title, and truncateActivity(\"\", 50) returns \"\" unchanged (internal/metafetch/service.go:674-679), reproducing the exact 'Applied audiobook_release_year: \u2192 2021' bug from the screenshot.",
   "domain": "internal/metafetch",
   "exact_files": [
-   "internal/metafetch/service_apply.go"
+   "changelog.d/20260821_metadata_081.md",
+   "internal/metafetch/service_apply.go",
+   "internal/metafetch/service_apply_test.go"
   ],
   "verified_anchors": [
    {
@@ -295,9 +301,9 @@
    "truncateActivity(s, maxLen) at internal/metafetch/service.go:674 is a plain length-capper with no empty-string special case"
   ],
   "steps": [
-   "1. Add a small helper near truncateActivity in internal/metafetch/service.go (or inline in service_apply.go): `func displayOrNone(s string) string { if s == \"\" { return \"(none)\" }; return s }`.",
-   "2. In service_apply.go's RecordChangeHistory, change the Summary line (L242) to: `Summary: fmt.Sprintf(\"%s: Applied %s: %s \u2192 %s\", book.Title, c.field, displayOrNone(truncateActivity(c.oldVal, 50)), truncateActivity(c.newVal, 50))`. Guard book.Title == \"\" by falling back to book.ID so the summary is never empty-prefixed with a bare colon (e.g. `title := book.Title; if title == \"\" { title = book.ID }`).",
-   "3. Bump the version header on internal/metafetch/service_apply.go."
+   "1. Add `func displayOrNone(s string) string { if s == \"\" { return \"(none)\" }; return s }` directly in internal/metafetch/service_apply.go, next to RecordChangeHistory (do NOT add it to service.go \u2014 keep the change confined to the one file already in scope).",
+   "2. In service_apply.go's RecordChangeHistory, change the Summary line (currently L242) to: `title := book.Title; if title == \"\" { title = book.ID }; Summary: fmt.Sprintf(\"%s: Applied %s: %s \u2192 %s\", title, c.field, displayOrNone(truncateActivity(c.oldVal, 50)), truncateActivity(c.newVal, 50))`.",
+   "3. Bump the version header on internal/metafetch/service_apply.go only."
   ],
   "tests": [
    "internal/metafetch/service_apply_test.go: new test RecordChangeHistory_SummaryLeadsWithBookTitle asserting the recorded ActivityEntry.Summary starts with the book's Title followed by ': Applied'",
@@ -314,7 +320,11 @@
   "anti_over_suppression": "RecordChangeHistory_SummaryLeadsWithBookTitle (proves the happy-path title-prefixed line still renders correctly, not just the (none) edge case)",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Screenshot-driven bug (2026-08-14 18:03); the field also appears in Details already, so this is purely a display-string fix, no schema change."
+  "notes": "Screenshot-driven bug (2026-08-14 18:03); the field also appears in Details already, so this is purely a display-string fix, no schema change.",
+  "review_notes": [
+   "[verify-1.json] Source-line re-find grep `grep -n \"Prefix metadata-apply activity\" TODO.md` returns 0 hits. Unlike TASK-079/080, this task has NO working bold-id fallback \u2014 its 'TODO id' in the skeleton is just 'L3517' (a line number), not a distinguishing acronym, so the brief's own '(re-find it: ... or by the bol",
+   "[verify-1.json] Step 1 says 'Add a small helper near truncateActivity in internal/metafetch/service.go (or inline in service_apply.go)' \u2014 this is a genuine either/or left to the executor's judgment. Two reasonable models would produce different diffs: one adds `displayOrNone` as a new exported/unexported function i"
+  ]
  },
  {
   "todo_line": 3526,
@@ -444,9 +454,8 @@
   "gate": "make ci",
   "notes": "This is the author-side twin the TODO explicitly asks for; the series-side fix (internal/database/series_bookref.go, internal/server/handlers/entities/series_refcount.go) is a nearly line-for-line template. Standing repo rule 'never delete files/rows in any repair' does not apply here \u2014 DeleteAuthor already only ever deletes a genuinely-zero-referenced author row; this task fixes what counts as zero, it does not add new deletion capability.",
   "review_notes": [
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
-   "[simplicity-scope.json] Busywork occupying a wave slot. TASK-033 'Repoint store.go:17's broken doc reference to the archived design spec' is a one-comment-line edit, yet it is wave 2 of the five-deep internal/database/store.go chain, which means TASK-037 and TASK-039 (real schema work) each wait an extra merge round-trip f"
+   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA",
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
   ]
  },
  {
@@ -920,9 +929,8 @@
   "verdict_evidence": "No existing op enumerates title-fragment author rows beyond the shipped IsDirtyAuthorName/looksLikePersonName creation-time gates, which prevent NEW bad rows but do not report on EXISTING ones: `grep -rn 'beginning with' internal/plugins/maintenance/*.go` and `grep -rln 'title-fragment\\|titleFragment' internal/` both return 0 hits. This matches the owner's decision-#11 pattern in this scope's preamble ('build a DETECTION-ONLY counter now... the fix itself is deferred').",
   "domain": "internal/plugins/maintenance",
   "exact_files": [
-   "internal/metafetch/service_apply.go",
-   "internal/metafetch/service_apply_test.go",
-   "changelog.d/20260821_metadata_081.md"
+   "internal/plugins/maintenance/author_title_fragment_report.go",
+   "internal/plugins/maintenance/plugin.go"
   ],
   "verified_anchors": [
    {
@@ -960,15 +968,16 @@
   "review_critical": false,
   "goal": "Add a new REPORT-ONLY maintenance op (e.g. maintenance.author-title-fragment-scan) that walks every author row, flags any whose name (a) begins with a leading hyphen '-' (the specific giveaway named in this item), or (b) fails the exported looksLikePersonName shape check outright (not just as part of a split decision), and logs a count + sample of flagged author IDs/names/book-counts to the activity log \u2014 matching owner decision #11's 'detection-only counter, fix deferred' pattern. No renames, merges, or deletes.",
   "background": [
-   "internal/metadata/cover.go:117 already calls validateCoverURL() (scheme allowlist) before the fetch at cover.go:137, and the client used there is built with a custom safeCoverDialContext (cover.go:71-89) that resolves the host and rejects private/loopback/link-local IPv4 AND IPv6 ranges. This is real, comprehensive SSRF protection already in place for alert #662.",
-   "internal/covers/covers.go:82's http.Get(coverURL) has exactly one caller: internal/server/covers.go's handleCoverProxy, which calls covers.IsAllowedCoverSource(coverURL) (a 4-domain allowlist: openlibrary/google books/amazon) and rejects before ever calling FetchAndCacheCover. This is real, comprehensive SSRF protection already in place for alert #645.",
-   "internal/metadata/cover_test.go already asserts a 169.254.169.254 cover URL is SSRF-blocked; internal/covers/covers_test.go already has TestIsAllowedCoverSource asserting both the blocked case and several legitimate URLs pass. Do not re-add these tests \u2014 verify they exist and pass."
+   "internal/dedup/author.go:210 looksLikePersonName is currently unexported and used only inside SplitCompositeAuthorName's comma branch \u2014 it will need to be exported (e.g. renamed to LooksLikePersonName, with call sites updated) or duplicated at a lower fidelity for this report op to reuse it from internal/plugins/maintenance",
+   "internal/plugins/maintenance/author.go:84-117 author-split-scan is the closest existing sibling: a LivenessManual, report-shaped maintenance op over all authors"
   ],
   "steps": [
-   "1. Read internal/metadata/cover.go top-to-bottom around lines 20-137: confirm validateCoverURL (scheme allowlist) and safeCoverDialContext (private/loopback/link-local IPv4+IPv6 block via DNS-resolved-IP check) are both wired into the client used at line 137.",
-   "2. Read internal/covers/covers.go's only caller (internal/server/covers.go:24-45) and confirm covers.IsAllowedCoverSource(coverURL) gates every call to FetchAndCacheCover.",
-   "3. Given both sites have real, host/IP-resolved validation already present, add `// lgtm[go/request-forgery]` directly above cover.go:137 and covers.go:82, each citing the exact validating function/file:line found above (do not add a duplicate/parallel validator).",
-   "4. Run `grep -n 169.254 internal/metadata/cover_test.go` and `grep -n TestIsAllowedCoverSource internal/covers/covers_test.go` to confirm the anti-over-suppression and blocked-case tests already exist and pass; do not add duplicate tests."
+   "1. Export looksLikePersonName as dedup.LooksLikePersonName(part string) bool in internal/dedup/author.go (rename in place; update the one internal call site in SplitCompositeAuthorName to use the exported name too, or keep an unexported wrapper \u2014 coordinator's call, note either is fine).",
+   "2. Create internal/plugins/maintenance/author_title_fragment_report.go with an OperationDef for maintenance.author-title-fragment-scan: LivenessManual, no schedule (manual-trigger only, since this is exploratory), Capabilities: []sdk.Capability{sdk.CapLibraryRead}.",
+   "3. In the Run function, list all authors (find the existing all-authors accessor used by author-split-scan or GetAllAuthorBookCounts's author enumeration path), and for each: flag if strings.HasPrefix(name, \"-\") OR !dedup.LooksLikePersonName(name) (calling the shape check directly on the full name, not as a split-decision component).",
+   "4. Report via reporter.Log/activity: total authors scanned, count flagged, and up to 100 sample rows (id, name, book count) \u2014 reuse the existing per-author book-count accessor (GetAllAuthorBookCounts, filtered view is fine for a report) so each flagged row shows how many books would be affected.",
+   "5. Register the op in internal/plugins/maintenance/plugin.go's op list alongside author-split-scan.",
+   "6. Bump version headers."
   ],
   "tests": [
    "internal/dedup/author_test.go: TestLooksLikePersonName_ExportedNameUnchangedBehavior \u2014 the renamed/exported function still passes the existing looksLikePersonName test cases (regression guard on the rename)",
@@ -989,11 +998,7 @@
   "gate": "make ci",
   "notes": "Per owner decision #9/#11 pattern: this is a REPORT op only. Do not add a delete/merge/apply path in this task \u2014 that is future work gated on a design decision the owner has not made (see L3586/3588/3589).",
   "review_notes": [
-   "[verify-1.json] Source-line re-find grep `grep -n \"Prefix metadata-apply activity\" TODO.md` returns 0 hits. Unlike TASK-079/080, this task has NO working bold-id fallback \u2014 its 'TODO id' in the skeleton is just 'L3517' (a line number), not a distinguishing acronym, so the brief's own '(re-find it: ... or by the bol",
-   "[verify-1.json] Step 1 says 'Add a small helper near truncateActivity in internal/metafetch/service.go (or inline in service_apply.go)' \u2014 this is a genuine either/or left to the executor's judgment. Two reasonable models would produce different diffs: one adds `displayOrNone` as a new exported/unexported function i",
-   "[verify-1.json] Background section is materially stale/wrong and would mislead the executing model. Verified at HEAD: internal/metadata/cover.go ALREADY has full SSRF protection on the exact flagged line (client.Get(coverURL) at cover.go:137) \u2014 validateCoverURL() (scheme allowlist, called at cover.go:117) PLUS safe",
-   "[verify-1.json] TODO.md's SEC-CODEQL-BACKLOG item (line 2595) is a single checkbox covering all 326 alerts (302 log-injection, 17 high, 3 medium workflow-permission, etc.), of which only the 2 critical SSRF alerts are this task's scope. The brief's generic instruction 'If the task is a TODO.md close-out, check the ",
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
   ]
  },
  {

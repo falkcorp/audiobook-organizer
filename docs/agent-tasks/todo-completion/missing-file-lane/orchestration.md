@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: dd8574ff-0423-4c07-9f89-e993435b5357 -->
+<!-- guid: cc1b13ce-feea-4848-b000-f99c14365238 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — missing-file-lane workstream (todo-completion)
@@ -12,43 +12,43 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK094[TASK-094 give-change-log-row-compare-]
-      TASK095[TASK-095 remove-dead-expanded-state-i]
-      TASK097[TASK-097 audit-remaining-setupmockapi]
-      TASK098[TASK-098 restore-version-group-count-]
-      TASK101[TASK-101 remove-the-now-redundant-rea]
-      TASK104[TASK-104 validate-the-two-unvalidated]
-      TASK105[TASK-105 pin-a-regression-test-the-re]
-      TASK107[TASK-107 build-a-report-only-op-categ]
-      TASK108[TASK-108 build-the-version-group-acou]
-      TASK110[TASK-110 import-found-playlist-files-]
-      TASK111[TASK-111 export-a-playlist-back-to-m3]
-      TASK112[TASK-112 add-the-review-rating-half-o]
-      TASK113[TASK-113 parse-deluge-torrent-release]
-      TASK115[TASK-115 build-the-pre-apply-snapshot]
-      TASK117[TASK-117 missing-input-triggering-enq]
-      TASK118[TASK-118 never-delete-re-associate-co]
+      TASK089[TASK-089 log-a-warning-when-getallser]
+      TASK090[TASK-090 give-change-log-row-compare-]
+      TASK091[TASK-091 remove-dead-expanded-state-i]
+      TASK092[TASK-092 delete-the-unreachable-bulk-]
+      TASK093[TASK-093 audit-remaining-setupmockapi]
+      TASK094[TASK-094 restore-version-group-count-]
+      TASK097[TASK-097 remove-the-now-redundant-rea]
+      TASK100[TASK-100 validate-the-two-unvalidated]
+      TASK101[TASK-101 pin-a-regression-test-the-re]
+      TASK103[TASK-103 build-a-report-only-op-categ]
+      TASK104[TASK-104 build-the-version-group-acou]
+      TASK106[TASK-106 import-found-playlist-files-]
+      TASK107[TASK-107 export-a-playlist-back-to-m3]
+      TASK108[TASK-108 add-the-review-rating-half-o]
+      TASK109[TASK-109 parse-deluge-torrent-release]
+      TASK111[TASK-111 build-the-pre-apply-snapshot]
+      TASK113[TASK-113 missing-input-triggering-enq]
+      TASK114[TASK-114 never-delete-re-associate-co]
     end
     subgraph Wave2
-      TASK093[TASK-093 log-a-warning-when-getallser]
-      TASK096[TASK-096 delete-the-unreachable-bulk-]
-      TASK099[TASK-099 instrument-sort-by-usage-to-]
-      TASK100[TASK-100 require-every-mutating-opera]
-      TASK103[TASK-103 fail-warn-ci-when-the-rc-ord]
-      TASK106[TASK-106 typescript-6-0-3-7-0-2-migra]
-      TASK109[TASK-109 build-chapters-backfill-from]
-      TASK114[TASK-114 audit-book-file-grouping-aga]
-      TASK116[TASK-116 build-the-first-aid-orchestr]
+      TASK095[TASK-095 instrument-sort-by-usage-to-]
+      TASK096[TASK-096 require-every-mutating-opera]
+      TASK099[TASK-099 fail-warn-ci-when-the-rc-ord]
+      TASK102[TASK-102 typescript-6-0-3-7-0-2-migra]
+      TASK105[TASK-105 build-chapters-backfill-from]
+      TASK110[TASK-110 audit-book-file-grouping-aga]
+      TASK112[TASK-112 build-the-first-aid-orchestr]
     end
     subgraph Wave3
-      TASK102[TASK-102 echo-which-filters-the-serve]
+      TASK098[TASK-098 echo-which-filters-the-serve]
     end
-    TASK099 --> TASK102
-    TASK101 --> TASK106
-    TASK110 --> TASK109
-    TASK111 --> TASK109
-    TASK113 --> TASK114
-    TASK117 --> TASK116
+    TASK095 --> TASK098
+    TASK097 --> TASK102
+    TASK106 --> TASK105
+    TASK107 --> TASK105
+    TASK109 --> TASK110
+    TASK113 --> TASK112
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -57,7 +57,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only' ; make ci ; make ci && npm --prefix web run lint && npm --prefix web test ; npm --prefix web run lint && npm --prefix web test`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only' ; go build ./... && go vet ./... && go test ./internal/deluge/... -count=1 ; go build ./... && go vet ./... && go test ./internal/operations/registry/... -count=1 ; go build ./... && go vet ./... && go test ./internal/operations/registry/... ./internal/scheduler/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/playlist/... ./internal/scanner/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1 && npm --prefix web run lint && npm --prefix web test ; go build ./... && go vet ./... && go test ./internal/server/handlers/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/handlers/abs/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/handlers/audiobooks/... -count=1 ; npm --prefix web run lint && npm --prefix web test`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-029-add-getbooksbyseriesidallversions-and-switch-ded.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f0cd10db-a680-4ff4-90d9-014ecb3bbfaf -->
+<!-- guid: 443150f0-f1c5-4521-822f-b3cb8a3220d8 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-029 — Add GetBooksBySeriesIDAllVersions and switch DedupSeries's merge loop to it before DeleteSeries (TODO.md L3966)
 
-**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · database subagent · **Why:** New store-interface method across MemStore + PebbleStore + the Store interface + MockStore, plus updating the dedup call site -- more surface than part 1 but still a mechanical mirror of an existing, already-reviewed pattern. · **Depends on:** TASK-044 · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · database subagent · **Why:** New store-interface method across MemStore + PebbleStore + the Store interface + MockStore, plus updating the dedup call site -- more surface than part 1 but still a mechanical mirror of an existing, already-reviewed pattern. · **Depends on:** TASK-043 · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 3966 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**`dedup.series-dedup` still has no dry-run parame" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-06.json`.
 
@@ -72,16 +72,16 @@ Anti-over-suppression test: `TestDedupSeries_RelinksNonPrimaryVersionBooks -- pr
 ## How to test
 
 ```bash
-make ci
+go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/dedup/... -count=1
 ```
-If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<changed-pkg>/... && go test ./<changed-pkg>/... -count=1` (or `npm --prefix web test -- <file>` for web), then the full gate once before reporting done.
+Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
 ## Acceptance criteria
 
 - [ ] go test ./internal/database/... ./internal/dedup/... -run 'SeriesID|DedupSeries' -v exits 0.
 - [ ] Anti-over-suppression test: `TestDedupSeries_RelinksNonPrimaryVersionBooks -- proves the fix actually catches the orphaning case, not just that the code compiles.` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `make ci` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/dedup/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_database_029.md`.
 

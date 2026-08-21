@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: c3d36e10-800d-419a-9797-7bf16b74bd40 -->
+<!-- guid: 3b2ff5b8-0e26-4afd-ae7b-768f2d8b106b -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — server workstream (todo-completion)
@@ -12,34 +12,33 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK131[TASK-131 log-abs-api-enabled-s-actual]
-      TASK134[TASK-134 reproduce-and-classify-the-p]
-      TASK137[TASK-137 fix-indexedstore-updatebook-]
-      TASK139[TASK-139 add-a-wiring-level-test-prov]
-      TASK140[TASK-140 convert-metadata-batch-apply]
-      TASK141[TASK-141 convert-reconcile-apply-from]
-      TASK142[TASK-142 fix-testorganizeservice-perf]
-      TASK143[TASK-143 exempt-the-abs-router-group-]
-      TASK145[TASK-145 retire-the-unsafe-cleanup-me]
-      TASK146[TASK-146 add-regression-tests-for-the]
+      TASK127[TASK-127 log-abs-api-enabled-s-actual]
+      TASK132[TASK-132 fix-indexedstore-updatebook-]
+      TASK134[TASK-134 add-a-wiring-level-test-prov]
+      TASK135[TASK-135 convert-metadata-batch-apply]
+      TASK136[TASK-136 convert-reconcile-apply-from]
+      TASK137[TASK-137 fix-testorganizeservice-perf]
+      TASK138[TASK-138 exempt-the-abs-router-group-]
+      TASK140[TASK-140 retire-the-unsafe-cleanup-me]
+      TASK141[TASK-141 add-regression-tests-for-the]
     end
     subgraph Wave2
-      TASK132[TASK-132 fix-enableratelimit-false-no]
-      TASK133[TASK-133 fix-wipeactivity-dry-run-cou]
-      TASK135[TASK-135 register-searchindexdroppedc]
-      TASK138[TASK-138 regression-test-soft-deletin]
+      TASK128[TASK-128 fix-enableratelimit-false-no]
+      TASK129[TASK-129 fix-wipeactivity-dry-run-cou]
+      TASK130[TASK-130 register-searchindexdroppedc]
+      TASK133[TASK-133 regression-test-soft-deletin]
     end
     subgraph Wave3
-      TASK136[TASK-136 fix-audiobook-organizer-book]
+      TASK131[TASK-131 fix-audiobook-organizer-book]
     end
     subgraph Wave4
-      TASK144[TASK-144 prune-expired-abs-sess-recor]
+      TASK139[TASK-139 prune-expired-abs-sess-recor]
     end
-    TASK132 --> TASK136
-    TASK132 --> TASK144
-    TASK135 --> TASK136
-    TASK136 --> TASK144
-    TASK137 --> TASK138
+    TASK128 --> TASK131
+    TASK128 --> TASK139
+    TASK130 --> TASK131
+    TASK131 --> TASK139
+    TASK132 --> TASK133
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -48,7 +47,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only' ; make ci`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/maintenance/jobs/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/metrics/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/middleware/... -count=1`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

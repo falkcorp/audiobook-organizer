@@ -62,11 +62,12 @@
   "domain": "internal/dedup",
   "exact_files": [
    "internal/database/dedup_automerge_journal.go",
-   "internal/database/pebble_store_externalids.go",
    "internal/database/mock_store.go",
-   "internal/merge/service.go",
+   "internal/database/mocks/mock_store.go",
+   "internal/database/pebble_store_externalids.go",
+   "internal/dedup/auto_resolve.go",
    "internal/dedup/merge_journaled.go",
-   "internal/dedup/auto_resolve.go"
+   "internal/merge/service.go"
   ],
   "verified_anchors": [
    {
@@ -146,10 +147,11 @@
   "gate": "make ci",
   "notes": "Part 3 below (endpoint wiring) depends on this part existing, since a real undo endpoint should call the FULLY reversing UnmergeAuto, not the book-record-only version, to avoid shipping a fake-safe 'undo' button. Owner should decide whether the iTunes write-back reversal (step 5's batcher gap) is in-scope now or gets its own follow-up TODO if it turns out to need real design work in the write-back batcher.",
   "review_notes": [
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
    "[correctness.json] An admin-invokable undo endpoint is shipped before the undo actually undoes, with no dependency edge. TASK-152 (wave 1, sonnet, review_critical) adds POST /api/v1/dedup/merges/:key/undo calling Engine.UnmergeAuto. TASK-042 (wave 2, opus, review_critical) is what makes UnmergeAuto reverse external-ID",
    "[ops-rollback.json] The admin 'undo merge' endpoint ships 12 waves BEFORE the code that makes the undo actually reverse anything beyond the book record, and there is no depends_on edge between them. An operator who hits POST /api/v1/dedup/merges/:key/undo in wave 1 gets a 200 'unmerged' while the loser's external-ID ma",
-   "[ops-rollback.json] Double-undo is unguarded and the endpoint's own contract cannot be implemented. TASK-154's goal promises '409 if already reverted', but no reverted marker exists anywhere: TASK-044 only says 'consider marking a journal entry reverted after first successful undo', in an edge_cases bullet, and its ste"
+   "[ops-rollback.json] Double-undo is unguarded and the endpoint's own contract cannot be implemented. TASK-154's goal promises '409 if already reverted', but no reverted marker exists anywhere: TASK-044 only says 'consider marking a journal entry reverted after first successful undo', in an edge_cases bullet, and its ste",
+   "[simplicity-scope.json] Tasks that add a method to a database sub-interface omit the mock implementations from exact_files, so they cannot compile, and the collision matrix under-counts the two hottest mock files. `database.Store` embeds BookStore/NarratorStore/TagStore, and both MockStore implementations are compile-asser",
+   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA"
   ]
  },
  {
@@ -232,10 +234,10 @@
   "gate": "make ci",
   "notes": "Should land AFTER part 2 (full external-ID + write-back reversal) so the exposed endpoint does not advertise a bigger guarantee ('undo this merge') than UnmergeAuto currently delivers (book-record-only). If shipped before part 2, the endpoint doc/response must say explicitly that external-ID and iTunes state are NOT reverted yet.",
   "review_notes": [
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
    "[correctness.json] An admin-invokable undo endpoint is shipped before the undo actually undoes, with no dependency edge. TASK-152 (wave 1, sonnet, review_critical) adds POST /api/v1/dedup/merges/:key/undo calling Engine.UnmergeAuto. TASK-042 (wave 2, opus, review_critical) is what makes UnmergeAuto reverse external-ID",
    "[ops-rollback.json] The admin 'undo merge' endpoint ships 12 waves BEFORE the code that makes the undo actually reverse anything beyond the book record, and there is no depends_on edge between them. An operator who hits POST /api/v1/dedup/merges/:key/undo in wave 1 gets a 200 'unmerged' while the loser's external-ID ma",
-   "[ops-rollback.json] Double-undo is unguarded and the endpoint's own contract cannot be implemented. TASK-154's goal promises '409 if already reverted', but no reverted marker exists anywhere: TASK-044 only says 'consider marking a journal entry reverted after first successful undo', in an edge_cases bullet, and its ste"
+   "[ops-rollback.json] Double-undo is unguarded and the endpoint's own contract cannot be implemented. TASK-154's goal promises '409 if already reverted', but no reverted marker exists anywhere: TASK-044 only says 'consider marking a journal entry reverted after first successful undo', in an edge_cases bullet, and its ste",
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
   ]
  },
  {
@@ -390,6 +392,8 @@
   "gate": "make ci",
   "notes": "Read the client-contract doc FIRST (step 1) \u2014 the existing in-code comment claiming true is required may itself be stale, per the worked example in this repo's CLAUDE.md about not trusting an unre-verified justification comment.",
   "review_notes": [
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
+   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,",
    "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
   ]
  },
@@ -504,7 +508,7 @@
   "gate": "make ci",
   "notes": "If this now runs under the N-2 value-comparison conformance gate (CompareValues:true), re-run the existing /search conformance test to see if it was ALREADY catching this \u2014 if IgnoreExtra:true is masking it (extra/wrong-shape fields are ignored, not just wrong values on expected fields), note that explicitly since it affects how much the N-2 fix actually covers N-5-shaped bugs.",
   "review_notes": [
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,"
   ]
  },
  {
@@ -558,7 +562,12 @@
   "anti_over_suppression": "N/A \u2014 logging addition, not a filter.",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Do not change the HTTP status code \u2014 the existing comment's reasoning (5xx flips the client's connection dot) is a deliberate, still-valid decision per the TODO text itself ('Keep the 200... but log at warn + add a metric')."
+  "notes": "Do not change the HTTP status code \u2014 the existing comment's reasoning (5xx flips the client's connection dot) is a deliberate, still-valid decision per the TODO text itself ('Keep the 200... but log at warn + add a metric').",
+  "review_notes": [
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
+   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,",
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ]
  },
  {
   "todo_line": 53,
@@ -758,7 +767,9 @@
   "depends_on_lines": [],
   "gate": "make ci",
   "notes": "N/A",
-  "review_notes": []
+  "review_notes": [
+   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,"
+  ]
  },
  {
   "todo_line": 42,
@@ -867,7 +878,6 @@
   "gate": "n/a (docs) \u2014 GitHub Actions workflow, validated by manual workflow_dispatch runs rather than make ci",
   "notes": "Consider whether the dedupe gap found in step 5 (the EXISTING auto-revert.yml's own issue-filing step has no dedupe check either) deserves its own follow-up TODO \u2014 a flapping CI failure that auto-revert.yml itself handles repeatedly could already be filing duplicate issues today, independent of this backstop.",
   "review_notes": [
-   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th",
    "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th"
   ]
  },
@@ -926,7 +936,10 @@
   ],
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
-  "gate": "n/a (docs) \u2014 CI workflow change, verified by a live Actions run"
+  "gate": "n/a (docs) \u2014 CI workflow change, verified by a live Actions run",
+  "review_notes": [
+   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th"
+  ]
  },
  {
   "todo_line": 90,
@@ -982,10 +995,7 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Separately, and NOT a code task: the owner should check the ACTUAL current prod value once this ships and a restart has happened, by grepping prod logs for the new line (see the server-logs skill / reference_prod_log_access.md in this repo's memory). Until then, prod state genuinely cannot be determined \u2014 this code change only fixes it going forward.",
-  "review_notes": [
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
-  ]
+  "notes": "Separately, and NOT a code task: the owner should check the ACTUAL current prod value once this ships and a restart has happened, by grepping prod logs for the new line (see the server-logs skill / reference_prod_log_access.md in this repo's memory). Until then, prod state genuinely cannot be determined \u2014 this code change only fixes it going forward."
  },
  {
   "todo_line": 96,
@@ -1295,8 +1305,7 @@
   "gate": "make ci",
   "notes": "Also still open per the TODO: 4 golden fixtures never loaded by any test \u2014 cross-reference item L53/ABS-N7 in this scope (marked stale_done there with a caveat to re-verify the pending-vs-strict distinction); if that re-verification finds real gaps, they belong here too.",
   "review_notes": [
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n"
+   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,"
   ]
  },
  {
@@ -1504,8 +1513,8 @@
   "todo_line": 1227,
   "src_id": null,
   "title": "Finish killing database.Store \u2014 narrow the remaining references per the existing 3-bucket plan",
-  "verdict": "actionable",
-  "verdict_evidence": "docs/plans/2026-08-18-decouple-database-layer.md exists and the TODO's own text gives a precise 7+3+8=18 breakdown (composition root, test helpers, Server.Store() chain); a naive `grep -rl 'database\\.Store\\b' internal | grep -v internal/database | grep -v _test` returns 82 FILES (not references) at HEAD, which is far too broad and almost certainly dominated by unrelated matches (comments, other `Store` types, incidental substring hits) \u2014 the precise 18-reference count must be re-derived using the same AST/compile-probe methodology the plan doc used (per this repo's own memory note 'a naming grep is NOT a census \u2014 count by STRUCTURE'), not trusted from a flat grep.",
+  "verdict": "stale_done",
+  "verdict_evidence": "[verify-2.json] The brief's premise is that an 8-reference 'Server.Store() chain' (internal/plugins/maintenance/deps.go x3, internal/server/server_maintenance_deps.go x2, plus callers) remains to be narrowed. At HEAD, `grep -n 'func (s \\*Server) Store()' internal/server/server.go` returns ZERO hits \u2014 there is no Server.Store() method returning database.Store anymore. deps.go and server_maintenance_deps.go already only expose narrow per-capability accessors (OpsStore(), ReconcileStore(), PlaylistStore() database.UserPlaylistStore, MetadataCacheStore() database.MetadataCacheStore, FileProvenanceStore() database.FileProvenanceStore) via a StoreProvider interface; the only remaining textual hits for 'database.Store' in those two files are inside comments describing the *historical* state ('These interfaces replaced a single `Store() database.Store` accessor...', 'They used to thread a database.Store -- 398...'). The 8-reference bucket this task targets appears to already be closed at HEAD (matches project memory: '\u2705 BOTH wide-store accessors SPLIT \u2014 #2612 + #2617' / '\u2705 Store decoupling DONE'). A weak model following the brief's Step 2 ('read internal/plugins/maintenance/deps.go's 3 references... and internal/server/server_maintenance_deps.go's 2 references') would find no live references to narrow and have no guidance on what to do next \u2014 the acceptance criterion 'the re-derived reference count (step 1) drops from its current value' cannot be satisfied by any code change because there is nothing left to narrow in the named bucket. | docs/plans/2026-08-18-decouple-database-layer.md exists and the TODO's own text gives a precise 7+3+8=18 breakdown (composition root, test helpers, Server.Store() chain); a naive `grep -rl 'database\\.Store\\b' internal | grep -v internal/database | grep -v _test` returns 82 FILES (not references) at HEAD, which is far too broad and almost certainly dominated by unrelated matches (comments, other `Store` types, incidental substring hits) \u2014 the precise 18-reference count must be re-derived using the same AST/compile-probe methodology the plan doc used (per this repo's own memory note 'a naming grep is NOT a census \u2014 count by STRUCTURE'), not trusted from a flat grep.",
   "domain": "internal/database",
   "exact_files": [
    "internal/plugins/maintenance/deps.go",
@@ -1562,13 +1571,16 @@
    "A reference inside missing_file_repair.go/missing_file_audit.go's call chain must be left untouched per the standing hands-off instruction, even if narrowing it would be mechanically easy \u2014 ask first, per CLAUDE.md."
   ],
   "anti_over_suppression": "N/A",
-  "depends_on_lines": [],
+  "depends_on_lines": [
+   1194
+  ],
   "gate": "make ci",
   "notes": "Depends conceptually on L1194 (PebbleStore split, PARKED) only for the 7 by-design composition-root references, which are explicitly NOT part of this task's scope \u2014 this task is just the Server.Store()-chain bucket. Re-verify the precise count via the plan doc's real methodology before starting; do not trust a flat grep (illustrated above returning 82 files vs. the claimed 18 references).",
   "review_notes": [
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
-   "[correctness.json] A wave-1 Opus-class review_critical task carries a prerequisite that is deliberately PARKED and can therefore never be satisfied. TASK-024 ('Finish killing database.Store') declares depends_on_lines [1194]; TODO line 1194 resolves only to the parked entry 'PebbleStore struct split \u2014 deliberately par",
-   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
+   "[verify-2.json] reviewer-closed; coordinator must re-grep before checking the box",
+   "[verify-2.json] The brief's premise is that an 8-reference 'Server.Store() chain' (internal/plugins/maintenance/deps.go x3, internal/server/server_maintenance_deps.go x2, plus callers) remains to be narrowed. At HEAD, `grep -n 'func (s \\*Server) Store()' internal/server/server.go` returns ZERO hits \u2014 there is no Se",
+   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th",
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
   ]
  },
  {
@@ -1654,18 +1666,19 @@
   "depends_on_lines": [],
   "gate": "n/a (docs)",
   "notes": "Split from the same L296 TODO item; part 2 covers the 16 removed-maintenance-endpoint paths (need individual triage, not blind deletion) and part 3 covers /torrents.",
-  "review_notes": []
+  "review_notes": [
+   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three"
+  ]
  },
  {
   "todo_line": 296,
   "part": 2,
   "src_id": null,
   "title": "Triage the 16 removed POST /maintenance/* paths in openapi.json \u2014 delete, or document as ops-API equivalents",
-  "verdict": "needs_design",
-  "verdict_evidence": "[correctness.json] Three Bucket-1 briefs fail the package's own evidence bar. TASK-058 and TASK-059 carry zero verified_anchors \u2014 the only two of 185. TASK-065 has an empty exact_files, so there is no commit scope at all. TASK-058 is additionally mis-bucketed: its stated outcome is a binary judgement call ('delete, or document as ops-API equivalents') across 16 API paths, which is a needs_design question, not something a weak model can execute deterministically. | The TODO explicitly separates these from the safe-to-delete group above: 'the maintenance ones should be checked against whether an ops-API equivalent should be documented instead' \u2014 these are genuine functionality (now dispatched through the registry ops API as maintenance.dedup-books etc.) rather than pure duplicates, so blind deletion would silently un-document real capability.",
+  "verdict": "actionable",
+  "verdict_evidence": "The TODO explicitly separates these from the safe-to-delete group above: 'the maintenance ones should be checked against whether an ops-API equivalent should be documented instead' \u2014 these are genuine functionality (now dispatched through the registry ops API as maintenance.dedup-books etc.) rather than pure duplicates, so blind deletion would silently un-document real capability.",
   "domain": "docs",
   "exact_files": [
-   "TODO.md",
    "docs/api/openapi.json"
   ],
   "verified_anchors": [],
@@ -1699,8 +1712,7 @@
   "gate": "n/a (docs)",
   "notes": "This needs a quick owner check-in on delete-vs-redocument policy before executing at scale, even though each individual path's 'is it gone' fact is independently verifiable.",
   "review_notes": [
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[correctness.json] Three Bucket-1 briefs fail the package's own evidence bar. TASK-058 and TASK-059 carry zero verified_anchors \u2014 the only two of 185. TASK-065 has an empty exact_files, so there is no commit scope at all. TASK-058 is additionally mis-bucketed: its stated outcome is a binary judgement call ('delete, or"
+   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three"
   ]
  },
  {
@@ -1708,8 +1720,8 @@
   "part": 3,
   "src_id": null,
   "title": "Delete the /torrents group-relative fragment from openapi.json",
-  "verdict": "needs_design",
-  "verdict_evidence": "[correctness.json] Three Bucket-1 briefs fail the package's own evidence bar. TASK-058 and TASK-059 carry zero verified_anchors \u2014 the only two of 185. TASK-065 has an empty exact_files, so there is no commit scope at all. TASK-058 is additionally mis-bucketed: its stated outcome is a binary judgement call ('delete, or document as ops-API equivalents') across 16 API paths, which is a needs_design question, not something a weak model can execute deterministically. | GET /torrents is documented by the TODO as a group-relative fragment of the Deluge integration group (i.e. the real route is prefixed, e.g. /deluge/torrents or similar) \u2014 same class of bug as part 1's group-relative duplicates, called out separately only because it belongs to a different integration group than the auth/itunes/ai examples.",
+  "verdict": "actionable",
+  "verdict_evidence": "GET /torrents is documented by the TODO as a group-relative fragment of the Deluge integration group (i.e. the real route is prefixed, e.g. /deluge/torrents or similar) \u2014 same class of bug as part 1's group-relative duplicates, called out separately only because it belongs to a different integration group than the auth/itunes/ai examples.",
   "domain": "docs",
   "exact_files": [
    "docs/api/openapi.json"
@@ -1743,7 +1755,7 @@
   "gate": "n/a (docs)",
   "notes": "Trivially batchable with part 1's execution \u2014 separated here only to mirror the source TODO's own grouping.",
   "review_notes": [
-   "[correctness.json] Three Bucket-1 briefs fail the package's own evidence bar. TASK-058 and TASK-059 carry zero verified_anchors \u2014 the only two of 185. TASK-065 has an empty exact_files, so there is no commit scope at all. TASK-058 is additionally mis-bucketed: its stated outcome is a binary judgement call ('delete, or"
+   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three"
   ]
  },
  {
@@ -1754,8 +1766,8 @@
   "verdict_evidence": "web/src/components/wizard/WelcomeWizard.tsx:160 still calls `fetch('https://api.openai.com/v1/models', ...)` directly from the client with the user's raw OpenAI key in the Authorization header; no server-side OpenAI-key-validation endpoint exists anywhere in internal/server/handlers (`grep -rln 'openai.*valid\\|validate.*openai' internal/server/handlers` returns 0 hits).",
   "domain": "web",
   "exact_files": [
-   "web/src/components/wizard/WelcomeWizard.tsx",
-   "internal/server/handlers/setup.go (or wherever the setup-wizard's other server-side calls live \u2014 confirm exact file)"
+   "internal/server/handlers/setup.go (or wherever the setup-wizard's other server-side calls live \u2014 confirm exact file)",
+   "web/src/components/wizard/WelcomeWizard.tsx"
   ],
   "verified_anchors": [
    {
@@ -1812,8 +1824,8 @@
   "notes": "Cross-reference item L397 (todo_line 397) in this scope \u2014 SEC-9 is the one still-open finding from that audit's otherwise-mostly-fixed backlog.",
   "review_notes": [
    "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for "
+   "[simplicity-scope.json] unparseable verdict_override ignored: hold TASK-160 until the scout resolves the server-side file",
+   "[simplicity-scope.json] exact_files contains a prose sentence instead of a path: 'internal/server/handlers/setup.go (or wherever the setup-wizard's other server-side calls live \u2014 confirm exact file)'. Any mechanical consumer of exact_files (the collision matrix, the wave computation, the coordinator's rebase/conflict check"
   ]
  },
  {
@@ -1976,8 +1988,8 @@
   "todo_line": 491,
   "src_id": null,
   "title": "Re-capture the series ABS fixture against a populated library (it currently contains zero series)",
-  "verdict": "hold TASK-160 until the scout resolves the server-side file",
-  "verdict_evidence": "[simplicity-scope.json] exact_files contains a prose sentence instead of a path: 'internal/server/handlers/setup.go (or wherever the setup-wizard's other server-side calls live \u2014 confirm exact file)'. Any mechanical consumer of exact_files (the collision matrix, the wave computation, the coordinator's rebase/conflict check) treats that whole string as a filename, so the real file TASK-160 will edit participates in no collision edge at all. TASK-160 is scheduled in web wave 1 alongside 10 other tasks. | testdata/abs-fixtures/get_api_libraries_id_series.json's response.body.results array has length 0 at HEAD (confirmed by loading and inspecting the fixture JSON directly), matching the TODO's claim exactly and confirming this has NOT been fixed despite the related series-pagination code fix (item L484) having landed.",
+  "verdict": "actionable",
+  "verdict_evidence": "testdata/abs-fixtures/get_api_libraries_id_series.json's response.body.results array has length 0 at HEAD (confirmed by loading and inspecting the fixture JSON directly), matching the TODO's claim exactly and confirming this has NOT been fixed despite the related series-pagination code fix (item L484) having landed.",
   "domain": "internal/server/handlers/abs",
   "exact_files": [
    "testdata/abs-fixtures/get_api_libraries_id_series.json"
@@ -2026,7 +2038,9 @@
   ],
   "gate": "make ci",
   "notes": "Directly feeds item L127's fixture-alignment work in this same scope \u2014 coordinate so the two are not done independently and inconsistently.",
-  "review_notes": []
+  "review_notes": [
+   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,"
+  ]
  },
  {
   "todo_line": 497,
@@ -2083,10 +2097,6 @@
    484
   ],
   "gate": "n/a (docs)",
-  "notes": "Depends on L468 and L484's findings in this same scope for two of the four corrections; the other two (series detail, authors) need fresh verification not yet done by this scout.",
-  "review_notes": [
-   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
-   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
-  ]
+  "notes": "Depends on L468 and L484's findings in this same scope for two of the four corrections; the other two (series detail, authors) need fresh verification not yet done by this scout."
  }
 ]

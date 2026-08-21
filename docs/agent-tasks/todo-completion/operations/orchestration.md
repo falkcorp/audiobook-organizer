@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/operations/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 0714590c-e59e-46ba-8e42-ec2822da786c -->
+<!-- guid: 06af146a-6cb2-47b7-ab36-73a0a29e6a0d -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — operations workstream (todo-completion)
@@ -12,10 +12,10 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK119[TASK-119 distinguish-nothing-to-cance]
-      TASK120[TASK-120 forward-iscanceled-through-r]
-      TASK121[TASK-121 give-prodschedulerstore-an-u]
-      TASK122[TASK-122 delete-internal-operations-m]
+      TASK115[TASK-115 distinguish-nothing-to-cance]
+      TASK116[TASK-116 forward-iscanceled-through-r]
+      TASK117[TASK-117 give-prodschedulerstore-an-u]
+      TASK118[TASK-118 delete-internal-operations-m]
     end
 
 ```
@@ -26,7 +26,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`make ci`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/operations/... -count=1 ; go build ./... && go vet ./... && go test ./internal/operations/mocks/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/operations/registry/... -count=1 ; go build ./... && go vet ./... && go test ./internal/operations/registry/... ./internal/server/... ./internal/server/handlers/... -count=1`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

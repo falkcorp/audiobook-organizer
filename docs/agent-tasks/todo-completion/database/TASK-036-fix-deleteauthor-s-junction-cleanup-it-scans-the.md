@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-036-fix-deleteauthor-s-junction-cleanup-it-scans-the.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 9d3dd554-3ab9-4c19-9e1b-d9dd7b6696cc -->
+<!-- guid: 628352be-d4d4-4959-9e7a-1e8ed01941d7 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-036 — Fix DeleteAuthor's junction cleanup: it scans the dead book_author: keyspace instead of book_authors: (TODO.md L5290)
@@ -77,9 +77,9 @@ Anti-over-suppression test: `TestDeleteAuthor_MemDBReflectsJunctionRemoval` — 
 ## How to test
 
 ```bash
-make ci
+go build ./... && go vet ./... && go test ./internal/database/... -count=1
 ```
-If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<changed-pkg>/... && go test ./<changed-pkg>/... -count=1` (or `npm --prefix web test -- <file>` for web), then the full gate once before reporting done.
+Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
 ## Acceptance criteria
 
@@ -88,7 +88,7 @@ If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<c
 - [ ] grep -n 'LowerBound: \[\]byte("book_authors:")' internal/database/pebble_store_authors.go shows a new hit inside DeleteAuthor (previously only GetAllAuthorBookCounts and similar had this bound; DeleteAuthor's old book_author: singular bound is gone)
 - [ ] Anti-over-suppression test: `TestDeleteAuthor_MemDBReflectsJunctionRemoval` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `make ci` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/database/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_database_036.md`.
 
