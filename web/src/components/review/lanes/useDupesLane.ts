@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
 // last-edited: 2026-08-20
 
@@ -177,10 +177,28 @@ export function useDupesLane(
   const [page, setPageState] = useState(1);
   const [pageSize, setPageSizeState] = useState(DEFAULT_PAGE_SIZE);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const [focusedIndex, setFocusedIndex] = useState(0);
+  const [focusedIndexState, setFocusedIndex] = useState(0);
   const [drawerCandidateId, setDrawerCandidateId] = useState<number | null>(null);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  /**
+   * Candidates whose decision has been dispatched but whose refetch has not
+   * landed yet. Filtered out of `visible` immediately.
+   *
+   * This is a correctness guard, not a rendering nicety. `m` fires an async
+   * merge and returns; until the refetch lands, `candidates` still holds the
+   * row and it still reads `status: 'pending'`, so a second `m` at the same
+   * focus index merges the SAME pair twice -- while the pair the reviewer
+   * meant to decide second stays untouched and unnoticed. Merges cannot be
+   * undone, so "decided twice, and one pair silently skipped" is the worst
+   * outcome this lane can produce.
+   *
+   * Removing the row makes its id unreachable from the key handler, which
+   * closes the race, advances focus to the next pending pair for free, and
+   * takes the refetch off the critical path of a keyboard-speed reviewer.
+   */
+  const [decidedIds, setDecidedIds] = useState<Set<number>>(() => new Set());
 
   const filters: DupesFilters = useMemo(
     () => ({ ...localFilters, band: urlFilters.band, entityId: urlFilters.entityId }),
@@ -232,7 +250,22 @@ export function useDupesLane(
       .getDedupCandidates(params, { signal: ctrl.signal })
       .then((res) => {
         if (ctrl.signal.aborted) return;
-        setCandidates(res.candidates ?? []);
+        const next = res.candidates ?? [];
+        setCandidates(next);
+        // Retire local suppressions the server has caught up with, and ONLY
+        // those. Decisions and refetches interleave: a row decided while this
+        // request was in flight was still pending when the query ran, so it
+        // comes back in `next`. Clearing the set wholesale would resurrect it
+        // as pending and re-arm the very double-merge the set exists to
+        // prevent. Intersecting instead is self-healing -- a suppression lives
+        // exactly as long as the server disagrees with it -- and keeps the set
+        // bounded by the page size rather than growing across a session.
+        setDecidedIds((prev) => {
+          if (prev.size === 0) return prev;
+          const live = new Set(next.map((c) => c.id));
+          const kept = new Set([...prev].filter((id) => live.has(id)));
+          return kept.size === prev.size ? prev : kept;
+        });
         setTotal(res.total ?? 0);
         setLoading(false);
       })
@@ -272,8 +305,10 @@ export function useDupesLane(
   // -------------------------------------------------------------------------
 
   const visible = useMemo(() => {
+    const decided = (rows: DedupCandidate[]) =>
+      decidedIds.size === 0 ? rows : rows.filter((c) => !decidedIds.has(c.id));
     const q = filters.search.trim().toLowerCase();
-    if (!q) return candidates;
+    if (!q) return decided(candidates);
     const hay = (c: DedupCandidate) =>
       [
         c.entity_a_id,
@@ -289,8 +324,24 @@ export function useDupesLane(
       ]
         .join(' ')
         .toLowerCase();
-    return candidates.filter((c) => hay(c).includes(q));
-  }, [candidates, filters.search]);
+    const searched = candidates.filter((c) => hay(c).includes(q));
+    return decided(searched);
+  }, [candidates, filters.search, decidedIds]);
+
+  /**
+   * The focus pointer, clamped to what is actually on screen.
+   *
+   * `visible` shrinks the instant a decision is dispatched, which can leave the
+   * stored index past the end. Clamping on READ rather than correcting it in an
+   * effect matters twice over: an effect runs after the render that produced
+   * the bad index, so there is one frame where `visible[focusedIndex]` is
+   * undefined -- and the key handler reads exactly that as "no focused row",
+   * turning every shortcut into a silent no-op. Deriving it means the
+   * out-of-range value is never observable, and there is no cascading render.
+   *
+   * The raw state is left alone so j/k keep their own bounds arithmetic.
+   */
+  const focusedIndex = Math.min(focusedIndexState, Math.max(0, visible.length - 1));
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
@@ -385,6 +436,32 @@ export function useDupesLane(
   // Actions
   // -------------------------------------------------------------------------
 
+  /** Suppress rows the moment their decision is dispatched -- see `decidedIds`. */
+  const markDecided = useCallback((ids: number[]) => {
+    setDecidedIds((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) next.add(id);
+      return next;
+    });
+  }, []);
+
+  /**
+   * Put rows back when their decision failed. Without this an optimistic
+   * removal outlives the request that justified it: the merge did not happen,
+   * the pair is still pending server-side, and the reviewer never sees it
+   * again -- a silent drop out of the queue, which is worse than the error
+   * toast they already got.
+   */
+  const unmarkDecided = useCallback((ids: number[]) => {
+    setDecidedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const next = new Set(prev);
+      let changed = false;
+      for (const id of ids) changed = next.delete(id) || changed;
+      return changed ? next : prev;
+    });
+  }, []);
+
   /**
    * Sequential rather than concurrent, carried over deliberately. Each merge
    * rewrites book rows on the server, and firing a selection's worth at once
@@ -393,33 +470,38 @@ export function useDupesLane(
   const runSequential = useCallback(
     async (ids: number[], op: (id: number) => Promise<void>, verb: string) => {
       setBusy(true);
+      markDecided(ids);
       let done = 0;
-      let failed = 0;
+      const failedIds: number[] = [];
       for (const id of ids) {
         try {
           await op(id);
           done++;
         } catch {
-          failed++;
+          failedIds.push(id);
         }
       }
+      if (failedIds.length > 0) unmarkDecided(failedIds);
       setBusy(false);
       toast(
-        failed === 0
+        failedIds.length === 0
           ? `${verb} ${done} candidate${done === 1 ? '' : 's'}`
-          : `${verb} ${done}, failed ${failed}`,
-        failed === 0 ? 'success' : 'warning'
+          : `${verb} ${done}, failed ${failedIds.length}`,
+        failedIds.length === 0 ? 'success' : 'warning'
       );
       clearSelection();
       refresh();
     },
-    [toast, clearSelection, refresh]
+    [toast, clearSelection, refresh, markDecided, unmarkDecided]
   );
 
   const dispatch = useCallback(
     (action: DupesAction) => {
       switch (action.type) {
         case 'merge':
+          // Before the await, not after: the whole point is that the row is
+          // gone by the time the next keystroke is read.
+          markDecided([action.id]);
           void (async () => {
             setBusy(true);
             try {
@@ -427,6 +509,7 @@ export function useDupesLane(
               toast('Merged', 'success');
               refresh();
             } catch (err) {
+              unmarkDecided([action.id]);
               toast(err instanceof Error ? err.message : 'Merge failed', 'error');
             } finally {
               setBusy(false);
@@ -435,6 +518,7 @@ export function useDupesLane(
           return;
 
         case 'dismiss':
+          markDecided([action.id]);
           void (async () => {
             setBusy(true);
             try {
@@ -442,6 +526,7 @@ export function useDupesLane(
               toast('Dismissed', 'success');
               refresh();
             } catch (err) {
+              unmarkDecided([action.id]);
               toast(err instanceof Error ? err.message : 'Dismiss failed', 'error');
             } finally {
               setBusy(false);
@@ -496,6 +581,8 @@ export function useDupesLane(
       }
     },
     [
+      markDecided,
+      unmarkDecided,
       toast,
       refresh,
       runSequential,
@@ -577,6 +664,27 @@ export function useDupesLane(
           event.preventDefault();
           dispatch({ lane: 'dupes', type: 'dismiss', id: focused.id });
           return;
+        case 'a':
+        case 'b': {
+          if (focused.status !== 'pending') return;
+          event.preventDefault();
+          // Explicit keep-side, as opposed to `m`, which follows the
+          // recommendation and silently falls back to A on a tie. These exist
+          // because disagreeing with the recommendation is the case that costs
+          // a mouse trip today: `recommendedKeepSide` returns null on a tie and
+          // renders no chip at all, so on exactly the pairs where the reviewer
+          // has to think, `m` is the shortcut that tells them the least.
+          //
+          // Lowercase only. Shift+A is select-all and arrives as key 'A', so
+          // the two never collide.
+          dispatch({
+            lane: 'dupes',
+            type: 'merge',
+            id: focused.id,
+            keepId: event.key === 'a' ? focused.entity_a_id : focused.entity_b_id,
+          });
+          return;
+        }
         case 'm': {
           if (focused.status !== 'pending') return;
           event.preventDefault();
@@ -654,7 +762,9 @@ export function isKeyboardShortcutSuppressed(): boolean {
 /** Rendered by the shortcut help overlay. Kept beside the handler that implements them. */
 export const DEDUP_SHORTCUTS = [
   { keys: 'j / k', action: 'Move to next / previous row' },
-  { keys: 'm', action: 'Merge the focused candidate' },
+  { keys: 'm', action: 'Merge, keeping the recommended side (A when the two tie)' },
+  { keys: 'a', action: 'Merge, keeping A -- regardless of the recommendation' },
+  { keys: 'b', action: 'Merge, keeping B -- regardless of the recommendation' },
   { keys: 'd', action: 'Dismiss the focused candidate' },
   { keys: 's', action: 'Select / deselect the focused row' },
   { keys: 'Enter', action: 'Open the compare drawer for the focused row' },
