@@ -1,5 +1,5 @@
 // file: web/src/components/common/PathLinks.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 57b9a402-8f25-433d-926e-9f65d70a364b
 // last-edited: 2026-08-21
 
@@ -69,6 +69,7 @@ export function PathLinks({ path, aliases, platform }: PathLinksProps): JSX.Elem
             variant="caption"
             component={r.href ? 'a' : 'span'}
             href={r.href ?? undefined}
+            title={r.copyText}
             sx={{
               fontFamily: 'monospace',
               color: 'inherit',

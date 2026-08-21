@@ -1,5 +1,5 @@
 // file: web/src/components/common/PathLinks.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 19ec3b3a-a184-4122-953f-32ebd321116c
 // last-edited: 2026-08-21
 
@@ -61,6 +61,16 @@ describe('PathLinks', () => {
     await screen.findByText(/\$\(books\)/);
     await userEvent.click(screen.getByRole('button', { name: /copy linux path/i }));
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(P);
+  });
+
+  it('exposes the literal path via title even when the display is abbreviated', async () => {
+    // Forces display !== copyText via the mocked root_dir above -- otherwise
+    // this assertion would pass vacuously even if `title` were wired to
+    // `display` instead of `copyText`.
+    render(<PathLinks path={P} aliases={ALIASES} platform="macOS" />);
+    const posixText = await screen.findByText(/\$\(books\)/);
+    expect(posixText).not.toHaveTextContent(P);
+    expect(posixText).toHaveAttribute('title', P);
   });
 
   it('gives every rendering its own copy button', () => {
