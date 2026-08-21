@@ -59,11 +59,10 @@ import * as api from '../../services/api';
 import type { DedupBand } from '../../services/api';
 import { useToast } from '../toast/ToastProvider';
 import { CommandBar, type CommandMenu } from './CommandBar';
-import { QueueRail } from './QueueRail';
-import { ActionBar } from './ActionBar';
-import { CompareSpine, type SpineViewMode } from './spine/CompareSpine';
+import type { SpineViewMode } from './spine/CompareSpine';
 import { DupesPanel } from './DupesPanel';
 import { RegroupPanel } from './RegroupPanel';
+import { MetadataPanel } from './MetadataPanel';
 import { useDupesLane } from './lanes/useDupesLane';
 import { useMetadataLane } from './lanes/useMetadataLane';
 import { useRegroupLane } from './lanes/useRegroupLane';
@@ -455,67 +454,12 @@ export function ReviewWorkspace() {
           </Alert>
         </Box>
       ) : (
-        <>
-          <Box
-            sx={{
-              flex: 1,
-              minHeight: 0,
-              display: 'grid',
-              gridTemplateColumns: { xs: '1fr', md: '320px 1fr' },
-            }}
-          >
-            <QueueRail
-              loading={metadata.loading}
-              rows={metadata.pageResults}
-              summary={metadata.summary}
-              sourceCounts={metadata.sourceCounts}
-              filters={metadata.filters}
-              setFilters={metadata.setFilters}
-              strictPreset={metadata.strictPreset}
-              setStrictPreset={metadata.setStrictPreset}
-              page={metadata.page}
-              totalPages={metadata.totalPages}
-              pageSize={metadata.pageSize}
-              setPage={metadata.setPage}
-              setPageSize={metadata.setPageSize}
-              filteredCount={metadata.filteredResults.length}
-              rowState={metadata.spineCtx.rowState}
-              isSelected={metadata.spineCtx.isSelected}
-              onToggleSelect={metadata.spineCtx.onToggleSelect}
-              onRefresh={metadata.refresh}
-              refetching={metadata.refetching}
-              onRefetchStale={
-                metadata.staleIds.length ? () => setConfirmRefetchStale(true) : undefined
-              }
-              onRefetchRow={(bookId) => {
-                // One row goes straight through. The confirm below exists
-                // because a bulk refetch is thousands of calls to external
-                // metadata providers; a single book is not worth a dialog.
-                void metadata.refetchBooks([bookId]);
-              }}
-            />
-
-            <Box sx={{ minWidth: 0, overflowY: 'auto' }}>
-              <CompareSpine
-                rows={metadata.rows}
-                groups={metadata.groups}
-                viewMode={viewMode}
-                ctx={metadata.spineCtx}
-                emptyMessage={LANES.metadata.emptyMessage}
-              />
-            </Box>
-          </Box>
-
-          <ActionBar
-            selectedIds={metadata.selectedIds}
-            highConfidenceIds={metadata.highConfidenceIds}
-            allVisiblePendingIds={metadata.allVisiblePendingIds}
-            unmatchedCount={unmatchedCount}
-            applying={metadata.applying}
-            dispatch={metadata.dispatch}
-            confirm={(message) => Promise.resolve(window.confirm(message))}
-          />
-        </>
+        <MetadataPanel
+          metadata={metadata}
+          viewMode={viewMode}
+          unmatchedCount={unmatchedCount}
+          onRefetchStale={() => setConfirmRefetchStale(true)}
+        />
       )}
 
       {/* Rescore-and-apply confirmation. */}
