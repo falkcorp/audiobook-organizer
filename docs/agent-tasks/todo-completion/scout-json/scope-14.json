@@ -262,7 +262,8 @@
    "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
    "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
    "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
+   "[ops-rollback.json] TASK-169 fans DismissDedupCluster's per-candidate work out over runtime.NumCPU() goroutines, and the per-candidate work calls EmbeddingStore.UpsertLabeledExample - one of the few EmbeddingStore methods that does NOT take the store's closeMu read lock, only a check-then-act atomic flag. The file's ow"
   ]
  },
  {
@@ -482,7 +483,10 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Confirm with the coordinator whether FilterSidebar.tsx's tag filter dropdown should also switch to the new user-only endpoint, or intentionally keep showing system tags there for power users \u2014 the TODO item only names the 'Browse-by-Tag cloud' (TagCloud.tsx) explicitly."
+  "notes": "Confirm with the coordinator whether FilterSidebar.tsx's tag filter dropdown should also switch to the new user-only endpoint, or intentionally keep showing system tags there for power users \u2014 the TODO item only names the 'Browse-by-Tag cloud' (TagCloud.tsx) explicitly.",
+  "review_notes": [
+   "[correctness.json] Three tasks redefine what the Browse-by-Tag cloud shows, using two INCOMPATIBLE definitions of 'hide', in the same and adjacent waves, with no depends_on between them. TASK-169 (wave 1, frontend) hides by NAMESPACE (dedup:*, metadata:source:*). TASK-040 (wave 1, backend) changes /tags to return only"
+  ]
  },
  {
   "todo_line": 10531,
@@ -812,7 +816,9 @@
   "gate": "make ci",
   "notes": "review_critical because this touches CombineBooks, a prod-data merge/apply path with real file moves.",
   "review_notes": [
-   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three"
+   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three",
+   "[ops-rollback.json] TASK-054 adds real, irreversible file moves to the merge/apply path (CombineBooks) via organizer.Organizer.OrganizeBook, with no dry-run and - decisively - no operation_change journal row. The repo's undo engine reverses file moves only from operation_changes rows of type file_move/organize_rename; ",
+   "[ops-rollback.json] TASK-054 changes CombineBooks itself, so it silently converts every existing CombineBooks caller from a DB-only operation into one that moves files on disk - including the review-queue apply path whose entire safety posture (review_apply_enabled OFF in prod, decision 8 = do not flip) is predicated o"
   ]
  },
  {

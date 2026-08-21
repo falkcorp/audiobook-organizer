@@ -1199,7 +1199,10 @@
    4832
   ],
   "gate": "n/a (docs)",
-  "notes": "Explicitly a REPORT-only deliverable per owner decision #9's precedent and the item's own 'Report counts before proposing any restore. Do not mass-restore rows.' Depends on L4832's find_bogus_dirs() (already built, not blocking)."
+  "notes": "Explicitly a REPORT-only deliverable per owner decision #9's precedent and the item's own 'Report counts before proposing any restore. Do not mass-restore rows.' Depends on L4832's find_bogus_dirs() (already built, not blocking).",
+  "review_notes": [
+   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
+  ]
  },
  {
   "todo_line": 4848,

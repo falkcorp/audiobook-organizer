@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/search/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 862ce1ce-e2db-453e-a909-99519305dbfc -->
+<!-- guid: f81c3b20-42b5-4868-a028-18a32dd245ff -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — search (todo-completion)
@@ -9,8 +9,8 @@
 
 | Task | TODO id | Title | Priority | Effort | Tier | Wave |
 |------|---------|-------|----------|--------|------|------|
-| TASK-134 | L618 | Index track names on BookDocument so smart playlists can match them | P2 | M | Sonnet-class | 2 |
-| TASK-135 | L3369 | Surface to the user when 'all'/'and' (or any stopword) is silently dro | P2 | M | Sonnet-class | 1 |
+| TASK-129 | L618 | Index track names on BookDocument so smart playlists can match them | P2 | M | Sonnet-class | 1 |
+| TASK-130 | L3369 | Surface to the user when 'all'/'and' (or any stopword) is silently dro | P2 | M | Sonnet-class | 1 |
 
 ## Ground rules
 
@@ -24,13 +24,12 @@
 
 ## Collision / wave note
 
-- `internal/search/bleve_index.go`: TASK-025, TASK-134 → serialize by wave (TASK-025=w1, TASK-134=w2)
-- `internal/search/index_builder.go`: TASK-025, TASK-134 → serialize by wave (TASK-025=w1, TASK-134=w2)
+- `internal/search/bleve_index.go`: TASK-023, TASK-129 → serialize by wave (TASK-023=w2, TASK-129=w1)
+- `internal/search/index_builder.go`: TASK-023, TASK-129 → serialize by wave (TASK-023=w2, TASK-129=w1)
 
 | Wave | Tasks | Prereq | Parallel-safe because |
 |------|-------|--------|-----------------------|
-| 1 | TASK-135 | none | disjoint files within the wave (computed collision matrix) |
-| 2 | TASK-134 | wave 1 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
+| 1 | TASK-129, TASK-130 | none | disjoint files within the wave (computed collision matrix) |
 
 Waves are GLOBAL across the package: a wave-2 task here may be waiting on a wave-1 task in another workstream that shares a file (see `../BREAKDOWN-2026-08-21.md` collision table).
 

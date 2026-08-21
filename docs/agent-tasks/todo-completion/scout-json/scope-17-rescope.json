@@ -940,8 +940,17 @@
   "verdict_evidence": "Confirmed internal/reconcile/elect_primaries.go's existing ElectMissingPrimaries EXPLICITLY skips any group with primaries > 0 ('if gs.primaries > 0 { continue }') -- it only ever handles the ZERO-primary half of the invariant, never demotes an over-elected group. This proves the double-primary repair is genuinely unbuilt, not a rename/discovery of existing code, and gives an exact, correct reuse target for the winner-selection logic: electPrimaryFor(members []database.Book) *database.Book (NOT 'BookIsBetter', which does not exist anywhere in the repo -- the prior scout's reuse guess was wrong).",
   "domain": "internal/reconcile",
   "exact_files": [
+   "internal/audiobooks/service_filtering.go",
+   "internal/audiobooks/service_query.go",
+   "internal/database/dbtest/invariants.go",
+   "internal/database/pebble_store.go",
+   "internal/organizer/service.go",
+   "internal/plugins/maintenance/itunes_regroup.go",
+   "internal/plugins/maintenance/regroup_apply.go",
    "internal/reconcile/elect_primaries.go",
    "internal/reconcile/elect_primaries_test.go",
+   "internal/reconcile/reconcile.go",
+   "internal/server/library_list_warmer.go",
    "internal/server/reconcile.go"
   ],
   "verified_anchors": [
@@ -1022,7 +1031,8 @@
   "_scope": "scope-03.json",
   "_section": "Config",
   "review_notes": [
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
+   "[correctness.json] TASK-002 canonizes 'nil IsPrimaryVersion == primary' but scopes itself to internal/audiobooks (exact_files = service_filtering.go, service_query.go). Partitioning every non-test use of the field BY STRUCTURE (not by naming grep) shows 13 sites implementing the opposite rule; TASK-002 fixes 2 of them"
   ]
  },
  {
@@ -1162,7 +1172,7 @@
   ],
   "anti_over_suppression": "N/A",
   "depends_on_lines": [
-   "TASK-002"
+   3348
   ],
   "gate": "n/a (docs) for the diagnostic; make ci (Go) if a fix follows",
   "notes": "Corrects the prior scout's reuse target: 'internal/ledger' does not exist in this repo; the provenance work from commit 8f6d0d99 landed as internal/database/file_provenance.go and tracks file moves, not general book-field writes, so it likely does not directly explain this anomaly -- CreatedAt/UpdatedAt correlation is the practical approach instead.",
@@ -1174,7 +1184,8 @@
    "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
    "[verify-3.json] TASK-003's entire code change (internal/audiobooks/service_query.go:346, `bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion` -> `== nil || *b.IsPrimaryVersion`) is IDENTICAL to a subset of what TASK-002 (wave 1, same collision-matrix file) already does at the SAME line 346 (TASK-002 fixes",
    "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
+   "[correctness.json] Type error in the dependency schema plus a garbage verified_anchor. TASK-003.depends_on_lines is `[\"TASK-002\"]` \u2014 a task ID string in a field that every other task populates with integer TODO line numbers, and that my coverage/dependency tooling (and presumably the wave scheduler and plan-auditor) p"
   ]
  },
  {

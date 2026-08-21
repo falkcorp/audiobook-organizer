@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/metadata/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: ae45598c-e026-4807-a354-94721d098628 -->
+<!-- guid: c7b3c340-ced7-45c6-ba52-a0e60b9f3ec5 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — metadata workstream (todo-completion)
@@ -12,15 +12,15 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK087[TASK-087 route-scoreoneresultwithbrea]
+      TASK082[TASK-082 route-scoreoneresultwithbrea]
     end
     subgraph Wave2
-      TASK088[TASK-088 assess-the-2-critical-go-req]
+      TASK084[TASK-084 prefix-metadata-apply-activi]
     end
-    subgraph Wave3
-      TASK089[TASK-089 prefix-metadata-apply-activi]
+    subgraph Wave5
+      TASK083[TASK-083 assess-the-2-critical-go-req]
     end
-    TASK087 --> TASK088
+    TASK082 --> TASK083
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -43,9 +43,14 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 > files); 3) file-copy cherry-pick fallback — re-apply the task's file states onto a
 > fresh branch from HEAD; 4) mark `rebase_blocked`, stop the lane, escalate to a human.
 >
-> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR; any
-> sibling worktree is un-rebased; the gate is red on `origin/main`; or a
-> `rebase_blocked` marker is unresolved.
+> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR that is
+> NOT a held review-critical PR; any sibling worktree is un-rebased; the gate is red on
+> `origin/main`; or a `rebase_blocked` marker is unresolved.
+>
+> **Held PRs (review-critical / prod-data path):** the coordinator opens the PR and
+> STOPS — never `gh pr merge`. A held PR does not block the wave; only tasks that share a
+> file with it are deferred to a `held-dependent` queue and dispatched after the owner
+> merges it. The owner sees the held list in the coordinator's status report.
 
 ## Run it
 

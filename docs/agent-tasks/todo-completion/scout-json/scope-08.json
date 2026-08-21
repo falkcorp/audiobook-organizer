@@ -1255,7 +1255,9 @@
   "notes": "review_critical=true: this op applies metadata to the database and optionally writes audio file tags back to disk at production scale \u2014 a resume bug here (e.g. double-applying or silently downgrading WriteBack) is a real data-integrity risk, not just an inconvenience.",
   "review_notes": [
    "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,",
-   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,"
+   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,",
+   "[ops-rollback.json] Both tasks convert production APPLY ops from ResumeDrop to ResumeRestart. ResumeRestart is resumed automatically and unattended at server startup - no operator action, no gate. That directly collides with the standing rule that a running scan clobbers applied metadata and applies must never run duri",
+   "[ops-rollback.json] resumeRestart is fail-OPEN when the checkpoint is missing, unreadable, or schema_version=1: it logs and dispatches the op with the ORIGINAL params, i.e. ResumeFrom absent => 0 => the entire book list is re-applied from the start. For metadata.batch-apply-cached with WriteBack=true that re-writes tag"
   ]
  },
  {
@@ -1330,7 +1332,9 @@
   "notes": "review_critical=true: reconcile.apply is a dedup merge/apply path \u2014 the highest-severity category in this scout's own review_critical rubric. Do not treat this as equivalent-risk to part 1; verify merge idempotency explicitly before shipping.",
   "review_notes": [
    "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,",
-   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,"
+   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,",
+   "[ops-rollback.json] Both tasks convert production APPLY ops from ResumeDrop to ResumeRestart. ResumeRestart is resumed automatically and unattended at server startup - no operator action, no gate. That directly collides with the standing rule that a running scan clobbers applied metadata and applies must never run duri",
+   "[ops-rollback.json] resumeRestart is fail-OPEN when the checkpoint is missing, unreadable, or schema_version=1: it logs and dispatches the op with the ORIGINAL params, i.e. ResumeFrom absent => 0 => the entire book list is re-applied from the start. For metadata.batch-apply-cached with WriteBack=true that re-writes tag"
   ]
  },
  {

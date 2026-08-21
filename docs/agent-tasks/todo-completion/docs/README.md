@@ -1,26 +1,23 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 3061dcb1-d6f0-4958-99c2-9244ce96d2f4 -->
+<!-- guid: e63c5e5c-b378-4919-90cc-cbde207f70e7 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — docs (todo-completion)
 
-12 tasks projected from the 2026-08-21 TODO-completion skeleton (`../skeleton.json`). Every fact here is a projection of that skeleton — edit the skeleton and regenerate, never this file.
+9 tasks projected from the 2026-08-21 TODO-completion skeleton (`../skeleton.json`). Every fact here is a projection of that skeleton — edit the skeleton and regenerate, never this file.
 
 | Task | TODO id | Title | Priority | Effort | Tier | Wave |
 |------|---------|-------|----------|--------|------|------|
-| TASK-055 | L101 | Record the docs/system vs top-level architecture classification decisi | P2 | S | Sonnet-class | 1 |
-| TASK-056 | L101 | Write file-header for the 35 current live docs still missing one | P2 | M | Haiku-class | 1 |
-| TASK-057 | L296 | Delete the 34 group-relative duplicate paths from docs/api/openapi.jso | P2 | S | Sonnet-class | 1 |
-| TASK-058 | L296 | Triage the 16 removed POST /maintenance/* paths in openapi.json — dele | P2 | M | Sonnet-class | 1 |
-| TASK-059 | L296 | Delete the /torrents group-relative fragment from openapi.json | P2 | S | Haiku-class | 1 |
-| TASK-060 | L497 | Re-verify docs/reference/abs-target-client-contract.md §11's 'safe to  | P2 | S | Sonnet-class | 1 |
-| TASK-061 | L1852 | Document the todo.d fragment race (assembled between filing and finish | P2 | S | Haiku-class | 1 |
-| TASK-062 | L4463 | Consolidate the August executive-summary roundup through 2026-08-19 | P2 | L | Sonnet-class | 1 |
-| TASK-063 | ABS-SYNC-Phase8 | Phase 8 — write the ABS topology, runbook, and migration guide (Cloudf | P1 | M | Opus-class | 1 |
-| TASK-064 | L10635 | Update execution-manifest doc to reflect the now-settled human gates | P2 | S | Haiku-class | 1 |
-| TASK-065 | L10706 | Close out the 2026-05-01 re-audit block (TEST-2/DEP-1/DEAD-1/CTX-4/LOG | P2 | S | Haiku-class | 1 |
-| TASK-066 | T13 | Docs truth-up with measured sandbox/prod dedup numbers | P2 | S | Haiku-class | 1 |
+| TASK-053 | L101 | Record the docs/system vs top-level architecture classification decisi | P2 | S | Sonnet-class | 1 |
+| TASK-054 | L101 | Write file-header for the 35 current live docs still missing one | P2 | M | Haiku-class | 1 |
+| TASK-055 | L296 | Delete the 34 group-relative duplicate paths from docs/api/openapi.jso | P2 | S | Sonnet-class | 1 |
+| TASK-056 | L497 | Re-verify docs/reference/abs-target-client-contract.md §11's 'safe to  | P2 | S | Sonnet-class | 1 |
+| TASK-057 | L1852 | Document the todo.d fragment race (assembled between filing and finish | P2 | S | Haiku-class | 1 |
+| TASK-058 | L4463 | Consolidate the August executive-summary roundup through 2026-08-19 | P2 | L | Sonnet-class | 1 |
+| TASK-059 | ABS-SYNC-Phase8 | Phase 8 — write the ABS topology, runbook, and migration guide (Cloudf | P1 | M | Opus-class | 1 |
+| TASK-060 | L10635 | Update execution-manifest doc to reflect the now-settled human gates | P2 | S | Haiku-class | 1 |
+| TASK-061 | T13 | Docs truth-up with measured sandbox/prod dedup numbers | P2 | S | Haiku-class | 1 |
 
 ## Ground rules
 
@@ -38,7 +35,7 @@
 
 | Wave | Tasks | Prereq | Parallel-safe because |
 |------|-------|--------|-----------------------|
-| 1 | TASK-055, TASK-056, TASK-057, TASK-058, TASK-059, TASK-060, TASK-061, TASK-062, TASK-063, TASK-064, TASK-065, TASK-066 | none | disjoint files within the wave (computed collision matrix) |
+| 1 | TASK-053, TASK-054, TASK-055, TASK-056, TASK-057, TASK-058, TASK-059, TASK-060, TASK-061 | none | disjoint files within the wave (computed collision matrix) |
 
 Waves are GLOBAL across the package: a wave-2 task here may be waiting on a wave-1 task in another workstream that shares a file (see `../BREAKDOWN-2026-08-21.md` collision table).
 

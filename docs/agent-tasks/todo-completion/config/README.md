@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/config/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 753a4c1d-0177-4657-b6c9-6306af41d5d8 -->
+<!-- guid: ded12d87-1320-4de7-abc9-8aa259d58638 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — config (todo-completion)
@@ -9,11 +9,11 @@
 
 | Task | TODO id | Title | Priority | Effort | Tier | Wave |
 |------|---------|-------|----------|--------|------|------|
-| TASK-017 | L1247 | Rename write_back_metadata config key to auto_write_tags_on_fetch with | P1 | M | Opus-class | 1 |
-| TASK-018 | CFG-AUDIT | Fix APIRateLimitPerMinute default drift between fresh-install (0) and  | P2 | S | Haiku-class | 2 |
-| TASK-019 | CFG-AUDIT | Fix ai_backend.local_base_url hardcoded developer LAN IP default | P2 | S | Sonnet-class | 3 |
-| TASK-020 | CFG-AUDIT | Fix ChapterConsolidationThresholdMin omitted from ResetToDefaults (fac | P2 | S | Haiku-class | 4 |
-| TASK-021 | CFG-AUDIT | Delete the fully inert --enable-sqlite3-i-know-the-risks flag and Enab | P2 | M | Sonnet-class | 5 |
+| TASK-015 | L1247 | Rename write_back_metadata config key to auto_write_tags_on_fetch with | P1 | M | Opus-class | 6 |
+| TASK-016 | CFG-AUDIT | Fix APIRateLimitPerMinute default drift between fresh-install (0) and  | P2 | S | Haiku-class | 1 |
+| TASK-017 | CFG-AUDIT | Fix ai_backend.local_base_url hardcoded developer LAN IP default | P2 | S | Sonnet-class | 2 |
+| TASK-018 | CFG-AUDIT | Fix ChapterConsolidationThresholdMin omitted from ResetToDefaults (fac | P2 | S | Haiku-class | 3 |
+| TASK-019 | CFG-AUDIT | Delete the fully inert --enable-sqlite3-i-know-the-risks flag and Enab | P2 | M | Sonnet-class | 4 |
 
 ## Ground rules
 
@@ -27,16 +27,16 @@
 
 ## Collision / wave note
 
-- `internal/config/config.go`: TASK-017, TASK-018, TASK-019, TASK-020, TASK-021, TASK-078 → serialize by wave (TASK-017=w1, TASK-018=w2, TASK-019=w3, TASK-020=w4, TASK-021=w5, TASK-078=w6)
-- `internal/database/store.go`: TASK-021, TASK-033, TASK-035, TASK-039, TASK-041 → serialize by wave (TASK-021=w5, TASK-033=w1, TASK-035=w2, TASK-039=w3, TASK-041=w6)
+- `internal/config/config.go`: TASK-015, TASK-016, TASK-017, TASK-018, TASK-019, TASK-073 → serialize by wave (TASK-015=w6, TASK-016=w1, TASK-017=w2, TASK-018=w3, TASK-019=w4, TASK-073=w5)
+- `internal/database/store.go`: TASK-019, TASK-031, TASK-033, TASK-037, TASK-039 → serialize by wave (TASK-019=w4, TASK-031=w1, TASK-033=w2, TASK-037=w6, TASK-039=w3)
 
 | Wave | Tasks | Prereq | Parallel-safe because |
 |------|-------|--------|-----------------------|
-| 1 | TASK-017 | none | disjoint files within the wave (computed collision matrix) |
-| 2 | TASK-018 | wave 1 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
-| 3 | TASK-019 | wave 2 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
-| 4 | TASK-020 | wave 3 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
-| 5 | TASK-021 | wave 4 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
+| 1 | TASK-016 | none | disjoint files within the wave (computed collision matrix) |
+| 2 | TASK-017 | wave 1 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
+| 3 | TASK-018 | wave 2 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
+| 4 | TASK-019 | wave 3 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
+| 6 | TASK-015 | wave 5 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
 
 Waves are GLOBAL across the package: a wave-2 task here may be waiting on a wave-1 task in another workstream that shares a file (see `../BREAKDOWN-2026-08-21.md` collision table).
 

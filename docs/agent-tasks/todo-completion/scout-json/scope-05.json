@@ -184,7 +184,8 @@
   "notes": "D111 'Stored zeros must not shadow defaults' (docs/handoffs/2026-08-14-task-board.md:83) is still open design status ('\u2b1c design') and is the general version of this field's 0-vs-absent ambiguity; PurgeSoftDeletedAfterDays already ships the same 0=never pattern without D111 being resolved, so this is not a hard blocker, but flag the D111 dependency to the coordinator in case a general resolution lands first and changes the config-loading convention.",
   "review_notes": [
    "[verify-1.json] Background section is materially stale/wrong and would mislead the executing model. Verified at HEAD: internal/metadata/cover.go ALREADY has full SSRF protection on the exact flagged line (client.Get(coverURL) at cover.go:137) \u2014 validateCoverURL() (scheme allowlist, called at cover.go:117) PLUS safe",
-   "[verify-1.json] TODO.md's SEC-CODEQL-BACKLOG item (line 2595) is a single checkbox covering all 326 alerts (302 log-injection, 17 high, 3 medium workflow-permission, etc.), of which only the 2 critical SSRF alerts are this task's scope. The brief's generic instruction 'If the task is a TODO.md close-out, check the "
+   "[verify-1.json] TODO.md's SEC-CODEQL-BACKLOG item (line 2595) is a single checkbox covering all 326 alerts (302 log-injection, 17 high, 3 medium workflow-permission, etc.), of which only the 2 critical SSRF alerts are this task's scope. The brief's generic instruction 'If the task is a TODO.md close-out, check the ",
+   "[ops-rollback.json] TASK-080 quietly changes the behaviour of a daily scheduled job on every existing install, in two ways, with no rollout or rollback note: (1) the effective compaction window drops from 14 days to 7, because the new ActivityLogRetentionDays (default 7) replaces ActivityLogCompactionDays as the argume"
   ]
  },
  {

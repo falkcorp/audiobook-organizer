@@ -7,6 +7,7 @@ import json, glob, os, sys, hashlib
 S = sys.argv[1]
 SK = json.load(open(os.path.join(S, "dryrun/docs/agent-tasks/todo-completion/skeleton.json")))
 byid = {t["id"]: t for t in SK["tasks"]}
+bytitle = {(t.get("title") or "")[:60]: t for t in SK["tasks"]}
 applied_path = os.path.join(S, "patches/applied.json")
 applied = set(json.load(open(applied_path))) if os.path.exists(applied_path) else set()
 ALLOWED = {"goal", "background", "steps", "tests", "acceptance", "edge_cases", "anti_over_suppression", "exact_files",
@@ -36,7 +37,12 @@ for f in sorted([os.path.join(S, "judges", n + ".json") for n in ("correctness",
     try:
         for fi in json.load(open(f)).get("findings", []):
             if fi.get("fix") or fi.get("verdict_override"):
-                for tid in fi.get("task_ids", []):
+                titles = fi.get("task_titles") or []
+                ids = fi.get("task_ids", [])
+                for i, tid in enumerate(ids):
+                    title = titles[i] if i < len(titles) else None
+                    if title and (title[:60] in bytitle):
+                        tid = bytitle[title[:60]]["id"]   # titles are the stable key across regenerations
                     entries.append((f, tid, fi))
     except Exception as ex:
         print("bad", f, ex)

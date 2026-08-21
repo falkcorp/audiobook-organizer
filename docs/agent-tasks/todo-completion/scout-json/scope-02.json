@@ -711,7 +711,8 @@
    "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
    "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
    "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n"
+   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
+   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
   ]
  },
  {
@@ -1078,7 +1079,11 @@
    872
   ],
   "gate": "make ci",
-  "notes": "Part 2 of 2 for TODO.md L872 (F5). Given effort=L and review_critical=true, this likely needs its own PLAN.md and worktree per CLAUDE.md's Plan Before Execution rule rather than being done inline -- flagging that explicitly for the coordinator rather than assuming a single PR."
+  "notes": "Part 2 of 2 for TODO.md L872 (F5). Given effort=L and review_critical=true, this likely needs its own PLAN.md and worktree per CLAUDE.md's Plan Before Execution rule rather than being done inline -- flagging that explicitly for the coordinator rather than assuming a single PR.",
+  "review_notes": [
+   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo",
+   "[ops-rollback.json] Routing the three organize/rename paths through organizer.MoveBookFile moves the DB write INTO the mover, but MoveBookFile records no operation_change row, while the current callers do. The refactor can therefore silently delete the organize undo trail - the rollback property the task is nominally s"
+  ]
  },
  {
   "todo_line": 888,
@@ -1611,7 +1616,8 @@
   "gate": "go build ./... && go test ./internal/maintenance/... (make ci is known-red on main per the plan doc; do not read a red make ci as a signal from this work)",
   "notes": "L973 in this same scope is a decision-record pointer to this exact item -- close L973 as not_a_task and treat this line as the real, actionable deliverable. Strongly recommend /parallel-sweep given the 37-job mechanical shape, once the Phase-1 sequencing question in step 1-2 is resolved.",
   "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re",
+   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
   ]
  }
 ]

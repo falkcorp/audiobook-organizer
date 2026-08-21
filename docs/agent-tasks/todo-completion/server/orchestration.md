@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 320f8c2c-419a-408b-9329-ee10691f09ed -->
+<!-- guid: c3d36e10-800d-419a-9797-7bf16b74bd40 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — server workstream (todo-completion)
@@ -12,36 +12,34 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK136[TASK-136 log-abs-api-enabled-s-actual]
-      TASK139[TASK-139 reproduce-and-classify-the-p]
-      TASK144[TASK-144 add-a-wiring-level-test-prov]
-      TASK145[TASK-145 convert-metadata-batch-apply]
-      TASK146[TASK-146 convert-reconcile-apply-from]
-      TASK147[TASK-147 fix-testorganizeservice-perf]
-      TASK148[TASK-148 exempt-the-abs-router-group-]
-      TASK150[TASK-150 retire-the-unsafe-cleanup-me]
-      TASK151[TASK-151 add-regression-tests-for-the]
+      TASK131[TASK-131 log-abs-api-enabled-s-actual]
+      TASK134[TASK-134 reproduce-and-classify-the-p]
+      TASK137[TASK-137 fix-indexedstore-updatebook-]
+      TASK139[TASK-139 add-a-wiring-level-test-prov]
+      TASK140[TASK-140 convert-metadata-batch-apply]
+      TASK141[TASK-141 convert-reconcile-apply-from]
+      TASK142[TASK-142 fix-testorganizeservice-perf]
+      TASK143[TASK-143 exempt-the-abs-router-group-]
+      TASK145[TASK-145 retire-the-unsafe-cleanup-me]
+      TASK146[TASK-146 add-regression-tests-for-the]
     end
     subgraph Wave2
-      TASK138[TASK-138 fix-wipeactivity-dry-run-cou]
-      TASK140[TASK-140 register-searchindexdroppedc]
-      TASK142[TASK-142 fix-indexedstore-updatebook-]
+      TASK132[TASK-132 fix-enableratelimit-false-no]
+      TASK133[TASK-133 fix-wipeactivity-dry-run-cou]
+      TASK135[TASK-135 register-searchindexdroppedc]
+      TASK138[TASK-138 regression-test-soft-deletin]
     end
     subgraph Wave3
-      TASK137[TASK-137 fix-enableratelimit-false-no]
-      TASK143[TASK-143 regression-test-soft-deletin]
+      TASK136[TASK-136 fix-audiobook-organizer-book]
     end
     subgraph Wave4
-      TASK141[TASK-141 fix-audiobook-organizer-book]
+      TASK144[TASK-144 prune-expired-abs-sess-recor]
     end
-    subgraph Wave5
-      TASK149[TASK-149 prune-expired-abs-sess-recor]
-    end
-    TASK137 --> TASK141
-    TASK137 --> TASK149
-    TASK140 --> TASK141
-    TASK141 --> TASK149
-    TASK142 --> TASK143
+    TASK132 --> TASK136
+    TASK132 --> TASK144
+    TASK135 --> TASK136
+    TASK136 --> TASK144
+    TASK137 --> TASK138
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -64,9 +62,14 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 > files); 3) file-copy cherry-pick fallback — re-apply the task's file states onto a
 > fresh branch from HEAD; 4) mark `rebase_blocked`, stop the lane, escalate to a human.
 >
-> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR; any
-> sibling worktree is un-rebased; the gate is red on `origin/main`; or a
-> `rebase_blocked` marker is unresolved.
+> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR that is
+> NOT a held review-critical PR; any sibling worktree is un-rebased; the gate is red on
+> `origin/main`; or a `rebase_blocked` marker is unresolved.
+>
+> **Held PRs (review-critical / prod-data path):** the coordinator opens the PR and
+> STOPS — never `gh pr merge`. A held PR does not block the wave; only tasks that share a
+> file with it are deferred to a `held-dependent` queue and dispatched after the owner
+> merges it. The owner sees the held list in the coordinator's status report.
 
 ## Run it
 

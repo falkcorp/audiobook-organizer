@@ -1,0 +1,72 @@
+[
+  {
+    "task_id": "TASK-022",
+    "verdict": "fail",
+    "findings": [
+      {
+        "severity": "fatal",
+        "check": 2,
+        "problem": "The brief's premise is that an 8-reference 'Server.Store() chain' (internal/plugins/maintenance/deps.go x3, internal/server/server_maintenance_deps.go x2, plus callers) remains to be narrowed. At HEAD, `grep -n 'func (s \\*Server) Store()' internal/server/server.go` returns ZERO hits — there is no Server.Store() method returning database.Store anymore. deps.go and server_maintenance_deps.go already only expose narrow per-capability accessors (OpsStore(), ReconcileStore(), PlaylistStore() database.UserPlaylistStore, MetadataCacheStore() database.MetadataCacheStore, FileProvenanceStore() database.FileProvenanceStore) via a StoreProvider interface; the only remaining textual hits for 'database.Store' in those two files are inside comments describing the *historical* state ('These interfaces replaced a single `Store() database.Store` accessor...', 'They used to thread a database.Store -- 398...'). The 8-reference bucket this task targets appears to already be closed at HEAD (matches project memory: '✅ BOTH wide-store accessors SPLIT — #2612 + #2617' / '✅ Store decoupling DONE'). A weak model following the brief's Step 2 ('read internal/plugins/maintenance/deps.go's 3 references... and internal/server/server_maintenance_deps.go's 2 references') would find no live references to narrow and have no guidance on what to do next — the acceptance criterion 'the re-derived reference count (step 1) drops from its current value' cannot be satisfied by any code change because there is nothing left to narrow in the named bucket.",
+        "fix": {"verdict_override": "stale_done", "reason": "The Server.Store() chain (8 references) that is this task's entire scope has already been narrowed to per-capability accessors at HEAD; no Server.Store() method exists and deps.go/server_maintenance_deps.go only reference database.Store in historical comments. Re-verify TODO.md L1227's 18-reference breakdown against current HEAD before re-filing — the remaining count is very likely lower than 18 now."}
+      },
+      {
+        "severity": "advisory",
+        "check": 2,
+        "problem": "Source: line's re-find grep `grep -n \"Finish killing database.Store \" TODO.md` returns ZERO hits at HEAD — the real TODO.md text wraps `database.Store` in backticks ('Finish killing `database.Store` — 18 references...'), so the literal substring never matches. The approximate line number (~1227) does correctly land on the item, so a weak model has a fallback, but the suggested re-find command as written is broken. This same broken-grep pattern (paraphrased Source: title vs. actual backtick/bold-wrapped TODO.md text) recurs in every brief in this workstream — see handoff notes."
+      }
+    ]
+  },
+  {
+    "task_id": "TASK-023",
+    "verdict": "pass",
+    "findings": [
+      {
+        "severity": "advisory",
+        "check": 2,
+        "problem": "Source: line's re-find grep `grep -n \"Investigate then evict/dirty-f\" TODO.md` returns ZERO hits — real TODO.md text is '- [ ] **MERGE-CACHE-EVICT** A merge must evict (or dirty-flag) every merged-away...', a paraphrase mismatch. Approximate line ~1627 correctly lands on the item (confirmed), so not blocking, but the fallback grep itself is dead."
+      }
+    ]
+  },
+  {
+    "task_id": "TASK-024",
+    "verdict": "fail",
+    "findings": [
+      {
+        "severity": "fatal",
+        "check": 4,
+        "problem": "Acceptance criterion `grep -n 'book:\\\"\\\\)' internal/database/pebble_store_versiongroup_backfill.go` is malformed and will NOT match the post-edit line even when the fix is applied correctly. Verified: piping the correct post-edit line `LowerBound: []byte(\"book:\"),` through the literal acceptance-criterion pattern `book:\\\"\\\\)` yields zero matches (exit 1); only a corrected pattern like `book:\"` matches. A weak model that applies the fix exactly as instructed will then fail this acceptance checkbox and either falsely conclude the fix is wrong, or skip verifying it.",
+        "fix": {"acceptance": [
+          "`go test ./internal/database/... -run BackfillVersionGroupIndex` passes including the new letter-ID case.",
+          "`grep -n 'LowerBound: \\[\\]byte(\"book:\"),' internal/database/pebble_store_versiongroup_backfill.go` confirms the widened bounds are in place.",
+          "Anti-over-suppression: N/A",
+          "Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).",
+          "Gate green: `make ci` exits 0; `go vet`/lint clean.",
+          "File headers bumped on every changed file (`grep -n \"last-edited: 2026-08-21\" <file>` hits for each).",
+          "Changelog fragment present: `test -f changelog.d/20260821_database_024.md`."
+        ]}
+      },
+      {
+        "severity": "fatal",
+        "check": 6,
+        "problem": "Step 3 leaves the highest-impact decision in the whole task ambiguous: 'decide whether this correctness fix warrants bumping the sentinel to v3 ... recommend bumping to v3 given the file's own precedent comment' — this is advisory phrasing ('decide', 'recommend'), not a mandate. Two reasonable weak models will diverge: one bumps `versionGroupBackfillKey` to a v3 sentinel (forcing every existing deployment to re-run the backfill once under the wider bounds), the other leaves the sentinel alone (the bound fix then only helps *future* book IDs written after this deploy; already-existing letter-leading books, if any, silently stay unindexed forever since the one-time gate is already tripped). This is a real behavioral fork with a prod-data consequence (whether stale deployments self-heal), not cosmetic — it needs to be a mandate either way.",
+        "fix": {"steps": [
+          "1. In internal/database/pebble_store_versiongroup_backfill.go, change L98-99 from `LowerBound: []byte(\"book:0\"), UpperBound: []byte(\"book:;\")` to `LowerBound: []byte(\"book:\"), UpperBound: []byte(\"book;\")`.",
+          "2. Bump the file's version header (currently 1.2.1) and last-edited date per the mandatory file-header rule.",
+          "3. Bump the sentinel from `versionGroupBackfillKey = \"system:backfill:versiongroup_index_v2_done\"` to a v3 key (`..._v3_done`), following the same v1->v2 bump pattern documented at L23-30, so every deployment (including ones that already completed v2 under the narrower bounds) re-runs once under the wider bounds. This is MANDATORY, not optional — the bound fix has no effect on already-existing letter-leading book IDs unless the one-time gate is forced to re-run.",
+          "4. Add or extend a unit test with a synthetic book ID starting with a letter (e.g. 'A01...') stored under `book:A01...`, asserting it is now included by the widened scan and correctly indexed if it has a VersionGroupID."
+        ]}
+      }
+    ]
+  },
+  {
+    "task_id": "TASK-025",
+    "verdict": "pass",
+    "findings": [
+      {
+        "severity": "advisory",
+        "check": 2,
+        "problem": "Source: line's re-find grep `grep -n \"Make WipeAllActivity cancellab\" TODO.md` returns ZERO hits — real TODO.md text at line 1970 is '- [ ] **`WipeAllActivity` still does an uncancellable full scan on a request...**' (backtick-wrapped, differently phrased). Approximate line ~1970 correctly lands on the item, so not blocking. All 4 re-verify anchors (interface signature, context.Background() hardcode, the 4 implementations, the handleWipe call site) independently confirmed correct via grep; step-by-step file:line references are all accurate; scope (interface + exactly 4 implementations + 1 call site) is complete — no 5th implementation exists anywhere in the tree."
+      }
+    ]
+  }
+]

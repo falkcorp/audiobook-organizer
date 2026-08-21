@@ -144,7 +144,8 @@
   "notes": "Owner decision context: this item's own instructions require the alias migration (see item text 'Migration matters \u2014 do not do a bare rename'). review_critical=true because a broken alias silently changes whether the app writes tags to the user's audio files during auto-fetch, in prod, without any explicit action.",
   "review_notes": [
    "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin",
-   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin"
+   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin",
+   "[ops-rollback.json] The config rename is forward-compatible but not BACKWARD-compatible, so the PR cannot be cleanly reverted. After it lands the app persists only the new key auto_write_tags_on_fetch (step 4 adds a new save case); roll the binary back and the old code reads write_back_metadata, which the new binary ne"
   ]
  },
  {
@@ -249,7 +250,8 @@
   "notes": "Part of CFG-AUDIT triage decision #1 from the owner's 2026-08-21 list (item 8 in the decisions is about review_apply_enabled, not this \u2014 this sub-item is independently actionable and not blocked by any owner decision).",
   "review_notes": [
    "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA",
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
+   "[ops-rollback.json] TASK-139 converts an option that currently cannot disable rate limiting into one that can, i.e. it makes a fail-open switch live - and it is marked review_critical=false, sonnet tier, with no step to check what production has persisted. The code's own warning text calls the disabled state 'vulnerabl"
   ]
  },
  {
@@ -776,7 +778,8 @@
   "notes": "Combine with part 2 (metadata: prefix reformat) in the same PR since both touch the same renderChip function and same file.",
   "review_notes": [
    "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for "
+   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
+   "[correctness.json] Three tasks redefine what the Browse-by-Tag cloud shows, using two INCOMPATIBLE definitions of 'hide', in the same and adjacent waves, with no depends_on between them. TASK-169 (wave 1, frontend) hides by NAMESPACE (dedup:*, metadata:source:*). TASK-040 (wave 1, backend) changes /tags to return only"
   ]
  },
  {
@@ -831,7 +834,8 @@
   "gate": "npm --prefix web run lint && npm --prefix web test",
   "notes": "Ship in the same PR as part 1 (same file, same renderChip function).",
   "review_notes": [
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n"
+   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
+   "[correctness.json] Three tasks redefine what the Browse-by-Tag cloud shows, using two INCOMPATIBLE definitions of 'hide', in the same and adjacent waves, with no depends_on between them. TASK-169 (wave 1, frontend) hides by NAMESPACE (dedup:*, metadata:source:*). TASK-040 (wave 1, backend) changes /tags to return only"
   ]
  },
  {

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e9405629-f9a9-44ef-afa2-1dff0077b312 -->
+<!-- guid: f7cf8ca2-3d62-483c-9873-e521589b6882 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — docs workstream (todo-completion)
@@ -12,18 +12,15 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK055[TASK-055 record-the-docs-system-vs-to]
-      TASK056[TASK-056 write-file-header-for-the-35]
-      TASK057[TASK-057 delete-the-34-group-relative]
-      TASK058[TASK-058 triage-the-16-removed-post-m]
-      TASK059[TASK-059 delete-the-torrents-group-re]
-      TASK060[TASK-060 re-verify-docs-reference-abs]
-      TASK061[TASK-061 document-the-todo-d-fragment]
-      TASK062[TASK-062 consolidate-the-august-execu]
-      TASK063[TASK-063 phase-8-write-the-abs-topolo]
-      TASK064[TASK-064 update-execution-manifest-do]
-      TASK065[TASK-065 close-out-the-2026-05-01-re-]
-      TASK066[TASK-066 docs-truth-up-with-measured-]
+      TASK053[TASK-053 record-the-docs-system-vs-to]
+      TASK054[TASK-054 write-file-header-for-the-35]
+      TASK055[TASK-055 delete-the-34-group-relative]
+      TASK056[TASK-056 re-verify-docs-reference-abs]
+      TASK057[TASK-057 document-the-todo-d-fragment]
+      TASK058[TASK-058 consolidate-the-august-execu]
+      TASK059[TASK-059 phase-8-write-the-abs-topolo]
+      TASK060[TASK-060 update-execution-manifest-do]
+      TASK061[TASK-061 docs-truth-up-with-measured-]
     end
 
 ```
@@ -48,9 +45,14 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 > files); 3) file-copy cherry-pick fallback — re-apply the task's file states onto a
 > fresh branch from HEAD; 4) mark `rebase_blocked`, stop the lane, escalate to a human.
 >
-> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR; any
-> sibling worktree is un-rebased; the gate is red on `origin/main`; or a
-> `rebase_blocked` marker is unresolved.
+> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR that is
+> NOT a held review-critical PR; any sibling worktree is un-rebased; the gate is red on
+> `origin/main`; or a `rebase_blocked` marker is unresolved.
+>
+> **Held PRs (review-critical / prod-data path):** the coordinator opens the PR and
+> STOPS — never `gh pr merge`. A held PR does not block the wave; only tasks that share a
+> file with it are deferred to a `held-dependent` queue and dispatched after the owner
+> merges it. The owner sees the held list in the coordinator's status report.
 
 ## Run it
 

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 9b782bf4-92af-4e80-94c3-7fa377979501 -->
+<!-- guid: b1dd281f-6d3b-478a-91c3-79b5d35accee -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — server-handlers workstream (todo-completion)
@@ -12,35 +12,35 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK152[TASK-152 expose-unmergeauto-through-a]
-      TASK153[TASK-153 n-3-stop-advertising-delete-]
-      TASK155[TASK-155 n-6-log-metric-when-listenin]
-      TASK158[TASK-158 detect-multi-file-books-whos]
-      TASK160[TASK-160 bound-the-itunes-search-hand]
-      TASK161[TASK-161 implement-post-api-session-l]
-      TASK163[TASK-163 move-tasks-and-maintenance-w]
+      TASK147[TASK-147 expose-unmergeauto-through-a]
+      TASK148[TASK-148 n-3-stop-advertising-delete-]
+      TASK150[TASK-150 n-6-log-metric-when-listenin]
+      TASK153[TASK-153 detect-multi-file-books-whos]
+      TASK155[TASK-155 bound-the-itunes-search-hand]
+      TASK156[TASK-156 implement-post-api-session-l]
+      TASK158[TASK-158 move-tasks-and-maintenance-w]
     end
     subgraph Wave2
-      TASK156[TASK-156 n-10-advertised-login-rate-l]
-      TASK159[TASK-159 document-the-hardcoded-abs-t]
-      TASK162[TASK-162 implement-post-api-session-l]
-      TASK164[TASK-164 phase-7-socket-io-for-absorb]
-      TASK165[TASK-165 parallelize-the-per-candidat]
+      TASK151[TASK-151 n-10-advertised-login-rate-l]
+      TASK154[TASK-154 document-the-hardcoded-abs-t]
+      TASK157[TASK-157 implement-post-api-session-l]
+      TASK159[TASK-159 phase-7-socket-io-for-absorb]
+      TASK160[TASK-160 parallelize-the-per-candidat]
+    end
+    subgraph Wave3
+      TASK149[TASK-149 n-5-search-narrators-must-om]
     end
     subgraph Wave4
-      TASK154[TASK-154 n-5-search-narrators-must-om]
+      TASK152[TASK-152 align-abs-conformance-fixtur]
     end
-    subgraph Wave5
-      TASK157[TASK-157 align-abs-conformance-fixtur]
-    end
-    TASK152 --> TASK165
-    TASK153 --> TASK156
-    TASK153 --> TASK157
-    TASK154 --> TASK157
-    TASK155 --> TASK157
+    TASK147 --> TASK160
+    TASK148 --> TASK151
+    TASK148 --> TASK152
+    TASK149 --> TASK152
+    TASK150 --> TASK152
+    TASK151 --> TASK152
+    TASK153 --> TASK154
     TASK156 --> TASK157
-    TASK158 --> TASK159
-    TASK161 --> TASK162
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -63,9 +63,14 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 > files); 3) file-copy cherry-pick fallback — re-apply the task's file states onto a
 > fresh branch from HEAD; 4) mark `rebase_blocked`, stop the lane, escalate to a human.
 >
-> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR; any
-> sibling worktree is un-rebased; the gate is red on `origin/main`; or a
-> `rebase_blocked` marker is unresolved.
+> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR that is
+> NOT a held review-critical PR; any sibling worktree is un-rebased; the gate is red on
+> `origin/main`; or a `rebase_blocked` marker is unresolved.
+>
+> **Held PRs (review-critical / prod-data path):** the coordinator opens the PR and
+> STOPS — never `gh pr merge`. A held PR does not block the wave; only tasks that share a
+> file with it are deferred to a `held-dependent` queue and dispatched after the owner
+> merges it. The owner sees the held list in the coordinator's status report.
 
 ## Run it
 

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/organize/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 743f66d6-c699-4dd6-95f2-487f79576570 -->
+<!-- guid: bc585794-c126-47e2-bf43-e0bf51420a3c -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — organize workstream (todo-completion)
@@ -12,14 +12,14 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK128[TASK-128 replace-the-size-equality-he]
-      TASK130[TASK-130 make-resolveorganizedfilepat]
-      TASK131[TASK-131 add-an-edition-suffix-folder]
+      TASK123[TASK-123 replace-the-size-equality-he]
+      TASK125[TASK-125 make-resolveorganizedfilepat]
+      TASK126[TASK-126 add-an-edition-suffix-folder]
     end
     subgraph Wave4
-      TASK129[TASK-129 route-the-three-organize-ren]
+      TASK124[TASK-124 route-the-three-organize-ren]
     end
-    TASK128 --> TASK129
+    TASK123 --> TASK124
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -42,9 +42,14 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 > files); 3) file-copy cherry-pick fallback — re-apply the task's file states onto a
 > fresh branch from HEAD; 4) mark `rebase_blocked`, stop the lane, escalate to a human.
 >
-> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR; any
-> sibling worktree is un-rebased; the gate is red on `origin/main`; or a
-> `rebase_blocked` marker is unresolved.
+> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR that is
+> NOT a held review-critical PR; any sibling worktree is un-rebased; the gate is red on
+> `origin/main`; or a `rebase_blocked` marker is unresolved.
+>
+> **Held PRs (review-critical / prod-data path):** the coordinator opens the PR and
+> STOPS — never `gh pr merge`. A held PR does not block the wave; only tasks that share a
+> file with it are deferred to a `held-dependent` queue and dispatched after the owner
+> merges it. The owner sees the held list in the coordinator's status report.
 
 ## Run it
 

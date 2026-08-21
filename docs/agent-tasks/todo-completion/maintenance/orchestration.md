@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 5867ce98-9ee4-4c91-8a08-bd0a496daae4 -->
+<!-- guid: ac4db05b-18f4-4d6a-bfcf-28299865e0b2 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — maintenance workstream (todo-completion)
@@ -12,29 +12,31 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK076[TASK-076 build-a-report-only-counter-]
-      TASK077[TASK-077 give-maintenance-jobs-v1-int]
-      TASK079[TASK-079 build-a-detection-only-repor]
-      TASK081[TASK-081 read-through-audit-of-the-8-]
-      TASK082[TASK-082 build-a-report-only-census-o]
-      TASK083[TASK-083 extend-purge-empty-authors-r]
-      TASK084[TASK-084 author-narrator-swap-repair-]
-      TASK085[TASK-085 narrow-the-3-remaining-maint]
-      TASK086[TASK-086 task-04-build-the-idempotent]
+      TASK069[TASK-069 wire-a-durable-freshness-sta]
+      TASK071[TASK-071 build-a-report-only-counter-]
+      TASK072[TASK-072 give-maintenance-jobs-v1-int]
+      TASK074[TASK-074 build-a-detection-only-repor]
+      TASK076[TASK-076 read-through-audit-of-the-8-]
+      TASK077[TASK-077 build-a-report-only-census-o]
+      TASK078[TASK-078 extend-purge-empty-authors-r]
+      TASK079[TASK-079 author-narrator-swap-repair-]
+      TASK080[TASK-080 narrow-the-3-remaining-maint]
+      TASK081[TASK-081 task-04-build-the-idempotent]
     end
     subgraph Wave2
-      TASK074[TASK-074 wire-a-durable-freshness-sta]
-      TASK075[TASK-075 extend-the-repoint-repair-to]
-      TASK080[TASK-080 new-maintenance-op-merge-an-]
+      TASK070[TASK-070 extend-the-repoint-repair-to]
     end
-    subgraph Wave6
-      TASK078[TASK-078 add-a-user-configurable-acti]
+    subgraph Wave3
+      TASK075[TASK-075 new-maintenance-op-merge-an-]
     end
-    TASK074 --> TASK078
-    TASK076 --> TASK075
-    TASK079 --> TASK080
-    TASK081 --> TASK078
-    TASK095 --> TASK080
+    subgraph Wave5
+      TASK073[TASK-073 add-a-user-configurable-acti]
+    end
+    TASK069 --> TASK073
+    TASK071 --> TASK070
+    TASK074 --> TASK075
+    TASK076 --> TASK073
+    TASK090 --> TASK075
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -57,9 +59,14 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 > files); 3) file-copy cherry-pick fallback — re-apply the task's file states onto a
 > fresh branch from HEAD; 4) mark `rebase_blocked`, stop the lane, escalate to a human.
 >
-> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR; any
-> sibling worktree is un-rebased; the gate is red on `origin/main`; or a
-> `rebase_blocked` marker is unresolved.
+> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR that is
+> NOT a held review-critical PR; any sibling worktree is un-rebased; the gate is red on
+> `origin/main`; or a `rebase_blocked` marker is unresolved.
+>
+> **Held PRs (review-critical / prod-data path):** the coordinator opens the PR and
+> STOPS — never `gh pr merge`. A held PR does not block the wave; only tasks that share a
+> file with it are deferred to a `held-dependent` queue and dispatched after the owner
+> merges it. The owner sees the held list in the coordinator's status report.
 
 ## Run it
 

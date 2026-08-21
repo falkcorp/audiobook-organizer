@@ -1274,8 +1274,14 @@
   "verdict_evidence": "No SupportsDryRun/DryRunParams field exists on OperationDef today: `grep -n 'type OperationDef struct' -A 200 internal/operations/registry/types.go | grep -i 'dryrun'` -> 0 hits, and `grep -rn 'DryRunParams\\|SupportsDryRun' --include='*.go' .` -> 0 hits (excluding tests). The motivating case in the item (maintenance.transcribe-book-intros having NO dry_run) is itself already fixed (`grep -n 'DryRun \\*bool' internal/plugins/maintenance/intro_transcribe.go` -> 1 hit ~L90, defaulting true per a 2026-08-07 comment) \u2014 but the systemic ask (declared on OperationDef, enforced at registration for ops declaring CapLibraryWrite) remains unbuilt.",
   "domain": "internal/operations/registry",
   "exact_files": [
+   "internal/operations/registry/registry.go",
    "internal/operations/registry/types.go",
-   "internal/operations/registry/registry.go"
+   "internal/plugins/acoustid/*.go",
+   "internal/plugins/dedup/*.go",
+   "internal/plugins/deluge/centralization.go",
+   "internal/plugins/maintenance/*.go",
+   "internal/scheduler/extra_ops.go",
+   "internal/server/*_ops.go"
   ],
   "verified_anchors": [
    {
@@ -1343,7 +1349,10 @@
   "notes": "This is a repo-wide contract change (large blast radius across every maintenance op) \u2014 per CLAUDE.md's Fix It Right rule, do the real registry-level enforcement rather than a narrower per-op-only fix, but expect this to be its own multi-PR effort given effort L / tier opus.",
   "review_notes": [
    "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th"
+   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th",
+   "[correctness.json] TASK-105 adds a NEW required field (SupportsDryRun) to OperationDef and makes ValidateOpDef reject any CapLibraryWrite def that leaves it false. SupportsDryRun does not exist anywhere in the repo today, so every write-capable def defaults to false the moment step 2 lands. ValidateOpDef is called by ",
+   "[ops-rollback.json] TASK-107 adds a new rejection rule to ValidateOpDef, which is the server BOOT contract - a def it rejects makes the server refuse to start - and then explicitly authorises leaving non-compliant ops non-compliant: step 3 says to flag write-capable ops without dry_run support 'as a follow-up per-op ta",
+   "[ops-rollback.json] The task title says 'declare AND enforce dry_run support at the registry', but every step only implements DECLARE. SupportsDryRun is a self-asserted bool with nothing tying it to the op actually honouring a dry_run/apply param; step 3 tells the agent to set it true on ops that 'already implement a d"
   ]
  },
  {

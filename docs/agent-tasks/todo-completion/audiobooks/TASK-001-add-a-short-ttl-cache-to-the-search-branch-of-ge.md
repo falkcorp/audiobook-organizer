@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-001-add-a-short-ttl-cache-to-the-search-branch-of-ge.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 02bb98e4-1e08-4991-8fd0-9132fd108736 -->
+<!-- guid: c8658a0b-ca4c-44ce-8441-40fab4df2848 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-001 — Add a short-TTL cache to the search branch of GetAudiobooksWithTotal (explicit first-cut, defer full dirty-set wiring) (SEARCH-CACHE)
 
-**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · audiobooks subagent · **Why:** Cache-key composition must be exhaustive (query, limit, offset, UserID-when-per-user-active, sort field/direction, every post-filtering ListFilters value) or it silently serves wrong results across users — needs care enumerating every filter that participates in post-filtering, not just the obvious ones. · **Depends on:** TASK-025 · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · audiobooks subagent · **Why:** Cache-key composition must be exhaustive (query, limit, offset, UserID-when-per-user-active, sort field/direction, every post-filtering ListFilters value) or it silently serves wrong results across users — needs care enumerating every filter that participates in post-filtering, not just the obvious ones. · **Depends on:** TASK-023 · **Wave:** 3 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 1980 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**SEARCH-CACHE**" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-03.json`.
 
@@ -105,6 +105,8 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n — ...` / `BLOCKED: n — ...`); the coordinator owns push/PR/merge. Do NOT run `git push`, `gh pr`, or any merge.
 
 ## Idempotency / Rollback
+
+**This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: (1) the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; (2) every mutation is journaled through the existing undo ledger (`CreateOperationChange` — verify: `grep -rn "func.*CreateOperationChange" internal/database/*.go`) so `internal/undo` can replay it — a mutation without a journal row is a defect; (3) acceptance includes a test that applies on a fixture and then undoes via `internal/undo` and asserts the fixture is byte-identical; (4) the apply path refuses to start while a `library.scan` operation is running or queued (check the registry for an active scan before mutating — a running scan clobbers applied metadata). Idempotency: re-running in dry-run must report 0 pending changes after a successful apply. Rollback of the CODE = `git revert`; rollback of the DATA = the undo ledger, which is why (2) is not optional. PR stays open for the owner — the coordinator never admin-merges it.
 
 If the first acceptance check below already passes at HEAD (``go test ./internal/audiobooks/...` passes including the new cache-key tests.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 

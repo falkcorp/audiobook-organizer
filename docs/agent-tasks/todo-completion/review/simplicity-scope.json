@@ -1,0 +1,254 @@
+{
+  "lens": "simplicity-scope",
+  "verdict": "CHALLENGED",
+  "findings": [
+    {
+      "severity": "blocker",
+      "task_ids": ["ALL-175", "TASK-059", "TASK-173", "TASK-174", "TASK-175", "TASK-170", "TASK-171", "TASK-135", "TASK-136", "TASK-080", "TASK-082", "TASK-083", "TASK-084", "TASK-106", "TASK-107", "TASK-158", "TASK-159", "TASK-143", "TASK-145"],
+      "problem": "TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` — closed 2026-08-21 (TASK-nnn)`', i.e. 175 concurrent direct edits to one file, 107 of them inside global wave 1. Worse, 46 tasks share 20 TODO.md source LINES, and several of those pairs/triples are scheduled in the SAME wave (L10660 -> TASK-173/174/175 all wave 1; L4960 -> TASK-170/171 both wave 1; L4575 -> TASK-135/136 both wave 1; L2595 -> TASK-080/082/083/084 all wave 1; L8646 -> TASK-106/107 both wave 1; L0 -> TASK-158/159 both wave 1; L53 -> TASK-143/145 both wave 1) — those conflict on the same line, and semantically the box must not be checked until every sibling task lands. The master plan this package derives from warned about exactly this and prescribed the opposite shape.",
+      "evidence": "grep -rl 'check the box' --include='TASK-*.md' . | wc -l -> 175 (of 175 briefs). python: [t['id'] for t in tasks if 'TODO.md' in t['exact_files']] -> ['TASK-059'] only; 'TODO.md' in skeleton['collisions'] -> False. Duplicate-todo_line groups computed from skeleton: 20 lines shared by 46 tasks. Master plan docs/plans/2026-08-21-todo-completion-master-plan.md:210-212: '⚠️ **Every task in this wave collides on `TODO.md`.** Either run it serially, or have one agent verify all 37 and a single commit apply all the check-offs. The second shape is strongly preferred.'",
+      "fix": {
+        "remove_from_briefs": "Delete the 'check the box' clause from all 175 briefs.",
+        "new_task": "Add a single coordinator-owned close-out task (one commit, run after each wave merges) that checks off every TODO.md line whose covering tasks have all landed, keyed by todo_line -> set(task_ids).",
+        "exact_files": {"TASK-059": ["TODO.md"]},
+        "note": "If the per-brief edit is kept instead, TODO.md must be added to skeleton['collisions'] with all 175 ids, which collapses the entire plan to a strictly serial 175-wave schedule."
+      }
+    },
+    {
+      "severity": "blocker",
+      "task_ids": ["TASK-068", "TASK-072", "TASK-076", "TASK-078", "TASK-103", "TASK-104", "TASK-105", "TASK-111", "TASK-112", "TASK-114", "TASK-045", "TASK-071", "TASK-074"],
+      "problem": "internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never register — the op is written and unreachable, the exact failure shape recorded in project memory as 'Declaring you participate != being in the list' — and (b) the collision matrix shows plugin.go as a 3-task file (TASK-045/071/074) when it is really a 13-task hub, so those ten tasks are mis-waved and will conflict.",
+      "evidence": "grep -n 'Register|Op{' internal/plugins/maintenance/plugin.go -> L31 '// Register registers all maintenance OperationDefs with the UOS registry.', L32 'func (p *Plugin) Register(r sdk.Registry) error {', L33 'defs := []sdk.OperationDef{' followed by ~60 `p.<name>Def(),` entries, L147 'if err := r.RegisterOp(d); err != nil {'. Existence check at HEAD: all of filepath_collision_report.go, author_duplicate_merge.go, author_narrator_swap_review.go, backfill_sync_id.go, transcribe_status_drift_report.go, version_group_acoustic_audit.go, multidisc_snapshot.go, first_aid_orchestrator.go, combine_by_template.go, chapters_backfill_from_duplicate.go are NEW (test -f -> absent). skeleton['collisions']['internal/plugins/maintenance/plugin.go'] == ['TASK-045','TASK-071','TASK-074'].",
+      "fix": {
+        "exact_files": {
+          "TASK-068": ["internal/plugins/maintenance/plugin.go"],
+          "TASK-072": ["internal/plugins/maintenance/plugin.go"],
+          "TASK-076": ["internal/plugins/maintenance/plugin.go"],
+          "TASK-078": ["internal/plugins/maintenance/plugin.go"],
+          "TASK-103": ["internal/plugins/maintenance/plugin.go"],
+          "TASK-104": ["internal/plugins/maintenance/plugin.go"],
+          "TASK-105": ["internal/plugins/maintenance/plugin.go"],
+          "TASK-111": ["internal/plugins/maintenance/plugin.go"],
+          "TASK-112": ["internal/plugins/maintenance/plugin.go"],
+          "TASK-114": ["internal/plugins/maintenance/plugin.go"]
+        },
+        "note": "13 tasks serialized on one registration slice is unworkable. Better: change the registration shape first (per-file `init()` self-registration or a generated defs list) as a prerequisite task, so new-op tasks stay parallel-safe. Otherwise add an acceptance criterion 'the op appears in `curl /api/v2/operations`' to each — a compile-clean unregistered op passes every current acceptance check."
+      }
+    },
+    {
+      "severity": "blocker",
+      "task_ids": ["TASK-029", "TASK-035", "TASK-038", "TASK-040"],
+      "problem": "Tasks that add a method to a database sub-interface omit the mock implementations from exact_files, so they cannot compile, and the collision matrix under-counts the two hottest mock files. `database.Store` embeds BookStore/NarratorStore/TagStore, and both MockStore implementations are compile-asserted against it. TASK-029 adds GetBooksBySeriesIDAllVersions to internal/database/iface_book.go and lists only iface_book.go, memdb_reads.go, pebble_store.go, series_dedup.go — no mock_store.go (a hard compile break) and no mocks/mock_store.go. TASK-035 (iface_catalog.go), TASK-038 (iface_tags.go) and TASK-040 list mock_store.go but not the mockery-generated mocks/mock_store.go.",
+      "evidence": "grep -n 'var _ .*Store = ' internal/database/mock_store.go -> 'internal/database/mock_store.go:30:var _ Store = (*MockStore)(nil)'. grep -n 'BookStore|TagStore|NarratorStore' internal/database/store.go -> L57 BookStore, L60 NarratorStore, L95 TagStore (all embedded in Store). .mockery.yaml:21 'Store:' generates internal/database/mocks/mock_store.go; grep -c 'func (_mock \\*MockStore)' internal/database/mocks/mock_store.go -> 398. skeleton['collisions']['internal/database/mock_store.go'] lists 7 tasks (TASK-028/030/034/035/038/040/139) — TASK-029 missing; ['internal/database/mocks/mock_store.go'] lists 2 (TASK-028/139) — TASK-029/035/038/040 missing.",
+      "fix": {
+        "exact_files": {
+          "TASK-029": ["internal/database/mock_store.go", "internal/database/mocks/mock_store.go"],
+          "TASK-035": ["internal/database/mocks/mock_store.go"],
+          "TASK-038": ["internal/database/mocks/mock_store.go"],
+          "TASK-040": ["internal/database/mocks/mock_store.go"]
+        }
+      }
+    },
+    {
+      "severity": "blocker",
+      "task_ids": ["TASK-173", "TASK-174", "TASK-175", "TASK-158", "TASK-159", "TASK-160", "TASK-161", "TASK-162", "TASK-163", "TASK-172"],
+      "problem": "The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` — the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | npm --prefix web run lint ...'), which pipes go's output into npm. The per-workstream README/orchestration then concatenates the distinct gate strings with `;` into one command block presented as 'Gate for every task in this workstream', producing an unrunnable five-clause string that also re-runs the web suite three times.",
+      "evidence": "python Counter over skeleton tasks['gate'] -> 10 tasks with 'npm --prefix web run lint && npm --prefix web test (web)'; 1 with 'make ci  (Go) | npm --prefix web run lint && npm --prefix web test (web)' (TASK-070). web/README.md and web/orchestration.md render: 'make ci && npm --prefix web run lint && npm --prefix web test ; npm --prefix web run lint && npm --prefix web test ; npm --prefix web run lint && npm --prefix web test (web) ; npm --prefix web run lint && npx playwright test ... ; ...'.",
+      "fix": {
+        "gate": {
+          "web-tasks": "npm --prefix web run lint && npm --prefix web test",
+          "TASK-070": "make ci && npm --prefix web run lint && npm --prefix web test"
+        },
+        "note": "The '(Go)'/'(web)' annotations belong in prose, never inside the gate value. The workstream README should print the DISTINCT gate set as a list, not a `;`-joined command."
+      }
+    },
+    {
+      "severity": "blocker",
+      "task_ids": ["TASK-160"],
+      "problem": "exact_files contains a prose sentence instead of a path: 'internal/server/handlers/setup.go (or wherever the setup-wizard's other server-side calls live — confirm exact file)'. Any mechanical consumer of exact_files (the collision matrix, the wave computation, the coordinator's rebase/conflict check) treats that whole string as a filename, so the real file TASK-160 will edit participates in no collision edge at all. TASK-160 is scheduled in web wave 1 alongside 10 other tasks.",
+      "evidence": "skeleton tasks -> TASK-160.exact_files == ['internal/server/handlers/setup.go (or wherever the setup-wizard\\'s other server-side calls live — confirm exact file)', 'web/src/components/wizard/WelcomeWizard.tsx']. That string is not a key in skeleton['collisions'].",
+      "fix": {
+        "verdict_override": "hold TASK-160 until the scout resolves the server-side file",
+        "exact_files": {"TASK-160": ["web/src/components/wizard/WelcomeWizard.tsx"]},
+        "note": "Add a schema lint to the generator: every exact_files entry must satisfy `test -e` at HEAD or be marked `new: true`."
+      }
+    },
+    {
+      "severity": "major",
+      "task_ids": ["TASK-161", "TASK-164", "TASK-165", "TASK-166", "TASK-167", "TASK-168", "TASK-169", "TASK-018", "TASK-019", "TASK-020", "TASK-021", "TASK-070"],
+      "problem": "Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN §'Same-file collision rule' is subtitled 'drives wave ordering — GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1). But web/README.md's wave table says 'Wave 2 | prereq: wave 1 merged + siblings rebased', and web/orchestration.md renders only web's own tasks in each subgraph. A coordinator working from web/orchestration.md starts TASK-161 once web's 11 wave-1 tasks merge; a coordinator working from BREAKDOWN waits for all 107. Under the local reading, cross-workstream collisions break outright: internal/config/config.go is serialized as wave1=TASK-016(config) ... wave7=TASK-070(maintenance), but maintenance's local wave 7 has no relationship to config's local wave 6, so TASK-021 and TASK-070 can run concurrently on config.go.",
+      "evidence": "BREAKDOWN-2026-08-21.md:20 '### ⚠️ Same-file collision rule (drives wave ordering — GLOBAL across workstreams)' and the line after the table 'Waves: wave 1: 107, wave 2: 36, wave 3: 12, wave 4: 8, wave 5: 3, wave 6: 4, wave 7: 4, wave 8: 1.' vs web/README.md wave table rows '| 2 | TASK-161 | wave 1 merged + siblings rebased |'. Per-ws wave spans computed from skeleton: maintenance {1:7, 2:4, 3:1, 7:1} — waves 4,5,6 empty, which only makes sense globally.",
+      "fix": {
+        "note": "Rename the field to `global_wave` and have every workstream doc print 'Global wave N' plus the full cross-workstream membership of that wave, or drop waves entirely in favour of the per-file `depends_on` edges (which are already computable and strictly less blocking)."
+      }
+    },
+    {
+      "severity": "major",
+      "task_ids": ["TASK-006", "TASK-007", "TASK-022", "TASK-023", "TASK-096", "TASK-106", "TASK-113"],
+      "problem": "The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds — every one of them including the slowest task in the batch — before wave 2's 36 tasks may begin, and 5 of the 8 waves contain 4 tasks or fewer. The barrier buys nothing the pairwise collision edges do not already buy: two tasks with disjoint exact_files are safe regardless of which wave they are in.",
+      "evidence": "BREAKDOWN 'Waves: wave 1: 107, wave 2: 36, wave 3: 12, wave 4: 8, wave 5: 3, wave 6: 4, wave 7: 4, wave 8: 1.'; BREAKDOWN 'Concurrency cap: 4 workers at a time on this machine. 16 concurrent agents crashed the session on 2026-08-21.'; orchestration.md 'A wave MUST NOT start while any of: the previous wave has an unmerged PR; any sibling worktree is un-rebased; ...'.",
+      "fix": {
+        "note": "Replace the wave barrier with a ready-queue: a task is dispatchable when every task sharing one of its exact_files (and every depends_on) has merged. Same safety, no global stalls, and it degrades gracefully when one task blocks."
+      }
+    },
+    {
+      "severity": "major",
+      "task_ids": ["TASK-016", "TASK-017", "TASK-018", "TASK-019", "TASK-020", "TASK-128"],
+      "problem": "Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing line in ResetToDefaults) are each a one-to-three-line edit to the same struct, in the same package, with the same reviewer and the same test file. Four PRs, four CI runs, four rebases of every sibling worktree, four TODO.md edits to the same line.",
+      "evidence": "skeleton todo_line grouping: L1317 n=5 [TASK-017 config w2, TASK-018 config w3, TASK-019 config w4, TASK-020 config w5, TASK-128 server w3]; plus TASK-016 (L1247) also on config.go. sed -n '1317p' TODO.md -> '- [ ] **CFG-AUDIT** Triage the findings in'. BREAKDOWN collision row: 'internal/config/config.go | TASK-016..TASK-021, TASK-070 | serialize: wave1=TASK-016, wave2=TASK-017, wave3=TASK-018, wave4=TASK-019, wave5=TASK-020, wave6=TASK-021, wave7=TASK-070'. Per-ws wave counts: config tasks=6 waves=6 single-task-waves=6.",
+      "fix": {
+        "merge": ["TASK-017", "TASK-018", "TASK-019"],
+        "note": "One PR 'fix(config): correct three default-value drifts (CFG-AUDIT)'. This removes 2 waves from the config.go chain and 2 TODO.md races on L1317. TASK-020 (flag deletion, 8 files) and TASK-016 (key rename with alias migration) stay separate."
+      }
+    },
+    {
+      "severity": "major",
+      "task_ids": ["TASK-092", "TASK-161", "TASK-164", "TASK-165", "TASK-166", "TASK-167", "TASK-168", "TASK-169"],
+      "problem": "The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential — TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (version_group link) are the same feature applied to four field groups in the same component, and three of them also share BookDetailInfoTab.tsx. The plan solves a file conflict by adding six merge-and-rebase round trips instead of by merging four near-identical tasks into one PR.",
+      "evidence": "skeleton['collisions']['web/src/pages/Library.tsx'] -> 8 tasks; web/README.md 'serialize by wave (TASK-092=w1, TASK-161=w2, TASK-164=w3, TASK-165=w4, TASK-166=w5, TASK-167=w6, TASK-168=w7, TASK-169=w8)'. Per-ws wave counts: web tasks=18 waves=8 single-task-waves=7. TASK-166/167/168 all list web/src/components/bookdetail/BookDetailInfoTab.tsx; TASK-166/167 also share web/src/hooks/useLibraryQuery.ts.",
+      "fix": {
+        "merge": ["TASK-166", "TASK-167", "TASK-168", "TASK-169"],
+        "note": "One PR: 'feat(web): link book-detail metadata fields to filtered library views'. Collapses waves 5-8 into one and drops the Library.tsx chain from 8 to 5."
+      }
+    },
+    {
+      "severity": "major",
+      "task_ids": ["TASK-051", "TASK-052", "TASK-053"],
+      "problem": "Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) — literally the same operation, split — and TASK-052 triages 16 more. Three PRs on docs/api/openapi.json, three TODO.md edits to L296, and the box cannot honestly be checked until all three land.",
+      "evidence": "skeleton todo_line grouping: L296 n=3 [TASK-051 docs w1, TASK-052 docs w2, TASK-053 docs w3]. BREAKDOWN collision row 'docs/api/openapi.json | TASK-051, TASK-052, TASK-053 | serialize: wave1=TASK-051, wave2=TASK-052, wave3=TASK-053'. sed -n '296p' TODO.md -> '- [ ] **The OpenAPI spec still documents 48 endpoints that no router serves.** After the'.",
+      "fix": {
+        "merge": ["TASK-051", "TASK-053"],
+        "note": "At minimum fold TASK-053 into TASK-051 (identical operation on adjacent keys). Ideally all three become one 'openapi spec truth-up' PR with three commits."
+      }
+    },
+    {
+      "severity": "major",
+      "task_ids": ["TASK-028", "TASK-030", "TASK-034", "TASK-035", "TASK-038", "TASK-040", "TASK-139", "TASK-029"],
+      "problem": "internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TASK-139 at wave 7). Mock churn is a mechanical consequence of the interface edits, not independent work, and should not cost six merge round-trips.",
+      "evidence": "BREAKDOWN collision row: 'internal/database/mock_store.go | TASK-028, TASK-030, TASK-034, TASK-035, TASK-038, TASK-040, TASK-139 | serialize: wave1=TASK-028, wave2=TASK-030, wave3=TASK-034, wave4=TASK-035, wave5=TASK-038, wave6=TASK-040, wave7=TASK-139'. mock_store.go is hand-written (var _ Store = (*MockStore)(nil) at L30) while mocks/mock_store.go is mockery-generated (.mockery.yaml:21 'Store:').",
+      "fix": {
+        "note": "Exclude both mock files from the collision graph and make mock regeneration/patch-up a coordinator step run once per merge (it is deterministic: `mockery` for mocks/, and TASK-034's Func-field pattern for mock_store.go). Land TASK-034 FIRST as a mechanical pre-pass so later tasks add one Func field each instead of colliding on hand-written stubs."
+      }
+    },
+    {
+      "severity": "major",
+      "task_ids": ["TASK-165"],
+      "problem": "Over-scoped, and it is the hub that serializes the back half of the web workstream. TASK-165 lists 18 files ('Review the 17 apiFetch-callers' catch handlers for session-expiry messaging') and sits at web wave 4, where it collides with Library.tsx, BookDetail.tsx and DedupAcousticTab.tsx and therefore blocks TASK-166/167/168/169. The correct fix is one file: apiFetch already exists as a single chokepoint, so session-expiry messaging belongs in it (or in one shared error-formatting helper), not copy-edited into 17 catch blocks.",
+      "evidence": "skeleton TASK-165.exact_files has 18 entries incl. web/src/pages/Library.tsx, web/src/pages/BookDetail.tsx, web/src/components/dedup/DedupAcousticTab.tsx. grep -rn 'export .*apiFetch' web/src -> 'web/src/utils/apiFetch.ts:150:export async function apiFetch(url: string, options: ApiFetchOptions = {}): Promise<Response>'. web/README.md serialize rows put TASK-165 at w4 in three separate collision chains.",
+      "fix": {
+        "exact_files": {"TASK-165": ["web/src/utils/apiFetch.ts", "web/src/utils/apiFetch.test.ts"]},
+        "note": "Re-scope to 'centralize session-expiry detection+messaging in apiFetch.ts and delete the per-caller duplication', with a follow-up sweep task only for callers that genuinely need bespoke copy. This removes TASK-165 from three collision chains at once."
+      }
+    },
+    {
+      "severity": "major",
+      "task_ids": ["TASK-150"],
+      "problem": "Two different deliverables in one task: TASK-150 both writes an audit document (docs/audits/2026-08-21-apply-endpoint-fileio-audit.md) and edits six production handlers (ai.go, diagnostics.go, metadata/handler.go, metadata_cache.go, organize.go, review/handler.go) to add missing tag/file-I/O writeback. It is review_critical and touches apply paths — per the master plan those are 'SINGLE-AGENT (strong model)' work — yet the audit half is read-only and parallel-safe, and bundling them means the reviewer cannot approve the finding set before the writes land.",
+      "evidence": "skeleton TASK-150.exact_files = ['docs/audits/2026-08-21-apply-endpoint-fileio-audit.md', 'internal/server/handlers/ai.go', 'internal/server/handlers/diagnostics.go', 'internal/server/handlers/metadata/handler.go', 'internal/server/handlers/metadata_cache.go', 'internal/server/handlers/organize.go', 'internal/server/handlers/review/handler.go']; review_critical=true. Master plan §4 Wave 3: 'Any item on a prod-data path is SINGLE-AGENT (strong model) and never weak-tier — ... organize/rename.'",
+      "fix": {
+        "split": {
+          "TASK-150a": {"exact_files": ["docs/audits/2026-08-21-apply-endpoint-fileio-audit.md"], "polarity": "report-only"},
+          "TASK-150b": {"depends_on": ["TASK-150a"], "note": "one PR per handler, or one PR gated on owner sign-off of the audit"}
+        }
+      }
+    },
+    {
+      "severity": "major",
+      "task_ids": ["TASK-102", "TASK-097"],
+      "problem": "TASK-102 is 'TypeScript 6.0.3 → 7.0.2 migration', tier Opus / effort L, with exact_files = ['web/package.json'] — a single dependency-version string. A TS major bump changes compiler defaults and will touch web/tsconfig.json (and web/tsconfig.node.json) plus every source file that trips a new error; none are listed. web/package-lock.json must also change and is listed by neither TASK-102 nor TASK-097 (the other package.json editor), so a lockfile conflict between them is invisible to the matrix.",
+      "evidence": "skeleton TASK-102 -> tier 'opus', effort 'L', exact_files ['web/package.json']. Repo at HEAD: ls web/tsconfig*.json -> web/tsconfig.json, web/tsconfig.node.json; grep -n '\"typescript\"' web/package.json -> '63:    \"typescript\": \"^6.0.3\",'; web/package-lock.json exists. skeleton['collisions']['web/package.json'] -> ['TASK-097','TASK-102'] (no package-lock.json key anywhere in collisions).",
+      "fix": {
+        "exact_files": {
+          "TASK-102": ["web/tsconfig.json", "web/tsconfig.node.json", "web/package-lock.json"],
+          "TASK-097": ["web/package-lock.json"]
+        },
+        "note": "Effort L with one listed file means the scout never enumerated the blast radius. Either run a `npx tsc --noEmit` spike against 7.0.2 first and enumerate the breaks, or move TASK-102 to the needs_design bucket."
+      }
+    },
+    {
+      "severity": "major",
+      "task_ids": ["TASK-003", "TASK-004", "TASK-132", "TASK-133", "TASK-062", "TASK-063", "TASK-170", "TASK-171"],
+      "problem": "Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves — the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for exactly that, w4). TASK-132 (fix indexedStore soft-delete, w2) / TASK-133 ('Regression test: soft-deleting an indexed book must be unsearchable', w3). TASK-062 / TASK-063 are the same offset-pagination bug in the same file (internal/itunes/backfill.go), split into w1/w2 only because the second occurrence was 'not named in the TODO item'. TASK-170 / TASK-171 are the same mechanical 'retarget spec mocks to v2' edit from the same TODO line, both already in wave 1.",
+      "evidence": "skeleton: TASK-004.exact_files = ['internal/audiobooks/service_query_isprimary_conformance_test.go'], depends_on ['TASK-003']; TASK-133.exact_files = ['internal/server/indexed_store_test.go'], depends_on ['TASK-132']. todo_line grouping: L4208 n=2 [TASK-062 w1, TASK-063 w2]; L4960 n=2 [TASK-170 w1, TASK-171 w1]. TASK-063 title: 'BackfillITunesTrackPIDs: same offset-pagination bug, not named in the TODO item'.",
+      "fix": {
+        "merge": [["TASK-003", "TASK-004"], ["TASK-132", "TASK-133"], ["TASK-062", "TASK-063"], ["TASK-170", "TASK-171"]],
+        "note": "Merging these removes 4 waves and 4 sibling-rebase rounds and puts each fix's proof in the same commit as the fix."
+      }
+    },
+    {
+      "severity": "major",
+      "task_ids": ["TASK-143", "TASK-144", "TASK-145", "TASK-146", "TASK-147", "TASK-148"],
+      "problem": "One TODO line (L53, 'ABS coverage gaps N-1 … N-10') becomes four micro-tasks — each a handful of lines in the ABS DTO/browse/stats layer — spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four, and TASK-148 depends on TASK-147. Six PRs and four waves for what is one 'close the ABS N-gaps' change plus a fixture refresh, and TASK-143/145 are scheduled in the same wave while both editing the same TODO line.",
+      "evidence": "skeleton todo_line grouping: L53 n=4 [TASK-143 w1, TASK-144 w2, TASK-145 w1, TASK-146 w2]; TASK-147.depends_on = ['TASK-143','TASK-144','TASK-145','TASK-146'], TASK-148.depends_on = ['TASK-147']. Collisions: 'internal/server/handlers/abs/dto.go' -> [TASK-143, TASK-146]; 'internal/server/handlers/abs/browse.go' -> [TASK-089, TASK-144].",
+      "fix": {
+        "merge": ["TASK-143", "TASK-144", "TASK-145", "TASK-146"],
+        "note": "One PR 'fix(abs): close conformance gaps N-3/N-5/N-6/N-10' with four commits, then TASK-147 as its immediate follow-up. Removes one wave and both intra-group file collisions."
+      }
+    },
+    {
+      "severity": "major",
+      "task_ids": ["TASK-001", "TASK-002", "TASK-003", "TASK-004", "TASK-043", "TASK-046", "TASK-063", "TASK-086", "TASK-119", "TASK-122", "TASK-132", "TASK-133", "TASK-138", "TASK-140"],
+      "problem": "The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 — 38 tasks disagree. The rule appears to be 'review_critical => Opus-class', applied mechanically regardless of size: 12 of the 38 escalated tasks are effort S, including TASK-086 'Collapse internal whitespace in util.NormalizeAuthor' (a one-function change), TASK-043 'Add a dry-run parameter', TASK-122 'Add an {edition_suffix} folder-pattern token', and TASK-004/TASK-133 which are single test files. 37% of the run priced at Opus for changes a Sonnet review would cover.",
+      "evidence": "Counter(t['tier']) -> {'sonnet':109,'haiku':39,'opus':27}; Counter(t['tier_label']) -> {'Sonnet-class':73,'Opus-class':65,'Haiku-class':37}; 38 ids where tier != tier_label, all escalated to Opus-class, effort split {M:24, S:12, L:2}. BREAKDOWN §Method repeats the tier_label numbers ('Sonnet-class 73, Opus-class 65, Haiku-class 37') while the same document's briefs are generated from `tier`. BREAKDOWN §Cost: 'Opus-class only for review-critical / cross-cutting. Actual: Sonnet-class 73, Opus-class 65, Haiku-class 37.'",
+      "fix": {
+        "note": "Collapse to ONE tier field. Escalate on (review_critical AND effort != 'S') OR cross-file blast radius, not on review_critical alone; keep the review gate (PR stays open for the owner) independent of the model tier — the gate is what protects prod, not the model."
+      }
+    },
+    {
+      "severity": "major",
+      "task_ids": ["TASK-022", "TASK-023", "TASK-024", "TASK-025", "TASK-027", "TASK-028", "TASK-031", "TASK-032", "TASK-036", "TASK-142", "TASK-143", "TASK-145", "TASK-149", "TASK-150", "TASK-152", "TASK-153", "TASK-155"],
+      "problem": "The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in database wave 1 explicitly edits internal/server/server.go, internal/server/indexed_store.go and internal/server/server_maintenance_deps.go while TASK-142/150/155 rework handler wiring in the same global wave.",
+      "evidence": "Master plan docs/plans/2026-08-21-todo-completion-master-plan.md §4 Wave 3: '**`internal/database` is the chokepoint.** ... Serialize it. Do not run it alongside `internal/server/handlers`.' Per-ws wave counts from skeleton: database {1:9,...}, server-handlers {1:8,...} — both populate global wave 1. TASK-022.exact_files includes internal/server/indexed_store.go, internal/server/server.go, internal/server/server_maintenance_deps.go.",
+      "fix": {
+        "note": "Either honour the plan (database gets its own exclusive wave band) or record a decision overriding it in DECISIONS-PENDING.md. Silently dropping a recorded sequencing constraint is the worse of the two."
+      }
+    },
+    {
+      "severity": "minor",
+      "task_ids": ["TASK-033", "TASK-020", "TASK-031", "TASK-037", "TASK-039"],
+      "problem": "Busywork occupying a wave slot. TASK-033 'Repoint store.go:17's broken doc reference to the archived design spec' is a one-comment-line edit, yet it is wave 2 of the five-deep internal/database/store.go chain, which means TASK-037 and TASK-039 (real schema work) each wait an extra merge round-trip for a comment fix.",
+      "evidence": "BREAKDOWN collision row: 'internal/database/store.go | TASK-020, TASK-031, TASK-033, TASK-037, TASK-039 | serialize: wave1=TASK-031, wave2=TASK-033, wave3=TASK-037, wave5=TASK-020, wave6=TASK-039'. skeleton TASK-033: tier haiku, effort S, exact_files ['internal/database/store.go'].",
+      "fix": {
+        "merge": ["TASK-031", "TASK-033"],
+        "note": "Fold the comment repoint into TASK-031 (already wave 1, same file). Shortens the store.go chain by one wave for free."
+      }
+    },
+    {
+      "severity": "minor",
+      "task_ids": ["TASK-173", "TASK-174", "TASK-175"],
+      "problem": "All three tasks close the SAME TODO.md line, and that line is not a checkbox at all, so the brief's close-out instruction is inapplicable and will be improvised three different ways by three agents in the same wave. TODO.md:10660 is '36. **1.16 — resizable/sortable columns** (H1:2750) — remaining: dedup results,' — a numbered sub-item with no `- [ ]`. The three tasks are also the same mechanical conversion to the same shared helper.",
+      "evidence": "sed -n '10660p' TODO.md -> '36. **1.16 — resizable/sortable columns** (H1:2750) — remaining: dedup results,'. skeleton todo_line grouping L10660 n=3 [TASK-173 w1, TASK-174 w1, TASK-175 w1]. Brief instruction (TASK-173): 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line'. Their exact_files are disjoint (DedupAcousticTab.tsx / ActivityLog.tsx / DedupSplitBookTab.tsx) and all three reuse web/src/components/common/ConfigurableTable.tsx unchanged.",
+      "fix": {
+        "merge": ["TASK-173", "TASK-174", "TASK-175"],
+        "note": "One PR 'feat(web): adopt ConfigurableTable in the three remaining list tables'. Also: the generator must not emit a checkbox close-out step for a todo_line that has no `- [ ]`, and must never emit the same close-out to more than one task."
+      }
+    },
+    {
+      "severity": "minor",
+      "task_ids": ["TASK-034"],
+      "problem": "Tier/effort mismatch in the direction that costs a rerun: TASK-034 is the only Haiku-class task at effort L — '~86 hardwired-zero-return methods' in a 1000+ line hand-written mock — and it sits at wave 3 of a seven-deep chain, so a botched pass by the weakest tier stalls TASK-035/038/040/139 behind it.",
+      "evidence": "skeleton: TASK-034 tier 'haiku', effort 'L' (the only ('haiku','L') pair in Counter((tier,effort))); exact_files ['internal/database/mock_store.go']; wave 3. Collision chain: mock_store.go serialize wave1..wave7.",
+      "fix": {
+        "note": "Either move TASK-034 to Sonnet-class, or (better) land it at wave 1 as a mechanical pre-pass so every later mock_store.go task is a one-field append rather than a stub rewrite."
+      }
+    },
+    {
+      "severity": "minor",
+      "task_ids": ["TASK-069"],
+      "problem": "TASK-069's gate field concedes that the package-wide gate is red on main — 'make ci is known-red on main per the plan doc; do not read a red make ci as a signal from this work' — which directly contradicts the coordinator protocol printed in every orchestration.md: 'A wave MUST NOT start while ... the gate is red on origin/main.' Taken literally, no wave in the package can ever start.",
+      "evidence": "skeleton TASK-069.gate = 'go build ./... && go test ./internal/maintenance/... (make ci is known-red on main per the plan doc; do not read a red make ci as a signal from this work)'. orchestration.md (all 18 workstreams): '**A wave MUST NOT start** when any of: the previous wave has an unmerged PR; any sibling worktree is un-rebased; the gate is red on `origin/main`; or a `rebase_blocked` marker is unresolved.'",
+      "fix": {
+        "note": "Add a Wave 0 task 'get `make ci` green on main' as a hard prerequisite for the whole package, or replace the red-main rule with 'no NEW failures vs. the recorded main baseline' and record that baseline."
+      }
+    },
+    {
+      "severity": "minor",
+      "task_ids": ["TASK-001", "TASK-173", "TASK-023", "TASK-038", "TASK-096"],
+      "problem": "Every brief points at a package-level protocol document that does not exist. 212 files in the package reference `docs/agent-tasks/ORCHESTRATION.md` (as `../ORCHESTRATION.md` / `../../ORCHESTRATION.md`), including the line in each brief '(Protocol also in `docs/agent-tasks/ORCHESTRATION.md` — the inline block above is authoritative for this task.)' and the opening line of every workstream orchestration.md 'Read the package-level ../../ORCHESTRATION.md first.' The generated tree contains no such file.",
+      "evidence": "grep -rc 'ORCHESTRATION.md' <package> | grep -v ':0' | wc -l -> 212. ls of the generated tree: docs/agent-tasks/ contains only todo-completion/; todo-completion/ contains only BREAKDOWN-2026-08-21.md, skeleton.json and the 18 workstream dirs. find for *.md above the workstream dirs -> only BREAKDOWN-2026-08-21.md.",
+      "fix": {
+        "note": "Generate docs/agent-tasks/ORCHESTRATION.md (the coordinator protocol is already duplicated verbatim in all 18 workstream files — hoist it), or drop the reference. As shipped, an agent told to 'read the package-level protocol first' hits a missing file on step one."
+      }
+    }
+  ]
+}
