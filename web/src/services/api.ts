@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.68.0
+// version: 2.69.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-08-20
+// last-edited: 2026-08-21
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -838,9 +838,18 @@ export interface ToolsConfig {
   embed_queue_debounce_ms: number;
 }
 
+/** One configured mapping from a server-side root to its remote-client forms. */
+export interface PathAlias {
+  root: string;
+  windows?: string;
+  unc?: string;
+  smb_url?: string;
+}
+
 export interface Config {
   // Core paths
   root_dir: string;
+  path_aliases?: PathAlias[];
   database_path: string;
   database_type: string;
   enable_sqlite: boolean;

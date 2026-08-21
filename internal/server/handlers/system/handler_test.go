@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
-// last-edited: 2026-07-16
+// last-edited: 2026-08-21
 
 // Unit tests for the system-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (config mask-secrets path,
@@ -355,6 +355,46 @@ func TestGetConfig_OK(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.NotNil(t, resp["data"].(map[string]any)["config"])
+}
+
+// TestGetConfigIncludesPathAliases confirms /config exposes config.Config's
+// PathAliases field. GetConfig marshals config.Config wholesale (via
+// MaskSecrets) rather than copying named fields into a bespoke response
+// struct, so the json:"path_aliases" tag on config.Config already exposes it
+// — this test only guards against that tag (or the marshal-wholesale shape)
+// regressing. MaskSecrets is mocked in this suite, so the returned
+// config.Config (not config.AppConfig) is what the handler actually
+// marshals.
+func TestGetConfigIncludesPathAliases(t *testing.T) {
+	h, d := newTestHandler(t)
+	d.cfgUpd.EXPECT().MaskSecrets(mock.Anything).Return(config.Config{
+		PathAliases: []config.PathAlias{
+			{Root: "/library/books", Windows: "W:", SMBURL: "smb://host/books"},
+		},
+	})
+
+	w := run(http.MethodGet, "/config", "/config", nil, func(r *gin.Engine) {
+		r.GET("/config", h.GetConfig)
+	})
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Decode PathAliases as untyped maps, not []config.PathAlias, so the
+	// assertions below pin the actual wire field names ("windows", "smb_url")
+	// against a struct-tag rename that both encode and decode would otherwise
+	// absorb silently (the frontend mirror in web/src/services/api.ts has no
+	// compiler tying it to Go's json tags).
+	var resp struct {
+		Data struct {
+			Config struct {
+				PathAliases []map[string]any `json:"path_aliases"`
+			} `json:"config"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data.Config.PathAliases, 1)
+	assert.Equal(t, "/library/books", resp.Data.Config.PathAliases[0]["root"])
+	assert.Equal(t, "W:", resp.Data.Config.PathAliases[0]["windows"])
+	assert.Equal(t, "smb://host/books", resp.Data.Config.PathAliases[0]["smb_url"])
 }
 
 func TestGetConfig_MasksAllSecrets(t *testing.T) {
