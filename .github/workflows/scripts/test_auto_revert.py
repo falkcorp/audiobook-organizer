@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: .github/workflows/scripts/test_auto_revert.py
-# version: 1.2.0
+# version: 1.3.0
 # guid: 8b2f6019-4d5a-4c88-b3e7-16f9a0c7d243
-# last-edited: 2026-08-20
+# last-edited: 2026-08-21
 
 """Tests for the auto-revert span selector.
 
@@ -174,11 +174,27 @@ class IssueBody(unittest.TestCase):
         self.assertIn("by hand", body)
         self.assertNotIn("Reverted commits", body)
 
-    def test_skip_ci_commits_are_labelled_as_such(self):
+    def test_a_commit_with_no_run_is_labelled_unverified(self):
         commits = [c(F, "red"), c(S, "collect [skip ci]"), c(G, "green")]
         conclusions = {F: "failure", G: "success"}
         body = render_issue_body(select_span(commits, conclusions), conclusions)
-        self.assertIn("no gate run (`[skip ci]`)", body)
+        self.assertIn("no gate run — never verified", body)
+
+    def test_a_missing_run_is_never_blamed_on_a_skip_marker(self):
+        """A commit can have no run for reasons other than a skip marker.
+
+        GitHub starts workflows only for the tip of a push, so every interior
+        commit of a rebase-merged PR also lands with zero runs. Issue #2652
+        blamed a skip marker on three such commits, none of which had one.
+        The report must not name a cause it cannot know.
+        """
+        # No skip marker anywhere in this history, and still no run.
+        commits = [c(F, "red"), c(S, "ordinary interior commit"), c(G, "green")]
+        conclusions = {F: "failure", G: "success"}
+        body = render_issue_body(select_span(commits, conclusions), conclusions)
+        self.assertIn("no gate run", body)
+        for token in ("skip ci", "ci skip", "no ci", "skip actions"):
+            self.assertNotIn(token, body, f"report asserts an unknowable cause: {token}")
 
 
 class GithubOutputEncoding(unittest.TestCase):

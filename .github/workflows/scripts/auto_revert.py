@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: .github/workflows/scripts/auto_revert.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 5c1d8a34-9e02-4b77-8f61-3a4c7d90b2e5
-# last-edited: 2026-08-20
+# last-edited: 2026-08-21
 
 """Pick which commits to revert when the CI gate goes red on the default branch.
 
@@ -16,7 +16,10 @@ Two properties of this repository drive the rules:
   earlier run. Measured on 2026-08-20, the last 100 pushes to ``main`` were 51
   success / 48 cancelled / 0 failure — roughly half of all commits carry a
   ``cancelled`` conclusion, meaning *never verified*, neither green nor red.
-* ``[skip ci]`` commits (the TODO and changelog collectors) have no run at all.
+* Some commits have no run at all. Skip markers are one cause (the TODO and
+  changelog collectors use them), but not the only one: GitHub starts workflows
+  only for the *tip* of a push, so every interior commit of a rebase-merged PR
+  also lands with zero runs. Treat "no run" as unverified without inferring why.
 
 Both are skipped when looking for the last-green anchor and both stay inside the
 reverted span: an unverified commit is a suspect, not an alibi. That is why the
@@ -61,7 +64,9 @@ LOG_FORMAT = f"%H{_FIELD}%s{_FIELD}%(trailers:only=true,unfold=true){_RECORD}"
 GREEN = frozenset({"success"})
 
 #: Conclusions that prove nothing. A cancelled run was killed by the concurrency
-#: group before it could judge anything; a missing run means ``[skip ci]``.
+#: group before it could judge anything; an empty string means no run was found
+#: at all, which has several possible causes and is never evidence of any one
+#: of them (see ``_commit_line``).
 UNVERIFIED = frozenset({"cancelled", "skipped", "stale", "neutral", ""})
 
 #: Conclusions that count as the gate having actually failed.
@@ -254,7 +259,14 @@ def _commit_line(commit: Commit, conclusions: dict[str, str]) -> str:
     elif verdict in RED:
         note = "**gate red**"
     elif not verdict:
-        note = "no gate run (`[skip ci]`)"
+        # Deliberately does NOT name a cause. A commit can have no run because
+        # it carries a skip marker, because it was an interior commit of a
+        # pushed range (GitHub only starts workflows for the tip), or because
+        # CI simply has not started yet. Measured on 2026-08-21: issue #2652
+        # blamed a skip marker on three commits that had none — all three were
+        # interior commits of one rebase-merged PR. A bug report read at 3am
+        # must not assert a cause it cannot know.
+        note = "no gate run — never verified"
     else:
         note = f"gate `{verdict}` — never verified"
     pr = f" (#{commit.pr})" if commit.pr else ""
