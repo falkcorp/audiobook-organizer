@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-08-21-todo-completion-master-plan.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b53623ab-e690-413e-bb0a-f40a493ed31f -->
 <!-- last-edited: 2026-08-21 -->
 
@@ -8,7 +8,8 @@
 **Status:** PROPOSED. Planning only; no planned work was executed.
 **Audience:** the Fable instance that will refine this into subtasks and dispatch subagents.
 **Companion:** [`2026-08-21-todo-completion-inventory.tsv`](2026-08-21-todo-completion-inventory.tsv)
-— all 385 open items, tiered, with `TODO.md` line anchors and collision domains.
+— all 385 parsed rows (≈378 distinct; see §1), tiered, with `TODO.md` line anchors
+and collision domains.
 
 ---
 
@@ -22,7 +23,18 @@ that reason.
 |---|---|---|---|
 | Checkbox bullets `- [ ]` | body, lines 8–10,484 | **335** | 63 |
 | Numbered backlog `N.` (done = `~~struck~~`) | tail, lines 10,486–10,849 | **50** | 4 |
-| | **Total open** | **385** | 67 |
+| | raw sum | 385 | 67 |
+| | **distinct open, after dedup** | **≈378** | |
+
+The two encodings **overlap**: the tail preamble describes itself as a curated
+index of "items confirmed ACTIVE by the 2026-07-17 docs audit", so some numbered
+entries re-describe work the body already carries. Fuzzy-matching the 50 numbered
+titles against the 335 checkbox bodies (bold-ID match, then ≥0.55 token overlap)
+finds **7 overlaps**, giving **378 distinct open items**.
+
+> ⚠️ The 7 is a *heuristic* match, not a verified one — treat 378 as ±7 and
+> re-derive it during Wave 2, when every item has a resolved anchor. Do not report
+> progress against 385: that number double-counts.
 
 Plus three registers that are not in `TODO.md` at all:
 
@@ -127,18 +139,27 @@ Collision domains for the 125 path-cited items (primary domain):
 
 | Domain | Items |
 |---|---|
-| `docs` | 37 |
-| `web` (frontend) | 16 |
-| `internal/database` | 13 |
+| `web` (frontend) | 22 |
+| `docs` | 22 |
+| `internal/database` | 15 |
 | `internal/dedup` | 8 |
-| `ci/scripts` | 5 |
+| `internal/server/handlers` | 5 |
+| `ci/scripts` | 4 |
 | `internal/operations` | 4 |
 | `internal/metafetch` | 4 |
-| `internal/server/handlers` | 4 |
+| `internal/audiobooks` | 4 |
+| `internal/itunes` | 4 |
 | `internal/plugins/maintenance` | 4 |
-| `internal/audiobooks` | 3 |
-| `internal/itunes` | 3 |
-| 13 further domains | 1–2 each |
+| 18 further domains | 1–3 each |
+
+> **Primary domain = most-specific code domain; `docs` only when it is the sole
+> domain.** An earlier cut of this table assigned the primary domain
+> alphabetically, which silently filed **16 code tasks under `docs`** (because
+> TODO items routinely cite a `docs/…` evidence link alongside the code they
+> describe) and understated `web` by 6. If you regenerate the TSV, keep the
+> priority rule — the naive `sorted()[0]` reintroduces the bug.
+>
+> 3 items cite both `web/` and `internal/`; they are cross-cutting, not frontend.
 
 ---
 
@@ -153,7 +174,8 @@ Do not plan work into these — they are live.
 | `abo-unified-review` | `fix/reap-report-records-outcome` | 1 commit ahead, clean, **no PR** |
 | `audiobook-organizer-summarize-by-day` | `fix/summarize-by-day` | 1 commit ahead, clean — **live session (pid 16904)** |
 
-There are **0 open PRs** on the repo. Four finished commits are sitting unshipped.
+As of 2026-08-21 there were **0 open PRs** on the repo (this plan's own branch aside).
+Four finished commits are sitting unshipped.
 
 Also live per the handoff: `feat/persist-missing-file-verdict` (`9b43f598`, missing-file
 Phase 1a) — committed and pushed, **no PR, not mutation-tested**.
@@ -187,7 +209,7 @@ touched is `TODO.md`. ⚠️ **Every task in this wave collides on `TODO.md`.** 
 serially, or have one agent verify all 37 and a single commit apply all the check-offs.
 The second shape is strongly preferred.
 
-**Exit criteria:** open-item count drops from 385 to ~348, with a one-line evidence note
+**Exit criteria:** distinct open-item count drops from ≈378 to ≈341, with a one-line evidence note
 per closed item.
 
 ### Wave 2 — Anchor-resolution / scoping pass (parallel, read-only)
@@ -214,9 +236,10 @@ Sequencing rules that hold regardless:
 - **`internal/database` is the chokepoint.** The store-decoupling lane is largely closed
   (refs 172→8), but 13 path-cited items plus most interface-width work still land there.
   Serialize it. Do not run it alongside `internal/server/handlers`.
-- **`docs` (37 items) is fully parallel-safe** and shares no files with code work. Run it
-  concurrently with any code wave as filler.
-- **`web` (16 items) is disjoint from all Go work.** Free parallelism — but the MUI
+- **`docs` (22 items) is parallel-safe** and shares no files with code work. Run it
+  concurrently with any code wave as filler. This is 22, not 37 — the other 15 cite a
+  `docs/` evidence link but edit code, and belong to their code domain.
+- **`web` (22 items) is disjoint from all Go work.** Free parallelism — but the MUI
   upgrade chain (`TODO-MUI-1/2/3/4`, #2216–#2218) is strictly serial within it, and
   `MuiMenu`/`theme.ts:186` is a known regression surface.
 - **The 40 cross-cutting items are `SINGLE-AGENT` work.** They span domains by
@@ -296,7 +319,7 @@ merge is reverted forward, not force-pushed away.
 ## 8. Status
 
 ```
-COMPLETED: 2 — this plan; the 385-item tiered inventory (TSV)
+COMPLETED: 2 — this plan; the tiered inventory (TSV, 385 rows / ≈378 distinct)
 REMAINING: 5 — Wave 0 (ship 4 branches), Wave 1 (37 Tier A close-outs),
                Wave 2 (194-item scoping pass), Wave 3 (implementation waves),
                Wave 4 (prod runs)
