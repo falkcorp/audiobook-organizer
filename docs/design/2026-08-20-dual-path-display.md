@@ -1,11 +1,11 @@
 <!-- file: docs/design/2026-08-20-dual-path-display.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: d87b37ef-85ee-4494-b629-6ef01de479af -->
-<!-- last-edited: 2026-08-20 -->
+<!-- last-edited: 2026-08-21 -->
 
 # Dual-Path Display on the Review Page
 
-**Status:** approved design, not yet planned
+**Status:** implemented 2026-08-21
 **Author:** session `86a85ada` (dual-path lane)
 **Branch:** `feat/dual-path-display` · worktree `../abo-dualpath`
 
