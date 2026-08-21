@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-08-20-dual-path-display.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: f9f6af37-76d8-487e-af1e-3da0467b8937 -->
 <!-- last-edited: 2026-08-20 -->
 
@@ -48,12 +48,21 @@ so their documented mirror stays intact.
 - **Fail closed on links:** `href` is non-null only where the client OS is known
   to register a handler. Unknown platform renders text + copy, never an anchor.
 
+**Known trap — `npm --prefix web exec` is broken here.** With npm 9.3.1,
+`npm --prefix web exec <tool> -- <args>` prints the tool's own help instead of
+running it, so a check written that way **passes vacuously**. Always
+`cd web && npm exec -- <tool> <args>`.
+
+**`PathAliases` has no `omitempty`**, so an unset value serializes as JSON
+`null`, not `[]`. Frontend code must tolerate `null` (`aliases ?? []`), and no
+test may assert strict equality against `[]` for the unset case.
+
 **Verification commands:**
 
 | What | Command |
 | --- | --- |
-| One frontend test file | `npm --prefix web exec vitest run -- src/path/to/file.test.ts` |
-| All frontend tests | `npm --prefix web exec vitest run` |
+| One frontend test file | `cd web && npm exec -- vitest run src/path/to/file.test.ts` |
+| All frontend tests | `cd web && npm exec -- vitest run` |
 | One Go package | `go test ./internal/config/...` |
 | Go vet + tests | `make test` |
 | Full local CI gate | `make ci` |
@@ -415,7 +424,7 @@ And inside `Config`, below `root_dir: string;`:
 
 - [ ] **Step 6: Typecheck**
 
-Run: `npm --prefix web exec tsc -- --noEmit`
+Run: `cd web && npm exec -- tsc --noEmit`
 Expected: no errors.
 
 - [ ] **Step 7: Bump headers and commit**
@@ -610,7 +619,7 @@ describe('every rendering of a row resolves to the same file', () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `npm --prefix web exec vitest run -- src/utils/__tests__/pathAliases.test.ts`
+Run: `cd web && npm exec -- vitest run src/utils/__tests__/pathAliases.test.ts`
 Expected: FAIL — cannot resolve `../pathAliases`.
 
 - [ ] **Step 3: Write the implementation**
@@ -731,12 +740,12 @@ export function renderPath(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `npm --prefix web exec vitest run -- src/utils/__tests__/pathAliases.test.ts`
+Run: `cd web && npm exec -- vitest run src/utils/__tests__/pathAliases.test.ts`
 Expected: PASS, all cases.
 
 - [ ] **Step 5: Prove the mirror was not disturbed**
 
-Run: `npm --prefix web exec vitest run -- src/utils/__tests__/formatPath.test.ts`
+Run: `cd web && npm exec -- vitest run src/utils/__tests__/formatPath.test.ts`
 Expected: PASS, unchanged. `git diff --stat web/src/utils/formatPath.ts` must be empty.
 
 - [ ] **Step 6: Commit**
@@ -820,7 +829,7 @@ describe('PathLinks', () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `npm --prefix web exec vitest run -- src/components/common/PathLinks.test.tsx`
+Run: `cd web && npm exec -- vitest run src/components/common/PathLinks.test.tsx`
 Expected: FAIL — cannot resolve `./PathLinks`.
 
 - [ ] **Step 3: Implement the component**
@@ -860,7 +869,7 @@ export function usePathAliases(): PathAlias[] {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `npm --prefix web exec vitest run -- src/components/common/PathLinks.test.tsx`
+Run: `cd web && npm exec -- vitest run src/components/common/PathLinks.test.tsx`
 Expected: PASS, 5 tests.
 
 - [ ] **Step 5: Commit**
@@ -895,7 +904,7 @@ pass it at `:499`.
 
 - [ ] **Step 2: Run the regroup tests**
 
-Run: `npm --prefix web exec vitest run -- src/components/review`
+Run: `cd web && npm exec -- vitest run src/components/review`
 Expected: PASS. Fix any snapshot/DOM assertions that named the old single line.
 
 - [ ] **Step 3: Bump the header and commit**
@@ -938,7 +947,7 @@ Match the file's existing render helper rather than inventing
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `npm --prefix web exec vitest run -- src/components/review/spine/CompareSpine.test.tsx`
+Run: `cd web && npm exec -- vitest run src/components/review/spine/CompareSpine.test.tsx`
 Expected: FAIL — the derived `W:\` line is absent.
 
 - [ ] **Step 3: Replace all three render sites**
@@ -954,7 +963,7 @@ Call `usePathAliases()` once in the component and reuse it at all three sites.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `npm --prefix web exec vitest run -- src/components/review`
+Run: `cd web && npm exec -- vitest run src/components/review`
 Expected: PASS.
 
 - [ ] **Step 5: Bump the header and commit**
@@ -993,7 +1002,7 @@ which calls `usePathAliases()` once.
 
 - [ ] **Step 3: Run the review tests**
 
-Run: `npm --prefix web exec vitest run -- src/components/review`
+Run: `cd web && npm exec -- vitest run src/components/review`
 Expected: PASS.
 
 - [ ] **Step 4: Bump the header to one above what Step 1 found and commit**
