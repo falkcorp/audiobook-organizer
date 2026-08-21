@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b1dd281f-6d3b-478a-91c3-79b5d35accee -->
+<!-- guid: cffc74bd-8ff3-45a7-87ea-72571f8b5f7a -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — server-handlers workstream (todo-completion)
@@ -12,35 +12,38 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK147[TASK-147 expose-unmergeauto-through-a]
-      TASK148[TASK-148 n-3-stop-advertising-delete-]
-      TASK150[TASK-150 n-6-log-metric-when-listenin]
-      TASK153[TASK-153 detect-multi-file-books-whos]
-      TASK155[TASK-155 bound-the-itunes-search-hand]
-      TASK156[TASK-156 implement-post-api-session-l]
-      TASK158[TASK-158 move-tasks-and-maintenance-w]
+      TASK142[TASK-142 expose-unmergeauto-through-a]
+      TASK143[TASK-143 n-3-stop-advertising-delete-]
+      TASK145[TASK-145 n-6-log-metric-when-listenin]
+      TASK149[TASK-149 detect-multi-file-books-whos]
+      TASK150[TASK-150 audit-apply-shaped-endpoints]
+      TASK152[TASK-152 bound-the-itunes-search-hand]
+      TASK153[TASK-153 implement-post-api-session-l]
+      TASK155[TASK-155 move-tasks-and-maintenance-w]
     end
     subgraph Wave2
-      TASK151[TASK-151 n-10-advertised-login-rate-l]
-      TASK154[TASK-154 document-the-hardcoded-abs-t]
-      TASK157[TASK-157 implement-post-api-session-l]
-      TASK159[TASK-159 phase-7-socket-io-for-absorb]
-      TASK160[TASK-160 parallelize-the-per-candidat]
+      TASK144[TASK-144 n-5-search-narrators-must-om]
+      TASK146[TASK-146 n-10-advertised-login-rate-l]
+      TASK151[TASK-151 document-the-hardcoded-abs-t]
+      TASK154[TASK-154 implement-post-api-session-l]
+      TASK156[TASK-156 phase-7-socket-io-for-absorb]
+      TASK157[TASK-157 parallelize-the-per-candidat]
     end
     subgraph Wave3
-      TASK149[TASK-149 n-5-search-narrators-must-om]
+      TASK147[TASK-147 align-abs-conformance-fixtur]
     end
     subgraph Wave4
-      TASK152[TASK-152 align-abs-conformance-fixtur]
+      TASK148[TASK-148 re-capture-the-series-abs-fi]
     end
-    TASK147 --> TASK160
-    TASK148 --> TASK151
-    TASK148 --> TASK152
-    TASK149 --> TASK152
-    TASK150 --> TASK152
-    TASK151 --> TASK152
+    TASK142 --> TASK157
+    TASK143 --> TASK146
+    TASK143 --> TASK147
+    TASK144 --> TASK147
+    TASK145 --> TASK147
+    TASK146 --> TASK147
+    TASK147 --> TASK148
+    TASK149 --> TASK151
     TASK153 --> TASK154
-    TASK156 --> TASK157
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -49,7 +52,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`make ci ; make ci && npm --prefix web run lint && npm --prefix web test`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only' ; go build ./... && go vet ./... && go test ./internal/server/... ./internal/server/handlers/... ./internal/server/handlers/operations/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/... ./internal/server/handlers/abs/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/... ./internal/server/handlers/dedup/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/handlers/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/handlers/... ./internal/server/handlers/metadata/... ./internal/server/handlers/review/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/handlers/abs/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/handlers/dedup/... -count=1`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

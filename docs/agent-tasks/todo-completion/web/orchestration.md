@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: a77f49e4-964d-45bd-855f-f055b4f7a827 -->
+<!-- guid: c10253f8-4e85-44d3-b04f-f0968d480a88 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — web workstream (todo-completion)
@@ -12,66 +12,66 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK161[TASK-161 add-a-settings-panel-section]
-      TASK162[TASK-162 add-and-use-a-test-reset-hoo]
-      TASK163[TASK-163 move-openai-api-key-validati]
-      TASK164[TASK-164 strip-dedup-and-metadata-sou]
-      TASK166[TASK-166 harden-muimenu-against-the-d]
-      TASK167[TASK-167 find-the-mechanism-behind-th]
-      TASK169[TASK-169 play-the-first-2-minutes-of-]
-      TASK175[TASK-175 retarget-dedup-operations-sp]
-      TASK176[TASK-176 retarget-diagnostics-spec-ts]
-      TASK177[TASK-177 add-a-frontend-test-assertin]
-      TASK178[TASK-178 add-resizable-sortable-colum]
-      TASK179[TASK-179 add-resizable-sortable-colum]
-      TASK180[TASK-180 add-resizable-sortable-colum]
+      TASK158[TASK-158 add-a-settings-panel-section]
+      TASK159[TASK-159 add-and-use-a-test-reset-hoo]
+      TASK160[TASK-160 move-openai-api-key-validati]
+      TASK162[TASK-162 reformat-metadata-tags-in-br]
+      TASK188[TASK-188 harden-muimenu-against-the-d]
+      TASK163[TASK-163 find-the-mechanism-behind-th]
+      TASK189[TASK-189 play-the-first-2-minutes-of-]
+      TASK170[TASK-170 retarget-dedup-operations-sp]
+      TASK171[TASK-171 retarget-diagnostics-spec-ts]
+      TASK172[TASK-172 add-a-frontend-test-assertin]
+      TASK173[TASK-173 add-resizable-sortable-colum]
+      TASK174[TASK-174 add-resizable-sortable-colum]
+      TASK175[TASK-175 add-resizable-sortable-colum]
     end
     subgraph Wave2
-      TASK165[TASK-165 reformat-metadata-tags-in-br]
+      TASK161[TASK-161 strip-dedup-and-metadata-sou]
     end
     subgraph Wave3
-      TASK171[TASK-171 make-the-book-detail-page-s-]
+      TASK166[TASK-166 make-the-book-detail-page-s-]
     end
     subgraph Wave4
-      TASK172[TASK-172 make-the-book-detail-page-s-]
+      TASK167[TASK-167 make-the-book-detail-page-s-]
     end
     subgraph Wave5
-      TASK173[TASK-173 make-narrator-publisher-genr]
+      TASK168[TASK-168 make-narrator-publisher-genr]
     end
     subgraph Wave6
-      TASK174[TASK-174 link-version-group-id-to-a-f]
+      TASK169[TASK-169 link-version-group-id-to-a-f]
     end
     subgraph Wave7
-      TASK168[TASK-168 let-the-owner-combine-merge-]
+      TASK164[TASK-164 let-the-owner-combine-merge-]
     end
     subgraph Wave8
-      TASK170[TASK-170 review-the-17-apifetch-calle]
+      TASK165[TASK-165 review-the-17-apifetch-calle]
     end
-    TASK043 --> TASK168
-    TASK085 --> TASK168
+    TASK042 --> TASK164
+    TASK161 --> TASK164
+    TASK161 --> TASK165
+    TASK161 --> TASK166
+    TASK161 --> TASK167
+    TASK161 --> TASK168
+    TASK161 --> TASK169
+    TASK162 --> TASK161
     TASK164 --> TASK165
-    TASK164 --> TASK168
-    TASK164 --> TASK170
-    TASK164 --> TASK171
-    TASK164 --> TASK172
-    TASK164 --> TASK173
-    TASK164 --> TASK174
-    TASK168 --> TASK170
-    TASK171 --> TASK168
-    TASK171 --> TASK170
-    TASK171 --> TASK172
-    TASK171 --> TASK173
-    TASK171 --> TASK174
-    TASK172 --> TASK168
-    TASK172 --> TASK170
-    TASK172 --> TASK173
-    TASK172 --> TASK174
-    TASK173 --> TASK168
-    TASK173 --> TASK170
-    TASK173 --> TASK174
-    TASK174 --> TASK168
-    TASK174 --> TASK170
-    TASK178 --> TASK170
+    TASK166 --> TASK164
+    TASK166 --> TASK165
+    TASK166 --> TASK167
+    TASK166 --> TASK168
+    TASK166 --> TASK169
+    TASK167 --> TASK164
+    TASK167 --> TASK165
+    TASK167 --> TASK168
+    TASK167 --> TASK169
+    TASK168 --> TASK164
+    TASK168 --> TASK165
+    TASK168 --> TASK169
+    TASK169 --> TASK164
+    TASK169 --> TASK165
+    TASK173 --> TASK165
+    TASK186 --> TASK164
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -80,7 +80,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`make ci && npm --prefix web run lint && npm --prefix web test ; npm --prefix web run lint && npm --prefix web test`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/server/... -count=1 && npm --prefix web run lint && npm --prefix web test ; npm --prefix web run lint && npm --prefix web test`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

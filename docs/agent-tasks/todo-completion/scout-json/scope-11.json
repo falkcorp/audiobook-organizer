@@ -252,7 +252,10 @@
   "verdict_evidence": "internal/server/handlers/abs/browse.go:502-506 still silently swallows the GetAllSeriesBookCounts() error into an empty map with only a code comment, no slog call: `grep -n \"not worth failing the page over; report 0 books\" internal/server/handlers/abs/browse.go` -> 1 hit ~L504, and `grep -n \"slog.Warn\" internal/server/handlers/abs/browse.go` shows no hit within 10 lines of that block (nearest slog.Warn is the unrelated mismatch logger at L725).",
   "domain": "internal/server/handlers/abs",
   "exact_files": [
-   "internal/server/handlers/abs/browse.go"
+   "changelog.d/20260821_missing-file-lane_089.md",
+   "internal/server/handlers/abs/browse.go",
+   "internal/server/handlers/abs/browse_test.go",
+   "internal/server/handlers/abs/library_fake_test.go"
   ],
   "verified_anchors": [
    {
@@ -300,7 +303,10 @@
   "anti_over_suppression": "TestLibrarySeries_CountsErrorLogsWarning must assert the log line fires on error and does NOT fire on the happy path (counts populated normally) to avoid a permanent noisy warning.",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Small, isolated, low risk \u2014 safe for a haiku-tier agent."
+  "notes": "Small, isolated, low risk \u2014 safe for a haiku-tier agent.",
+  "review_notes": [
+   "[verify-1.json] The Tests section instructs 'Add a table-driven or standalone test ... that injects a failing GetAllSeriesBookCounts on a fake library store' (internal/server/handlers/abs/browse_test.go), implying the existing fakeLibrary (internal/server/handlers/abs/library_fake_test.go) already supports error in"
+  ]
  },
  {
   "todo_line": 5494,
@@ -522,8 +528,7 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "npm --prefix web run lint && npm --prefix web test (web)",
-  "notes": "Low risk, self-contained single-file cleanup.",
-  "review_notes": []
+  "notes": "Low risk, self-contained single-file cleanup."
  },
  {
   "todo_line": 5742,
@@ -533,11 +538,8 @@
   "verdict_evidence": "Confirmed dead: `grep -rn 'setBulkFetchDialogOpen(true)' web/src` -> 0 hits. The dialog block is at web/src/components/library/LibraryDialogs.tsx:956-1000 (`grep -n '<Dialog open={bulkFetchDialogOpen}' web/src/components/library/LibraryDialogs.tsx` -> 1 hit ~L956); handleBulkFetchMetadata in Library.tsx (`grep -n 'const handleBulkFetchMetadata = async' web/src/pages/Library.tsx` -> 1 hit ~L1445) confirms it calls `api.startBulkMetadataFetch(selection)` directly (the async replacement flow) and never opens the dialog.",
   "domain": "web (frontend)",
   "exact_files": [
-   "web/package-lock.json",
    "web/src/components/library/LibraryDialogs.tsx",
-   "web/src/pages/Library.tsx",
-   "web/tsconfig.json",
-   "web/tsconfig.node.json"
+   "web/src/pages/Library.tsx"
   ],
   "verified_anchors": [
    {
@@ -590,7 +592,7 @@
   "gate": "npm --prefix web run lint && npm --prefix web test (web)",
   "notes": "Split from a design/product decision (none needed \u2014 the item states this cleanup is 'a separate change... deliberately not bundled with' the e2e repair, i.e. already cleared).",
   "review_notes": [
-   "[simplicity-scope.json] TASK-102 is 'TypeScript 6.0.3 \u2192 7.0.2 migration', tier Opus / effort L, with exact_files = ['web/package.json'] \u2014 a single dependency-version string. A TS major bump changes compiler defaults and will touch web/tsconfig.json (and web/tsconfig.node.json) plus every source file that trips a new error;"
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
   ]
  },
  {
@@ -601,7 +603,6 @@
   "verdict_evidence": "The three named historical instances (/audiobooks/batch, /audiobooks/<id>/files, /authors*) are already correctly ordered or resolved: `grep -n \"audiobooks/batch\" web/tests/e2e/utils/test-helpers.ts` -> exact-match branch at L1626 sits above the prefix POST catch-all at L1636 with an explanatory comment at L1623; `grep -n \"startsWith('/api/v1/authors\" web/tests/e2e/utils/test-helpers.ts` -> 0 hits (no more authors prefix catch-all). But 10 startsWith() catch-alls remain unaudited as a class: `grep -c \"\\.startsWith(\" web/tests/e2e/utils/test-helpers.ts` -> 10.",
   "domain": "web (frontend)",
   "exact_files": [
-   "internal/plugins/maintenance/plugin.go",
    "web/tests/e2e/utils/test-helpers.ts"
   ],
   "verified_anchors": [
@@ -643,10 +644,7 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "npm --prefix web run lint && npm --prefix web test (web)",
-  "notes": "This is a confirmatory audit \u2014 the two most likely-to-bite cases in the original report are already fixed; expect this to mostly find nothing further, but the task should still be done to close the item honestly rather than assume.",
-  "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
-  ]
+  "notes": "This is a confirmatory audit \u2014 the two most likely-to-bite cases in the original report are already fixed; expect this to mostly find nothing further, but the task should still be done to close the item honestly rather than assume."
  },
  {
   "todo_line": 5904,
@@ -897,7 +895,6 @@
   "verdict_evidence": "Confirmed still missing at HEAD: `grep -rn 'Part of version group' web/src` -> 0 hits and `grep -rn '(Current)' web/src` -> 0 hits. BookDetailHeader.tsx's chip is still bare: `grep -n \"label=\\\"Version Group Linked\\\"\" web/src/components/bookdetail/BookDetailHeader.tsx` -> 1 hit ~L198, with no count. isCurrent is computed in BookDetailVersionGroup.tsx (`grep -n 'const isCurrent = version.id === book.id' web/src/components/bookdetail/BookDetailVersionGroup.tsx` -> 1 hit ~L299) but only drives conditional rendering, never a visible '(Current)' label.",
   "domain": "web (frontend)",
   "exact_files": [
-   "internal/plugins/maintenance/plugin.go",
    "web/src/components/bookdetail/BookDetailHeader.tsx",
    "web/src/components/bookdetail/BookDetailVersionGroup.tsx"
   ],
@@ -953,10 +950,7 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "npm --prefix web run lint && npm --prefix web test (web)",
-  "notes": "This is a straightforward restoration, not a product question \u2014 no owner decision blocks it, unlike the sibling L5972/L5904 items.",
-  "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
-  ]
+  "notes": "This is a straightforward restoration, not a product question \u2014 no owner decision blocks it, unlike the sibling L5972/L5904 items."
  },
  {
   "todo_line": 6258,
@@ -1066,7 +1060,6 @@
   "verdict_evidence": "No instrumentation exists today: `grep -rn 'sort_by' internal/server/handlers/audiobooks/handler.go` -> 1 hit ~L519 (parsing only, `httputil.ParseQueryString(c, \"sort_by\")`), with no accompanying slog call nearby; `grep -rn \"slog.*sort_by\\|sort_by.*slog\" internal/` -> 0 hits confirms no logging of the value exists anywhere.",
   "domain": "internal/server/handlers",
   "exact_files": [
-   "internal/plugins/maintenance/plugin.go",
    "internal/server/handlers/audiobooks/handler.go"
   ],
   "verified_anchors": [
@@ -1113,10 +1106,7 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "This is the item's own recommended cheapest-first option (#2, 'instrument first'); it does not itself decide which fields to enable \u2014 see part 2 for that separate design decision.",
-  "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
-  ]
+  "notes": "This is the item's own recommended cheapest-first option (#2, 'instrument first'); it does not itself decide which fields to enable \u2014 see part 2 for that separate design decision."
  },
  {
   "todo_line": 6701,
@@ -1276,12 +1266,21 @@
   "exact_files": [
    "internal/operations/registry/registry.go",
    "internal/operations/registry/types.go",
-   "internal/plugins/acoustid/*.go",
-   "internal/plugins/dedup/*.go",
-   "internal/plugins/deluge/centralization.go",
-   "internal/plugins/maintenance/*.go",
    "internal/scheduler/extra_ops.go",
-   "internal/server/*_ops.go"
+   "internal/server/ai_ops.go",
+   "internal/server/batch_apply_op.go",
+   "internal/server/batch_save_op.go",
+   "internal/server/duplicates_ops.go",
+   "internal/server/entities_ops.go",
+   "internal/server/folder_autoscan_op.go",
+   "internal/server/itunes_ops.go",
+   "internal/server/itunes_path_ops.go",
+   "internal/server/library_core_ops.go",
+   "internal/server/library_writeback_op.go",
+   "internal/server/metadata_candidate_op.go",
+   "internal/server/openlibrary_ops.go",
+   "internal/server/reconcile_ops.go",
+   "internal/server/scheduler_maintenance_window_op.go"
   ],
   "verified_anchors": [
    {
@@ -1348,11 +1347,11 @@
   "gate": "make ci",
   "notes": "This is a repo-wide contract change (large blast radius across every maintenance op) \u2014 per CLAUDE.md's Fix It Right rule, do the real registry-level enforcement rather than a narrower per-op-only fix, but expect this to be its own multi-PR effort given effort L / tier opus.",
   "review_notes": [
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th",
    "[correctness.json] TASK-105 adds a NEW required field (SupportsDryRun) to OperationDef and makes ValidateOpDef reject any CapLibraryWrite def that leaves it false. SupportsDryRun does not exist anywhere in the repo today, so every write-capable def defaults to false the moment step 2 lands. ValidateOpDef is called by ",
    "[ops-rollback.json] TASK-107 adds a new rejection rule to ValidateOpDef, which is the server BOOT contract - a def it rejects makes the server refuse to start - and then explicitly authorises leaving non-compliant ops non-compliant: step 3 says to flag write-capable ops without dry_run support 'as a follow-up per-op ta",
-   "[ops-rollback.json] The task title says 'declare AND enforce dry_run support at the registry', but every step only implements DECLARE. SupportsDryRun is a self-asserted bool with nothing tying it to the op actually honouring a dry_run/apply param; step 3 tells the agent to set it true on ops that 'already implement a d"
+   "[ops-rollback.json] The task title says 'declare AND enforce dry_run support at the registry', but every step only implements DECLARE. SupportsDryRun is a self-asserted bool with nothing tying it to the op actually honouring a dry_run/apply param; step 3 tells the agent to set it true on ops that 'already implement a d",
+   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th",
+   "[simplicity-scope.json] Every brief points at a package-level protocol document that does not exist. 212 files in the package reference `docs/agent-tasks/ORCHESTRATION.md` (as `../ORCHESTRATION.md` / `../../ORCHESTRATION.md`), including the line in each brief '(Protocol also in `docs/agent-tasks/ORCHESTRATION.md` \u2014 the inl"
   ]
  },
  {

@@ -356,11 +356,7 @@
   "anti_over_suppression": "TestResolveOrganizedFilePath_NeitherExists_NoRecovery",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "review_critical because this writes book_file.FilePath on the organize path \u2014 a wrong recovery match (multiple same-size candidates) could point a row at the WRONG file, which is worse than the current status quo of an unverified-but-at-least-honest planned path. The 'do not auto-recover on ambiguous size match' edge case above is load-bearing, not optional.",
-  "review_notes": [
-   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
-  ]
+  "notes": "review_critical because this writes book_file.FilePath on the organize path \u2014 a wrong recovery match (multiple same-size candidates) could point a row at the WRONG file, which is worse than the current status quo of an unverified-but-at-least-honest planned path. The 'do not auto-recover on ambiguous size match' edge case above is load-bearing, not optional."
  },
  {
   "todo_line": 4924,
@@ -493,7 +489,11 @@
   "anti_over_suppression": "N/A \u2014 this is a mock-accuracy fix, not a new filter/guard.",
   "depends_on_lines": [],
   "gate": "npm --prefix web run lint && npx playwright test web/tests/e2e/dedup-operations.spec.ts web/tests/e2e/dedup.spec.ts",
-  "notes": "Per the TODO item's own 2026-08-16 measurement, fixing this mock is the RIGHT engineering fix regardless of whether it changes any test's pass/fail count \u2014 a stale mock 'fails silently' by falling through to a 404 rather than erroring loudly, which is a correctness bug in the test fixture even if today it happens not to flip a result."
+  "notes": "Per the TODO item's own 2026-08-16 measurement, fixing this mock is the RIGHT engineering fix regardless of whether it changes any test's pass/fail count \u2014 a stale mock 'fails silently' by falling through to a 404 rather than erroring loudly, which is a correctness bug in the test fixture even if today it happens not to flip a result.",
+  "review_notes": [
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
+   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for "
+  ]
  },
  {
   "todo_line": 4960,
@@ -561,7 +561,11 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "npm --prefix web run lint && npx playwright test web/tests/e2e/diagnostics.spec.ts",
-  "notes": null
+  "notes": null,
+  "review_notes": [
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
+   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for "
+  ]
  },
  {
   "todo_line": 4960,
@@ -681,9 +685,6 @@
   "gate": "make ci",
   "notes": "The item's own text calls this 'deliberately deferred... an ergonomics fix, not a correctness one' (discussed 2026-08-17) \u2014 flagging for the coordinator that this is real, well-specified, low-risk work, but was explicitly deprioritized relative to correctness fixes elsewhere in this scope (e.g. L4919, L5290). Not covered by any of the 14 owner decisions in SCOUT-INSTRUCTIONS.md, so verdict is 'actionable' rather than 'parked' \u2014 but sequence it behind higher-priority items unless told otherwise.",
   "review_notes": [
-   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
-   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
    "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
   ]
  },
@@ -921,11 +922,9 @@
   "gate": "make ci",
   "notes": "Split from the TODO item's single bullet because the store-CRUD half is unconditionally useful infrastructure, while the purge-OP half (part 2) is explicitly gated by the item's own text on 'whatever decides the narrator identity question' (L5281's author-narrator swap repair).",
   "review_notes": [
-   "[simplicity-scope.json] Busywork occupying a wave slot. TASK-033 'Repoint store.go:17's broken doc reference to the archived design spec' is a one-comment-line edit, yet it is wave 2 of the five-deep internal/database/store.go chain, which means TASK-037 and TASK-039 (real schema work) each wait an extra merge round-trip f",
+   "[ops-rollback.json] TASK-039 adds a brand-new DeleteNarrator that deliberately reproduces the junction-orphan bug another task in the same package is fixing, and it carries no reference guard even though two sibling tasks add exactly such a guard for authors and series. It also has no depends_on edge to either. Shippin",
    "[simplicity-scope.json] Tasks that add a method to a database sub-interface omit the mock implementations from exact_files, so they cannot compile, and the collision matrix under-counts the two hottest mock files. `database.Store` embeds BookStore/NarratorStore/TagStore, and both MockStore implementations are compile-asser",
-   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA",
-   "[simplicity-scope.json] Every brief points at a package-level protocol document that does not exist. 212 files in the package reference `docs/agent-tasks/ORCHESTRATION.md` (as `../ORCHESTRATION.md` / `../../ORCHESTRATION.md`), including the line in each brief '(Protocol also in `docs/agent-tasks/ORCHESTRATION.md` \u2014 the inl",
-   "[ops-rollback.json] TASK-039 adds a brand-new DeleteNarrator that deliberately reproduces the junction-orphan bug another task in the same package is fixing, and it carries no reference guard even though two sibling tasks add exactly such a guard for authors and series. It also has no depends_on edge to either. Shippin"
+   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA"
   ]
  },
  {
@@ -1029,10 +1028,7 @@
   "anti_over_suppression": "TestPurgeEmptyAuthors_HeldBackSample_CapAtLimit",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "This does NOT decide what the 822 authors are \u2014 it only builds the tool a human needs to look at a sample and decide, matching the item's own framing ('Someone has to look at a sample and decide before that flag is ever flipped'). The flip itself stays a human call.",
-  "review_notes": [
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
-  ]
+  "notes": "This does NOT decide what the 822 authors are \u2014 it only builds the tool a human needs to look at a sample and decide, matching the item's own framing ('Someone has to look at a sample and decide before that flag is ever flipped'). The flip itself stays a human call."
  },
  {
   "todo_line": 5281,
@@ -1042,7 +1038,8 @@
   "verdict_evidence": "An existing job, internal/maintenance/jobs/fix_author_narrator_swap.go, addresses a DIFFERENT and narrower population (same-book AuthorID name EqualFold to that book's own Narrator field, L70) and blind-applies by nulling AuthorID with no review-queue involvement (L78-93, direct store.UpdateBook call under !dryRun) \u2014 it does not implement the cross-table population this item measures (names appearing in BOTH the author and narrator tables, narrator book-count>=5, author book-count 1-2), and it does not route through review as this item explicitly requires ('Route any repair through the review queue rather than blind-applying').",
   "domain": "internal/plugins/maintenance",
   "exact_files": [
-   "internal/plugins/maintenance/author_narrator_swap_review.go"
+   "internal/plugins/maintenance/author_narrator_swap_review.go",
+   "internal/plugins/maintenance/plugin.go"
   ],
   "verified_anchors": [
    {
@@ -1127,7 +1124,7 @@
   "gate": "make ci",
   "notes": "The existing internal/maintenance/jobs/fix_author_narrator_swap.go job is NOT what this item is asking to fix or extend \u2014 it solves a narrower, different problem (same-book field equality) and predates the review-queue infrastructure. Do not conflate the two in a PR description; flag both to the coordinator as related-but-distinct so a reviewer doesn't assume this item is already covered.",
   "review_notes": [
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
   ]
  },
  {
@@ -1208,7 +1205,7 @@
   "gate": "make ci",
   "notes": "review_critical: true because this is the author-deletion code path and a subtle bug in the rewrite (e.g. deleting a book's ENTIRE junction row when only one of several authors should be removed) would silently strip legitimate co-author credits from unrelated books. The 'filter, don't wipe' distinction in the steps above is load-bearing.",
   "review_notes": [
-   "[simplicity-scope.json] Busywork occupying a wave slot. TASK-033 'Repoint store.go:17's broken doc reference to the archived design spec' is a one-comment-line edit, yet it is wave 2 of the five-deep internal/database/store.go chain, which means TASK-037 and TASK-039 (real schema work) each wait an extra merge round-trip f"
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
   ]
  },
  {
@@ -1313,10 +1310,7 @@
   "anti_over_suppression": "N/A \u2014 pure refactor, no filter/guard added.",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "This is the ONLY genuinely-actionable slice of the item's 'maintenance: 8 left' claim \u2014 5 of the 8 named declarations are already done at HEAD. See part 2 below for why the 'outside maintenance: 65' portion of this item needs re-measurement before any further work is scoped against it.",
-  "review_notes": [
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
-  ]
+  "notes": "This is the ONLY genuinely-actionable slice of the item's 'maintenance: 8 left' claim \u2014 5 of the 8 named declarations are already done at HEAD. See part 2 below for why the 'outside maintenance: 65' portion of this item needs re-measurement before any further work is scoped against it."
  },
  {
   "todo_line": 5424,

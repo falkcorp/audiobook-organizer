@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-033-repoint-store-go-17-s-broken-doc-reference-to-th.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 89bf6caf-73f7-41d6-915b-c3b5a7115461 -->
+<!-- guid: 90152349-bf9c-4031-8dba-ba894e442b95 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-033 — Repoint store.go:17's broken doc reference to the archived design spec (TODO.md L4721)
@@ -69,9 +69,9 @@ Anti-over-suppression: N/A
 ## How to test
 
 ```bash
-make ci
+go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... -count=1
 ```
-If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<changed-pkg>/... && go test ./<changed-pkg>/... -count=1` (or `npm --prefix web test -- <file>` for web), then the full gate once before reporting done.
+Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
 ## Acceptance criteria
 
@@ -79,7 +79,7 @@ If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<c
 - [ ] test -f docs/archive/superpowers/plans/2026-04-17-store-interface-segregation.md exits 0.
 - [ ] Anti-over-suppression: N/A
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `make ci` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_database_033.md`.
 

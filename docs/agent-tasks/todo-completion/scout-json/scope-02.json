@@ -215,8 +215,7 @@
   "anti_over_suppression": "TestChaptersBackfill_Force_ReprobesDespiteFreshStamp -- proves a fresh stamp does not permanently suppress re-probing when the caller explicitly asks.",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "This is explicitly a PREREQUISITE, not a request to add Schedule to the op -- chapters_backfill.go:49-52 says schedule-adding is a separate, larger decision ('If this op is ever given a Schedule, wire the freshness stamp FIRST'). Do not add sdk.Schedule in this change.",
-  "review_notes": []
+  "notes": "This is explicitly a PREREQUISITE, not a request to add Schedule to the op -- chapters_backfill.go:49-52 says schedule-adding is a separate, larger decision ('If this op is ever given a Schedule, wire the freshness stamp FIRST'). Do not add sdk.Schedule in this change."
  },
  {
   "todo_line": 618,
@@ -312,10 +311,7 @@
   "anti_over_suppression": "N/A -- this is additive indexing, not a filter/guard.",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Bumping bookMappingVersion forces every deployed index to rebuild on next restart (bleve_index.go:122-125 logs a warning and the reconciler drains the dirty set) -- call this out explicitly in the PR description since it is a one-time cost on the production instance, not a bug.",
-  "review_notes": [
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
-  ]
+  "notes": "Bumping bookMappingVersion forces every deployed index to rebuild on next restart (bleve_index.go:122-125 logs a warning and the reconciler drains the dirty set) -- call this out explicitly in the PR description since it is a one-time cost on the production instance, not a bug."
  },
  {
   "todo_line": 629,
@@ -369,8 +365,7 @@
   "verdict_evidence": "maintenance.missing-file-repoint already exists (internal/plugins/maintenance/missing_file_repoint.go, apply=false default, never deletes -- matches owner decision #12) but its candidate derivation ONLY string-transforms the row's own broken path (the 'track-slash flattened into padded filename' shape, e.g. 'Corruption - 2/35.mp3' -> 'Corruption - 02.mp3'): grep -n 'book.FilePath\\|Book.FilePath\\|GetBookByID' internal/plugins/maintenance/missing_file_repoint.go -> 0 hits. It never falls back to the OWNING BOOK's Book.FilePath, which is the specific recovery path this TODO item describes (86 of 88 sampled unresolvable BookFile.FilePath rows have a Book.FilePath that IS a real file on disk) and which chapters_backfill.go already implements for its own narrow purpose (chapters_backfill.go:370-394, 'recoveredViaBook' counter).",
   "domain": "internal/plugins/maintenance",
   "exact_files": [
-   "internal/plugins/maintenance/missing_file_repoint.go",
-   "internal/plugins/maintenance/plugin.go"
+   "internal/plugins/maintenance/missing_file_repoint.go"
   ],
   "verified_anchors": [
    {
@@ -442,10 +437,7 @@
    670
   ],
   "gate": "make ci",
-  "notes": "Owner decision #12 ('build the REPOINT repair with apply=false default; owner runs apply; the 16,265 fully-broken books stay untouched/parked') is satisfied in SHAPE by the existing op but not in POPULATION -- this item is the gap between the op that exists and the specific recovery path the TODO and decision #12 were actually written about.",
-  "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
-  ]
+  "notes": "Owner decision #12 ('build the REPOINT repair with apply=false default; owner runs apply; the 16,265 fully-broken books stay untouched/parked') is satisfied in SHAPE by the existing op but not in POPULATION -- this item is the gap between the op that exists and the specific recovery path the TODO and decision #12 were actually written about."
  },
  {
   "todo_line": 665,
@@ -503,7 +495,8 @@
   "verdict_evidence": "No existing detector counts Book.FilePath collisions: grep -rn 'FilePath.*collision\\|collision.*FilePath' --include=*.go . -> 0 hits, and grep -rn 'duplicate.*FilePath\\|FilePath.*duplicate' --include=*.go . -> 0 hits. The TODO explicitly requires re-running this count before extending any fallback that WRITES a book row (directly gates L642's Book.FilePath-repoint extension and any future write-path use of Book.FilePath).",
   "domain": "internal/plugins/maintenance",
   "exact_files": [
-   "internal/plugins/maintenance/filepath_collision_report.go"
+   "internal/plugins/maintenance/filepath_collision_report.go",
+   "internal/plugins/maintenance/plugin.go"
   ],
   "verified_anchors": [
    {
@@ -566,7 +559,9 @@
   "depends_on_lines": [],
   "gate": "make ci",
   "notes": "This is a small, self-contained prerequisite for L642 and for L665's eventual authority decision -- keep it decoupled from those two rather than folding it into either PR, since it has independent value as a standing library-health report.",
-  "review_notes": []
+  "review_notes": [
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+  ]
  },
  {
   "todo_line": 680,
@@ -707,12 +702,7 @@
   "gate": "make ci",
   "notes": "This is intentionally scoped to detection/logging only, not to correcting the underlying BookFile.Duration values -- that correction is duration-reextract's job, and L680 already flags that duration-reextract's tolerance floor may not catch every case this detector would surface. Once this logs in production, it becomes new evidence for L680's blast-radius question.",
   "review_notes": [
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
-   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
   ]
  },
  {
@@ -1011,7 +1001,10 @@
   "anti_over_suppression": "TestOrganizeBookDirectory_DstSameSizeDifferentContent_NotAdopted",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "This is part 1 of 2 for TODO.md L872 (F5) -- part 2 covers the larger, separately-scoped 'route the three rename paths through MoveBookFile' refactor the TODO calls out as 'Also worth doing'."
+  "notes": "This is part 1 of 2 for TODO.md L872 (F5) -- part 2 covers the larger, separately-scoped 'route the three rename paths through MoveBookFile' refactor the TODO calls out as 'Also worth doing'.",
+  "review_notes": [
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+  ]
  },
  {
   "todo_line": 872,
@@ -1081,7 +1074,6 @@
   "gate": "make ci",
   "notes": "Part 2 of 2 for TODO.md L872 (F5). Given effort=L and review_critical=true, this likely needs its own PLAN.md and worktree per CLAUDE.md's Plan Before Execution rule rather than being done inline -- flagging that explicitly for the coordinator rather than assuming a single PR.",
   "review_notes": [
-   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo",
    "[ops-rollback.json] Routing the three organize/rename paths through organizer.MoveBookFile moves the DB write INTO the mover, but MoveBookFile records no operation_change row, while the current callers do. The refactor can therefore silently delete the organize undo trail - the rollback property the task is nominally s"
   ]
  },
@@ -1216,8 +1208,7 @@
   "anti_over_suppression": "N/A -- this is an interface-narrowing refactor, not a filter/guard.",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Scope for this item is exactly the one stale comment found; the TODO's broader ask ('audit existing... comments across the codebase... grep for justification comments near database.Store / database.BookStore and re-verify each claim') was performed as part of this investigation (see verified_anchors) and turned up only this one additional instance beyond the two CLAUDE.md already documents as fixed.",
-  "review_notes": []
+  "notes": "Scope for this item is exactly the one stale comment found; the TODO's broader ask ('audit existing... comments across the codebase... grep for justification comments near database.Store / database.BookStore and re-verify each claim') was performed as part of this investigation (see verified_anchors) and turned up only this one additional instance beyond the two CLAUDE.md already documents as fixed."
  },
  {
   "todo_line": 921,
@@ -1539,9 +1530,8 @@
   "exact_files": [
    "internal/maintenance/job.go",
    "internal/maintenance/registry.go",
-   "internal/plugins/maintenance/plugin.go",
-   "internal/server/maintenance_dispatcher.go",
-   "internal/server/maintenance_job_op.go"
+   "internal/server/maintenance_job_op.go",
+   "internal/server/maintenance_dispatcher.go"
   ],
   "verified_anchors": [
    {
@@ -1616,8 +1606,9 @@
   "gate": "go build ./... && go test ./internal/maintenance/... (make ci is known-red on main per the plan doc; do not read a red make ci as a signal from this work)",
   "notes": "L973 in this same scope is a decision-record pointer to this exact item -- close L973 as not_a_task and treat this line as the real, actionable deliverable. Strongly recommend /parallel-sweep given the 37-job mechanical shape, once the Phase-1 sequencing question in step 1-2 is resolved.",
   "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re",
-   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
+   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo",
+   "[correctness.json] The package's own source plan says the shared gate cannot pass, and 128 tasks are gated on it anyway. docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md:143-145 states `make ci` currently CANNOT pass on main (10 staticcheck findings, none introduced by that work) and instructs readers not ",
+   "[simplicity-scope.json] TASK-069's gate field concedes that the package-wide gate is red on main \u2014 'make ci is known-red on main per the plan doc; do not read a red make ci as a signal from this work' \u2014 which directly contradicts the coordinator protocol printed in every orchestration.md: 'A wave MUST NOT start while ... t"
   ]
  }
 ]

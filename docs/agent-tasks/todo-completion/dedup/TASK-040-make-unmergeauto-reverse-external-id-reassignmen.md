@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-040-make-unmergeauto-reverse-external-id-reassignmen.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 194d3bdf-f505-4333-a288-3f7f802c0a93 -->
+<!-- guid: 1abccef6-8624-40c1-b4d9-a02621ac2bb2 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-040 — Make UnmergeAuto reverse external-ID reassignment and iTunes write-back removals, not just the book record (MERGE-UNDO)
@@ -80,9 +80,9 @@ Anti-over-suppression test: `N/A — this is additive reversal logic, not a filt
 ## How to test
 
 ```bash
-make ci
+go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/dedup/... ./internal/merge/... -count=1
 ```
-If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<changed-pkg>/... && go test ./<changed-pkg>/... -count=1` (or `npm --prefix web test -- <file>` for web), then the full gate once before reporting done.
+Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
 ## Acceptance criteria
 
@@ -90,7 +90,7 @@ If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<c
 - [ ] `grep -n "LoserExternalIDs\|RemovedITunesPIDs" internal/database/dedup_automerge_journal.go` returns 2+ hits.
 - [ ] Anti-over-suppression test: `N/A — this is additive reversal logic, not a filter/guard.` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `make ci` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/dedup/... ./internal/merge/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_dedup_040.md`.
 

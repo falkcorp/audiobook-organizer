@@ -259,10 +259,6 @@
   "gate": "make ci",
   "notes": "TODO.md item 7's own text hedges this as 'may need' \u2014 but the concurrency mandate in this repo's CLAUDE.md makes this a should-fix regardless of measured latency, since the shape (per-item DB round-trip in a for-range) is exactly what that policy targets.",
   "review_notes": [
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
    "[ops-rollback.json] TASK-169 fans DismissDedupCluster's per-candidate work out over runtime.NumCPU() goroutines, and the per-candidate work calls EmbeddingStore.UpsertLabeledExample - one of the few EmbeddingStore methods that does NOT take the store's closeMu read lock, only a check-then-act atomic flag. The file's ow"
   ]
  },
@@ -274,9 +270,8 @@
   "verdict_evidence": "docs/superpowers/specs/2026-05-31-omnibus-detection-and-dedup.md is a complete, unimplemented spec (last-edited 2026-05-31, v1.0.0); grep -rn 'book_type' internal/database/bookcore.go internal/database/migrations.go returns 0 hits, confirming Part 1 (the book_type column) is unbuilt.",
   "domain": "internal/database",
   "exact_files": [
-   "internal/database/bookcore.go",
    "internal/database/migrations.go",
-   "internal/database/mocks/mock_store.go",
+   "internal/database/bookcore.go",
    "internal/database/store.go",
    "internal/server/handlers/audiobooks/handler.go",
    "web/src/pages/BookDetail.tsx",
@@ -332,8 +327,7 @@
   "gate": "make ci",
   "notes": "Deliberately scoped to Part 1 only. Parts 2/3 of the spec (detection + non-destructive relationship representation) are large, undesigned-in-detail follow-ons \u2014 do not let a Haiku/Sonnet agent try to build the whole spec in one PR.",
   "review_notes": [
-   "[simplicity-scope.json] Tasks that add a method to a database sub-interface omit the mock implementations from exact_files, so they cannot compile, and the collision matrix under-counts the two hottest mock files. `database.Store` embeds BookStore/NarratorStore/TagStore, and both MockStore implementations are compile-asser",
-   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA"
+   "[simplicity-scope.json] Busywork occupying a wave slot. TASK-033 'Repoint store.go:17's broken doc reference to the archived design spec' is a one-comment-line edit, yet it is wave 2 of the five-deep internal/database/store.go chain, which means TASK-037 and TASK-039 (real schema work) each wait an extra merge round-trip f"
   ]
  },
  {
@@ -401,11 +395,7 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "TODO item calls this 'optional' \u2014 low priority, small effort, safe for a Haiku-tier agent.",
-  "review_notes": [
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
-  ]
+  "notes": "TODO item calls this 'optional' \u2014 low priority, small effort, safe for a Haiku-tier agent."
  },
  {
   "todo_line": 10526,
@@ -415,10 +405,11 @@
   "verdict_evidence": "internal/audiobooks/service_tags.go:16-20 ListAllUserTags (despite its name) calls svc.store.ListAllTags() unfiltered, and internal/database/pebble_store_tags.go:222 ListAllTags scans the tag_idx: index which has no source distinction, so system-sourced tags like 'metadata:source:audible' leak into the /tags endpoint that feeds web/src/components/library/TagCloud.tsx's availableTags prop",
   "domain": "internal/database",
   "exact_files": [
-   "internal/database/pebble_store_tags.go",
-   "internal/database/iface_tags.go",
    "internal/audiobooks/service_tags.go",
-   "internal/database/mock_store.go"
+   "internal/database/iface_tags.go",
+   "internal/database/mock_store.go",
+   "internal/database/mocks/mock_store.go",
+   "internal/database/pebble_store_tags.go"
   ],
   "verified_anchors": [
    {
@@ -485,7 +476,9 @@
   "gate": "make ci",
   "notes": "Confirm with the coordinator whether FilterSidebar.tsx's tag filter dropdown should also switch to the new user-only endpoint, or intentionally keep showing system tags there for power users \u2014 the TODO item only names the 'Browse-by-Tag cloud' (TagCloud.tsx) explicitly.",
   "review_notes": [
-   "[correctness.json] Three tasks redefine what the Browse-by-Tag cloud shows, using two INCOMPATIBLE definitions of 'hide', in the same and adjacent waves, with no depends_on between them. TASK-169 (wave 1, frontend) hides by NAMESPACE (dedup:*, metadata:source:*). TASK-040 (wave 1, backend) changes /tags to return only"
+   "[simplicity-scope.json] Tasks that add a method to a database sub-interface omit the mock implementations from exact_files, so they cannot compile, and the collision matrix under-counts the two hottest mock files. `database.Store` embeds BookStore/NarratorStore/TagStore, and both MockStore implementations are compile-asser",
+   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA",
+   "[simplicity-scope.json] Every brief points at a package-level protocol document that does not exist. 212 files in the package reference `docs/agent-tasks/ORCHESTRATION.md` (as `../ORCHESTRATION.md` / `../../ORCHESTRATION.md`), including the line in each brief '(Protocol also in `docs/agent-tasks/ORCHESTRATION.md` \u2014 the inl"
   ]
  },
  {
@@ -816,7 +809,6 @@
   "gate": "make ci",
   "notes": "review_critical because this touches CombineBooks, a prod-data merge/apply path with real file moves.",
   "review_notes": [
-   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three",
    "[ops-rollback.json] TASK-054 adds real, irreversible file moves to the merge/apply path (CombineBooks) via organizer.Organizer.OrganizeBook, with no dry-run and - decisively - no operation_change journal row. The repo's undo engine reverses file moves only from operation_changes rows of type file_move/organize_rename; ",
    "[ops-rollback.json] TASK-054 changes CombineBooks itself, so it silently converts every existing CombineBooks caller from a DB-only operation into one that moves files on disk - including the review-queue apply path whose entire safety posture (review_apply_enabled OFF in prod, decision 8 = do not flip) is predicated o"
   ]
@@ -968,7 +960,10 @@
   "anti_over_suppression": "TestBookSigCoverage_HidesBadgeAtFullCoverage is the anti-suppression companion to the partial-badge test \u2014 proves the badge doesn't always render.",
   "depends_on_lines": [],
   "gate": "npm --prefix web run lint && npm --prefix web test",
-  "notes": "Part 1 of 2 for TODO item 23; Part 2 is the live-prod verification, filed separately as prod_run."
+  "notes": "Part 1 of 2 for TODO item 23; Part 2 is the live-prod verification, filed separately as prod_run.",
+  "review_notes": [
+   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n"
+  ]
  },
  {
   "todo_line": 10586,

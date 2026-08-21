@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: ecf3801a-69dd-45ec-89b6-fbc0d063965c -->
+<!-- guid: 160bdd02-85c1-489e-9f00-35decbf50833 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — misc-go workstream (todo-completion)
@@ -12,16 +12,16 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK086[TASK-086 fix-the-go-zipslip-finding-o]
-      TASK087[TASK-087 fix-or-verify-the-4-still-op]
-      TASK088[TASK-088 add-codeql-specific-lgtm-sup]
-      TASK089[TASK-089 add-search-index-metrics-doc]
-      TASK090[TASK-090 collapse-internal-whitespace]
-      TASK091[TASK-091 replace-serviceregistry-get-]
-      TASK092[TASK-092 route-acoustid-lsh-backfill-]
+      TASK082[TASK-082 fix-the-go-zipslip-finding-o]
+      TASK083[TASK-083 fix-or-verify-the-4-still-op]
+      TASK084[TASK-084 add-codeql-specific-lgtm-sup]
+      TASK085[TASK-085 add-search-index-metrics-doc]
+      TASK086[TASK-086 collapse-internal-whitespace]
+      TASK087[TASK-087 replace-serviceregistry-get-]
+      TASK088[TASK-088 route-acoustid-lsh-backfill-]
     end
-    subgraph Wave4
-      TASK085[TASK-085 measure-the-real-double-prim]
+    subgraph Wave5
+      TASK186[TASK-186 measure-the-real-double-prim]
     end
 
 ```
@@ -32,7 +32,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`make ci ; make ci && npm --prefix web run lint && npm --prefix web test`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/audiobooks/... ./internal/database/... ./internal/organizer/... ./internal/plugins/maintenance/... ./internal/reconcile/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/backup/... -count=1 ; go build ./... && go vet ./... && go test ./internal/fileops/... ./internal/metadata/... ./internal/server/handlers/... -count=1 ; go build ./... && go vet ./... && go test ./internal/metrics/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/mtls/... ./tools/cmd/merge-split-books/... ./tools/cmd/reconcile-paths/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/acoustid/... -count=1 ; go build ./... && go vet ./... && go test ./internal/serviceregistry/... -count=1 ; go build ./... && go vet ./... && go test ./internal/util/... -count=1`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

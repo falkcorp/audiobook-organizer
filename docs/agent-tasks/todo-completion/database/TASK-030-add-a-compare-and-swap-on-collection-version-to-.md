@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-030-add-a-compare-and-swap-on-collection-version-to-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 67b9c2b7-dec4-4841-97cb-4809d6487aef -->
+<!-- guid: 6274b822-1128-422e-996f-c8a36fc72b23 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-030 — Add a compare-and-swap on Collection.Version to PebbleStore.UpdateCollection (TODO.md L4501)
@@ -74,9 +74,9 @@ Anti-over-suppression test: `TestUpdateCollection_CorrectVersion_Succeeds` — a
 ## How to test
 
 ```bash
-make ci
+go build ./... && go vet ./... && go test ./internal/database/... -count=1
 ```
-If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<changed-pkg>/... && go test ./<changed-pkg>/... -count=1` (or `npm --prefix web test -- <file>` for web), then the full gate once before reporting done.
+Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
 ## Acceptance criteria
 
@@ -85,7 +85,7 @@ If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<c
 - [ ] MockStore.UpdateCollection and PebbleStore.UpdateCollection agree on CAS behavior (both reject a stale-version write) — verify with `grep -n 'version conflict' internal/database/*.go` showing the message in both implementations.
 - [ ] Anti-over-suppression test: `TestUpdateCollection_CorrectVersion_Succeeds` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `make ci` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/database/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_database_030.md`.
 

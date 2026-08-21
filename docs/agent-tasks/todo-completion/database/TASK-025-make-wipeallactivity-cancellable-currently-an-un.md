@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-025-make-wipeallactivity-cancellable-currently-an-un.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: a795655c-134e-4052-929b-cd80448eb185 -->
+<!-- guid: d7511a96-c6c9-4d76-abad-131293e12fc3 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-025 — Make WipeAllActivity cancellable (currently an uncancellable full scan reachable from a request path) (TODO.md L1970)
@@ -74,9 +74,9 @@ Anti-over-suppression: N/A
 ## How to test
 
 ```bash
-make ci
+go build ./... && go vet ./... && go test ./internal/database/... ./internal/server/... -count=1
 ```
-If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<changed-pkg>/... && go test ./<changed-pkg>/... -count=1` (or `npm --prefix web test -- <file>` for web), then the full gate once before reporting done.
+Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
 ## Acceptance criteria
 
@@ -84,7 +84,7 @@ If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<c
 - [ ] `go test ./internal/database/... ./internal/server/...` passes including the new cancellation test.
 - [ ] Anti-over-suppression: N/A
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `make ci` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/database/... ./internal/server/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_database_025.md`.
 

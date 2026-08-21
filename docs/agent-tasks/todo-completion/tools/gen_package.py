@@ -103,8 +103,19 @@ for o in items:
 
 # split tasks by workstream and assign ids
 tasks.sort(key=lambda o: (ws_for(o.get("domain"), o.get("notes"), o.get("_section","")), int(o.get("todo_line") or 0), o.get("part") or 0))
-for n, t in enumerate(tasks, 1):
-    t["id"] = f"TASK-{n:03d}"
+def stable_key(o):
+    return f"{o.get('_scope')}|{o.get('todo_line')}|{o.get('part')}|{(o.get('title') or '')[:60]}"
+IDMAP_PATH = os.path.join(SCOUT, "..", "task-ids.json")
+idmap = json.load(open(IDMAP_PATH)) if os.path.exists(IDMAP_PATH) else {}
+next_n = 1 + max([int(v[5:]) for v in idmap.values()] or [0])
+for t in tasks:
+    k = stable_key(t)
+    if k not in idmap:
+        idmap[k] = f"TASK-{next_n:03d}"; next_n += 1
+    t["id"] = idmap[k]
+    t["stable_key"] = k
+json.dump(idmap, open(IDMAP_PATH, "w"), indent=1, sort_keys=True)
+for t in tasks:
     t["ws"] = ws_for(t.get("domain"), t.get("notes"), t.get("_section",""))
     t["slug"] = slugify(t.get("title"))
     t["scope_file"] = t["_scope"]
@@ -128,15 +139,24 @@ for n, t in enumerate(tasks, 1):
         t["tier_label"] = "Sonnet-class" if (t.get("effort") or "M") == "S" else "Opus-class"
 
 # depends_on by todo_line → ids
+NONTASK_VERDICT = {o.get("todo_line"): o.get("verdict") for o in items if o.get("verdict") != "actionable"}
 by_line = collections.defaultdict(list)
 for t in tasks: by_line[int(t.get("todo_line") or 0)].append(t["id"])
 for t in tasks:
     deps = []
     for ln in t.get("depends_on_lines") or []:
+        if str(ln).startswith("TASK-"):
+            deps.append(ln); continue
         try: ln = int(ln)
         except: continue
-        deps += [i for i in by_line.get(ln, []) if i != t["id"]]
-    t["depends_on"] = sorted(set(deps))
+        hit = [i for i in by_line.get(ln, []) if i != t["id"]]
+        if hit: deps += hit
+        else:
+            v = NONTASK_VERDICT.get(ln, "unknown")
+            if v in ("needs_design", "prod_run", "parked"):
+                t.setdefault("external_blockers", []).append(f"TODO.md L{ln} ({v}) — not a task in this package; coordinator confirms it is resolved or explicitly waives it before dispatch")
+            # stale_done / not_a_task dependencies are satisfied or moot: drop silently
+    t["depends_on"] = sorted(set(d for d in deps if d in {x["id"] for x in tasks}))
 
 # ---------- collision matrix + waves (global) ----------
 SOFT_HUBS = {"internal/plugins/maintenance/plugin.go", "internal/database/mock_store.go", "internal/database/mocks/mock_store.go",
@@ -184,9 +204,14 @@ def gate_for(t):
     files = t["exact_files"]
     web = any(f.startswith("web/") for f in files)
     go = any(f.endswith(".go") or f in ("go.mod", "Makefile") for f in files)
-    if web and go: return "make ci && npm --prefix web run lint && npm --prefix web test"
+    # `make ci` is RED on main (10 pre-existing staticcheck findings — see
+    # docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md), so the Go gate is build+vet+targeted tests.
+    pkgs = sorted({os.path.dirname(f) for f in files if f.endswith(".go") and os.path.dirname(f)})
+    gotest = "go test " + " ".join("./" + d + "/..." for d in pkgs) + " -count=1" if pkgs else "go test ./... -count=1 -short"
+    gogate = "go build ./... && go vet ./... && " + gotest
+    if web and go: return gogate + " && npm --prefix web run lint && npm --prefix web test"
     if web: return "npm --prefix web run lint && npm --prefix web test"
-    if go: return "make ci"
+    if go: return gogate
     return "git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only'"
 def lst(xs, prefix="- "):
     return "\n".join(f"{prefix}{x}" for x in (xs or [])) or f"{prefix}(none)"
@@ -231,6 +256,7 @@ def brief(t):
     aos_line = "Anti-over-suppression: N/A" if aos.strip().upper() == "N/A" else f"Anti-over-suppression test: `{aos}` — a known-good input still passes with the new guard active."
     rc = " · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**" if t.get("review_critical") else ""
     dep = ", ".join(t["depends_on"]) if t["depends_on"] else "none"
+    if t.get("external_blockers"): dep += " · **External blockers:** " + "; ".join(t["external_blockers"])
     body = f"""# {t['id']} — {t.get('title')} ({t.get('src_id') or 'TODO.md L' + str(t.get('todo_line'))})
 
 **Priority:** P{1 if t.get('review_critical') else 2} · **Effort:** {t.get('effort','M')} · **Recommended subagent:** {t['tier_label']} · {t['ws']} subagent · **Why:** {t.get('why_tier','')} · **Depends on:** {dep} · **Wave:** {t['wave']}{rc}
@@ -293,7 +319,7 @@ Then, always:
 ```bash
 {gate}
 ```
-If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<changed-pkg>/... && go test ./<changed-pkg>/... -count=1` (or `npm --prefix web test -- <file>` for web), then the full gate once before reporting done.
+Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
 ## Acceptance criteria
 
@@ -418,8 +444,8 @@ Run at most 4 workers concurrently on this machine (16 concurrent agents crashed
 """)
 
 # skeleton
-skel = {"profile": {"docs_root": "docs", "gate_cmd": "make ci", "default_branch": "main", "repo_abs_path": REPO, "commit_trailer": TRAILER},
-        "tasks": [{k: v for k, v in t.items() if not k.startswith("_")} for t in tasks],
+skel = {"profile": {"docs_root": "docs", "gate_cmd": "go build ./... && go vet ./... && go test ./<changed-pkgs>/... -count=1 (make ci is RED on main — never the gate)", "default_branch": "main", "repo_abs_path": REPO, "commit_trailer": TRAILER},
+        "tasks": [{**{k: v for k, v in t.items() if not k.startswith("_")}, "gate": gate_for(t)} for t in tasks],
         "collisions": collisions, "soft_collisions": soft_collisions,
         "workstreams": [{"ws": ws, "tasks": [t["id"] for t in ts]} for ws, ts in ws_tasks.items()],
         "buckets": {"b2_needs_design": b2, "b3_prod_run": b3, "stale_done": stale, "parked": parked, "not_a_task": nottask}}
@@ -432,7 +458,7 @@ ws_sections = []
 for ws, ts in ws_tasks.items():
     rows = "\n".join(f"| {t['id']} | {t.get('src_id') or 'L'+str(t.get('todo_line'))} | {(t.get('title') or '')[:70]} | **{t['tier_label']}** | {t.get('why_tier','')[:90]} | {t['wave']} |" for t in ts)
     n_similar = len(ts)
-    mode = ("`/parallel-sweep` — trigger: %d tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = `make ci`." % n_similar) if n_similar >= 3 else "SERIAL (coordinator-driven) — fewer than 3 tasks."
+    mode = ("`/parallel-sweep` — trigger: %d tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main)." % n_similar) if n_similar >= 3 else "SERIAL (coordinator-driven) — fewer than 3 tasks."
     if any(t.get("review_critical") for t in ts):
         mode += " Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner."
     ws_sections.append(f"### WS — {ws} · {len(ts)} tasks\n\n| Task | TODO id | Title | Tier | Why tier | Wave |\n|------|---------|-------|------|----------|------|\n{rows}\n\nExecution mode: {mode}\n")
@@ -477,7 +503,7 @@ Rule for the coordinator: after every merge touching a hub file, rebase each sib
 
 ### Coordinator protocol (verbatim)
 
-{PROTOCOL.format(gate='make ci')}
+{PROTOCOL.format(gate='the per-brief How-to-test block (go build/vet/targeted tests or npm lint+test; make ci is RED on main and is never the gate)')}
 
 ---
 

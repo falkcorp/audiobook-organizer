@@ -379,13 +379,7 @@
   "anti_over_suppression": "N/A \u2014 this is a coverage-gap fix, not a filter/guard.",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "The TODO item's stated root cause (concrete types blocking substitution) is already resolved; only reword this when folding into the assembled backlog so the next reader doesn't waste time re-narrowing interfaces that are already narrow.",
-  "review_notes": [
-   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,",
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,",
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
-  ]
+  "notes": "The TODO item's stated root cause (concrete types blocking substitution) is already resolved; only reword this when folding into the assembled backlog so the next reader doesn't waste time re-narrowing interfaces that are already narrow."
  },
  {
   "todo_line": 4463,
@@ -445,11 +439,7 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "n/a (docs)",
-  "notes": "Per project convention (CLAUDE.md Post-Task Hygiene), this kind of executive-summary maintenance pass is itself is the deliverable \u2014 no code changes accompany it.",
-  "review_notes": [
-   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
-  ]
+  "notes": "Per project convention (CLAUDE.md Post-Task Hygiene), this kind of executive-summary maintenance pass is itself is the deliverable \u2014 no code changes accompany it."
  },
  {
   "todo_line": 4477,
@@ -695,9 +685,7 @@
   "gate": "make ci",
   "notes": "Not literally 'organize/rename/dedup/repair/schema/migration' per the review_critical rubric, so marked false, but this is still a real correctness fix on a shared, multi-writer row.",
   "review_notes": [
-   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA",
-   "[simplicity-scope.json] Tier/effort mismatch in the direction that costs a rerun: TASK-034 is the only Haiku-class task at effort L \u2014 '~86 hardwired-zero-return methods' in a 1000+ line hand-written mock \u2014 and it sits at wave 3 of a seven-deep chain, so a botched pass by the weakest tier stalls TASK-035/038/040/139 behind ",
-   "[simplicity-scope.json] Busywork occupying a wave slot. TASK-033 'Repoint store.go:17's broken doc reference to the archived design spec' is a one-comment-line edit, yet it is wave 2 of the five-deep internal/database/store.go chain, which means TASK-037 and TASK-039 (real schema work) each wait an extra merge round-trip f"
+   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA"
   ]
  },
  {
@@ -781,7 +769,7 @@
   "gate": "make ci",
   "notes": "See part 2 (same todo_line) for the more substantial /api/session/local-all endpoint, which actually applies progress.",
   "review_notes": [
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n"
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
   ]
  },
  {
@@ -883,13 +871,7 @@
   "anti_over_suppression": "TestSessionLocalAll_MalformedBody_StillReturns200",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "The spec (docs/specs/2026-07-29-abs-sync-api-design.md) is unusually thorough for this API family \u2014 read \u00a71.8 and \u00a71.9 in full before implementing, not just the excerpts cited here, since it documents several client-specific quirks (timestamp tie-breaking, forward-only guards) that apply to any progress-writing endpoint including this one.",
-  "review_notes": [
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
-  ]
+  "notes": "The spec (docs/specs/2026-07-29-abs-sync-api-design.md) is unusually thorough for this API family \u2014 read \u00a71.8 and \u00a71.9 in full before implementing, not just the excerpts cited here, since it documents several client-specific quirks (timestamp tie-breaking, forward-only guards) that apply to any progress-writing endpoint including this one."
  },
  {
   "todo_line": 4513,
@@ -1050,10 +1032,8 @@
   "domain": "internal/server/handlers/operations",
   "exact_files": [
    "internal/server/handlers/operations/handler.go",
-   "internal/server/handlers/scheduler_admin.go",
    "internal/server/wire_operations_routes.go",
-   "web/src/utils/apiFetch.test.ts",
-   "web/src/utils/apiFetch.ts"
+   "internal/server/handlers/scheduler_admin.go"
   ],
   "verified_anchors": [
    {
@@ -1097,7 +1077,9 @@
    "4. Move the corresponding test cases out of internal/server/handlers/operations/handler_test.go (or wherever they currently live \u2014 grep for `func Test.*ListTasks\\|func Test.*RunTask\\|func Test.*MaintenanceWindow` under internal/server/handlers/operations/) into a new _test.go file alongside the new handler.",
    "5. Bump version headers on every touched/created file."
   ],
-  "tests": [],
+  "tests": [
+   "internal/server/wire_operations_routes_test.go: a table over the 6 moved routes asserting status code and response shape are identical before and after the move (record the current responses first)."
+  ],
   "acceptance": [
    "`grep -n '\"/tasks\\|/maintenance-window' internal/server/wire_operations_routes.go` shows the 6 routes registered against the NEW handler, not operationsH.",
    "`go build ./...` and `go test ./internal/server/...` both pass with no behavior change (same routes, same responses)."
@@ -1110,11 +1092,8 @@
   "gate": "make ci",
   "notes": "This is purely an internal reorganization with no behavior change \u2014 keep the PR small and mechanical so it is trivially reviewable, and do not fold it into the same PR as the actual v1-operations-record retirement work happening elsewhere in this backlog.",
   "review_notes": [
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
-   "[simplicity-scope.json] Over-scoped, and it is the hub that serializes the back half of the web workstream. TASK-165 lists 18 files ('Review the 17 apiFetch-callers' catch handlers for session-expiry messaging') and sits at web wave 4, where it collides with Library.tsx, BookDetail.tsx and DedupAcousticTab.tsx and therefor"
+   "[correctness.json] A route migration ships with tests: []. TASK-163 moves 6 routes (/tasks/*, /maintenance-window/*) off the legacy v1 operations handler onto a new scheduler-config handler and touches the frontend fetch layer, but declares no tests. Its acceptance is a grep that the routes are registered against the ",
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
   ]
  },
  {
@@ -1254,10 +1233,9 @@
   "gate": "make ci",
   "notes": "review_critical=true: this op applies metadata to the database and optionally writes audio file tags back to disk at production scale \u2014 a resume bug here (e.g. double-applying or silently downgrading WriteBack) is a real data-integrity risk, not just an inconvenience.",
   "review_notes": [
-   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,",
-   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,",
    "[ops-rollback.json] Both tasks convert production APPLY ops from ResumeDrop to ResumeRestart. ResumeRestart is resumed automatically and unattended at server startup - no operator action, no gate. That directly collides with the standing rule that a running scan clobbers applied metadata and applies must never run duri",
-   "[ops-rollback.json] resumeRestart is fail-OPEN when the checkpoint is missing, unreadable, or schema_version=1: it logs and dispatches the op with the ORIGINAL params, i.e. ResumeFrom absent => 0 => the entire book list is re-applied from the start. For metadata.batch-apply-cached with WriteBack=true that re-writes tag"
+   "[ops-rollback.json] resumeRestart is fail-OPEN when the checkpoint is missing, unreadable, or schema_version=1: it logs and dispatches the op with the ORIGINAL params, i.e. ResumeFrom absent => 0 => the entire book list is re-applied from the start. For metadata.batch-apply-cached with WriteBack=true that re-writes tag",
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
   ]
  },
  {
@@ -1331,10 +1309,9 @@
   "gate": "make ci",
   "notes": "review_critical=true: reconcile.apply is a dedup merge/apply path \u2014 the highest-severity category in this scout's own review_critical rubric. Do not treat this as equivalent-risk to part 1; verify merge idempotency explicitly before shipping.",
   "review_notes": [
-   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,",
-   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,",
    "[ops-rollback.json] Both tasks convert production APPLY ops from ResumeDrop to ResumeRestart. ResumeRestart is resumed automatically and unattended at server startup - no operator action, no gate. That directly collides with the standing rule that a running scan clobbers applied metadata and applies must never run duri",
-   "[ops-rollback.json] resumeRestart is fail-OPEN when the checkpoint is missing, unreadable, or schema_version=1: it logs and dispatches the op with the ORIGINAL params, i.e. ResumeFrom absent => 0 => the entire book list is re-applied from the start. For metadata.batch-apply-cached with WriteBack=true that re-writes tag"
+   "[ops-rollback.json] resumeRestart is fail-OPEN when the checkpoint is missing, unreadable, or schema_version=1: it logs and dispatches the op with the ORIGINAL params, i.e. ResumeFrom absent => 0 => the entire book list is re-applied from the start. For metadata.batch-apply-cached with WriteBack=true that re-writes tag",
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
   ]
  },
  {

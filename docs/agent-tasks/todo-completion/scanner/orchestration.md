@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/scanner/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e355a567-8373-42ca-896e-7658ebf0d7e8 -->
+<!-- guid: ac761b34-f512-4e67-a578-ededcbe2065e -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — scanner workstream (todo-completion)
@@ -12,10 +12,10 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK128[TASK-128 reuse-internal-ai-s-existing]
+      TASK124[TASK-124 reuse-internal-ai-s-existing]
     end
     subgraph Wave2
-      TASK127[TASK-127 delete-the-unused-internal-s]
+      TASK123[TASK-123 delete-the-unused-internal-s]
     end
 
 ```
@@ -26,7 +26,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`make ci`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/scanner/... -count=1 ; go build ./... && go vet ./... && go test ./internal/scanner/mocks/... -count=1`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

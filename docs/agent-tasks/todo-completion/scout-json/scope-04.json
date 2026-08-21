@@ -3,18 +3,17 @@
   "todo_line": 2481,
   "src_id": null,
   "title": "Audit apply-shaped endpoints for missing tag/file-I/O writeback",
-  "verdict": "hold TASK-160 until the scout resolves the server-side file",
-  "verdict_evidence": "[simplicity-scope.json] exact_files contains a prose sentence instead of a path: 'internal/server/handlers/setup.go (or wherever the setup-wizard's other server-side calls live \u2014 confirm exact file)'. Any mechanical consumer of exact_files (the collision matrix, the wave computation, the coordinator's rebase/conflict check) treats that whole string as a filename, so the real file TASK-160 will edit participates in no collision edge at all. TASK-160 is scheduled in web wave 1 alongside 10 other tasks. | BatchApplyFromCache (metadata_cache.go:448) and applyAudiobookMetadataImpl (metadata/handler.go:577) are the two known apply paths; grep -n 'func.*[Aa]pply' internal/server/handlers/*.go finds 5 more untouched candidates: ApplyRename (organize.go:157), ApplyScanResults (ai.go:484), ApplyAuthorReview (ai.go:697), ApplySuggestions (diagnostics.go:472), RegisterApplyHandler (review/handler.go:137).",
+  "verdict": "actionable",
+  "verdict_evidence": "BatchApplyFromCache (metadata_cache.go:448) and applyAudiobookMetadataImpl (metadata/handler.go:577) are the two known apply paths; grep -n 'func.*[Aa]pply' internal/server/handlers/*.go finds 5 more untouched candidates: ApplyRename (organize.go:157), ApplyScanResults (ai.go:484), ApplyAuthorReview (ai.go:697), ApplySuggestions (diagnostics.go:472), RegisterApplyHandler (review/handler.go:137).",
   "domain": "internal/server/handlers",
   "exact_files": [
-   "docs/audits/2026-08-21-apply-endpoint-fileio-audit.md",
+   "internal/server/handlers/organize.go",
    "internal/server/handlers/ai.go",
    "internal/server/handlers/diagnostics.go",
+   "internal/server/handlers/review/handler.go",
    "internal/server/handlers/metadata/handler.go",
    "internal/server/handlers/metadata_cache.go",
-   "internal/server/handlers/organize.go",
-   "internal/server/handlers/review/handler.go",
-   "web/src/components/wizard/WelcomeWizard.tsx"
+   "docs/audits/2026-08-21-apply-endpoint-fileio-audit.md"
   ],
   "verified_anchors": [
    {
@@ -78,9 +77,8 @@
   "gate": "n/a (docs)",
   "notes": "Owner phrasing is 'Consider the same file-I/O audit' \u2014 the audit document is the deliverable; a shared helper is speculative and out of scope unless the audit finds a live second defect.",
   "review_notes": [
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
-   "[simplicity-scope.json] exact_files contains a prose sentence instead of a path: 'internal/server/handlers/setup.go (or wherever the setup-wizard's other server-side calls live \u2014 confirm exact file)'. Any mechanical consumer of exact_files (the collision matrix, the wave computation, the coordinator's rebase/conflict check"
+   "[simplicity-scope.json] Two different deliverables in one task: TASK-150 both writes an audit document (docs/audits/2026-08-21-apply-endpoint-fileio-audit.md) and edits six production handlers (ai.go, diagnostics.go, metadata/handler.go, metadata_cache.go, organize.go, review/handler.go) to add missing tag/file-I/O writeba",
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
   ]
  },
  {
@@ -91,24 +89,26 @@
   "verdict_evidence": "apiFetch throws ApiAuthRedirectError (web/src/utils/apiFetch.ts:100,110); of the 17 named callers only useMetadataLane.ts special-cases it \u2014 grep -rln \"isAuthRedirectError|ApiAuthRedirectError\" web/src --include=*.tsx --include=*.ts (excluding tests and apiFetch.ts itself) returns exactly web/src/components/review/lanes/useMetadataLane.ts.",
   "domain": "web",
   "exact_files": [
-   "web/src/pages/BookDetail.tsx",
-   "web/src/pages/Library.tsx",
-   "web/src/hooks/useImportFolderHandlers.ts",
-   "web/src/pages/FileManager.tsx",
-   "web/src/components/layout/UserMenu.tsx",
-   "web/src/components/audiobooks/VersionManagement.tsx",
-   "web/src/components/audiobooks/MetadataSearchDialog.tsx",
    "web/src/components/audiobooks/BulkMetadataSearchDialog.tsx",
-   "web/src/components/review/lanes/useMetadataLane.ts",
+   "web/src/components/audiobooks/MetadataSearchDialog.tsx",
+   "web/src/components/audiobooks/VersionManagement.tsx",
    "web/src/components/common/ServerFileBrowser.tsx",
-   "web/src/hooks/useBackupHandlers.ts",
-   "web/src/components/system/MaintenanceTab.tsx",
-   "web/src/hooks/useColumnConfig.ts",
-   "web/src/components/review/reviewActions.ts",
-   "web/src/components/review/lanes/useDupesLane.ts",
-   "web/src/components/dedup/DedupAcousticTab.tsx",
    "web/src/components/dedup/CandidateCompareDrawer.tsx",
-   "web/src/components/settings/APIKeysTab.tsx"
+   "web/src/components/dedup/DedupAcousticTab.tsx",
+   "web/src/components/layout/UserMenu.tsx",
+   "web/src/components/review/lanes/useDupesLane.ts",
+   "web/src/components/review/lanes/useMetadataLane.ts",
+   "web/src/components/review/reviewActions.ts",
+   "web/src/components/settings/APIKeysTab.tsx",
+   "web/src/components/system/MaintenanceTab.tsx",
+   "web/src/hooks/useBackupHandlers.ts",
+   "web/src/hooks/useColumnConfig.ts",
+   "web/src/hooks/useImportFolderHandlers.ts",
+   "web/src/pages/BookDetail.tsx",
+   "web/src/pages/FileManager.tsx",
+   "web/src/pages/Library.tsx",
+   "web/src/utils/apiFetch.test.ts",
+   "web/src/utils/apiFetch.ts"
   ],
   "verified_anchors": [
    {
@@ -166,7 +166,12 @@
   "anti_over_suppression": "Test asserting a genuine 500 still shows the original 'Failed to X' message, not the session-expired one.",
   "depends_on_lines": [],
   "gate": "npm --prefix web run lint && npm --prefix web test (web)",
-  "notes": "This is the direct consequence of apiFetch's ApiAuthRedirectError throw already shipping \u2014 the fix 'is working', per the TODO text; this item is purely about auditing/upgrading 18 call-site messages. Good candidate for a parallel-refactor-sweep given the repeated pattern across files."
+  "notes": "This is the direct consequence of apiFetch's ApiAuthRedirectError throw already shipping \u2014 the fix 'is working', per the TODO text; this item is purely about auditing/upgrading 18 call-site messages. Good candidate for a parallel-refactor-sweep given the repeated pattern across files.",
+  "review_notes": [
+   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
+   "[simplicity-scope.json] Over-scoped, and it is the hub that serializes the back half of the web workstream. TASK-165 lists 18 files ('Review the 17 apiFetch-callers' catch handlers for session-expiry messaging') and sits at web wave 4, where it collides with Library.tsx, BookDetail.tsx and DedupAcousticTab.tsx and therefor"
+  ]
  },
  {
   "todo_line": 2537,
@@ -425,13 +430,7 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci (Go)",
-  "notes": "Purely a documentation task; the owner decision already resolved the design question.",
-  "review_notes": [
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
-  ]
+  "notes": "Purely a documentation task; the owner decision already resolved the design question."
  },
  {
   "todo_line": 2595,
@@ -442,12 +441,8 @@
   "verdict_evidence": "Both flagged lines exist unchanged and unassessed at HEAD: internal/metadata/cover.go:135 `resp, err := client.Get(coverURL) //nolint:noctx` and internal/covers/covers.go:82 `resp, err := http.Get(coverURL) //nolint:gosec` \u2014 both nolint comments suppress the STYLE lint, not the CodeQL SSRF finding, and neither line validates coverURL's host/scheme before fetching.",
   "domain": "internal/metadata",
   "exact_files": [
-   "changelog.d/20260821_missing-file-lane_089.md",
-   "internal/covers/covers.go",
    "internal/metadata/cover.go",
-   "internal/server/handlers/abs/browse.go",
-   "internal/server/handlers/abs/browse_test.go",
-   "internal/server/handlers/abs/library_fake_test.go"
+   "internal/covers/covers.go"
   ],
   "verified_anchors": [
    {
@@ -469,15 +464,15 @@
   "review_critical": true,
   "goal": "Read the full call chain into both cover.go:135 and covers.go:82 to determine what, if anything, validates coverURL before the fetch (the nolint comments claim validation happens elsewhere \u2014 confirm or refute this for the SSRF threat model specifically: can a malicious metadata provider return a coverURL pointing at an internal/link-local address like 169.254.169.254 or a file:// scheme?). If no real validation exists, add a scheme allowlist (http/https only) and a private/link-local IP block (using net.IP.IsPrivate/IsLoopback/IsLinkLocalUnicast after resolving the host) before the Get call. If validation genuinely already prevents SSRF, add an `// lgtm[go/request-forgery]` comment citing exactly where the validation happens, since CodeQL does not read #nolint/#nosec-style suppressions.",
   "background": [
-   "302-alert CodeQL backlog counted 2026-08-12 via the code-scanning API across all 4 result pages; these are the only 2 'critical' severity alerts (#662 cover.go:135, #645 covers.go:82).",
-   "Both call sites already carry a lint-suppression comment CLAIMING prior validation ('URL already validated above' / 'URL is validated by caller') but neither comment has been verified against the SSRF threat model specifically \u2014 a cover URL originates from a third-party metadata provider response, which is exactly CodeQL's untrusted-input model for this rule."
+   "internal/metadata/cover.go:117 already calls validateCoverURL() (scheme allowlist) before the fetch at cover.go:137, and the client used there is built with a custom safeCoverDialContext (cover.go:71-89) that resolves the host and rejects private/loopback/link-local IPv4 AND IPv6 ranges. This is real, comprehensive SSRF protection already in place for alert #662.",
+   "internal/covers/covers.go:82's http.Get(coverURL) has exactly one caller: internal/server/covers.go's handleCoverProxy, which calls covers.IsAllowedCoverSource(coverURL) (a 4-domain allowlist: openlibrary/google books/amazon) and rejects before ever calling FetchAndCacheCover. This is real, comprehensive SSRF protection already in place for alert #645.",
+   "internal/metadata/cover_test.go already asserts a 169.254.169.254 cover URL is SSRF-blocked; internal/covers/covers_test.go already has TestIsAllowedCoverSource asserting both the blocked case and several legitimate URLs pass. Do not re-add these tests \u2014 verify they exist and pass."
   ],
   "steps": [
-   "1. Read internal/metadata/cover.go from the top of the function containing line 135 backward to find what 'already validated above' refers to; determine if it checks scheme/host or only file-extension/format.",
-   "2. Read internal/covers/covers.go's caller chain to find what 'validated by caller' refers to.",
-   "3. If validation is only extension/format-based (not scheme/host), add a small helper (e.g. `isSafeCoverURL(rawURL string) bool` in internal/metadata or a shared internal/httputil location) that parses the URL, rejects non-http(s) schemes, resolves the host, and rejects private/loopback/link-local resolved IPs.",
-   "4. Call the helper before both client.Get(coverURL) (cover.go:135) and http.Get(coverURL) (covers.go:82); return a clear error on rejection instead of fetching.",
-   "5. If step 1-2 instead finds real SSRF-relevant validation already present upstream, skip step 3-4 and instead add `// lgtm[go/request-forgery]` directly above both fetch lines, with a comment naming the exact validating function and file:line."
+   "1. Read internal/metadata/cover.go top-to-bottom around lines 20-137: confirm validateCoverURL (scheme allowlist) and safeCoverDialContext (private/loopback/link-local IPv4+IPv6 block via DNS-resolved-IP check) are both wired into the client used at line 137.",
+   "2. Read internal/covers/covers.go's only caller (internal/server/covers.go:24-45) and confirm covers.IsAllowedCoverSource(coverURL) gates every call to FetchAndCacheCover.",
+   "3. Given both sites have real, host/IP-resolved validation already present, add `// lgtm[go/request-forgery]` directly above cover.go:137 and covers.go:82, each citing the exact validating function/file:line found above (do not add a duplicate/parallel validator).",
+   "4. Run `grep -n 169.254 internal/metadata/cover_test.go` and `grep -n TestIsAllowedCoverSource internal/covers/covers_test.go` to confirm the anti-over-suppression and blocked-case tests already exist and pass; do not add duplicate tests."
   ],
   "tests": [
    "internal/metadata/cover_test.go: add a case asserting a coverURL of `http://169.254.169.254/latest/meta-data/` (or file://, or a private-range IP) is rejected before any network call.",
@@ -496,7 +491,9 @@
   "gate": "make ci (Go)",
   "notes": "Read first per the item's own suggested order \u2014 these are the only 2 critical-severity alerts in the 326-alert backlog and sit on untrusted-input paths.",
   "review_notes": [
-   "[verify-1.json] The Tests section instructs 'Add a table-driven or standalone test ... that injects a failing GetAllSeriesBookCounts on a fake library store' (internal/server/handlers/abs/browse_test.go), implying the existing fakeLibrary (internal/server/handlers/abs/library_fake_test.go) already supports error in"
+   "[verify-1.json] Background section is materially stale/wrong and would mislead the executing model. Verified at HEAD: internal/metadata/cover.go ALREADY has full SSRF protection on the exact flagged line (client.Get(coverURL) at cover.go:137) \u2014 validateCoverURL() (scheme allowlist, called at cover.go:117) PLUS safe",
+   "[verify-1.json] TODO.md's SEC-CODEQL-BACKLOG item (line 2595) is a single checkbox covering all 326 alerts (302 log-injection, 17 high, 3 medium workflow-permission, etc.), of which only the 2 critical SSRF alerts are this task's scope. The brief's generic instruction 'If the task is a TODO.md close-out, check the ",
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
   ]
  },
  {
@@ -551,7 +548,7 @@
   "gate": "make ci (Go)",
   "notes": "Alert #13. Suggested to read before the log-injection sweep since it is on a file-mutating path.",
   "review_notes": [
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
   ]
  },
  {
@@ -616,7 +613,10 @@
   "anti_over_suppression": "N/A \u2014 this class of finding is either fixed or suppressed-with-citation, not silenced with a bare nolint.",
   "depends_on_lines": [],
   "gate": "make ci (Go)",
-  "notes": "Read before the log-injection sweep per the item's suggested order, since these are on file-mutating paths."
+  "notes": "Read before the log-injection sweep per the item's suggested order, since these are on file-mutating paths.",
+  "review_notes": [
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+  ]
  },
  {
   "todo_line": 2595,
@@ -670,7 +670,10 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci (Go)",
-  "notes": "This assumes CodeQL alert-dismissal happens via in-code lgtm comments in this repo's workflow; if the repo instead dismisses via the GitHub code-scanning UI, the equivalent action is to dismiss alerts #<id> there with 'used in code, but not exploitable' and the same justification text \u2014 confirm which mechanism this repo's CodeQL workflow actually honors before proceeding."
+  "notes": "This assumes CodeQL alert-dismissal happens via in-code lgtm comments in this repo's workflow; if the repo instead dismisses via the GitHub code-scanning UI, the equivalent action is to dismiss alerts #<id> there with 'used in code, but not exploitable' and the same justification text \u2014 confirm which mechanism this repo's CodeQL workflow actually honors before proceeding.",
+  "review_notes": [
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+  ]
  },
  {
   "todo_line": 2595,
@@ -825,11 +828,9 @@
   "domain": "internal/database",
   "exact_files": [
    "internal/database/memdb_summaries.go",
-   "internal/database/mock_store.go",
-   "internal/database/mocks/mock_store.go",
-   "internal/server/handlers/system/handler.go",
    "internal/server/server.go",
-   "internal/server/server_lifecycle.go"
+   "internal/server/server_lifecycle.go",
+   "internal/server/handlers/system/handler.go"
   ],
   "verified_anchors": [
    {
@@ -884,12 +885,7 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci (Go) for Go changes; npm --prefix web run lint && npm --prefix web test for any JS fix",
-  "notes": "Lowest priority sub-part of the CodeQL backlog per the item's own suggested order (criticals, then zipslip/path-injection, then log-injection sweep decision, then re-check the gate) \u2014 do this last.",
-  "review_notes": [
-   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA",
-   "[simplicity-scope.json] Tasks that add a method to a database sub-interface omit the mock implementations from exact_files, so they cannot compile, and the collision matrix under-counts the two hottest mock files. `database.Store` embeds BookStore/NarratorStore/TagStore, and both MockStore implementations are compile-asser",
-   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA"
-  ]
+  "notes": "Lowest priority sub-part of the CodeQL backlog per the item's own suggested order (criticals, then zipslip/path-injection, then log-injection sweep decision, then re-check the gate) \u2014 do this last."
  },
  {
   "todo_line": 3156,
@@ -961,7 +957,11 @@
   "anti_over_suppression": "N/A \u2014 not a filter/guard task.",
   "depends_on_lines": [],
   "gate": "npm --prefix web run lint && npm --prefix web test (web)",
-  "notes": "Prefer real <a href> per the item's own notes (middle-clickable, shareable). Pairs naturally with todo_line 3161 (series link) since both need the same new URL-param plumbing in useLibraryQuery.ts \u2014 consider doing them in the same PR to avoid touching that hook twice."
+  "notes": "Prefer real <a href> per the item's own notes (middle-clickable, shareable). Pairs naturally with todo_line 3161 (series link) since both need the same new URL-param plumbing in useLibraryQuery.ts \u2014 consider doing them in the same PR to avoid touching that hook twice.",
+  "review_notes": [
+   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+  ]
  },
  {
   "todo_line": 3161,
@@ -1025,7 +1025,11 @@
    3156
   ],
   "gate": "npm --prefix web run lint && npm --prefix web test (web)",
-  "notes": "Do in the same PR as todo_line 3156 if practical \u2014 both need the identical new author_id/series_id URL-param plumbing added to useLibraryQuery.ts, so splitting them risks touching the same hook twice with overlapping diffs."
+  "notes": "Do in the same PR as todo_line 3156 if practical \u2014 both need the identical new author_id/series_id URL-param plumbing added to useLibraryQuery.ts, so splitting them risks touching the same hook twice with overlapping diffs.",
+  "review_notes": [
+   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+  ]
  },
  {
   "todo_line": 3164,
@@ -1089,7 +1093,11 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "npm --prefix web run lint && npm --prefix web test (web)",
-  "notes": "The item's own caution \u2014 'check each has a real filter behind it before making it a link' \u2014 is satisfied by the verified_anchors above: all four are real, unlike version_group_id was before its recent fix (see todo_line 3168/3356). library_state and tags were named by the item as 'good candidates' with existing filter support but are not book-detail-page fields in scope here."
+  "notes": "The item's own caution \u2014 'check each has a real filter behind it before making it a link' \u2014 is satisfied by the verified_anchors above: all four are real, unlike version_group_id was before its recent fix (see todo_line 3168/3356). library_state and tags were named by the item as 'good candidates' with existing filter support but are not book-detail-page fields in scope here.",
+  "review_notes": [
+   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+  ]
  },
  {
   "todo_line": 3168,
@@ -1160,7 +1168,8 @@
   "gate": "npm --prefix web run lint && npm --prefix web test (web)",
   "notes": "This item's own blocking condition is resolved \u2014 cross-reference todo_line 3356 in this same scope, which is separately marked stale_done for the exact fix that unblocks this one. Downgrade any earlier assumption that this stays 'parked'.",
   "review_notes": [
-   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
+   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
   ]
  },
  {
@@ -1272,20 +1281,12 @@
   "todo_line": 3348,
   "src_id": null,
   "title": "Fix the 3-way disagreement in how a nil IsPrimaryVersion is treated (matcher vs. pushdown vs. serialized field)",
-  "verdict": "stale_done",
-  "verdict_evidence": "[correctness.json] The same fix is briefed twice under two different todo_lines with no depends_on edge. TASK-002 (L3348, wave 1, review_critical) step 1 and TASK-004 (L3884, wave 3, review_critical) step 2 are the identical edit to the identical line: internal/audiobooks/service_query.go:346, `bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion` -> `== nil || *`. TASK-002 additionally does the twin at L531 and the DTO. Once TASK-002 lands, TASK-004's own re-verify grep returns zero hits and every brief's START-HERE rule says a zero-hit grep means STOP and report \u2014 so TASK-004 burns a review_critical slot and a PR the owner must review, for nothing. | Three different code paths compute 'is this book primary' with OPPOSITE nil semantics: internal/audiobooks/service_filtering.go:864 `eff := s.IsPrimaryVersion == nil || *s.IsPrimaryVersion` treats nil as PRIMARY (true); internal/audiobooks/service_query.go:346 and :532 both compute `bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion`, treating nil as NOT PRIMARY (false); and service_filtering.go:737 `IsPrimaryVersion: summary.IsPrimaryVersion` passes the raw nullable field straight to the API DTO with no 'effective' normalization at all \u2014 so the serialized field can read null/false for a book the filter (via the nil-is-true path) still returns as primary.",
+  "verdict": "actionable",
+  "verdict_evidence": "[correctness.json] REVIEW LAUNDERING: this judge's own finding text was ingested by the 19:43 regeneration and used as the verdict_evidence for a stale_done verdict on the very items it was reporting as broken. Finding #1 of the 19:26 pass said the nil-IsPrimaryVersion fix was briefed TWICE (L3348 and L3884) and that ONE of the two should be dropped. In the 19:43 cut BOTH todo_lines were moved out of tasks[] into buckets.stale_done \u2014 i.e. 'already done, check the box' \u2014 and both entries' verdict_evidence now literally opens with '[correctness.json] The same fix is briefed twice under two different todo_lines...'. A duplicate-work report was converted into a done verdict for both copies. The code is unchanged at HEAD: internal/audiobooks/service_query.go:346 and :531 still read `bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion`, and service_filtering.go:737 still passes the raw nullable straight to the DTO. The stale_done entries even retain the original anchors that PROVE the item is live ('2 hits, at L346 and L532'), so each entry now asserts done and not-done simultaneously. Two wave-1 tasks in the same cut (TASK-002 L3354, TASK-003 L3889) declare depends_on_lines [3348] \u2014 they are gated on an item the package just checked off without fixing. | Three different code paths compute 'is this book primary' with OPPOSITE nil semantics: internal/audiobooks/service_filtering.go:864 `eff := s.IsPrimaryVersion == nil || *s.IsPrimaryVersion` treats nil as PRIMARY (true); internal/audiobooks/service_query.go:346 and :532 both compute `bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion`, treating nil as NOT PRIMARY (false); and service_filtering.go:737 `IsPrimaryVersion: summary.IsPrimaryVersion` passes the raw nullable field straight to the API DTO with no 'effective' normalization at all \u2014 so the serialized field can read null/false for a book the filter (via the nil-is-true path) still returns as primary.",
   "domain": "internal/audiobooks",
   "exact_files": [
    "internal/audiobooks/service_filtering.go",
-   "internal/audiobooks/service_query.go",
-   "internal/database/dbtest/invariants.go",
-   "internal/database/pebble_store.go",
-   "internal/organizer/service.go",
-   "internal/plugins/maintenance/itunes_regroup.go",
-   "internal/plugins/maintenance/regroup_apply.go",
-   "internal/reconcile/elect_primaries.go",
-   "internal/reconcile/reconcile.go",
-   "internal/server/library_list_warmer.go"
+   "internal/audiobooks/service_query.go"
   ],
   "verified_anchors": [
    {
@@ -1348,12 +1349,8 @@
   "review_notes": [
    "[verify-3.json] Acceptance checkbox #2 ('A production-shaped fixture reproducing the 5,731-book case ... shows agreement between the filter result and the serialized field after the fix') names no test function, grep, or command \u2014 unlike checkbox #3 (anti-over-suppression), which names the exact test. A cold model ",
    "[verify-3.json] Direct contradiction between two sections on how to interpret a zero-hit grep on the SAME command. Background/Re-verify section: 'a zero-hit grep means STOP and report' for `grep -n 'bPrimary := b.IsPrimaryVersion != nil && \\*b.IsPrimaryVersion' internal/audiobooks/service_query.go`. Idempotency sec",
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
-   "[verify-3.json] Acceptance checkbox #2 ('A production-shaped fixture reproducing the 5,731-book case ... shows agreement between the filter result and the serialized field after the fix') names no test function, grep, or command \u2014 unlike checkbox #3 (anti-over-suppression), which names the exact test. A cold model ",
-   "[verify-3.json] Direct contradiction between two sections on how to interpret a zero-hit grep on the SAME command. Background/Re-verify section: 'a zero-hit grep means STOP and report' for `grep -n 'bPrimary := b.IsPrimaryVersion != nil && \\*b.IsPrimaryVersion' internal/audiobooks/service_query.go`. Idempotency sec",
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
-   "[correctness.json] The same fix is briefed twice under two different todo_lines with no depends_on edge. TASK-002 (L3348, wave 1, review_critical) step 1 and TASK-004 (L3884, wave 3, review_critical) step 2 are the identical edit to the identical line: internal/audiobooks/service_query.go:346, `bPrimary := b.IsPrimary",
-   "[correctness.json] TASK-002 canonizes 'nil IsPrimaryVersion == primary' but scopes itself to internal/audiobooks (exact_files = service_filtering.go, service_query.go). Partitioning every non-test use of the field BY STRUCTURE (not by naming grep) shows 13 sites implementing the opposite rule; TASK-002 fixes 2 of them"
+   "[correctness.json] REVIEW LAUNDERING: this judge's own finding text was ingested by the 19:43 regeneration and used as the verdict_evidence for a stale_done verdict on the very items it was reporting as broken. Finding #1 of the 19:26 pass said the nil-IsPrimaryVersion fix was briefed TWICE (L3348 and L3884) and that ",
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
   ]
  },
  {
@@ -1520,10 +1517,7 @@
   "anti_over_suppression": "TestReproAllJobsAndClasses (or equivalent) still passes, confirming the underlying stopword-drop behavior is unchanged.",
   "depends_on_lines": [],
   "gate": "make ci (Go) and npm --prefix web run lint && npm --prefix web test (web)",
-  "notes": "Distinct from and unrelated to the (already-fixed) quoted-phrase bug at todo_line 3377 \u2014 do not conflate the two when scoping this fix.",
-  "review_notes": [
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
-  ]
+  "notes": "Distinct from and unrelated to the (already-fixed) quoted-phrase bug at todo_line 3377 \u2014 do not conflate the two when scoping this fix."
  },
  {
   "todo_line": 3377,
@@ -1629,11 +1623,7 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci (Go)",
-  "notes": "Do this together with todo_line 3433 (which asks for the same class of missing metrics more broadly, including search_index_docs_total) \u2014 likely the same PR, since both touch internal/metrics/metrics.go.",
-  "review_notes": [
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
-   "[correctness.json] A brief step contradicts the wave plan. TASK-094 (wave 1) step 5 instructs 'Land this in the same PR as todo_line 3384's search_index_dropped_total / search_index_dirty_backlog gauges' \u2014 that is TASK-140, which the collision matrix places in wave 2 as a SEPARATE PR (both serialize on internal/metric"
-  ]
+  "notes": "Do this together with todo_line 3433 (which asks for the same class of missing metrics more broadly, including search_index_docs_total) \u2014 likely the same PR, since both touch internal/metrics/metrics.go."
  },
  {
   "todo_line": 3391,
@@ -1753,10 +1743,8 @@
   "gate": "make ci (Go) for the tool's own build; n/a for the prod data-gathering run itself",
   "notes": "This is a report/investigation task per the owner's PH-2b-style preference (report before mutate) \u2014 do not build a repair op until the cause is established, per the item's own explicit caution.",
   "review_notes": [
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
-   "[simplicity-scope.json] Busywork occupying a wave slot. TASK-033 'Repoint store.go:17's broken doc reference to the archived design spec' is a one-comment-line edit, yet it is wave 2 of the five-deep internal/database/store.go chain, which means TASK-037 and TASK-039 (real schema work) each wait an extra merge round-trip f",
-   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA",
-   "[ops-rollback.json] A prod RUN is embedded inside a briefable agent task. TASK-031's gate explicitly excuses 'the prod data-gathering run itself' from CI, i.e. the agent is expected to point the new diagnostic at the live production store - which the master plan classifies as Wave 4, 'NOT AGENT WORK', routed to pending"
+   "[ops-rollback.json] A prod RUN is embedded inside a briefable agent task. TASK-031's gate explicitly excuses 'the prod data-gathering run itself' from CI, i.e. the agent is expected to point the new diagnostic at the live production store - which the master plan classifies as Wave 4, 'NOT AGENT WORK', routed to pending",
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
   ]
  },
  {
@@ -1871,12 +1859,7 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci (Go)",
-  "notes": "Do together with todo_line 3384 \u2014 same file (internal/metrics/metrics.go), same registration block, same periodic-update call site.",
-  "review_notes": [
-   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th",
-   "[simplicity-scope.json] Every brief points at a package-level protocol document that does not exist. 212 files in the package reference `docs/agent-tasks/ORCHESTRATION.md` (as `../ORCHESTRATION.md` / `../../ORCHESTRATION.md`), including the line in each brief '(Protocol also in `docs/agent-tasks/ORCHESTRATION.md` \u2014 the inl",
-   "[correctness.json] A brief step contradicts the wave plan. TASK-094 (wave 1) step 5 instructs 'Land this in the same PR as todo_line 3384's search_index_dropped_total / search_index_dirty_backlog gauges' \u2014 that is TASK-140, which the collision matrix places in wave 2 as a SEPARATE PR (both serialize on internal/metric"
-  ]
+  "notes": "Do together with todo_line 3384 \u2014 same file (internal/metrics/metrics.go), same registration block, same periodic-update call site."
  },
  {
   "todo_line": 3443,
@@ -1940,10 +1923,7 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci (Go)",
-  "notes": "Do together with todo_line 3433/3384 if practical \u2014 all three touch internal/metrics/metrics.go's registration block and internal/server/server_lifecycle.go's same periodic metrics-gathering loop.",
-  "review_notes": [
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
-  ]
+  "notes": "Do together with todo_line 3433/3384 if practical \u2014 all three touch internal/metrics/metrics.go's registration block and internal/server/server_lifecycle.go's same periodic metrics-gathering loop."
  },
  {
   "todo_line": 3449,

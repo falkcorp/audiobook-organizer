@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: ac4db05b-18f4-4d6a-bfcf-28299865e0b2 -->
+<!-- guid: fc406a7c-a7be-40d6-b15d-1a833dbca633 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — maintenance workstream (todo-completion)
@@ -12,31 +12,28 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK069[TASK-069 wire-a-durable-freshness-sta]
-      TASK071[TASK-071 build-a-report-only-counter-]
-      TASK072[TASK-072 give-maintenance-jobs-v1-int]
-      TASK074[TASK-074 build-a-detection-only-repor]
-      TASK076[TASK-076 read-through-audit-of-the-8-]
-      TASK077[TASK-077 build-a-report-only-census-o]
-      TASK078[TASK-078 extend-purge-empty-authors-r]
-      TASK079[TASK-079 author-narrator-swap-repair-]
-      TASK080[TASK-080 narrow-the-3-remaining-maint]
-      TASK081[TASK-081 task-04-build-the-idempotent]
+      TASK066[TASK-066 wire-a-durable-freshness-sta]
+      TASK068[TASK-068 build-a-report-only-counter-]
+      TASK069[TASK-069 give-maintenance-jobs-v1-int]
+      TASK071[TASK-071 build-a-detection-only-repor]
+      TASK073[TASK-073 read-through-audit-of-the-8-]
+      TASK074[TASK-074 build-a-report-only-census-o]
+      TASK075[TASK-075 extend-purge-empty-authors-r]
+      TASK076[TASK-076 author-narrator-swap-repair-]
+      TASK077[TASK-077 narrow-the-3-remaining-maint]
+      TASK078[TASK-078 task-04-build-the-idempotent]
     end
     subgraph Wave2
-      TASK070[TASK-070 extend-the-repoint-repair-to]
-    end
-    subgraph Wave3
-      TASK075[TASK-075 new-maintenance-op-merge-an-]
+      TASK067[TASK-067 extend-the-repoint-repair-to]
+      TASK072[TASK-072 new-maintenance-op-merge-an-]
     end
     subgraph Wave5
-      TASK073[TASK-073 add-a-user-configurable-acti]
+      TASK070[TASK-070 add-a-user-configurable-acti]
     end
-    TASK069 --> TASK073
-    TASK071 --> TASK070
-    TASK074 --> TASK075
-    TASK076 --> TASK073
-    TASK090 --> TASK075
+    TASK066 --> TASK070
+    TASK068 --> TASK067
+    TASK073 --> TASK070
+    TASK086 --> TASK072
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -45,7 +42,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`make ci ; make ci && npm --prefix web run lint && npm --prefix web test`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/config/... ./internal/plugins/maintenance/... ./internal/server/... -count=1 && npm --prefix web run lint && npm --prefix web test ; go build ./... && go vet ./... && go test ./internal/maintenance/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/maintenance/jobs/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... ./internal/server/... -count=1`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

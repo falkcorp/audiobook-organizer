@@ -325,9 +325,7 @@
   "gate": "make ci",
   "notes": "basic_auth_enabled is off by default in prod per the item text, so this is a latent bug, not an active incident \u2014 still worth fixing before anyone turns basic auth on.",
   "review_notes": [
-   "[simplicity-scope.json] Two different deliverables in one task: TASK-150 both writes an audit document (docs/audits/2026-08-21-apply-endpoint-fileio-audit.md) and edits six production handlers (ai.go, diagnostics.go, metadata/handler.go, metadata_cache.go, organize.go, review/handler.go) to add missing tag/file-I/O writeba",
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
   ]
  },
  {
@@ -404,8 +402,7 @@
   "gate": "make ci",
   "notes": "Low risk, additive-only change; no data migration needed since DeleteExpiredABSSessions already exists and is tested standalone.",
   "review_notes": [
-   "[simplicity-scope.json] Two different deliverables in one task: TASK-150 both writes an audit document (docs/audits/2026-08-21-apply-endpoint-fileio-audit.md) and edits six production handlers (ai.go, diagnostics.go, metadata/handler.go, metadata_cache.go, organize.go, review/handler.go) to add missing tag/file-I/O writeba",
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA"
   ]
  },
  {
@@ -598,7 +595,8 @@
   "domain": "internal/plugins/maintenance",
   "exact_files": [
    "internal/plugins/maintenance/backfill_sync_id.go",
-   "internal/plugins/maintenance/backfill_sync_id_test.go"
+   "internal/plugins/maintenance/backfill_sync_id_test.go",
+   "internal/plugins/maintenance/plugin.go"
   ],
   "verified_anchors": [
    {
@@ -663,7 +661,8 @@
   "gate": "make ci",
   "notes": "Must use a bounded worker pool per CLAUDE.md's MANDATORY concurrency rule \u2014 this is exactly the whole-library-scale, per-item-DB-write shape that rule targets.",
   "review_notes": [
-   "[ops-rollback.json] A whole-library MUTATING backfill (mints/repoints a sync identity on every book lacking one) is briefed with no dry_run/apply parameter, no report-first mode, and no preview - while sibling new-op tasks in the same package all default to preview (TASK-125 step 7 'Default apply=false', TASK-022 step "
+   "[ops-rollback.json] A whole-library MUTATING backfill (mints/repoints a sync identity on every book lacking one) is briefed with no dry_run/apply parameter, no report-first mode, and no preview - while sibling new-op tasks in the same package all default to preview (TASK-125 step 7 'Default apply=false', TASK-022 step ",
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
   ]
  },
  {
@@ -937,14 +936,7 @@
    10337
   ],
   "gate": "make ci",
-  "notes": "Item's own text explicitly deprioritizes this ('the primary client ships without it') \u2014 recommend the owner confirm it's still worth building before spending an M-effort task on it, rather than this scout assuming 'parked' on their behalf.",
-  "review_notes": [
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
-   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
-  ]
+  "notes": "Item's own text explicitly deprioritizes this ('the primary client ships without it') \u2014 recommend the owner confirm it's still worth building before spending an M-effort task on it, rather than this scout assuming 'parked' on their behalf."
  },
  {
   "todo_line": 10358,
@@ -1074,8 +1066,7 @@
   "anti_over_suppression": "TestClassifyGroup_PartChapterNaming_MixedWithOtherFiles_StaysAmbiguous",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "The item frames this as a 'fast-follow, consider' item, not a hard requirement \u2014 still fully actionable and briefable, just lower urgency than the security/data-loss items in this scope.",
-  "review_notes": []
+  "notes": "The item frames this as a 'fast-follow, consider' item, not a hard requirement \u2014 still fully actionable and briefable, just lower urgency than the security/data-loss items in this scope."
  },
  {
   "todo_line": 10372,
@@ -1138,7 +1129,7 @@
   "gate": "make ci",
   "notes": "This is a live prod data-loss path today (an operator or a stale UI button could still trigger a real removal via an unsafe criterion) \u2014 treat as review-critical and prioritize over the lower-urgency ABS-SYNC items in this scope.",
   "review_notes": [
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
   ]
  },
  {
@@ -1275,11 +1266,7 @@
    10383
   ],
   "gate": "make ci",
-  "notes": "Depends conceptually on L10383's byte-preservation proof being run first (the PRE-APPLY VERIFICATION comment in relocate_sync_cycle.go effectively says the same thing) before this is ever pointed at prod with Apply=true.",
-  "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re",
-   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
-  ]
+  "notes": "Depends conceptually on L10383's byte-preservation proof being run first (the PRE-APPLY VERIFICATION comment in relocate_sync_cycle.go effectively says the same thing) before this is ever pointed at prod with Apply=true."
  },
  {
   "todo_line": 10406,

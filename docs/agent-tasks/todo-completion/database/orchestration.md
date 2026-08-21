@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 2d9837d2-31e5-4a60-84c7-559306ff8b3b -->
+<!-- guid: dc17ccd6-5469-4a83-b5c4-b148cf6f944e -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — database workstream (todo-completion)
@@ -12,7 +12,7 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK020[TASK-020 reduce-internal-database-s-s]
+      TASK177[TASK-177 add-a-per-test-deadline-cont]
       TASK024[TASK-024 replace-fragile-0x30-0x3a-on]
       TASK025[TASK-025 make-wipeallactivity-cancell]
       TASK026[TASK-026 triage-the-remaining-misc-co]
@@ -26,8 +26,8 @@ flowchart LR
       TASK038[TASK-038 filter-system-sourced-tags-o]
     end
     subgraph Wave2
-      TASK021[TASK-021 database-store-40-build-the-]
-      TASK022[TASK-022 finish-killing-database-stor]
+      TASK178[TASK-178 reduce-internal-database-s-s]
+      TASK179[TASK-179 database-store-40-build-the-]
       TASK023[TASK-023 investigate-then-evict-dirty]
       TASK029[TASK-029 add-getbooksbyseriesidallver]
       TASK033[TASK-033 repoint-store-go-17-s-broken]
@@ -39,8 +39,7 @@ flowchart LR
     subgraph Wave6
       TASK037[TASK-037 omnibus-anthology-book-type-]
     end
-    TASK004 --> TASK039
-    TASK026 --> TASK022
+    TASK005 --> TASK039
     TASK026 --> TASK039
     TASK029 --> TASK039
     TASK031 --> TASK033
@@ -50,7 +49,8 @@ flowchart LR
     TASK033 --> TASK039
     TASK035 --> TASK036
     TASK039 --> TASK037
-    TASK044 --> TASK029
+    TASK043 --> TASK029
+    TASK177 --> TASK178
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -59,7 +59,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`make ci ; make ci && npm --prefix web run lint && npm --prefix web test`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/audiobooks/... ./internal/database/... ./internal/database/mocks/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/dedup/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/server/handlers/audiobooks/... -count=1 && npm --prefix web run lint && npm --prefix web test ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/server/handlers/entities/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/server/... ./internal/server/handlers/system/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/merge/... ./internal/search/... -count=1 ; go build ./... && go vet ./... && go test ./tools/cmd/reconcile-book-counts/... -count=1 ; go build ./... && go vet ./... && go test ./tools/cmd/storewidthgate/... -count=1`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-024-replace-fragile-0x30-0x3a-only-book-0-book-bound.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e67ea3c3-c954-46de-9ace-1fe5649ab2c7 -->
+<!-- guid: f6e4da86-362d-4f63-ab9a-2390bbb82390 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-024 — Replace fragile [0x30-0x3A]-only book:0..book:; bounds in the version-group backfill with a real prefix scan (VGBACKFILL-BOUNDS-FRAGILE)
@@ -47,7 +47,7 @@ Change the iterator bounds in BackfillVersionGroupIndex (internal/database/pebbl
 
 1. In internal/database/pebble_store_versiongroup_backfill.go, change L98-99 from `LowerBound: []byte("book:0"), UpperBound: []byte("book:;")` to `LowerBound: []byte("book:"), UpperBound: []byte("book;")`.
 2. Bump the file's version header (currently 1.2.1) and last-edited date per the mandatory file-header rule.
-3. Since this changes what the scan visits, and the sentinel key (`versionGroupBackfillKey = "system:backfill:versiongroup_index_v2_done"`) gates a ONE-TIME run, decide whether this correctness fix warrants bumping the sentinel to v3 so existing deployments (which already ran v2 successfully under the old, narrower bounds) re-run once under the wider bounds — recommend bumping to v3 given the file's own precedent comment explains exactly why silent incompleteness needs a forced rebuild ('their index can be incomplete... could never heal'). Follow the same versionGroupBackfillKey bump pattern already documented at L23-30 (v1→v2 rationale) for a v2→v3 bump.
+3. Bump the sentinel from `versionGroupBackfillKey = "system:backfill:versiongroup_index_v2_done"` to a v3 key (`..._v3_done`), following the same v1->v2 bump pattern documented at L23-30, so every deployment (including ones that already completed v2 under the narrower bounds) re-runs once under the wider bounds. This is MANDATORY, not optional — the bound fix has no effect on already-existing letter-leading book IDs unless the one-time gate is forced to re-run.
 4. Add or extend a unit test with a synthetic book ID starting with a letter (e.g. 'A01...') stored under `book:A01...`, asserting it is now included by the widened scan and correctly indexed if it has a VersionGroupID.
 
 Then, always:
@@ -70,17 +70,22 @@ Anti-over-suppression: N/A
 ## How to test
 
 ```bash
-make ci
+go build ./... && go vet ./... && go test ./internal/database/... -count=1
 ```
-If `make ci` is too slow for iteration, first run `go build ./... && go vet ./<changed-pkg>/... && go test ./<changed-pkg>/... -count=1` (or `npm --prefix web test -- <file>` for web), then the full gate once before reporting done.
+Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
 ## Acceptance criteria
 
 - [ ] `go test ./internal/database/... -run BackfillVersionGroupIndex` passes including the new letter-ID case.
-- [ ] `grep -n 'book:\"\\)' internal/database/pebble_store_versiongroup_backfill.go` confirms the widened bounds are in place.
+- [ ] `grep -n 'LowerBound: \[\]byte("book:"),' internal/database/pebble_store_versiongroup_backfill.go` confirms the widened bounds are in place.
 - [ ] Anti-over-suppression: N/A
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `make ci` exits 0; `go vet`/lint clean.
+- [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
+- [ ] Changelog fragment present: `test -f changelog.d/20260821_database_024.md`.
+- [ ] Anti-over-suppression: N/A
+- [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/database/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_database_024.md`.
 
