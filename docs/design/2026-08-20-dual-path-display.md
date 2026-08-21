@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-08-20-dual-path-display.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: d87b37ef-85ee-4494-b629-6ef01de479af -->
 <!-- last-edited: 2026-08-20 -->
 
@@ -388,13 +388,26 @@ Config (DB blob)
   | `&` `#` `%` | `%26` `%23` `%25` | frequent |
   | space | `%20` | universal |
 
-  **This is the one unverified assumption left in the design.** The `smb:`
-  handler binding was confirmed against LaunchServices; whether *Finder* decodes
-  `%5B` / `%26` / `%23` back to literals when resolving a share path was not.
-  RFC 3986 says it should. The implementation plan must verify it first — one
-  `open "smb://…"` against a directory containing `[Unabridged]` — because if
-  Finder does not decode, the encoding rule changes and every href changes with
-  it. Do not build on top of it before checking.
+  **Verified 2026-08-21, at the layer that matters.** macOS's URL layer — the
+  same CFURL/NSURL parsing NetFS uses to turn an `smb://` URL into a mount plus
+  a path — decodes exactly as RFC 3986 requires:
+
+  | Input | `NSURL.path` |
+  | --- | --- |
+  | `…/Go%20Programming%20Blueprints%20%5BPacktPub%5D%20%5B2015%5D` | `…/Go Programming Blueprints [PacktPub] [2015]` |
+  | `…/A%20%26%20B/it%231.m4b` | `…/A & B/it#1.m4b` |
+  | `…/Author%20(Reader)/it%27s%20here!` | `…/Author (Reader)/it's here!` |
+
+  `%5B` decodes to `[`, which was the case that mattered. **The encoding rule
+  stands as specified.**
+
+  **What remains unverified, stated plainly:** the end-to-end GUI click. An
+  attempt to have Finder open the deep URL returned `open` exit 0 but produced
+  no mount, almost certainly because the screen was locked and Finder could not
+  present its mount UI. SMB reachability was confirmed separately (445 and 139
+  both open) and `smb:` is bound to Finder in LaunchServices, so the two ends of
+  the chain are sound and only the GUI hop between them is untested. Worth one
+  real click when someone is at the machine; not worth blocking on.
 
 ## Testing
 
