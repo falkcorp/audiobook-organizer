@@ -1,0 +1,1414 @@
+[
+ {
+  "todo_line": 4678,
+  "src_id": null,
+  "title": "Lock the three bare globalStore accesses in InitializeStore/CloseStore",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/database/store.go:1323 `globalStore = s` (InitializeStore) and :1337-1338 `store := globalStore; globalStore = nil` (CloseStore) bypass globalStoreMu, while GetGlobalStore/SetGlobalStore at :1283-1294 already lock; `grep -n \"globalStore = \\|:= globalStore\" internal/database/store.go` returns exactly these 3 unlocked sites plus the two locked ones inside the getter/setter themselves.",
+  "domain": "internal/database",
+  "exact_files": [
+   "internal/database/store.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "globalStore/globalStoreMu declared",
+    "grep_cmd": "grep -n \"var globalStore Store\\|var globalStoreMu\" internal/database/store.go",
+    "expect": "2 hits at :1279-1280"
+   },
+   {
+    "claim": "InitializeStore writes globalStore bare",
+    "grep_cmd": "grep -n \"globalStore = s$\" internal/database/store.go",
+    "expect": "1 hit ~L1323"
+   },
+   {
+    "claim": "CloseStore reads+nils globalStore bare then sleeps as a race workaround",
+    "grep_cmd": "grep -n \"store := globalStore\\|globalStore = nil\\|time.Sleep(100\" internal/database/store.go",
+    "expect": "3 hits ~L1337-1342"
+   },
+   {
+    "claim": "GetGlobalStore/SetGlobalStore already lock correctly",
+    "grep_cmd": "grep -n \"globalStoreMu.RLock\\|globalStoreMu.Lock\" internal/database/store.go",
+    "expect": "2 hits ~L1284,1292"
+   },
+   {
+    "claim": "no production (non-test, non-comment, non-definition) caller of GetGlobalStore() exists today",
+    "grep_cmd": "grep -rn \"GetGlobalStore()\" --include=\"*.go\" . | grep -v _test.go | grep -v '//' | grep -v 'func GetGlobalStore'",
+    "expect": "0 hits (excluding the func GetGlobalStore() definition itself, which also matches the bare literal text)"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "globalStoreMu sync.RWMutex + SetGlobalStore",
+    "file": "internal/database/store.go",
+    "verify_grep": "grep -n \"func SetGlobalStore\" internal/database/store.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Mechanical: swap 3 bare accesses for the existing locked setter/mutex, delete the sleep workaround. No new types or design.",
+  "review_critical": false,
+  "goal": "Make InitializeStore and CloseStore synchronize every globalStore read/write through globalStoreMu (matching GetGlobalStore/SetGlobalStore), and delete the time.Sleep(100ms) race workaround in CloseStore once the nil-out is properly locked against concurrent GetGlobalStore readers.",
+  "background": [
+   "globalStoreMu sync.RWMutex guards globalStore (internal/database/store.go:1279-1280).",
+   "GetGlobalStore (:1283-1289) and SetGlobalStore (:1291-1295) already lock/unlock correctly.",
+   "InitializeStore writes `globalStore = s` at :1323 with no lock.",
+   "CloseStore reads `store := globalStore` (:1337) and writes `globalStore = nil` (:1338) with no lock, then does `time.Sleep(100 * time.Millisecond)` at :1342, commented as a 'brief pause to let in-flight goroutines notice the nil' \u2014 a race workaround, not a fix.",
+   "Blast radius is test-only today: every non-comment, non-test call to GetGlobalStore() is inside a _test.go file (internal/merge/service_test.go, internal/audiobooks/audiobook_service_tags_test.go, internal/itunes/service/*_test.go, internal/testutil/integration.go's SetGlobalStore calls); every non-test hit elsewhere is a comment describing why that path now avoids the global."
+  ],
+  "steps": [
+   "Open internal/database/store.go.",
+   "In InitializeStore (~L1306-1331): replace the bare `globalStore = s` at line 1323 with a call to the existing `SetGlobalStore(s)`.",
+   "In CloseStore (~L1334-1346): replace the unlocked `store := globalStore` / `globalStore = nil` pair (lines 1337-1338) with `globalStoreMu.Lock(); store := globalStore; globalStore = nil; globalStoreMu.Unlock()`.",
+   "Delete the `time.Sleep(100 * time.Millisecond)` call at line 1342 and its 'brief pause' comment \u2014 no longer needed once the nil-out is mutex-protected against GetGlobalStore's RLock.",
+   "If `time` becomes unused in store.go after removing the Sleep call, remove the import.",
+   "Bump the file's version header (file-headers.md) and last-edited date."
+  ],
+  "tests": [
+   "New test internal/database/store_global_test.go: TestGlobalStoreConcurrentAccess \u2014 under `go test -race`, spawn goroutines calling InitializeStore-style SetGlobalStore, CloseStore-style clear, and GetGlobalStore concurrently; assert -race reports nothing.",
+   "Existing InitializeStore/CloseStore callers (grep -rn \"InitializeStore(\\|CloseStore(\" --include=\"*_test.go\" .) must keep passing unmodified \u2014 this is a behavior-preserving locking fix, not a semantic change."
+  ],
+  "acceptance": [
+   "go build ./internal/database/... exits 0.",
+   "go test -race ./internal/database/... exits 0, including the new concurrency test.",
+   "grep -n \"globalStore = \\|:= globalStore\" internal/database/store.go shows the only remaining bare accesses are inside GetGlobalStore/SetGlobalStore, which already hold the lock at that point."
+  ],
+  "edge_cases": [
+   "CloseStore called when globalStore is already nil: the locked local `store` var is nil, function returns nil without calling Close() \u2014 preserve this early-return semantics inside the critical section.",
+   "InitializeStore called twice without an intervening CloseStore: SetGlobalStore simply overwrites, same as today \u2014 no leak detection added."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Preventive hardening, matching the item's own framing: 'production-critical the moment a GetGlobalStore() call is reintroduced' into a hot path. No known live incident.",
+  "review_notes": [
+   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA",
+   "[simplicity-scope.json] Tier/effort mismatch in the direction that costs a rerun: TASK-034 is the only Haiku-class task at effort L \u2014 '~86 hardwired-zero-return methods' in a 1000+ line hand-written mock \u2014 and it sits at wave 3 of a seven-deep chain, so a botched pass by the weakest tier stalls TASK-035/038/040/139 behind "
+  ]
+ },
+ {
+  "todo_line": 4685,
+  "src_id": null,
+  "title": "wire_abs_routes.go contributor-warm store race \u2014 already fixed",
+  "verdict": "stale_done",
+  "verdict_evidence": "commit f9f6e991 'refactor(server): make the contributor-warm store a parameter, not a capture' (2026-08-19) fixed exactly this: spawnContributorWarm now takes `store any` as a synchronous caller-evaluated argument (internal/server/wire_abs_routes.go:720 `func spawnContributorWarm(store any, warm func(context.Context))`), and resolveWarmupWaiter walks the decorator chain via database.AsCapability instead of a bare `s.Ops().(*database.PebbleStore)` assertion. The in-file comment at :693-720 states directly: 'The bare form was live until 2026-08-19'.",
+  "domain": "internal/server",
+  "exact_files": [
+   "TODO.md"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "spawnContributorWarm takes the store as a parameter, not a closure capture",
+    "grep_cmd": "grep -n \"func spawnContributorWarm\" internal/server/wire_abs_routes.go",
+    "expect": "1 hit ~L720, signature `func spawnContributorWarm(store any, warm func(context.Context))`"
+   },
+   {
+    "claim": "resolveWarmupWaiter resolves through the decorator chain, not a bare assertion",
+    "grep_cmd": "grep -n \"func resolveWarmupWaiter\" internal/server/wire_abs_routes.go",
+    "expect": "1 hit; comment at :741 says reverting to a bare assertion 'turns that test red'"
+   },
+   {
+    "claim": "the fixing commit exists on main's history",
+    "grep_cmd": "git log --oneline --all --grep=\"contributor-warm store a parameter\"",
+    "expect": "1 hit: f9f6e991"
+   },
+   {
+    "claim": "call site now passes s.Ops() synchronously as an argument, not inside the goroutine",
+    "grep_cmd": "grep -n \"spawnContributorWarm(s.Ops()\" internal/server/wire_abs_routes.go",
+    "expect": "1 hit ~L497"
+   }
+  ],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Just checking off the TODO box; no code change needed.",
+  "review_critical": false,
+  "goal": "Check off the TODO.md box at L4685 \u2014 the described race was fixed by commit f9f6e991 on 2026-08-19, before this audit ran.",
+  "background": [
+   "TestWarmupWaiterResolvesThroughDecorator (referenced in the code comment at wire_abs_routes.go:740) exercises resolveWarmupWaiter through the Bleve indexedStore decorator.",
+   "The item's own line-494 citation lands on the explanatory comment for the fix ('The store is passed as an ARGUMENT...'), not on the bug."
+  ],
+  "steps": [
+   "In TODO.md, change the `- [ ]` box for the L4685 item to `- [x]`, citing commit f9f6e991 in the same line or a trailing note."
+  ],
+  "tests": [
+   "No new test needed; TestWarmupWaiterResolvesThroughDecorator (internal/server, grep -n TestWarmupWaiterResolvesThroughDecorator) already covers this."
+  ],
+  "acceptance": [
+   "grep -n \"TestWarmupWaiterResolvesThroughDecorator\" internal/server/*_test.go returns \u22651 hit and `go test ./internal/server/... -run TestWarmupWaiterResolvesThroughDecorator` passes."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Do not re-open; this is a closed, well-documented fix with its own regression test."
+ },
+ {
+  "todo_line": 4694,
+  "src_id": null,
+  "title": "Add the 4 missing compile-time assertions to iface_assert.go",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/database/iface_assert.go has exactly 36 `var _ X = (*PebbleStore)(nil)` entries (grep -c \"_ .* = (\\*PebbleStore)(nil)\" internal/database/iface_assert.go = 36) and is missing OAuthIdentityStore, MetadataCacheStore, RejectedMetadataStore, ReviewStore, all of which exist as interfaces (iface_oauth.go:9, iface_metadata.go:65, iface_metadata.go:123, iface_review.go:12) and are already implemented by PebbleStore (oauth_identity.go:36, pebble_store_metadata_cache.go:24, pebble_store_metadata.go:153, review_store.go:152).",
+  "domain": "internal/database",
+  "exact_files": [
+   "internal/database/iface_assert.go",
+   "internal/database/mocks/mock_store.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "iface_assert.go currently has 36 assertions",
+    "grep_cmd": "grep -c \"_ .* = (\\*PebbleStore)(nil)\" internal/database/iface_assert.go",
+    "expect": "36"
+   },
+   {
+    "claim": "OAuthIdentityStore interface exists",
+    "grep_cmd": "grep -n \"^type OAuthIdentityStore interface\" internal/database/iface_oauth.go",
+    "expect": "1 hit ~L9"
+   },
+   {
+    "claim": "MetadataCacheStore interface exists",
+    "grep_cmd": "grep -n \"^type MetadataCacheStore interface\" internal/database/iface_metadata.go",
+    "expect": "1 hit ~L65"
+   },
+   {
+    "claim": "RejectedMetadataStore interface exists",
+    "grep_cmd": "grep -n \"^type RejectedMetadataStore interface\" internal/database/iface_metadata.go",
+    "expect": "1 hit ~L123"
+   },
+   {
+    "claim": "ReviewStore interface exists",
+    "grep_cmd": "grep -n \"^type ReviewStore interface\" internal/database/iface_review.go",
+    "expect": "1 hit ~L12"
+   },
+   {
+    "claim": "PebbleStore implements CreateOAuthIdentity, GetMetadataCache, AddMetadataRejection, UpsertReviewItem (one method each of the 4 interfaces, enough to prove they compile)",
+    "grep_cmd": "grep -n \"func (p \\*PebbleStore) CreateOAuthIdentity\\|func (p \\*PebbleStore) GetMetadataCache(\\|func (p \\*PebbleStore) AddMetadataRejection\\|func (p \\*PebbleStore) UpsertReviewItem\" internal/database/*.go",
+    "expect": "4 hits across oauth_identity.go, pebble_store_metadata_cache.go, pebble_store_metadata.go, review_store.go"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "4-line mechanical addition following the file's exact existing pattern.",
+  "review_critical": false,
+  "goal": "Add `_ OAuthIdentityStore = (*PebbleStore)(nil)`, `_ MetadataCacheStore = (*PebbleStore)(nil)`, `_ RejectedMetadataStore = (*PebbleStore)(nil)`, `_ ReviewStore = (*PebbleStore)(nil)` to the var block in internal/database/iface_assert.go so PebbleStore's conformance to all 40 sub-interfaces is compiler-proven, not just 36 of them.",
+  "background": [
+   "iface_assert.go's comment states its purpose: 'Compile-time proof that PebbleStore satisfies every sub-interface defined in iface_*.go.'",
+   "The var block currently lists 36 interfaces alphabetically-by-domain (Store, LifecycleStore, BookStore, ... OpsV2Store)."
+  ],
+  "steps": [
+   "Open internal/database/iface_assert.go.",
+   "Inside the `var ( ... )` block (currently ending with `_ OpsV2Store = (*PebbleStore)(nil)`), add 4 new lines, keeping the existing alignment style: `_ OAuthIdentityStore  = (*PebbleStore)(nil)`, `_ MetadataCacheStore  = (*PebbleStore)(nil)`, `_ RejectedMetadataStore = (*PebbleStore)(nil)`, `_ ReviewStore         = (*PebbleStore)(nil)`.",
+   "Run `gofmt -w internal/database/iface_assert.go` to re-align the `=` columns across all 40 entries.",
+   "Bump the file's version header and last-edited date."
+  ],
+  "tests": [
+   "No new test file needed \u2014 `go build ./internal/database/...` itself is the test: if PebbleStore ever drops a method from one of these 4 interfaces, the build fails here instead of surfacing as a runtime nil from a failed type assertion elsewhere."
+  ],
+  "acceptance": [
+   "go build ./internal/database/... exits 0.",
+   "grep -c \"_ .* = (\\*PebbleStore)(nil)\" internal/database/iface_assert.go returns 40."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Pure hardening; catches a future silent regression at compile time instead of at a runtime type-assertion failure.",
+  "review_notes": [
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
+   "[simplicity-scope.json] Tasks that add a method to a database sub-interface omit the mock implementations from exact_files, so they cannot compile, and the collision matrix under-counts the two hottest mock files. `database.Store` embeds BookStore/NarratorStore/TagStore, and both MockStore implementations are compile-asser",
+   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA"
+  ]
+ },
+ {
+  "todo_line": 4698,
+  "src_id": null,
+  "title": "Route merge.AsExternalIDReassigner through database.AsCapability instead of a bare assertion",
+  "part": 1,
+  "verdict": "actionable",
+  "verdict_evidence": "internal/merge/service.go:34-40 `AsExternalIDReassigner` does `if eid, ok := s.(ExternalIDReassigner); ok { return eid }` \u2014 a bare assertion of the kind store_capability.go documents as failing silently through the indexedStore decorator once a caller passes a wrapped store. The exact fix (`database.AsCapability[T](s)`) already exists and is used by an identical helper: internal/plugins/acoustid/reset_all.go:223-228 `resolveFingerprintResetter`.",
+  "domain": "internal/merge",
+  "exact_files": [
+   "internal/merge/service.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "AsExternalIDReassigner uses a bare type assertion",
+    "grep_cmd": "grep -n \"func AsExternalIDReassigner\" -A 8 internal/merge/service.go",
+    "expect": "1 hit ~L34, body is `s.(ExternalIDReassigner)`"
+   },
+   {
+    "claim": "called on ms.db at two sites",
+    "grep_cmd": "grep -n \"AsExternalIDReassigner(ms.db)\" internal/merge/service.go",
+    "expect": "2 hits ~L236,377"
+   },
+   {
+    "claim": "database.AsCapability exists and is the documented fix for exactly this shape",
+    "grep_cmd": "grep -n \"func AsCapability\" internal/database/store_capability.go",
+    "expect": "1 hit ~L86"
+   },
+   {
+    "claim": "the identical pattern is already fixed once, as a copyable reference",
+    "grep_cmd": "grep -n \"func resolveFingerprintResetter\" -A 6 internal/plugins/acoustid/reset_all.go",
+    "expect": "1 hit ~L223, body calls database.AsCapability[fingerprintResetter](s)"
+   },
+   {
+    "claim": "merge.Service.db is an interface (any-compatible), not a concrete type",
+    "grep_cmd": "grep -n \"db  *Store\" internal/merge/service.go",
+    "expect": "1 hit ~L51 `db Store` inside `type Service struct`"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "database.AsCapability[T]",
+    "file": "internal/database/store_capability.go",
+    "verify_grep": "grep -n \"func AsCapability\" internal/database/store_capability.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "One-line body swap copying an existing sibling helper's exact pattern.",
+  "review_critical": true,
+  "goal": "Change AsExternalIDReassigner in internal/merge/service.go to resolve through database.AsCapability so a merge running against a decorator-wrapped store still finds the capability instead of silently skipping iTunes-PID/ASIN reassignment on merge.",
+  "background": [
+   "internal/database/store_capability.go documents the exact failure mode: 'Embedding an interface promotes only THAT interface's method set... a plain s.(SyncIdentityStore) returns nil once the wrap is installed \u2014 with no compile error.'",
+   "Two prod jobs were already silently degraded this way for weeks per that file's comment; the fix pattern (AsCapability walking StoreUnwrapper) is established and reused at internal/plugins/acoustid/reset_all.go:223-228 (resolveFingerprintResetter) and wire_abs_routes.go's resolveWarmupWaiter.",
+   "Today merge.NewService is always constructed with the bare store (internal/server/wire_handlers.go:387,655 pass s.storeForWiring(), internal/server/duplicates_ops.go:169 and handlers/diagnostics.go:526 pass a bare `store`), so this is latent, not a live incident \u2014 but the item is correct that any future call site that hands merge.NewService a wrapped store degrades silently."
+  ],
+  "steps": [
+   "Open internal/merge/service.go.",
+   "Replace the body of `func AsExternalIDReassigner(s any) ExternalIDReassigner` (currently `if s == nil { return nil }; if eid, ok := s.(ExternalIDReassigner); ok { return eid }; return nil`) with: `if s == nil { return nil }; c, _ := database.AsCapability[ExternalIDReassigner](s); return c`.",
+   "Confirm `github.com/falkcorp/audiobook-organizer/internal/database` is already imported (it is, for the `database` package alias used elsewhere in the file).",
+   "Bump the file's version header and last-edited date."
+  ],
+  "tests": [
+   "internal/merge/service_test.go: add TestAsExternalIDReassigner_ResolvesThroughDecorator \u2014 build a minimal fake decorator implementing database.StoreUnwrapper that wraps a fake store implementing ExternalIDReassigner, call AsExternalIDReassigner(decorator), assert it returns non-nil and its ReassignExternalIDs works.",
+   "Keep/adapt the existing direct-store case: AsExternalIDReassigner(fakeStoreImplementingIt) still returns non-nil (anti-regression for the non-decorated path).",
+   "AsExternalIDReassigner(nil) still returns nil (existing nil-guard, must survive the rewrite)."
+  ],
+  "acceptance": [
+   "go build ./internal/merge/... exits 0.",
+   "go test ./internal/merge/... -run TestAsExternalIDReassigner exits 0.",
+   "grep -n \"database.AsCapability\\[ExternalIDReassigner\\]\" internal/merge/service.go returns 1 hit."
+  ],
+  "edge_cases": [
+   "s implements ExternalIDReassigner directly (no wrapper): AsCapability's outermost-check-first order returns it on the first iteration, same as today.",
+   "s is a decorator that does NOT implement StoreUnwrapper: AsCapability returns (zero, false) immediately, same nil result as today's failed bare assertion \u2014 no behavior change for opaque decorators."
+  ],
+  "anti_over_suppression": "TestAsExternalIDReassigner_ResolvesThroughDecorator (must go red if AsExternalIDReassigner is reverted to a bare assertion)",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "review_critical=true: a silent skip here means merge.MergeBooks completes 'successfully' while dropping the loser book's iTunes PID/ASIN reassignment \u2014 a prod-data-path defect class, even though today's wiring is unaffected. Correction to the TODO item's own citation: internal/plugins/acoustid/reset_all.go:69 (cited by the item as a live 'same shape' instance) is NOT a live bug \u2014 it is a comment describing the ALREADY-FIXED resolveFingerprintResetter helper (the fast path at reset_all.go:69-78 calls resolveFingerprintResetter, not a bare assertion). Only lsh_backfill.go:86 (this todo_line, part 2) is a live instance of the same shape.",
+  "review_notes": [
+   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three",
+   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three"
+  ]
+ },
+ {
+  "todo_line": 4698,
+  "src_id": null,
+  "title": "Route acoustid lsh_backfill's lshIndexChecker lookup through database.AsCapability",
+  "part": 2,
+  "verdict": "actionable",
+  "verdict_evidence": "internal/plugins/acoustid/lsh_backfill.go:86 `checker, _ := p.store.(lshIndexChecker)` is a bare interface assertion on p.store, the same shape store_capability.go documents as failing silently through a decorator. p.store's static type is `pluginStore` (plugin.go:21), sourced from `serviceregistry.Get[pluginStore](c, serviceregistry.KeyStore)` in register.go:32 \u2014 per store_capability.go's own rule of thumb ('anything bound during NewServer via the service-registry container... holds the BARE store'), this container binding happens before Server.Start() installs the indexedStore wrap, so the defect is latent today, matching the item's own framing.",
+  "domain": "internal/plugins/acoustid",
+  "exact_files": [
+   "internal/plugins/acoustid/lsh_backfill.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "bare assertion at the cited line",
+    "grep_cmd": "grep -n \"lshIndexChecker\" internal/plugins/acoustid/lsh_backfill.go",
+    "expect": "3 hits: type decl ~L24, bare assertion ~L86, a test-file comment"
+   },
+   {
+    "claim": "lshIndexChecker is a 1-method interface",
+    "grep_cmd": "grep -n \"type lshIndexChecker interface\" -A 3 internal/plugins/acoustid/lsh_backfill.go",
+    "expect": "1 hit ~L24"
+   },
+   {
+    "claim": "p.store is sourced from the service-registry container's KeyStore (bare store today)",
+    "grep_cmd": "grep -n \"serviceregistry.Get\\[pluginStore\\]\" internal/plugins/acoustid/register.go",
+    "expect": "1 hit ~L32"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "database.AsCapability[T]",
+    "file": "internal/database/store_capability.go",
+    "verify_grep": "grep -n \"func AsCapability\" internal/database/store_capability.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "One-line body swap, same pattern as part 1.",
+  "review_critical": false,
+  "goal": "Replace the bare `p.store.(lshIndexChecker)` assertion in runLSHBackfill with database.AsCapability[lshIndexChecker](p.store) so the fast-skip check keeps working if p.store is ever handed a decorator-wrapped store.",
+  "background": [
+   "This is the same defect class as part 1, in a different file, per the TODO item's own 'Same shape at ... lsh_backfill.go:86' citation.",
+   "Effect if triggered: hasChecker becomes false, HasLSHIndex fast-skip is silently disabled, and the backfill re-writes every row instead of skipping already-indexed ones \u2014 a performance regression, not a correctness one (checker is optional, `hasChecker := checker != nil` already degrades gracefully)."
+  ],
+  "steps": [
+   "Open internal/plugins/acoustid/lsh_backfill.go.",
+   "Replace `checker, _ := p.store.(lshIndexChecker)` (~L86) with `checker, _ := database.AsCapability[lshIndexChecker](p.store)`.",
+   "Confirm `github.com/falkcorp/audiobook-organizer/internal/database` is imported in this file (it already is, for other database.* references).",
+   "Bump the file's version header and last-edited date."
+  ],
+  "tests": [
+   "internal/plugins/acoustid/lsh_backfill_test.go: add a case wrapping the fake store in a minimal StoreUnwrapper-implementing decorator and asserting the fast-skip path (hasChecker=true) still activates through it.",
+   "Keep the existing direct (non-decorated) case passing unchanged."
+  ],
+  "acceptance": [
+   "go build ./internal/plugins/acoustid/... exits 0.",
+   "go test ./internal/plugins/acoustid/... -run LSHBackfill exits 0."
+  ],
+  "edge_cases": [
+   "p.store does not implement lshIndexChecker at all (plain PebbleStore without HasLSHIndex, or a mock): AsCapability returns (nil, false), hasChecker stays false, per-row fallback taken \u2014 same as today."
+  ],
+  "anti_over_suppression": "N/A \u2014 this is a performance fast-path, not a filter/guard that could over-suppress results.",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Low priority relative to part 1: this defect degrades performance, not correctness, and per the service-registry binding order is not currently reachable in production."
+ },
+ {
+  "todo_line": 4703,
+  "src_id": null,
+  "title": "Give prodSchedulerStore an Unwrap() so capability lookups can see past it",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/operations/registry/register.go:59-64 `type prodSchedulerStore struct { opRegistryStore }` has no Unwrap() method (grep -n \"func (p \\*prodSchedulerStore)\" internal/operations/registry/register.go shows only BookFiles), so database.AsCapability treats it as an opaque, non-StoreUnwrapper value and stops there rather than reaching the concrete store inside it.",
+  "domain": "internal/operations/registry",
+  "exact_files": [
+   "internal/operations/registry/register.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "prodSchedulerStore embeds opRegistryStore and adds only BookFiles",
+    "grep_cmd": "grep -n \"type prodSchedulerStore struct\" -A 3 internal/operations/registry/register.go",
+    "expect": "1 hit ~L59"
+   },
+   {
+    "claim": "no Unwrap method defined on prodSchedulerStore",
+    "grep_cmd": "grep -n \"func (p \\*prodSchedulerStore)\" internal/operations/registry/register.go",
+    "expect": "exactly 1 hit (BookFiles), no Unwrap"
+   },
+   {
+    "claim": "StoreUnwrapper requires Unwrap() Store",
+    "grep_cmd": "grep -n \"type StoreUnwrapper interface\" -A 3 internal/database/store_capability.go",
+    "expect": "1 hit ~L68"
+   },
+   {
+    "claim": "prodSchedulerStore is instantiated from the container's KeyStore resolution and handed to SetDepBookStore/NewDepsScheduler",
+    "grep_cmd": "grep -n \"schedStore := &prodSchedulerStore\" internal/operations/registry/register.go",
+    "expect": "1 hit ~L91"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "database.StoreUnwrapper",
+    "file": "internal/database/store_capability.go",
+    "verify_grep": "grep -n \"type StoreUnwrapper interface\" internal/database/store_capability.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Needs a design call the item itself doesn't spell out: prodSchedulerStore only holds the narrow opRegistryStore interface today, so Unwrap() needs a second, wider field captured at construction time \u2014 not a pure copy-paste like items 4a/4b.",
+  "review_critical": false,
+  "goal": "Make prodSchedulerStore implement database.StoreUnwrapper by capturing the full database.Store alongside the narrow opRegistryStore it already embeds, so a future AsCapability lookup against a *prodSchedulerStore-wrapped value can reach the underlying store.",
+  "background": [
+   "opRegistryStore (register.go ~L44-50) is a narrow interface (database.OpsV2Store + GetBookByID), not database.Store \u2014 it cannot itself serve as Unwrap()'s return value without widening.",
+   "opregistry's Build func (register.go ~L79-95) already resolves `store := serviceregistry.Get[opRegistryStore](c, serviceregistry.KeyStore)` from the same container KeyStore that also holds the full database.Store \u2014 the same singleton, viewed through a narrower interface.",
+   "This is defect-shaped, not live: `grep -rn \"AsCapability\" internal/operations/registry/*.go` (run this as part of triage) currently finds no capability lookup running through prodSchedulerStore, matching the item's own 'no capability lookup currently runs through it' framing."
+  ],
+  "steps": [
+   "In internal/operations/registry/register.go, add a `full database.Store` field to `prodSchedulerStore` (alongside its embedded `opRegistryStore`).",
+   "In the \"opregistry\" ServiceDef's Build func (~L79-95), also resolve `full := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)` (same KeyStore, wider generic type) and pass it when constructing `schedStore := &prodSchedulerStore{opRegistryStore: store, full: full}`.",
+   "Add `func (p *prodSchedulerStore) Unwrap() database.Store { return p.full }` near the existing BookFiles method, with a comment stating the same rationale as indexed_store.go's Unwrap: capability lookups may reach past prodSchedulerStore for methods it does not itself narrow.",
+   "Add `var _ database.StoreUnwrapper = (*prodSchedulerStore)(nil)` as a compile-time proof, mirroring wire_abs_routes.go:27's pattern.",
+   "Bump the file's version header and last-edited date."
+  ],
+  "tests": [
+   "internal/operations/registry/register_test.go (or a new file): TestProdSchedulerStoreUnwrap \u2014 construct a prodSchedulerStore with a known full store, call database.AsCapability[SomeKnownCapability](schedStore), assert it resolves through to the full store instead of stopping at prodSchedulerStore."
+  ],
+  "acceptance": [
+   "go build ./internal/operations/registry/... exits 0.",
+   "go vet ./internal/operations/registry/... exits 0 (confirms the var _ StoreUnwrapper assertion compiles)."
+  ],
+  "edge_cases": [
+   "serviceregistry.Get[database.Store](c, KeyStore) must resolve the SAME underlying store instance as serviceregistry.Get[opRegistryStore](c, KeyStore) \u2014 confirm serviceregistry.Get is not itself constructing a new value per call (it should be a singleton container lookup); if it constructs fresh per-type wrappers, this whole approach needs revisiting and the item becomes needs_design."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Marked review_critical=false because the item itself says no capability lookup currently runs through prodSchedulerStore \u2014 this is pure preventive hardening matching the audit's stated pattern (SERVER-GLOBAL-STORE-AUDIT / the third-capability-lost incident at server_lifecycle.go:1737-1766). If serviceregistry.Get's per-generic-type resolution turns out not to return the same singleton for KeyStore under two different type parameters, downgrade this to needs_design and ask: does the container guarantee identity across generic Get[T] calls on the same key?",
+  "review_notes": [
+   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin"
+  ]
+ },
+ {
+  "todo_line": 4714,
+  "src_id": null,
+  "title": "importer.Store already narrowed off database.Store",
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/importer/service.go:27-38's own comment states the narrowing already happened: 'It was = database.Store (398 methods) with a comment saying it had been \"temporarily widened... because versions.CreateIngestVersion requires the full Store interface\"... That pass happened in #2582; this is the re-narrowing it promised.' Line 64 declares `type Store interface { ... }` (a real interface, not an alias), and versions.CreateIngestVersion itself takes `store IngestStore` (internal/versions/ingest.go:46), a narrow interface, not database.Store.",
+  "domain": "internal/importer",
+  "exact_files": [
+   "TODO.md"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "importer.Store is a real interface, not `= database.Store`",
+    "grep_cmd": "grep -n \"^type Store\" internal/importer/service.go",
+    "expect": "1 hit ~L64: `type Store interface {`"
+   },
+   {
+    "claim": "the file's own comment documents the re-narrowing and cites #2582",
+    "grep_cmd": "grep -n \"#2582\" internal/importer/service.go",
+    "expect": "1 hit ~L32"
+   },
+   {
+    "claim": "versions.CreateIngestVersion takes a narrow IngestStore, not database.Store",
+    "grep_cmd": "grep -n \"func CreateIngestVersion\" internal/versions/ingest.go",
+    "expect": "1 hit ~L46: `func CreateIngestVersion(store IngestStore, ...)`"
+   }
+  ],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Just checking off the TODO box; no code change needed.",
+  "review_critical": false,
+  "goal": "Check off the TODO.md box at L4714 \u2014 the widening this item describes was already reverted in #2582, before this audit ran.",
+  "background": [
+   "The comment block at service.go:27-38 is itself the closing note for this exact TODO item, left in place as documentation of the fix."
+  ],
+  "steps": [
+   "In TODO.md, change the `- [ ]` box for the L4714 item to `- [x]`, citing #2582."
+  ],
+  "tests": [
+   "None needed \u2014 go build ./internal/importer/... already proves the narrow interface compiles against its callers."
+  ],
+  "acceptance": [
+   "grep -n \"= database.Store\" internal/importer/service.go returns 0 hits."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Do not re-open."
+ },
+ {
+  "todo_line": 4716,
+  "src_id": null,
+  "title": "handlers.OrganizeStore already narrowed off database.Store",
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/server/handlers/organize.go:56-71's own comment documents the fix in full: 'It was = database.Store... Neither does [require the full interface]: SetStore takes organizer.OrganizerStore (four lookups) and the deluge notifier needs one method. The justification was stale, not wrong when written.' The type is now `type OrganizeStore interface { organizer.OrganizerStore; logger.ActivityLogWriter; ... }`. This matches the 'Worked example (2026-08-18)' already recorded in this repo's CLAUDE.md as done.",
+  "domain": "internal/server/handlers",
+  "exact_files": [
+   "TODO.md"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "OrganizeStore is a real interface, not an alias to database.Store",
+    "grep_cmd": "grep -n \"^type OrganizeStore interface\" internal/server/handlers/organize.go",
+    "expect": "1 hit ~L64"
+   },
+   {
+    "claim": "the file documents the exact narrowing and why the old justification was stale",
+    "grep_cmd": "grep -n \"was \\`= database.Store\\`\" internal/server/handlers/organize.go",
+    "expect": "1 hit ~L60"
+   }
+  ],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Just checking off the TODO box; no code change needed.",
+  "review_critical": false,
+  "goal": "Check off the TODO.md box at L4716 \u2014 already fixed and documented in CLAUDE.md's 2026-08-18 worked example.",
+  "background": [
+   "CLAUDE.md's 'Fix It Right' section already cites this exact file as its worked example of the correct (not minimal) fix."
+  ],
+  "steps": [
+   "In TODO.md, change the `- [ ]` box for the L4716 item to `- [x]`."
+  ],
+  "tests": [
+   "None needed."
+  ],
+  "acceptance": [
+   "grep -n \"= database.Store\" internal/server/handlers/organize.go returns 0 hits."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Do not re-open; this is the canonical example already cited in CLAUDE.md."
+ },
+ {
+  "todo_line": 4719,
+  "src_id": null,
+  "title": "Narrow CollectDuration's tagStore param from dedup.Store to database.BookTagSingletonStore",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/dedup/collectors_metadata.go:145-147 `func CollectDuration(store DurationCollectorStore, tagStore Store, ...)` \u2014 `tagStore` is only used to call `database.EnsureSingletonBookTag(tagStore, ...)` (4 call sites, :245/248/261/264), and EnsureSingletonBookTag's actual signature (internal/database/tag_helpers.go:66) takes `BookTagSingletonStore`, a 3-method interface (:46-50: GetBookTagsDetailed, RemoveBookTagsByPrefix, AddBookTagWithSource) \u2014 matching the item's 'It uses 3' claim exactly. `Store` here is dedup.Store (internal/dedup/store.go:102), itself already narrowed to ~27 methods (not database.Store's 398), so the comment's phrase 'requires the full Store interface' is stale documentation, not a live 398-method leak, but the parameter is still wider than the 3 methods this function's body needs.",
+  "domain": "internal/dedup",
+  "exact_files": [
+   "internal/dedup/collectors_metadata.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "CollectDuration's tagStore param is typed dedup.Store",
+    "grep_cmd": "grep -n \"func CollectDuration\" -A 5 internal/dedup/collectors_metadata.go",
+    "expect": "1 hit ~L145, param `tagStore Store`"
+   },
+   {
+    "claim": "EnsureSingletonBookTag actually requires only BookTagSingletonStore (3 methods)",
+    "grep_cmd": "grep -n \"func EnsureSingletonBookTag\" internal/database/tag_helpers.go",
+    "expect": "1 hit ~L66: `func EnsureSingletonBookTag(store BookTagSingletonStore, ...)`"
+   },
+   {
+    "claim": "BookTagSingletonStore is exactly 3 methods",
+    "grep_cmd": "grep -n \"type BookTagSingletonStore interface\" -A 4 internal/database/tag_helpers.go",
+    "expect": "1 hit ~L46, 3 method lines"
+   },
+   {
+    "claim": "dedup.Store already embeds database.BookTagSingletonStore by name (so narrowing the param does not require touching callers)",
+    "grep_cmd": "grep -n \"database.BookTagSingletonStore\" internal/dedup/store.go",
+    "expect": "1 hit inside dedupForwardedStores"
+   },
+   {
+    "claim": "the only two callers pass either nil or de.bookStore (dedup.Store), both of which satisfy the narrower type",
+    "grep_cmd": "grep -n \"CollectDuration(\" internal/dedup/rescore.go internal/dedup/engine.go",
+    "expect": "2 hits: rescore.go:228 passes nil, engine.go:562 passes de.bookStore"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "database.BookTagSingletonStore",
+    "file": "internal/database/tag_helpers.go",
+    "verify_grep": "grep -n \"type BookTagSingletonStore interface\" internal/database/tag_helpers.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Single parameter type change plus a doc-comment fix; both existing call sites already satisfy the narrower type with no changes needed.",
+  "review_critical": false,
+  "goal": "Change CollectDuration's `tagStore Store` parameter to `tagStore database.BookTagSingletonStore`, and fix the stale doc comment at collectors_metadata.go:47-51 which claims EnsureSingletonBookTag 'requires the full Store interface' when it only needs 3 methods.",
+  "background": [
+   "This mirrors the exact pattern CLAUDE.md's worked example describes: a comment justifying a wide parameter that was true when written but is now stale because the callee (EnsureSingletonBookTag) was independently narrowed.",
+   "No caller needs to change: rescore.go:228 already passes `nil` (untyped nil satisfies any interface) and engine.go:562 passes `de.bookStore`, whose static type dedup.Store already embeds database.BookTagSingletonStore by name."
+  ],
+  "steps": [
+   "Open internal/dedup/collectors_metadata.go.",
+   "Change the CollectDuration signature (~L145-150) from `tagStore Store,` to `tagStore database.BookTagSingletonStore,`.",
+   "Rewrite the doc comment above it (~L142-144, 'tagStore is the Store used for side-effect tag writes...') to state it takes the narrow BookTagSingletonStore, dropping the 'the engine passes its bookStore field which is a Store superset' phrasing in favor of noting dedup.Store already satisfies it.",
+   "The comment on DurationCollectorStore (~L44-51) that says 'database.EnsureSingletonBookTag (which requires the full Store interface) can be called without a type assertion' is now doubly stale (EnsureSingletonBookTag never required the full interface, and this narrowing removes the last reason to phrase it that way) \u2014 reword to state plainly that EnsureSingletonBookTag needs BookTagSingletonStore (3 methods), which tagStore's new narrow type provides directly.",
+   "Bump the file's version header and last-edited date."
+  ],
+  "tests": [
+   "No behavior changes, so existing tests (internal/dedup/collectors_metadata_test.go, if present, or engine_test.go's duration-signal tests) must keep passing unmodified \u2014 this is purely a static-type narrowing.",
+   "If no direct unit test currently exercises CollectDuration with a fake tagStore, add one: TestCollectDuration_TagStoreAcceptsNarrowType \u2014 pass a minimal fake implementing only the 3 BookTagSingletonStore methods (not full dedup.Store) and assert it compiles and the tag side-effect fires."
+  ],
+  "acceptance": [
+   "go build ./internal/dedup/... exits 0.",
+   "go vet ./internal/dedup/... exits 0.",
+   "grep -n \"tagStore database.BookTagSingletonStore\" internal/dedup/collectors_metadata.go returns 1 hit."
+  ],
+  "edge_cases": [
+   "tagStore == nil (interface nil, the rescore.go call site): the existing `if tagStore != nil` guards at :244 and :260 must keep working identically against the narrower interface type \u2014 a nil database.BookTagSingletonStore compares equal to nil the same way a nil dedup.Store does."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Low-risk, purely additive-narrowing change; both call sites already satisfy the tighter type so no ripple beyond this one file.",
+  "review_notes": [
+   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three",
+   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three"
+  ]
+ },
+ {
+  "todo_line": 4721,
+  "src_id": null,
+  "title": "Repoint store.go:17's broken doc reference to the archived design spec",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/database/store.go:17 references `docs/superpowers/specs/2026-04-17-store-interface-segregation-design.md`, which does not exist on main (`ls docs/superpowers/specs/` has no such file) because commit ff6607fe untracked and gitignored the entire docs/superpowers/ tree. The content survives at docs/archive/superpowers/plans/2026-04-17-store-interface-segregation.md (note: filename drops the '-design' suffix).",
+  "domain": "internal/database",
+  "exact_files": [
+   "internal/database/store.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the broken reference exists at the cited line",
+    "grep_cmd": "grep -n \"store-interface-segregation-design\" internal/database/store.go",
+    "expect": "1 hit ~L17"
+   },
+   {
+    "claim": "docs/superpowers/ is now gitignored, so nothing there is on main",
+    "grep_cmd": "grep -n \"docs/superpowers/\" .gitignore",
+    "expect": "1 hit, with narrow !docs/superpowers/fleet-tasks/ etc. exceptions that do not cover specs/"
+   },
+   {
+    "claim": "the commit that untracked it",
+    "grep_cmd": "git log --oneline --all --grep=\"untrack docs/superpowers\"",
+    "expect": "1 hit: ff6607fe"
+   },
+   {
+    "claim": "the archived counterpart exists on main under a slightly different filename",
+    "grep_cmd": "find docs/archive/superpowers/plans -iname \"*store-interface-segregation*\"",
+    "expect": "1 hit: docs/archive/superpowers/plans/2026-04-17-store-interface-segregation.md"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "One-line comment edit repointing a path.",
+  "review_critical": false,
+  "goal": "Repoint the dead doc reference in internal/database/store.go:17 to docs/archive/superpowers/plans/2026-04-17-store-interface-segregation.md so a reader following the comment lands on a real file.",
+  "background": [
+   "The owner-decision list does not cover this specific file-move question, but the resolution is unambiguous: the archived file is the same document (same date, same topic, only the trailing '-design' dropped from the filename), so this is a mechanical repoint, not a design call."
+  ],
+  "steps": [
+   "Open internal/database/store.go.",
+   "At line 17, change `See docs/superpowers/specs/2026-04-17-store-interface-segregation-design.md.` to `See docs/archive/superpowers/plans/2026-04-17-store-interface-segregation.md.`",
+   "Diff the two files' content (`diff <(git show 29e256ac:docs/superpowers/specs/2026-04-17-store-interface-segregation-design.md) docs/archive/superpowers/plans/2026-04-17-store-interface-segregation.md`) to confirm they are the same document before repointing \u2014 if they materially differ, restore the original file into docs/archive/ instead of repointing to a divergent one.",
+   "Bump the file's version header and last-edited date."
+  ],
+  "tests": [
+   "N/A \u2014 comment-only change; no test asserts comment content today. Optional: a doc-link-checker script if one exists in scripts/ (grep -rl \"doc.*link.*check\\|linkcheck\" scripts/) could be extended to catch this class, but that is out of scope for this item."
+  ],
+  "acceptance": [
+   "grep -n \"docs/archive/superpowers/plans/2026-04-17-store-interface-segregation.md\" internal/database/store.go returns 1 hit.",
+   "test -f docs/archive/superpowers/plans/2026-04-17-store-interface-segregation.md exits 0."
+  ],
+  "edge_cases": [
+   "If the diff step finds the archived file has drifted from the original (unlikely for an archived/frozen doc), restore the exact original via `git show 29e256ac:<path>` into docs/archive/ instead, and repoint to that."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Tiny, isolated fix; safe for a haiku-tier pass alongside item L4694 (same file family, same PR is reasonable, but keep as separate commits since they touch different lines for different reasons).",
+  "review_notes": [
+   "[simplicity-scope.json] Busywork occupying a wave slot. TASK-033 'Repoint store.go:17's broken doc reference to the archived design spec' is a one-comment-line edit, yet it is wave 2 of the five-deep internal/database/store.go chain, which means TASK-037 and TASK-039 (real schema work) each wait an extra merge round-trip f",
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ]
+ },
+ {
+  "todo_line": 4728,
+  "src_id": null,
+  "title": "Add Func override fields to MockStore's ~86 hardwired-zero-return methods",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/database/mock_store.go has 399 total `func (m *MockStore)` methods (grep -c) and 313 lines matching the `if m.XFunc != nil` override pattern \u2014 leaving 86 methods with no override field, hardwired to whatever zero-value literal was written at generation time (close to the item's 'approximately 88' claim; small variance is expected since some methods have more than one `Func != nil` check inline). The item's SPECIFIC illustrative example (GetAllAuthorBookCounts, cited at line :863) is inaccurate, though: that method DOES have an override field (`GetAllAuthorBookCountsFunc`, mock_store.go:868-871) \u2014 the real defect in that example is that TestListAuthors_Success (handlers_integration_test.go:360-386) never sets it and never asserts on BookCount at all, which is a test-quality issue (see this scope's L4732 item), not a missing-override issue.",
+  "domain": "internal/database",
+  "exact_files": [
+   "internal/database/mock_store.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "total MockStore methods",
+    "grep_cmd": "grep -c \"^func (m \\*MockStore)\" internal/database/mock_store.go",
+    "expect": "399"
+   },
+   {
+    "claim": "methods with a Func-override guard",
+    "grep_cmd": "grep -c \"Func != nil\" internal/database/mock_store.go",
+    "expect": "313"
+   },
+   {
+    "claim": "GetAllAuthorBookCounts DOES have an override field, contradicting the item's specific example",
+    "grep_cmd": "grep -n \"func (m \\*MockStore) GetAllAuthorBookCounts\" -A 4 internal/database/mock_store.go",
+    "expect": "1 hit, body is `if m.GetAllAuthorBookCountsFunc != nil { return m.GetAllAuthorBookCountsFunc() }`"
+   },
+   {
+    "claim": "TestListAuthors_Success never sets GetAllAuthorBookCountsFunc and never asserts BookCount",
+    "grep_cmd": "grep -n \"func TestListAuthors_Success\" -A 25 internal/server/handlers_integration_test.go",
+    "expect": "1 hit; body only asserts resp.Count == 2, no BookCount assertion, no GetAllAuthorBookCountsFunc set"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "existing `if m.XFunc != nil { return m.XFunc(...) }` pattern already used by 313 of 399 methods",
+    "file": "internal/database/mock_store.go",
+    "verify_grep": "grep -n \"Func != nil\" internal/database/mock_store.go | head -3"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "L",
+  "tier": "haiku",
+  "why_tier": "Purely mechanical \u2014 for each of the ~86 methods, add one `XFunc func(...) (...)` field to the MockStore struct and wrap the existing hardwired return in `if m.XFunc != nil { return m.XFunc(args...) }` before it, following the pattern of the other 313 methods verbatim. Large in count but zero design judgment per method; a strong candidate for the repo's parallel-refactor-sweep skill, sharded by method-name ranges within the single file.",
+  "review_critical": false,
+  "goal": "Give every one of MockStore's remaining ~86 hardwired-zero-return methods an XFunc override field, following the exact `if m.XFunc != nil { return m.XFunc(args...) }; return <existing zero literal>` shape already used by the other 313 methods, so any test can override any mock method's behavior instead of being stuck with a compile-time-fixed zero value.",
+  "background": [
+   "This is documentation debt as much as code debt: a caller reading mock_store.go's existing 313-method pattern reasonably assumes ALL methods are overridable; the 86 silent exceptions are a trap for the next test author.",
+   "Because MockStore is a single generated-by-hand file (not mockery-generated per .mockery.yaml \u2014 grep -n \"MockStore\" .mockery.yaml to confirm it is absent from the mockery config, meaning it is a hand-maintained double), there is no regeneration step; every one of the 86 methods needs a manual edit."
+  ],
+  "steps": [
+   "Run `grep -n \"^func (m \\*MockStore)\" internal/database/mock_store.go` to enumerate all 399 methods with line numbers.",
+   "Run `grep -L` is not directly usable per-method in one file; instead scan the output of the enumeration and, for each method, check the 1-4 lines following its signature for `Func != nil` \u2014 build the list of the ~86 methods lacking it.",
+   "For each such method: (a) find its 1-3 line body (`return <expr1>, <expr2>` or similar), (b) add a new struct field to the `MockStore` struct definition (near the top of the file, alongside the other ~313 `XFunc func(...)` fields, keeping the same declared-order-follows-method-order convention already used) named `<MethodName>Func func(<same params>) (<same returns>)`, (c) rewrite the method body to `if m.<MethodName>Func != nil { return m.<MethodName>Func(<params>) }` followed by the original hardwired return as the fallback.",
+   "This is large enough (86 methods) to warrant the `/parallel-sweep` or `parallel-refactor-sweep` skill per CLAUDE.md's '\u22653 mechanically-similar refactor tasks' rule \u2014 shard the 86 methods into ~4-6 worker batches by method name alphabetical range, each producing a small diff to the same two regions of the same file (struct field block + method bodies), then integrate serially to avoid merge conflicts within one file.",
+   "Bump the file's version header and last-edited date once, after the full sweep lands."
+  ],
+  "tests": [
+   "For at least the GetAllAuthorBookCounts case the item calls out by name: update TestListAuthors_Success (or add a new test) to set GetAllAuthorBookCountsFunc and assert the returned BookCount is non-zero for at least one author, proving the override field is both present and wired through the real handler path \u2014 this doubles as the fix for this scope's L4732 test-quality item's *spirit*, though the concrete L4732 item targets a different test (TestOrganizeService_PerformOrganize_NoBooksToOrganize).",
+   "No existing test should break: adding a Func field with a nil zero-value preserves every current call site's behavior exactly (the fallback path is the previous hardwired return, verbatim)."
+  ],
+  "acceptance": [
+   "go build ./internal/database/... exits 0.",
+   "grep -c \"Func != nil\" internal/database/mock_store.go returns \u2265399 (every method now checks its own override, some methods may have >1 check if they branch).",
+   "go test ./... exits with the SAME pass/fail set as before the change (a snapshot `go test ./... 2>&1 | md5` before/after, restricted to test names/counts not timing, should match) \u2014 this is a behavior-preserving structural change."
+  ],
+  "edge_cases": [
+   "A method whose current hardwired return references mutable receiver state (e.g. increments a counter, appends to a slice) rather than a pure literal \u2014 for those, the Func-override fallback must still execute the side effect when no override is set, i.e. wrap `if m.XFunc != nil { return m.XFunc(...) } <original side-effecting body>`, not silently drop it."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "L-effort, not S/M, because of the sheer method count (~86), even though each individual edit is trivial \u2014 flagged per CLAUDE.md's 'Fix It Right: depth' rule rather than silently downgrading to a partial pass over 'the important ones'. Good candidate for the repo's parallel-refactor-sweep skill given \u226520 similar call sites.",
+  "review_notes": [
+   "[simplicity-scope.json] Busywork occupying a wave slot. TASK-033 'Repoint store.go:17's broken doc reference to the archived design spec' is a one-comment-line edit, yet it is wave 2 of the five-deep internal/database/store.go chain, which means TASK-037 and TASK-039 (real schema work) each wait an extra merge round-trip f"
+  ]
+ },
+ {
+  "todo_line": 4732,
+  "src_id": null,
+  "title": "Fix TestOrganizeService_PerformOrganize_NoBooksToOrganize to mock the method PerformOrganize actually calls",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/server/organize_service_test.go:33-48 sets `mockDB.GetAllBooksFunc`, but PerformOrganize (internal/organizer/service.go:234, reached via the internal/audiobooks/organize.go:23 `type OrganizeService = organizer.Service` alias) fetches books via `orgSvc.db.GetAllBooksCore(fetchPageSize, offset)` (internal/organizer/service.go:259), a DIFFERENT MockStore method with its own unset `GetAllBooksCoreFunc` field, which defaults to `return nil, nil` (mock_store.go:724-729). The test therefore always runs PerformOrganize against zero books regardless of what GetAllBooksFunc is set to, and only asserts `err == nil` \u2014 a condition true for both an empty-books run and a correctly-processed non-empty run, so it cannot distinguish a working PerformOrganize from a broken one.",
+  "domain": "internal/server",
+  "exact_files": [
+   "internal/server/organize_service_test.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the test sets the wrong mock field",
+    "grep_cmd": "grep -n \"GetAllBooksFunc\" internal/server/organize_service_test.go",
+    "expect": "1 hit ~L35"
+   },
+   {
+    "claim": "PerformOrganize actually calls GetAllBooksCore, not GetAllBooks",
+    "grep_cmd": "grep -n \"orgSvc.db.GetAllBooksCore\" internal/organizer/service.go",
+    "expect": "2 hits ~L259, L307 (initial fetch + metadata re-fetch)"
+   },
+   {
+    "claim": "MockStore.GetAllBooksCore defaults to nil,nil when its own Func field is unset",
+    "grep_cmd": "grep -n \"func (m \\*MockStore) GetAllBooksCore\" -A 5 internal/database/mock_store.go",
+    "expect": "1 hit ~L724, body `if m.GetAllBooksCoreFunc != nil {...}; return nil, nil`"
+   },
+   {
+    "claim": "OrganizeService is a type alias to organizer.Service, and NewOrganizeService wraps organizer.NewService",
+    "grep_cmd": "grep -n \"type OrganizeService = organizer.Service\\|func NewOrganizeService\" internal/audiobooks/organize.go",
+    "expect": "2 hits ~L23, L43"
+   },
+   {
+    "claim": "the test asserts only err == nil, nothing about book count or organized results",
+    "grep_cmd": "grep -n \"func TestOrganizeService_PerformOrganize_NoBooksToOrganize\" -A 15 internal/server/organize_service_test.go",
+    "expect": "1 hit; only `if err != nil { t.Errorf(...) }` present"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Swap one mock field name for the correct one and add a real assertion; mechanical once the right field is identified (already identified above).",
+  "review_critical": false,
+  "goal": "Fix TestOrganizeService_PerformOrganize_NoBooksToOrganize to mock GetAllBooksCoreFunc (what PerformOrganize actually calls) instead of GetAllBooksFunc, and strengthen its assertions so a broken PerformOrganize would actually fail the test.",
+  "background": [
+   "req.BookIDs is empty in the test (`req := &OrganizeRequest{}`), so PerformOrganize takes the `else` branch at service.go:257-278 which pages through GetAllBooksCore, not the per-ID GetBookByID branch."
+  ],
+  "steps": [
+   "Open internal/server/organize_service_test.go.",
+   "In TestOrganizeService_PerformOrganize_NoBooksToOrganize (~L33-48), replace `GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) { return []database.Book{}, nil }` with `GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) { return []database.BookCore{}, nil }` (matching MockStore's actual GetAllBooksCoreFunc signature \u2014 verify the exact param/return types via `grep -n \"GetAllBooksCoreFunc \" internal/database/mock_store.go` before writing this).",
+   "Add a second test, TestOrganizeService_PerformOrganize_WithBooks, that sets GetAllBooksCoreFunc to return a non-empty []database.BookCore slice (1-2 books with a FilePath needing organization) plus whatever other MockStore Funcs PerformOrganize's happy path touches (check organizer/service.go's other orgSvc.db.* calls in the non-BookIDs branch \u2014 e.g. UpdateBook, snapshot/backup calls \u2014 and stub each with a Func that records it was called), then assert PerformOrganize returns nil error AND that the recorded calls happened \u2014 this is the anti-over-suppression twin so the suite cannot silently regress back to a vacuous 'zero books, err==nil' pass.",
+   "Bump the file's version header and last-edited date."
+  ],
+  "tests": [
+   "TestOrganizeService_PerformOrganize_NoBooksToOrganize (fixed): mocks GetAllBooksCoreFunc, asserts err == nil.",
+   "TestOrganizeService_PerformOrganize_WithBooks (new): mocks a non-empty GetAllBooksCoreFunc plus PerformOrganize's other store dependencies, asserts err == nil AND that book-processing side effects (via recorded Func calls) actually occurred."
+  ],
+  "acceptance": [
+   "go test ./internal/server/... -run TestOrganizeService_PerformOrganize -v exits 0 and both test names appear in the -v output.",
+   "Manually verify the anti-over-suppression property: temporarily break PerformOrganize's book-fetch loop (e.g. force an early `return nil`) and confirm TestOrganizeService_PerformOrganize_WithBooks goes red while _NoBooksToOrganize stays green \u2014 then revert the temporary break."
+  ],
+  "edge_cases": [
+   "PerformOrganize's paging loop (service.go ~L257-278) breaks when `len(page) < fetchPageSize` (1000) \u2014 a 1-2 book fake page satisfies this on the first iteration, so the new WithBooks test does not need to simulate pagination across multiple pages."
+  ],
+  "anti_over_suppression": "TestOrganizeService_PerformOrganize_WithBooks",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "This scope's L4728 item (MockStore Func-field audit) is a prerequisite in spirit but not a hard dependency: GetAllBooksCoreFunc already exists on MockStore today, so this fix does not need L4728 to land first.",
+  "review_notes": [
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
+   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,"
+  ]
+ },
+ {
+  "todo_line": 4739,
+  "src_id": null,
+  "title": "Delete the unused internal/scanner/mocks generated package",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/scanner/mocks/ contains 442 generated lines (mock_scanner.go: 380, mock_scanner_coverage_test.go: 62) with zero importers anywhere in the repo (`grep -rln \"scanner/mocks\" --include=\"*.go\" .` returns nothing outside the directory itself), while internal/scanner's own tests hand-roll `fullMockScanner` (scanner_coverage_test.go:655-667) specifically to avoid an import cycle. .mockery.yaml:32-36 still has the `Scanner:` entry generating this dead package.",
+  "domain": "internal/scanner",
+  "exact_files": [
+   "internal/scanner/mocks/mock_scanner.go",
+   "internal/scanner/mocks/mock_scanner_coverage_test.go",
+   ".mockery.yaml"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "dir contents and line counts",
+    "grep_cmd": "wc -l internal/scanner/mocks/*.go",
+    "expect": "380 mock_scanner.go, 62 mock_scanner_coverage_test.go, 442 total"
+   },
+   {
+    "claim": "zero importers repo-wide",
+    "grep_cmd": "grep -rln \"scanner/mocks\" --include=\"*.go\" .",
+    "expect": "0 hits"
+   },
+   {
+    "claim": ".mockery.yaml still generates it",
+    "grep_cmd": "grep -n \"Scanner:\" .mockery.yaml",
+    "expect": "1 hit ~L37, under the internal/scanner config block (dir: internal/scanner/mocks)"
+   },
+   {
+    "claim": "internal/scanner tests use a hand-rolled double instead, to dodge an import cycle",
+    "grep_cmd": "grep -n \"fullMockScanner\" internal/scanner/scanner_coverage_test.go",
+    "expect": "\u22653 hits ~L642,655,659"
+   }
+  ],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Delete a directory and one YAML entry; no logic to reason about.",
+  "review_critical": false,
+  "goal": "Delete internal/scanner/mocks/ entirely and remove its .mockery.yaml entry, since it has no importers and the package's own tests already use a hand-written double for the same interface.",
+  "background": [
+   "The mockery config's `internal/scanner:` block (.mockery.yaml ~L32-37) has only the Scanner interface; removing the Scanner: line empties that block, so the whole `github.com/falkcorp/audiobook-organizer/internal/scanner:` top-level key should be removed too if Scanner is its only interface (verify no sibling interfaces are listed under it before deleting the whole block, not just the Scanner: line)."
+  ],
+  "steps": [
+   "Confirm no other interface is configured under the `internal/scanner:` mockery block: `grep -n \"internal/scanner:\" -A 6 .mockery.yaml` and check only `Scanner:` appears under `interfaces:`.",
+   "Delete internal/scanner/mocks/ (both files): `git rm -r internal/scanner/mocks/`.",
+   "In .mockery.yaml, remove the `github.com/falkcorp/audiobook-organizer/internal/scanner:` block (config + interfaces: Scanner:) in full.",
+   "Run `go build ./... && go vet ./...` to confirm nothing else was silently depending on the package (matches the zero-importer grep, so this should be a no-op).",
+   "Bump .mockery.yaml's version header if it carries one (check first: `head -5 .mockery.yaml`); if the file has no header convention, skip."
+  ],
+  "tests": [
+   "No new test needed. Existing internal/scanner tests using fullMockScanner (scanner_coverage_test.go) must keep passing unmodified \u2014 they never depended on the deleted package."
+  ],
+  "acceptance": [
+   "test -d internal/scanner/mocks returns non-zero (directory gone).",
+   "go build ./... exits 0.",
+   "grep -n \"internal/scanner:\" .mockery.yaml returns 0 hits."
+  ],
+  "edge_cases": [
+   "If a future mockery regeneration run (`mockery` CLI via Makefile target, check `grep -n mockery Makefile`) is invoked without regenerating this entry removed, confirm no Makefile target hard-codes internal/scanner/mocks/ as an expected output path that would now error on a missing dir."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Pairs naturally with the sibling L4743 item (internal/operations/mocks) as one small cleanup PR, but keep them as two commits since the operations/mocks item has a wrinkle (see that item's notes) this one does not.",
+  "review_notes": [
+   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+  ]
+ },
+ {
+  "todo_line": 4743,
+  "src_id": null,
+  "title": "Delete internal/operations/mocks \u2014 its only referencer is dead, permanently-untagged, currently-broken test code",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/operations/mocks/mock_progress_reporter.go is 206 lines with exactly one repo-wide importer outside itself: internal/server/server_import_file_mocks_test.go, which is gated behind `//go:build mocks` (a tag never passed anywhere in Makefile or .github/workflows \u2014 `grep -rn \"tags mocks\\|tags=mocks\\|build mocks\" Makefile .github/workflows/*.yml` returns 0 hits) and which, when actually compiled with that tag, FAILS: `go vet -tags mocks ./internal/server/...` reports `internal/server/server_import_file_mocks_test.go:98:26: undefined: queuemocks.NewMockQueue` \u2014 a symbol that does not exist in internal/operations/mocks (which only exports MockProgressReporter). git history shows why: commit ceb125ef 'feat(ops): piece D \u2014 delete v1 queue, bridge, activity + extract progress types' removed the v1 Queue/MockQueue this test still imports, and the test file was never updated or deleted.",
+  "domain": "internal/operations",
+  "exact_files": [
+   "internal/operations/mocks/mock_progress_reporter.go",
+   "internal/server/server_import_file_mocks_test.go",
+   ".mockery.yaml"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "dir contents",
+    "grep_cmd": "wc -l internal/operations/mocks/*.go",
+    "expect": "206 mock_progress_reporter.go"
+   },
+   {
+    "claim": "the only outside importer",
+    "grep_cmd": "grep -rln \"operations/mocks\\\"\" --include=\"*.go\" . ",
+    "expect": "2 hits: internal/server/server_import_file_mocks_test.go and (a different, unrelated package) internal/server/handlers/operations/mocks \u2014 confirm the second is a DIFFERENT import path (internal/server/handlers/operations/mocks, not internal/operations/mocks) before concluding"
+   },
+   {
+    "claim": "the importer is gated behind a build tag",
+    "grep_cmd": "grep -n \"go:build mocks\" internal/server/server_import_file_mocks_test.go",
+    "expect": "1 hit at L6"
+   },
+   {
+    "claim": "that build tag is never referenced in Makefile or CI workflows",
+    "grep_cmd": "grep -rn \"tags mocks\\|tags=mocks\\|build mocks\" Makefile .github/workflows/*.yml",
+    "expect": "0 hits \u2014 the mocks build tag is never invoked by Makefile or CI"
+   },
+   {
+    "claim": "the file is currently broken even under its own tag",
+    "grep_cmd": "go vet -tags mocks ./internal/server/... 2>&1 | grep -n 'undefined: queuemocks.NewMockQueue'",
+    "expect": "1 hit \u2014 vet: internal/server/server_import_file_mocks_test.go:98:26: undefined: queuemocks.NewMockQueue"
+   },
+   {
+    "claim": "the removal commit that orphaned it",
+    "grep_cmd": "git log --oneline --all --grep=\"delete v1 queue\"",
+    "expect": "1 hit: ceb125ef"
+   }
+  ],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "The deletion itself is mechanical, but deciding what to do with the one (broken, dead) referencer requires reading server_import_file_mocks_test.go closely enough to confirm nothing salvageable is being thrown away \u2014 not a pure delete-and-done.",
+  "review_critical": false,
+  "goal": "Delete internal/operations/mocks/ and its .mockery.yaml entry, and delete internal/server/server_import_file_mocks_test.go \u2014 the latter is dead code from before commit ceb125ef removed the v1 queue it tests, is gated behind a build tag CI never sets, and does not even compile under that tag today.",
+  "background": [
+   "internal/server/handlers/operations/handler_test.go imports a DIFFERENT package (internal/server/handlers/operations/mocks, pkgname operationsmocks \u2014 .mockery.yaml:247-251) which is unrelated and must NOT be touched.",
+   "TestImportFile_WithMockMetadata_CreateAuthorAndBook (the test inside server_import_file_mocks_test.go) may cover real, still-relevant behavior (import-file-with-AI-metadata) that has no coverage elsewhere \u2014 before deleting, grep for a differently-named test covering the same handler to confirm nothing unique is lost, or port the useful assertions into an existing, currently-compiling test file instead of a blind delete."
+  ],
+  "steps": [
+   "Read internal/server/server_import_file_mocks_test.go in full to see what TestImportFile_WithMockMetadata_CreateAuthorAndBook (and any sibling tests in the file) actually assert.",
+   "Check whether an existing, currently-built test file already covers the same import-file-with-metadata path without the `mocks` build tag: `grep -rln \"ImportFile\" internal/server/*_test.go | grep -v server_import_file_mocks_test.go`.",
+   "If coverage is duplicated elsewhere: delete internal/server/server_import_file_mocks_test.go outright (`git rm`).",
+   "If NOT duplicated: port the test's assertions into a new or existing non-tag-gated test file, replacing the dead `queuemocks.NewMockQueue(t)` dependency with whatever the current queue abstraction is (find it via `grep -rn \"type.*Queue interface\" internal/operations/`), then delete the old file.",
+   "Delete internal/operations/mocks/mock_progress_reporter.go and its directory.",
+   "In .mockery.yaml, remove the `internal/operations:` block's `ProgressReporter:` entry (~L25-31) \u2014 check first whether ProgressReporter is used unmocked elsewhere (`grep -rln \"ProgressReporter\" --include=\"*.go\" internal/operations/`) so removing the mock doesn't strand a still-needed interface without a double.",
+   "Run `go build -tags mocks ./... ` and `go vet -tags mocks ./...` to confirm the whole `mocks`-tagged build is clean after the deletions (not just the untagged default build)."
+  ],
+  "tests": [
+   "If porting: the ported test must compile and pass under the DEFAULT build (no `mocks` tag) so it actually runs in CI, unlike its predecessor."
+  ],
+  "acceptance": [
+   "test -d internal/operations/mocks returns non-zero.",
+   "go build ./... exits 0.",
+   "go vet -tags mocks ./... exits 0 (no more orphaned broken references anywhere under that tag).",
+   "grep -rn \"queuemocks\" --include=\"*.go\" . returns 0 hits."
+  ],
+  "edge_cases": [
+   "internal/server/scan_edge_cases_test.go and other *_test.go files may ALSO carry `//go:build mocks` \u2014 grep -rln \"go:build mocks\" --include=\"*_test.go\" . before finishing, to make sure this class of dead-and-broken-under-its-own-tag test isn't larger than this one file."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "The item as literally written ('effectively unreferenced') undersells what was found: the sole referencer isn't just unreferenced-in-spirit, it's dead code that doesn't even compile under the only tag that would include it. Worth a wider grep (see edge_cases) for siblings before closing this out as a one-file fix.",
+  "review_notes": [
+   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin"
+  ]
+ },
+ {
+  "todo_line": 4832,
+  "src_id": null,
+  "title": "Stranded .tmp-rename recovery tool \u2014 already built",
+  "verdict": "stale_done",
+  "verdict_evidence": "scripts/repair_stranded_tracks.py (372 lines, commits f494551d 'feat(scripts): recover audio stranded by the path-separator bug' and b2e29bb0 'fix(scripts): detect stranded tracks structurally, not by \\\".tmp-rename\\\"', both 2026-08-16) implements every requirement the item lists: dry-run default (`--apply` required, `argparse` help text 'default is a dry run', script.py:323-324), a full report before any move (main() prints a plan and, per the docstring, is meant to be redirected to a report file), naming reconstruction via directory-tail + filename join ('<book>/Project Hail Mary - 24/31.mp3.tmp-rename' -> '<book>/Project Hail Mary - 24.mp3', docstring lines 8-19), and edition-collision handling for exactly the ambiguous cases the item names (docstring 'EDITION COLLISIONS... Foundation and Empire has both a 23-track and a 201-track rip').",
+  "domain": "scripts",
+  "exact_files": [
+   "TODO.md"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the tool exists and its size",
+    "grep_cmd": "wc -l scripts/repair_stranded_tracks.py",
+    "expect": "372"
+   },
+   {
+    "claim": "dry-run is the default, --apply required to move anything",
+    "grep_cmd": "grep -n \"default is a dry run\\|action=\\\"store_true\\\"\" scripts/repair_stranded_tracks.py",
+    "expect": "\u22651 hit ~L323-324"
+   },
+   {
+    "claim": "the fixing commits",
+    "grep_cmd": "git log --oneline --all --grep=\"recover audio stranded\\|detect stranded tracks structurally\"",
+    "expect": "2 hits: f494551d, b2e29bb0"
+   },
+   {
+    "claim": "nothing is ever deleted or overwritten",
+    "grep_cmd": "grep -n \"Nothing is ever deleted and nothing is ever overwritten\" scripts/repair_stranded_tracks.py",
+    "expect": "1 hit in the module docstring"
+   }
+  ],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Just checking off the TODO box; the tool is already built and iterated (2 commits).",
+  "review_critical": false,
+  "goal": "Check off the TODO.md box at L4832 \u2014 the recovery tool exists at scripts/repair_stranded_tracks.py, already through two hardening iterations (seed-based detection, then structural detection).",
+  "background": [
+   "The structural-detection follow-up (b2e29bb0) found the true blast radius is much larger than the seed-based scan: 38,895 files in 1,145 books vs the original 2,687/82 estimate \u2014 the seed approach (matching only .tmp-rename) missed the 93% of damage where the bug's rename SUCCEEDED into a wrong-but-ordinary-looking directory.",
+   "No evidence the tool has been run with --apply against production yet (no report file found under any obvious name, no TODO/CHANGELOG mention) \u2014 running it is a separate, not-yet-taken action."
+  ],
+  "steps": [
+   "In TODO.md, change the `- [ ]` box for the L4832 item to `- [x]`, citing scripts/repair_stranded_tracks.py and commits f494551d/b2e29bb0."
+  ],
+  "tests": [
+   "Check for scripts/tests/test_repair_stranded_tracks.py or similar (`find scripts -iname \"*test*stranded*\"`) \u2014 if absent, that gap belongs in this scope's part-2 note below, not as a reason to keep this item open (the code exists and matches every stated requirement)."
+  ],
+  "acceptance": [
+   "test -f scripts/repair_stranded_tracks.py exits 0.",
+   "python3 scripts/repair_stranded_tracks.py --help exits 0 and shows --apply as a flag."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "The DELIVERABLE (the tool) is done; running it against production with --apply is a separate 'prod_run' action requiring a human to read the dry-run report first \u2014 do not conflate 'the tool exists' with 'the recovery has happened'. No report-file artifact was found on disk to confirm a dry-run was ever executed; recommend the owner run `python3 scripts/repair_stranded_tracks.py <root> > report.txt` (dry-run) before considering an --apply run."
+ },
+ {
+  "todo_line": 4840,
+  "src_id": null,
+  "title": "SHA-256 + ffmpeg audio-MD5 comparison fallback \u2014 already implemented",
+  "verdict": "stale_done",
+  "verdict_evidence": "scripts/repair_stranded_tracks.py implements exactly the two-tier comparison the item specifies: `sha256()` (line 87) for per-file byte comparison, and `audio_md5()` (line 98) which shells out to `ffmpeg -v error -i path -map 0:a -f md5 -` (line 108) \u2014 the literal command the item names \u2014 as the tag-insensitive fallback when SHA-256s differ. `resolve_conflict()` (line 240) uses `sha256(act.src) == sha256(act.dst)` for the primary comparison at a destination collision.",
+  "domain": "scripts",
+  "exact_files": [
+   "TODO.md"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "sha256 helper exists",
+    "grep_cmd": "grep -n \"^def sha256\" scripts/repair_stranded_tracks.py",
+    "expect": "1 hit ~L87"
+   },
+   {
+    "claim": "ffmpeg audio-md5 fallback exists with the exact command form the item specifies",
+    "grep_cmd": "grep -n \"audio_md5\\|ffmpeg\" scripts/repair_stranded_tracks.py",
+    "expect": "\u22652 hits; command includes -v error -i path -map 0:a -f md5 -"
+   },
+   {
+    "claim": "resolve_conflict uses sha256 for the primary comparison",
+    "grep_cmd": "grep -n \"def resolve_conflict\" -A 10 scripts/repair_stranded_tracks.py",
+    "expect": "1 hit ~L240, body compares sha256(act.src) == sha256(act.dst)"
+   }
+  ],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Just checking off the TODO box; already implemented as part of the same script from L4832.",
+  "review_critical": false,
+  "goal": "Check off the TODO.md box at L4840 \u2014 the SHA-256-primary / ffmpeg-audio-MD5-fallback comparison logic is already implemented in scripts/repair_stranded_tracks.py's resolve_conflict/audio_md5 functions.",
+  "background": [
+   "This item is a sub-requirement of the same recovery tool covered by L4832 in this scope; both landed together in commits f494551d/b2e29bb0."
+  ],
+  "steps": [
+   "In TODO.md, change the `- [ ]` box for the L4840 item to `- [x]`, citing scripts/repair_stranded_tracks.py's sha256()/audio_md5()/resolve_conflict()."
+  ],
+  "tests": [
+   "Same gap noted in L4832: confirm whether scripts/ has any automated test coverage for this script at all; if not, that's a separate, smaller follow-up (a unit test for resolve_conflict's decision table), not grounds to reopen this item."
+  ],
+  "acceptance": [
+   "grep -n \"def audio_md5\" scripts/repair_stranded_tracks.py returns 1 hit."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Do not re-open; do not conflate with the still-open question of whether the tool has actually been RUN against prod (see L4832's notes)."
+ },
+ {
+  "todo_line": 4844,
+  "src_id": null,
+  "title": "Build a report-only scan for book rows that may have been spuriously created by the .tmp-rename bug",
+  "verdict": "actionable",
+  "verdict_evidence": "No existing script or report covers this specific check: `grep -rln \"purely numeric title\\|numeric_title\\|spurious.*book.*row\" --include=\"*.py\" --include=\"*.go\" scripts/ internal/` returns nothing, and `ls scripts/ | grep -i \"spurious\\|purge\\|soft.delete\"` is empty. The defect class is confirmed real and understood: internal/organizer/path_format.go:55-63's scrubVar comment cites the exact real-prod pattern ('Tarkin - Star Wars - 3/85' -> 85 separate Book records instead of one Book with 85 BookFiles), and scripts/repair_stranded_tracks.py's structural detector already enumerates the 1,145 affected books/38,895 files (b2e29bb0 commit message) that this investigation should cross-reference against.",
+  "domain": "scripts",
+  "exact_files": [
+   "scripts/find_spurious_stranded_book_rows.py"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "no existing tooling covers 'purely numeric title' detection by that phrase",
+    "grep_cmd": "grep -rln \"purely numeric title\" --include=\"*.py\" --include=\"*.go\" scripts/ internal/",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "'numeric_title' only appears as an unrelated test-case label (stop-word extraction test), not as spurious-row detection tooling",
+    "grep_cmd": "grep -rln \"numeric_title\" --include=\"*.py\" --include=\"*.go\" scripts/ internal/",
+    "expect": "1 hit \u2014 internal/metafetch/service_test.go:161, a subtest name for stop-word extraction (\"14\" \u2192 {\"14\": true}), unrelated to this item's spurious-book-row concept"
+   },
+   {
+    "claim": "no existing tooling covers 'spurious...book...row' detection by that phrase",
+    "grep_cmd": "grep -rln \"spurious.*book.*row\" --include=\"*.py\" --include=\"*.go\" scripts/ internal/",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "the defect mechanism is documented and real (85-Book-records example)",
+    "grep_cmd": "grep -n \"85 separate Book records\" internal/organizer/path_format.go",
+    "expect": "1 hit ~L59-60"
+   },
+   {
+    "claim": "the affected-book-directory list already exists in the sibling recovery tool and can be reused/imported",
+    "grep_cmd": "grep -n \"def find_bogus_dirs\" scripts/repair_stranded_tracks.py",
+    "expect": "1 hit ~L119"
+   },
+   {
+    "claim": "existing scripts already have a precedent for talking to the live API with an auth token",
+    "grep_cmd": "grep -l \"api-token\\|API_TOKEN\\|Authorization\" scripts/*.py",
+    "expect": "\u22651 hit, e.g. scripts/abs_capture_fixtures.py"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "find_bogus_dirs()",
+    "file": "scripts/repair_stranded_tracks.py",
+    "verify_grep": "grep -n \"def find_bogus_dirs\" scripts/repair_stranded_tracks.py"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Combines a filesystem-pattern reuse (find_bogus_dirs), a live-API paginated book query, and two independent spurious-row heuristics (numeric title, path-segment pattern) into one coherent report \u2014 more judgment than a mechanical sweep, but well short of a design question given owner decision #9's report-only precedent.",
+  "review_critical": false,
+  "goal": "Write scripts/find_spurious_stranded_book_rows.py: a REPORT-ONLY script (no mutation, per the owner's standing 'never delete files/rows in any repair' rule and decision #9's report-only precedent for review-lane investigations) that queries the live book API for rows whose title matches `^\\d+$` (purely numeric) or whose file_path contains a segment matching ` - \\d+$`, cross-references those against the set of affected book directories scripts/repair_stranded_tracks.py's find_bogus_dirs() already identifies, and prints/writes counts broken down by (numeric-title-only, path-segment-only, both, neither-but-in-an-affected-dir) so a human can decide what \u2014 if anything \u2014 to do about soft-delete/purge archaeology, per the item's own 'Report counts before proposing any restore. Do not mass-restore rows.'",
+  "background": [
+   "This is Task 3 from the original incident write-up (.claude/notes/2026-08-16-tmp-rename-recovery-prompt.md): 'Hypothesis worth testing: books whose files all became stranded would have looked empty to any scan/cleanup pass, and may have been soft-deleted or purged... purge-deleted and trash-cleanup are scheduled ops \u2014 check whether either ran over these in April.'",
+   "Per the owner decision list in this scope's instructions (#12, missing-file lane): 'never delete; must REPOINT' and (#9) 'review-only drain; per-population REPORT ops may be built; NO purge/delete ops' \u2014 this item must produce a report, not a mutation.",
+   "The API requires the long-lived key at ~/.config/audiobook-organizer/api-key per this repo's operational conventions; a server-bootstrap-style auth flow is out of scope for this item (assume the key file already exists)."
+  ],
+  "steps": [
+   "Create scripts/find_spurious_stranded_book_rows.py with the standard file header for a Python script per file-headers.md.",
+   "Import or re-implement (prefer import if repair_stranded_tracks.py exposes find_bogus_dirs as an importable function without side effects) the bogus-directory detector to get the current set of affected book paths.",
+   "Add an API client function using the same auth pattern as scripts/abs_capture_fixtures.py (Authorization header from the key file), paginating GET /api/v1/books (check the real endpoint path via `grep -rn \"router.GET(\\\"/api/v1/books\\\"\" internal/server/`) to enumerate all books with id, title, file_path.",
+   "For each book, test: (a) `re.fullmatch(r'\\d+', title.strip())` for purely-numeric title, (b) `re.search(r' - \\d+$', PurePath(file_path).parent.name)` or similar for a path segment ending in ' - N'.",
+   "Cross-reference matches against the bogus-directory set from step 2: report counts for (in an affected dir AND numeric-title), (in an affected dir AND path-segment match), (numeric-title but NOT in an affected dir \u2014 could be a false positive, e.g. a book genuinely titled a number), (in an affected dir but neither heuristic fired \u2014 worth a closer look).",
+   "Write output to a timestamped report file (mirroring repair_stranded_tracks.py's own reporting convention) and print a summary to stdout; make no API mutation calls anywhere in the script.",
+   "Do NOT implement any restore/purge action in this script \u2014 per the item and owner decision, that is a separate, later, human-reviewed step."
+  ],
+  "tests": [
+   "scripts/tests/test_find_spurious_stranded_book_rows.py (or inline `if __name__ == \"__main__\":` smoke test): unit-test the two regex heuristics against known-good and known-bad title/path strings (e.g. 'Tarkin - Star Wars - 3' parent + '85' \u2014 wait, verify against the REAL shape: the numeric fragment becomes the Title of a spuriously-created Book, so test with title='85', title='Foundation and Empire', path segment 'Project Hail Mary - 24').",
+   "Test the cross-reference logic against a small fixture of 3-4 fake book records: one clearly spurious (numeric title, in an affected dir), one false-positive-shaped (numeric title, NOT in an affected dir \u2014 e.g. a real book called '1984'), one clean (neither)."
+  ],
+  "acceptance": [
+   "python3 scripts/find_spurious_stranded_book_rows.py --help exits 0.",
+   "Running it against a local/dev server (not prod, for the acceptance check) produces a report file and prints non-negative counts for each category with no exceptions.",
+   "grep -rn \"DELETE\\|requests.delete\\|api.*delete\" scripts/find_spurious_stranded_book_rows.py returns 0 hits \u2014 confirms the report-only constraint is honored in the code, not just the docstring."
+  ],
+  "edge_cases": [
+   "A real book genuinely titled a bare number (e.g. '1984', '2001') would false-positive on the numeric-title heuristic alone \u2014 this is why the cross-reference against find_bogus_dirs' affected-directory set is required, not optional; report numeric-title matches OUTSIDE an affected directory as a separate, lower-confidence bucket rather than folding them into the main count.",
+   "Books whose file_path no longer exists on disk (already cleaned up some other way) still need to be counted from the DB side \u2014 do not skip a book just because os.path.exists(file_path) is false; the whole point is finding rows the filesystem side can no longer explain."
+  ],
+  "anti_over_suppression": "N/A \u2014 this is a read-only investigation script, not a filter/guard in the runtime path.",
+  "depends_on_lines": [
+   4832
+  ],
+  "gate": "n/a (docs)",
+  "notes": "Explicitly a REPORT-only deliverable per owner decision #9's precedent and the item's own 'Report counts before proposing any restore. Do not mass-restore rows.' Depends on L4832's find_bogus_dirs() (already built, not blocking)."
+ },
+ {
+  "todo_line": 4848,
+  "src_id": null,
+  "title": "Confirm no new bogus directories post-fix \u2014 operational monitoring, not code",
+  "verdict": "prod_run",
+  "verdict_evidence": "The code-side guard and its regression tests are already in place and verifiably passing: internal/organizer/pathbuild.go:165 `stem = SanitizePathComponent(stem)` (added by commit c54721c7, per the comment at pathbuild.go:140 'closed by a different guard... From 2026-03-03 (f29c3ce6) to 2026-08-15 (c54721c7)'), and two dedicated regression tests already reproduce the exact historical failure: TestBuildRelPath_SeparatorInFilePatternStaysOneComponent (path_format_test.go:163, using the literal original buggy pattern `SegmentTitleFormat: \"{title} - {track}/{total_tracks}\"`) and TestBuildPath_TarkinReproducesAsOneFile (path_format_test.go:105, reproducing the real 2026-05-28 prod data case). What remains per the item's own text ('the post-fix observation window is currently about zero') is calendar time passing with continued production monitoring \u2014 not a code deliverable.",
+  "domain": "docs",
+  "exact_files": [
+   "TODO.md"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the builder guard exists at the cited fix commit",
+    "grep_cmd": "grep -n \"SanitizePathComponent(stem)\" internal/organizer/pathbuild.go",
+    "expect": "1 hit ~L165"
+   },
+   {
+    "claim": "the guard's own comment documents the fix commit and date range of the historical damage",
+    "grep_cmd": "grep -n \"c54721c7\" internal/organizer/pathbuild.go",
+    "expect": "1 hit ~L141"
+   },
+   {
+    "claim": "a regression test reproduces the exact original buggy default pattern",
+    "grep_cmd": "grep -n \"TestBuildRelPath_SeparatorInFilePatternStaysOneComponent\" -A 20 internal/organizer/path_format_test.go",
+    "expect": "1 hit ~L163, uses SegmentTitleFormat: \\\"{title} - {track}/{total_tracks}\\\""
+   },
+   {
+    "claim": "a second regression test reproduces the real prod data case",
+    "grep_cmd": "grep -n \"TestBuildPath_TarkinReproducesAsOneFile\" internal/organizer/path_format_test.go",
+    "expect": "1 hit ~L105"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "No code to write; this is a scheduling/monitoring note.",
+  "review_critical": false,
+  "goal": "No code deliverable. The forward fix and its regression tests are done (verified above); what's left is operational: periodically re-run the prod measurement commands from the incident notes (find <root> -name \\\"*.tmp-rename\\\" | wc -l, and a scan for the structural pattern find_bogus_dirs() implements) on a cadence (e.g. weekly for the next month) and confirm the count stays at zero.",
+  "background": [
+   "The incident notes (.claude/notes/2026-08-16-tmp-rename-recovery-prompt.md) already give the exact commands to re-run: `find <library-root> -name \\\"*.tmp-rename\\\" | wc -l` and the journalctl grep for 'safeRename refusing'."
+  ],
+  "steps": [
+   "This is not a code task. Recommend: add a recurring reminder/cron note (outside this codebase, or as a scheduled `/loop` check per this session's tooling) to re-run the incident notes' find/journalctl commands against the server weekly through 2026-09-15, and record each result."
+  ],
+  "tests": [
+   "N/A"
+  ],
+  "acceptance": [
+   "A human confirms, on each check, that `find <root> -name \\\"*.tmp-rename\\\" | wc -l` returns 0 and no new 'safeRename refusing' log lines appear referencing the same directory-shape."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Per this scope's owner-decision framing (#14, and the general standing rule 'a running scan clobbers applied metadata / never auto-run'), this is exactly the kind of item that goes to docs/operations/pending-prod-actions.md as a recurring check, not a code PR."
+ },
+ {
+  "todo_line": 4852,
+  "src_id": null,
+  "title": "Reuse internal/ai's existing typed OpenAI error classification in scanner.isPermanentAIFailure instead of re-parsing error text",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/scanner/ai_failure.go:47-58 still does substring matching (`strings.Contains(msg, marker)`) against a hand-maintained marker list, and its own comment (line 17-19) says the typed-error fix 'is tracked in todo.d/20260816-typed-ai-provider-errors.md' \u2014 but that typed fix ALREADY EXISTS, six weeks earlier, one package over: internal/ai/retry.go:34-53 `isPermanentAIError` already does `var apiErr *openai.Error; errors.As(err, &apiErr)` against the real openai-go SDK error type (StatusCode, Code fields) and DoWithRetry (internal/ai/retry.go:83-89) already wraps a detected-permanent failure as the exported `*ai.PermanentError` before returning it up through ParseBatch. `internal/ai/openai_parser.go`'s aiParser is concretely `*ai.OpenAIParser` (scanner.go:782), so this is not a design gap \u2014 it is an un-reused fix that already shipped in a sibling function.",
+  "domain": "internal/scanner",
+  "exact_files": [
+   "internal/scanner/ai_failure.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "ai_failure.go still substring-matches, with a comment pointing at a todo fragment",
+    "grep_cmd": "grep -n \"strings.Contains\\|todo.d/20260816-typed-ai-provider-errors\" internal/scanner/ai_failure.go",
+    "expect": "2 hits ~L18, L53"
+   },
+   {
+    "claim": "internal/ai already has typed classification via errors.As against *openai.Error",
+    "grep_cmd": "grep -n \"func isPermanentAIError\" -A 13 internal/ai/retry.go",
+    "expect": "1 hit ~L40, body uses `var apiErr *openai.Error; errors.As(err, &apiErr)`, switches on apiErr.StatusCode and apiErr.Code"
+   },
+   {
+    "claim": "the typed classification predates ai_failure.go by 6 weeks",
+    "grep_cmd": "git log -1 --format=%ai bf110a3a -- internal/ai/retry.go; git log -1 --format=%ai a662ec0c -- internal/scanner/ai_failure.go",
+    "expect": "bf110a3a: 2026-07-03; a662ec0c: 2026-08-16"
+   },
+   {
+    "claim": "DoWithRetry wraps a detected-permanent error in the exported *ai.PermanentError before it propagates out of ParseBatch",
+    "grep_cmd": "grep -n \"type PermanentError struct\\|isPermanentAIError(err)\" internal/ai/retry.go",
+    "expect": "2 hits ~L22, L84; L84 body is `if isPermanentAIError(err) { return \\u0026PermanentError{Err: err} }`"
+   },
+   {
+    "claim": "the scanner's aiParser is concretely *ai.OpenAIParser (an openai-go SDK client), so *openai.Error is the right, reachable type",
+    "grep_cmd": "grep -n \"var aiParser \\*ai.OpenAIParser\" internal/scanner/scanner.go",
+    "expect": "1 hit ~L782"
+   },
+   {
+    "claim": "the fragment this comment points at no longer exists in todo.d/",
+    "grep_cmd": "find todo.d -iname \"*typed-ai-provider*\"",
+    "expect": "0 hits in todo.d/"
+   },
+   {
+    "claim": "the fragment was already folded into TODO.md at this exact item",
+    "grep_cmd": "grep -n \"typed provider errors\" TODO.md",
+    "expect": "1 hit in TODO.md at L4852"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "ai.PermanentError (exported, wraps the classified error, satisfies errors.As)",
+    "file": "internal/ai/retry.go",
+    "verify_grep": "grep -n \"type PermanentError struct\" internal/ai/retry.go"
+   },
+   {
+    "name": "isPermanentAIError's *openai.Error / errors.As pattern (unexported, but the pattern to mirror or export)",
+    "file": "internal/ai/retry.go",
+    "verify_grep": "grep -n \"func isPermanentAIError\" internal/ai/retry.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Not pure mechanical: requires reasoning about which of ai_failure.go's marker strings become provably redundant once errors.As(*ai.PermanentError) is checked first (400/401/403/404 already covers invalid_api_key/account_deactivated by status code) versus which still need a text fallback (Anthropic-style markers are currently dead code since aiParser is OpenAI-only; Ollama-via-baseURL errors may not always come back as structured *openai.Error and could still need the text fallback) \u2014 a judgment call, not a copy-paste.",
+  "review_critical": false,
+  "goal": "Change internal/scanner/isPermanentAIFailure to check `errors.As(err, &permErr)` for `*ai.PermanentError` FIRST (reusing the classification internal/ai/retry.go's DoWithRetry already computed via the real openai-go SDK error type), falling back to the existing substring-marker list only for errors that are not an *ai.PermanentError (e.g. errors that never went through DoWithRetry, or a non-structured error from an OpenAI-compatible-but-not-quite endpoint like Ollama's baseURL mode).",
+  "background": [
+   "isPermanentAIError's switch (internal/ai/retry.go:45-52) currently covers: StatusCode 400/401/403/404 (always permanent) and StatusCode 429 with Code==\\\"insufficient_quota\\\" specifically. It does NOT check for 'credit_balance_exhausted' or 'account_deactivated' by Code \u2014 those are two of ai_failure.go's marker strings that may or may not map to a status code already in the 400/401/403/404 bucket; this needs verification against real OpenAI API error payloads (or the openai-go SDK's own documented error codes) rather than assumption before deciding to drop them from the fallback list.",
+   "The Anthropic-style markers ('authentication_error', 'permission_error') in ai_failure.go are dead code today: `aiParser` is concretely `*ai.OpenAIParser` (scanner.go:782), never an Anthropic client \u2014 but the marker-list fallback is still worth keeping as defense-in-depth for the Ollama-via-OpenAI-baseURL path (scanner.go:798, ai.NewOpenAIParserWithBaseURL), whose errors may not always deserialize into a structured *openai.Error the same way OpenAI's own API does."
+  ],
+  "steps": [
+   "Verify, via the openai-go SDK source or OpenAI's public API error-code documentation, whether 'credit_balance_exhausted' and 'account_deactivated' error responses carry an HTTP status already inside isPermanentAIError's 400/401/403/404 bucket (they almost certainly do \u2014 billing/auth errors are 4xx) \u2014 if confirmed, they are provably redundant with the typed check and can be dropped from ai_failure.go's marker list; if NOT confirmed, keep them in the text-fallback list.",
+   "In internal/scanner/ai_failure.go, import \\\"errors\\\" and the internal/ai package.",
+   "Rewrite isPermanentAIFailure: first do `var permErr *ai.PermanentError; if errors.As(err, &permErr) { return true }`, THEN fall through to the existing `for _, marker := range permanentAIFailureMarkers { if strings.Contains(msg, marker) { return true } }` loop as a fallback for errors that are not *ai.PermanentError.",
+   "Trim permanentAIFailureMarkers down to only the entries NOT provably covered by isPermanentAIError's status-code switch, per step 1's finding \u2014 at minimum this removes '401 Unauthorized' and '403 Forbidden' (directly covered by StatusCode 401/403) if step 1 confirms the SDK's *openai.Error.Error() string format doesn't already get caught pre-wrap in some other way.",
+   "Update the doc comment (currently citing the now-stale todo.d fragment path) to reference internal/ai/retry.go's isPermanentAIError/PermanentError directly instead.",
+   "Bump both files' version headers if either is touched beyond ai_failure.go (retry.go should not need changes for this item)."
+  ],
+  "tests": [
+   "internal/scanner/ai_failure_test.go: add TestIsPermanentAIFailure_TypedPermanentError \u2014 wrap a fake error in &ai.PermanentError{Err: errors.New(\\\"whatever\\\")} and assert isPermanentAIFailure returns true even when the wrapped message contains none of the substring markers (proves the typed path is checked, not just the text path).",
+   "Existing TestIsPermanentAIFailure-style table tests (grep -n \\\"func Test\\\" internal/scanner/ai_failure_test.go) must keep passing for the substring-fallback cases that remain in the marker list after trimming.",
+   "Anti-over-suppression: TestIsPermanentAIFailure_TransientErrorNotFlagged \u2014 a plain network-timeout error (not *ai.PermanentError, no marker substring) must still return false, so the phase keeps retrying transient failures instead of aborting on everything."
+  ],
+  "acceptance": [
+   "go build ./internal/scanner/... ./internal/ai/... exits 0.",
+   "go test ./internal/scanner/... -run TestIsPermanentAIFailure -v exits 0 including the new typed-error test.",
+   "grep -n \"errors.As(err, &permErr)\" internal/scanner/ai_failure.go returns 1 hit."
+  ],
+  "edge_cases": [
+   "err is nil: isPermanentAIFailure's existing `if err == nil { return false }` guard must stay first, before the errors.As check (errors.As(nil, ...) is safe but the early return is clearer and matches existing style).",
+   "err is a *ai.PermanentError wrapping ANOTHER *ai.PermanentError (double-wrap, shouldn't happen but errors.As unwraps recursively so it is harmless either way) \u2014 no special handling needed, errors.As already walks the chain.",
+   "err comes from the Ollama-via-baseURL path and is a plain fmt.Errorf-wrapped string with no *openai.Error anywhere in its chain: falls through to the substring-marker fallback exactly as today \u2014 behavior-preserving for that path."
+  ],
+  "anti_over_suppression": "TestIsPermanentAIFailure_TransientErrorNotFlagged",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "This is a 'hand-rolled = weaker copy' finding (see this repo's own standing feedback lesson of that name): the correct fix already exists in a sibling file and predates the workaround by 6 weeks; the workaround's own comment even names the right destination (a typed error) without noticing it had already arrived. Flagging per CLAUDE.md's 'Fix It Right: depth' \u2014 the minimal patch would be to just add one more substring marker; the correct fix is to consume the classification that already exists.",
+  "review_notes": []
+ },
+ {
+  "todo_line": 4861,
+  "src_id": null,
+  "title": "Maintenance-window watchdog cancellation vs. plugin self-reported success \u2014 contradictory terminal status",
+  "verdict": "needs_design",
+  "verdict_evidence": "Confirmed mechanism for HALF the contradiction: internal/operations/registry/worker.go:410-430 authoritatively sets the operations_v2 row's terminal status to \\\"canceled\\\" whenever `ctxCanceled` is true, REGARDLESS of what the plugin's Run() actually returned (the `case runErr != nil` / `default: finalStatus = \\\"completed\\\"` branches are only reached when ctxCanceled is false) \u2014 so a plugin that keeps running past its own context cancellation and finishes cleanly will have its Run()-level success silently overridden to \\\"canceled\\\" at the operations_v2 layer. What is NOT resolvable by grep alone is the OTHER half: which code path produces the maintenance plugin's own \\\"completed successfully (100%)\\\" log/report (no literal match for that string anywhere in the repo \u2014 grep -rn \\\"completed successfully\\\" internal/plugins/maintenance/*.go internal/maintenance/*.go returns 0 hits, so it is either a paraphrase of prod log output or generated by a generic reporter format string not yet located), and specifically whether that plugin-side success signal checks ctx.Err() before declaring victory.",
+  "domain": "internal/operations/registry",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the watchdog cancels the op's context on a stuck/timeout strike, without itself setting a terminal status",
+    "grep_cmd": "grep -n \"Cancel the op's context\" -A 2 internal/operations/registry/watchdog.go",
+    "expect": "1 hit ~L94, comment 'we do NOT set status here'"
+   },
+   {
+    "claim": "the worker's own status write authoritatively overrides to canceled whenever ctxCanceled, before checking runErr",
+    "grep_cmd": "grep -n \"case ctxCanceled:\" -A 15 internal/operations/registry/worker.go",
+    "expect": "1 hit ~L410, finalStatus = \\\"canceled\\\" unconditionally in this branch"
+   },
+   {
+    "claim": "no literal match for the plugin's own log message anywhere in the repo",
+    "grep_cmd": "grep -rn \"completed successfully\" internal/plugins/maintenance/*.go internal/maintenance/*.go",
+    "expect": "0 hits \u2014 confirms this half needs live-log or broader-search investigation, not just this scope's directories"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "opus",
+  "why_tier": "The mechanical half (worker.go's status-write logic) is well understood, but the actual fix requires a policy decision this scope's owner-decision list does not cover, plus locating a second code path (the plugin's own success reporting) that a targeted grep in this scope's directories did not find \u2014 likely needs a wider repo search or the original prod log lines to pin down.",
+  "review_critical": true,
+  "goal": "NOT YET BRIEFABLE. Needs one policy decision plus one more locate-the-code step before this can become an actionable task.",
+  "background": [
+   "Owner decision #14 in this scope's instructions covers E08/ABS/chapters-backfill prod-run gating, not this watchdog/plugin-status race \u2014 this item is not covered by any of the 14 listed decisions.",
+   "The race is real and was observed in production (per the item: 'Prod cancelled the maintenance window at 331s idle, after which the plugin logged \\\"completed successfully (100%)\\\"'), and is now MORE consequential per the item's own framing: 'newly consequential after #2483: the legacy operations row is now mirrored as canceled while the op's own log claims success, so the two records actively contradict each other.'"
+  ],
+  "steps": [
+   "DESIGN QUESTION (needs owner decision): when a plugin's own execution completes successfully AFTER the watchdog has already canceled its context and the operations_v2 row is already terminal as 'canceled', should the system (a) suppress/annotate the plugin's own 'completed successfully' log so it doesn't read as an unqualified success once cancellation has already been recorded, (b) allow a late completion to flip the row from canceled back to completed (requires re-opening a terminal row, a bigger change), or (c) leave both signals as they are today but make the contradiction visible in the UI/log (e.g. tag the plugin's post-cancellation completion log line with 'note: op was already canceled by watchdog at T') rather than let them silently disagree?",
+   "LOCATE THE OTHER HALF: find what actually logs '<maintenance job> completed successfully (100%)' \u2014 search beyond this scope's directories (internal/plugins/maintenance/, internal/maintenance/) into the generic maintenance/job reporter framework (check pkg/plugin/sdk/ for a Reporter.Complete-style method, and internal/maintenance/job.go's Liveness/Run contract referenced at job.go:82-104) or grep the exact prod log format string more broadly across the repo (`grep -rn \\\"100%)\\\"` or search for the reporter's completion-percentage formatting) \u2014 confirm whether that code path checks ctx.Err()/ctx.Done() before logging success, which determines whether this is a straightforward 'add a ctx check' fix or a deeper race in the maintenance job framework's Run/Liveness contract (job.go:104 mentions 'Liveness declares how the job keeps the watchdog informed' \u2014 read that whole section before concluding).",
+   "Once both are resolved, this splits into a concrete fix: either add a ctx.Err() check before the plugin's success log (if design answer is (a)), or a status-reconciliation change in worker.go (if (b) or (c))."
+  ],
+  "tests": [
+   "Cannot be specified until the design question above is answered \u2014 the correct assertion depends entirely on which of (a)/(b)/(c) is chosen."
+  ],
+  "acceptance": [
+   "N/A until briefable."
+  ],
+  "edge_cases": [
+   "A job that finishes at exactly the same tick the watchdog's cancellation fires is an inherent race regardless of the fix chosen; the fix should make the CONTRADICTION observable/resolved, not claim to eliminate the race's existence."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "review_critical=true: this is exactly the class of bug where two authoritative-looking records disagree about whether a maintenance run succeeded, which is precisely the kind of silent-contradiction failure mode this repo's memory file flags repeatedly (see 'Hand-verify machine-flagged findings' / 'A gate that never ran clean may crash when it does' lessons). Do not let a subagent 'fix' this with the minimal patch (silencing the plugin's log) without the owner explicitly picking option (a)/(b)/(c) above \u2014 the wrong silent choice here reproduces the exact failure class (two records disagreeing) this item exists to close out."
+ }
+]

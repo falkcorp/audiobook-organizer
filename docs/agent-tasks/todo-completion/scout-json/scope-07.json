@@ -1,0 +1,1474 @@
+[
+ {
+  "todo_line": 4107,
+  "src_id": null,
+  "title": "Offset-pagination walkers: all 7 already collapsed to a single limit-0 call",
+  "verdict": "stale_done",
+  "verdict_evidence": "All 5 named plugin loops and both pebble_store.go pagers already call GetAllBooksCore(0, 0) once instead of paging; grep -n \"GetAllBooksCore(0, 0)\" internal/quarantine/service.go internal/plugins/maintenance/repair_junk_titles.go internal/plugins/maintenance/title_backfill.go internal/plugins/maintenance/title_repair.go internal/plugins/maintenance/duration_backfill.go internal/database/pebble_store.go returns 7 hits (service.go:232, repair_junk_titles.go:75, title_backfill.go:82, title_repair.go:196, duration_backfill.go:91, pebble_store.go:1477 GetFolderDuplicatesCore, pebble_store.go:1611 GetDuplicateBooksByMetadataCore), each with a comment citing 'reconcile #2443'.",
+  "domain": "internal/plugins/maintenance",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "quarantine/service.go AutoQuarantineFailedScans uses one limit-0 call",
+    "grep_cmd": "grep -n \"GetAllBooksCore(0, 0)\" internal/quarantine/service.go",
+    "expect": "1 hit at L232"
+   },
+   {
+    "claim": "repair_junk_titles.go uses one limit-0 call",
+    "grep_cmd": "grep -n \"GetAllBooksCore(0, 0)\" internal/plugins/maintenance/repair_junk_titles.go",
+    "expect": "1 hit at L75"
+   },
+   {
+    "claim": "title_backfill.go uses one limit-0 call",
+    "grep_cmd": "grep -n \"GetAllBooksCore(0, 0)\" internal/plugins/maintenance/title_backfill.go",
+    "expect": "1 hit at L82"
+   },
+   {
+    "claim": "title_repair.go uses one limit-0 call",
+    "grep_cmd": "grep -n \"GetAllBooksCore(0, 0)\" internal/plugins/maintenance/title_repair.go",
+    "expect": "1 hit at L196"
+   },
+   {
+    "claim": "duration_backfill.go uses one limit-0 call",
+    "grep_cmd": "grep -n \"GetAllBooksCore(0, 0)\" internal/plugins/maintenance/duration_backfill.go",
+    "expect": "1 hit at L91"
+   },
+   {
+    "claim": "GetFolderDuplicatesCore (folder-dup pager) uses one limit-0 call with the reconcile #2443 comment",
+    "grep_cmd": "grep -n \"GetAllBooksCore(0, 0)\" internal/database/pebble_store.go",
+    "expect": "2 hits, one at L1477 (GetFolderDuplicatesCore) one at L1611 (GetDuplicateBooksByMetadataCore)"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "no code change needed \u2014 just tick the TODO box after confirming the anchors above",
+  "review_critical": false,
+  "goal": "Mark this TODO item done: every walker it lists already migrated from offset-pagination to a single GetAllBooksCore(0,0) snapshot call before iterating/mutating, closing the cross-page snapshot-swap window it warns about.",
+  "background": [
+   "The item asks to verify each of the 7 named loops is 'pure accumulate' before collapsing it to one call \u2014 inspection at HEAD shows all 7 are already collapsed, each carrying an explicit comment referencing 'reconcile #2443' as the reason.",
+   "quarantine/service.go's loop is not pure-accumulate (it calls QuarantineBook while walking) and its own comment explains that mutation is exactly why it needed the single-snapshot fix \u2014 already applied."
+  ],
+  "steps": [
+   "No code change. Verify the 6 grep commands above each return the expected hit, then check the TODO.md box for this item (the [ ] at TODO.md line 4107 becomes [x]) and add a changelog.d fragment noting the walkers were already fixed prior to this pass."
+  ],
+  "tests": [],
+  "acceptance": [
+   "All 6 grep commands in verified_anchors return the stated hit counts."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "This scout's repo HEAD is 46628240, two commits ahead of the SCOUT-INSTRUCTIONS.md stated HEAD (8f6d0d99) \u2014 same branch, no divergence risk."
+ },
+ {
+  "todo_line": 4117,
+  "src_id": null,
+  "title": "CI flake repro already built and the write-loss bug already fixed",
+  "verdict": "stale_done",
+  "verdict_evidence": "Commit 587b2fd0 'fix(database): stop losing writes during the async memdb warmup' fixes exactly the mechanism this item hypothesizes (a write landing after WarmFromPebble's iterator is created but before memPtr.Store is dropped and invisible to the published snapshot) and ships 5 new regression tests; grep -n \"^func Test\" internal/database/memdb_warmup_writeloss_test.go returns 5 hits: TestWarmupWriteLoss_CreateDuringWarmupIsVisible (L73), _DeleteDuringWarmupLeavesNoPhantom (L149), _ConcurrentWritesAllVisible (L223), _BufferOverflowDegradesLoudly (L286), _ResetDuringWarmupIsNotUndone (L356).",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "memdb_pending.go buffers write-throughs during warmup instead of dropping them",
+    "grep_cmd": "grep -n \"warmup\" internal/database/memdb_pending.go",
+    "expect": "several hits describing the buffer-and-replay mechanism"
+   },
+   {
+    "claim": "5 regression tests for the exact race exist",
+    "grep_cmd": "grep -n \"^func Test\" internal/database/memdb_warmup_writeloss_test.go",
+    "expect": "5 hits"
+   },
+   {
+    "claim": "the fix commit's message describes the identical mechanism the TODO item hypothesizes",
+    "grep_cmd": "git log -1 --format=%B 587b2fd0",
+    "expect": "commit body mentions 'lost write', 'iterator', 'memPtr.Store', 'buffer and replay'"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "verification only, no code change",
+  "review_critical": false,
+  "goal": "Close out the CI-flake investigation: the store-layer bug it predicted (warmup-window write loss, not the offset-pagination cross-page swap) was found and fixed on 2026-08-06, with a dedicated repro/regression test suite, before this TODO item was ever actioned.",
+  "background": [
+   "The fix commit (587b2fd0, 2026-08-06) explains: memSync's first line was `if p.mem() == nil { return }`, silently dropping any write-through that lands between WarmFromPebble's iterator snapshot and memPtr.Store \u2014 precisely the 'write-through buffer hole' this TODO item guesses at.",
+   "The commit is NOT a data race (memPtr is an atomic.Pointer used correctly) \u2014 it is a lost update, which is why -race never caught it and it read as CI noise for weeks, matching this item's framing that the flake 'survives any enumeration pattern'."
+  ],
+  "steps": [
+   "No code change. Verify the grep commands above, then check the TODO.md box and note in a changelog.d fragment (or simply as a TODO tick) that the CI-flake repro/fix predates this scout pass."
+  ],
+  "tests": [],
+  "acceptance": [
+   "grep -n \"^func Test\" internal/database/memdb_warmup_writeloss_test.go returns exactly 5 hits."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "The specific CI run number (30702594886) predates the fix commit's authored date only by inspection of the fix's own evidence section (PR #2123/#2126), which this scout did not independently re-run \u2014 but the bug CLASS match is exact and the fix ships tests that directly exercise it."
+ },
+ {
+  "todo_line": 4126,
+  "src_id": null,
+  "title": "Record prod op-ID audit-trail verification as a pending operator action",
+  "verdict": "prod_run",
+  "verdict_evidence": "The code fix (ctxOpID wiring via opRunContextDecorator) is already merged and unit-tested (grep -n \"SetRunContextDecorator\\|opRunContextDecorator\" internal/server/registry_wire.go internal/server/op_run_context.go returns hits at registry_wire.go:359 and op_run_context.go:41), but no prod verification step exists yet in docs/operations/pending-prod-actions.md (grep -c \"op-ID\\|operation_changes\" docs/operations/pending-prod-actions.md returns 0).",
+  "domain": "docs/operations",
+  "exact_files": [
+   "docs/operations/pending-prod-actions.md"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "opRunContextDecorator is installed via SetRunContextDecorator",
+    "grep_cmd": "grep -n \"SetRunContextDecorator\" internal/server/registry_wire.go",
+    "expect": "1 hit at L359"
+   },
+   {
+    "claim": "pending-prod-actions.md has no existing row for this verification",
+    "grep_cmd": "grep -c \"op-ID\\|operation_changes\" docs/operations/pending-prod-actions.md",
+    "expect": "0"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "maintenance.temp-file-cleanup op (safest low-risk trigger, per the TODO item itself)",
+    "file": "internal/plugins/maintenance",
+    "verify_grep": "grep -rn \"temp-file-cleanup\" internal/plugins/maintenance/*.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "one doc row, no code",
+  "review_critical": true,
+  "goal": "Add a row to docs/operations/pending-prod-actions.md's table (operator-run class) documenting the outstanding prod-verification step: trigger maintenance.temp-file-cleanup on prod after the run-context fix is deployed, then confirm operation_changes now has rows keyed to that op's ID (previously always empty per L4295's finding).",
+  "background": [
+   "The op-ID plumbing fix (WithOpID actually wired) is already merged at HEAD (internal/server/op_run_context.go, registry_wire.go:359) and covered by op_run_context_test.go's 3 unit tests, but per the TODO item the wiring passes through wireServerFromContainer which no test exercises end-to-end against real Pebble/prod state.",
+   "docs/operations/pending-prod-actions.md is the owner-designated destination for exactly this class of task per the scope decisions (item 14: 'every PROD RUN goes to docs/operations/pending-prod-actions.md as prod_run')."
+  ],
+  "steps": [
+   "Edit docs/operations/pending-prod-actions.md: bump the version header (currently 1.0.1) and last-edited date, add a new numbered row to the table with Action='Verify op-ID audit trail (ctxOpID wiring)', What/why citing the 2026-08-14 series-prune 326-deletion-zero-changes incident, Op/command shape='POST /api/v1/operations/v2 {\"def_id\":\"maintenance.temp-file-cleanup\"} then inspect operation_changes rows for that op ID', Gating='operator-run', Source='TODO.md ~L4126'."
+  ],
+  "tests": [],
+  "acceptance": [
+   "grep -n \"op-ID\\|operation_changes\" docs/operations/pending-prod-actions.md returns at least 1 hit after the edit."
+  ],
+  "edge_cases": [
+   "If operation_changes still shows zero rows after triggering the op post-deploy, that is itself the finding to report back \u2014 not a doc-writing failure."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Owner decision 14 applies: build/verify is fine, but never auto-run against prod \u2014 an operator executes this row manually."
+ },
+ {
+  "todo_line": 4132,
+  "src_id": null,
+  "title": "Historical operation_changes gap is permanent \u2014 informational note only",
+  "verdict": "not_a_task",
+  "verdict_evidence": "The item is a standing caveat ('an empty change list for a pre-fix run means recording was off, not nothing changed'), not a deliverable \u2014 there is no code or doc file it asks to create or change beyond what L4126/L4295 already cover.",
+  "domain": "docs",
+  "exact_files": [],
+  "verified_anchors": [],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "n/a \u2014 no work",
+  "review_critical": false,
+  "goal": "n/a",
+  "background": [
+   "This is the same investigation thread as L4295 (WithOpID never called) and L4126 (verify on prod) \u2014 it records a warning for future readers, not a task."
+  ],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   4295,
+   4126
+  ],
+  "gate": "n/a (docs)",
+  "notes": "If the coordinator wants this preserved formally, fold one sentence of it into the L4295 changelog fragment rather than filing it as its own task."
+ },
+ {
+  "todo_line": 4137,
+  "src_id": null,
+  "title": "Read-through audit of the 8 ctxOpID consumer call sites now that op IDs actually arrive",
+  "verdict": "actionable",
+  "verdict_evidence": "All 8 named call sites exist and each calls ctxOpID(ctx) exactly where claimed; grep -n \"opID := ctxOpID(ctx)\" internal/plugins/maintenance/series.go internal/plugins/maintenance/cleanup.go internal/plugins/maintenance/write_back.go internal/plugins/maintenance/reconcile.go internal/plugins/maintenance/dedup_ops.go internal/plugins/maintenance/optimize.go internal/plugins/maintenance/metadata.go returns 8 hits total (cleanup.go has 2, matching the TODO's 'cleanup.go x2').",
+  "domain": "internal/plugins/maintenance",
+  "exact_files": [
+   "internal/plugins/maintenance/series.go",
+   "internal/plugins/maintenance/cleanup.go",
+   "internal/plugins/maintenance/write_back.go",
+   "internal/plugins/maintenance/reconcile.go",
+   "internal/plugins/maintenance/dedup_ops.go",
+   "internal/plugins/maintenance/optimize.go",
+   "internal/plugins/maintenance/metadata.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "series.go extracts opID and forwards it to ExecuteSeriesPrune",
+    "grep_cmd": "grep -n \"opID := ctxOpID(ctx)\" internal/plugins/maintenance/series.go",
+    "expect": "1 hit at L82"
+   },
+   {
+    "claim": "cleanup.go has two ctxOpID call sites",
+    "grep_cmd": "grep -n \"opID := ctxOpID(ctx)\" internal/plugins/maintenance/cleanup.go",
+    "expect": "2 hits at L48, L120"
+   },
+   {
+    "claim": "write_back.go, reconcile.go, dedup_ops.go, optimize.go, metadata.go each have exactly one",
+    "grep_cmd": "grep -n \"opID := ctxOpID(ctx)\" internal/plugins/maintenance/write_back.go internal/plugins/maintenance/reconcile.go internal/plugins/maintenance/dedup_ops.go internal/plugins/maintenance/optimize.go internal/plugins/maintenance/metadata.go",
+    "expect": "5 hits, one per file at L59/L49/L124/L54/L121 respectively"
+   },
+   {
+    "claim": "CreateOperationChange itself is not called directly in these files \u2014 opID is threaded through to deps/executor functions",
+    "grep_cmd": "grep -rn \"CreateOperationChange\" internal/plugins/maintenance/*.go",
+    "expect": "only the interface declaration in deps.go:114, confirming the actual write happens deeper (e.g. internal/dedup, internal/organizer, internal/undo)"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "requires reading 8 call sites plus their downstream CreateOperationChange consumers across several packages and reasoning about correctness under real (previously-always-empty) opID values \u2014 not mechanical",
+  "review_critical": true,
+  "goal": "Read through each of the 8 ctxOpID call sites in internal/plugins/maintenance and trace opID downstream to its first CreateOperationChange call, confirming the payload built there (op_id field, change type, before/after snapshot) is correct now that opID is a real non-empty value for the first time in production \u2014 since these branches were previously silently skipped (opID==\"\"), a wrong field name or nil-deref guarded only by 'if operationID != \"\"' would never have been exercised.",
+  "background": [
+   "series.go:82 forwards opID into deps.ExecuteSeriesPrune (internal/plugins/maintenance/deps.go's ExecuteSeriesPrune interface method).",
+   "opID is now non-empty in production because internal/server/op_run_context.go's opRunContextDecorator calls maintenanceplugin.WithOpID, wired via registry_wire.go:359 (see L4295 \u2014 that fix is already shipped and tested).",
+   "CreateOperationChange itself is declared as an interface method in internal/plugins/maintenance/deps.go:114; the actual implementations live outside this package (internal/dedup, internal/organizer, internal/undo, internal/server) per grep -rln \"CreateOperationChange(\" ."
+  ],
+  "steps": [
+   "For each of series.go:82, cleanup.go:48, cleanup.go:120, write_back.go:59, reconcile.go:49, dedup_ops.go:124, optimize.go:54, metadata.go:121: read the function opID is passed into, follow it to wherever CreateOperationChange (or an equivalent recorder) is actually invoked, and confirm (a) opID is passed as the change's OperationID field (not silently dropped), (b) the branch guarded by 'if opID != \"\"' does not assume opID is always empty (e.g. no dead-code paths that were never reachable before), (c) no panic/nil-deref is possible now that this code path actually executes.",
+   "If a bug is found in any of the 8, fix it minimally in the same file (do not widen scope beyond the opID-correctness question) and add/adjust a unit test in that file's _test.go asserting CreateOperationChange is called with the expected OperationID.",
+   "If all 8 are clean, record that finding (which file/line, what was checked) rather than silently doing nothing \u2014 this task's whole point is that these branches were never exercised in prod before."
+  ],
+  "tests": [
+   "internal/plugins/maintenance/series_test.go (or nearest existing _test.go for each of the 8 files): add/verify a test that runs the op with a context carrying a real opID (via maintenanceplugin.WithOpID) and asserts the recorded OperationChange's OperationID field equals that ID."
+  ],
+  "acceptance": [
+   "go test ./internal/plugins/maintenance/... -run OpID passes (or the nearest matching test name after tests are added)."
+  ],
+  "edge_cases": [
+   "opID == \"\" (context not decorated, e.g. a unit test that calls the Run function directly without going through opRunContextDecorator) must still behave as before: CreateOperationChange either skipped or called with an empty OperationID, whichever the pre-existing contract was \u2014 do not change that branch's behavior, only verify it."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   4295
+  ],
+  "gate": "make ci",
+  "notes": "review_critical=true because series-prune and other maintenance ops here are the same family that deleted 326 series with zero audit trail on 2026-08-14 (see L4295's background) \u2014 a wrong opID payload here silently reintroduces the same class of bug.",
+  "review_notes": [
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+  ]
+ },
+ {
+  "todo_line": 4144,
+  "part": 1,
+  "src_id": null,
+  "title": "Author-placeholder rename gate already shipped \u2014 verify only",
+  "verdict": "stale_done",
+  "verdict_evidence": "Commit 106f4c75 'fix(organizer): defer rename/copy while the author is unresolved' implements exactly the wanted behavior #1 and #2 from this item; grep -n \"author_unresolved\\|HasResolvedAuthor\" internal/organizer/preview.go internal/organizer/service.go returns hits: preview.go:139 sets Warning:\"author_unresolved\" with description 'Author is unresolved \u2014 rename deferred so Unknown Author is not baked into the path...', service.go:704-712 skips the book into skippedUnresolvedAuthor when !HasResolvedAuthor(&book).",
+  "domain": "internal/organizer",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "PreviewService gates rename/copy behind HasResolvedAuthor",
+    "grep_cmd": "grep -n \"authorUnresolved := !org.HasResolvedAuthor\" internal/organizer/preview.go",
+    "expect": "1 hit ~L133"
+   },
+   {
+    "claim": "PerformOrganize's bulk loop defers books with unresolved author instead of renaming them",
+    "grep_cmd": "grep -n \"skippedUnresolvedAuthor\" internal/organizer/service.go",
+    "expect": "hits at L625 (init), L709 (increment), L714-715 (log)"
+   },
+   {
+    "claim": "HasResolvedAuthor is the exported gate function",
+    "grep_cmd": "grep -n \"func (o \\*Organizer) HasResolvedAuthor\" internal/organizer/organizer.go",
+    "expect": "1 hit at L402"
+   },
+   {
+    "claim": "fix landed 2026-08-18",
+    "grep_cmd": "git log --oneline -1 106f4c75",
+    "expect": "fix(organizer): defer rename/copy while the author is unresolved"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "verification only",
+  "review_critical": false,
+  "goal": "Confirm wanted-behavior items #1 and #2 (never bake a placeholder author into a rename target; route unresolved-author books to a flagged/deferred state instead) are already implemented, and check the TODO box for that portion.",
+  "background": [
+   "PreviewService (preview.go:133-142) and PerformOrganize (service.go:696-716) both call the same Organizer.HasResolvedAuthor gate before proposing/executing a rename or copy \u2014 mirroring each other as the code comments state ('Author gate (mirrors PerformOrganize and ReOrganizeInPlace)').",
+   "Wanted-behavior #3 ('rename template always built from resolved author + metadata, never from whatever the row happens to hold') was not independently re-verified by this scout beyond confirming the gate exists \u2014 if the coordinator wants #3 specifically re-checked, that is a separate small audit, not covered by this stale_done verdict."
+  ],
+  "steps": [
+   "No code change. Verify the anchors above, then tick the corresponding portion of the TODO.md checkbox (or split the box in TODO.md into 'gate: done' vs 'audit: open', matching part 2 of this todo_line)."
+  ],
+  "tests": [],
+  "acceptance": [
+   "grep -n \"author_unresolved\" internal/organizer/preview.go returns >=1 hit."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Part 2 of this todo_line (the 'audit how many books already have Unknown Author baked in' ask) is still open \u2014 see the sibling JSON object with part:2."
+ },
+ {
+  "todo_line": 4144,
+  "part": 2,
+  "src_id": null,
+  "title": "Build a report-only census of books with a placeholder author already baked into their organizer-tree path but resolvable metadata",
+  "verdict": "actionable",
+  "verdict_evidence": "No existing counter/report exists for this: grep -rln \"CountUnknownAuthorPaths\\|AuditUnknownAuthor\\|baked.*Unknown Author\" internal --include=*.go returns 0 hits outside preview.go's comment (which only describes the gate, not a census).",
+  "domain": "internal/plugins/maintenance",
+  "exact_files": [
+   "internal/plugins/maintenance/unknown_author_audit.go",
+   "internal/plugins/maintenance/plugin.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the placeholder author constant already exists and is reusable",
+    "grep_cmd": "grep -n \"const placeholderAuthor\" internal/organizer/organizer.go",
+    "expect": "1 hit at L375, value \\\"Unknown Author\\\""
+   },
+   {
+    "claim": "the resolved-author predicate to reuse for 'carries resolvable metadata' already exists",
+    "grep_cmd": "grep -n \"func (o \\*Organizer) HasResolvedAuthor\" internal/organizer/organizer.go",
+    "expect": "1 hit at L402"
+   },
+   {
+    "claim": "an existing report-only op def pattern to copy (apply=false default, counts only)",
+    "grep_cmd": "grep -n \"ID:.*maintenance.dedup-exact-triage\\|Apply bool\" internal/plugins/maintenance/dedup_triage.go",
+    "expect": "hits at L301 (op ID) and L288 (Apply field with 'report-only contract' comment)"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "Organizer.HasResolvedAuthor",
+    "file": "internal/organizer/organizer.go",
+    "verify_grep": "grep -n \"func (o \\*Organizer) HasResolvedAuthor\" internal/organizer/organizer.go"
+   },
+   {
+    "name": "sdk.OperationDef report-only pattern (Apply bool, default false)",
+    "file": "internal/plugins/maintenance/dedup_triage.go",
+    "verify_grep": "grep -n \"Apply bool\" internal/plugins/maintenance/dedup_triage.go"
+   },
+   {
+    "name": "registry.RunItems bounded worker pool for whole-library loops",
+    "file": "internal/operations/registry/run_items.go",
+    "verify_grep": "grep -n \"func RunItems\" internal/operations/registry/run_items.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "a new whole-library maintenance op with a worker pool, following an existing pattern but requiring correct path-parsing logic (detecting the placeholder baked into FilePath) plus a resolvable-metadata heuristic",
+  "review_critical": false,
+  "goal": "Add a new report-only maintenance op maintenance.unknown-author-audit that walks every book under the organizer root, flags ones whose current FilePath contains the placeholder author segment ('Unknown Author'), and further classifies each as 'resolvable' (title + narrators/tags present, i.e. would pass HasResolvedAuthor after a metadata fetch \u2014 approximate this by checking whether Author is empty/placeholder but Title, Narrator, or external IDs are populated) vs 'genuinely unknown', reporting counts of each population. No mutation \u2014 this is audit-only per owner decision 11's counter pattern.",
+  "background": [
+   "The rename-time gate (HasResolvedAuthor, part 1 of this item) prevents NEW placeholder-baked paths going forward, but does nothing for books already organized under Unknown Author/ before 2026-08-18 \u2014 those are the ones this audit must count.",
+   "placeholderAuthor = \"Unknown Author\" (organizer.go:375) is the exact string to match against FilePath segments."
+  ],
+  "steps": [
+   "Create internal/plugins/maintenance/unknown_author_audit.go modeled on dedup_triage.go's structure: a params struct (no Apply field needed since this has no apply path at all \u2014 report-only, full stop), an sdk.OperationDef with ID 'maintenance.unknown-author-audit', DisplayName, Description stating it is report-only, Capabilities: []sdk.Capability{sdk.CapLibraryRead}, and a Run function.",
+   "In the Run function, fetch all books via a single GetAllBooksCore(0,0) snapshot call (per this repo's established single-page pattern \u2014 see L4107), filter to books whose FilePath contains the RootDir-relative segment '/Unknown Author/' (use filepath separators correctly, case-sensitive match on the literal placeholder string), and for each such book classify: resolvable = Title != \"\" && (has ISBN/ASIN external ID, or non-empty Narrator field, or NormalizedTitle differs from a generic default) vs unresolvable otherwise.",
+   "Shard the classification loop across a bounded worker pool via registry.RunItems (per CLAUDE.md's mandatory-concurrency rule for whole-library loops) since classification may involve per-book store reads (external IDs).",
+   "Report via sdk.Reporter: total books scanned, count with Unknown Author baked into path, count of those classified resolvable, count unresolvable, and (bounded, e.g. first 100) a sample list of book IDs+titles in the resolvable bucket for operator review.",
+   "Register the op in internal/plugins/maintenance/plugin.go's defs slice (append p.unknownAuthorAuditDef() alongside the other RegisterOp calls near line 33-147)."
+  ],
+  "tests": [
+   "internal/plugins/maintenance/unknown_author_audit_test.go: TestUnknownAuthorAudit_CountsResolvableAndUnresolvable \u2014 seed a fake store with 3 books: one under /Unknown Author/ with a populated ISBN (resolvable), one under /Unknown Author/ with nothing else populated (unresolvable), one NOT under /Unknown Author/ (excluded); assert the report counts are 1/1/1 respectively.",
+   "TestUnknownAuthorAudit_NeverMutates \u2014 assert no CreateBook/UpdateBook/DeleteBook call is made on the mock store during the run (report-only contract)."
+  ],
+  "acceptance": [
+   "go test ./internal/plugins/maintenance/... -run TestUnknownAuthorAudit passes.",
+   "POST /api/v1/operations/v2 {\"def_id\":\"maintenance.unknown-author-audit\"} against a running dev server returns a report with non-negative counts and does not change any book row (verify via a before/after GetBooksCore diff)."
+  ],
+  "edge_cases": [
+   "A book with FilePath == \"\" (never organized) must not false-positive as 'baked Unknown Author' \u2014 only match when the placeholder literally appears as a path segment.",
+   "A book already fixed by the L4144-part1 gate (soft-deleted or restored) should be excluded consistent with the standard bookIsSoftDeleted rule."
+  ],
+  "anti_over_suppression": "TestUnknownAuthorAudit_CountsResolvableAndUnresolvable (the resolvable bucket must not be empty when a qualifying book exists \u2014 guards against an over-broad 'everything is unresolvable' classifier)",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "This is a NEW report op, not covered verbatim by any owner decision in the scope file, but follows the same 'report ops actionable, mutating ops parked' principle as owner decision 9 (PH-2b) and decision 11 (generateTargetPath counter) \u2014 flagging for coordinator confirmation since it is inferred by analogy, not an explicit decision line.",
+  "review_notes": [
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+  ]
+ },
+ {
+  "todo_line": 4166,
+  "src_id": null,
+  "title": "E07 duplicate-PID residue: 2 groups need an operator's manual pick (organizer-side only)",
+  "verdict": "prod_run",
+  "verdict_evidence": "The read-only census endpoint already exists and answers this (grep -n \"pid-integrity\" internal/server/itl_pid.go internal/server/server_lifecycle.go returns hits at itl_pid.go:6,24,30 and server_lifecycle.go:1579), and the repair op reports files_to_clear per the TODO's own numbers \u2014 there is no code gap, only an operator decision gated by the standing iTunes-tree hands-off rule.",
+  "domain": "internal/itunes",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the pid-integrity census endpoint exists and is read-only",
+    "grep_cmd": "grep -n \"pidIntegrityHandler\\|pid-integrity\" internal/server/itl_pid.go internal/server/server_lifecycle.go",
+    "expect": "hits confirming GET /api/v1/itunes/pid-integrity is wired"
+   },
+   {
+    "claim": "the repair-op FilesToClear field exists in both the integrity and repair packages",
+    "grep_cmd": "grep -n \"FilesToClear\" internal/itunes/pid_integrity.go internal/itunes/pid_repair.go",
+    "expect": "1 hit each"
+   }
+  ],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "no code; a human picks which of 2 file groups to clear",
+  "review_critical": true,
+  "goal": "Record this as a pending human-decision operator action: for the 2 remaining duplicate-PID groups (sample PID 31A790B4DEF5981C, Alcatraz content present in both trees), an operator must pick the canonical file per group and clear the organizer-side copy's PID (never touch the iTunes-tree copy, per the standing hands-off rule).",
+  "background": [
+   "files_to_clear=0 in the current census means the automatic repair op has nothing safe to act on \u2014 both copies currently 'own' the PID legitimately from the store's point of view, so only a human can decide which is canonical.",
+   "The iTunes tree is hands-off per project memory (project_itunes_active_library_hands_off) \u2014 resolution must clear the organizer-side copy's PID field or be deferred indefinitely, never mutate the iTunes-tree row."
+  ],
+  "steps": [
+   "Add a row to docs/operations/pending-prod-actions.md: Action='E07 duplicate-PID manual resolution (2 groups)', What/why='2 remaining duplicate-PID groups (sample PID 31A790B4DEF5981C) need a human pick of canonical file; GET /api/v1/itunes/pid-integrity for current census', Gating='human-decision', Source='TODO.md ~L4166'."
+  ],
+  "tests": [],
+  "acceptance": [
+   "The new row appears in docs/operations/pending-prod-actions.md's table."
+  ],
+  "edge_cases": [
+   "If a later census shows files_to_clear>0 for these 2 groups, that means the population changed and the row's description needs re-verifying before acting, not blind execution."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "iTunes-tree hands-off is a standing project rule (MEMORY.md: feedback_itunes_active_library_hands_off) \u2014 do not let any future automation touch the iTunes-side copy of this PID pair."
+ },
+ {
+  "todo_line": 4186,
+  "src_id": null,
+  "title": "Bleve stale-doc reconcile pass already shipped",
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/server/search_coverage.go (version 2.0.0, last-edited 2026-08-14) implements reconcileSearchIndexCoverage which compares the indexed-doc-ID set against the live-book-ID set and deletes stale docs whose book is gone (hard- or soft-deleted); its own doc comment cites the exact figure this TODO item names: 'on production 2026-08-14 the index held 67,824 docs against 63,871 live books \u2014 3,953 soft-deleted books indexed'.",
+  "domain": "internal/server",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "reconcileSearchIndexCoverage deletes stale (soft-deleted/gone) docs via a set comparison, not the old count gate",
+    "grep_cmd": "grep -n \"func (s \\*Server) reconcileSearchIndexCoverage\" internal/server/search_coverage.go",
+    "expect": "1 hit at L74"
+   },
+   {
+    "claim": "the fix's comment names the same 3,953 figure this TODO item cites",
+    "grep_cmd": "grep -n \"3,953\" internal/server/search_coverage.go",
+    "expect": "1 hit"
+   },
+   {
+    "claim": "stale docs are actually deleted via searchIndex.DeleteBook, not just logged",
+    "grep_cmd": "grep -n \"s.searchIndex.DeleteBook(id)\" internal/server/search_coverage.go",
+    "expect": "1 hit ~L168"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "verification only",
+  "review_critical": false,
+  "goal": "Confirm the reconcile-and-delete-stale-docs pass this item asks for already exists and runs on every boot, then check the TODO box.",
+  "background": [
+   "The fix replaced a count-only gate (len(ListBookIDs()) <= DocCount()) \u2014 the exact defect this TODO item describes as 'passing forever' \u2014 with a full set comparison (AllDocIDs vs ListBookIDs), per the file's own package comment.",
+   "Restored books are handled correctly too: the file comment notes RestoreAudiobook goes through store.UpdateBook, and indexedStore's decorator re-enqueues an index refresh on every UpdateBook \u2014 though see L4329 for a separate, still-open bug in that same decorator's soft-delete direction."
+  ],
+  "steps": [
+   "No code change. Verify the anchors above and tick the TODO box."
+  ],
+  "tests": [],
+  "acceptance": [
+   "grep -n \"3,953\" internal/server/search_coverage.go returns 1 hit."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Do not conflate this with L4329/L4334 \u2014 this item is about a PERIODIC reconcile-and-clean pass (already fixed), while L4329 is about the immediate soft-delete-time UPSERT bug (still open)."
+ },
+ {
+  "todo_line": 4192,
+  "src_id": null,
+  "title": "Bogus-value control test for the stale-doc reconcile already shipped",
+  "verdict": "stale_done",
+  "verdict_evidence": "TestSearchCoverage_StaleDocsAreDeleted (internal/server/search_coverage_test.go:185) does exactly this: seeds two 'ghost' docs directly into the index that aren't in the store (the shape a soft-deleted book leaves behind), searches for both titles (bogus-value probes) before AND after reconcileSearchIndexCoverage()/reconcileOnce(), asserting 0 hits after, plus asserts the previously-missing LIVE book's title search returns exactly 1 hit (the known-good twin).",
+  "domain": "internal/server",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the test exists and does a before/after title search on trashed content",
+    "grep_cmd": "grep -n \"func TestSearchCoverage_StaleDocsAreDeleted\" internal/server/search_coverage_test.go",
+    "expect": "1 hit at L185"
+   },
+   {
+    "claim": "it probes with a title search after reconcile and asserts 0 hits for the ghost docs",
+    "grep_cmd": "grep -n \"title:trashed\\|title:vanished\" internal/server/search_coverage_test.go",
+    "expect": ">=2 hits"
+   },
+   {
+    "claim": "it also asserts the live book's search still works (known-good twin)",
+    "grep_cmd": "grep -n \"title:charisma\" internal/server/search_coverage_test.go",
+    "expect": "1 hit"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "verification only",
+  "review_critical": false,
+  "goal": "Confirm the bogus-value-with-known-good-twin verification this item asks for already exists as a passing test, then check the TODO box.",
+  "background": [
+   "This satisfies MEMORY.md's own measurement-discipline rule (feedback_a_bogus_value_needs_a_known_good_twin) \u2014 the test doesn't just check the trashed title disappears, it also checks a genuinely-live title still resolves, ruling out an over-broad delete."
+  ],
+  "steps": [
+   "No code change. Verify the anchors above and tick the TODO box."
+  ],
+  "tests": [],
+  "acceptance": [
+   "go test ./internal/server/... -run TestSearchCoverage_StaleDocsAreDeleted passes."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   4186
+  ],
+  "gate": "make ci",
+  "notes": null
+ },
+ {
+  "todo_line": 4202,
+  "src_id": "SEC-2",
+  "title": "Decide opt-in/local-only policy for bootstrap's plaintext credential files",
+  "verdict": "needs_design",
+  "verdict_evidence": "The two plaintext writes still exist at the exact lines the TODO cites: grep -n \"os.WriteFile\" internal/server/bootstrap.go returns L108 (.readonly-key) and L153 (.bootstrap-token) \u2014 unchanged from the TODO's own line numbers, meaning no design decision has been made yet; the item's own text says 'Decide opt-in/local-only', which is a policy call none of the owner decisions in this scope cover.",
+  "domain": "internal/server",
+  "exact_files": [
+   "internal/server/bootstrap.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the read-only key is still written as a plaintext file",
+    "grep_cmd": "grep -n \"os.WriteFile(keyPath\" internal/server/bootstrap.go",
+    "expect": "1 hit at L108"
+   },
+   {
+    "claim": "the bootstrap token is still written as a plaintext file",
+    "grep_cmd": "grep -n \"os.WriteFile(tokenPath\" internal/server/bootstrap.go",
+    "expect": "1 hit at L153"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "policy decision plus a conditional-write refactor once the policy is set",
+  "review_critical": true,
+  "goal": "Not directly actionable without a human decision: should the plaintext .bootstrap-token / .readonly-key files be written unconditionally (current behavior, needed by server-bootstrap tooling), gated behind an explicit opt-in config flag, or restricted to only fire when the server detects it's running in a local/dev environment (e.g. not behind the prod reverse proxy)?",
+  "background": [
+   "Both files are already 0600-permissioned and the raw values are never logged (per the code's own CRIT-1 pen-test-finding comments) \u2014 the remaining exposure is that any process/user with filesystem read access to dataDir can read live credentials without going through any auth check at all.",
+   "The server-bootstrap skill in this Claude Code session depends on reading .bootstrap-token from disk (per its own description: 'read the bootstrap token from the .bootstrap-token file... exchange it for an API key') \u2014 so an unconditional removal would break existing tooling; this is exactly why it needs a design decision, not a code fix."
+  ],
+  "steps": [
+   "PRESENT the three options (unconditional/opt-in/local-only) to the repo owner via AskUserQuestion or an explicit written decision in docs/plans/DECISIONS-PENDING.md before writing any code.",
+   "Once decided: if opt-in, add a config.AppConfig bool (e.g. WriteBootstrapCredentialFiles, default false in prod configs, true in dev) and gate both os.WriteFile calls in bootstrap.go (L108, L153) behind it, falling back to log-path-only guidance when disabled.",
+   "If local-only, detect via an existing environment signal (check internal/config for an existing IsLocalDev()-style helper before inventing one) and gate the same two writes."
+  ],
+  "tests": [
+   "internal/server/bootstrap_test.go: add a test asserting the plaintext file is NOT written when the chosen gate condition is false, and IS written when true (both branches, avoiding an over-suppression regression where the file silently stops being written for the opt-IN case too)."
+  ],
+  "acceptance": [
+   "Once policy is chosen and implemented: go test ./internal/server/... -run Bootstrap passes with both branches exercised."
+  ],
+  "edge_cases": [
+   "The server-bootstrap skill and scripts/manage-credentials.sh both currently assume this file exists \u2014 any gate must not silently break that workflow without updating the skill/script too."
+  ],
+  "anti_over_suppression": "TestBootstrapWritesPlaintextFileWhenGateEnabled (must still assert the file IS written in the enabled case, not just that it's suppressed in the disabled case)",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "DESIGN QUESTION for the owner: opt-in flag (explicit, default-off in prod) vs local-only auto-detect vs status-quo-accepted-risk. This scout does not have authority to pick one."
+ },
+ {
+  "todo_line": 4204,
+  "src_id": "SEC-4",
+  "title": "CSP header \u2014 deferred pending a nonce/hash strategy decision",
+  "verdict": "needs_design",
+  "verdict_evidence": "securityHeadersMiddleware still has no Content-Security-Policy header and its own comment explicitly defers it: grep -n \"CSP is intentionally omitted\" internal/server/server_middleware.go returns 1 hit at L98, stating 'add it as a separate hardening step once the nonce/hash strategy is settled' \u2014 that strategy decision is exactly what's missing and isn't covered by any owner decision in this scope.",
+  "domain": "internal/server",
+  "exact_files": [
+   "internal/server/server_middleware.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "CSP is explicitly deferred in the code comment, not merely absent",
+    "grep_cmd": "grep -n \"CSP is intentionally omitted\" internal/server/server_middleware.go",
+    "expect": "1 hit at L98"
+   },
+   {
+    "claim": "securityHeadersMiddleware sets other security headers but no CSP",
+    "grep_cmd": "grep -n \"X-Content-Type-Options\\|X-Frame-Options\\|Content-Security-Policy\" internal/server/server_middleware.go",
+    "expect": "hits for the first two, 0 for Content-Security-Policy"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "L",
+  "tier": "opus",
+  "why_tier": "requires auditing every inline <script>/<style> in the React SPA build and choosing nonce-per-request vs hash-based CSP \u2014 a real architectural decision, not mechanical",
+  "review_critical": false,
+  "goal": "Not directly actionable: needs a decision on nonce-per-request (requires threading a per-request nonce from Gin middleware into the served index.html and Vite's build output) vs hash-based CSP (requires a build-time script hashing each inline script/style block) before any header can be added without breaking the SPA.",
+  "background": [
+   "The React SPA (per the comment) 'requires inline styles and scripts that vary across builds' \u2014 this is a Vite/MUI characteristic (MUI injects style tags at runtime) that a naive CSP would break immediately, which is why the original implementer deferred it rather than shipping a broken or trivially-bypassable policy."
+  ],
+  "steps": [
+   "PRESENT the nonce-vs-hash choice to the repo owner before implementing.",
+   "If nonce: add per-request nonce generation in server_middleware.go, thread it into the served index.html template (check whether web/dist's index.html is a static file or templated at serve time \u2014 grep for how it's currently served), and set style-src/script-src 'nonce-<value>'.",
+   "If hash: add a Vite build plugin or post-build script that computes sha256 hashes of every inline <script>/<style> block and emits a CSP meta tag or header list from them."
+  ],
+  "tests": [
+   "A Playwright E2E test (web/e2e/) loading the app under the new CSP header and asserting no CSP-violation console errors."
+  ],
+  "acceptance": [
+   "Chrome DevTools console shows zero CSP violation errors on every page after the header is added."
+  ],
+  "edge_cases": [
+   "Any third-party embed (if the app iframes anything) or dynamically-injected style from a chart library must be accounted for in the chosen strategy."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "npm --prefix web run lint && npm --prefix web test",
+  "notes": "DESIGN QUESTION for the owner: nonce-per-request or hash-based CSP. Effort is L and likely deserves its own PLAN.md per this repo's Plan-Before-Execution rule given it touches both server and build tooling."
+ },
+ {
+  "todo_line": 4206,
+  "src_id": "SEC-8",
+  "title": "Pin SHA256 checksums for Dockerfile-fetched utfcpp/taglib tarballs",
+  "verdict": "actionable",
+  "verdict_evidence": "Both curl|tar pipelines still have no checksum verification at the exact lines the TODO cites: grep -n \"curl -sL\" Dockerfile returns L39 (utfcpp v4.0.6) and L41 (taglib v2.0.2), neither piped through a sha256sum check.",
+  "domain": "ci/scripts",
+  "exact_files": [
+   "Dockerfile"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "utfcpp is fetched via curl|tar with no checksum step",
+    "grep_cmd": "grep -n \"curl -sL https://github.com/nemtrif/utfcpp\" Dockerfile",
+    "expect": "1 hit at L39"
+   },
+   {
+    "claim": "taglib is fetched via curl|tar with no checksum step",
+    "grep_cmd": "grep -n \"curl -sL https://github.com/taglib/taglib\" Dockerfile",
+    "expect": "1 hit at L41"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "mechanical: download once, record the known-good sha256, add a verification step \u2014 no design decision needed since base images are already pinned by the project's own convention",
+  "review_critical": false,
+  "goal": "Add SHA256 verification for both fetched tarballs (utfcpp v4.0.6, taglib v2.0.2) in the Dockerfile so a compromised/tampered upstream release fails the build loudly instead of silently compiling into the image.",
+  "background": [
+   "The base images in this Dockerfile are already pinned by digest/tag per the TODO item's own note ('base images are pinned') \u2014 only these two dependency tarballs are unverified."
+  ],
+  "steps": [
+   "Download https://github.com/nemtrif/utfcpp/archive/refs/tags/v4.0.6.tar.gz and https://github.com/taglib/taglib/releases/download/v2.0.2/taglib-2.0.2.tar.gz locally, compute `sha256sum` for each, and record the two hex digests.",
+   "Rewrite Dockerfile lines 39 and 41 from `curl -sL <url> | tar xz` to a two-step form: `curl -sL -o utfcpp.tar.gz <url> && echo \"<sha256>  utfcpp.tar.gz\" | sha256sum -c - && tar xzf utfcpp.tar.gz` (and the equivalent for taglib), removing the intermediate .tar.gz files afterward alongside the existing `rm -rf /tmp/taglib-build` cleanup at line 64.",
+   "Bump the file-header version comment at the top of the Dockerfile if one exists (check first few lines) per this repo's mandatory file-header rule."
+  ],
+  "tests": [
+   "make build (or the Docker build step in CI) \u2014 the build must still succeed with the correct hashes, and a deliberately-wrong hash (manual local test only, not committed) must fail the build."
+  ],
+  "acceptance": [
+   "docker build . (or make's equivalent target) completes successfully with the new checksum steps in place; grep -n \"sha256sum -c\" Dockerfile returns 2 hits."
+  ],
+  "edge_cases": [
+   "If either upstream release is ever re-tagged/re-uploaded with different bytes (rare but has happened to GitHub release/archive tarballs), the pinned hash correctly fails the build \u2014 that is the intended behavior, not a bug to work around."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs) \u2014 verify via a local docker build, no Go/web test suite covers Dockerfile content",
+  "notes": null
+ },
+ {
+  "todo_line": 4208,
+  "part": 1,
+  "src_id": "PERF-5",
+  "title": "internal/itunes/backfill.go BackfillExternalIDs: replace offset pagination with GetAllBooksFullFrom cursor",
+  "verdict": "actionable",
+  "verdict_evidence": "The exact line numbers the TODO cites are unchanged at HEAD: grep -n \"offset := 0\\|GetAllBooksCore(10000, offset)\" internal/itunes/backfill.go shows the first loop's offset:=0 at L60 and GetAllBooksCore(10000, offset) at L68, matching 'backfill.go:60-68' verbatim.",
+  "domain": "internal/itunes",
+  "exact_files": [
+   "internal/itunes/backfill.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "BackfillExternalIDs offset-paginates over a mutable snapshot",
+    "grep_cmd": "grep -n \"offset := 0\" internal/itunes/backfill.go",
+    "expect": "hit at L60 (first of two occurrences in the file)"
+   },
+   {
+    "claim": "GetAllBooksFullFrom(afterID string, limit int) exists as the cursor-based replacement",
+    "grep_cmd": "grep -n \"func (p \\*PebbleStore) GetAllBooksFullFrom\" internal/database/pebble_store.go",
+    "expect": "1 hit at L590"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "GetAllBooksFullFrom(afterID, limit) cursor pager",
+    "file": "internal/database/pebble_store.go",
+    "verify_grep": "grep -n \"func (p \\*PebbleStore) GetAllBooksFullFrom\" internal/database/pebble_store.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "loop-restructuring across a function with error-handling nuance (H7 comment about not silently breaking on read failure) that must be preserved",
+  "review_critical": true,
+  "goal": "Replace BackfillExternalIDs's offset-pagination loop (internal/itunes/backfill.go:60-68) with GetAllBooksFullFrom's ID-cursor pagination, closing the same cross-page snapshot-swap window class already fixed elsewhere (AssignOrphanVGs bug, per the TODO item, and the L4107 walkers).",
+  "background": [
+   "The loop currently does: offset:=0; for { books, err := store.GetAllBooksCore(10000, offset); ...; offset += 10000 } \u2014 vulnerable to rows shifting between calls on a live, mutable memdb-backed store.",
+   "The existing H7 comment in this exact function (visible at HEAD) warns that a silent break on read error used to mask a partial backfill being marked 'done' \u2014 any rewrite MUST preserve the 'return fmt.Errorf(...)' behavior on read failure, not revert to a silent break."
+  ],
+  "steps": [
+   "Replace the `offset := 0` / `for { ... GetAllBooksCore(10000, offset) ... offset += 10000 }` loop (L60-~76) with a cursor loop: `afterID := \"\"` then `for { books, err := store.GetAllBooksFullFrom(afterID, 10000); if err != nil { return fmt.Errorf(...) }; if len(books) == 0 { break }; ... process ...; afterID = books[len(books)-1].ID }` \u2014 keep the existing ctx.Err() cancellation check and the H7 error-wrapping exactly as-is.",
+   "Confirm GetAllBooksFullFrom's ID ordering (ULID-lexicographic, ascending) makes 'books[len(books)-1].ID' a valid resume cursor \u2014 check its doc comment / TestGetAllBooksFullFrom_PaginatesPastDoubleLimit in internal/database/pebble_books_pagination_test.go for the exact contract."
+  ],
+  "tests": [
+   "internal/itunes/backfill_test.go: add or adapt an existing backfill test to seed >10000 books via a fake store and assert every book is visited exactly once even when a book is inserted mid-backfill (mirroring the reconcile-loop tests' cross-page-mutation coverage, e.g. TestWarmupWriteLoss_ConcurrentWritesAllVisible's style of test)."
+  ],
+  "acceptance": [
+   "go test ./internal/itunes/... -run Backfill passes."
+  ],
+  "edge_cases": [
+   "A book deleted mid-backfill (its ID no longer exists) must not break the cursor \u2014 GetAllBooksFullFrom's contract for an unknown/stale cursor should be checked against TestGetAllBooksFullFrom_UnknownCursorEndsIteration."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "See part 2 (same todo_line) for the second, unnamed-in-TODO-but-identical-pattern loop at BackfillITunesTrackPIDs (lines 178-184 in the same file) \u2014 Fix It Right's depth rule says this should be fixed alongside part 1 rather than left as a sequential duplicate of the same bug.",
+  "review_notes": [
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+  ]
+ },
+ {
+  "todo_line": 4208,
+  "part": 2,
+  "src_id": "PERF-5",
+  "title": "internal/itunes/backfill.go BackfillITunesTrackPIDs: same offset-pagination bug, not named in the TODO but identical pattern in the same file",
+  "verdict": "actionable",
+  "verdict_evidence": "A second, structurally identical offset-pagination loop exists in the same file, unmentioned by the TODO item's line range but sharing the exact defect: grep -n \"offset := 0\" internal/itunes/backfill.go returns a second hit at L178, feeding GetAllBooksCore(10000, offset) at L184.",
+  "domain": "internal/itunes",
+  "exact_files": [
+   "internal/itunes/backfill.go",
+   "internal/plugins/maintenance/plugin.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "BackfillITunesTrackPIDs has its own offset-pagination loop building pidToBook/titleToBook indexes",
+    "grep_cmd": "grep -n \"offset := 0\" internal/itunes/backfill.go",
+    "expect": "2 hits total in the file, L60 and L178"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "GetAllBooksFullFrom(afterID, limit) cursor pager",
+    "file": "internal/database/pebble_store.go",
+    "verify_grep": "grep -n \"func (p \\*PebbleStore) GetAllBooksFullFrom\" internal/database/pebble_store.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "same mechanical rewrite as part 1, smaller function",
+  "review_critical": true,
+  "goal": "Apply the identical cursor-pagination fix to BackfillITunesTrackPIDs's pidToBook/titleToBook index-build loop (internal/itunes/backfill.go:178-190ish), which has the same H7-style error-wrapping comment and the same cross-page-mutation exposure as part 1.",
+  "background": [
+   "This loop builds an in-memory PID\u2192book_id and lowercase-title\u2192book_id index before streaming the iTunes XML \u2014 a book created or its PID changed between offset pages during this index build would be silently missed or double counted, same failure class as part 1."
+  ],
+  "steps": [
+   "Apply the same transformation described in part 1's steps to this second loop: afterID cursor instead of offset, preserving the existing `return 0, fmt.Errorf(...)` error wrap and the ctx.Err() cancellation check."
+  ],
+  "tests": [
+   "Extend the same backfill_test.go coverage from part 1 to also cover BackfillITunesTrackPIDs's index-build loop."
+  ],
+  "acceptance": [
+   "go test ./internal/itunes/... -run TrackPID passes."
+  ],
+  "edge_cases": [
+   "Same as part 1."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   4208
+  ],
+  "gate": "make ci",
+  "notes": "Same file/PR as part 1 \u2014 do this as one combined change, not two separate PRs, since they're the identical bug pattern in the same file.",
+  "review_notes": [
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+  ]
+ },
+ {
+  "todo_line": 4211,
+  "src_id": "TOOL-1",
+  "title": "Decide how to split the 2.2G tracked testdata directory",
+  "verdict": "needs_design",
+  "verdict_evidence": "testdata is still fully tracked at 2.2G: du -sh testdata returns '2.2G  testdata' at HEAD, and no split/fetch mechanism (git-lfs config, external fixture-fetch script) exists \u2014 grep -rln 'fetched-dataset\\|testdata.*split' docs returns 0 relevant hits \u2014 matching the TODO's own framing that this needs a decision, not a mechanical fix.",
+  "domain": "ci/scripts",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "testdata is still 2.2G",
+    "grep_cmd": "du -sh testdata",
+    "expect": "2.2G testdata"
+   }
+  ],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "L",
+  "tier": "opus",
+  "why_tier": "repo-history-affecting decision (git-lfs migration vs external fixture host vs accept-as-is) that the owner decision list explicitly excludes from this pass (decision 1: 'forward-only hygiene + GitHub gc only, no history rewrite')",
+  "review_critical": false,
+  "goal": "Not directly actionable: decide whether to (a) migrate large fixtures to git-lfs, (b) move them to an external fixture-fetch step (download in CI/make setup, .gitignore the raw files), or (c) accept the size and only prevent it from growing further.",
+  "background": [
+   "Owner decision 1 in this scope ('REPO-SIZE-1: forward-only hygiene + GitHub gc only, no history rewrite') governs the git-history side of repo size but does not resolve whether NEW testdata should keep being committed at this scale going forward \u2014 that is exactly TOOL-1's open question."
+  ],
+  "steps": [
+   "PRESENT the three options to the repo owner. Given decision 1 already rules out history rewrite, only forward-looking options (b) and (c) are consistent with that decision \u2014 flag this to the owner rather than assuming git-lfs (option a, which typically also wants a history migration to fully pay off) is still on the table."
+  ],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "DESIGN QUESTION for the owner, narrowed by decision 1: likely only 'external fixture-fetch for new large files going forward' or 'accept as-is' remain viable without contradicting the no-history-rewrite decision."
+ },
+ {
+  "todo_line": 4212,
+  "src_id": null,
+  "title": "FE-2/FE-3/FE-4 stale-deps findings all already fixed",
+  "verdict": "stale_done",
+  "verdict_evidence": "All three: FE-2 (ActivityLog.tsx pageSize dep) \u2014 grep -n \"pageSize,\" web/src/pages/ActivityLog.tsx shows it inside loadFeed's useCallback dependency array at L540. FE-3 (BookDedup.tsx rowsPerPage dep) \u2014 the legacy tab moved to web/src/components/dedup/DedupAcousticTab.tsx, where `}, [page, rowsPerPage]);` appears at L610. FE-4 (BookDetail.tsx stale state on id change) \u2014 commit 30c74520 'fix(web): stop BookDetail load race + orphaned SSE EventSource leak' (2026-08-20) added a cancelled/isStale guard on every setState in the id-keyed load effect (L219-297), a broader fix than the narrow 'reset on id change' the TODO envisioned but covering the same defect.",
+  "domain": "web (frontend)",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "FE-2: pageSize is in loadFeed's useCallback deps",
+    "grep_cmd": "grep -n \"pageSize,\" web/src/pages/ActivityLog.tsx",
+    "expect": "1 hit inside the deps array ~L540"
+   },
+   {
+    "claim": "FE-3: rowsPerPage is in the fetch effect's deps, in the relocated component",
+    "grep_cmd": "grep -n \"\\[page, rowsPerPage\\]\" web/src/components/dedup/DedupAcousticTab.tsx",
+    "expect": "1 hit at L610"
+   },
+   {
+    "claim": "FE-4: BookDetail.tsx's id-keyed load effect guards every setState with a cancelled/isStale flag",
+    "grep_cmd": "grep -n \"BOOKDETAIL-RACE\" web/src/pages/BookDetail.tsx",
+    "expect": ">=1 hit"
+   },
+   {
+    "claim": "FE-4 fix commit date",
+    "grep_cmd": "git log -1 --format=%ci -- web/src/pages/BookDetail.tsx",
+    "expect": "2026-08-20"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "verification only, anchors moved but all confirmed",
+  "review_critical": false,
+  "goal": "Confirm all three FE findings are resolved (with re-anchored line numbers/files since the original audit's cited lines moved), then tick the TODO box.",
+  "background": [
+   "FE-3's original file (web/src/pages/BookDedup.tsx) no longer contains the AcousticDedup tab's logic at all \u2014 it now imports AcousticDedupTab from web/src/components/dedup/DedupAcousticTab.tsx, which is where the fixed rowsPerPage dependency now lives.",
+   "FE-4's fix is broader than literally 'reset files/segments/caches on id change' \u2014 it uses a cancelled-flag guard pattern already established elsewhere in the same file (the same idiom used by the linkSearch and tag-preload effects per the file's own comment), which achieves the same anti-stale-data goal without a state reset."
+  ],
+  "steps": [
+   "No code change. Verify the 4 anchors above and tick the TODO box; optionally update the original audit doc (docs/audits/2026-06-22-repo-optimization-security-sweep.md lines 92-94, 210-212) to mark FE-2/3/4 resolved with the new anchors."
+  ],
+  "tests": [],
+  "acceptance": [
+   "All 4 grep commands above return the stated hits."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": null
+ },
+ {
+  "todo_line": 4214,
+  "part": 1,
+  "src_id": "ARCH-8",
+  "title": "Replace serviceregistry.Get[T]'s panicking string-key lookups with typed accessors",
+  "verdict": "actionable",
+  "verdict_evidence": "The two panic call sites named in the TODO are unchanged at HEAD: grep -n \"panic(fmt.Sprintf\" internal/serviceregistry/container.go returns exactly 2 hits at L248 and L255, matching 'container.go:248,:255' verbatim.",
+  "domain": "internal/serviceregistry",
+  "exact_files": [
+   "internal/serviceregistry/container.go",
+   "web/package-lock.json"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "Get[T] panics when the requested service name is not in the active builder's Needs",
+    "grep_cmd": "grep -n \"panic(fmt.Sprintf\" internal/serviceregistry/container.go",
+    "expect": "2 hits at L248 and L255"
+   },
+   {
+    "claim": "Get is a generic function keyed by a bare string name",
+    "grep_cmd": "grep -n \"func Get\\[T any\\](c \\*Container, name string) T\" internal/serviceregistry/container.go",
+    "expect": "1 hit"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "touches every Get[T](c, \"name\") call site across the service registry's consumers to introduce typed keys without breaking the Needs-declaration mechanism",
+  "review_critical": false,
+  "goal": "Per the audit doc's own recommendation ('Add typed service keys or generated accessors for core services'), replace bare-string Get[T](c, \"serviceName\") call sites for the small set of CORE services with typed accessor functions (e.g. func GetDatabase(c *Container) database.Store) that fail at compile time on a typo instead of panicking at runtime \u2014 this is the smallest of the ARCH items (ARCH-8) per the TODO's own framing; ARCH-3/4/5/7 are large structural programs out of scope for this item (see part 2).",
+  "background": [
+   "container.go:248's panic fires when name is not declared in the active builder's Needs slice \u2014 a programmer error caught only at Build() time, and only if that code path executes (i.e. never for an unused/rarely-exercised builder).",
+   "container.go:255's panic fires when the service was never built at all, same fail-fast-but-runtime-only characteristic."
+  ],
+  "steps": [
+   "Identify the 'core services' worth typed accessors \u2014 grep -rn 'serviceregistry.Get\\[' internal --include=*.go to enumerate every call site and its string name, then group by which names appear across MANY builders' Needs (those are the 'core' ones worth a typed wrapper) versus one-off names (leave those on the generic Get[T] path).",
+   "For each core service, add a typed accessor in container.go (or a new typed_accessors.go) of the shape `func Get<Name>(c *Container) <ConcreteType> { return Get[<ConcreteType>](c, \"<name>\") }`, and update call sites to use it.",
+   "Do NOT remove the generic Get[T] \u2014 it stays for the long tail of one-off services; this is additive, not a replacement of the whole mechanism."
+  ],
+  "tests": [
+   "internal/serviceregistry/container_test.go: add a test that a typed accessor for a service not in Needs still panics with the same message (behavior preserved, just called through a named wrapper) \u2014 a compile-time-safety improvement, not a runtime-behavior change."
+  ],
+  "acceptance": [
+   "go build ./... succeeds; go vet ./internal/serviceregistry/... is clean."
+  ],
+  "edge_cases": [
+   "A service intentionally optional (built conditionally based on config) should NOT get a typed accessor that assumes it's always present \u2014 only truly-core, always-built services qualify."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "This is a partial, incremental step toward ARCH-8's full recommendation, not a wholesale registry redesign \u2014 matches the TODO's own framing of it as 'the smallest' of the five ARCH items.",
+  "review_notes": [
+   "[simplicity-scope.json] TASK-102 is 'TypeScript 6.0.3 \u2192 7.0.2 migration', tier Opus / effort L, with exact_files = ['web/package.json'] \u2014 a single dependency-version string. A TS major bump changes compiler defaults and will touch web/tsconfig.json (and web/tsconfig.node.json) plus every source file that trips a new error;"
+  ]
+ },
+ {
+  "todo_line": 4214,
+  "part": 2,
+  "src_id": "ARCH-3/4/5/7",
+  "title": "ARCH-3/4/5/7 remain large structural programs, not single-PR-scoped",
+  "verdict": "needs_design",
+  "verdict_evidence": "Per the audit doc (docs/audits/2026-06-22-repo-optimization-security-sweep.md:85-90), each is \ud83d\udd34 OPEN with a multi-file scope: ARCH-3 (operation-launch service spanning internal/server/handlers/operations/handler.go:110 plus 4 duplicate sites in handlers/duplicates/handler.go), ARCH-4 (config remap centralization across internal/config/update_service.go:70,102,138,170,206 plus persistence.go:150), ARCH-5 (AudiobookService split, internal/audiobooks/service.go:68 + 721 + 778), ARCH-7 (compatibility registry across 6 files) \u2014 none of these has a single resolvable edit list; each needs its own design doc before implementation.",
+  "domain": "(unresolved \u2014 spans internal/server, internal/config, internal/audiobooks)",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "ARCH-3/4/5/7 status and file spans per the tracking audit doc",
+    "grep_cmd": "grep -n \"ARCH-3\\|ARCH-4\\|ARCH-5\\|ARCH-7\" docs/audits/2026-06-22-repo-optimization-security-sweep.md",
+    "expect": "hits at L85-90 (status table) and L204-227 (detail rows) confirming all 4 are still \ud83d\udd34 OPEN"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "L",
+  "tier": "opus",
+  "why_tier": "each is a multi-file architectural refactor requiring its own PLAN.md per this repo's Plan-Before-Execution rule",
+  "review_critical": false,
+  "goal": "Not directly actionable as a single task: each of ARCH-3 (unified operation-launch service), ARCH-4 (centralized config remap tables), ARCH-5 (split the AudiobookService god-service), and ARCH-7 (compatibility registry with owner/caller/removal-condition tracking) needs its own scoped design/plan document before any code moves, per this repo's mandatory Plan-Before-Execution rule for multi-file refactors.",
+  "background": [
+   "The audit doc already did the file-anchor legwork for all four (see verified_anchors) \u2014 what's missing is not investigation but a prioritization decision (which of the 4 to tackle first, if any) and a written plan for whichever is chosen."
+  ],
+  "steps": [
+   "Do not implement directly. If the coordinator wants to proceed, pick ONE of the 4, write a PLAN.md in a fresh worktree per the repo's plan-first skill, and treat the other 3 as still-parked follow-ups."
+  ],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "DESIGN QUESTION for the owner: which (if any) of ARCH-3/4/5/7 to prioritize; each is its own multi-week program, not a scout-briefable task."
+ },
+ {
+  "todo_line": 4281,
+  "src_id": null,
+  "title": "BulkDeleteSeries and single-delete series guard already fixed to use the unfiltered ref-count",
+  "verdict": "stale_done",
+  "verdict_evidence": "Both DeleteEmptySeries (single-delete) and BulkDeleteSeries in internal/server/handlers/entities/handler.go now call the shared seriesRefCounts(h.store) helper (which wraps database.AsSeriesBookRefStore(store).GetAllSeriesBookRefCounts(), failing CLOSED if unavailable) instead of the filtered GetBooksBySeriesIDCore; grep -n \"seriesRefCounts(h.store)\" internal/server/handlers/entities/handler.go returns 2 hits, one in each function, and the helper's own file (series_refcount.go, last-edited 2026-08-14) explicitly documents this as the fix for the exact bug this TODO item describes.",
+  "domain": "internal/server/handlers",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "both delete paths call the shared unfiltered-count helper",
+    "grep_cmd": "grep -n \"seriesRefCounts(h.store)\" internal/server/handlers/entities/handler.go",
+    "expect": "2 hits"
+   },
+   {
+    "claim": "the helper wraps GetAllSeriesBookRefCounts and fails closed",
+    "grep_cmd": "grep -n \"GetAllSeriesBookRefCounts\\|refusing to delete\" internal/server/handlers/entities/series_refcount.go",
+    "expect": "hits confirming both"
+   },
+   {
+    "claim": "fix landed 2026-08-14, same day as the bug's own discovery per the TODO item's L4295",
+    "grep_cmd": "git log -1 --format=%ci -- internal/server/handlers/entities/series_refcount.go",
+    "expect": "2026-08-14"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "verification only",
+  "review_critical": false,
+  "goal": "Confirm both series-delete handlers already use the safe unfiltered ref count and check the TODO box.",
+  "background": [
+   "series_refcount.go's own doc comment explicitly names this exact prior bug: 'Both series delete handlers used to guard with GetBooksBySeriesIDCore... On production 2026-08-14 that had produced 6,893 series IDs referenced by 13,322 live books... each rendering with no series and unrecoverable' \u2014 and states the fix 'Mirrors the guard executeSeriesPrune adopted in #2400'."
+  ],
+  "steps": [
+   "No code change. Verify the anchors above and tick the TODO box."
+  ],
+  "tests": [],
+  "acceptance": [
+   "grep -n \"seriesRefCounts(h.store)\" internal/server/handlers/entities/handler.go returns 2 hits."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "This fix is the template L4288 (still open) should copy for the two remaining unguarded series deleters."
+ },
+ {
+  "todo_line": 4288,
+  "src_id": null,
+  "title": "Apply the unfiltered ref-count guard to the two remaining series deleters (internal/dedup/series_dedup.go, internal/maintenance/jobs/cleanup_series.go)",
+  "verdict": "actionable",
+  "verdict_evidence": "Both files still guard with the filtered GetBooksBySeriesIDCore, not the fixed GetAllSeriesBookRefCounts pattern: grep -n \"GetBooksBySeriesIDCore\" internal/dedup/series_dedup.go returns 4 hits (L105, L344, L492, L565) and internal/maintenance/jobs/cleanup_series.go returns 2 hits (L68, L160); neither file references seriesRefCounts, GetAllSeriesBookRefCounts, or any cache-invalidation call (InvalidateAll/seriesCache \u2014 0 hits in either file).",
+  "domain": "internal/dedup",
+  "exact_files": [
+   "internal/dedup/series_dedup.go",
+   "internal/maintenance/jobs/cleanup_series.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "DedupSeries/MergeSeries in series_dedup.go still use the filtered counter at 4 call sites",
+    "grep_cmd": "grep -n \"GetBooksBySeriesIDCore\" internal/dedup/series_dedup.go",
+    "expect": "4 hits: L105, L344, L492, L565"
+   },
+   {
+    "claim": "csUnlinkAndDeleteSeries/csMergeSeriesGroup in cleanup_series.go still use the filtered counter",
+    "grep_cmd": "grep -n \"GetBooksBySeriesIDCore\" internal/maintenance/jobs/cleanup_series.go",
+    "expect": "2 hits: L68, L160"
+   },
+   {
+    "claim": "PebbleStore.DeleteSeries already notifies memdb on delete (confirming the TODO's own claim, so store-layer invalidation is already covered \u2014 only the ref-count guard is missing)",
+    "grep_cmd": "grep -n \"p.DeleteSeriesFromMemDB(id)\" internal/database/pebble_store_series.go",
+    "expect": "1 hit ~L188"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "seriesRefCounts helper pattern (fail-closed, unfiltered)",
+    "file": "internal/server/handlers/entities/series_refcount.go",
+    "verify_grep": "grep -n \"func seriesRefCounts\" internal/server/handlers/entities/series_refcount.go"
+   },
+   {
+    "name": "database.AsSeriesBookRefStore capability accessor",
+    "file": "internal/database",
+    "verify_grep": "grep -rn \"func AsSeriesBookRefStore\" internal/database/*.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "same fix pattern as the already-shipped L4281 fix, but applied across two different packages with their own store interfaces (bookSoftDeleter/seriesUnlinker/seriesMerger narrow interfaces in cleanup_series.go), so it's not a pure copy-paste",
+  "review_critical": true,
+  "goal": "Replace the filtered GetBooksBySeriesIDCore ref-count checks in DedupSeries/MergeSeries (internal/dedup/series_dedup.go) and csUnlinkAndDeleteSeries/csMergeSeriesGroup (internal/maintenance/jobs/cleanup_series.go) with the same unfiltered-count, fail-closed guard pattern already shipped for the HTTP handlers (internal/server/handlers/entities/series_refcount.go), preventing these two remaining call sites from deleting a series that still has trashed or non-primary books pointing at it.",
+  "background": [
+   "The exact same defect that produced 6,893 dangling series references via the HTTP handlers (fixed in L4281 / #2400) still exists in these two maintenance/dedup packages, which sit outside internal/server and cannot import the entities package's seriesRefCounts helper directly \u2014 a package-appropriate equivalent (or a shared exported helper in internal/database) is needed.",
+   "Cache invalidation is a separate, smaller concern than the TODO item implies: PebbleStore.DeleteSeries already calls DeleteSeriesFromMemDB on every delete (verified above), so the memdb-level cache is already consistent from any caller. The remaining gap is the HTTP-layer seriesCache (in-handler, request-scoped) which these non-HTTP packages have no path to and arguably don't need to invalidate directly \u2014 that part of the TODO ('no path to the server's caches') is more a design note than a blocking defect."
+  ],
+  "steps": [
+   "Add an exported helper analogous to seriesRefCounts, either promoted into internal/database (e.g. `func SeriesRefCounts(store any) (map[int]int, error)` wrapping AsSeriesBookRefStore(store).GetAllSeriesBookRefCounts()) so both internal/dedup and internal/maintenance/jobs can call it without importing internal/server/handlers/entities, OR duplicate the small helper locally in each package if a shared database-layer helper is out of scope \u2014 prefer the shared helper per this repo's Fix-It-Right depth rule (avoid a third copy of the same 9-line function).",
+   "In internal/dedup/series_dedup.go: replace the ref-count check before each store.DeleteSeries(...) call (near L366 in DedupSeries, L536 in MergeSeries) to consult the unfiltered counts instead of a fresh GetBooksBySeriesIDCore call per series.",
+   "In internal/maintenance/jobs/cleanup_series.go: same replacement in csUnlinkAndDeleteSeries (before L152's store.DeleteSeries) and csMergeSeriesGroup (before L177's store.DeleteSeries).",
+   "Confirm each function's narrow store interface (seriesUnlinker, seriesMerger, whatever DedupSeries/MergeSeries declare) already includes or can be extended to include the GetAllSeriesBookRefCounts capability method \u2014 check via database.AsSeriesBookRefStore's type assertion requirements."
+  ],
+  "tests": [
+   "internal/dedup/series_dedup_test.go: add TestDedupSeries_RefusesDeleteWhenTrashedBooksRemain and TestMergeSeries_RefusesDeleteWhenNonPrimaryBooksRemain mirroring the HTTP handler's existing coverage pattern (check series_refcount_test.go or handler_test.go if one exists for the shipped fix, for the exact assertion shape to mirror).",
+   "internal/maintenance/jobs/cleanup_series_test.go: add equivalent tests for csUnlinkAndDeleteSeries and csMergeSeriesGroup."
+  ],
+  "acceptance": [
+   "go test ./internal/dedup/... ./internal/maintenance/jobs/... -run Series passes with the new tests included."
+  ],
+  "edge_cases": [
+   "A series with GetAllSeriesBookRefCounts returning an error (store cannot answer the unfiltered question) must fail CLOSED (refuse to delete), matching seriesRefCounts' own documented contract \u2014 not silently fall back to the filtered count."
+  ],
+  "anti_over_suppression": "TestDedupSeries_RefusesDeleteWhenTrashedBooksRemain / TestMergeSeries_RefusesDeleteWhenNonPrimaryBooksRemain (must assert the delete is REFUSED, not just that the count differs \u2014 guards against a guard that computes the right number but doesn't act on it)",
+  "depends_on_lines": [
+   4281
+  ],
+  "gate": "make ci",
+  "notes": "review_critical=true: same class of bug that stranded 13,322 books behind 6,893 dangling series on prod (2026-08-14) \u2014 this closes the remaining 2 of what appear to have been (at least) 3 total unguarded call sites."
+ },
+ {
+  "todo_line": 4295,
+  "src_id": null,
+  "title": "WithOpID wiring already fixed and tested \u2014 op IDs now actually reach ctxOpID",
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/server/op_run_context.go's opRunContextDecorator calls maintenanceplugin.WithOpID and is installed via s.opRegistry.SetRunContextDecorator(opRunContextDecorator) in registry_wire.go:359 (last-edited 2026-08-14, same day as the bug's own discovery per the item's text); 3 unit tests exist in op_run_context_test.go (TestOpRunContextDecorator_CarriesOpIDForMaintenanceOps, _PreservesLoggerDecoration, _UndecoratedContextHasNoOpID).",
+  "domain": "internal/server",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "opRunContextDecorator calls WithOpID",
+    "grep_cmd": "grep -n \"maintenanceplugin.WithOpID\" internal/server/op_run_context.go",
+    "expect": "1 hit at L41"
+   },
+   {
+    "claim": "it is actually installed as the registry's run-context decorator",
+    "grep_cmd": "grep -n \"SetRunContextDecorator(opRunContextDecorator)\" internal/server/registry_wire.go",
+    "expect": "1 hit at L359"
+   },
+   {
+    "claim": "3 unit tests cover this wiring",
+    "grep_cmd": "grep -n \"^func Test\" internal/server/op_run_context_test.go",
+    "expect": "3 hits"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "verification only",
+  "review_critical": true,
+  "goal": "Confirm the code-level fix for 'WithOpID never called in production' is shipped and unit-tested, then check the TODO box \u2014 the item's own prod-verification ask remains open separately as L4126.",
+  "background": [
+   "op_run_context.go's own doc comment states this explicitly: 'The op ID in the form maintenance.ctxOpID reads. This was NOT [wired]. WithOpID was defined and exported but never called anywhere in production code... The fix... is extracted from an inline closure so it can be tested; see op_run_context_test.go.'"
+  ],
+  "steps": [
+   "No code change. Verify the 3 anchors above and tick the TODO box (leave L4126's prod-verification ask open as its own item)."
+  ],
+  "tests": [],
+  "acceptance": [
+   "go test ./internal/server/... -run OpRunContextDecorator passes (3 subtests)."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "This unblocks L4137 (audit the 8 ctxOpID consumers now that IDs actually arrive) \u2014 that item remains actionable and open."
+ },
+ {
+  "todo_line": 4304,
+  "part": 1,
+  "src_id": null,
+  "title": "Build a dry-run report-only classifier for series that look like they were minted from a book title",
+  "verdict": "actionable",
+  "verdict_evidence": "No such classifier exists yet: grep -rln \"title-derived.*series\\|series.*derived.*title\\|near.*bucket.*series\" internal --include=*.go returns 0 hits, and dedup_triage.go's existing report-only op pattern (Apply bool defaulting false, no mutation) is directly reusable per the owner decisions' PH-2b precedent (report ops actionable, mutating/apply gated separately).",
+  "domain": "internal/dedup",
+  "exact_files": [
+   "internal/plugins/maintenance/series_title_leak_audit.go",
+   "internal/plugins/maintenance/plugin.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "no existing classifier for title-derived series",
+    "grep_cmd": "grep -rln \"title-derived.*series\\|near.*bucket\" internal --include=*.go",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "reusable report-only op pattern with Apply bool default-false",
+    "grep_cmd": "grep -n \"Apply bool\" internal/plugins/maintenance/dedup_triage.go",
+    "expect": "1 hit ~L288, comment describing the report-only contract"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "sdk.OperationDef report-only pattern (Apply bool, default false, dry-run emits counts/list)",
+    "file": "internal/plugins/maintenance/dedup_triage.go",
+    "verify_grep": "grep -n \"ID:.*maintenance.dedup-exact-triage\" internal/plugins/maintenance/dedup_triage.go"
+   },
+   {
+    "name": "registry.RunItems bounded worker pool for the whole-series-table scan",
+    "file": "internal/operations/registry/run_items.go",
+    "verify_grep": "grep -n \"func RunItems\" internal/operations/registry/run_items.go"
+   },
+   {
+    "name": "GetAllSeriesBookRefCounts (needed to find single-book series, the classifier's core signal)",
+    "file": "internal/database",
+    "verify_grep": "grep -rn \"func.*GetAllSeriesBookRefCounts\" internal/database/*.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "a new whole-series-table maintenance op with a two-bucket fuzzy-match classifier (exact-equals vs contains) plus emitting a bounded sample list for hand-audit",
+  "review_critical": false,
+  "goal": "Add a report-only maintenance op (e.g. maintenance.series-title-leak-audit) that walks the series table, computes each series' single associated book (where ref count == 1) and its title, classifies as 'exact' (series name == book title, case/whitespace-normalized) or 'near' (one string contains the other) or neither, and emits counts plus a bounded sample (e.g. first 40 of the 'near' bucket) for the hand-audit this TODO item explicitly calls for \u2014 no delete/merge logic in this task; that stays parked pending the hand-audit and its own apply gate.",
+  "background": [
+   "The TODO item explicitly warns against a blunt 'book-count == 1' filter: 2,322 legitimate single-book series exist (named examples: Arliss Cutter, The Spiderwick Chronicles, Star Runners) that must NOT be caught by this classifier \u2014 only series-name/title correlation should flag a candidate, not book count alone.",
+   "The two buckets to report (990 exact-equals, 1,280 'near'/contains) are cited directly in the TODO item as the expected current population sizes \u2014 the classifier's output should be checked against these approximate numbers as a sanity check, not treated as exact targets (the live count will have drifted since the TODO was written)."
+  ],
+  "steps": [
+   "Create internal/plugins/maintenance/series_title_leak_audit.go modeled on dedup_triage.go: an sdk.OperationDef with ID 'maintenance.series-title-leak-audit', report-only (no Apply field, no mutation path at all in this task), Capabilities: []sdk.Capability{sdk.CapLibraryRead}.",
+   "In Run: get all series with a ref count of exactly 1 via GetAllSeriesBookRefCounts + a series listing call (check internal/database for the series-listing method to reuse rather than reinventing), for each fetch its single book's title, normalize both strings (reuse internal/util.NormalizeAuthor-style normalization if a title-normalization helper already exists \u2014 grep internal/titleutil first), and classify as ExactMatch (normalized equal) or NearMatch (one contains the other, case-insensitive) or Neither.",
+   "Shard the per-series book lookup across a bounded worker pool via registry.RunItems.",
+   "Report: total single-book series scanned, ExactMatch count, NearMatch count, and (bounded to e.g. 40) a sample of NearMatch entries (series ID, series name, book ID, book title) for the human hand-audit the TODO explicitly requests."
+  ],
+  "tests": [
+   "internal/plugins/maintenance/series_title_leak_audit_test.go: TestSeriesTitleLeakAudit_ClassifiesExactAndNear \u2014 seed 3 series: one where name==book title (exact), one where name is a substring of the title (near), one legitimate real-series name unrelated to its book's title (neither); assert counts 1/1/1.",
+   "TestSeriesTitleLeakAudit_NeverMutates \u2014 assert no DeleteSeries/UpdateBook call occurs during the run."
+  ],
+  "acceptance": [
+   "go test ./internal/plugins/maintenance/... -run TestSeriesTitleLeakAudit passes.",
+   "POST /api/v1/operations/v2 {\"def_id\":\"maintenance.series-title-leak-audit\"} on a running dev/sandbox server returns a report with ExactMatch/NearMatch counts roughly consistent with the TODO's cited 990/1,280 (allowing for drift since the TODO was written) and mutates nothing."
+  ],
+  "edge_cases": [
+   "A series with a nil or empty name must not crash the normalize/compare step \u2014 classify as Neither.",
+   "A single-book series whose one book is soft-deleted should still count via GetAllSeriesBookRefCounts (which includes trashed books per its own contract) \u2014 this classifier is about the series/title relationship, not about live-vs-trashed status."
+  ],
+  "anti_over_suppression": "TestSeriesTitleLeakAudit_ClassifiesExactAndNear (must include a genuine single-book-series-that-is-real case classified as Neither, so the classifier isn't just flagging every single-book series)",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "This satisfies the 'dry-run that emits the list' half of the TODO item. The '~40 hand-audit' and 'its own apply gate' halves are explicitly NOT part of this task \u2014 see part 2 (parked).",
+  "review_notes": [
+   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three"
+  ]
+ },
+ {
+  "todo_line": 4304,
+  "part": 2,
+  "src_id": null,
+  "title": "Title-leak series repair (merge/delete) stays parked pending hand-audit and its own apply gate",
+  "verdict": "parked",
+  "verdict_evidence": "The TODO item's own text explicitly defers the repair: 'Needs a dry-run that emits the list, a hand-audit of ~40 of the near bucket, and its own apply gate \u2014 the repair must be narrower than the classifier.' No repair/merge/delete logic should be built until that hand-audit happens, consistent with owner decision 9's pattern in this scope (report ops actionable, purge/delete ops parked).",
+  "domain": "internal/dedup",
+  "exact_files": [],
+  "verified_anchors": [],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "L",
+  "tier": "opus",
+  "why_tier": "n/a \u2014 parked",
+  "review_critical": true,
+  "goal": "n/a \u2014 do not build until the part-1 report op has run and a human has hand-audited a sample of the 'near' bucket to determine what 'narrower than the classifier' should mean in practice.",
+  "background": [
+   "Deleting/merging a series purely because its name correlates with its one book's title would catch real single-book series the owner explicitly wants preserved (Arliss Cutter, The Spiderwick Chronicles, Star Runners) \u2014 the classifier alone is not a safe repair trigger."
+  ],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   4304
+  ],
+  "gate": "n/a (docs)",
+  "notes": "Standing rule applies: never delete/merge on book-count alone; REPOINT-only philosophy extends here as 'never auto-merge a series on a name heuristic alone'."
+ },
+ {
+  "todo_line": 4312,
+  "src_id": null,
+  "title": "scripts/setup-prometheus-auth.py does NOT share the server-side shell script's dead-indentation bug",
+  "verdict": "actionable",
+  "verdict_evidence": "The described bug pattern (compute a YAML indent from a whitespace-only regex capture, then call .index('-') on it) does not appear in this file at all: grep -n \"index('-')\\|indent\" scripts/setup-prometheus-auth.py returns 0 hits; the script instead writes the new job_name block from a hardcoded f-string template (`  - job_name: '{JOB_NAME}'` at L78), never computing an indent from existing YAML content \u2014 so the script genuinely diverged from its shell sibling and the only remaining work is documenting that finding.",
+  "domain": "ci/scripts",
+  "exact_files": [
+   "scripts/setup-prometheus-auth.py"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "no .index('-') or computed-indent logic exists in the script",
+    "grep_cmd": "grep -n \"index('-')\\|indent\" scripts/setup-prometheus-auth.py",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "the new job block is a hardcoded template, not a computed indent",
+    "grep_cmd": "grep -n \"job_name: '{JOB_NAME}'\" scripts/setup-prometheus-auth.py",
+    "expect": "1 hit at L78"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "documentation-only comment addition, no logic change needed",
+  "review_critical": false,
+  "goal": "Add a short comment near the job-block template in scripts/setup-prometheus-auth.py (around L78) noting it was checked against the abo-prometheus-auth.sh v1.0.1 indentation bug (patched on the server 2026-08-14) and confirmed NOT to share the pattern, so a future reader doesn't re-open this investigation.",
+  "background": [
+   "The buggy shell script computed indentation from a whitespace-only regex capture and called .index('-') on it, guaranteeing a ValueError on any real prometheus.yml with list-style '- job_name:' entries. This Python script sidesteps the whole problem by using a fixed, hardcoded indentation in its template string rather than introspecting the existing file's indentation at all."
+  ],
+  "steps": [
+   "Add a one-line comment above the JOB block template (near scripts/setup-prometheus-auth.py:78) stating: '# Hardcoded indent, not computed from existing YAML \u2014 does not share the abo-prometheus-auth.sh v1.0.1 dead-indentation bug (checked 2026-08-2x).' Bump the file's version header per this repo's mandatory file-header rule."
+  ],
+  "tests": [],
+  "acceptance": [
+   "grep -n \"does not share\" scripts/setup-prometheus-auth.py returns 1 hit."
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "The investigation itself (the actual ask of this TODO item) is complete via this scout's grep \u2014 the only remaining deliverable is recording the negative result so it isn't re-investigated."
+ },
+ {
+  "todo_line": 4329,
+  "src_id": null,
+  "title": "Fix indexedStore.UpdateBook to enqueue a Bleve DELETE when the update is a soft-delete transition",
+  "verdict": "actionable",
+  "verdict_evidence": "indexed_store.go's UpdateBook unconditionally calls s.server.enqueueIndex(id, false) (upsert) regardless of whether the updated book's MarkedForDeletion is now true: grep -n \"func (s \\*indexedStore) UpdateBook\" internal/server/indexed_store.go returns 1 hit at L68, and its body (L69-73) has no MarkedForDeletion/IsSoftDeleted check at all.",
+  "domain": "internal/server",
+  "exact_files": [
+   "internal/server/indexed_store.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "UpdateBook always enqueues an upsert (delete=false), never checking the new MarkedForDeletion state",
+    "grep_cmd": "grep -n \"func (s \\*indexedStore) UpdateBook\" internal/server/indexed_store.go",
+    "expect": "1 hit at L68, body shows enqueueIndex(id, false) unconditionally"
+   },
+   {
+    "claim": "database.Book.IsSoftDeleted() is the existing reusable predicate",
+    "grep_cmd": "grep -n \"func (b \\*Book) IsSoftDeleted\" internal/database/book_visibility.go",
+    "expect": "1 hit"
+   },
+   {
+    "claim": "DeleteBook already shows the correct delete=true call shape to mirror",
+    "grep_cmd": "grep -n \"func (s \\*indexedStore) DeleteBook\" internal/server/indexed_store.go",
+    "expect": "1 hit ~L94, calls enqueueIndex(id, true)"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "(*database.Book).IsSoftDeleted()",
+    "file": "internal/database/book_visibility.go",
+    "verify_grep": "grep -n \"func (b \\*Book) IsSoftDeleted\" internal/database/book_visibility.go"
+   },
+   {
+    "name": "s.enqueueIndex(bookID string, del bool)",
+    "file": "internal/server/indexed_store.go",
+    "verify_grep": "grep -n \"func (s \\*Server) enqueueIndex\" internal/server/indexed_store.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "small, precise change on a decorator that sits on every book mutation in the app \u2014 must not regress the ordinary (non-soft-delete) update path",
+  "review_critical": true,
+  "goal": "Change indexedStore.UpdateBook (internal/server/indexed_store.go:68-74) so that when the updated book (the `b *database.Book` argument, or the `updated` return value) has MarkedForDeletion set true, it enqueues a Bleve DELETE (enqueueIndex(id, true)) instead of an upsert (enqueueIndex(id, false)) \u2014 closing the gap where soft-deleting a book currently re-indexes it into Bleve instead of removing it, which is what produced the 3,953-doc pollution the periodic reconciler (L4186) now has to clean up after the fact.",
+  "background": [
+   "RestoreAudiobook's reindex-on-UpdateBook is explicitly correct and must be preserved: search_coverage.go's own comment states 'A book restored from soft-delete later is re-indexed by the restore path itself: RestoreAudiobook goes through store.UpdateBook, and the indexedStore decorator enqueues a reindex on every UpdateBook' \u2014 so the fix must branch on the RESULTING MarkedForDeletion state, not special-case 'is this a restore or a delete call', to keep both directions correct through the same code path.",
+   "internal/merge/service.go's SoftDeleteBook(store BookWriter, bookID string) is the primary soft-delete entry point and goes through store.UpdateBook, meaning it is exactly the call path this fix must intercept."
+  ],
+  "steps": [
+   "In internal/server/indexed_store.go's UpdateBook (currently L68-74), after `updated, err := s.Store.UpdateBook(id, b)` succeeds, check whether the resulting book is soft-deleted: prefer `updated.IsSoftDeleted()` if `updated` is non-nil (it reflects the actual persisted state), falling back to `b.IsSoftDeleted()` if `updated` is nil but err is also nil (defensive; check what the underlying Store.UpdateBook actually returns on success before assuming updated is always non-nil).",
+   "If soft-deleted, call `s.server.enqueueIndex(id, true)` (delete); otherwise keep the existing `s.server.enqueueIndex(id, false)` (upsert) \u2014 a restore (MarkedForDeletion transitioning true\u2192false) naturally falls into the upsert branch, preserving the documented-correct restore behavior.",
+   "Bump the file's version header (currently 1.4.0) and last-edited date per this repo's mandatory file-header rule."
+  ],
+  "tests": [
+   "See L4334 (todo_line 4334) for the dedicated regression test this fix requires \u2014 write it as part of the same change, not deferred."
+  ],
+  "acceptance": [
+   "go test ./internal/server/... -run IndexedStore passes, including the new soft-delete-enqueues-delete test from L4334.",
+   "Manual/integration check: soft-delete a book via the API, then GET /api/v1/search?q=<its exact title> returns 0 hits without waiting for reconcileSearchIndexCoverage to run."
+  ],
+  "edge_cases": [
+   "A book updated with an UNRELATED field change (title edit, tag edit) while MarkedForDeletion stays false throughout must still enqueue an upsert as before \u2014 only the true-transition changes behavior.",
+   "A book that is ALREADY soft-deleted and gets a further metadata update (MarkedForDeletion stays true, some other field changes) should still enqueue a delete (idempotent \u2014 DeleteBook on an already-absent Bleve doc is documented as a no-op per search_coverage.go's own comment), not accidentally re-upsert it back into the index."
+  ],
+  "anti_over_suppression": "TestIndexedStoreUpdateBook_RestoreStillReindexes (L4334's sibling happy-path test \u2014 restore, i.e. MarkedForDeletion true\u2192false via UpdateBook, must still enqueue an upsert, not a delete, guarding against an over-broad fix that breaks RestoreAudiobook)",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "review_critical=true: this decorator sits on every book mutation server-wide; a mistake here either re-breaks the soft-delete leak (under-fix) or breaks restore/normal updates (over-fix).",
+  "review_notes": [
+   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,",
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
+   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,",
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ]
+ },
+ {
+  "todo_line": 4334,
+  "src_id": null,
+  "title": "Regression test: soft-deleting an indexed book must be unsearchable without a boot reconcile",
+  "verdict": "actionable",
+  "verdict_evidence": "No such test exists yet for indexed_store.go's UpdateBook soft-delete path: grep -n \"SoftDelete\" internal/server/indexed_store_test.go returns 0 hits, confirming the regression coverage this item asks for is missing (consistent with the underlying bug in L4329 still being unfixed at HEAD).",
+  "domain": "internal/server",
+  "exact_files": [
+   "internal/server/indexed_store_test.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "no existing soft-delete-related test in indexed_store_test.go",
+    "grep_cmd": "grep -n \"SoftDelete\" internal/server/indexed_store_test.go",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "the test file already exists as the natural home for this test",
+    "grep_cmd": "grep -n \"^func Test\" internal/server/indexed_store_test.go",
+    "expect": ">=1 existing hit establishing file conventions to mirror"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "existing indexed_store_test.go test setup helpers (fake/mock searchIndex + store)",
+    "file": "internal/server/indexed_store_test.go",
+    "verify_grep": "grep -n \"^func Test\" internal/server/indexed_store_test.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "must be written to FAIL against the current buggy UpdateBook (proving the bug) and then PASS after L4329's fix \u2014 sequencing matters",
+  "review_critical": true,
+  "goal": "Add TestIndexedStore_SoftDeleteIsUnsearchableWithoutReconcile to internal/server/indexed_store_test.go: index a book, soft-delete it via the indexedStore.UpdateBook path (mirroring internal/merge/service.go's SoftDeleteBook, i.e. set MarkedForDeletion=true and call store.UpdateBook), then assert a title-search probe (via the searchIndex directly, not through reconcileSearchIndexCoverage) returns zero hits \u2014 proving the immediate soft-delete path removes the doc rather than relying on the periodic reconciler to clean it up later.",
+  "background": [
+   "This is deliberately a DIFFERENT test surface than L4192's TestSearchCoverage_StaleDocsAreDeleted, which tests the periodic reconciler's cleanup of ALREADY-stale docs. This test proves the immediate, synchronous-enqueue path (indexedStore.UpdateBook) itself does the right thing at soft-delete time, with no reconcile pass in between \u2014 that's the literal ask: 'assert a title probe returns nothing WITHOUT a boot reconcile.'",
+   "Written correctly, this test FAILS at current HEAD (before L4329's fix) and PASSES after it \u2014 write both together as one change per L4329's steps, not as two separate PRs, since the test has no value without the fix and the fix has no proof without the test."
+  ],
+  "steps": [
+   "In internal/server/indexed_store_test.go, add a test that: (1) creates a book via a test server/indexedStore setup with a real or fake Bleve index, (2) waits for/drains the initial index-create to land (check existing tests in this file for the drain idiom, e.g. drainQueue mentioned in indexed_store.go's enqueueIndex comment), (3) soft-deletes the book by setting MarkedForDeletion=true and calling indexedStore.UpdateBook(id, updatedBook), (4) drains the index queue again, (5) searches the index directly for the book's exact title and asserts 0 hits \u2014 critically, WITHOUT calling reconcileSearchIndexCoverage or reconcileOnce at any point.",
+   "Also add the sibling happy-path guard test named in L4329's anti_over_suppression field: TestIndexedStoreUpdateBook_RestoreStillReindexes \u2014 soft-delete then restore (MarkedForDeletion true\u2192false) via UpdateBook, drain, and assert the title search DOES find it again (1 hit), proving the fix didn't break the restore path search_coverage.go documents as correct."
+  ],
+  "tests": [
+   "This item IS the test \u2014 see steps."
+  ],
+  "acceptance": [
+   "Before L4329's fix: this new test FAILS (search still finds the soft-deleted book).",
+   "After L4329's fix: go test ./internal/server/... -run 'TestIndexedStore_SoftDeleteIsUnsearchableWithoutReconcile|TestIndexedStoreUpdateBook_RestoreStillReindexes' passes both."
+  ],
+  "edge_cases": [
+   "The test must use the queue-drain mechanism already established in this test file (not a raw time.Sleep) to avoid flakiness \u2014 check how existing tests in indexed_store_test.go synchronize with the async index worker."
+  ],
+  "anti_over_suppression": "TestIndexedStoreUpdateBook_RestoreStillReindexes (must be added alongside the delete-path test, per L4329's own anti_over_suppression note, so the fix isn't validated one-sided)",
+  "depends_on_lines": [
+   4329
+  ],
+  "gate": "make ci",
+  "notes": "Implement this together with L4329 (todo_line 4329) as one PR \u2014 the test has no standalone value against the current buggy code beyond proving the bug exists, and the coordinator should not schedule these as two independently-mergeable tasks.",
+  "review_notes": [
+   "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,"
+  ]
+ }
+]

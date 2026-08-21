@@ -1,0 +1,1390 @@
+[
+ {
+  "todo_line": 5449,
+  "src_id": null,
+  "title": "Run the missing-file-audit classify pass in prod and record numbers",
+  "verdict": "stale_done",
+  "verdict_evidence": "The classify pass has already run against the full prod population and the numbers are recorded: internal/plugins/maintenance/missing_file_repoint.go's package doc says 'Measured on 2026-08-20: 71,954 of 532,296 book_file rows... classified 35,296 of those rows (49.1%) recoverable' (`grep -n \"Measured on 2026-08-20\" internal/plugins/maintenance/missing_file_repoint.go` -> 1 hit ~L17), and the classify param itself lives at `grep -n \"Classify bool\" internal/plugins/maintenance/missing_file_audit.go` -> 1 hit ~L111.",
+  "domain": "internal/plugins/maintenance",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "missing_file_repoint.go records the classify pass's population numbers from a 2026-08-20 prod run",
+    "grep_cmd": "grep -n \"Measured on 2026-08-20\" internal/plugins/maintenance/missing_file_repoint.go",
+    "expect": "1 hit ~L17"
+   },
+   {
+    "claim": "missing_file_audit.go exposes a Classify bool param on the op",
+    "grep_cmd": "grep -n \"Classify bool\" internal/plugins/maintenance/missing_file_audit.go",
+    "expect": "1 hit ~L111"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification-only, no code to write.",
+  "review_critical": false,
+  "goal": "No code deliverable \u2014 the classify pass this item asks the owner to run in prod has already been run and its results are captured in the missing_file_repoint.go header comment (which is what downstream feat/missing-file-repoint consumed to size its rewrite population).",
+  "background": [
+   "71,954 total missing rows matches the same total-missing figure in docs/audits/2026-08-17-missing-file-audit-full-population.md line 27, confirming this is the full-population run, not a sample."
+  ],
+  "steps": [
+   "No action required. If the owner wants a formal write-up, copy the numbers from internal/plugins/maintenance/missing_file_repoint.go's package doc comment (lines ~17-19) into a docs/audits/ note."
+  ],
+  "tests": [],
+  "acceptance": [
+   "grep -n \"35,296\" internal/plugins/maintenance/missing_file_repoint.go returns 1 hit"
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "TODO.md box should be checked off; the underlying work is done, just not written back to TODO.md."
+ },
+ {
+  "todo_line": 5454,
+  "src_id": null,
+  "title": "Build the missing-file REPOINT repair (never delete, apply=false default)",
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/plugins/maintenance/missing_file_repoint.go (last-edited 2026-08-20) fully implements the op: `grep -n \"ID:          \\\"maintenance.missing-file-repoint\\\"\" internal/plugins/maintenance/missing_file_repoint.go` -> 1 hit ~L132, and `grep -n \"Apply must be explicitly true to write. Default false\" internal/plugins/maintenance/missing_file_repoint.go` -> 1 hit ~L51. Shipped via merged PR #2625 'feat(maintenance): add missing-file-repoint to restore renamed files' and PR #2626 (TSV report), confirmed via `gh pr list --state all --search \"missing-file-repoint\"`.",
+  "domain": "internal/plugins/maintenance",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the repoint op is registered under maintenance.missing-file-repoint",
+    "grep_cmd": "grep -n \"ID:          \\\"maintenance.missing-file-repoint\\\"\" internal/plugins/maintenance/missing_file_repoint.go",
+    "expect": "1 hit ~L132"
+   },
+   {
+    "claim": "Apply defaults false (report-only) matching decision 12",
+    "grep_cmd": "grep -n \"Apply must be explicitly true to write\" internal/plugins/maintenance/missing_file_repoint.go",
+    "expect": "1 hit ~L51"
+   },
+   {
+    "claim": "the op never deletes, only rewrites FilePath",
+    "grep_cmd": "grep -n \"THIS OP NEVER DELETES A ROW\" internal/plugins/maintenance/missing_file_repoint.go",
+    "expect": "1 hit ~L9"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification-only.",
+  "review_critical": true,
+  "goal": "No code deliverable. The exact op decision-12 asked for (REPOINT-only, apply=false default, never delete) is built and merged.",
+  "background": [
+   "Old tombstone comment in internal/plugins/maintenance/missing_file_repair.go:315 ('If a repair is ever built, it must REPOINT...') pointed at this future op; missing_file_repoint.go is that op.",
+   "PR #2625 and a follow-up #2626 ('dump every repoint decision to TSV, stratify the sample') are both MERGED per `gh pr list --state all --search missing-file-repoint`."
+  ],
+  "steps": [
+   "No action required. TODO.md box for this item should be checked off."
+  ],
+  "tests": [
+   "internal/plugins/maintenance/missing_file_repoint_test.go already exists per package convention; confirm with `ls internal/plugins/maintenance/missing_file_repoint_test.go` if a fresh audit is wanted."
+  ],
+  "acceptance": [
+   "grep -n 'func (p \\*Plugin) missingFileRepointDef' internal/plugins/maintenance/missing_file_repoint.go returns 1 hit"
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "This is the single biggest finding in this scope: the item scope file's own decision 12 assumed this was still to be built, but it already merged 2026-08-20."
+ },
+ {
+  "todo_line": 5458,
+  "src_id": null,
+  "title": "Decide what happens to the 16,265 fully-broken books",
+  "verdict": "parked",
+  "verdict_evidence": "Owner decision 12: 'The 16,265 fully-broken books stay untouched (\"parked\")'. Confirmed the count still matches current code: `grep -n \"16,265 books with zero resolvable files\" internal/plugins/maintenance/missing_file_repoint.go` -> 1 hit ~L18.",
+  "domain": "internal/plugins/maintenance",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "16,265 fully-broken books figure is current",
+    "grep_cmd": "grep -n \"16,265 books with zero resolvable files\" internal/plugins/maintenance/missing_file_repoint.go",
+    "expect": "1 hit ~L18"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "n/a \u2014 parked.",
+  "review_critical": true,
+  "goal": "n/a \u2014 excluded by owner decision 12.",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "Do not build anything for this line."
+ },
+ {
+  "todo_line": 5461,
+  "src_id": null,
+  "title": "Missing-file audit Phase 1a (census identity signals) \u2014 verify it landed",
+  "verdict": "stale_done",
+  "verdict_evidence": "The exact branch named in the item, feat/persist-missing-file-verdict, shipped as PR #2539 'feat(maintenance): census identity signals on missing vs present book_file rows', MERGED 2026-08-18, confirmed via `gh pr list --state all --search \"census identity signals\"`. The named commit hash 9b43f598 is a pre-rebase duplicate of commit b14ae3c8 (same message, same author/date) which IS an ancestor of HEAD: `git merge-base --is-ancestor b14ae3c8 HEAD && echo YES` -> YES.",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "PR #2539 (feat/persist-missing-file-verdict) is merged",
+    "grep_cmd": "gh pr list --state all --search \"census identity signals\" --limit 5",
+    "expect": "row: 2539  ...  feat/persist-missing-file-verdict  MERGED"
+   },
+   {
+    "claim": "the equivalent commit is an ancestor of current HEAD",
+    "grep_cmd": "git merge-base --is-ancestor b14ae3c8 HEAD && echo YES",
+    "expect": "YES"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification-only.",
+  "review_critical": false,
+  "goal": "No code deliverable \u2014 the 'committed but unmerged, worst of both states' problem this item warned about has been resolved by merging PR #2539. TODO.md box should be checked off.",
+  "background": [
+   "The item's stated worktree .worktrees/auditpersist no longer exists (`ls .worktrees` shows only .worktrees/todo-master-plan)."
+  ],
+  "steps": [
+   "No action required."
+  ],
+  "tests": [],
+  "acceptance": [
+   "gh pr view 2539 --json state -q .state returns MERGED"
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "Mutation-testing status of the merged PR was not independently re-verified in this pass (out of scope for a read-only scout); if that specific concern still matters, a follow-up mutation-test run on internal/plugins/maintenance/missing_file_audit.go's classify path would close it, but the 'no PR' problem itself is resolved."
+ },
+ {
+  "todo_line": 5466,
+  "src_id": null,
+  "title": "database.Store grouped-not-unreachable caution note \u2014 status check",
+  "verdict": "not_a_task",
+  "verdict_evidence": "This TODO entry is a caution/reminder ('Do not read the 0 as that job being done'), not a work request, and its claim is still accurate at HEAD: `.interface-width-baseline` is 0 (`cat .interface-width-baseline | tail -1` -> '0') and the plan doc it points at still exists and still describes Store as un-split: `grep -n \"398 methods\" docs/plans/2026-08-19-split-the-pebblestore-surface.md` -> 3 hits.",
+  "domain": "docs",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "interface-width baseline is currently 0",
+    "grep_cmd": "tail -1 .interface-width-baseline",
+    "expect": "0"
+   },
+   {
+    "claim": "the split-Store plan doc still exists and still describes 398 methods as unresolved",
+    "grep_cmd": "grep -n \"398 methods\" docs/plans/2026-08-19-split-the-pebblestore-surface.md",
+    "expect": "3 hits"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "n/a.",
+  "review_critical": false,
+  "goal": "n/a \u2014 this is prose warning a future reader not to misread the 0 baseline, already correctly documented in both .interface-width-baseline's own history and docs/plans/2026-08-19-split-the-pebblestore-surface.md. No independent action is requested by this TODO line.",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Per project memory this whole lane is tracked as 'CLOSED' (project_database_consumer_narrowing_sweep.md) \u2014 consistent with this being a caution note rather than new work."
+ },
+ {
+  "todo_line": 5494,
+  "part": 1,
+  "src_id": null,
+  "title": "ABS LibrarySeries: books/totalDuration hardcoded empty \u2014 already fixed",
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/server/handlers/abs/browse.go:613 now sets `\"books\": items` (the real hydrated list) and :617 `\"totalDuration\": total`, with a comment confirming the fix: `grep -n \"books AND totalDuration WERE HARDCODED EMPTY\" internal/server/handlers/abs/browse.go` -> 1 hit ~L509. This matches the TODO item's own '2026-08-14 STATUS: \u00a71 (series) \u2014 the list now embeds books' update.",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "browse.go's LibrarySeries DTO no longer hardcodes books empty",
+    "grep_cmd": "grep -n '\"books\":            items' internal/server/handlers/abs/browse.go",
+    "expect": "1 hit ~L613"
+   },
+   {
+    "claim": "a fix comment documents the prior bug and the 2026-08-13 fix",
+    "grep_cmd": "grep -n \"books AND totalDuration WERE HARDCODED EMPTY\" internal/server/handlers/abs/browse.go",
+    "expect": "1 hit ~L509"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification-only.",
+  "review_critical": false,
+  "goal": "No deliverable \u2014 already shipped.",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "See part 2 for the one residual gap (silent GetAllSeriesBookCounts error path) that is still open."
+ },
+ {
+  "todo_line": 5494,
+  "part": 2,
+  "src_id": null,
+  "title": "Log a warning when GetAllSeriesBookCounts() itself errors in LibrarySeries",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/server/handlers/abs/browse.go:502-506 still silently swallows the GetAllSeriesBookCounts() error into an empty map with only a code comment, no slog call: `grep -n \"not worth failing the page over; report 0 books\" internal/server/handlers/abs/browse.go` -> 1 hit ~L504, and `grep -n \"slog.Warn\" internal/server/handlers/abs/browse.go` shows no hit within 10 lines of that block (nearest slog.Warn is the unrelated mismatch logger at L725).",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+   "internal/server/handlers/abs/browse.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the GetAllSeriesBookCounts error path has no logging, only a comment",
+    "grep_cmd": "grep -n \"counts, err := h.library.GetAllSeriesBookCounts()\" internal/server/handlers/abs/browse.go",
+    "expect": "1 hit ~L502"
+   },
+   {
+    "claim": "package already imports log/slog for use elsewhere in this file",
+    "grep_cmd": "grep -n \"slog.Warn\" internal/server/handlers/abs/browse.go",
+    "expect": ">=1 hit (L725 etc.)"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "logSeriesBookCountMismatch (existing slog.Warn pattern in same file)",
+    "file": "internal/server/handlers/abs/browse.go",
+    "verify_grep": "grep -n \"func (h \\*Handler) logSeriesBookCountMismatch\" internal/server/handlers/abs/browse.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "One-line addition to an existing, well-understood error branch.",
+  "review_critical": false,
+  "goal": "Add a slog.Warn call at internal/server/handlers/abs/browse.go's GetAllSeriesBookCounts() error branch (~L502-506) so a total failure of the count query is observable, matching the exact ask in the TODO item: 'add a slog.Warn here; a silent zero is how this went unnoticed.'",
+  "background": [
+   "The mismatch-per-series case already logs via logSeriesBookCountMismatch (browse.go:724), but the upstream call failing entirely (counts = map[int]int{}) does not log at all."
+  ],
+  "steps": [
+   "1. Open internal/server/handlers/abs/browse.go and find the block starting `counts, err := h.library.GetAllSeriesBookCounts()` (~L502).",
+   "2. Inside the `if err != nil { ... }` branch, before `counts = map[int]int{}`, add: `slog.Warn(\"abs: series book counts unavailable, reporting 0 for all series\", \"err\", err)`.",
+   "3. Confirm `log/slog` is already imported in this file (it is, used elsewhere in the same file for other slog.Warn calls)."
+  ],
+  "tests": [
+   "Add a table-driven or standalone test in internal/server/handlers/abs/browse_test.go that injects a failing GetAllSeriesBookCounts on a fake library store and asserts (via a captured slog handler or httptest response) that a warning is logged; name it TestLibrarySeries_CountsErrorLogsWarning."
+  ],
+  "acceptance": [
+   "grep -n 'series book counts unavailable' internal/server/handlers/abs/browse.go returns 1 hit",
+   "go test ./internal/server/handlers/abs/... -run TestLibrarySeries passes"
+  ],
+  "edge_cases": [
+   "counts == nil vs counts == map[int]int{} \u2014 both should be treated as 'query failed', log once per request, not once per series."
+  ],
+  "anti_over_suppression": "TestLibrarySeries_CountsErrorLogsWarning must assert the log line fires on error and does NOT fire on the happy path (counts populated normally) to avoid a permanent noisy warning.",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Small, isolated, low risk \u2014 safe for a haiku-tier agent."
+ },
+ {
+  "todo_line": 5494,
+  "part": 3,
+  "src_id": null,
+  "title": "ABS collections: stub \u2014 already replaced with real CRUD",
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/server/handlers/abs/handler.go no longer routes collections to h.EmptyPage; it now wires a full CollectionStore-backed CRUD surface: `grep -n \"collections\\\", auth, h.LibraryCollections\" internal/server/handlers/abs/handler.go` -> 1 hit ~L466, and `grep -n \"type CollectionStore interface\" internal/server/handlers/abs/collections.go` -> 1 hit ~L69, with handlers CreateCollection/UpdateCollection/DeleteCollection/AddBookToCollection/RemoveBookFromCollection all present (`grep -n \"func (h \\*Handler)\" internal/server/handlers/abs/collections.go` shows LibraryCollections, CollectionDetail, CreateCollection, etc).",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the collections route no longer points at EmptyPage",
+    "grep_cmd": "grep -n 'collections\", auth, h.LibraryCollections' internal/server/handlers/abs/handler.go",
+    "expect": "1 hit ~L466"
+   },
+   {
+    "claim": "a real CollectionStore and CRUD handlers exist in internal/server/handlers/abs/collections.go",
+    "grep_cmd": "grep -n 'type CollectionStore interface' internal/server/handlers/abs/collections.go",
+    "expect": "1 hit ~L69"
+   },
+   {
+    "claim": "collections have their own test file",
+    "grep_cmd": "ls internal/server/handlers/abs/collections_test.go",
+    "expect": "file exists"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification-only.",
+  "review_critical": false,
+  "goal": "No deliverable \u2014 the 'collections are a stub' problem the TODO item describes (h.EmptyPage) is resolved; a persisted, user-curated collection with membership CRUD now exists exactly as the owner wanted.",
+  "background": [
+   "The TODO item's own 2026-08-14 STATUS note already flagged \u00a71 (series) and \u00a73 (playlists) fixed and only \u00a72 (collections) as 'Remaining'; that remaining gap is now also closed."
+  ],
+  "steps": [],
+  "tests": [],
+  "acceptance": [
+   "curl-free check: grep -c 'func (h \\*Handler)' internal/server/handlers/abs/collections.go returns >=6"
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "docs/reference/abs-implementation-status.md (cited by the TODO item as the source of truth marking collections a stub) is now STALE and should be updated to reflect this \u2014 flag to whoever owns docs sweeps, not itself an actionable code task in this scope."
+ },
+ {
+  "todo_line": 5494,
+  "part": 4,
+  "src_id": null,
+  "title": "ABS playlists: confirmed shipped, no stub remains",
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/server/handlers/abs/handler.go wires a real PlaylistStore route, not EmptyPage: `grep -n \"api/playlists/:id\\\", auth, h.PlaylistDetail\" internal/server/handlers/abs/handler.go` -> 1 hit ~L488. Matches the TODO item's own note '\u00a73 (playlists) \u2014 SHIPPED in #2366'.",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "playlist routes are wired to real handlers, not EmptyPage",
+    "grep_cmd": "grep -n 'api/playlists/:id\", auth, h.PlaylistDetail' internal/server/handlers/abs/handler.go",
+    "expect": "1 hit ~L488"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification-only.",
+  "review_critical": false,
+  "goal": "No deliverable \u2014 already shipped, per the TODO item's own admission.",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "The broader playlist import/.m3u work mentioned in the same paragraph (todo.d/20260805_214200_playlists_full_support.md) is a separate, already-folded TODO item outside this line."
+ },
+ {
+  "todo_line": 5650,
+  "src_id": null,
+  "title": "book-detail.spec.ts flaky-once auth-guard failure \u2014 deliberately not fixed",
+  "verdict": "not_a_task",
+  "verdict_evidence": "The item's own text explicitly states 'This is deliberately NOT fixed' and 'rare enough that it should not block calling the suite green, and rare enough that hunting it by repeated full-suite runs is poor value.' Its only prescribed action is opportunistic ('the next time CI or a local full run goes red on this test, read test-results/*book-detail*/error-context.md') \u2014 there is no resolvable anchor or deliverable to brief today; it is a standing operational note for whenever the failure next reproduces.",
+  "domain": "web (frontend)",
+  "exact_files": [],
+  "verified_anchors": [],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "n/a.",
+  "review_critical": false,
+  "goal": "n/a \u2014 no code deliverable; this is a monitoring instruction to follow only when the test next fails.",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "If this recurs, DO NOT add a retry/tolerance/test.fixme per the item's own explicit instruction \u2014 capture test-results/*book-detail*/error-context.md before re-running anything."
+ },
+ {
+  "todo_line": 5722,
+  "src_id": null,
+  "title": "Give Change Log row 'Compare snapshot' keyboard/a11y affordance",
+  "verdict": "actionable",
+  "verdict_evidence": "Confirmed still true at HEAD: the row's Box (web/src/components/ChangeLog.tsx:139-166) has an onClick but no role, tabIndex, or aria-label: `grep -n 'onClick={() => {' web/src/components/ChangeLog.tsx` -> 1 hit ~L163, and `grep -n 'role=\"button\"' web/src/components/ChangeLog.tsx` -> 0 hits.",
+  "domain": "web (frontend)",
+  "exact_files": [
+   "web/src/components/ChangeLog.tsx"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the row Box has onClick with no role/tabIndex/aria-label",
+    "grep_cmd": "grep -n 'onClick={() => {' web/src/components/ChangeLog.tsx",
+    "expect": "1 hit ~L163"
+   },
+   {
+    "claim": "no role=button exists anywhere in the file today",
+    "grep_cmd": "grep -c 'role=\"button\"' web/src/components/ChangeLog.tsx",
+    "expect": "0 hits \u2014 role=\"button\" does not appear anywhere in the file today (grep -c prints \"0\" and exits 1 on no match)"
+   },
+   {
+    "claim": "onCompareSnapshot prop signature",
+    "grep_cmd": "grep -n 'onCompareSnapshot?:' web/src/components/ChangeLog.tsx",
+    "expect": "1 hit ~L17"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Needs careful keyboard-event handling that doesn't double-fire with the nested Revert button's own stopPropagation.",
+  "review_critical": false,
+  "goal": "Following the item's own second (conservative, no product decision needed) option: keep the row click behavior but make it a real interactive element \u2014 add role=\"button\", tabIndex={0}, an aria-label, and an onKeyDown handler for Enter/Space \u2014 on entries where onCompareSnapshot applies (type === 'metadata_apply' || 'tag_write'). Non-actionable row types keep no role/tabIndex.",
+  "background": [
+   "The Revert <Button> inside the same row already calls e.stopPropagation() on its own click handler (`grep -n 'stopPropagation()' web/src/components/ChangeLog.tsx` -> 1 hit ~L222), so a new onKeyDown on the row must not fire when focus/activation originates from that button."
+  ],
+  "steps": [
+   "1. In web/src/components/ChangeLog.tsx, in the entries.map(...) block (~L139), compute `const clickable = entry.type === 'metadata_apply' || entry.type === 'tag_write';` once per entry (this condition is currently duplicated inline for cursor and onClick).",
+   "2. On the row <Box> (~L139-166), add: `role={clickable ? 'button' : undefined}`, `tabIndex={clickable ? 0 : undefined}`, `aria-label={clickable ? 'Compare snapshot' : undefined}`.",
+   "3. Add `onKeyDown={(e) => { if (clickable && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onCompareSnapshot?.(entry.timestamp); } }}` on the same Box.",
+   "4. Verify the Revert Button's existing stopPropagation (~L222) still stops the click bubbling to the row's onClick; it does not need changes since key events on the nested button do not re-target the row's onKeyDown."
+  ],
+  "tests": [
+   "Add a Vitest test in web/src/components/ChangeLog.test.tsx (create if absent) asserting: (a) a tag_write row has role=button and responds to Enter/Space by calling onCompareSnapshot with the entry timestamp; (b) a non-actionable entry type has no role/tabIndex; (c) pressing Enter on the nested Revert button does not also trigger onCompareSnapshot (anti-double-fire)."
+  ],
+  "acceptance": [
+   "npm --prefix web run lint passes",
+   "npm --prefix web test -- ChangeLog passes",
+   "web/tests/e2e/files-history.spec.ts's existing snapshot-comparison-banner assertion (L334) still passes unmodified"
+  ],
+  "edge_cases": [
+   "Row with onCompareSnapshot undefined (prop optional) \u2014 clickable should still gate on entry.type only per current cursor logic, so role stays present but the callback call is a no-op via `?.`."
+  ],
+  "anti_over_suppression": "test: 'pressing Enter on the Revert button does not double-fire onCompareSnapshot'",
+  "depends_on_lines": [],
+  "gate": "npm --prefix web run lint && npm --prefix web test (web)",
+  "notes": "The item leaves 'restore a visible link/button' as an alternative; this brief picks the row-becomes-keyboard-accessible option since it needs no additional product decision and preserves current visual design. If the owner prefers a visible link/button instead, that changes step 2-3 into adding a small IconButton/Link inside the row (also fine, similar test shape)."
+ },
+ {
+  "todo_line": 5736,
+  "src_id": null,
+  "title": "Remove dead expanded state in TagComparison",
+  "verdict": "actionable",
+  "verdict_evidence": "Confirmed at HEAD: `grep -n \"useState(true)\" web/src/components/TagComparison.tsx` -> 1 hit ~L75 with comment 'Always show table when tray is open'; setExpanded is only ever called with `true` (`grep -n 'setExpanded(' web/src/components/TagComparison.tsx` -> 2 hits, both `setExpanded(true)`), never false, so `<Collapse in={expanded}>` at L276 is always open. The e2e testid the item mentions is gone: `grep -rn \"tag-comparison-toggle\" web/` -> 0 hits, confirming no test depends on a toggle existing.",
+  "domain": "web (frontend)",
+  "exact_files": [
+   "web/src/components/TagComparison.tsx"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "expanded is initialized true and never set false",
+    "grep_cmd": "grep -n 'setExpanded(' web/src/components/TagComparison.tsx",
+    "expect": "2 hits, both setExpanded(true)"
+   },
+   {
+    "claim": "Collapse wraps the table using expanded",
+    "grep_cmd": "grep -n '<Collapse in={expanded}>' web/src/components/TagComparison.tsx",
+    "expect": "1 hit ~L276"
+   },
+   {
+    "claim": "no e2e test still depends on a toggle",
+    "grep_cmd": "grep -rn 'tag-comparison-toggle' web/",
+    "expect": "0 hits"
+   }
+  ],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Mechanical dead-state removal with no remaining consumers.",
+  "review_critical": false,
+  "goal": "Delete the always-true expanded state and its Collapse wrapper in web/src/components/TagComparison.tsx since no toggle UI or test depends on it, per the item's first option ('drop the state and the Collapse'). The alternative (wire up a real toggle) is not chosen because the e2e testid that used to assert it was intentionally deleted 2026-08-09, indicating the toggle was deliberately dropped rather than merely lost.",
+  "background": [
+   "setExpanded is called in one other place (~L109, inside the snapshot-select useEffect) purely to force it back to true \u2014 dead once the state itself is deleted."
+  ],
+  "steps": [
+   "1. In web/src/components/TagComparison.tsx remove the `const [expanded, setExpanded] = useState(true);` line (~L75).",
+   "2. Remove the `setExpanded(true);` call inside the snapshot-select useEffect (~L109) \u2014 the surrounding effect body (`setCompareId('')`) stays.",
+   "3. Replace `<Collapse in={expanded}>` (~L276) and its matching closing `</Collapse>` (~L533) with just the inner content (remove the Collapse wrapper); remove the now-unused `Collapse` import from '@mui/material' (~L10) if nothing else in the file uses it \u2014 check with `grep -n Collapse web/src/components/TagComparison.tsx` after the edit."
+  ],
+  "tests": [
+   "Update/add a Vitest test in web/src/components/TagComparison.test.tsx confirming the metadata table renders immediately without needing any expand interaction (i.e. it is present in the DOM on mount, no data-testid=\"tag-comparison-toggle\" is queried)."
+  ],
+  "acceptance": [
+   "npm --prefix web run lint && npm --prefix web run build succeed (no unused-import errors)",
+   "npm --prefix web test -- TagComparison passes"
+  ],
+  "edge_cases": [
+   "Confirm no other component imports TagComparison expecting an `expanded` controlled prop (grep -rn 'expanded=' for TagComparison usages) \u2014 none found; it is fully internal state."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "npm --prefix web run lint && npm --prefix web test (web)",
+  "notes": "Low risk, self-contained single-file cleanup.",
+  "review_notes": []
+ },
+ {
+  "todo_line": 5742,
+  "src_id": null,
+  "title": "Delete the unreachable Bulk Fetch Metadata dialog and its handler",
+  "verdict": "actionable",
+  "verdict_evidence": "Confirmed dead: `grep -rn 'setBulkFetchDialogOpen(true)' web/src` -> 0 hits. The dialog block is at web/src/components/library/LibraryDialogs.tsx:956-1000 (`grep -n '<Dialog open={bulkFetchDialogOpen}' web/src/components/library/LibraryDialogs.tsx` -> 1 hit ~L956); handleBulkFetchMetadata in Library.tsx (`grep -n 'const handleBulkFetchMetadata = async' web/src/pages/Library.tsx` -> 1 hit ~L1445) confirms it calls `api.startBulkMetadataFetch(selection)` directly (the async replacement flow) and never opens the dialog.",
+  "domain": "web (frontend)",
+  "exact_files": [
+   "web/package-lock.json",
+   "web/src/components/library/LibraryDialogs.tsx",
+   "web/src/pages/Library.tsx",
+   "web/tsconfig.json",
+   "web/tsconfig.node.json"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the dialog is never opened anywhere in web/src",
+    "grep_cmd": "grep -rn 'setBulkFetchDialogOpen(true)' web/src",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "state is only ever initialized false and reset false",
+    "grep_cmd": "grep -n 'bulkFetchDialogOpen' web/src/pages/Library.tsx",
+    "expect": ">=2 hits, all false-setting or declaration"
+   },
+   {
+    "claim": "handleBulkFetchMetadata uses the new async flow, bypassing the dialog",
+    "grep_cmd": "grep -n 'api.startBulkMetadataFetch' web/src/pages/Library.tsx",
+    "expect": "1 hit ~L1454"
+   }
+  ],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Threading removal through a shared props interface across two files without breaking other props on the same interface needs care.",
+  "review_critical": false,
+  "goal": "Remove the dead Bulk Fetch Metadata dialog (web/src/components/library/LibraryDialogs.tsx:956-1000), its props (bulkFetchDialogOpen, handleCancelBulkFetch, bulkFetchProgress, handleBulkFetchMetadata, and any bulkFetchInProgress/hasSelection props solely feeding it) from LibraryDialogsProps (~L174-178), and the corresponding dead state/handlers in web/src/pages/Library.tsx (bulkFetchDialogOpen at ~L391, bulkFetchProgress at ~L394, handleCancelBulkFetch at ~L1468, and the prop-passing block at ~L2306-2311) \u2014 but do NOT remove handleBulkFetchMetadata itself or the working async fetch-then-toast flow, which is the surviving replacement.",
+  "background": [
+   "The 'Fetch Selected' + 'Review' async flow is the surviving replacement per the item text and confirmed live in handleBulkFetchMetadata (Library.tsx ~L1445-1464).",
+   "Five e2e tests covering the old dialog were already deleted 2026-08-09 per the item; no test coverage will be lost by this removal."
+  ],
+  "steps": [
+   "1. In web/src/components/library/LibraryDialogs.tsx, delete the `<Dialog open={bulkFetchDialogOpen} ...>...</Dialog>` block (~L956-1000).",
+   "2. Remove `bulkFetchDialogOpen`, `handleCancelBulkFetch`, `bulkFetchProgress`, `handleBulkFetchMetadata` (and any bulkFetchInProgress prop feeding only this dialog) from the LibraryDialogsProps interface (~L174-178) and from the component's destructured props (~L320-324).",
+   "3. Remove the `getResultLabel` helper if it is used only by this dialog (`grep -n getResultLabel web/src/components/library/LibraryDialogs.tsx` to confirm sole usage before deleting).",
+   "4. In web/src/pages/Library.tsx, remove `bulkFetchDialogOpen`/`setBulkFetchDialogOpen` state (~L391), `bulkFetchProgress`/`setBulkFetchProgress` state (~L394), `handleCancelBulkFetch` (~L1468-1473), `bulkFetchCancelRef` if it is unused elsewhere, and the prop-passing lines to LibraryDialogs (~L2306-2311) \u2014 but KEEP `handleBulkFetchMetadata` (~L1445) since it is still called from the working 'Fetch Selected' button.",
+   "5. Grep for `bulkFetchInProgress` and `BulkActionProgress` type usage after the edit to confirm nothing else references the removed state; delete the BulkActionProgress import/type if it becomes unused."
+  ],
+  "tests": [
+   "Run `npm --prefix web run build` (tsc noUnusedLocals-style errors will surface any leftover references) and `npm --prefix web test -- Library` to confirm no existing test asserted the dialog's presence (if one does, it is itself dead and should be deleted alongside)."
+  ],
+  "acceptance": [
+   "grep -rn 'bulkFetchDialogOpen' web/src returns 0 hits",
+   "npm --prefix web run build succeeds",
+   "npm --prefix web run lint passes"
+  ],
+  "edge_cases": [
+   "Confirm `handleBulkFetchMetadata`'s 'Fetch Selected' button caller (search `onClick={handleBulkFetchMetadata}` or similar in Library.tsx) is untouched \u2014 this task removes only the unreachable dialog, not the working button."
+  ],
+  "anti_over_suppression": "N/A \u2014 this is a removal task; no filter/guard is being added.",
+  "depends_on_lines": [],
+  "gate": "npm --prefix web run lint && npm --prefix web test (web)",
+  "notes": "Split from a design/product decision (none needed \u2014 the item states this cleanup is 'a separate change... deliberately not bundled with' the e2e repair, i.e. already cleared).",
+  "review_notes": [
+   "[simplicity-scope.json] TASK-102 is 'TypeScript 6.0.3 \u2192 7.0.2 migration', tier Opus / effort L, with exact_files = ['web/package.json'] \u2014 a single dependency-version string. A TS major bump changes compiler defaults and will touch web/tsconfig.json (and web/tsconfig.node.json) plus every source file that trips a new error;"
+  ]
+ },
+ {
+  "todo_line": 5758,
+  "src_id": null,
+  "title": "Audit remaining setupMockApi startsWith() catch-alls for shadowed specific branches",
+  "verdict": "actionable",
+  "verdict_evidence": "The three named historical instances (/audiobooks/batch, /audiobooks/<id>/files, /authors*) are already correctly ordered or resolved: `grep -n \"audiobooks/batch\" web/tests/e2e/utils/test-helpers.ts` -> exact-match branch at L1626 sits above the prefix POST catch-all at L1636 with an explanatory comment at L1623; `grep -n \"startsWith('/api/v1/authors\" web/tests/e2e/utils/test-helpers.ts` -> 0 hits (no more authors prefix catch-all). But 10 startsWith() catch-alls remain unaudited as a class: `grep -c \"\\.startsWith(\" web/tests/e2e/utils/test-helpers.ts` -> 10.",
+  "domain": "web (frontend)",
+  "exact_files": [
+   "internal/plugins/maintenance/plugin.go",
+   "web/tests/e2e/utils/test-helpers.ts"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the batch hazard is already fixed with an explanatory comment",
+    "grep_cmd": "grep -n 'startsWith' \\''(\\'\\''/api/v1/audiobooks/\\'\\'')' \\'\\''and .audiobooks/batch. below below above' web/tests/e2e/utils/test-helpers.ts || grep -n audiobooks/batch web/tests/e2e/utils/test-helpers.ts",
+    "expect": "1 hit ~L1626, preceded by comment ~L1623"
+   },
+   {
+    "claim": "10 startsWith() prefix catch-alls remain in the dispatcher",
+    "grep_cmd": "grep -c '\\.startsWith(' web/tests/e2e/utils/test-helpers.ts",
+    "expect": "10"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Read-and-verify ordering audit across one file, no new logic to design.",
+  "review_critical": false,
+  "goal": "For each of the 10 remaining `pathname.startsWith(...)` branches in web/tests/e2e/utils/test-helpers.ts's setupMockApi dispatcher, confirm no more-specific `pathname === '...'` branch for a path under that prefix sits below it (which would make the specific branch unreachable and silently fall through to the generic one). Fix ordering for any violation found by moving the specific check above its prefix catch-all, following the existing pattern/comment at ~L1623-1626.",
+  "background": [
+   "Current startsWith() sites (grep -n '\\.startsWith(' web/tests/e2e/utils/test-helpers.ts): L762 /api/v1/backup/, L1571 /api/v1/blocked-hashes/, L1603 /api/v1/audiobooks/ (PUT), L1618 /api/v1/audiobooks/ (DELETE), L1636 /api/v1/audiobooks/ (POST), L1646 /api/v1/metadata/, L1683 /api/v1/ai/, L1715 /api/v1/itunes/import-status/, L1745 /api/v1/version-groups/, L1750 /api/v1/works."
+  ],
+  "steps": [
+   "1. For each startsWith() line listed above, search the file for any `pathname === '<prefix>...'` (exact-match) branch and note its line number.",
+   "2. If an exact-match branch for a path under that prefix exists BELOW the startsWith() branch with the same HTTP method, move the exact-match branch to immediately above its prefix catch-all (mirroring the existing /audiobooks/batch fix and its explanatory comment).",
+   "3. If none are found shadowed, no code change is needed for that prefix \u2014 just note it as audited."
+  ],
+  "tests": [
+   "No new automated test is strictly required for a pure ordering audit with no findings; if any shadowing IS found and fixed, add/adjust an e2e assertion in the spec exercising that specific endpoint to confirm it now gets its distinct mock response rather than the generic one."
+  ],
+  "acceptance": [
+   "Manual audit table (prefix -> shadowed exact match found: yes/no) attached to the PR description; `npm --prefix web run test:e2e` (or the specific affected spec) still passes."
+  ],
+  "edge_cases": [
+   "A specific branch for a DIFFERENT HTTP method than its prefix catch-all is not shadowed (method is part of the match) \u2014 only same-method ordering matters."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "npm --prefix web run lint && npm --prefix web test (web)",
+  "notes": "This is a confirmatory audit \u2014 the two most likely-to-bite cases in the original report are already fixed; expect this to mostly find nothing further, but the task should still be done to close the item honestly rather than assume.",
+  "review_notes": [
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+  ]
+ },
+ {
+  "todo_line": 5904,
+  "src_id": null,
+  "title": "Library sort UI (Sort by / Order) \u2014 already restored",
+  "verdict": "stale_done",
+  "verdict_evidence": "Confirmed at HEAD: SearchBar now has onSortChange (`grep -n 'onSortChange?:' web/src/components/audiobooks/SearchBar.tsx` -> 1 hit ~L162) and renders the Sort by / Order UI (`grep -n \"onSortChange && sortOptions\" web/src/components/audiobooks/SearchBar.tsx` -> 1 hit ~L302). It is wired end-to-end: FilterPanel forwards onSortChange (`grep -n 'onSortChange={onSortChange}' web/src/components/FilterPanel.tsx` -> 1 hit ~L60), and LibraryBookGrid.tsx passes a real handler, not the underscore-prefixed dead one the item describes: `grep -n 'onSortChange={handleColumnSortChange}' web/src/components/library/LibraryBookGrid.tsx` -> 2 hits (~L287, ~L440), and `grep -n '_handleSortChange' web/src/components/library/LibraryBookGrid.tsx` -> 0 hits.",
+  "domain": "web (frontend)",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "SearchBar has an onSortChange prop and renders sort controls when provided",
+    "grep_cmd": "grep -n 'onSortChange && sortOptions' web/src/components/audiobooks/SearchBar.tsx",
+    "expect": "1 hit ~L302"
+   },
+   {
+    "claim": "no underscore-prefixed dead handler remains",
+    "grep_cmd": "grep -n '_handleSortChange' web/src/components/library/LibraryBookGrid.tsx",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "the live handler is wired through FilterPanel into SearchBar",
+    "grep_cmd": "grep -n 'handleColumnSortChange' web/src/components/library/LibraryBookGrid.tsx",
+    "expect": ">=3 hits (declared and passed twice)"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification-only.",
+  "review_critical": false,
+  "goal": "No deliverable \u2014 the sort control regression the item describes has been fixed since it was written; the FilterPanel/LibraryBookGrid combination now renders and wires a working Sort by / Order UI.",
+  "background": [
+   "SearchBar.test.tsx:43's 'does not render sort controls when onSortChange is absent' assertion is no longer vacuous, since production code now supplies onSortChange in the real render path."
+  ],
+  "steps": [],
+  "tests": [],
+  "acceptance": [
+   "npm --prefix web test -- SearchBar passes"
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "The e2e tests the item says were 'repointed at the URL' (library-browser.spec.ts) may now be redundant with a UI-driven test since the control exists again \u2014 worth a follow-up (not in this scope) to add a UI-interaction sort test rather than only URL-based ones, but that is optional polish, not a regression fix."
+ },
+ {
+  "todo_line": 5972,
+  "src_id": null,
+  "title": "Per-field 'Use File'/'Use Fetched' one-click apply removed from Book Detail \u2014 confirm intentional",
+  "verdict": "needs_design",
+  "verdict_evidence": "Confirmed still true at HEAD: `grep -rln 'Use File\\|Use Fetched' web/src` -> 0 hits; BookDetail.tsx still renders exactly two tabs (`grep -n '<Tab label=' web/src/pages/BookDetail.tsx` -> 2 hits, 'Info' and 'Files & History' only). The item itself explicitly frames this as a product question ('confirm that was intended'), which is not covered by any of the 14 owner decisions supplied for this scope.",
+  "domain": "web (frontend)",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "no per-field Use File/Use Fetched buttons remain anywhere",
+    "grep_cmd": "grep -rln 'Use File\\|Use Fetched' web/src",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "BookDetail.tsx renders only Info and Files & History tabs",
+    "grep_cmd": "grep -n '<Tab label=' web/src/pages/BookDetail.tsx",
+    "expect": "2 hits ~L1109-1110"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "n/a until scoped.",
+  "review_critical": false,
+  "goal": "Cannot be briefed without an owner decision: was removing per-field one-click apply (in favor of opening MetadataEditDialog and saving the whole form) intentional? If NOT intentional, the brief would be to restore a per-field apply affordance (likely inside MetadataEditDialog.tsx, which already surfaces fetched_value per field per `grep -n \"fetched_value\" web/src/components/MetadataEditDialog.tsx`). If intentional, no code changes \u2014 just close the TODO line.",
+  "background": [
+   "Related sibling capability losses tracked separately: todo.d/20260809-changelog-row-compare-affordance.md (this scope's L5722) and version navigation (this scope's L6241, now itself found stale_done)."
+  ],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a until scoped",
+  "notes": "Question for the owner: 'Was losing per-field Use File / Use Fetched from Book Detail intentional, or should it be restored (e.g. inline buttons in MetadataEditDialog.tsx per field)?'"
+ },
+ {
+  "todo_line": 5987,
+  "part": 1,
+  "src_id": null,
+  "title": "Visual-regression goldens for linux \u2014 already committed",
+  "verdict": "stale_done",
+  "verdict_evidence": "Both linux snapshot goldens now exist: `ls web/tests/e2e/dynamic-ui-interactions.spec.ts-snapshots/` shows scan-button-loading-chromium-linux.png AND scan-button-loading-webkit-linux.png alongside the darwin ones, contradicting the item's claim that only darwin goldens exist.",
+  "domain": "web (frontend)",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "linux goldens for both browsers are committed",
+    "grep_cmd": "ls web/tests/e2e/dynamic-ui-interactions.spec.ts-snapshots/",
+    "expect": "4 files: scan-button-loading-{chromium,webkit}-{darwin,linux}.png"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification-only.",
+  "review_critical": false,
+  "goal": "No deliverable \u2014 the missing-linux-golden CI-red problem is resolved.",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "See part 2 for the still-open residual concern about webkit-darwin staleness noted in the same item."
+ },
+ {
+  "todo_line": 5987,
+  "part": 2,
+  "src_id": null,
+  "title": "Regenerate the stale webkit-darwin visual-regression golden (needs CI, not local)",
+  "verdict": "prod_run",
+  "verdict_evidence": "The item states the webkit-darwin golden 'could not be regenerated locally because the webkit browser is not installed on this machine (npx playwright install webkit)' \u2014 this is an environment/CI operation, not a code change; scout confirms webkit-darwin still present but unverified as current (`ls web/tests/e2e/dynamic-ui-interactions.spec.ts-snapshots/*webkit-darwin*` -> 1 file, timestamp/content not independently re-verified since this scout is read-only).",
+  "domain": "ci/scripts",
+  "exact_files": [
+   "web/tests/e2e/dynamic-ui-interactions.spec.ts-snapshots/scan-button-loading-webkit-darwin.png"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the webkit-darwin golden file exists",
+    "grep_cmd": "ls web/tests/e2e/dynamic-ui-interactions.spec.ts-snapshots/scan-button-loading-webkit-darwin.png",
+    "expect": "file exists"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Running a CI job/snapshot regeneration, not code authorship.",
+  "review_critical": false,
+  "goal": "Run `npx playwright test --update-snapshots -g 'Button loading states visual check'` for the webkit project in an environment with webkit installed (CI, or a machine with `npx playwright install webkit` run first), then commit the regenerated scan-button-loading-webkit-darwin.png.",
+  "background": [],
+  "steps": [
+   "1. In CI or a machine with webkit installed, run the dynamic-ui-interactions spinner test with --update-snapshots for the webkit project only.",
+   "2. Commit the regenerated PNG."
+  ],
+  "tests": [
+   "The visual-regression test itself (Button loading states visual check, webkit project) is the test."
+  ],
+  "acceptance": [
+   "web/tests/e2e/dynamic-ui-interactions.spec.ts's webkit visual check passes in CI with a freshly regenerated snapshot"
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make test-e2e",
+  "notes": "Cannot be done on the scout's machine (webkit not installed locally, per the item itself)."
+ },
+ {
+  "todo_line": 6133,
+  "src_id": null,
+  "title": "Regenerate stale .api-token and verify Bleve search index completeness",
+  "verdict": "prod_run",
+  "verdict_evidence": "This is explicitly a live-server operation (bootstrap token exchange + a live search comparison against production), not a code change. `.api-token` currently on disk is dated 2026-08-11 (`ls -la .api-token` -> Aug 11 21:00), 10 days before this scout run (2026-08-21) and after the item's stated 2026-07-14 staleness \u2014 freshness against the live server cannot be confirmed by a read-only repo scout.",
+  "domain": "internal/search",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": ".api-token file exists locally, dated 2026-08-11",
+    "grep_cmd": "ls -la .api-token",
+    "expect": "1 file, Aug 11 timestamp"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Operational task (server-bootstrap skill + one HTTP comparison), not code authorship.",
+  "review_critical": false,
+  "goal": "1. Regenerate .api-token via the documented server-bootstrap skill (per CLAUDE.md / reference_longlived_api_key.md). 2. With a fresh key, compare a broad search's result count against the same term reached through a filter-only path to check for Bleve index drift, per docs/design/2026-08-09-search-backend-options.md.",
+  "background": [
+   "internal/search/register.go downgrades Open() failures to warnings so the server boots without search, per the item's own citation \u2014 a silent search degradation would be otherwise invisible with /metrics unscraped (see project memory: Prometheus gap)."
+  ],
+  "steps": [
+   "1. Run the server-bootstrap skill to obtain a fresh .api-token.",
+   "2. Issue a broad search query and a filter-only query for the same term against the live API.",
+   "3. Compare result counts; a large gap indicates index drift.",
+   "4. Record findings in docs/design/2026-08-09-search-backend-options.md \u00a76 Q1."
+  ],
+  "tests": [],
+  "acceptance": [
+   "A documented before/after comparison of search vs filter result counts, committed to the design doc."
+  ],
+  "edge_cases": [
+   "Server currently mid-scan would confound the comparison \u2014 avoid running during an active scan per standing decision."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (prod operation)",
+  "notes": "Not code work \u2014 flag to the owner as an operation to run, matching decision-14's 'every PROD RUN goes to docs/operations/pending-prod-actions.md' pattern even though this scope's item isn't explicitly item 14's lane."
+ },
+ {
+  "todo_line": 6241,
+  "src_id": null,
+  "title": "Version-to-version navigation from Book Detail \u2014 already restored via 'View Details'",
+  "verdict": "stale_done",
+  "verdict_evidence": "BookDetailVersionGroup.tsx has a 'View Details' button per non-current version that navigates to it: `grep -n \"navigate(\\`/library/\\${version.id}\\`)\" web/src/components/bookdetail/BookDetailVersionGroup.tsx` -> 1 hit ~L383, immediately following a Button labeled 'View Details' (~L378-386). This achieves the item's requested capability (jump from one version to another) even though it is not literally a RouterLink as the item's anchor specifically checked for.",
+  "domain": "web (frontend)",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "a View Details button navigates to another version's book detail page",
+    "grep_cmd": "grep -n 'navigate(\\`/library/\\${version.id}\\`)' web/src/components/bookdetail/BookDetailVersionGroup.tsx",
+    "expect": "1 hit ~L383"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification-only.",
+  "review_critical": false,
+  "goal": "No deliverable \u2014 cross-version navigation exists again via a 'View Details' button per version row, functionally equivalent to what the item asks for.",
+  "background": [
+   "The item specifically checked for the absence of RouterLink, which is technically still absent, but the imperative navigate() call from an onClick achieves the same user-facing outcome."
+  ],
+  "steps": [],
+  "tests": [
+   "version-management.spec.ts (see this scope's L6484 finding) already exercises the Manage Versions -> version list flow; confirm it also exercises 'View Details' if full coverage is desired (not required to close this line)."
+  ],
+  "acceptance": [
+   "grep -n \"'View Details'\" web/src/components/bookdetail/BookDetailVersionGroup.tsx returns 1 hit"
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "The Move-to-version destructive action the item worried about (moving files, not navigating) coexists alongside View Details as a separate, clearly-labeled button \u2014 not the same affordance."
+ },
+ {
+  "todo_line": 6252,
+  "src_id": null,
+  "title": "Restore version-group count and current-version marker on Book Detail",
+  "verdict": "actionable",
+  "verdict_evidence": "Confirmed still missing at HEAD: `grep -rn 'Part of version group' web/src` -> 0 hits and `grep -rn '(Current)' web/src` -> 0 hits. BookDetailHeader.tsx's chip is still bare: `grep -n \"label=\\\"Version Group Linked\\\"\" web/src/components/bookdetail/BookDetailHeader.tsx` -> 1 hit ~L198, with no count. isCurrent is computed in BookDetailVersionGroup.tsx (`grep -n 'const isCurrent = version.id === book.id' web/src/components/bookdetail/BookDetailVersionGroup.tsx` -> 1 hit ~L299) but only drives conditional rendering, never a visible '(Current)' label.",
+  "domain": "web (frontend)",
+  "exact_files": [
+   "internal/plugins/maintenance/plugin.go",
+   "web/src/components/bookdetail/BookDetailHeader.tsx",
+   "web/src/components/bookdetail/BookDetailVersionGroup.tsx"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "no count or current-marker text exists anywhere in web/src",
+    "grep_cmd": "grep -rn 'Part of version group\\|(Current)' web/src",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "the header chip only says 'Version Group Linked', no count",
+    "grep_cmd": "grep -n 'Version Group Linked' web/src/components/bookdetail/BookDetailHeader.tsx",
+    "expect": "1 hit ~L198"
+   },
+   {
+    "claim": "isCurrent is already computed per version row",
+    "grep_cmd": "grep -n 'const isCurrent = version.id === book.id' web/src/components/bookdetail/BookDetailVersionGroup.tsx",
+    "expect": "1 hit ~L299"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "isCurrent (existing per-row boolean)",
+    "file": "web/src/components/bookdetail/BookDetailVersionGroup.tsx",
+    "verify_grep": "grep -n 'const isCurrent' web/src/components/bookdetail/BookDetailVersionGroup.tsx"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Touches two related components; needs the version count plumbed to the header chip label.",
+  "review_critical": false,
+  "goal": "Restore visible group size and 'you are here' signal: (a) extend BookDetailHeader.tsx's 'Version Group Linked' chip label to include the count, e.g. `Version Group Linked (N)` where N = versions.length/allVersions.length; (b) add a visible '(Current)' text/badge next to the version row in BookDetailVersionGroup.tsx where isCurrent is true (~L299).",
+  "background": [
+   "allVersions is already computed as `versions.length > 0 ? versions : [book]` in BookDetailVersionGroup.tsx (~L176), a ready source for the count."
+  ],
+  "steps": [
+   "1. In BookDetailHeader.tsx, thread a `versionCount` (or `versions.length`) prop into the component (check current props at the top of the file) and change the Chip label (~L198) from `label=\"Version Group Linked\"` to a template string including the count, e.g. `label={`Version Group Linked (${versionCount})`}`.",
+   "2. In BookDetailVersionGroup.tsx, in the groupVersions.map(...) render (~L296+), where `isCurrent` is computed (~L299), render a small Chip or inline text '(Current)' next to that version's title when isCurrent is true.",
+   "3. Confirm the count source is consistent between the header chip and the version list (both should reflect allVersions.length, not just linked-but-not-current)."
+  ],
+  "tests": [
+   "Add/extend a Vitest test for BookDetailHeader.tsx asserting the chip label includes the version count for a book with version_group_id set and N linked versions.",
+   "Add/extend a Vitest test for BookDetailVersionGroup.tsx asserting the current version's row renders a visible '(Current)' marker and non-current rows do not."
+  ],
+  "acceptance": [
+   "npm --prefix web test -- BookDetailHeader passes",
+   "npm --prefix web test -- BookDetailVersionGroup passes"
+  ],
+  "edge_cases": [
+   "A book with version_group_id set but only 1 resolvable version (others deleted) \u2014 count should reflect what's actually resolvable, not a stale group size."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "npm --prefix web run lint && npm --prefix web test (web)",
+  "notes": "This is a straightforward restoration, not a product question \u2014 no owner decision blocks it, unlike the sibling L5972/L5904 items.",
+  "review_notes": [
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+  ]
+ },
+ {
+  "todo_line": 6258,
+  "src_id": null,
+  "title": "Library card overflow menu button accessible name \u2014 already fixed",
+  "verdict": "stale_done",
+  "verdict_evidence": "AudiobookCard.tsx's overflow IconButton already has `aria-label=\"Book actions\"` with an explanatory comment describing exactly this fix: `grep -n 'aria-label=\"Book actions\"' web/src/components/audiobooks/AudiobookCard.tsx` -> 1 hit ~L227, preceded by a comment 'Until MUI 9 this button had no accessible name at all' (~L221-226).",
+  "domain": "web (frontend)",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the overflow button has an aria-label",
+    "grep_cmd": "grep -n 'aria-label=\"Book actions\"' web/src/components/audiobooks/AudiobookCard.tsx",
+    "expect": "1 hit ~L227"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification-only.",
+  "review_critical": false,
+  "goal": "No deliverable \u2014 already fixed, and the fix comment explains why (MUI 9's dev-only data-testid stopped being reachable in production builds).",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [
+   "grep -n 'aria-label=\"Book actions\"' web/src/components/audiobooks/AudiobookCard.tsx returns 1 hit"
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "This confirms the project is already on MUI 9, consistent with the finding at L7549 in this same scope."
+ },
+ {
+  "todo_line": 6425,
+  "src_id": null,
+  "title": "E2E repair progress status table (66/218/4 of 288, 55% fixed)",
+  "verdict": "not_a_task",
+  "verdict_evidence": "This is a point-in-time status report/inventory table, not a work item with resolvable anchors of its own \u2014 it summarizes counts across many spec files and explicitly defers the actual fixes to 'other todo.d fragments'. Several of its named 'untouched, best value' targets are independently covered elsewhere in this same scope (version-management -> L6484, found stale_done; unified-dedup-tab -> L7254, found stale_done), and the rest (dynamic-ui-interactions, files-history) have no per-failure anchor in this item's text to brief against.",
+  "domain": "web (frontend)",
+  "exact_files": [],
+  "verified_anchors": [],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "n/a.",
+  "review_critical": false,
+  "goal": "n/a \u2014 status report, not a task.",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "If dynamic-ui-interactions (6 failures) and files-history (4 failures) still need dedicated repair briefs, that requires a fresh per-spec triage (read test-results/<dir>/error-context.md per the item's own documented method) \u2014 out of scope for this read-only pass since no current failure list/anchors exist to cite."
+ },
+ {
+  "todo_line": 6484,
+  "src_id": null,
+  "title": "version-management.spec.ts rewrite for relocated 'Manage Versions' entry point \u2014 already done",
+  "verdict": "stale_done",
+  "verdict_evidence": "The spec already drives the described new flow: `grep -n \"Book actions\" web/tests/e2e/version-management.spec.ts` -> 1 hit ~L45 (`card.getByRole('button', { name: 'Book actions' }).click()`) immediately followed by `grep -n \"getByRole('menuitem', { name: 'Manage Versions' })\" web/tests/e2e/version-management.spec.ts` -> 1 hit ~L46 \u2014 exactly the 'open the card's overflow menu, then click the menuitem' rewrite the item describes as still needed.",
+  "domain": "web (frontend)",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the spec opens the card overflow menu via the Book actions button",
+    "grep_cmd": "grep -n \"'Book actions'\" web/tests/e2e/version-management.spec.ts",
+    "expect": "1 hit ~L45"
+   },
+   {
+    "claim": "the spec then clicks the Manage Versions MENUITEM (not a button)",
+    "grep_cmd": "grep -n \"getByRole('menuitem', { name: 'Manage Versions' })\" web/tests/e2e/version-management.spec.ts",
+    "expect": "1 hit ~L46"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification-only.",
+  "review_critical": false,
+  "goal": "No deliverable \u2014 the described rewrite (point openBookDetail-equivalent flow at /library, open the card's overflow menu, click the Manage Versions menuitem) has already shipped.",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [
+   "npx playwright test version-management.spec.ts passes (run in CI/full suite, not verified live by this read-only scout)"
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "The item's own 'worth asking' product question (is losing version management from book detail intentional) is separately resolved by L6241's finding in this scope: a 'View Details' navigation button exists again on book detail's version group."
+ },
+ {
+  "todo_line": 6701,
+  "part": 1,
+  "src_id": null,
+  "title": "Instrument sort_by usage to inform the enabled_sort_indexes decision",
+  "verdict": "actionable",
+  "verdict_evidence": "No instrumentation exists today: `grep -rn 'sort_by' internal/server/handlers/audiobooks/handler.go` -> 1 hit ~L519 (parsing only, `httputil.ParseQueryString(c, \"sort_by\")`), with no accompanying slog call nearby; `grep -rn \"slog.*sort_by\\|sort_by.*slog\" internal/` -> 0 hits confirms no logging of the value exists anywhere.",
+  "domain": "internal/server/handlers",
+  "exact_files": [
+   "internal/plugins/maintenance/plugin.go",
+   "internal/server/handlers/audiobooks/handler.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "sort_by is parsed from the query string here",
+    "grep_cmd": "grep -n 'ParseQueryString(c, \"sort_by\")' internal/server/handlers/audiobooks/handler.go",
+    "expect": "1 hit ~L519"
+   },
+   {
+    "claim": "no existing instrumentation logs sort_by values",
+    "grep_cmd": "grep -rn 'slog.*sort_by\\|sort_by.*slog' internal/",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "CanPushDownSort consults only the enabled set, as the item states",
+    "grep_cmd": "grep -n 'func CanPushDownSort' internal/database/memdb_sort_indexers.go",
+    "expect": "1 hit ~L336"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "One log line at an existing, well-understood call site.",
+  "review_critical": false,
+  "goal": "Add a low-cardinality log/metric of sort_by values actually requested by clients, over a representative window, to replace guesswork with real usage data before deciding which of the nine indexed sort fields (option 2 in the item) to enable \u2014 per the item's cheapest-first option list.",
+  "background": [
+   "EnabledSortIndexes defaults to empty ([]string), matching option 1 (enable none for now) as the current behavior (`grep -n 'Empty (the default) reproduces' internal/config/config.go` confirms this comment exists ~L1022)."
+  ],
+  "steps": [
+   "1. In internal/server/handlers/audiobooks/handler.go near the SortBy parsing (~L519), add a low-cardinality counter/log, e.g. `slog.Debug(\"audiobooks: sort_by requested\", \"sort_by\", filter.SortBy)` \u2014 or, if the project has a metrics counter pattern already (check internal/metrics/ for an existing Prometheus counter helper), prefer incrementing a `sort_by_requested_total{field=...}` counter over a log line, since /metrics gaps are a known project issue (see project memory: Prometheus gap) and a log line risks being as unobserved as the GetAllSeriesBookCounts silent-zero case elsewhere in this scope.",
+   "2. If using a counter, register it near other request-scoped metrics in the same package; keep the label cardinality bounded to known sort field names (reject/bucket unknown values as \"other\")."
+  ],
+  "tests": [
+   "internal/server/handlers/audiobooks/handler_test.go: assert the instrumentation fires (metric increments, or a captured log record) once per request with the requested SortBy value, including for the default/empty case."
+  ],
+  "acceptance": [
+   "go test ./internal/server/handlers/audiobooks/... passes",
+   "A week of prod logs/metrics shows a distribution of sort_by values, closing the 'nobody has measured which sorts real users pick' gap the item cites."
+  ],
+  "edge_cases": [
+   "Empty/default sort_by (title, the always-streamed field) should still be counted, as a baseline to compare other fields against."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "This is the item's own recommended cheapest-first option (#2, 'instrument first'); it does not itself decide which fields to enable \u2014 see part 2 for that separate design decision.",
+  "review_notes": [
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+  ]
+ },
+ {
+  "todo_line": 6701,
+  "part": 2,
+  "src_id": null,
+  "title": "Decide which sort fields to enable in enabled_sort_indexes",
+  "verdict": "needs_design",
+  "verdict_evidence": "Confirmed unresolved at HEAD: `grep -n 'EnabledSortIndexes \\[\\]string' internal/config/config.go` -> 1 hit, defaulting to empty, matching the item's option 1 as current state; the item is explicit that the choice needs 'evidence' not currently available ('nobody has measured which sorts real users pick'), and this is not among the 14 owner decisions supplied for this scope.",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "enabled_sort_indexes is currently empty by default (no fields enabled)",
+    "grep_cmd": "grep -n 'Empty (the default) reproduces' internal/config/config.go",
+    "expect": "1 hit"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "n/a until scoped.",
+  "review_critical": true,
+  "goal": "Cannot be briefed without an owner decision on which of the nine candidate sort fields (author, narrator, series, created_at, updated_at, year, duration, file_size, bitrate) to set in config's enabled_sort_indexes, given the measured cost of ~146 MB per field. Blocked on part 1's usage instrumentation landing and running for a representative period, per the item's own 'instrument first' preference.",
+  "background": [
+   "Cost measured via TestSortIndexCost in internal/database/memdb_sort_index_cost_test.go (`grep -n 'func TestSortIndexCost' internal/database/memdb_sort_index_cost_test.go` -> 1 hit ~L91): +142% heap per book, +1.3 GB at 366,916 books, for all nine fields."
+  ],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   6701
+  ],
+  "gate": "n/a until scoped",
+  "notes": "depends_on_lines references part 1 of this same todo_line (the instrumentation) \u2014 list only the numeric line since the schema doesn't carry a part qualifier there."
+ },
+ {
+  "todo_line": 6988,
+  "src_id": null,
+  "title": "e2e mock envelope (body.data) systemic fix \u2014 already shipped",
+  "verdict": "stale_done",
+  "verdict_evidence": "The item's own 'suggested approach if it holds' (wrap every jsonResponse body as { ...body, data: body } unless already enveloped) is implemented verbatim in setupMockApi: `grep -n 'ADDITIVE:' web/tests/e2e/utils/test-helpers.ts` -> 1 hit ~L443, with the actual implementation at `grep -n 'const jsonResponse = (body: unknown' web/tests/e2e/utils/test-helpers.ts` -> 1 hit ~L455, including the two deliberate exclusions the item's own text would require (arrays, and bodies that already carry a data key) at `grep -n 'Two deliberate exclusions' web/tests/e2e/utils/test-helpers.ts` -> 1 hit ~L449.",
+  "domain": "web (frontend)",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "jsonResponse auto-wraps a { data: body } envelope by default",
+    "grep_cmd": "grep -n 'const jsonResponse = (body: unknown' web/tests/e2e/utils/test-helpers.ts",
+    "expect": "1 hit ~L455"
+   },
+   {
+    "claim": "arrays and already-enveloped bodies are excluded, matching the item's stated opt-out requirement",
+    "grep_cmd": "grep -n 'Two deliberate exclusions' web/tests/e2e/utils/test-helpers.ts",
+    "expect": "1 hit ~L449"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification-only.",
+  "review_critical": false,
+  "goal": "No deliverable \u2014 the systematic fix the item recommended (rather than hand-patching ~72 endpoints one at a time) has already shipped, superseding the per-file audit the item's remaining steps ask for.",
+  "background": [
+   "This also incidentally resolves the item's specific /authors/duplicates dedup.spec.ts example, since the envelope is now applied to every jsonResponse call by default."
+  ],
+  "steps": [],
+  "tests": [],
+  "acceptance": [
+   "grep -c 'jsonResponse(' web/tests/e2e/utils/test-helpers.ts confirms the helper is used broadly (>50 call sites) rather than one-off hand-wrapping"
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "The item's per-file audit spec ('pick a failing test in library-browser.spec.ts and metadata-provenance.spec.ts...') is now moot since the systemic fix covers all handlers uniformly; no per-endpoint audit is needed."
+ },
+ {
+  "todo_line": 7254,
+  "src_id": null,
+  "title": "e2e coverage for the unified Dedup/review surface \u2014 already added",
+  "verdict": "stale_done",
+  "verdict_evidence": "web/tests/e2e/review-dupes-lane.spec.ts exists and covers exactly what the item asks for: `grep -n \"test.describe('the dupes lane of /review'\" web/tests/e2e/review-dupes-lane.spec.ts` -> 1 hit ~L192, with tests for band filtering (`grep -n 'band-chip-CERTAIN' web/tests/e2e/review-dupes-lane.spec.ts` -> multiple hits), the candidate table, the comparison drawer, score breakdown, and a deep-link filter \u2014 plus a comment explicitly noting this is the successor to 'UnifiedDedupTab' (`grep -n 'UnifiedDedupTab wrapped these' web/tests/e2e/review-dupes-lane.spec.ts` -> 1 hit ~L203).",
+  "domain": "web (frontend)",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "a dedicated spec covers the unified/review dupes lane",
+    "grep_cmd": "grep -n \"the dupes lane of /review\" web/tests/e2e/review-dupes-lane.spec.ts",
+    "expect": "1 hit ~L192"
+   },
+   {
+    "claim": "band filtering is covered",
+    "grep_cmd": "grep -n 'band-chip-CERTAIN' web/tests/e2e/review-dupes-lane.spec.ts",
+    "expect": ">=1 hit"
+   },
+   {
+    "claim": "the comment explicitly frames this as the UnifiedDedupTab's successor",
+    "grep_cmd": "grep -n 'UnifiedDedupTab wrapped these' web/tests/e2e/review-dupes-lane.spec.ts",
+    "expect": "1 hit ~L203"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification-only.",
+  "review_critical": false,
+  "goal": "No deliverable \u2014 the surface the item worried had zero coverage (the unified candidate surface) has since been further redesigned into '/review's dupes lane' and now has dedicated e2e coverage of band filtering, the candidate table, and the comparison drawer.",
+  "background": [
+   "The /dedup route with a legacy toggle described in the item may itself now be superseded by /review; dedup.spec.ts no longer references enableLegacyDedupView (`grep -n 'enableLegacyDedupView' web/tests/e2e/dedup.spec.ts` -> 0 hits), consistent with recent commits in this repo's history moving dedup review into a dedicated review workspace (see recent git log: 'give the metadata lane its own panel', 'let a reviewer search metadata for an unmatched book')."
+  ],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "Merge/dismiss action coverage and the legacy-toggle sessionStorage round-trip were not independently re-verified line-by-line in this pass; if those two specific sub-cases still lack coverage, that would be a small follow-up, not a rebuild of this item."
+ },
+ {
+  "todo_line": 7404,
+  "src_id": null,
+  "title": "Stop Deluge writing in-progress downloads into the import directory",
+  "verdict": "parked",
+  "verdict_evidence": "Owner decision 2: 'INIT-5 T2 Deluge / torrent relocation: PARKED'. This item is exactly that torrent-relocation work (staging directory, atomic move-on-completion, scanner partial-suffix ignore list).",
+  "domain": "(unresolved)",
+  "exact_files": [],
+  "verified_anchors": [],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "n/a \u2014 parked.",
+  "review_critical": true,
+  "goal": "n/a \u2014 excluded by owner decision 2.",
+  "background": [],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "The item also suggests measuring how many existing books have a duration/file-size inconsistency (a possible signature of past truncated imports) 'before assuming this is only a forward fix' \u2014 that measurement question is arguably a separate, non-parked report task, but it wasn't isolated as its own todo.d fragment/line, so it stays folded into this parked item rather than split out unilaterally."
+ },
+ {
+  "todo_line": 7435,
+  "src_id": null,
+  "title": "Require every mutating operation to declare and enforce dry_run support at the registry",
+  "verdict": "actionable",
+  "verdict_evidence": "No SupportsDryRun/DryRunParams field exists on OperationDef today: `grep -n 'type OperationDef struct' -A 200 internal/operations/registry/types.go | grep -i 'dryrun'` -> 0 hits, and `grep -rn 'DryRunParams\\|SupportsDryRun' --include='*.go' .` -> 0 hits (excluding tests). The motivating case in the item (maintenance.transcribe-book-intros having NO dry_run) is itself already fixed (`grep -n 'DryRun \\*bool' internal/plugins/maintenance/intro_transcribe.go` -> 1 hit ~L90, defaulting true per a 2026-08-07 comment) \u2014 but the systemic ask (declared on OperationDef, enforced at registration for ops declaring CapLibraryWrite) remains unbuilt.",
+  "domain": "internal/operations/registry",
+  "exact_files": [
+   "internal/operations/registry/types.go",
+   "internal/operations/registry/registry.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "OperationDef has no dry-run declaration field today",
+    "grep_cmd": "grep -c 'DryRun' internal/operations/registry/types.go",
+    "expect": "0 hits \u2014 OperationDef has no DryRun field today (grep -c prints \"0\" and exits 1 on no match)"
+   },
+   {
+    "claim": "ValidateOpDef exists as the place to add a registration-time check (extracted 2026-08-20 per commit 4e19d467)",
+    "grep_cmd": "grep -n 'func ValidateOpDef' internal/operations/registry/*.go",
+    "expect": "1 hit"
+   },
+   {
+    "claim": "the item's specific motivating example (transcribe-book-intros) already has dry_run, defaulting true",
+    "grep_cmd": "grep -n 'DryRun \\*bool' internal/plugins/maintenance/intro_transcribe.go",
+    "expect": "1 hit ~L90"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "ValidateOpDef (stateless registration-time checks, extracted 2026-08-20)",
+    "file": "internal/operations/registry/registry.go",
+    "verify_grep": "grep -n 'func ValidateOpDef' internal/operations/registry/registry.go"
+   },
+   {
+    "name": "Writes []Resource (existing declare-what-you-do pattern to model this after)",
+    "file": "internal/operations/registry/types.go",
+    "verify_grep": "grep -n 'Writes \\[\\]Resource' internal/operations/registry/types.go"
+   },
+   {
+    "name": "existing dry_run classify-then-branch pattern (missing_file_repoint.go, intro_transcribe.go)",
+    "file": "internal/plugins/maintenance/missing_file_repoint.go",
+    "verify_grep": "grep -n 'if !params.Apply' internal/plugins/maintenance/missing_file_repoint.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "L",
+  "tier": "opus",
+  "why_tier": "Cross-cutting registry contract change touching every mutating OperationDef; needs careful design of the shared param-embedding mechanism and a migration plan for existing ops that lack it.",
+  "review_critical": true,
+  "goal": "Add a `SupportsDryRun bool` (or equivalent shared `DryRunParams` embed convention) to OperationDef in internal/operations/registry/types.go; extend ValidateOpDef (internal/operations/registry/registry.go) to reject registration of any op declaring CapLibraryWrite without SupportsDryRun=true, so the gap is caught at server boot rather than discovered ad hoc while deciding whether to hit apply. Default TRUE for destructive ops per the item's stated preference, matching the two existing correctly-built examples (missing-file-repoint, intro_transcribe reparse path).",
+  "background": [
+   "Related existing machinery already following the 'declare what you do' philosophy the item cites: OperationDef.Writes []Resource (internal/operations/registry/types.go, 2026-08-07 owner design)."
+  ],
+  "steps": [
+   "1. In internal/operations/registry/types.go, add a field to OperationDef, e.g. `SupportsDryRun bool // required true when Capabilities includes CapLibraryWrite; see ValidateOpDef`.",
+   "2. In internal/operations/registry/registry.go's ValidateOpDef (the function extracted 2026-08-20, `grep -n 'func ValidateOpDef'`), add a check: if the def's Capabilities include CapLibraryWrite (or similar write capability) and SupportsDryRun is false, return a registration error.",
+   "3. Audit every existing OperationDef with a write capability (`grep -rln 'CapLibraryWrite' internal/plugins/`) and set SupportsDryRun: true on those that already implement a dry_run/apply param (most maintenance ops per the existing classify-then-branch pattern), flagging any found WITHOUT dry_run support as a follow-up per-op task rather than silently forcing them.",
+   "4. Optionally introduce a shared `DryRunParams` struct (e.g. `type DryRunParams struct { DryRun *bool \\`json:\"dry_run,omitempty\"\\` }`) that op param structs can embed, to standardize the field name/semantics (some ops use `apply` inverted, some use `dry_run` \u2014 pick one canonical name and document the other as deprecated per-op)."
+  ],
+  "tests": [
+   "internal/operations/registry/registry_test.go: TestValidateOpDef_RejectsWriteCapabilityWithoutDryRun \u2014 registering an OperationDef with CapLibraryWrite and SupportsDryRun:false must fail; the same def with SupportsDryRun:true must pass.",
+   "A boot-time guard test (like the existing maintenance guard test mentioned in commit 4e19d467) asserting every currently-registered maintenance op with CapLibraryWrite has SupportsDryRun:true, so a future op can't silently regress."
+  ],
+  "acceptance": [
+   "go test ./internal/operations/registry/... passes",
+   "go build ./... succeeds after every existing write-capable OperationDef sets SupportsDryRun appropriately"
+  ],
+  "edge_cases": [
+   "An op that mutates but is inherently idempotent/non-destructive (e.g., a cache warm) may reasonably not need dry_run \u2014 the check should key off CapLibraryWrite specifically, not 'any write', matching the item's own framing ('any op that mutates state')."
+  ],
+  "anti_over_suppression": "TestValidateOpDef_RejectsWriteCapabilityWithoutDryRun must include a positive case (SupportsDryRun:true, CapLibraryWrite present) that passes registration, so the guard isn't accidentally rejecting everything.",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "This is a repo-wide contract change (large blast radius across every maintenance op) \u2014 per CLAUDE.md's Fix It Right rule, do the real registry-level enforcement rather than a narrower per-op-only fix, but expect this to be its own multi-PR effort given effort L / tier opus.",
+  "review_notes": [
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
+   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th"
+  ]
+ },
+ {
+  "todo_line": 7549,
+  "src_id": "TODO-MUI-1",
+  "title": "MUI upgrade Step 1 (5.14 -> 6.x) \u2014 already superseded, project is on MUI 9",
+  "verdict": "stale_done",
+  "verdict_evidence": "web/package.json already pins `@mui/material` and `@mui/icons-material` to `^9.3.1`, well past the 6.x target this step describes and past the v7 boundary the item explicitly says not to cross in the same session: `grep -n '\"@mui/material\"' web/package.json` -> 1 hit, `\"^9.3.1\"`. Independently corroborated by a fix comment elsewhere in this scope's L6258 finding referencing 'Until MUI 9' behavior in AudiobookCard.tsx.",
+  "domain": "web (frontend)",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "MUI is already at 9.3.1, not 5.14 or 6.x",
+    "grep_cmd": "grep -n '\"@mui/material\"' web/package.json",
+    "expect": "1 hit, value ^9.3.1"
+   },
+   {
+    "claim": "a separate file's comment independently confirms the project is already on MUI 9",
+    "grep_cmd": "grep -n 'Until MUI 9' web/src/components/audiobooks/AudiobookCard.tsx",
+    "expect": "1 hit ~L221"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Verification-only.",
+  "review_critical": false,
+  "goal": "No deliverable \u2014 the step-by-step 5.14->6.x->(not yet 7) migration plan this item describes is entirely obsolete; the project has already migrated past 6.x and 7.x to 9.x, presumably via later, unlinked TODO-MUI steps or an out-of-band upgrade not captured by this scope's items.",
+  "background": [
+   "docs/plans/2026-08-07-mui-upgrade-path.md (the brief this item cites) still describes only the 5.14->6->7->... staged plan; it is now stale documentation and should be updated or archived, though that doc edit is outside this scope's item list."
+  ],
+  "steps": [],
+  "tests": [],
+  "acceptance": [
+   "grep -n '\"@mui/material\": \"\\^9' web/package.json returns 1 hit"
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "Whoever owns docs/plans/2026-08-07-mui-upgrade-path.md should mark it superseded/archived \u2014 flagged here, not actioned, since that's a docs-only follow-up not itself in this scope's item list."
+ }
+]
