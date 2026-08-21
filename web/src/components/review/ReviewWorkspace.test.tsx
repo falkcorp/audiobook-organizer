@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
-// last-edited: 2026-08-20
+// last-edited: 2026-08-21
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -62,6 +62,12 @@ beforeEach(() => {
     total: 0,
   });
   vi.mocked(api.getReviewCount).mockResolvedValue({ count: 0, byKind: {} });
+  // CompareSpine (Task 7) now calls usePathAliases() itself, which pulls
+  // config via api.getConfig(). The module is auto-mocked above, so without
+  // this every mount throws "Cannot read properties of undefined (reading
+  // 'then')" -- vi.fn() with no configured return resolves to undefined, not
+  // a Promise.
+  vi.mocked(api.getConfig).mockResolvedValue({ root_dir: '' } as api.Config);
 });
 
 describe('lane default', () => {
