@@ -73,6 +73,14 @@ type MergeService interface {
 // The concrete *dedup.Engine satisfies it.
 type DedupEngine interface {
 	CleanupCandidatesAfterMerge(mergedAwayBookIDs []string) int
+	// MergeJournaled merges a candidate's two books and guarantees a journal
+	// entry exists before the merge happens, so the merge can be reversed.
+	//
+	// The review lane must use this rather than MergeService.MergeBooks
+	// directly. Merging through MergeBooks writes no journal entry, which is
+	// how hand-dispatched merges -- the fast ones, at speed -- ended up being
+	// the only merges in the system with no undo.
+	MergeJournaled(candidateID int64, aID, bID, keepID, tag string) (*merge.Result, string, error)
 	// ScorePairsForBook recomputes the ScoreBreakdown for a work list of pairs
 	// sharing book A, using the SAME collectors + unified.ComposeScore as the
 	// operational scan (via the shared collectPairSignals helper — no scorer

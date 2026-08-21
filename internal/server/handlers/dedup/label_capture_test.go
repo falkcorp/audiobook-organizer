@@ -64,7 +64,8 @@ func TestMergeDedupCandidate_RecordsHumanTrueDupLabel(t *testing.T) {
 	h, d := newHandler(t)
 	allowLabelCaptureReads(d)
 	id, aID, bID := insertCandidate(t, d.es, "book-aaa", "book-bbb")
-	d.merge.EXPECT().MergeBooks([]string{aID, bID}, "").Return(&merge.Result{PrimaryID: aID}, nil).Once()
+	d.engine.EXPECT().MergeJournaled(id, aID, bID, "", mock.Anything).
+		Return(&merge.Result{PrimaryID: aID}, "dedup:automerge:key", nil).Once()
 	d.engine.EXPECT().CleanupCandidatesAfterMerge(mock.Anything).Return(0).Once()
 
 	w := doReq(t, h.MergeDedupCandidate, http.MethodPost,

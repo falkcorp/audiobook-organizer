@@ -1400,7 +1400,19 @@ func (h *Handler) MergeDedupCandidate(c *gin.Context) {
 
 	var result interface{}
 	if candidate.EntityType == "book" && h.mergeService != nil {
-		mergeResult, mergeErr := h.mergeService.MergeBooks([]string{candidate.EntityAID, candidate.EntityBID}, keepID)
+		// Refuse rather than merge irreversibly. Merging through
+		// MergeService.MergeBooks writes no journal entry, so there would be
+		// nothing for UnmergeAuto to revert to -- and a merge a human
+		// dispatched by keystroke is precisely the one most likely to be a
+		// mistake. 503 matches how this handler treats every other endpoint
+		// that needs the engine.
+		if h.dedupEngine == nil {
+			httputil.RespondWithServiceUnavailable(c,
+				"dedup engine not available; refusing to merge because the undo journal cannot be written")
+			return
+		}
+		mergeResult, journalKey, mergeErr := h.dedupEngine.MergeJournaled(
+			id, candidate.EntityAID, candidate.EntityBID, keepID, "dedup:merge-survivor:manual")
 		if mergeErr != nil {
 			// MAYDEPLOY-B2: when one of the source books no longer exists (a previous
 			// merge already absorbed it), the candidate is stale rather than the
@@ -1436,6 +1448,8 @@ func (h *Handler) MergeDedupCandidate(c *gin.Context) {
 			httputil.InternalError(c, "failed to merge books", mergeErr)
 			return
 		}
+		slog.Info("dedup merge journaled", "candidate_id", id, "journal", journalKey,
+			"winner", mergeResult.PrimaryID)
 		result = mergeResult
 
 		// MAYDEPLOY-B3: sweep orphan candidates. Any *other* pending candidate
