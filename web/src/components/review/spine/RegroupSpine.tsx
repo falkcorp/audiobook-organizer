@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/RegroupSpine.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c14d7e2-6b03-4a95-9f28-5e7a1c0b3d64
-// last-edited: 2026-08-20
+// last-edited: 2026-08-21
 
 /**
  * The regroup lane's renderer -- the THIRD comparison shape in this workspace.
@@ -46,7 +46,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import AlbumIcon from '@mui/icons-material/Album';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlineOutlined';
 import * as api from '../../../services/api';
-import { type Book, type ReviewItem } from '../../../services/api';
+import { type Book, type PathAlias, type ReviewItem } from '../../../services/api';
 import {
   REVIEW_ACTIONS,
   actionSpec,
@@ -60,7 +60,7 @@ import {
 import { EvidencePanel } from '../evidence/EvidencePanel';
 import { regroupEvidence } from '../evidence/adapters';
 import { formatBytes, formatDuration } from '../../../utils/mediaFormat';
-import { formatPath, usePathVars } from '../../../utils/formatPath';
+import { PathLinks, usePathAliases } from '../../common/PathLinks';
 import type { RegroupBucket, RegroupLane } from '../lanes/useRegroupLane';
 
 // fetchBooksByIds resolves member book IDs to full Book records in bounded batches
@@ -89,11 +89,11 @@ export async function fetchBooksByIds(ids: string[], signal: AbortSignal): Promi
 export function MemberRow({
   entry,
   book,
-  pathVars,
+  pathAliases,
 }: {
   entry: MemberEntry;
   book: Book | undefined;
-  pathVars: ReturnType<typeof usePathVars>;
+  pathAliases: PathAlias[];
 }) {
   const title = book?.title || entry.filePath.split('/').pop() || '(unknown)';
   const size = book?.file_size;
@@ -178,19 +178,9 @@ export function MemberRow({
           {codec && <Chip size="small" variant="outlined" label={codec} />}
         </Stack>
         {entry.filePath && (
-          <Tooltip
-            title={entry.filePath}
-            placement="bottom-start"
-            slotProps={{ tooltip: { sx: { maxWidth: 600 } } }}
-          >
-            <Typography
-              variant="caption"
-              sx={{ fontFamily: 'monospace', fontSize: '0.65rem', display: 'block', mt: 0.5 }}
-              noWrap
-            >
-              {formatPath(entry.filePath, pathVars)}
-            </Typography>
-          </Tooltip>
+          <Box sx={{ mt: 0.5 }}>
+            <PathLinks path={entry.filePath} aliases={pathAliases} />
+          </Box>
         )}
       </Box>
     </Box>
@@ -425,7 +415,7 @@ export function ItemActions({
 // expanded, via unmountOnExit) so opening the queue never fans out hundreds of
 // getBook calls up front.
 export function MemberFilesDetail({ item }: { item: ReviewItem }) {
-  const pathVars = usePathVars();
+  const pathAliases = usePathAliases();
   const payload = useMemo(() => parsePayload(item.payload), [item.payload]);
   const folder = payload?.folder ?? item.folder_ref;
   const title = payload?.survivorTitle ?? payload?.derived_title ?? payload?.title;
@@ -496,7 +486,7 @@ export function MemberFilesDetail({ item }: { item: ReviewItem }) {
               key={e.bookId ?? e.filePath ?? i}
               entry={e}
               book={e.bookId ? books.get(e.bookId) : undefined}
-              pathVars={pathVars}
+              pathAliases={pathAliases}
             />
           ))}
         </Stack>
