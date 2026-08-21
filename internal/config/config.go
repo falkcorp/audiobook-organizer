@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.82.0
+// version: 1.83.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-08-21
 
@@ -66,11 +66,17 @@ func normalizeWindowsPrefix(prefix string) string {
 	if s == prefix {
 		s = strings.TrimPrefix(prefix, "file:///")
 	}
-	if decoded, err := url.PathUnescape(s); err == nil {
-		s = decoded
+	// Decode per segment, after splitting on the real separators. Decoding the
+	// whole string first would turn an encoded literal slash (%2F) into a
+	// separator indistinguishable from a real one -- which would also make the
+	// drift guard read two genuinely different prefixes as agreement.
+	parts := strings.Split(s, "/")
+	for i, p := range parts {
+		if decoded, err := url.PathUnescape(p); err == nil {
+			parts[i] = decoded
+		}
 	}
-	s = strings.ReplaceAll(s, "/", `\`)
-	return strings.TrimRight(s, `\`)
+	return strings.TrimRight(strings.Join(parts, `\`), `\`)
 }
 
 // normalizeRoot trims trailing separators from a POSIX root so the two sides of

@@ -1,5 +1,5 @@
 // file: internal/config/path_alias_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 864e867a-dbd9-47fb-a731-300899c5e5b8
 // last-edited: 2026-08-21
 
@@ -141,4 +141,15 @@ func TestValidatePathAliasesComparesNormalizedWindows(t *testing.T) {
 
 	assert.NoError(t, ValidatePathAliases(aliases, mappings),
 		"the same prefix written two ways is agreement, not drift")
+}
+
+// TestNormalizeWindowsPrefixKeepsAnEncodedSlashDistinct pins that decoding
+// happens per segment. Decoding the whole prefix first would turn an encoded
+// literal slash into a separator indistinguishable from a real one, which also
+// let the drift guard read two genuinely different prefixes as agreement.
+func TestNormalizeWindowsPrefixKeepsAnEncodedSlashDistinct(t *testing.T) {
+	assert.Equal(t, `W:\a/b`, normalizeWindowsPrefix("file://localhost/W:/a%2Fb"),
+		"an encoded slash stays inside its segment rather than becoming a separator")
+	assert.NotEqual(t, normalizeWindowsPrefix("W:/a%2Fb"), normalizeWindowsPrefix("W:/a/b"),
+		"two different prefixes must not normalize to the same value")
 }
