@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.32.1 -->
+<!-- version: 10.32.2 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-21 -->
 
@@ -13,6 +13,42 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **MERGE-UNDO** Make a review-initiated merge reversible. The machinery is
+      half-built and entirely unwired: `Engine.UnmergeAuto`
+      (`internal/dedup/auto_resolve.go:450`) reverts both books to their
+      pre-merge `book_ver` snapshots and has **no production caller at all** —
+      it is reachable only from tests. Three gaps stand between that and a
+      working undo, and none of them is the hard part of the other two:
+      - Only the auto-resolve path journals. `PutAutoMergeJournalEntry` is
+        called from `auto_resolve.go` alone, so a merge dispatched from the
+        review lane records no pre-merge snapshot timestamps and there is
+        nothing for `UnmergeAuto` to revert *to*.
+      - `UnmergeAuto` declares its own scope limit: it restores the BOOK RECORD
+        only. It does not reverse the external-ID reassignment (loser→winner)
+        that `MergeBooks` performed, nor the enqueued iTunes write-back
+        removals. Its comment names the missing follow-on explicitly.
+      - No endpoint or op exposes it, so there is no way to invoke it.
+      Deferred deliberately on 2026-08-20 when the dupes lane was made faster to
+      triage: the user chose to ship throughput first and treat undo as its own
+      task, since it is backend work with a correctness surface (external-ID
+      restoration) that does not belong inside a keyboard-shortcut change. The
+      speedup did not make merges less reversible — they were never reversible
+      from that screen — but it does raise the rate at which they happen, which
+      is the reason this is written down rather than left implicit.
+
+## CI / automation
+
+- [ ] Decide whether the 22 `gha-*` repos (plus `magnet-handler`) should keep their
+      classic branch protection. They all require PR reviews and share a
+      `set-auto-merge` check, so they look like a deliberate template rather than
+      drift — unlike audiobook-organizer, whose protection was removed 2026-08-20.
+- [ ] Add a scheduled detect-only backstop for `auto-revert.yml`: if `main`'s tip has
+      a failed gate run older than 30 minutes and no open auto-revert issue exists,
+      file the issue. Covers the case where the `workflow_run` listener never fires
+      (runner outage, cancelled run).
+- [ ] `scripts/test_check_memory_leaks.py` is executed by no workflow. Either wire it
+      into `repo-guards` next to the auto-revert selector tests, or delete it.
 
 - [ ] 🔌 **ABS coverage gaps N-1 … N-10** (audit:
       [`docs/audits/2026-08-11-abs-coverage-gap-audit.md`](docs/audits/2026-08-11-abs-coverage-gap-audit.md)).
