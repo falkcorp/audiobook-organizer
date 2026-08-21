@@ -1,0 +1,307 @@
+# file: .github/workflows/auto-revert.yml
+# version: 1.1.0
+# guid: 2f7c4e19-6b83-4a05-9d21-8e5b0a3f7c64
+# last-edited: 2026-08-20
+
+# Restore main to its last known-good commit when the CI gate goes red.
+#
+# This repository does not gate merges on CI. Anything can land; the gate runs
+# afterwards; if it fails, this workflow puts main back and files a bug naming the
+# culprits. That trade is deliberate — waiting on a pre-merge gate wastes a rebase
+# and a full CI cycle every time an unrelated commit lands first, and a PR that was
+# red at review time is often green by the time it merges.
+#
+# The decision of *what* to revert lives in scripts/auto_revert.py, which is unit
+# tested and mutation tested. This file is only plumbing: gather evidence, call the
+# script, act on its verdict.
+name: Auto-Revert Red Main
+
+on:
+  workflow_run:
+    workflows: ['Continuous Integration']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      failing_sha:
+        description: 'Commit to treat as the failure (defaults to origin/main tip)'
+        required: false
+        type: string
+      dry_run:
+        description: 'Decide and print, but do not push or file anything'
+        required: false
+        default: true
+        type: boolean
+      max_span:
+        description: 'Refuse to revert more than this many commits'
+        required: false
+        default: '3'
+        type: string
+
+# Never let two reverts race. Queue rather than cancel: a cancelled revert leaves
+# main red with nothing watching it.
+concurrency:
+  group: auto-revert-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  actions: write
+
+jobs:
+  revert:
+    name: Restore last green
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Only pushes to main. PR runs and other branches are none of this workflow's
+    # business, and a red PR is supposed to merge anyway.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.event == 'push')
+    steps:
+      - name: Classify the gate result
+        id: triage
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "act=true" >> "$GITHUB_OUTPUT"
+            echo "Manual dispatch — proceeding to triage."
+            exit 0
+          fi
+
+          case "$CONCLUSION" in
+            failure|timed_out|action_required) ;;
+            *)
+              echo "act=false" >> "$GITHUB_OUTPUT"
+              echo "Gate concluded '$CONCLUSION' — nothing to do."
+              exit 0
+              ;;
+          esac
+
+          # Flake defense. Re-running bumps run_attempt on the same run and fires
+          # this workflow again on completion, so no state has to be carried.
+          # A revert is expensive and public; one free re-run is not.
+          if [ "$ATTEMPT" = "1" ]; then
+            echo "act=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Gate red on attempt 1 — re-running failed jobs before blaming anyone."
+            gh run rerun --failed "$RUN_ID" --repo "$GITHUB_REPOSITORY"
+            exit 0
+          fi
+
+          echo "act=true" >> "$GITHUB_OUTPUT"
+          echo "::warning::Gate red on attempt $ATTEMPT — this is not a flake."
+
+      - name: Checkout full history
+        if: steps.triage.outputs.act == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: main
+          token: ${{ secrets.JF_CI_GH_PAT }}
+
+      - name: Gather commits and gate verdicts
+        if: steps.triage.outputs.act == 'true'
+        id: evidence
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_SHA: ${{ inputs.failing_sha }}
+          EVENT_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+
+          FAILING="${INPUT_SHA:-$EVENT_SHA}"
+          [ -n "$FAILING" ] || FAILING=$(git rev-parse origin/main)
+          echo "failing=$FAILING" >> "$GITHUB_OUTPUT"
+          echo "Treating $FAILING as the failing commit."
+
+          # Newest first, starting at the failure. 12 is comfortably wider than
+          # any span we would act on, so the script can still see a green anchor
+          # when it decides the span is too wide to touch.
+          # The format string comes from the script so the parser and the commit
+          # message it later writes cannot drift apart.
+          FORMAT=$(python3 -c 'import sys; sys.path.insert(0, ".github/workflows/scripts"); import auto_revert; print(auto_revert.LOG_FORMAT, end="")')
+          git log --format="$FORMAT" -n 12 "$FAILING" > /tmp/commits.raw
+
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          sys.path.insert(0, ".github/workflows/scripts")
+          from auto_revert import parse_log
+          repo = os.environ["GITHUB_REPOSITORY"]
+          out = []
+          for commit in parse_log(open("/tmp/commits.raw").read()):
+              sha, subject, trailers = commit.sha, commit.subject, commit.trailers
+              pr = None
+              try:
+                  res = subprocess.run(
+                      ["gh", "api", f"repos/{repo}/commits/{sha}/pulls",
+                       "--jq", ".[0].number // empty"],
+                      capture_output=True, text=True, timeout=30)
+                  pr = int(res.stdout.strip()) if res.stdout.strip() else None
+              except Exception:
+                  pr = None
+              out.append({"sha": sha, "subject": subject, "trailers": trailers, "pr": pr})
+          json.dump(out, open("/tmp/commits.json", "w"), indent=2)
+          print(f"collected {len(out)} commits")
+          PY
+
+          # Every gate run on main, so the script can map SHA -> conclusion. This
+          # is the only workflow that counts: codeql/e2e/binary-smoke are either
+          # path-filtered or flaky, and folding them in would invent failures.
+          gh run list --repo "$GITHUB_REPOSITORY" \
+            --workflow ci.yml --branch main --limit 60 \
+            --json headSha,conclusion,event \
+            --jq '[.[] | select(.event == "push")]' > /tmp/runs.json
+
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/${{ github.event.workflow_run.id }}/jobs" \
+            --jq '.jobs[] | select(.conclusion == "failure") | .name' \
+            > /tmp/failed-jobs.txt 2>/dev/null || true
+          echo "failed jobs:"; cat /tmp/failed-jobs.txt || true
+
+      - name: Decide what to revert
+        if: steps.triage.outputs.act == 'true'
+        id: decide
+        # max_span is the one value here a dispatcher controls, so it goes through
+        # env and is validated as digits before reaching a command line.
+        env:
+          MAX_SPAN: ${{ inputs.max_span }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+          case "${MAX_SPAN:-3}" in
+            ''|*[!0-9]*) echo "::error::max_span must be digits, got '$MAX_SPAN'"; exit 1 ;;
+          esac
+          python3 .github/workflows/scripts/auto_revert.py decide \
+            --commits /tmp/commits.json \
+            --runs /tmp/runs.json \
+            --max-span "${MAX_SPAN:-3}" \
+            --run-url "$RUN_URL" \
+            --failed-jobs "$(cat /tmp/failed-jobs.txt 2>/dev/null || true)"
+
+      - name: Revert to the last green commit
+        if: >-
+          steps.triage.outputs.act == 'true' &&
+          steps.decide.outputs.action == 'revert' &&
+          inputs.dry_run != true
+        id: apply
+        env:
+          ANCHOR: ${{ steps.decide.outputs.anchor }}
+          FAILING: ${{ steps.decide.outputs.failing }}
+          SPAN: ${{ steps.decide.outputs.span }}
+          COUNT: ${{ steps.decide.outputs.span_count }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+
+          # Someone may have landed a commit while we were deciding. Reverting a
+          # stale span would take out an innocent change, so re-check and bail.
+          git fetch origin main --quiet
+          TIP=$(git rev-parse origin/main)
+          if [ "$TIP" != "$FAILING" ]; then
+            echo "::warning::main moved from $FAILING to $TIP while triaging — not reverting a stale span."
+            echo "moved=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -q main
+          git reset -q --hard "$FAILING"
+
+          if ! git revert --no-commit "$ANCHOR..$FAILING"; then
+            git revert --abort || true
+            echo "::error::Revert of $ANCHOR..$FAILING does not apply cleanly."
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Generated by the script, not inline here: the Auto-Revert-Of trailer
+          # this writes is the only thing stopping a revert loop, and a message
+          # built in YAML is a contract no test can reach.
+          python3 .github/workflows/scripts/auto_revert.py commit-message \
+            --anchor "$ANCHOR" \
+            --failing "$FAILING" \
+            --span "$SPAN" \
+            --run-url "$RUN_URL" > /tmp/msg.txt
+
+          git commit -q --file /tmp/msg.txt
+          REVERT_SHA=$(git rev-parse HEAD)
+          echo "revert_sha=$REVERT_SHA" >> "$GITHUB_OUTPUT"
+
+          # Pushed with the PAT on purpose: GITHUB_TOKEN pushes do not trigger
+          # workflows, and an unverified revert is exactly what we must not create.
+          git push origin main
+          echo "::notice::Reverted $COUNT commit(s); main is now $REVERT_SHA."
+
+      - name: File the bug
+        if: >-
+          steps.triage.outputs.act == 'true' &&
+          steps.decide.outputs.action != 'none' &&
+          inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BODY: ${{ steps.decide.outputs.issue_body }}
+          EXTRA_LABEL: ${{ steps.decide.outputs.label }}
+          REVERT_SHA: ${{ steps.apply.outputs.revert_sha }}
+          MOVED: ${{ steps.apply.outputs.moved }}
+          CONFLICT: ${{ steps.apply.outputs.conflict }}
+          FAILING: ${{ steps.decide.outputs.failing }}
+        run: |
+          set -euo pipefail
+
+          # The backticks below are literal Markdown, not command substitution,
+          # which is exactly why these format strings are single-quoted.
+          # shellcheck disable=SC2016
+          {
+            printf '%s\n' "$BODY"
+            [ -n "$REVERT_SHA" ] && printf '\n**Revert commit:** `%s`\n' "${REVERT_SHA:0:8}"
+            [ "$MOVED" = "true" ] && printf '\n> main moved while triaging, so nothing was reverted.\n'
+            [ "$CONFLICT" = "true" ] && printf '\n> The revert did not apply cleanly and needs hands.\n'
+          } > /tmp/issue.md || true
+
+          # Build argv as an array. `${VAR:+--label "$VAR"}` looks like it quotes
+          # the label but the quotes are consumed by the expansion, so a label
+          # with a space would split into two arguments.
+          args=(--repo "$GITHUB_REPOSITORY"
+                --title "CI red on main at ${FAILING:0:8}"
+                --body-file /tmp/issue.md
+                --label bug --label ci --label automation)
+
+          if [ -n "$EXTRA_LABEL" ]; then
+            gh label create "$EXTRA_LABEL" --color D93F0B \
+              --description "CI went red on main and could not be auto-reverted" \
+              --force --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || true
+            args+=(--label "$EXTRA_LABEL")
+          fi
+
+          gh issue create "${args[@]}"
+
+      - name: Summary
+        if: always() && steps.triage.outputs.act == 'true'
+        # Values go through env, never inline interpolation: `reason` is built
+        # from commit data and must not be spliced into the shell.
+        env:
+          ACTION: ${{ steps.decide.outputs.action }}
+          REASON: ${{ steps.decide.outputs.reason }}
+          FAILING: ${{ steps.decide.outputs.failing }}
+          ANCHOR: ${{ steps.decide.outputs.anchor }}
+          COUNT: ${{ steps.decide.outputs.span_count }}
+          DRY: ${{ inputs.dry_run }}
+        run: |
+          {
+            echo "### Auto-revert"
+            echo
+            echo "- action: \`${ACTION:-n/a}\`"
+            echo "- reason: ${REASON:-n/a}"
+            echo "- failing: \`${FAILING:-n/a}\`"
+            echo "- anchor: \`${ANCHOR:-n/a}\`"
+            echo "- span: \`${COUNT:-0}\` commit(s)"
+            echo "- dry run: \`${DRY:-false}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
