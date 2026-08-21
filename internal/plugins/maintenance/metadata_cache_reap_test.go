@@ -448,3 +448,92 @@ func TestMetadataCacheReap_DefDeclaresWriteCapabilityAndDropsOnResume(t *testing
 	require.Contains(t, def.Capabilities, sdk.CapLibraryWrite,
 		"a delete op must not claim to be read-only")
 }
+
+// ---- the report must record what HAPPENED, not what was planned ----
+//
+// Found by reading a real production report: every reaped row's reason said
+// "would reap", because the decision is recorded during the plan phase and the
+// file is written after the apply. On a dry run that is accurate. On an apply it
+// tells a reader auditing the deletion that nothing was deleted -- and a row
+// that was SPARED (revived, or a failed delete) was indistinguishable from one
+// that was destroyed anywhere except the summary counters.
+
+func bucketOf(plan reapPlan, bookID string) (string, string) {
+	for _, d := range plan.all {
+		if d.BookID == bookID {
+			return d.Bucket, d.Reason
+		}
+	}
+	return "", ""
+}
+
+func TestMetadataCacheReap_ReportRecordsActualOutcomePerRow(t *testing.T) {
+	cache := seedReap(4)
+	cache.delErr = map[string]error{"b02": errors.New("pebble: write failed")}
+	books := &reapFakeBooks{
+		present:     map[string]bool{"b00": true},
+		reviveAfter: map[string]int{"b01": 1}, // absent in the scan, back by the write
+	}
+
+	plan := runReapPlan(t, cache, books, metadataCacheReapParams{Apply: true})
+
+	// b03 is the only one that actually went.
+	require.Equal(t, []string{"b03"}, cache.deletedSorted())
+
+	b, reason := bucketOf(plan, "b03")
+	require.Equal(t, "reaped", b)
+	require.Equal(t, "DELETED", reason)
+
+	b, reason = bucketOf(plan, "b01")
+	require.Equal(t, "spared-revived", b, "a revived row must not read as reaped")
+	require.Contains(t, reason, "spared")
+
+	b, reason = bucketOf(plan, "b02")
+	require.Equal(t, "delete-error", b)
+	require.Contains(t, reason, "NOT deleted")
+
+	// Untouched rows keep the plan's wording -- they were never attempted.
+	b, _ = bucketOf(plan, "b00")
+	require.Equal(t, "resolves", b)
+
+	// And the attempted rows still account for every orphan the plan selected.
+	counts := map[string]int{}
+	for _, d := range plan.all {
+		counts[d.Bucket]++
+	}
+	require.Equal(t, plan.Orphaned,
+		counts["reaped"]+counts["spared-revived"]+counts["delete-error"],
+		"every attempted row must carry exactly one outcome")
+	require.Equal(t, 0, counts["orphaned"], "no attempted row may keep the planned wording")
+}
+
+// A dry run attempts nothing, so its rows must keep the conditional wording.
+// Restamping them would claim deletions that never happened.
+func TestMetadataCacheReap_DryRunReportStaysConditional(t *testing.T) {
+	cache := seedReap(3)
+	books := &reapFakeBooks{present: map[string]bool{"b00": true}}
+
+	plan := runReapPlan(t, cache, books, metadataCacheReapParams{Apply: false})
+
+	b, reason := bucketOf(plan, "b01")
+	require.Equal(t, "orphaned", b)
+	require.Contains(t, reason, "would reap")
+	require.Empty(t, cache.deletedSorted())
+}
+
+// The log line's samples are copies of the same decisions. If only `all` were
+// restamped the log would contradict the file it names.
+func TestMetadataCacheReap_SamplesAgreeWithTheReport(t *testing.T) {
+	cache := seedReap(3)
+	books := &reapFakeBooks{}
+
+	plan := runReapPlan(t, cache, books, metadataCacheReapParams{Apply: true})
+
+	require.NotEmpty(t, plan.Samples)
+	for _, s := range plan.Samples {
+		require.NotEqual(t, "orphaned", s.Bucket,
+			"a sample still reading 'orphaned' contradicts the restamped report")
+		full, _ := bucketOf(plan, s.BookID)
+		require.Equal(t, full, s.Bucket, "sample and report row must agree for %s", s.BookID)
+	}
+}
