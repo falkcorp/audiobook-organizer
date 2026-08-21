@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/CompareSpine.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: f30a6c85-2b47-4e19-93d0-8a5c1e7b402f
 // last-edited: 2026-08-21
 
@@ -400,6 +400,39 @@ describe('dual path display (Task 7)', () => {
       viewMode: 'two-column',
       ctx,
     });
+
+    expect(await screen.findByRole('button', { name: 'Copy Windows path' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy UNC path' })).toBeInTheDocument();
+  });
+
+  it('threads pathAliases through GroupedCard so the Windows and UNC rows render', async () => {
+    // GroupedCard (site 1) is reached only via `groups`, never `rows` -- the
+    // 'grouped results' describe block above renders groups too, but never
+    // asserts on path output, so a regression that dropped
+    // pathAliases={pathAliases} from just the GroupedCard call site
+    // (CompareSpine.tsx :1071) would pass every other test in this file. The
+    // two-column test above covers site 3 and the coexistence test covers
+    // site 2 (CompactRow); neither renders a group.
+    const { ctx } = makeCtx();
+    const group: CandidateGroup = {
+      key: 'g1',
+      candidate,
+      results: [
+        row('b1', {
+          book: {
+            id: 'b1',
+            title: 'Book b1',
+            author: 'Someone',
+            cover_url: '',
+            file_path: '/library/books/Author/Title/y.m4b',
+            duration_seconds: 43200,
+            file_size_bytes: 350 * 1048576,
+            format: 'm4b',
+          },
+        }),
+      ],
+    };
+    renderSpine({ rows: [], groups: [group], viewMode: 'compact', ctx });
 
     expect(await screen.findByRole('button', { name: 'Copy Windows path' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Copy UNC path' })).toBeInTheDocument();
