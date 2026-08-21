@@ -1,11 +1,19 @@
 // file: internal/database/file_provenance.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c1f4a92-3d6b-4e08-9a5c-1b2e8f0d4a37
 // last-edited: 2026-08-21
 
 package database
 
-import "time"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
 
 // FileEventKind names what happened to a file at one point in its life.
 //
@@ -106,6 +114,172 @@ type FileEvent struct {
 	Detail string `json:"detail,omitempty"`
 	// Actor names what caused the event — an op name, a plugin, a username.
 	Actor string `json:"actor,omitempty"`
+
+	// Seq is a store-wide monotonic sequence number assigned at append time,
+	// in the same batch as the event itself.
+	//
+	// It does two jobs a per-chain link cannot. It gives the export a cursor
+	// that is correct in the presence of AdoptOrphanEvents — which preserves
+	// an event's original At, so an adopted event is written NOW with an OLD
+	// timestamp and any time-watermark cursor would skip it forever. And a
+	// GAP in the sequence proves rows were deleted wholesale, including the
+	// deletion of an entire file's chain, which a chain link can never notice
+	// because the evidence goes with it.
+	//
+	// Zero means the event predates this field. See VerifyFileChain.
+	Seq uint64 `json:"seq,omitempty"`
+	// PrevHash is the Hash of the preceding event in this file's chain, or
+	// empty for the first event (or where the predecessor is itself
+	// unchained).
+	PrevHash string `json:"prev_hash,omitempty"`
+	// Hash is this event's canonical digest, covering its content, its Seq and
+	// its PrevHash. Stored rather than derived so a verifier can tell an
+	// in-place edit of the row apart from a broken link.
+	//
+	// Empty means the event was written before chaining existed. That is a
+	// legitimate state, NOT tampering — see VerifyFileChain.
+	Hash string `json:"hash,omitempty"`
+}
+
+// fileEventCanonicalVersion prefixes the canonical encoding so a future field
+// can be added without retroactively invalidating every historical hash: a
+// verifier that knows v1 keeps validating v1 rows byte-for-byte.
+const fileEventCanonicalVersion = "v1"
+
+// canonicalBytes renders the event as a deterministic byte string.
+//
+// This is deliberately NOT json.Marshal. Go does not promise struct field
+// order forever, a JSON tag rename would silently invalidate every stored
+// hash, and map iteration order inside any future field would be fatal. Each
+// field is length-prefixed so that concatenating "ab"+"c" cannot collide with
+// "a"+"bc" — without that, a hash chain is trivially forgeable by moving
+// characters across a field boundary.
+//
+// Hash itself is excluded, for the obvious reason. Seq and PrevHash are
+// INCLUDED, so renumbering or re-pointing an event breaks its own digest and
+// not merely its neighbour's link.
+func (e FileEvent) canonicalBytes() []byte {
+	var b strings.Builder
+	w := func(s string) {
+		b.WriteString(strconv.Itoa(len(s)))
+		b.WriteByte(':')
+		b.WriteString(s)
+	}
+	w(fileEventCanonicalVersion)
+	w(e.BookFileID)
+	w(e.Path)
+	w(string(e.Kind))
+	w(strconv.FormatInt(e.At.UTC().UnixNano(), 10))
+	w(e.Digest.SHA256Full)
+	w(e.Digest.SHA256Chunk)
+	w(strconv.FormatInt(e.Digest.SizeBytes, 10))
+	w(e.Digest.AudioMD5)
+	w(e.Digest.AcoustIDSeg0)
+	// 'g' with precision -1 is the shortest representation that round-trips,
+	// so a duration read back from JSON re-encodes to the same bytes.
+	w(strconv.FormatFloat(e.Digest.DurationSec, 'g', -1, 64))
+	w(e.Digest.TorrentHash)
+	w(e.Detail)
+	w(e.Actor)
+	w(strconv.FormatUint(e.Seq, 10))
+	w(e.PrevHash)
+	return []byte(b.String())
+}
+
+// ComputeHash returns the canonical digest of the event as it currently
+// stands. Callers set Seq and PrevHash first; the store does this for them.
+func (e FileEvent) ComputeHash() string {
+	sum := sha256.Sum256(e.canonicalBytes())
+	return hex.EncodeToString(sum[:])
+}
+
+// ChainVerdict is the outcome of verifying one file's chain.
+type ChainVerdict string
+
+const (
+	// ChainOK means every chained event verified and every link held.
+	ChainOK ChainVerdict = "ok"
+	// ChainUnchained means the chain carries no hash data at all — every
+	// event predates chaining. This is a legitimate state for a ledger that
+	// was written before this feature shipped, and must never be reported as
+	// tampering: the first verify run after deploy would otherwise flag the
+	// entire existing library.
+	ChainUnchained ChainVerdict = "unchained"
+	// ChainBroken means a stored hash disagrees with its content, or a link
+	// does not match its predecessor. Corruption or rewriting.
+	ChainBroken ChainVerdict = "broken"
+)
+
+// ChainReport is the result of verifying a single file's chain.
+type ChainReport struct {
+	Verdict ChainVerdict `json:"verdict"`
+	// Events is how many events were examined.
+	Events int `json:"events"`
+	// Chained is how many carried hash data.
+	Chained int `json:"chained"`
+	// Unchained is how many predate chaining. Counted, never an error.
+	Unchained int `json:"unchained"`
+	// Problems describes each failure, most useful first.
+	Problems []string `json:"problems,omitempty"`
+}
+
+// VerifyFileChain checks a file's event chain.
+//
+// The chain records APPEND order, not event time. Those differ: an event's At
+// describes when something happened in the world, and callers legitimately
+// append out of order (a pre-write observation recorded after the fact, an
+// orphan adopted into the middle of a chain). Linking by timestamp would fork
+// the chain on every such write and report honest code as tampering, so the
+// link follows Seq and this function sorts by Seq before walking. Callers can
+// pass GetFileHistory's output directly — it is in time order, and gets
+// re-sorted here.
+//
+// It distinguishes THREE states rather than two. An event with no Hash was
+// written before chaining existed; it is skipped, counted, and breaks the link
+// for its successor without being an error itself. Conflating "no chain data"
+// with "chain broken" would make every pre-existing row read as tampering,
+// which is the fastest way to teach an operator to ignore the verifier.
+//
+// Sequence gaps are deliberately NOT checked here. A single file's events are
+// not contiguous in the store-wide sequence — every other file's events fall
+// between them — so gap detection is only meaningful over a global scan.
+func VerifyFileChain(events []FileEvent) ChainReport {
+	rep := ChainReport{Verdict: ChainOK, Events: len(events)}
+
+	// Copy before sorting: a verifier that reorders its caller's slice is a
+	// nasty surprise for anything that reads the history afterwards.
+	ordered := append([]FileEvent(nil), events...)
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Seq < ordered[j].Seq })
+
+	// The Hash of the previous event, or empty when there is no verifiable
+	// predecessor — either the chain start, or an unchained event, which
+	// cannot vouch for what follows it.
+	var prevHash string
+	for i, e := range ordered {
+		if e.Hash == "" {
+			rep.Unchained++
+			prevHash = ""
+			continue
+		}
+		rep.Chained++
+		if got := e.ComputeHash(); got != e.Hash {
+			rep.Problems = append(rep.Problems,
+				fmt.Sprintf("event %d (seq %d): content does not match its stored hash", i, e.Seq))
+		}
+		if e.PrevHash != prevHash {
+			rep.Problems = append(rep.Problems,
+				fmt.Sprintf("event %d (seq %d): prev_hash does not match the preceding event", i, e.Seq))
+		}
+		prevHash = e.Hash
+	}
+
+	switch {
+	case len(rep.Problems) > 0:
+		rep.Verdict = ChainBroken
+	case rep.Chained == 0:
+		rep.Verdict = ChainUnchained
+	}
+	return rep
 }
 
 // FileProvenanceStore is the append-only record of what has happened to files.
@@ -134,6 +308,29 @@ type FileProvenanceStore interface {
 	// book_file row once the file is imported, matching on full-file SHA. It
 	// returns the number of events adopted.
 	AdoptOrphanEvents(bookFileID, sha256Full string) (int, error)
+
+	// --- store-wide sequence, for export and gap detection ---
+	//
+	// These live on the same interface rather than a separate one because they
+	// are properties of the ledger's storage, not a different concern: the
+	// sequence is assigned by AppendFileEvent in the same batch as the event,
+	// and splitting the reader off would let a caller hold one half without
+	// the other. There is exactly one implementation.
+
+	// MaxFileEventSeq returns the highest sequence number handed out, 0 if none.
+	MaxFileEventSeq() (uint64, error)
+	// ScanFileEventsBySeq returns events in store-wide sequence order starting
+	// after afterSeq, capped at limit (0 = uncapped). A sequence slot whose
+	// event is missing comes back with a zero Event rather than being skipped:
+	// a dangling slot is the evidence that a row was deleted, and hiding it
+	// would defeat the point of keeping the index.
+	ScanFileEventsBySeq(afterSeq uint64, limit int) ([]FileEventSeqRow, error)
+	// GetFileProvExportCursor returns the highest sequence already exported.
+	GetFileProvExportCursor() (uint64, error)
+	// SetFileProvExportCursor advances the export cursor. It must never move
+	// backwards — an append-only file cannot un-write what a rewind would
+	// cause it to duplicate.
+	SetFileProvExportCursor(seq uint64) error
 }
 
 // FileProvenanceRecorder is the write half of FileProvenanceStore, narrowed for
