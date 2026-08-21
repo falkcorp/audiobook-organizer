@@ -5,8 +5,8 @@
 The review page used to show only the server-side path for a book, which is
 the one form that is useless on the machine you are usually sitting at. It now
 shows the Windows drive path and the UNC path alongside it, each with its own
-copy button, and on macOS and Linux the server path is a link that opens the
-folder directly.
+copy button, and on macOS and Linux the server path is an `smb://` link for
+your file manager to open.
 
 Nothing new appears until path aliases are configured, and they are seeded
 automatically from the iTunes path mappings that already exist, so an
