@@ -1,18 +1,39 @@
 // file: web/src/components/review/spine/CompareSpine.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: f30a6c85-2b47-4e19-93d0-8a5c1e7b402f
-// last-edited: 2026-08-20
+// last-edited: 2026-08-21
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from '@mui/material/styles';
 import { CompareSpine, SPINE_TWO_COLUMN_MIN, type SpineContext } from './CompareSpine';
 import type { CandidateGroup } from './CompareSpine';
 import { appTheme } from '../../../theme';
-import type { CandidateResult, MetadataCandidate } from '../../../services/api';
+import * as api from '../../../services/api';
+import type { CandidateResult, Config, MetadataCandidate, PathAlias } from '../../../services/api';
 import type { MetadataAction } from '../reviewActions';
 import type { RowState } from './rowState';
+
+// Task 7 wired PathLinks into all three CompareSpine render sites
+// (GroupedCard, CompactRow, TwoColumnCard), which pulls in usePathVars()
+// (formatPath.ts) and usePathAliases() (PathLinks.tsx) -- both call
+// api.getConfig() independently, and CompareSpine now calls usePathAliases()
+// itself rather than taking aliases as an explicit prop. Automock the module
+// and supply path_aliases so the derived Windows/UNC rows have something to
+// match; without this the real apiFetch call resolves via the generic {}
+// fallback in src/test/setup.ts, which yields path_aliases: [] and a
+// POSIX-only render (harmless for tests that don't care about path display,
+// but wrong for the ones below that do).
+vi.mock('../../../services/api');
+
+const ALIASES: PathAlias[] = [
+  { root: '/library/books', windows: 'W:', unc: '\\\\host\\books', smb_url: 'smb://host/books' },
+];
+
+beforeEach(() => {
+  vi.mocked(api.getConfig).mockResolvedValue({ root_dir: '', path_aliases: ALIASES } as Config);
+});
 
 // These renderers were ported from MetadataReviewDialog by mechanical
 // substitution, not rewritten. The tests therefore focus on the seams the
@@ -310,5 +331,77 @@ describe('auto mode', () => {
     renderSpine({ rows: [row('b1')], viewMode: 'auto', ctx });
     const auto = screen.getByTestId('spine-auto-card');
     expect(within(auto).getByText('Mistborn: The Final Empire')).toBeInTheDocument();
+  });
+});
+
+describe('dual path display (Task 7)', () => {
+  it('renders the stored iTunes path and the derived windows path side by side', async () => {
+    // A row whose stored iTunes path disagrees with what file_path derives to.
+    // Both must show: the stored line is provenance (where iTunes recorded the
+    // file), the derived line is a transform of current belief (what the app
+    // thinks file_path is now), and the disagreement is a corruption signal a
+    // reviewer needs to see -- not redundancy to be collapsed away.
+    //
+    // The compact row's file-path lines live inside the expanded "Current"
+    // detail (CompareSpine.tsx :546), not the collapsed row -- so this must
+    // expand b1 to reach them.
+    const { ctx } = makeCtx({ expandedId: 'b1' });
+    renderSpine({
+      rows: [
+        row('b1', {
+          book: {
+            id: 'b1',
+            title: 'Book b1',
+            author: 'Someone',
+            cover_url: '',
+            file_path: '/library/books/Author/Title/x.m4b',
+            itunes_path: 'W:\\itunes\\Old Location\\x.m4b',
+            duration_seconds: 43200,
+            file_size_bytes: 350 * 1048576,
+            format: 'm4b',
+          },
+        }),
+      ],
+      viewMode: 'compact',
+      ctx,
+    });
+
+    // The stored line: still blue, still "iTunes:"-prefixed -- untouched by
+    // Task 7.
+    expect(await screen.findByText(/iTunes: W:\\itunes\\Old Location/)).toBeInTheDocument();
+    // The derived line: plain, unprefixed, a transform of file_path via the
+    // configured alias. Neither line is the other.
+    expect(screen.getByText(/^W:\\Author\\Title\\x\.m4b$/)).toBeInTheDocument();
+  });
+
+  it('threads pathAliases through so the Windows and UNC rows actually render', async () => {
+    // The POSIX row renders regardless of whether aliases ever arrive (see
+    // PathLinks.test.tsx), so asserting only the POSIX row would pass even if
+    // CompareSpine never wired usePathAliases() through to a render site at
+    // all. Only the Windows/UNC rows are proof the alias actually matched.
+    // Exercises TwoColumnCard (site 3) -- the coexistence test above already
+    // covers CompactRow (site 2).
+    const { ctx } = makeCtx();
+    renderSpine({
+      rows: [
+        row('b1', {
+          book: {
+            id: 'b1',
+            title: 'Book b1',
+            author: 'Someone',
+            cover_url: '',
+            file_path: '/library/books/Author/Title/x.m4b',
+            duration_seconds: 43200,
+            file_size_bytes: 350 * 1048576,
+            format: 'm4b',
+          },
+        }),
+      ],
+      viewMode: 'two-column',
+      ctx,
+    });
+
+    expect(await screen.findByRole('button', { name: 'Copy Windows path' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy UNC path' })).toBeInTheDocument();
   });
 });

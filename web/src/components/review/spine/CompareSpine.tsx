@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CompareSpine.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1e5b8d72-4c30-49a6-8f21-0b7e3a6c9d54
-// last-edited: 2026-08-20
+// last-edited: 2026-08-21
 //
 // The shared comparison spine: the surface that shows a reviewer what they are
 // deciding between.
@@ -57,10 +57,11 @@ import {
   Typography,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
-import type { CandidateResult, MetadataCandidate } from '../../../services/api';
+import type { CandidateResult, MetadataCandidate, PathAlias } from '../../../services/api';
 import type { MetadataAction } from '../reviewActions';
 import { EvidencePanel } from '../evidence/EvidencePanel';
 import { metadataEvidence } from '../evidence/adapters';
+import { PathLinks, usePathAliases } from '../../common/PathLinks';
 import {
   SOURCE_COLORS,
   formatDuration,
@@ -134,7 +135,15 @@ export interface SpineContext {
  */
 export type SpineViewMode = 'compact' | 'two-column' | 'auto';
 
-function GroupedCard({ group, ctx }: { group: CandidateGroup; ctx: SpineContext }) {
+function GroupedCard({
+  group,
+  ctx,
+  pathAliases,
+}: {
+  group: CandidateGroup;
+  ctx: SpineContext;
+  pathAliases: PathAlias[];
+}) {
   const c = group.candidate;
   const actionableIds = group.results
     .filter((r) => isRowActionable(ctx.rowState(r.book.id)))
@@ -210,16 +219,7 @@ function GroupedCard({ group, ctx }: { group: CandidateGroup; ctx: SpineContext 
                       </Typography>
                     )}
                   </Stack>
-                  <Typography
-                    variant="caption"
-                    sx={{
-                      display: 'block',
-                      wordBreak: 'break-all',
-                      color: 'text.secondary',
-                    }}
-                  >
-                    {r.book.file_path}
-                  </Typography>
+                  <PathLinks path={r.book.file_path} aliases={pathAliases} />
                   {r.book.itunes_path && (
                     <Typography
                       variant="caption"
@@ -370,7 +370,15 @@ function GroupedCard({ group, ctx }: { group: CandidateGroup; ctx: SpineContext 
   );
 }
 
-function CompactRow({ r, ctx }: { r: CandidateResult; ctx: SpineContext }) {
+function CompactRow({
+  r,
+  ctx,
+  pathAliases,
+}: {
+  r: CandidateResult;
+  ctx: SpineContext;
+  pathAliases: PathAlias[];
+}) {
   const bookId = r.book.id;
   const isExpanded = ctx.expandedId === bookId;
 
@@ -586,9 +594,7 @@ function CompactRow({ r, ctx }: { r: CandidateResult; ctx: SpineContext }) {
                       {formatFileSize(r.book.file_size_bytes)}
                     </Typography>
                   )}
-                  <Typography variant="caption" sx={{ wordBreak: 'break-all' }}>
-                    {r.book.file_path}
-                  </Typography>
+                  <PathLinks path={r.book.file_path} aliases={pathAliases} />
                   {r.book.itunes_path && (
                     <Typography
                       variant="caption"
@@ -721,7 +727,15 @@ function CompactRow({ r, ctx }: { r: CandidateResult; ctx: SpineContext }) {
   );
 }
 
-function TwoColumnCard({ r, ctx }: { r: CandidateResult; ctx: SpineContext }) {
+function TwoColumnCard({
+  r,
+  ctx,
+  pathAliases,
+}: {
+  r: CandidateResult;
+  ctx: SpineContext;
+  pathAliases: PathAlias[];
+}) {
   const bookId = r.book.id;
 
   return (
@@ -788,9 +802,7 @@ function TwoColumnCard({ r, ctx }: { r: CandidateResult; ctx: SpineContext }) {
                   {formatFileSize(r.book.file_size_bytes)}
                 </Typography>
               )}
-              <Typography variant="caption" sx={{ wordBreak: 'break-all' }}>
-                {r.book.file_path}
-              </Typography>
+              <PathLinks path={r.book.file_path} aliases={pathAliases} />
               {r.book.itunes_path && (
                 <Typography
                   variant="caption"
@@ -1027,6 +1039,11 @@ export function CompareSpine({
   ctx: SpineContext;
   emptyMessage?: string;
 }) {
+  // Called once here and threaded down to every render site as a plain prop --
+  // the three renderers (GroupedCard, CompactRow, TwoColumnCard/AutoCard) stay
+  // pure and don't each re-fetch config on their own.
+  const pathAliases = usePathAliases();
+
   if (rows.length === 0 && groups.length === 0) {
     return (
       <Box sx={{ p: 3 }} data-testid="spine-empty">
@@ -1051,16 +1068,16 @@ export function CompareSpine({
       }}
     >
       {groups.map((group) => (
-        <GroupedCard key={group.key} group={group} ctx={ctx} />
+        <GroupedCard key={group.key} group={group} ctx={ctx} pathAliases={pathAliases} />
       ))}
 
       {rows.map((r) =>
         viewMode === 'compact' ? (
-          <CompactRow key={r.book.id} r={r} ctx={ctx} />
+          <CompactRow key={r.book.id} r={r} ctx={ctx} pathAliases={pathAliases} />
         ) : viewMode === 'two-column' ? (
-          <TwoColumnCard key={r.book.id} r={r} ctx={ctx} />
+          <TwoColumnCard key={r.book.id} r={r} ctx={ctx} pathAliases={pathAliases} />
         ) : (
-          <AutoCard key={r.book.id} r={r} ctx={ctx} />
+          <AutoCard key={r.book.id} r={r} ctx={ctx} pathAliases={pathAliases} />
         )
       )}
     </Box>
@@ -1081,7 +1098,15 @@ export function CompareSpine({
  * reflows is a browser-level question and belongs to the visual harness -- the
  * same split used for the theme's signal colours.
  */
-function AutoCard({ r, ctx }: { r: CandidateResult; ctx: SpineContext }) {
+function AutoCard({
+  r,
+  ctx,
+  pathAliases,
+}: {
+  r: CandidateResult;
+  ctx: SpineContext;
+  pathAliases: PathAlias[];
+}) {
   return (
     <Box
       data-testid="spine-auto-card"
@@ -1093,7 +1118,7 @@ function AutoCard({ r, ctx }: { r: CandidateResult; ctx: SpineContext }) {
         },
       }}
     >
-      <TwoColumnCard r={r} ctx={ctx} />
+      <TwoColumnCard r={r} ctx={ctx} pathAliases={pathAliases} />
     </Box>
   );
 }

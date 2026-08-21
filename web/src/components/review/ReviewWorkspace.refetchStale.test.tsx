@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.refetchStale.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d91c7a3-6b28-4e50-9f13-8a26c5b407de
-// last-edited: 2026-08-20
+// last-edited: 2026-08-21
 //
 // The refetch path from /review. Before this the stale chip's tooltip ended
 // "refetch to be sure", naming a remedy the workspace had no way to reach --
@@ -70,6 +70,12 @@ function seed(results: api.CandidateResult[], stale: number) {
   });
   vi.mocked(api.getReviewCount).mockResolvedValue({ count: 0, byKind: {} });
   vi.mocked(api.batchFetchCandidates).mockResolvedValue({ operation_id: 'op-1' });
+  // CompareSpine (Task 7) now calls usePathAliases() itself, which pulls
+  // config via api.getConfig(). The module is auto-mocked above, so without
+  // this every mount throws "Cannot read properties of undefined (reading
+  // 'then')" -- vi.fn() with no configured return resolves to undefined, not
+  // a Promise.
+  vi.mocked(api.getConfig).mockResolvedValue({ root_dir: '' } as api.Config);
 }
 
 beforeEach(() => {
