@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-08-20-dual-path-display.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: d87b37ef-85ee-4494-b629-6ef01de479af -->
 <!-- last-edited: 2026-08-20 -->
 
@@ -95,7 +95,8 @@ Add a new type instead:
 // pathutil.PathVars uses, so a nested root wins over its parent.
 type PathAlias struct {
     Root    string `json:"root"`     // "/mnt/bigdata/books"
-    Windows string `json:"windows"`  // "W:"  -> W:\audiobook-organizer\...
+    Windows string `json:"windows"`  // "W:"                  -> W:\audiobook-organizer\...
+    UNC     string `json:"unc"`      // "\\\\<nas-host>\\books" -> \\\\<nas-host>\\books\\audiobook-organizer\\...
     SMBURL  string `json:"smb_url"`  // "smb://<server>/books"
 }
 ```
@@ -105,13 +106,14 @@ Carried on `Config` as `PathAliases []PathAlias` and surfaced on the existing
 
 **Separator contract.** Rendering the Windows line is two operations, not one:
 prefix substitution *and* a `/` → `\` flip. Only the first is visible in the
-type. The contract is therefore stated rather than configured: **whenever
-`Windows` is non-empty, every separator in the remainder is flipped to a
-backslash, unconditionally.**
+type. The contract is therefore stated rather than configured: **whenever `Windows`
+or `UNC` is non-empty, every separator in the remainder of that rendering is
+flipped to a backslash, unconditionally.**
 
 There is deliberately no `Separator` field. The field is named `Windows` and
-carries a drive letter; a root that must keep forward slashes would not
-populate it. Adding a knob to express "Windows paths use backslashes" is
+carries a drive letter, and `UNC` carries a `\\host\share` prefix; a root that
+must keep forward slashes would populate neither. Adding a knob to express
+"Windows paths use backslashes" is
 configuring a fact, and it would let a mis-set config emit `W:/foo`, which is
 not a thing. The unit tests below pin the flip so it cannot drift silently.
 
@@ -242,9 +244,22 @@ correct in isolation.
 Rendered shape:
 
 ```
-$(libroot)/Brandon Sanderson/Mistborn/         [copy]  [↗ Finder]
-W:\audiobook-organizer\Brandon Sanderson\...   [copy]
+$(books)/Brandon Sanderson/Mistborn/              [copy]  [↗ Finder]
+W:\Brandon Sanderson\Mistborn\                    [copy]
+\\<nas-host>\books\Brandon Sanderson\Mistborn\    [copy]     <- muted
 ```
+
+Three lines, each self-describing, each with exactly one copy button. `W:` is
+the short form and only resolves on a machine that has the drive mapped; the
+UNC form resolves on any Windows client and is therefore the reliable one, so
+it is present but visually de-emphasised rather than hidden.
+
+Considered and rejected: collapsing UNC into a split-button menu on the
+Windows line to save a row. It keeps row density flat but makes the more
+*reliable* of the two Windows forms the one you have to go hunting for, and an
+unlabelled second copy affordance is a guessing game. If three lines prove too
+noisy in a dense compare view, the fallback is to mute the UNC line further or
+reveal it on row hover — not to bury it behind a menu.
 
 ## Components
 
@@ -279,9 +294,10 @@ Config (DB blob)
   the default state and must render today's UI exactly.
 - **Alias with an empty `Root`** — skipped, mirroring `formatPath`'s
   empty-value rule, so it cannot match every path.
-- **`SMBURL` empty on a matched alias** — render the POSIX line as text with a
-  copy button and no anchor. A partially configured alias degrades; it does not
-  produce a broken link.
+- **Any one of `Windows` / `UNC` / `SMBURL` empty on a matched alias** — omit
+  just that rendering. Each of the three is independent, so a partially
+  configured alias emits fewer lines rather than a wrong or empty one. An alias
+  with only `Root` set contributes nothing and is equivalent to no alias.
 - **Client OS has no handler for the scheme, or could not be detected** — same
   treatment: text plus copy, never an anchor. See Decision 5. This is the
   common case on Windows, not an edge case.
@@ -319,6 +335,8 @@ Config (DB blob)
 - `web/src/components/common/PathLinks.test.tsx` — anchor present iff
   `href !== null`; `copyText` is the unabbreviated path; renders one line when
   no alias matches.
+- `UNC` and `Windows` render independently: each present alone, both present,
+  neither present, with `Root` matching in every case.
 - `href` is null for a simulated Windows client and for an undetectable
   platform, and non-null for macOS and Linux, with `SMBURL` configured
   identically in all four — the anchor gate is the only variable.
@@ -326,10 +344,11 @@ Config (DB blob)
   different strings for one file: the abbreviated `display`
   (`$(books)/Brandon Sanderson/…`), the literal `copyText`
   (`/mnt/bigdata/books/Brandon Sanderson/…`), and the `href`
-  (`smb://<server>/books/Brandon%20Sanderson/…`). Each looks correct in
-  isolation, so a mismatch between what the link opens and what the clipboard
+  (`smb://<server>/books/Brandon%20Sanderson/…`) — plus the two Windows forms,
+  `W:\Brandon Sanderson\…` and `\\<nas-host>\books\Brandon Sanderson\…`. Each
+  looks correct in isolation, so a mismatch between what the link opens and what the clipboard
   pastes would pass every test listed above and every human review. Assert that
-  all three renderings of a single row **resolve back to the same underlying
+  every rendering of a single row **resolves back to the same underlying
   path** — un-abbreviate `display`, percent-decode and de-prefix `href`, and
   require both to equal `copyText`. Run it over a table of awkward names
   (spaces, `[Unabridged]`, `&`, `#`, apostrophes, non-ASCII).
@@ -363,11 +382,7 @@ recorded rather than acted on.
 
 1. **Settings UI.** v1 is config/env only. An editable Settings panel is
    deferred unless you want it in scope now.
-2. **UNC as a second copy target.** `W:\…` only resolves on a machine that has
-   `W:` mapped; `\\<nas-host>\books\…` resolves on any Windows client.
-   Dropped from v1 as unrequested scope — it is a one-field, one-line addition
-   if you want it.
-3. **Secure context.** If any client reaches the UI over plain
+2. **Secure context.** If any client reaches the UI over plain
    `http://<server>:8484`, the copy button needs an `execCommand` fallback.
    Assumed not needed based on the six existing bare `navigator.clipboard`
    call sites.
