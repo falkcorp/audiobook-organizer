@@ -1,7 +1,7 @@
 # file: .github/workflows/auto-revert.yml
-# version: 1.1.0
+# version: 1.2.0
 # guid: 2f7c4e19-6b83-4a05-9d21-8e5b0a3f7c64
-# last-edited: 2026-08-20
+# last-edited: 2026-08-21
 
 # Restore main to its last known-good commit when the CI gate goes red.
 #
@@ -113,6 +113,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INPUT_SHA: ${{ inputs.failing_sha }}
           EVENT_SHA: ${{ github.event.workflow_run.head_sha }}
+          # Empty on workflow_dispatch — there is no gate run to read jobs from.
+          GATE_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
           git fetch origin main --quiet
@@ -144,7 +146,12 @@ jobs:
                       ["gh", "api", f"repos/{repo}/commits/{sha}/pulls",
                        "--jq", ".[0].number // empty"],
                       capture_output=True, text=True, timeout=30)
-                  pr = int(res.stdout.strip()) if res.stdout.strip() else None
+                  # `gh api` prints the HTTP error body on stdout, so stdout is
+                  # only trustworthy when the call succeeded. int() would reject
+                  # a JSON error object anyway, but checking the status makes
+                  # the intent explicit rather than accidental.
+                  text = res.stdout.strip() if res.returncode == 0 else ""
+                  pr = int(text) if text.isdigit() else None
               except Exception:
                   pr = None
               out.append({"sha": sha, "subject": subject, "trailers": trailers, "pr": pr})
@@ -160,10 +167,24 @@ jobs:
             --json headSha,conclusion,event \
             --jq '[.[] | select(.event == "push")]' > /tmp/runs.json
 
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/${{ github.event.workflow_run.id }}/jobs" \
-            --jq '.jobs[] | select(.conclusion == "failure") | .name' \
-            > /tmp/failed-jobs.txt 2>/dev/null || true
-          echo "failed jobs:"; cat /tmp/failed-jobs.txt || true
+          # Failing job names are decoration on the bug report, so a lookup
+          # failure must degrade to "no names", never to garbage. `gh api`
+          # prints the HTTP error body on STDOUT, so a naive redirect captures
+          # it and `|| true` hides that it happened: dry run 32443758633 filed
+          # a body whose "Failing jobs" list was the four lines of a 404 error
+          # object. Only accept the output when the call actually succeeded.
+          : > /tmp/failed-jobs.txt
+          if [ -z "$GATE_RUN_ID" ]; then
+            echo "::notice::no gate run id (manual dispatch) — skipping job lookup"
+          elif gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GATE_RUN_ID/jobs" \
+                 --paginate \
+                 --jq '.jobs[] | select(.conclusion == "failure") | .name' \
+                 > /tmp/jobs.raw 2>/dev/null; then
+            mv /tmp/jobs.raw /tmp/failed-jobs.txt
+          else
+            echo "::warning::could not read failing jobs for run $GATE_RUN_ID"
+          fi
+          echo "failed jobs:"; cat /tmp/failed-jobs.txt
 
       - name: Decide what to revert
         if: steps.triage.outputs.act == 'true'
