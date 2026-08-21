@@ -1,5 +1,5 @@
 // file: web/src/utils/__tests__/pathAliases.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f1c9a55-6d84-4b0e-9a37-8e5b0c14d7a2
 // last-edited: 2026-08-21
 
@@ -88,6 +88,26 @@ describe('renderPath', () => {
     expect(rs.map((r) => r.key)).toEqual(['posix', 'unc']);
     expect(by(rs, 'posix').href).toBeNull();
   });
+
+  it('omits unc and href when only windows is configured', () => {
+    const rs = renderPath(P, [{ root: '/library/books', windows: 'W:' }], VARS, 'macOS');
+    expect(rs.map((r) => r.key)).toEqual(['posix', 'windows']);
+    expect(by(rs, 'posix').href).toBeNull();
+  });
+
+  it('omits windows and unc when only smb_url is configured', () => {
+    const rs = renderPath(P, [{ root: '/library/books', smb_url: 'smb://host/books' }], VARS, 'macOS');
+    expect(rs.map((r) => r.key)).toEqual(['posix']);
+    expect(by(rs, 'posix').href).toBe(
+      'smb://host/books/Some%20Author/Some%20Title/part1.m4b',
+    );
+  });
+
+  it('renders the bare prefix with no trailing separator on an exact root match', () => {
+    const rs = renderPath('/library/books', ALIASES, VARS, 'macOS');
+    expect(by(rs, 'windows').copyText).toBe('W:');
+    expect(by(rs, 'unc').copyText).toBe('\\\\host\\books');
+  });
 });
 
 describe('hasSchemeHandler — Decision 5, fail closed', () => {
@@ -101,6 +121,13 @@ describe('hasSchemeHandler — Decision 5, fail closed', () => {
       expect(hasSchemeHandler(p as string | undefined)).toBe(false);
     },
   );
+
+  it('gives Windows precedence over a Linux substring in the same string', () => {
+    // Pins the fail-closed guard's ordering: startsWith('win') is checked
+    // BEFORE the mac/linux substring check, so a platform string containing
+    // both tokens (e.g. WSL's navigator.platform) still resolves to false.
+    expect(hasSchemeHandler('Windows Subsystem for Linux')).toBe(false);
+  });
 
   it('gates the posix href and nothing else', () => {
     const mac = renderPath(P, ALIASES, VARS, 'macOS');
@@ -138,9 +165,14 @@ describe('every rendering of a row resolves to the same file', () => {
     const tail = decodeURIComponent(posix.href!.replace('smb://host/books', ''));
     expect('/library/books' + tail).toBe(p);
     // windows/unc -> flip separators back
-    expect(by(rs, 'windows').copyText.replace(/^W:/, '/library/books').replace(/\\/g, '/')).toBe(p);
-    expect(
-      by(rs, 'unc').copyText.replace(/^\\\\host\\books/, '/library/books').replace(/\\/g, '/'),
-    ).toBe(p);
+    const windows = by(rs, 'windows');
+    const unc = by(rs, 'unc');
+    expect(windows.copyText.replace(/^W:/, '/library/books').replace(/\\/g, '/')).toBe(p);
+    expect(unc.copyText.replace(/^\\\\host\\books/, '/library/books').replace(/\\/g, '/')).toBe(p);
+    // display and copyText must stay in lockstep for windows/unc -- there is
+    // no abbreviation step for these forms, so a divergence would mean the
+    // link and the on-screen text point at different files.
+    expect(windows.display).toBe(windows.copyText);
+    expect(unc.display).toBe(unc.copyText);
   });
 });
