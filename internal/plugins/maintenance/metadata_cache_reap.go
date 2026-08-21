@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/metadata_cache_reap.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b1f9d47-3c82-4e05-9a71-d84c2f60e5b3
 // last-edited: 2026-08-20
 
@@ -48,6 +48,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -380,27 +381,46 @@ func planMetadataCacheReap(
 	// candidates are worth keeping. Trusting the plan here would turn a race
 	// into data loss, so the check that authorises each delete is the one taken
 	// at the moment of the delete.
+	// outcomes is what actually happened per row, collected so the report can
+	// state it. Without this every orphaned row reads "would reap" even on a run
+	// that reaped it -- accurate for a dry run, misleading for an apply -- and a
+	// spared or failed row is indistinguishable from a deleted one anywhere but
+	// the summary counters. For an op whose report IS the record of what it
+	// destroyed, "which of these 3,354 actually went" has to be answerable from
+	// the file.
+	var outcomeMu sync.Mutex
+	applyOutcome := make(map[string]reapDecision, len(reapable))
+	note := func(bookID, bucket, reason string) {
+		outcomeMu.Lock()
+		defer outcomeMu.Unlock()
+		applyOutcome[bookID] = reapDecision{Bucket: bucket, Reason: reason}
+	}
+
 	var reaped, revived, deleteErrs atomic.Int64
 	err = registry.RunItems(ctx, reporter, reapable, func(_ context.Context, it cacheItem) error {
 		book, gerr := books.GetBookByID(it.sum.BookID)
 		if gerr != nil {
 			deleteErrs.Add(1)
+			note(it.sum.BookID, "recheck-error", "spared: re-check failed: "+gerr.Error())
 			log.Warn("metadata-cache-reap: re-check failed, row spared",
 				"book", it.sum.BookID, "err", gerr)
 			return nil
 		}
 		if book != nil {
 			revived.Add(1)
+			note(it.sum.BookID, "spared-revived", "spared: book resolved on the re-check")
 			log.Info("metadata-cache-reap: book resolved on re-check, row spared",
 				"book", it.sum.BookID)
 			return nil
 		}
 		if derr := cache.DeleteMetadataCache(it.sum.BookID); derr != nil {
 			deleteErrs.Add(1)
+			note(it.sum.BookID, "delete-error", "NOT deleted: "+derr.Error())
 			log.Warn("metadata-cache-reap: delete failed", "book", it.sum.BookID, "err", derr)
 			return nil
 		}
 		reaped.Add(1)
+		note(it.sum.BookID, "reaped", "DELETED")
 		return nil
 	}, registry.RunItemsOptions{
 		Concurrency: metadataCacheReapConcurrency,
@@ -416,7 +436,36 @@ func planMetadataCacheReap(
 	plan.Reaped = int(reaped.Load())
 	plan.Revived = int(revived.Load())
 	plan.DeleteErrs = int(deleteErrs.Load())
+
+	// Restamp the planned decisions with what actually happened. Only rows the
+	// apply phase touched are rewritten; `resolves` and `orphaned-capped` were
+	// never candidates and keep the plan's wording. Samples carry copies of the
+	// same decisions, so they are restamped too or the log line would contradict
+	// the file it points at.
+	plan.restampApplyOutcomes(applyOutcome)
 	return plan, nil
+}
+
+// restampApplyOutcomes rewrites each attempted row's bucket and reason with the
+// result of the attempt, so the report distinguishes a row that was deleted from
+// one that was spared or failed. A no-op for rows the apply never reached.
+func (p *reapPlan) restampApplyOutcomes(outcomes map[string]reapDecision) {
+	// No empty-map guard: a dry run returns before the apply phase and never
+	// reaches this, and with an empty map the loops below are already a no-op.
+	// A guard here would be untestable code standing in for nothing -- verified
+	// by mutation, removing it changes no test's result.
+	stamp := func(list []reapDecision) {
+		for i := range list {
+			o, ok := outcomes[list[i].BookID]
+			if !ok || list[i].Bucket != "orphaned" {
+				continue
+			}
+			list[i].Bucket = o.Bucket
+			list[i].Reason = o.Reason
+		}
+	}
+	stamp(p.all)
+	stamp(p.Samples)
 }
 
 // writeReapReport dumps EVERY scanned row and what was decided about it, TSV.
