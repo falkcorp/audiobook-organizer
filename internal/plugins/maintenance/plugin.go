@@ -63,6 +63,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.missingFileRepairDef(),
 		p.missingFileRepointDef(),
 		p.metadataCacheReapDef(),
+		p.fileProvenanceCaptureDef(),
 		p.seriesNormalizeDef(),
 		p.seriesPruneDef(),
 		p.resolveProductionAuthorsDef(),

@@ -44,6 +44,16 @@ type fakeDeps struct{ store database.Store }
 func (d fakeDeps) OpsStore() OpsStore                        { return d.store }
 func (d fakeDeps) ReconcileStore() ReconcileStore            { return d.store }
 func (d fakeDeps) PlaylistStore() database.UserPlaylistStore { return d.store }
+
+// FileProvenanceStore mirrors Server's accessor: the provenance methods are not
+// part of database.Store, so this asserts and yields nil for a store that does
+// not implement them. Tests that need a live ledger supply a *PebbleStore.
+func (d fakeDeps) FileProvenanceStore() database.FileProvenanceStore {
+	if fp, ok := d.store.(database.FileProvenanceStore); ok {
+		return fp
+	}
+	return nil
+}
 func (d fakeDeps) MetadataCacheStore() database.MetadataCacheStore {
 	return d.store
 }
