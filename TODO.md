@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.32.2 -->
+<!-- version: 10.33.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-21 -->
 
@@ -1812,9 +1812,10 @@ step 4 propagates to the server package with no edit there.
       3. Report exact counts on the first import run (imported / skipped), and
          verify by re-reading the DB rather than trusting the return values.
 
-- [ ] ✅ **Confirm playlists are book-level, not file-level — and delete the dead
+- [x] ✅ **Confirm playlists are book-level, not file-level — and delete the dead
       file-level path.** Owner requirement 2026-08-10: *"we need to be sure
-      playlists operate at the book level not the file level."*
+      playlists operate at the book level not the file level."* — closed 2026-08-21:
+      `generatePlaylistFile`/`PlaylistItem` deleted (`git log --oneline -- internal/playlist/playlist.go` shows `a1923369 chore(playlist): delete dead file-level M3U playlist path`; no non-test references remain).
 
       **Checked 2026-08-10 — the live model is already book-level.**
       `database.UserPlaylist` (`internal/database/store.go:391`) stores
@@ -4467,12 +4468,19 @@ book and is most likely to go looking for another by the same author.
       lands", so it needs a consolidation pass covering 08-10 through 08-16 before the
       month closes.
 
-- [ ] **Backfill legacy operation rows stuck at `pending`.** #2483 fixed the forward path
+- [x] **Backfill legacy operation rows stuck at `pending`.** #2483 fixed the forward path
       (terminal status now mirrors from `publishOpTerminal`), but rows created before it
       stay frozen at whatever status they started with. `/api/v1/operations` shows several
       on page one alone (`archive-sweep`, `trash-cleanup`, `temp-file-cleanup`,
       `cleanup_activity_log`, `maintenance-window`, `purge-deleted`). Needs a one-off
       supervised pass — it rewrites historical records, so run it watching, not unattended.
+      — closed 2026-08-21: not backfilled row-by-row, but the underlying symptom is gone —
+      `git show --stat 1ce1de7d` shows `1ce1de7d refactor(ops): retire the v1 operation reads
+      that served a table stuck on "pending"` deleted the v1 `GET /operations`,
+      `/operations/:id/status`, `/operations/:id/logs` handlers entirely
+      (`internal/server/handlers/operations/handler.go`, -87 lines); `wire_operations_routes.go`
+      confirms the routes are gone (`RETIRED 2026-08-16` comment) and every caller now reads
+      v2, which does not carry the stale `pending` rows.
 
 - [ ] **Cancelling an operation the registry has never heard of reports success.**
       `DELETE /operations/v2/<unknown-id>` returns `204 No Content`. The handler
@@ -8217,10 +8225,13 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
   confirm the upgrade — and treat `make test-e2e` as a required gate for any
   future routing or auth-flow change.
 
-- [ ] **`UpsertBookToMemDB` holds go-memdb's global writer mutex across Pebble
+- [x] **`UpsertBookToMemDB` holds go-memdb's global writer mutex across Pebble
   I/O.** Found 2026-08-06 while profiling `dedupe-book-file-rows` (fixed in
   #2161). This is a **system-wide ceiling on every `UpdateBook`**, not something
-  specific to that op, and it is the natural next performance win.
+  specific to that op, and it is the natural next performance win. — closed
+  2026-08-21: `git log --oneline -- internal/database/memdb_sync.go | grep 8eb8c0c1`
+  → `8eb8c0c1 perf(database): hoist Pebble reads out of the memdb writer mutex (C816)`;
+  `internal/database/memdb_sync.go:139-141` now fetches `GetBookAuthors`/`GetBookNarrators`/`loadBookFilesForBookID` before `p.memSync(...)` takes the writer lock.
 
   go-memdb has a single global writer mutex (`memdb.go:34-35`, `:73-76` — one
   writer at a time, `Txn(true)` takes `db.writer.Lock()`). Inside that lock,
@@ -10035,7 +10046,7 @@ and `/track/2`. **A backfill would change nothing for that book.**
 **Do not run a whole-library backfill without answering (1) first** — a scan touches
 far more than chapters.
 
-- [ ] **TODO-ABS-MODEB** A Cloudflare **service-token** assertion is rejected as
+- [x] **TODO-ABS-MODEB** A Cloudflare **service-token** assertion is rejected as
       invalid, so the documented "Mode B" (edge service token + our own bearer
       token) cannot work at all. A `non_identity` Access JWT carries
       `common_name` and **no `email` claim**, so
@@ -10052,7 +10063,14 @@ far more than chapters.
       401. Tests: (a) forged assertion still 401; (b) valid non-identity + valid
       bearer → 200 via jwt mode; (c) valid non-identity, no bearer → 401
       `no-credential`; (d) login with non-identity assertion + password body
-      reaches the password path. Revert-validate (b) and (d).
+      reaches the password path. Revert-validate (b) and (d). — closed 2026-08-21:
+      `oauth.ErrNonIdentityAssertion` sentinel implemented (`internal/oauth/cfaccess.go`),
+      consumed by `ResolveCFAssertion` (`internal/server/middleware/absauth.go:193`) to
+      fall through to the bearer path; all 4 acceptance scenarios covered by
+      `TestABSAuth_NonIdentity_ForgedAssertionStillHard401`, `_WithBearerIsAdmitted`,
+      `_WithoutBearerIs401`, `_LoginReachesPasswordPath`, `_LoginStillRejectsForgedAssertion`
+      — `go test ./internal/server/middleware/... -run TestABSAuth_NonIdentity -v` all PASS
+      (commit `ec2a6c83 fix(abs): let a non-identity Access assertion fall through to the bearer`).
 
 - [ ] **TODO-SSO-EDGE** Neither native-app auth mode is actually configured at
       the Cloudflare edge, despite both being fully written up in
@@ -10071,8 +10089,10 @@ far more than chapters.
       already coded — no app changes, no `/status` change, no password. Mode B
       additionally needs TODO-ABS-MODEB fixed before it can work.
 
-- [ ] **TODO-DEPS-VULN** GitHub reports 5 Dependabot vulnerabilities on the
-      default branch (2 high, 3 moderate). Triage and bump.
+- [x] **TODO-DEPS-VULN** GitHub reports 5 Dependabot vulnerabilities on the
+      default branch (2 high, 3 moderate). Triage and bump. — closed 2026-08-21:
+      `gh api repos/jdfalk/audiobook-organizer/dependabot/alerts --paginate -q '.[] | .state' | sort | uniq -c`
+      → `36 fixed`, 0 open.
 
 - [ ] **TODO-SEC-BIND** The service binds every interface
       (`ExecStart=… serve --host 0.0.0.0 --port 8484`), so anything on the LAN
@@ -10619,7 +10639,7 @@ Companion docs:
 
 ## Infra (5)
 
-37. **CPU busy-loop: `CountPrimaryBooks` full-scan on the 5s metrics ticker** — ✅ DONE
+37. ~~**CPU busy-loop: `CountPrimaryBooks` full-scan on the 5s metrics ticker**~~ — ✅ DONE
     (2026-07-18): the server burned ~2 cores continuously while idle because
     `CountPrimaryBooks` (`internal/database/pebble_store.go`) full-scans + `json.Unmarshal`s
     all ~44K books (~5.6s) and the 5s status ticker
@@ -10627,7 +10647,9 @@ Companion docs:
     back-to-back (presented as ~189% CPU with only `sweep tick waiting_count=0` logs; also
     made `/api/v1/health` ~5.6s). Fixed with a 30s in-memory TTL cache + recompute gate on
     `CountPrimaryBooks` (regression test `TestPebbleCountPrimaryBooksTTLCache`). Diagnosed
-    while health-checking the (now torn-down) dedup sandbox.
+    while health-checking the (now torn-down) dedup sandbox. — closed 2026-08-21: re-verified
+    against HEAD — `primaryCountCacheTTL = 30 * time.Second` (`internal/database/pebble_store.go:188`)
+    and `TestPebbleCountPrimaryBooksTTLCache` (`internal/database/pebble_store_test.go:706`) both present.
 
 33. **REPO-SIZE-1 decision** ([plan](docs/plans/2026-07-10-repo-size-history-rewrite-plan.md),
     [package](docs/plans/2026-07-12-repo-size-targeted-purge-package.md)) —
@@ -10638,7 +10660,7 @@ Companion docs:
     review, REPO-SIZE-1.
 35. **Consultancy wave 4+ residuals** ([roadmap](docs/consultancy/00-ROADMAP.md)) —
     unverified; needs a close-out sweep against shipped work.
-36. **Op-progress Prometheus metric (T12 follow-up)** — ✅ DONE (PR #2014,
+36. ~~**Op-progress Prometheus metric (T12 follow-up)**~~ — ✅ DONE (PR #2014,
     2026-07-18): added `audiobook_organizer_op_items_processed{op_id,op_type}`
     + companion `audiobook_organizer_op_items_total{op_id,op_type}` gauges
     (`internal/metrics/metrics.go`, `SetOpProgress`/`ClearOpProgress`), set on
@@ -10653,7 +10675,9 @@ Companion docs:
     at terminal, so no separate `op_active` gauge was needed). Closes the
     observability gap behind the 3+ hour `dedup.full-scan` hang and the 9hr
     Pebble write-stall freeze — both were only noticed by a human watching
-    the UI.
+    the UI. — closed 2026-08-21: re-verified against HEAD — `SetOpProgress`/`ClearOpProgress`
+    (`internal/metrics/metrics.go:216,227`) and the `AudiobookOrganizerOpStalled` alert
+    (`deploy/prometheus/alert-rules.yml:147`) both present.
 
 ## UX (4)
 
@@ -10712,8 +10736,14 @@ Companion docs:
 44. **GFO-4 — graceful-file-ops sub-op phase tracking** — last open graceful-file-ops
     item.
 45. **Performance items #1/#2/#6** (2026-04-14 set) — still open.
-46. **Duration/filesize aggregation** — Book fields show snapshots instead of sums;
-    likely stale (F5-T026 shipped) — verify then close.
+46. ~~**Duration/filesize aggregation**~~ — Book fields show snapshots instead of sums;
+    likely stale (F5-T026 shipped) — verify then close. — closed 2026-08-21: verified —
+    `git log --oneline -- internal/database/pebble_store_book_aggregates.go` shows
+    `a25b802e feat(database): recompute book duration/filesize aggregates from BookFiles (fable5 T026)`;
+    `RecomputeBookAggregates` sums Duration/FileSize from BookFiles and is wired at every
+    BookFile create/update/delete chokepoint via `notifyBookFileChange`
+    (`internal/database/pebble_store_bookfiles.go:280,391,870,919,1091`), plus a dedicated
+    backfill job (`internal/maintenance/jobs/recompute_book_aggregates.go`).
     - ~~**46b. `/audiobooks` LIST endpoint mis-serializes `duration`** (found
       2026-07-19)~~ **DONE 2026-08-03 (#2125).** The reported symptom — list says
       `duration: 4` where the detail endpoint says `4680` — was the arithmetic itself:
