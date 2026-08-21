@@ -597,8 +597,8 @@
   "todo_line": 10706,
   "src_id": null,
   "title": "Close out the 2026-05-01 re-audit block (TEST-2/DEP-1/DEAD-1/CTX-4/LOG-5/R-9/R-10)",
-  "verdict": "actionable",
-  "verdict_evidence": "Every sub-item independently re-verified at HEAD is resolved or moot: DEAD-1 symbols (legacySaveConfigToDatabase_REMOVED/bookTagKeyspace/bookSummarySelectColumnsQualified) \u2014 0 hits; CTX-4 (context.Context on ActivityStore.Summarize/CompactByDay) \u2014 present on all 6 implementations; LOG-5 (fmt.Printf/log.Printf in sqlite_store/pebble_store/migrations/playlist/organizer) \u2014 0 hits and sqlite_store.go no longer exists; R-9 (stale N1-2 TODO comments in sqlite_store.go) \u2014 moot, file gone; R-10 (12 capitalized error strings in 6 metadata packages) \u2014 0 hits; DEP-1 (Book.ITunesPath usage outside BookFile.ITunesPath) \u2014 0 non-test hits of `book.ITunesPath`; TEST-2 (TestStoreAdditionalCoverageSQLite failure) \u2014 test exists, runs against PebbleStore via setupTestDB, no evidence of a current failure. Only DEP-1e (drop the deprecated `books.itunes_path` column / `Book.ITunesPath` struct field) is genuinely still open: the field is still declared (internal/database/store.go:220) and still copied through struct clones (internal/database/bookcore.go:207,321).",
+  "verdict": "needs_design",
+  "verdict_evidence": "[correctness.json] Three Bucket-1 briefs fail the package's own evidence bar. TASK-058 and TASK-059 carry zero verified_anchors \u2014 the only two of 185. TASK-065 has an empty exact_files, so there is no commit scope at all. TASK-058 is additionally mis-bucketed: its stated outcome is a binary judgement call ('delete, or document as ops-API equivalents') across 16 API paths, which is a needs_design question, not something a weak model can execute deterministically. | Every sub-item independently re-verified at HEAD is resolved or moot: DEAD-1 symbols (legacySaveConfigToDatabase_REMOVED/bookTagKeyspace/bookSummarySelectColumnsQualified) \u2014 0 hits; CTX-4 (context.Context on ActivityStore.Summarize/CompactByDay) \u2014 present on all 6 implementations; LOG-5 (fmt.Printf/log.Printf in sqlite_store/pebble_store/migrations/playlist/organizer) \u2014 0 hits and sqlite_store.go no longer exists; R-9 (stale N1-2 TODO comments in sqlite_store.go) \u2014 moot, file gone; R-10 (12 capitalized error strings in 6 metadata packages) \u2014 0 hits; DEP-1 (Book.ITunesPath usage outside BookFile.ITunesPath) \u2014 0 non-test hits of `book.ITunesPath`; TEST-2 (TestStoreAdditionalCoverageSQLite failure) \u2014 test exists, runs against PebbleStore via setupTestDB, no evidence of a current failure. Only DEP-1e (drop the deprecated `books.itunes_path` column / `Book.ITunesPath` struct field) is genuinely still open: the field is still declared (internal/database/store.go:220) and still copied through struct clones (internal/database/bookcore.go:207,321).",
   "domain": "docs",
   "exact_files": [
    "TODO.md"
@@ -669,7 +669,10 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "n/a (docs)",
-  "notes": "This is a housekeeping pass, not new code \u2014 the only enduring deliverable is DEP-1e as a fresh small follow-up task, correctly separated out rather than left buried in a stale close-out bullet."
+  "notes": "This is a housekeeping pass, not new code \u2014 the only enduring deliverable is DEP-1e as a fresh small follow-up task, correctly separated out rather than left buried in a stale close-out bullet.",
+  "review_notes": [
+   "[correctness.json] Three Bucket-1 briefs fail the package's own evidence bar. TASK-058 and TASK-059 carry zero verified_anchors \u2014 the only two of 185. TASK-065 has an empty exact_files, so there is no commit scope at all. TASK-058 is additionally mis-bucketed: its stated outcome is a binary judgement call ('delete, or"
+  ]
  },
  {
   "todo_line": 10710,
@@ -1427,6 +1430,8 @@
   ],
   "gate": "n/a (docs)",
   "notes": "Partial completion only: the T04/prod-derived doc updates can land now; the T02/T03/sandbox-derived rows must wait for todo_line 10831 (T03) to actually run on sandbox. Do not mark T13 fully checked off in TODO.md until T03 lands \u2014 check off only the prod-numbers portion, or leave the box open with a progress note.",
-  "review_notes": []
+  "review_notes": [
+   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
+  ]
  }
 ]

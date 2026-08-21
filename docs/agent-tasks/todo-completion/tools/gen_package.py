@@ -29,9 +29,14 @@ PROTOCOL = """> **Coordinator owns git. Workers never push.** Each worker operat
 > files); 3) file-copy cherry-pick fallback — re-apply the task's file states onto a
 > fresh branch from HEAD; 4) mark `rebase_blocked`, stop the lane, escalate to a human.
 >
-> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR; any
-> sibling worktree is un-rebased; the gate is red on `origin/main`; or a
-> `rebase_blocked` marker is unresolved."""
+> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR that is
+> NOT a held review-critical PR; any sibling worktree is un-rebased; the gate is red on
+> `origin/main`; or a `rebase_blocked` marker is unresolved.
+>
+> **Held PRs (review-critical / prod-data path):** the coordinator opens the PR and
+> STOPS — never `gh pr merge`. A held PR does not block the wave; only tasks that share a
+> file with it are deferred to a `held-dependent` queue and dispatched after the owner
+> merges it. The owner sees the held list in the coordinator's status report."""
 
 # ---------- load ----------
 items = []
@@ -148,7 +153,7 @@ soft_collisions = {f: ids for f, ids in soft_tasks.items() if len(ids) > 1}
 idx = {t["id"]: t for t in tasks}
 wave_of = {}
 # topological by depends_on, then earliest wave w/o collision
-order = sorted(tasks, key=lambda t: t["id"])
+order = sorted(tasks, key=lambda t: (bool(t.get("review_critical")), t["id"]))  # held (review-critical) PRs placed after siblings on the same file so a held PR never blocks a lane
 placed = set()
 def place(t):
     if t["id"] in wave_of: return wave_of[t["id"]]
@@ -213,12 +218,15 @@ def brief(t):
     reuse = "\n".join(f"- Use `{r.get('name')}` in `{r.get('file')}` (verify: `{r.get('verify_grep')}`) — do NOT write a parallel helper." for r in (t.get("reuse") or [])) or "- No existing helper identified; do not invent new constants for concepts that already have a name — grep first."
     pol = t.get("polarity") or "additive"
     new_sym = (t.get("acceptance") or ["<new symbol>"])[0]
+    DATA_ROLLBACK = ("**This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: (1) the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; (2) every mutation is journaled through the existing undo ledger (`CreateOperationChange` — verify: `grep -rn \"func.*CreateOperationChange\" internal/database/*.go`) so `internal/undo` can replay it — a mutation without a journal row is a defect; (3) acceptance includes a test that applies on a fixture and then undoes via `internal/undo` and asserts the fixture is byte-identical; (4) the apply path refuses to start while a `library.scan` operation is running or queued (check the registry for an active scan before mutating — a running scan clobbers applied metadata). Idempotency: re-running in dry-run must report 0 pending changes after a successful apply. Rollback of the CODE = `git revert`; rollback of the DATA = the undo ledger, which is why (2) is not optional. PR stays open for the owner — the coordinator never admin-merges it.\n\n")
     if pol == "additive":
         idem = f"If the first acceptance check below already passes at HEAD (`{new_sym}`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change)."
     elif pol == "removal":
         idem = f"If the removed symbol/file is already ABSENT at HEAD (re-run the re-verify greps above: zero hits = already removed) AND the replacement is present, the removal is already done — run acceptance instead. Rollback = `git revert` the commit to restore the file + its call sites; no data or schema is touched."
     else:
         idem = f"If the symbol already lives at its NEW location and is absent from the old one (re-run the re-verify greps above), the move is already done — run acceptance instead. Rollback = `git revert` the commit; behaviour at the old site is restored."
+    if t.get("review_critical"):
+        idem = DATA_ROLLBACK + idem
     aos = t.get("anti_over_suppression") or "N/A"
     aos_line = "Anti-over-suppression: N/A" if aos.strip().upper() == "N/A" else f"Anti-over-suppression test: `{aos}` — a known-good input still passes with the new guard active."
     rc = " · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**" if t.get("review_critical") else ""

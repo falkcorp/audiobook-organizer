@@ -661,7 +661,10 @@
   "anti_over_suppression": "TestBackfillSyncID_MintsForBooksWithoutIdentity is the happy-path counterpart to the idempotent-skip test \u2014 proves the skip logic doesn't also skip books that genuinely need backfilling",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Must use a bounded worker pool per CLAUDE.md's MANDATORY concurrency rule \u2014 this is exactly the whole-library-scale, per-item-DB-write shape that rule targets."
+  "notes": "Must use a bounded worker pool per CLAUDE.md's MANDATORY concurrency rule \u2014 this is exactly the whole-library-scale, per-item-DB-write shape that rule targets.",
+  "review_notes": [
+   "[ops-rollback.json] A whole-library MUTATING backfill (mints/repoints a sync identity on every book lacking one) is briefed with no dry_run/apply parameter, no report-first mode, and no preview - while sibling new-op tasks in the same package all default to preview (TASK-125 step 7 'Default apply=false', TASK-022 step "
+  ]
  },
  {
   "todo_line": 10333,
@@ -939,7 +942,8 @@
    "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
    "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
    "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
+   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
   ]
  },
  {
@@ -1273,7 +1277,8 @@
   "gate": "make ci",
   "notes": "Depends conceptually on L10383's byte-preservation proof being run first (the PRE-APPLY VERIFICATION comment in relocate_sync_cycle.go effectively says the same thing) before this is ever pointed at prod with Apply=true.",
   "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re",
+   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
   ]
  },
  {

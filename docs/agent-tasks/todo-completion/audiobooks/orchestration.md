@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e6b2fdeb-6695-44a2-a4b7-0bc99a2cf924 -->
+<!-- guid: b48c3428-26f8-4a68-af48-0ae803523647 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — audiobooks workstream (todo-completion)
@@ -12,27 +12,15 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK002[TASK-002 fix-the-3-way-disagreement-i]
-      TASK003[TASK-003 build-a-read-only-census-too]
-    end
-    subgraph Wave2
-      TASK001[TASK-001 add-a-short-ttl-cache-to-the]
+      TASK002[TASK-002 build-a-read-only-census-too]
+      TASK003[TASK-003 add-a-conformance-test-asser]
+      TASK004[TASK-004 wire-onlyparsedtranscription]
     end
     subgraph Wave3
-      TASK004[TASK-004 fix-the-author-path-post-fil]
+      TASK001[TASK-001 add-a-short-ttl-cache-to-the]
     end
-    subgraph Wave4
-      TASK005[TASK-005 add-a-conformance-test-asser]
-      TASK006[TASK-006 wire-onlyparsedtranscription]
-    end
-    TASK001 --> TASK004
-    TASK001 --> TASK006
-    TASK002 --> TASK001
-    TASK002 --> TASK004
-    TASK002 --> TASK006
-    TASK004 --> TASK005
-    TASK004 --> TASK006
-    TASK025 --> TASK001
+    TASK004 --> TASK001
+    TASK023 --> TASK001
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -55,9 +43,14 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 > files); 3) file-copy cherry-pick fallback — re-apply the task's file states onto a
 > fresh branch from HEAD; 4) mark `rebase_blocked`, stop the lane, escalate to a human.
 >
-> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR; any
-> sibling worktree is un-rebased; the gate is red on `origin/main`; or a
-> `rebase_blocked` marker is unresolved.
+> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR that is
+> NOT a held review-critical PR; any sibling worktree is un-rebased; the gate is red on
+> `origin/main`; or a `rebase_blocked` marker is unresolved.
+>
+> **Held PRs (review-critical / prod-data path):** the coordinator opens the PR and
+> STOPS — never `gh pr merge`. A held PR does not block the wave; only tasks that share a
+> file with it are deferred to a `held-dependent` queue and dispatched after the owner
+> merges it. The owner sees the held list in the coordinator's status report.
 
 ## Run it
 

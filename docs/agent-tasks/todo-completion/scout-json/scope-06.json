@@ -234,8 +234,8 @@
   "todo_line": 3884,
   "src_id": null,
   "title": "Fix the author-path post-filter to treat nil IsPrimaryVersion as primary, matching storage's default",
-  "verdict": "actionable",
-  "verdict_evidence": "internal/audiobooks/service_query.go:346 computes `bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion` (nil treated as NOT primary), which disagrees with the storage-side convention `eff := book.IsPrimaryVersion == nil || *book.IsPrimaryVersion` at internal/database/pebble_store.go:953 and the memdb index default `Default: true` at internal/database/memdb_schema.go:165. This exact line (service_query.go:345-350) is the post-filter applied only on the authorID!=nil branch (service_query.go:150-162 calls store.GetBooksByAuthorIDCore, which already excludes explicit-false rows -- see pebble_store.go:1865's `if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion { continue }` -- so a nil-flagged book survives into this post-filter and is then misclassified as non-primary).",
+  "verdict": "stale_done",
+  "verdict_evidence": "[correctness.json] The same fix is briefed twice under two different todo_lines with no depends_on edge. TASK-002 (L3348, wave 1, review_critical) step 1 and TASK-004 (L3884, wave 3, review_critical) step 2 are the identical edit to the identical line: internal/audiobooks/service_query.go:346, `bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion` -> `== nil || *`. TASK-002 additionally does the twin at L531 and the DTO. Once TASK-002 lands, TASK-004's own re-verify grep returns zero hits and every brief's START-HERE rule says a zero-hit grep means STOP and report \u2014 so TASK-004 burns a review_critical slot and a PR the owner must review, for nothing. | internal/audiobooks/service_query.go:346 computes `bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion` (nil treated as NOT primary), which disagrees with the storage-side convention `eff := book.IsPrimaryVersion == nil || *book.IsPrimaryVersion` at internal/database/pebble_store.go:953 and the memdb index default `Default: true` at internal/database/memdb_schema.go:165. This exact line (service_query.go:345-350) is the post-filter applied only on the authorID!=nil branch (service_query.go:150-162 calls store.GetBooksByAuthorIDCore, which already excludes explicit-false rows -- see pebble_store.go:1865's `if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion { continue }` -- so a nil-flagged book survives into this post-filter and is then misclassified as non-primary).",
   "domain": "internal/audiobooks",
   "exact_files": [
    "internal/audiobooks/service_query.go"
@@ -260,6 +260,11 @@
     "claim": "authorID branch calls GetBooksByAuthorIDCore, which already excludes explicit-false rows before the post-filter runs",
     "grep_cmd": "grep -n \"booksCore, err = svc.store.GetBooksByAuthorIDCore\" internal/audiobooks/service_query.go",
     "expect": "1 hit L156"
+   },
+   {
+    "claim": "the author-path post-filter site (there are two structurally identical sites)",
+    "grep_cmd": "grep -n \"bPrimary := b.IsPrimaryVersion\" internal/audiobooks/service_query.go",
+    "expect": "2 hits \u2014 L346 (author-path post-filter, the target) and L531 (the other post-filter branch, out of scope for this task)"
    }
   ],
   "reuse": [],
@@ -301,7 +306,9 @@
    "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
    "[verify-3.json] Step 3/4's example call and the Tests section both use `ptrBool(false)`, but no such symbol exists anywhere in internal/audiobooks. The real package-local helper is `boolPtr` (internal/audiobooks/helpers.go:33: `func boolPtr(b bool) *bool { return &b }`). Verified: `grep -rn 'func ptrBool' internal/",
    "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
+   "[correctness.json] The same fix is briefed twice under two different todo_lines with no depends_on edge. TASK-002 (L3348, wave 1, review_critical) step 1 and TASK-004 (L3884, wave 3, review_critical) step 2 are the identical edit to the identical line: internal/audiobooks/service_query.go:346, `bPrimary := b.IsPrimary",
+   "[correctness.json] A verified_anchor expectation is wrong at HEAD, and the brief's whole framing ('THE author-path post-filter') rests on the uniqueness it asserts. There are two identical sites, so an agent following the anchor cannot tell which one it is meant to edit \u2014 and picking the wrong one silently changes the"
   ]
  },
  {
@@ -363,13 +370,14 @@
   ],
   "anti_over_suppression": "TestIsPrimaryVersion_LibraryAndAuthorPathsAgree itself -- it is the anti-regression check for L3884's fix.",
   "depends_on_lines": [
-   3884
+   3348
   ],
   "gate": "make ci",
   "notes": "Write this alongside or just before L3884 so it can be run against the buggy code first to confirm it actually fails (mutation-test discipline).",
   "review_notes": [
    "[verify-3.json] Steps 4 and 5 tell the model to add the OnlyParsedTranscription predicate INSIDE blocks that are gated by booleans the steps never instruct it to update, so the new filter would silently be skipped whenever it is the ONLY active list filter. Verified: (a) service_filtering.go:994 `hasFPFilters := f.",
-   "[verify-3.json] Steps 4 and 5 tell the model to add the OnlyParsedTranscription predicate INSIDE blocks that are gated by booleans the steps never instruct it to update, so the new filter would silently be skipped whenever it is the ONLY active list filter. Verified: (a) service_filtering.go:994 `hasFPFilters := f."
+   "[verify-3.json] Steps 4 and 5 tell the model to add the OnlyParsedTranscription predicate INSIDE blocks that are gated by booleans the steps never instruct it to update, so the new filter would silently be skipped whenever it is the ONLY active list filter. Verified: (a) service_filtering.go:994 `hasFPFilters := f.",
+   "[correctness.json] TASK-005 (the nil-IsPrimaryVersion conformance test, wave 4, review_critical) depends on TASK-004 alone. TASK-004 is the duplicate that should be dropped (finding 1), and it is not the task that establishes the semantics the test asserts \u2014 TASK-002 is, since it changes both L346 and L531 plus the DT"
   ]
  },
  {
@@ -561,7 +569,8 @@
   "review_notes": [
    "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
    "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n"
+   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
+   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
   ]
  },
  {
@@ -878,7 +887,10 @@
   "anti_over_suppression": "TestDedupSeries_RealRunMerges -- proves dryRun=false still does the real work (the dry-run flag doesn't silently become the only path).",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Pair with part 2 of this same TODO line (switch to an all-versions series getter) before this op is wired to any production trigger -- both are prerequisites the TODO explicitly lists together."
+  "notes": "Pair with part 2 of this same TODO line (switch to an all-versions series getter) before this op is wired to any production trigger -- both are prerequisites the TODO explicitly lists together.",
+  "review_notes": [
+   "[ops-rollback.json] The dry-run parameter the task adds cannot hold its stated default. The brief specifies a plain `dryRun bool` / DryRun bool threaded from the op request body 'defaulting to true' - in Go an omitted JSON bool decodes to false, so every caller that omits dry_run gets a REAL series merge with DeleteSer"
+  ]
  },
  {
   "todo_line": 3966,

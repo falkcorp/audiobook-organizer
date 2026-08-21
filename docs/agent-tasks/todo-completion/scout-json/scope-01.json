@@ -146,7 +146,10 @@
   "gate": "make ci",
   "notes": "Part 3 below (endpoint wiring) depends on this part existing, since a real undo endpoint should call the FULLY reversing UnmergeAuto, not the book-record-only version, to avoid shipping a fake-safe 'undo' button. Owner should decide whether the iTunes write-back reversal (step 5's batcher gap) is in-scope now or gets its own follow-up TODO if it turns out to need real design work in the write-back batcher.",
   "review_notes": [
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
+   "[correctness.json] An admin-invokable undo endpoint is shipped before the undo actually undoes, with no dependency edge. TASK-152 (wave 1, sonnet, review_critical) adds POST /api/v1/dedup/merges/:key/undo calling Engine.UnmergeAuto. TASK-042 (wave 2, opus, review_critical) is what makes UnmergeAuto reverse external-ID",
+   "[ops-rollback.json] The admin 'undo merge' endpoint ships 12 waves BEFORE the code that makes the undo actually reverse anything beyond the book record, and there is no depends_on edge between them. An operator who hits POST /api/v1/dedup/merges/:key/undo in wave 1 gets a 200 'unmerged' while the loser's external-ID ma",
+   "[ops-rollback.json] Double-undo is unguarded and the endpoint's own contract cannot be implemented. TASK-154's goal promises '409 if already reverted', but no reverted marker exists anywhere: TASK-044 only says 'consider marking a journal entry reverted after first successful undo', in an edge_cases bullet, and its ste"
   ]
  },
  {
@@ -229,7 +232,10 @@
   "gate": "make ci",
   "notes": "Should land AFTER part 2 (full external-ID + write-back reversal) so the exposed endpoint does not advertise a bigger guarantee ('undo this merge') than UnmergeAuto currently delivers (book-record-only). If shipped before part 2, the endpoint doc/response must say explicitly that external-ID and iTunes state are NOT reverted yet.",
   "review_notes": [
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
+   "[correctness.json] An admin-invokable undo endpoint is shipped before the undo actually undoes, with no dependency edge. TASK-152 (wave 1, sonnet, review_critical) adds POST /api/v1/dedup/merges/:key/undo calling Engine.UnmergeAuto. TASK-042 (wave 2, opus, review_critical) is what makes UnmergeAuto reverse external-ID",
+   "[ops-rollback.json] The admin 'undo merge' endpoint ships 12 waves BEFORE the code that makes the undo actually reverse anything beyond the book record, and there is no depends_on edge between them. An operator who hits POST /api/v1/dedup/merges/:key/undo in wave 1 gets a 200 'unmerged' while the loser's external-ID ma",
+   "[ops-rollback.json] Double-undo is unguarded and the endpoint's own contract cannot be implemented. TASK-154's goal promises '409 if already reverted', but no reverted marker exists anywhere: TASK-044 only says 'consider marking a journal entry reverted after first successful undo', in an edge_cases bullet, and its ste"
   ]
  },
  {
@@ -1556,13 +1562,13 @@
    "A reference inside missing_file_repair.go/missing_file_audit.go's call chain must be left untouched per the standing hands-off instruction, even if narrowing it would be mechanically easy \u2014 ask first, per CLAUDE.md."
   ],
   "anti_over_suppression": "N/A",
-  "depends_on_lines": [
-   1194
-  ],
+  "depends_on_lines": [],
   "gate": "make ci",
   "notes": "Depends conceptually on L1194 (PebbleStore split, PARKED) only for the 7 by-design composition-root references, which are explicitly NOT part of this task's scope \u2014 this task is just the Server.Store()-chain bucket. Re-verify the precise count via the plan doc's real methodology before starting; do not trust a flat grep (illustrated above returning 82 files vs. the claimed 18 references).",
   "review_notes": [
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
+   "[correctness.json] A wave-1 Opus-class review_critical task carries a prerequisite that is deliberately PARKED and can therefore never be satisfied. TASK-024 ('Finish killing database.Store') declares depends_on_lines [1194]; TODO line 1194 resolves only to the parked entry 'PebbleStore struct split \u2014 deliberately par",
+   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
   ]
  },
  {
@@ -1655,8 +1661,8 @@
   "part": 2,
   "src_id": null,
   "title": "Triage the 16 removed POST /maintenance/* paths in openapi.json \u2014 delete, or document as ops-API equivalents",
-  "verdict": "actionable",
-  "verdict_evidence": "The TODO explicitly separates these from the safe-to-delete group above: 'the maintenance ones should be checked against whether an ops-API equivalent should be documented instead' \u2014 these are genuine functionality (now dispatched through the registry ops API as maintenance.dedup-books etc.) rather than pure duplicates, so blind deletion would silently un-document real capability.",
+  "verdict": "needs_design",
+  "verdict_evidence": "[correctness.json] Three Bucket-1 briefs fail the package's own evidence bar. TASK-058 and TASK-059 carry zero verified_anchors \u2014 the only two of 185. TASK-065 has an empty exact_files, so there is no commit scope at all. TASK-058 is additionally mis-bucketed: its stated outcome is a binary judgement call ('delete, or document as ops-API equivalents') across 16 API paths, which is a needs_design question, not something a weak model can execute deterministically. | The TODO explicitly separates these from the safe-to-delete group above: 'the maintenance ones should be checked against whether an ops-API equivalent should be documented instead' \u2014 these are genuine functionality (now dispatched through the registry ops API as maintenance.dedup-books etc.) rather than pure duplicates, so blind deletion would silently un-document real capability.",
   "domain": "docs",
   "exact_files": [
    "TODO.md",
@@ -1693,7 +1699,8 @@
   "gate": "n/a (docs)",
   "notes": "This needs a quick owner check-in on delete-vs-redocument policy before executing at scale, even though each individual path's 'is it gone' fact is independently verifiable.",
   "review_notes": [
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
+   "[correctness.json] Three Bucket-1 briefs fail the package's own evidence bar. TASK-058 and TASK-059 carry zero verified_anchors \u2014 the only two of 185. TASK-065 has an empty exact_files, so there is no commit scope at all. TASK-058 is additionally mis-bucketed: its stated outcome is a binary judgement call ('delete, or"
   ]
  },
  {
@@ -1701,8 +1708,8 @@
   "part": 3,
   "src_id": null,
   "title": "Delete the /torrents group-relative fragment from openapi.json",
-  "verdict": "actionable",
-  "verdict_evidence": "GET /torrents is documented by the TODO as a group-relative fragment of the Deluge integration group (i.e. the real route is prefixed, e.g. /deluge/torrents or similar) \u2014 same class of bug as part 1's group-relative duplicates, called out separately only because it belongs to a different integration group than the auth/itunes/ai examples.",
+  "verdict": "needs_design",
+  "verdict_evidence": "[correctness.json] Three Bucket-1 briefs fail the package's own evidence bar. TASK-058 and TASK-059 carry zero verified_anchors \u2014 the only two of 185. TASK-065 has an empty exact_files, so there is no commit scope at all. TASK-058 is additionally mis-bucketed: its stated outcome is a binary judgement call ('delete, or document as ops-API equivalents') across 16 API paths, which is a needs_design question, not something a weak model can execute deterministically. | GET /torrents is documented by the TODO as a group-relative fragment of the Deluge integration group (i.e. the real route is prefixed, e.g. /deluge/torrents or similar) \u2014 same class of bug as part 1's group-relative duplicates, called out separately only because it belongs to a different integration group than the auth/itunes/ai examples.",
   "domain": "docs",
   "exact_files": [
    "docs/api/openapi.json"
@@ -1734,7 +1741,10 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "n/a (docs)",
-  "notes": "Trivially batchable with part 1's execution \u2014 separated here only to mirror the source TODO's own grouping."
+  "notes": "Trivially batchable with part 1's execution \u2014 separated here only to mirror the source TODO's own grouping.",
+  "review_notes": [
+   "[correctness.json] Three Bucket-1 briefs fail the package's own evidence bar. TASK-058 and TASK-059 carry zero verified_anchors \u2014 the only two of 185. TASK-065 has an empty exact_files, so there is no commit scope at all. TASK-058 is additionally mis-bucketed: its stated outcome is a binary judgement call ('delete, or"
+  ]
  },
  {
   "todo_line": 376,
@@ -2075,7 +2085,8 @@
   "gate": "n/a (docs)",
   "notes": "Depends on L468 and L484's findings in this same scope for two of the four corrections; the other two (series detail, authors) need fresh verification not yet done by this scout.",
   "review_notes": [
-   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for "
+   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
+   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
   ]
  }
 ]

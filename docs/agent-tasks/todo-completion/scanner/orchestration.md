@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/scanner/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: a740f762-0867-4561-9f8b-91c204410976 -->
+<!-- guid: e355a567-8373-42ca-896e-7658ebf0d7e8 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — scanner workstream (todo-completion)
@@ -12,10 +12,10 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK133[TASK-133 reuse-internal-ai-s-existing]
+      TASK128[TASK-128 reuse-internal-ai-s-existing]
     end
     subgraph Wave2
-      TASK132[TASK-132 delete-the-unused-internal-s]
+      TASK127[TASK-127 delete-the-unused-internal-s]
     end
 
 ```
@@ -40,9 +40,14 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 > files); 3) file-copy cherry-pick fallback — re-apply the task's file states onto a
 > fresh branch from HEAD; 4) mark `rebase_blocked`, stop the lane, escalate to a human.
 >
-> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR; any
-> sibling worktree is un-rebased; the gate is red on `origin/main`; or a
-> `rebase_blocked` marker is unresolved.
+> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR that is
+> NOT a held review-critical PR; any sibling worktree is un-rebased; the gate is red on
+> `origin/main`; or a `rebase_blocked` marker is unresolved.
+>
+> **Held PRs (review-critical / prod-data path):** the coordinator opens the PR and
+> STOPS — never `gh pr merge`. A held PR does not block the wave; only tasks that share a
+> file with it are deferred to a `held-dependent` queue and dispatched after the owner
+> merges it. The owner sees the held list in the coordinator's status report.
 
 ## Run it
 

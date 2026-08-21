@@ -1144,7 +1144,10 @@
    8646
   ],
   "gate": "make ci",
-  "notes": "Owner was explicit that borrowing offsets from a different edition is WORSE than no chapters \u2014 the near-exact-match gate is the single most important correctness property of this op; do not loosen it under time pressure."
+  "notes": "Owner was explicit that borrowing offsets from a different edition is WORSE than no chapters \u2014 the near-exact-match gate is the single most important correctness property of this op; do not loosen it under time pressure.",
+  "review_notes": [
+   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
+  ]
  },
  {
   "todo_line": 8646,
@@ -1767,7 +1770,8 @@
   "gate": "make ci && npm --prefix web run lint && npm --prefix web test",
   "notes": "Owner design 2026-08-05, architecture LOCKED per the referenced note \u2014 do not redesign the tier boundaries, only implement the sequencer/orchestrator around the already-built ops.",
   "review_notes": [
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
+   "[ops-rollback.json] TASK-124 makes the operations registry AUTO-ENQUEUE producer ops with no operator involvement, and is marked review_critical=false. It never says the enqueued producer inherits the requester's dry_run/apply posture, so a First Aid dry run (TASK-123, apply=false by design) can cause real mutating pro"
   ]
  },
  {
@@ -1836,7 +1840,10 @@
   "anti_over_suppression": "TestDepsScheduler_DoesNotDoubleEnqueueAlreadyRunningProducer",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "This is core operations-registry infrastructure, not First Aid-specific \u2014 First Aid (part 3) is its first real consumer, but review this change with the same care the item says its one prior review needed."
+  "notes": "This is core operations-registry infrastructure, not First Aid-specific \u2014 First Aid (part 3) is its first real consumer, but review this change with the same care the item says its one prior review needed.",
+  "review_notes": [
+   "[ops-rollback.json] TASK-124 makes the operations registry AUTO-ENQUEUE producer ops with no operator involvement, and is marked review_critical=false. It never says the enqueued producer inherits the requester's dry_run/apply posture, so a First Aid dry run (TASK-123, apply=false by design) can cause real mutating pro"
+  ]
  },
  {
   "todo_line": 8943,

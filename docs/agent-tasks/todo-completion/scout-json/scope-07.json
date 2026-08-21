@@ -268,7 +268,8 @@
   "gate": "make ci",
   "notes": "review_critical=true because series-prune and other maintenance ops here are the same family that deleted 326 series with zero audit trail on 2026-08-14 (see L4295's background) \u2014 a wrong opID payload here silently reintroduces the same class of bug.",
   "review_notes": [
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
+   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
   ]
  },
  {
@@ -1129,7 +1130,10 @@
    4281
   ],
   "gate": "make ci",
-  "notes": "review_critical=true: same class of bug that stranded 13,322 books behind 6,893 dangling series on prod (2026-08-14) \u2014 this closes the remaining 2 of what appear to have been (at least) 3 total unguarded call sites."
+  "notes": "review_critical=true: same class of bug that stranded 13,322 books behind 6,893 dangling series on prod (2026-08-14) \u2014 this closes the remaining 2 of what appear to have been (at least) 3 total unguarded call sites.",
+  "review_notes": [
+   "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo"
+  ]
  },
  {
   "todo_line": 4295,

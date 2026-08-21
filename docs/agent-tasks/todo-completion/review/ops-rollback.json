@@ -1,0 +1,388 @@
+{
+ "lens": "ops-rollback",
+ "verdict": "CHALLENGED",
+ "note": "Task IDs are from the skeleton.json snapshot taken 2026-08-21 19:21 (189 tasks); the file was being regenerated during review (175 -> 189 tasks between two reads) so every finding also names the task TITLE, which is stable. Every finding now carries a task_titles array parallel to task_ids: titles are the STABLE identifier across skeleton regenerations, IDs are not. Where a finding's evidence quotes a brief FILENAME, that filename uses the pre-regeneration numbering and the snapshot ID is given in parentheses.",
+ "findings": [
+  {
+   "severity": "blocker",
+   "task_ids": [
+    "TASK-154",
+    "TASK-044"
+   ],
+   "problem": "The admin 'undo merge' endpoint ships 12 waves BEFORE the code that makes the undo actually reverse anything beyond the book record, and there is no depends_on edge between them. An operator who hits POST /api/v1/dedup/merges/:key/undo in wave 1 gets a 200 'unmerged' while the loser's external-ID mappings stay on the winner and the iTunes write-back removals stay applied to the ITL on disk. Both briefs state the ordering in prose NOTES only; skeleton depends_on is empty on both.",
+   "evidence": "python3 -c on skeleton.json: TASK-154 'Expose UnmergeAuto through an admin undo-merge endpoint (list + invoke)' -> wave=1, depends_on=[]; TASK-044 'Make UnmergeAuto reverse external-ID reassignment and iTunes write-back removals, not just the book record' -> wave=13, depends_on=[]. TASK-154 NOTES: 'Should land AFTER part 2 (full external-ID + write-back reversal) so the exposed endpoint does not advertise a bigger guarantee...'. TASK-044 NOTES: 'Part 3 below (endpoint wiring) depends on this part existing, since a real undo endpoint should call the FULLY reversing UnmergeAuto, not the book-record-only version, to avoid shipping a fake-safe undo button.'",
+   "fix": {
+    "TASK-154": {
+     "depends_on": [
+      "TASK-044"
+     ],
+     "wave": 14
+    }
+   },
+   "task_titles": [
+    "Expose UnmergeAuto through an admin undo-merge endpoint (list + invoke)",
+    "Make UnmergeAuto reverse external-ID reassignment and iTunes write-back removals, not just the book record"
+   ]
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-154",
+    "TASK-044"
+   ],
+   "problem": "Double-undo is unguarded and the endpoint's own contract cannot be implemented. TASK-154's goal promises '409 if already reverted', but no reverted marker exists anywhere: TASK-044 only says 'consider marking a journal entry reverted after first successful undo', in an edge_cases bullet, and its steps 1-6 never add the field. A second undo re-runs RevertBookToVersion against a book_ver snapshot that the first undo already restored - TASK-044's own words: 'document this as a known no-op/idempotent-ish case but not guaranteed safe'. 'Not guaranteed safe' plus an HTTP endpoint that invites retries is a fail-open on the one path whose whole purpose is rollback.",
+   "evidence": "TASK-154 GOAL: '...and returns 200 on success, 404 if the journal key does not exist, 409 if already reverted'. TASK-044 STEPS 1: adds only LoserExternalIDs and RemovedITunesPIDs to AutoMergeJournalEntry. TASK-044 EDGE_CASES: 'UnmergeAuto called twice on the same journal key (double-undo): ... consider marking a journal entry reverted after first successful undo and refusing a second.'",
+   "fix": {
+    "TASK-044": {
+     "steps_add": "Add RevertedAt *time.Time to AutoMergeJournalEntry and make UnmergeAuto refuse (typed ErrAlreadyReverted) a second undo of the same key; this is a required step, not a consideration - TASK-154 returns 409 off it."
+    }
+   },
+   "task_titles": [
+    "Expose UnmergeAuto through an admin undo-merge endpoint (list + invoke)",
+    "Make UnmergeAuto reverse external-ID reassignment and iTunes write-back removals, not just the book record"
+   ]
+  },
+  {
+   "severity": "blocker",
+   "task_ids": [
+    "TASK-107"
+   ],
+   "problem": "TASK-107 adds a new rejection rule to ValidateOpDef, which is the server BOOT contract - a def it rejects makes the server refuse to start - and then explicitly authorises leaving non-compliant ops non-compliant: step 3 says to flag write-capable ops without dry_run support 'as a follow-up per-op task rather than silently forcing them'. Following the brief literally produces a binary that will not boot in prod, and the failure is at startup, i.e. after deploy, not in CI unless the boot smoke test happens to cover every plugin. There is no phased path (warn-then-enforce) and no rollback note.",
+   "evidence": "internal/operations/registry/registry.go:416-419 (HEAD): 'ValidateOpDef checks every rule an OperationDef must satisfy on its own... RegisterOp calls it first, so this function IS the boot contract: whatever it rejects here, the server refuses to start on.' Same file lines 420-428 record this exact failure mode having already happened twice ('the failure surfaced as the SERVER REFUSING TO BOOT -- twice'). Scale at HEAD: `grep -rln 'CapLibraryWrite' --include='*.go' internal/plugins | grep -v _test | wc -l` = 70 plugin files declare the write capability, while `grep -rln 'dry_run\\|DryRun' --include='*.go' internal/plugins | grep -v _test | wc -l` = 17 mention a dry-run at all - so the audit step 3 waves through is on the order of 50 non-compliant defs, every one of which becomes a boot refusal.",
+   "fix": {
+    "TASK-107": {
+     "steps_add": "Two-phase rollout: PR 1 adds the field plus a WARN-only audit (log every write-capable def missing SupportsDryRun at boot) and sets the flag on every compliant op; PR 2 flips ValidateOpDef to reject, only once the audit logs zero. Never merge the rejecting rule while any registered def is non-compliant.",
+     "review_critical": true
+    }
+   },
+   "task_titles": [
+    "Require every mutating operation to declare and enforce dry_run support at the registry"
+   ]
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-107"
+   ],
+   "problem": "The task title says 'declare AND enforce dry_run support at the registry', but every step only implements DECLARE. SupportsDryRun is a self-asserted bool with nothing tying it to the op actually honouring a dry_run/apply param; step 3 tells the agent to set it true on ops that 'already implement a dry_run/apply param' by grep. After this lands, the registry gate reads as a guarantee ('registry enforces dry-run') while providing none - and step 4 concedes the param name is not even canonical ('some ops use apply inverted, some use dry_run'), so no runtime check is possible without first unifying the param.",
+   "evidence": "TASK-107 title: 'Require every mutating operation to declare and enforce dry_run support at the registry'. STEPS 1-2 add the field + ValidateOpDef check; STEPS 4: 'Optionally introduce a shared DryRunParams struct ... (some ops use apply inverted, some use dry_run - pick one canonical name...)' - marked optional, so the enforceable half is the part allowed to be skipped.",
+   "fix": {
+    "TASK-107": {
+     "steps_add": "Make the shared DryRunParams embed mandatory, not optional, and have the registry decode it centrally so the dispatcher (not the op body) is what refuses to write when dry_run is set. A declaration flag that nothing checks at runtime must not be described as enforcement."
+    }
+   },
+   "task_titles": [
+    "Require every mutating operation to declare and enforce dry_run support at the registry"
+   ]
+  },
+  {
+   "severity": "blocker",
+   "task_ids": [
+    "TASK-147",
+    "TASK-148"
+   ],
+   "problem": "Both tasks convert production APPLY ops from ResumeDrop to ResumeRestart. ResumeRestart is resumed automatically and unattended at server startup - no operator action, no gate. That directly collides with the standing rule that a running scan clobbers applied metadata and applies must never run during a scan (plan section 4 and DECISIONS row 14). After a deploy or crash-restart, an interrupted metadata.batch-apply-cached (which optionally writes tags to audio files on disk) or reconcile.apply (a dedup merge/apply path) will resume by itself, possibly into a scan window. Neither brief contains the words scan, interlock, or any precondition on resume.",
+   "evidence": "internal/operations/registry/resume.go:21-31 (HEAD): 'resumeAfterStartup is called from Start() before the dispatcher begins... ResumeRestart: increment resume_count, dispatch with saved state.' resume.go:117-129: '_ = r.store.UpdateOperationV2Status(row.ID, \"queued\", ...)' then 'r.pingDispatch()'. Master plan section 4 Wave 4: 'A running scan clobbers applied metadata - never apply during a scan. This constraint binds most of Wave 4.' DECISIONS-PENDING.md row 14: 'E02 never via library.scan while applies are pending'. grep of both briefs for 'scan' returns no hit in steps/edge_cases/acceptance.",
+   "fix": {
+    "TASK-147": {
+     "steps_add": "Before RunItems resumes, check for an active library.scan / reconcile_scan op and park (or refuse) rather than resume; add a test asserting a resumed apply does not start while a scan op is running.",
+     "depends_on_lines": [
+      "scan-interlock precondition"
+     ]
+    },
+    "TASK-148": {
+     "steps_add": "same interlock"
+    }
+   },
+   "task_titles": [
+    "Convert metadata.batch-apply-cached from ResumeDrop to real checkpoint/resume",
+    "Convert reconcile.apply from ResumeDrop to real checkpoint/resume"
+   ]
+  },
+  {
+   "severity": "blocker",
+   "task_ids": [
+    "TASK-147",
+    "TASK-148"
+   ],
+   "problem": "resumeRestart is fail-OPEN when the checkpoint is missing, unreadable, or schema_version=1: it logs and dispatches the op with the ORIGINAL params, i.e. ResumeFrom absent => 0 => the entire book list is re-applied from the start. For metadata.batch-apply-cached with WriteBack=true that re-writes tags into audio files already processed; for reconcile.apply it re-applies every merge decision. Both briefs treat ResumeFrom=0 only as the benign 'fresh run' case and never as the checkpoint-lost case, so nothing in either task makes the resumed run safe when the state blob is gone.",
+   "evidence": "internal/operations/registry/resume.go:100-115: 'if stateRow, err := r.store.GetOpStateV2(row.ID); err == nil && stateRow != nil && stateRow.SchemaVersion == 2 { ... }' - every failure branch falls through with row.Params unchanged, then lines 117-129 re-queue and pingDispatch regardless. resume.go:88-91 doc comment: 'Schema_version=1 (gob) blobs are ignored - the op restarts from scratch once, which is safe for all idempotent ops.' TASK-147 EDGE_CASES: 'ResumeFrom=0 (a fresh run, not a resume) must behave identically to today's unconverted behavior - no skipped books.' - no checkpoint-lost case.",
+   "fix": {
+    "TASK-147": {
+     "steps_add": "Make the apply per-item idempotent (skip a book whose applied-revision already matches) OR refuse to resume when no schema_version=2 checkpoint is present, marking the op interrupted_ask instead. Add a test for 'checkpoint absent on restart' asserting no re-write.",
+     "edge_cases_add": "Checkpoint row missing or schema_version=1 on resume: must NOT silently re-apply from index 0."
+    },
+    "TASK-148": {
+     "edge_cases_add": "same"
+    }
+   },
+   "task_titles": [
+    "Convert metadata.batch-apply-cached from ResumeDrop to real checkpoint/resume",
+    "Convert reconcile.apply from ResumeDrop to real checkpoint/resume"
+   ]
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-017"
+   ],
+   "problem": "The config rename is forward-compatible but not BACKWARD-compatible, so the PR cannot be cleanly reverted. After it lands the app persists only the new key auto_write_tags_on_fetch (step 4 adds a new save case); roll the binary back and the old code reads write_back_metadata, which the new binary never wrote, so tag write-back on fetch silently flips to its false default - the exact failure the brief itself identifies for the forward direction ('a bare rename would silently revert AutoWriteTagsOnFetch to its default ... and change which fetches write tags without anyone asking'). Nothing in the brief writes BOTH keys during the deprecation window.",
+   "evidence": "TASK-017 STEPS 4: 'KEEP the case \"write_back_metadata\": ... as-is ... and ADD a new case \"auto_write_tags_on_fetch\"' - read-side only. No step touches the SAVE path to emit the legacy key. GOAL covers only load: 'on load, if the new key is absent ... use the old key's value'. review_critical=true, so per DECISIONS-PENDING 'Execution conventions' this PR stays open for the owner - i.e. it is exactly the class of PR most likely to be reverted.",
+   "fix": {
+    "TASK-017": {
+     "steps_add": "During the deprecation window, WRITE both keys on save (new key authoritative, legacy key mirrored) so a binary rollback keeps the operator's setting. Remove the mirror only in a later PR."
+    }
+   },
+   "task_titles": [
+    "Rename write_back_metadata config key to auto_write_tags_on_fetch with deprecated-alias migration"
+   ]
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-124",
+    "TASK-123"
+   ],
+   "problem": "TASK-124 makes the operations registry AUTO-ENQUEUE producer ops with no operator involvement, and is marked review_critical=false. It never says the enqueued producer inherits the requester's dry_run/apply posture, so a First Aid dry run (TASK-123, apply=false by design) can cause real mutating producer ops to be dispatched with their own defaults. Its exact_files also omit the file where ops actually transition into waiting_deps, so the agent will not find the call site step 3 asks for.",
+   "evidence": "TASK-124: review_critical=false, exact_files = [internal/operations/registry/deps.go, deps_scheduler.go, deps_scheduler_test.go]. STEPS 3: 'Call this from wherever a new op transitions into waiting_deps'. At HEAD that is internal/operations/registry/registry.go:699-701 ('if !satisfied { status = \"waiting_deps\" }') and :754 - registry.go is not in exact_files. No step or edge_case mentions dry_run, apply, params, or a scan interlock; the enqueue is described as 'via the same path normal op submission uses', i.e. default params. TASK-123 depends_on TASK-124 and its own step 7 sets apply=false only at the frontend button.",
+   "fix": {
+    "TASK-124": {
+     "review_critical": true,
+     "exact_files": [
+      "internal/operations/registry/registry.go"
+     ],
+     "steps_add": "The auto-enqueued producer must inherit dry_run/apply from the waiting op's params (never its own default), must refuse to auto-enqueue any op whose def has CapLibraryWrite unless the waiting op was itself an apply, and must be behind the same off-by-default flag this dormant subsystem already ships under."
+    }
+   },
+   "task_titles": [
+    "Missing-input triggering: enqueue the producer op when a waiting_deps requirement's input has never run",
+    "Build the First Aid orchestrator + frontend trigger button (dry-run by default, no schedule)"
+   ]
+  },
+  {
+   "severity": "blocker",
+   "task_ids": [
+    "TASK-054"
+   ],
+   "problem": "TASK-054 adds real, irreversible file moves to the merge/apply path (CombineBooks) via organizer.Organizer.OrganizeBook, with no dry-run and - decisively - no operation_change journal row. The repo's undo engine reverses file moves only from operation_changes rows of type file_move/organize_rename; neither internal/merge/service.go nor internal/organizer/organizer.go writes one. So a Combine that co-locates files cannot be undone by any existing mechanism, and reverting the PR leaves every already-moved library file where it landed with DB rows pointing at the new paths.",
+   "evidence": "internal/undo/engine.go:129 'case \"file_move\", \"organize_rename\": if err := revertFileMove(change)' - undo is driven entirely by operation_changes rows. `grep -c CreateOperationChange internal/organizer/organizer.go internal/merge/service.go` -> organizer.go:0, merge/service.go:0. The recording that does exist is in internal/organizer/service.go:1056-1069 and is conditional: 'if operationID != \"\" { ... ChangeType: \"organize_rename\" ...}' - a merge-path caller has no operationID. TASK-054 STEPS name 'OrganizeBook(survivorBook)' on *organizer.Organizer (organizer.go:171), the variant with no journaling, and no step mentions operation_changes, undo, or dry-run.",
+   "fix": {
+    "TASK-054": {
+     "steps_add": "Record an operation_change row (change_type file_move) per moved file, under a real operationID, before returning; add an apply/dry_run param defaulting to preview; add a test asserting internal/undo can reverse a co-location."
+    }
+   },
+   "task_titles": [
+    "Physically co-locate a Combine survivor's files under RootDir after CombineBooks"
+   ]
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-131"
+   ],
+   "problem": "Routing the three organize/rename paths through organizer.MoveBookFile moves the DB write INTO the mover, but MoveBookFile records no operation_change row, while the current callers do. The refactor can therefore silently delete the organize undo trail - the rollback property the task is nominally strengthening. The brief never mentions operation_changes, undo, or internal/audiobooks/revert.go, and its exact_files omit internal/organizer/service.go, which is where the journaling lives.",
+   "evidence": "`grep -c CreateOperationChange internal/organizer/move.go` = 0. internal/organizer/service.go:1015-1101, 1184, 1559-1568 create the organize_rename / organize_failed / organize_skipped rows; internal/audiobooks/revert.go:89 and internal/undo/engine.go:129 consume them. TASK-131 exact_files = [internal/metafetch/service_apply.go, internal/organizer/organizer.go] - service.go absent. Its EDGE_CASES discuss per-file vs book-level rollback but only in terms of filesystem state, never the change log.",
+   "fix": {
+    "TASK-131": {
+     "exact_files": [
+      "internal/organizer/service.go",
+      "internal/organizer/move.go"
+     ],
+     "steps_add": "Move the operation_change recording into MoveBookFile (or assert at the caller that it still happens) and add a regression test that an organize run still produces reversible organize_rename rows after the refactor."
+    }
+   },
+   "task_titles": [
+    "Route the three organize/rename paths through organizer.MoveBookFile's verify-move-DB-update-rollback pattern"
+   ]
+  },
+  {
+   "severity": "blocker",
+   "task_ids": [
+    "TASK-048"
+   ],
+   "problem": "The dry-run parameter the task adds cannot hold its stated default. The brief specifies a plain `dryRun bool` / DryRun bool threaded from the op request body 'defaulting to true' - in Go an omitted JSON bool decodes to false, so every caller that omits dry_run gets a REAL series merge with DeleteSeries calls. The brief cites author_conjunction_repair.go as the pattern to match, and that file uses the pointer form precisely to make absent mean dry-run.",
+   "evidence": "TASK-048 STEPS 1: 'Change DedupSeries's signature ... to accept a `dryRun bool` parameter'; STEPS 4: 'thread a DryRun param from the op's request body, defaulting to true'. HEAD convention: internal/plugins/maintenance/author_conjunction_repair.go:58 'DryRun *bool `json:\"dry_run,omitempty\"`' (also intro_migrate_single_file.go:66, intro_transcribe.go:90). The unsafe form is also live at internal/reconcile/elect_primaries.go:32 'DryRun bool `json:\"dry_run\"`'.",
+   "fix": {
+    "TASK-048": {
+     "steps_add": "Use `DryRun *bool `json:\"dry_run,omitempty\"`` and treat nil as true, matching author_conjunction_repair.go; add a test that an EMPTY params body performs no writes."
+    }
+   },
+   "task_titles": [
+    "Add a dry-run parameter to dedup.series-dedup"
+   ]
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-039"
+   ],
+   "problem": "TASK-039 adds a brand-new DeleteNarrator that deliberately reproduces the junction-orphan bug another task in the same package is fixing, and it carries no reference guard even though two sibling tasks add exactly such a guard for authors and series. It also has no depends_on edge to either. Shipping a delete primitive that knowingly strands book_narrators: rows creates the next data-integrity item rather than closing one.",
+   "evidence": "TASK-039 EDGE_CASES: 'A narrator referenced by one or more book_narrators:<bookID> junction rows is NOT protected against deletion by this task's scope ... exactly analogous to L5290's DeleteAuthor junction-cleanup gap, which this task deliberately does not attempt to fix for narrators either.' Sibling tasks: TASK-040 'Fix DeleteAuthor's junction cleanup: it scans the dead book_author: keyspace instead of book_authors:' (confirmed at HEAD: internal/database/pebble_store_authors.go:185 'LowerBound: []byte(\"book_author:\")' vs the live keyspace at :463/:481 'book_authors:%s'), TASK-032 'Guard author delete paths with an unfiltered author-reference counter', TASK-050 same guard for series. book_narrators: is a real keyspace (internal/database/memdb_warmup.go:266-268). TASK-039 depends_on = [].",
+   "fix": {
+    "TASK-039": {
+     "depends_on": [
+      "TASK-040",
+      "TASK-032"
+     ],
+     "steps_add": "Delete the book_narrators: junction entries in the same batch, and refuse deletion when an unfiltered narrator-reference count is non-zero (mirror the author guard from TASK-032) instead of documenting the gap."
+    }
+   },
+   "task_titles": [
+    "Add DeleteNarrator to the store (CRUD building block only)"
+   ]
+  },
+  {
+   "severity": "blocker",
+   "task_ids": [
+    "ALL review_critical (60 tasks)"
+   ],
+   "problem": "The owner decision that prod-data-path PRs are NOT auto-merged exists nowhere in the execution machinery. Every workstream's orchestration.md says 'Read the package-level ../../ORCHESTRATION.md first', and that document - docs/agent-tasks/ORCHESTRATION.md at HEAD - instructs the coordinator to open and rebase-merge every PR with no exception for review-critical work. The carve-out appears only as prose in BREAKDOWN and in each brief's header line, i.e. in documents the coordinator's git step does not consult. The default behaviour of the described machine is therefore to admin-merge 60 prod-data PRs unattended, overnight.",
+   "evidence": "`grep -rn 'PR left open\\|stays open' docs/agent-tasks/todo-completion/*/orchestration.md` -> 0 hits across 18 files. Package-level doc: docs/agent-tasks/ORCHESTRATION.md:19-20 'gates each finished worker on a local build/test, opens+merges the PR, and rebases the still-open siblings after each merge'; :63-66 '5. **Merge** (coordinator only): gh pr create --fill && gh pr merge <n> --rebase'; `grep -niE 'review.critical|prod' docs/agent-tasks/ORCHESTRATION.md` -> 0 hits. DECISIONS-PENDING.md (Decisions recorded 2026-08-21): 'PRs are opened and admin-merged on green CI overnight, except PRs on a prod-data path (review-critical), which stay open for the owner.' Count: 60 of 189 tasks have review_critical=true.",
+   "fix": {
+    "package": {
+     "orchestration_add": "Put the hold-open rule in every orchestration.md's verbatim coordinator protocol AND in docs/agent-tasks/ORCHESTRATION.md: 'A task whose brief header says REVIEW-CRITICAL: open the PR, never merge it. It is the owner's to merge.'"
+    }
+   },
+   "task_titles": [
+    "ALL review_critical (60 tasks)"
+   ]
+  },
+  {
+   "severity": "blocker",
+   "task_ids": [
+    "ALL review_critical (60 tasks)"
+   ],
+   "problem": "Holding review-critical PRs open deadlocks the sweep as specified. All 18 orchestration.md files carry the rule 'A wave MUST NOT start while any of: the previous wave has an unmerged PR ...', and the package-level doc adds 'Don't start a task whose Depends on: isn't merged yet'. 15 of the 18 workstreams have a review-critical task in wave 1, so under the owner's hold-open rule those 15 lanes can never reach wave 2. The plan resolves the contradiction only in one direction - by merging the prod-data PRs - which is the failure mode the decision exists to prevent.",
+   "evidence": "`grep -rlc 'A wave MUST NOT start' docs/agent-tasks/todo-completion/*/orchestration.md | wc -l` = 18. docs/agent-tasks/ORCHESTRATION.md:46 'Run dependent tasks in waves ... Don't start a task whose Depends on: isn't merged yet.' Per-workstream earliest review-critical wave (computed from skeleton.json): audiobooks 1, config 1, database 1, dedup 1, docs 1, itunes 1, maintenance 1, metadata 1, misc-go 1, missing-file-lane 1, operations 1, organize 1, server 1, server-handlers 1, web 3; only ci-tooling, scanner and search have none.",
+   "fix": {
+    "package": {
+     "orchestration_add": "Define what a lane does when its blocking PR is owner-held: either (a) partition each workstream into an auto-merge lane and an owner lane with no cross-lane file collisions, or (b) allow the next wave to start on a worktree stacked on the open PR's branch. State which; do not leave the coordinator to improvise."
+    }
+   },
+   "task_titles": [
+    "ALL review_critical (60 tasks)"
+   ]
+  },
+  {
+   "severity": "blocker",
+   "task_ids": [
+    "TASK-054"
+   ],
+   "problem": "TASK-054 changes CombineBooks itself, so it silently converts every existing CombineBooks caller from a DB-only operation into one that moves files on disk - including the review-queue apply path whose entire safety posture (review_apply_enabled OFF in prod, decision 8 = do not flip) is predicated on applies being reversible DB writes, and including the multidisc holds TASK-122 exists to snapshot. exact_files lists only internal/merge/service.go, so neither the collision matrix nor any depends_on edge connects it to those callers, and no caller's brief is told its blast radius grew.",
+   "evidence": "`grep -rn 'CombineBooks(' --include='*.go' internal/ | grep -v _test` -> production callers at internal/plugins/maintenance/regroup_apply.go:127 (ApplyMultidisc) and :502 (ApplyDuplicateOf), and internal/server/handlers/duplicates/handler.go:351 (HTTP endpoint). TASK-054 exact_files = ['internal/merge/service.go']; depends_on = []. TASK-122 NOTES: 'This is the prerequisite for the actual canary APPLY, which is PARKED per decision 8'.",
+   "fix": {
+    "TASK-054": {
+     "exact_files": [
+      "internal/plugins/maintenance/regroup_apply.go",
+      "internal/server/handlers/duplicates/handler.go"
+     ],
+     "steps_add": "Gate co-location behind an explicit opt-in on CombineBooks' signature (default OFF) so existing callers keep DB-only semantics, and have each caller opt in deliberately."
+    }
+   },
+   "task_titles": [
+    "Physically co-locate a Combine survivor's files under RootDir after CombineBooks"
+   ]
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-088"
+   ],
+   "problem": "A whole-library MUTATING backfill (mints/repoints a sync identity on every book lacking one) is briefed with no dry_run/apply parameter, no report-first mode, and no preview - while sibling new-op tasks in the same package all default to preview (TASK-125 step 7 'Default apply=false', TASK-022 step 5, TASK-048). It also lands in wave 8, i.e. after TASK-107 makes SupportsDryRun mandatory for CapLibraryWrite ops, so as briefed it either fails boot validation or declares a dry-run capability it does not have.",
+   "evidence": "TASK-088 full brief: STEPS 1-5 and EDGE_CASES contain no occurrence of dry_run, apply, preview or report; GOAL: 'a new maintenance op ... that walks every book lacking a sync identity and mints/repoints one idempotently'. review_critical=true, wave=8. TASK-107 (wave 1) GOAL: 'extend ValidateOpDef ... to reject registration of any op declaring CapLibraryWrite without SupportsDryRun=true'.",
+   "fix": {
+    "TASK-088": {
+     "depends_on": [
+      "TASK-107"
+     ],
+     "steps_add": "Add DryRun *bool (nil = true) and a report-only first pass that counts books that WOULD be minted vs repointed, per this package's report-before-mutate convention; declare SupportsDryRun and prove it with a no-write test."
+    }
+   },
+   "task_titles": [
+    "TASK-04: build the idempotent sync-ID backfill over the existing library (bounded worker pool required)"
+   ]
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-031"
+   ],
+   "problem": "A prod RUN is embedded inside a briefable agent task. TASK-031's gate explicitly excuses 'the prod data-gathering run itself' from CI, i.e. the agent is expected to point the new diagnostic at the live production store - which the master plan classifies as Wave 4, 'NOT AGENT WORK', routed to pending-prod-actions.md. Worse, the 'strictly read-only' guarantee the brief relies on cannot be built with what HEAD provides: the only PebbleStore constructor opens read-write with FormatMajorVersion: FormatNewest, so pointing a tool at the live directory either fails on the lock held by the running server or risks an on-disk format upgrade.",
+   "evidence": "TASK-031 gate: 'make ci (Go) for the tool's own build; n/a for the prod data-gathering run itself'. TASK-031 EDGE_CASES: 'If run against a live production store, must be strictly read-only - no write path in the diagnostic tool at all'. HEAD: internal/database/pebble_store.go:307-313 'func newPebbleStore(path string, fs vfs.FS) ... opts := &pebble.Options{FormatMajorVersion: pebble.FormatNewest} ... db, err := pebble.Open(path, opts)' - `grep -rn 'ReadOnly' --include='*.go' internal/database/*.go` returns no read-only open path. Master plan section 4 Wave 4: 'These are NOT AGENT WORK. They route to pending-prod-actions.md'.",
+   "fix": {
+    "TASK-031": {
+     "steps_add": "Scope the task to building the tool and validating it against a fixture store only; file the production run as a pending-prod-actions.md row. If a live read is genuinely needed, add an explicit read-only open (pebble ReadOnly) or read via the running server's API rather than a second opener."
+    }
+   },
+   "task_titles": [
+    "Build a diagnostic reconciling the 3,954-book gap between the store's live-book count and the API list endpoint's total"
+   ]
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-080"
+   ],
+   "problem": "TASK-080 quietly changes the behaviour of a daily scheduled job on every existing install, in two ways, with no rollout or rollback note: (1) the effective compaction window drops from 14 days to 7, because the new ActivityLogRetentionDays (default 7) replaces ActivityLogCompactionDays as the argument; (2) the meaning of a stored 0 inverts from 'use 14' to 'never compact'. Any install whose persisted config already holds 0 flips from compacting at 14 days to never compacting - unbounded activity-log growth - and any install relying on the 14-day window starts destroying a week of detail the night the release lands. review_critical is false and the tier is sonnet.",
+   "evidence": "HEAD internal/server/server_maintenance_deps.go:238-241: 'if compactionDays <= 0 { compactionDays = 14 }; compactionCutoff := time.Now().AddDate(0, 0, -compactionDays)'. TASK-080 STEPS 4: 'Change CompactActivityLog's compaction-cutoff logic ... so that when the days value is 0 the compaction step is skipped entirely ... rather than falling back to 14'; STEPS 5: 'pass p.deps.ActivityLogRetentionDays() as the primary compaction-days argument instead of p.deps.ActivityLogCompactionDays()'; STEPS 1 sets the default to 7. Schedule: TASK-080 BACKGROUND cites internal/plugins/maintenance/cleanup.go:131 \"runs on schedule '0 0 * * *' (midnight daily)\". The brief's own NOTES flag D111 ('Stored zeros must not shadow defaults') as open and then waives it: 'this is not a hard blocker'.",
+   "fix": {
+    "TASK-080": {
+     "review_critical": true,
+     "steps_add": "Default the new key to the current effective value (14), not 7, so the release is behaviour-neutral; migrate an existing stored ActivityLogCompactionDays into the new key on first load; and state the rollback (revert restores the 14-day fallback, no data can be un-compacted)."
+    }
+   },
+   "task_titles": [
+    "Add a user-configurable activity-log retention window (default 7 days, 0=never)"
+   ]
+  },
+  {
+   "severity": "blocker",
+   "task_ids": [
+    "all 58 review-critical briefs"
+   ],
+   "problem": "Every brief's '## Idempotency / Rollback' section is boilerplate generated from the task's polarity field, and on data-touching tasks the claim it makes is FALSE. All 58 review-critical briefs carry one of exactly three sentences, each asserting that `git revert` restores the prior state: 'pre-existing behaviour is untouched (purely additive change)' (28), 'behaviour at the old site is restored' (27), 'no data or schema is touched' (3). The brief for the task that physically MOVES a survivor's audio files across the library says, verbatim, 'purely additive change'. Reverting the commit does not move files back, does not un-mint a backfilled sync identity, does not restore a compacted activity log, and does not re-write a config key the new binary stopped writing. The package therefore ships no real rollback story for exactly the 58 tasks that need one.",
+   "evidence": "`ls */TASK-*.md | wc -l` = 185 briefs; `grep -rlniE '## *rollback|rollback plan|how to revert' */TASK-*.md | wc -l` = 0 hand-written rollback plans. The selector is confirmed in the generator, not inferred: `sed -n '215,221p` of the package generator `scratchpad/gen_package.py` reads `pol = t.get(\"polarity\") or \"additive\"` then `if pol == \"additive\": idem = ...\"purely additive change\").` / `elif pol == \"removal\": ...\"no data or schema is touched\".` / `else: ...\"behaviour at the old site is restored\".` - i.e. the rollback sentence is chosen by the polarity field alone, with no input from review_critical or from what the task writes. Extracting the section from the 58 briefs whose header carries '**REVIEW-CRITICAL' yields 3 distinct texts (28/27/3). dedup/TASK-052-physically-co-locate-a-combine-survivor-s-files-.md lines 104-106: '## Idempotency / Rollback\\n\\nIf the first acceptance check below already passes at HEAD ... Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).' - while its own Coordinator notes on the next line read 'review_critical because this touches CombineBooks, a prod-data merge/apply path with real file moves.' (Brief filenames use the pre-regeneration numbering; this is skeleton TASK-054.)",
+   "fix": {
+    "package": {
+     "brief_template": "For any task with polarity that writes prod data, files, config or index state, replace the templated line with a task-specific answer to: what is already changed once this has RUN, and how is that undone? If the honest answer is 'it cannot be undone', the brief must say so and name the pre-image (snapshot/journal/report) that must exist first."
+    }
+   },
+   "task_titles": [
+    "all 58 review-critical briefs"
+   ]
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-139"
+   ],
+   "problem": "TASK-139 converts an option that currently cannot disable rate limiting into one that can, i.e. it makes a fail-open switch live - and it is marked review_critical=false, sonnet tier, with no step to check what production has persisted. The code's own warning text calls the disabled state 'vulnerable to abuse'. Because the flag's zero value is false, any persisted config row or env that carries a bare false (the exact 'stored zeros shadow defaults' class the package's own D111 note tracks) silently switches prod's API rate limiting OFF the moment this deploys, with only a WARN line as evidence.",
+   "evidence": "HEAD internal/server/server_lifecycle.go:1418-1419: 'if !config.AppConfig.EnableRateLimit { slog.Warn(\"rate limiting is disabled (enable_rate_limitfalse) - the API is vulnerable to abuse...\") }' - the warning exists but the limiter is still built, because the build condition only tests rpm>0. TASK-139 STEPS 1: 'change the condition that builds the real limiter (around L1402) ... require BOTH EnableRateLimit==true AND rpm>0'. Defaults are safe in code (internal/config/config.go:1292 'viper.SetDefault(\"enable_rate_limit\", true)', :2337 'EnableRateLimit: true') but the field is a plain bool at :815 read via viper.GetBool at :1706, so a persisted false wins. TASK-139 review_critical=false; no step reads prod's effective value.",
+   "fix": {
+    "TASK-139": {
+     "review_critical": true,
+     "steps_add": "Before merging, read prod's effective enable_rate_limit (GET /api/v1/config or the persisted row) and record it in the PR; if it is false, the PR must not merge until the owner sets it true. Log at ERROR, not WARN, when the master switch disables the limiter."
+    }
+   },
+   "task_titles": [
+    "Fix EnableRateLimit=false not actually disabling rate limiting"
+   ]
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-169"
+   ],
+   "problem": "TASK-169 fans DismissDedupCluster's per-candidate work out over runtime.NumCPU() goroutines, and the per-candidate work calls EmbeddingStore.UpsertLabeledExample - one of the few EmbeddingStore methods that does NOT take the store's closeMu read lock, only a check-then-act atomic flag. The file's own comment documents that this exact shape deadlocked three concurrent writers inside db.Set for 29 minutes in CI. The brief's only mitigation is 'grep for other concurrent callers of these methods elsewhere as a precedent check' - a precedent grep is not a concurrency proof, and the repo's concurrency rule explicitly says to check for shared mutable state rather than assume.",
+   "evidence": "internal/database/dedup_label.go:111-120: 'func (s *EmbeddingStore) UpsertLabeledExample(ex LabeledExample) error { if err := s.checkClosed(); err != nil {...} ... return s.db.Set(dedupLabelKey(ex.CandidateID), data, pebble.Sync) }' - no closeMu. internal/database/embedding_store.go:269-274 shows checkClosed is only 's.closed.Load()'. Contrast embedding_store.go:331,341,403,429,453,563,757 which all do 's.closeMu.RLock(); defer s.closeMu.RUnlock()'. embedding_store.go:209-218: 'closeMu serialises every DB-touching operation against Close ... doing so deadlocks for real: three writers inside db.Set blocked forever on commitPipeline.prepare and hung TestChaos_MixedReadWriteDuringClose for 29 minutes (CI run 31603570061). The pre-existing closed flag below cannot prevent that - it is a check-then-act'. TASK-169 STEPS: 'Verify h ... and es ... are safe for concurrent calls ... grep for other concurrent callers of these methods elsewhere in the codebase as a precedent check.'",
+   "fix": {
+    "TASK-169": {
+     "steps_add": "First make dedup_label.go's methods take closeMu.RLock like their siblings in embedding_store.go (or route through a locked helper); only then add the worker pool. Add a race-detector test that dismisses a cluster while the store is closed concurrently."
+    }
+   },
+   "task_titles": [
+    "Parallelize the per-candidate synchronous label/breakdown refresh in DismissDedupCluster"
+   ]
+  }
+ ]
+}

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 75b37a41-f761-4b79-9b6f-34c260bd183a -->
+<!-- guid: f27d5c36-a063-408a-ac9f-1e6ba5b09df3 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — dedup workstream (todo-completion)
@@ -12,38 +12,38 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK043[TASK-043 audit-remaining-we-use-the-w]
-      TASK044[TASK-044 measure-whether-dedup-durati]
-      TASK046[TASK-046 add-a-dry-run-parameter-to-d]
-      TASK047[TASK-047 find-the-createbook-path-s-t]
-      TASK049[TASK-049 build-a-dry-run-report-only-]
-      TASK053[TASK-053 acoustic-confirm-signal-prom]
+      TASK040[TASK-040 make-unmergeauto-reverse-ext]
+      TASK041[TASK-041 audit-remaining-we-use-the-w]
+      TASK042[TASK-042 measure-whether-dedup-durati]
+      TASK044[TASK-044 add-a-dry-run-parameter-to-d]
+      TASK047[TASK-047 build-a-dry-run-report-only-]
     end
     subgraph Wave2
-      TASK042[TASK-042 make-unmergeauto-reverse-ext]
-      TASK051[TASK-051 narrow-collectduration-s-tag]
-      TASK054[TASK-054 shattered-book-reassembly-ma]
+      TASK045[TASK-045 find-the-createbook-path-s-t]
+      TASK049[TASK-049 narrow-collectduration-s-tag]
+      TASK051[TASK-051 acoustic-confirm-signal-prom]
     end
     subgraph Wave3
-      TASK045[TASK-045 forward-fix-demote-pre-exist]
-      TASK048[TASK-048 apply-the-unfiltered-ref-cou]
+      TASK043[TASK-043 forward-fix-demote-pre-exist]
+      TASK046[TASK-046 apply-the-unfiltered-ref-cou]
+      TASK052[TASK-052 shattered-book-reassembly-ma]
     end
     subgraph Wave4
-      TASK050[TASK-050 route-merge-asexternalidreas]
+      TASK048[TASK-048 route-merge-asexternalidreas]
     end
     subgraph Wave5
-      TASK052[TASK-052 physically-co-locate-a-combi]
+      TASK050[TASK-050 physically-co-locate-a-combi]
     end
-    TASK042 --> TASK045
-    TASK042 --> TASK050
-    TASK042 --> TASK052
-    TASK043 --> TASK051
-    TASK045 --> TASK050
-    TASK045 --> TASK052
-    TASK046 --> TASK048
-    TASK050 --> TASK052
-    TASK053 --> TASK042
-    TASK053 --> TASK054
+    TASK040 --> TASK043
+    TASK040 --> TASK048
+    TASK040 --> TASK050
+    TASK040 --> TASK051
+    TASK041 --> TASK049
+    TASK043 --> TASK048
+    TASK043 --> TASK050
+    TASK044 --> TASK046
+    TASK048 --> TASK050
+    TASK051 --> TASK052
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -66,9 +66,14 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 > files); 3) file-copy cherry-pick fallback — re-apply the task's file states onto a
 > fresh branch from HEAD; 4) mark `rebase_blocked`, stop the lane, escalate to a human.
 >
-> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR; any
-> sibling worktree is un-rebased; the gate is red on `origin/main`; or a
-> `rebase_blocked` marker is unresolved.
+> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR that is
+> NOT a held review-critical PR; any sibling worktree is un-rebased; the gate is red on
+> `origin/main`; or a `rebase_blocked` marker is unresolved.
+>
+> **Held PRs (review-critical / prod-data path):** the coordinator opens the PR and
+> STOPS — never `gh pr merge`. A held PR does not block the wave; only tasks that share a
+> file with it are deferred to a `held-dependent` queue and dispatched after the owner
+> merges it. The owner sees the held list in the coordinator's status report.
 
 ## Run it
 

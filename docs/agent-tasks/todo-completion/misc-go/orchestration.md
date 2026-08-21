@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 9ef427c4-a7d3-46a1-9cb3-258e8fe40df6 -->
+<!-- guid: ecf3801a-69dd-45ec-89b6-fbc0d063965c -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — misc-go workstream (todo-completion)
@@ -12,14 +12,16 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK090[TASK-090 measure-the-real-double-prim]
-      TASK091[TASK-091 fix-the-go-zipslip-finding-o]
-      TASK092[TASK-092 fix-or-verify-the-4-still-op]
-      TASK093[TASK-093 add-codeql-specific-lgtm-sup]
-      TASK094[TASK-094 add-search-index-metrics-doc]
-      TASK095[TASK-095 collapse-internal-whitespace]
-      TASK096[TASK-096 replace-serviceregistry-get-]
-      TASK097[TASK-097 route-acoustid-lsh-backfill-]
+      TASK086[TASK-086 fix-the-go-zipslip-finding-o]
+      TASK087[TASK-087 fix-or-verify-the-4-still-op]
+      TASK088[TASK-088 add-codeql-specific-lgtm-sup]
+      TASK089[TASK-089 add-search-index-metrics-doc]
+      TASK090[TASK-090 collapse-internal-whitespace]
+      TASK091[TASK-091 replace-serviceregistry-get-]
+      TASK092[TASK-092 route-acoustid-lsh-backfill-]
+    end
+    subgraph Wave4
+      TASK085[TASK-085 measure-the-real-double-prim]
     end
 
 ```
@@ -44,9 +46,14 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 > files); 3) file-copy cherry-pick fallback — re-apply the task's file states onto a
 > fresh branch from HEAD; 4) mark `rebase_blocked`, stop the lane, escalate to a human.
 >
-> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR; any
-> sibling worktree is un-rebased; the gate is red on `origin/main`; or a
-> `rebase_blocked` marker is unresolved.
+> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR that is
+> NOT a held review-critical PR; any sibling worktree is un-rebased; the gate is red on
+> `origin/main`; or a `rebase_blocked` marker is unresolved.
+>
+> **Held PRs (review-critical / prod-data path):** the coordinator opens the PR and
+> STOPS — never `gh pr merge`. A held PR does not block the wave; only tasks that share a
+> file with it are deferred to a `held-dependent` queue and dispatched after the owner
+> merges it. The owner sees the held list in the coordinator's status report.
 
 ## Run it
 

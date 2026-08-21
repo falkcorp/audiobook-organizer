@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 0990d49a-02a4-43d7-83ac-750e00f9936c -->
+<!-- guid: 2d9837d2-31e5-4a60-84c7-559306ff8b3b -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — database workstream (todo-completion)
@@ -12,45 +12,45 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 ```mermaid
 flowchart LR
     subgraph Wave1
-      TASK022[TASK-022 reduce-internal-database-s-s]
-      TASK024[TASK-024 finish-killing-database-stor]
-      TASK025[TASK-025 investigate-then-evict-dirty]
-      TASK026[TASK-026 replace-fragile-0x30-0x3a-on]
-      TASK027[TASK-027 make-wipeallactivity-cancell]
-      TASK029[TASK-029 build-a-diagnostic-reconcili]
-      TASK030[TASK-030 guard-author-delete-paths-wi]
-      TASK032[TASK-032 add-a-compare-and-swap-on-co]
-      TASK033[TASK-033 lock-the-three-bare-globalst]
-      TASK034[TASK-034 add-the-4-missing-compile-ti]
-      TASK036[TASK-036 add-func-override-fields-to-]
-      TASK037[TASK-037 add-deletenarrator-to-the-st]
-      TASK040[TASK-040 filter-system-sourced-tags-o]
+      TASK020[TASK-020 reduce-internal-database-s-s]
+      TASK024[TASK-024 replace-fragile-0x30-0x3a-on]
+      TASK025[TASK-025 make-wipeallactivity-cancell]
+      TASK026[TASK-026 triage-the-remaining-misc-co]
+      TASK027[TASK-027 build-a-diagnostic-reconcili]
+      TASK028[TASK-028 guard-author-delete-paths-wi]
+      TASK030[TASK-030 add-a-compare-and-swap-on-co]
+      TASK031[TASK-031 lock-the-three-bare-globalst]
+      TASK032[TASK-032 add-the-4-missing-compile-ti]
+      TASK034[TASK-034 add-func-override-fields-to-]
+      TASK035[TASK-035 add-deletenarrator-to-the-st]
+      TASK038[TASK-038 filter-system-sourced-tags-o]
     end
     subgraph Wave2
-      TASK023[TASK-023 database-store-40-build-the-]
-      TASK028[TASK-028 triage-the-remaining-misc-co]
-      TASK031[TASK-031 add-getbooksbyseriesidallver]
-      TASK035[TASK-035 repoint-store-go-17-s-broken]
-      TASK038[TASK-038 fix-deleteauthor-s-junction-]
+      TASK021[TASK-021 database-store-40-build-the-]
+      TASK022[TASK-022 finish-killing-database-stor]
+      TASK023[TASK-023 investigate-then-evict-dirty]
+      TASK029[TASK-029 add-getbooksbyseriesidallver]
+      TASK033[TASK-033 repoint-store-go-17-s-broken]
+      TASK036[TASK-036 fix-deleteauthor-s-junction-]
     end
     subgraph Wave3
-      TASK039[TASK-039 omnibus-anthology-book-type-]
+      TASK039[TASK-039 add-transcribe-status-to-the]
     end
     subgraph Wave6
-      TASK041[TASK-041 add-transcribe-status-to-the]
+      TASK037[TASK-037 omnibus-anthology-book-type-]
     end
-    TASK006 --> TASK041
-    TASK024 --> TASK028
-    TASK028 --> TASK041
-    TASK031 --> TASK041
-    TASK033 --> TASK035
+    TASK004 --> TASK039
+    TASK026 --> TASK022
+    TASK026 --> TASK039
+    TASK029 --> TASK039
+    TASK031 --> TASK033
+    TASK031 --> TASK037
+    TASK031 --> TASK039
+    TASK033 --> TASK037
     TASK033 --> TASK039
-    TASK033 --> TASK041
-    TASK035 --> TASK039
-    TASK035 --> TASK041
-    TASK037 --> TASK038
-    TASK039 --> TASK041
-    TASK046 --> TASK031
+    TASK035 --> TASK036
+    TASK039 --> TASK037
+    TASK044 --> TASK029
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -73,9 +73,14 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 > files); 3) file-copy cherry-pick fallback — re-apply the task's file states onto a
 > fresh branch from HEAD; 4) mark `rebase_blocked`, stop the lane, escalate to a human.
 >
-> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR; any
-> sibling worktree is un-rebased; the gate is red on `origin/main`; or a
-> `rebase_blocked` marker is unresolved.
+> **A wave MUST NOT start** while any of: the previous wave has an unmerged PR that is
+> NOT a held review-critical PR; any sibling worktree is un-rebased; the gate is red on
+> `origin/main`; or a `rebase_blocked` marker is unresolved.
+>
+> **Held PRs (review-critical / prod-data path):** the coordinator opens the PR and
+> STOPS — never `gh pr merge`. A held PR does not block the wave; only tasks that share a
+> file with it are deferred to a `held-dependent` queue and dispatched after the owner
+> merges it. The owner sees the held list in the coordinator's status report.
 
 ## Run it
 
