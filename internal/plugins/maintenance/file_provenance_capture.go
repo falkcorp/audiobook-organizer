@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -194,8 +193,10 @@ func (p *Plugin) captureFileProvenance(ctx context.Context, rawParams json.RawMe
 				return nil
 			}
 
-			info, statErr := os.Stat(path)
-			if statErr != nil {
+			// d.Info() comes from the directory entry WalkDir already read, so
+			// this needs no second path lookup.
+			info, infoErr := d.Info()
+			if infoErr != nil {
 				result.Errors++
 				return nil
 			}
@@ -208,7 +209,7 @@ func (p *Plugin) captureFileProvenance(ctx context.Context, rawParams json.RawMe
 				return nil
 			}
 
-			sha, hashErr := fileops.ComputeFileHash(path)
+			sha, size, hashErr := fileops.ComputeFileHashAndSize(path)
 			if hashErr != nil {
 				result.Errors++
 				return nil
@@ -217,7 +218,7 @@ func (p *Plugin) captureFileProvenance(ctx context.Context, rawParams json.RawMe
 
 			if known, kerr := alreadyObserved(store, sha, path); kerr == nil && known {
 				result.AlreadyKnown++
-				result.addSample(fileProvSample{Path: path, SizeBytes: info.Size(), SHA256: sha, Outcome: "already-known"})
+				result.addSample(fileProvSample{Path: path, SizeBytes: size, SHA256: sha, Outcome: "already-known"})
 				return nil
 			}
 
@@ -227,7 +228,7 @@ func (p *Plugin) captureFileProvenance(ctx context.Context, rawParams json.RawMe
 				At:   time.Now(),
 				Digest: database.FileDigest{
 					SHA256Full: sha,
-					SizeBytes:  info.Size(),
+					SizeBytes:  size,
 				},
 				Actor:  "maintenance.file-provenance-capture",
 				Detail: "captured outside the library, before any modification",
@@ -237,7 +238,7 @@ func (p *Plugin) captureFileProvenance(ctx context.Context, rawParams json.RawMe
 				return nil
 			}
 			result.Recorded++
-			result.addSample(fileProvSample{Path: path, SizeBytes: info.Size(), SHA256: sha, Outcome: "recorded"})
+			result.addSample(fileProvSample{Path: path, SizeBytes: size, SHA256: sha, Outcome: "recorded"})
 			return nil
 		})
 		if walkErr != nil {

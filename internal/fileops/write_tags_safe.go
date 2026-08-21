@@ -1,5 +1,5 @@
 // file: internal/fileops/write_tags_safe.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b4c5d6e7-f8a9-0b1c-2d3e-4f5a6b7c8d9e
 // last-edited: 2026-08-21
 
@@ -72,10 +72,11 @@ func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTa
 	// destination is reason enough to compute them. Without this the ledger
 	// would silently record empty digests whenever Store was nil.
 	wantHashes := (opts.BookFileID != "" && opts.Store != nil) || opts.Provenance != nil
+	var originalSize int64
 
 	// Step 1: fingerprint the original file before any modification.
 	if wantHashes {
-		originalHash, err = ComputeFileHash(path)
+		originalHash, originalSize, err = ComputeFileHashAndSize(path)
 		if err != nil {
 			return "", "", fmt.Errorf("WriteTagsSafe: hash original %s: %w", path, err)
 		}
@@ -84,7 +85,7 @@ func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTa
 	// Step 1b: record the pre-write state BEFORE touching anything. If the
 	// process dies during the write, this row is what survives — recording it
 	// afterwards would lose precisely the case the ledger exists for.
-	recordEvent(opts, database.FileEventObserved, path, originalHash, "", "pre-write")
+	recordEvent(opts, database.FileEventObserved, path, originalHash, originalSize, "", "pre-write")
 
 	// Step 2: create temp file in the same directory so os.Rename is atomic
 	// (same filesystem mount). Use the same extension so taglib can detect
@@ -122,13 +123,16 @@ func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTa
 
 	// Step 6: fingerprint the result (only when it will be persisted).
 	if wantHashes {
-		postHash, err = ComputeFileHash(path)
+		// Assign to the named return, not a new local: `:=` here would shadow
+		// postHash and the function would return an empty hash on success.
+		var postSize int64
+		postHash, postSize, err = ComputeFileHashAndSize(path)
 		if err != nil {
 			return originalHash, "", fmt.Errorf("WriteTagsSafe: hash result %s: %w", path, err)
 		}
 
 		// Step 7: record the completed write in the append-only ledger.
-		recordEvent(opts, database.FileEventTagsWritten, path, postHash, opts.Detail, "")
+		recordEvent(opts, database.FileEventTagsWritten, path, postHash, postSize, opts.Detail, "")
 
 		// Step 8: update the two hash columns. The bytes are already on disk, so
 		// a failure here cannot fail the write — returning an error would invite
@@ -152,7 +156,7 @@ func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTa
 // file operation being observed. It is logged rather than returned for that
 // reason — but it is logged, because a ledger with silent gaps is worse than no
 // ledger, since it reads as authoritative.
-func recordEvent(opts WriteTagsSafeOptions, kind database.FileEventKind, path, sha, detail, note string) {
+func recordEvent(opts WriteTagsSafeOptions, kind database.FileEventKind, path, sha string, size int64, detail, note string) {
 	if opts.Provenance == nil {
 		return
 	}
@@ -160,12 +164,12 @@ func recordEvent(opts WriteTagsSafeOptions, kind database.FileEventKind, path, s
 		// Would be rejected as an unadoptable orphan; skip rather than log noise.
 		return
 	}
+	// The size is passed in rather than looked up here: it comes off the same
+	// open handle the hash does, so the two provably describe the same bytes.
 	digest := database.FileDigest{
 		SHA256Full:  sha,
+		SizeBytes:   size,
 		TorrentHash: opts.TorrentHash,
-	}
-	if fi, err := os.Stat(path); err == nil {
-		digest.SizeBytes = fi.Size()
 	}
 	if note != "" && detail == "" {
 		detail = note
