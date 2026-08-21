@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-08-20-dual-path-display.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d87b37ef-85ee-4494-b629-6ef01de479af -->
 <!-- last-edited: 2026-08-20 -->
 
@@ -35,8 +35,16 @@ From `/etc/samba/smb.conf.d/smb-exta.conf` on the library server, read
 | `[bigdata]`  | `/mnt/bigdata`                  |
 | `[audiobooks]` | `/mnt/bigdata/books/Audiobooks` |
 
-`[books]` is the share behind `W:`. So for a single root, four renderings of the
-same bytes:
+`[books]` is the share behind `W:`.
+
+Note which root that is: `/mnt/bigdata/books` is `$(books)` in
+`derivePathVars` terms — the **parent** of `RootDir`, which is `$(libroot)`.
+The alias `Root` is therefore the books root, not the library root, and the two
+must not be conflated when choosing which var the `display` line abbreviates
+against. Getting this backwards yields a `display` and an `href` that disagree
+about where the tree starts.
+
+So for a single root, four renderings of the same bytes:
 
 ```
 /mnt/bigdata/books/<rest>          POSIX (what the UI shows today)
@@ -94,6 +102,18 @@ type PathAlias struct {
 
 Carried on `Config` as `PathAliases []PathAlias` and surfaced on the existing
 `/config` response.
+
+**Separator contract.** Rendering the Windows line is two operations, not one:
+prefix substitution *and* a `/` → `\` flip. Only the first is visible in the
+type. The contract is therefore stated rather than configured: **whenever
+`Windows` is non-empty, every separator in the remainder is flipped to a
+backslash, unconditionally.**
+
+There is deliberately no `Separator` field. The field is named `Windows` and
+carries a drive letter; a root that must keep forward slashes would not
+populate it. Adding a knob to express "Windows paths use backslashes" is
+configuring a fact, and it would let a mis-set config emit `W:/foo`, which is
+not a thing. The unit tests below pin the flip so it cannot drift silently.
 
 **The default is the empty slice.** With no aliases configured the review page
 renders exactly what it renders today: one POSIX line, no second line, no
@@ -236,9 +256,25 @@ Config (DB blob)
   established pattern is followed; the copy button surfaces a failure toast
   rather than silently doing nothing, because copy is the *primary* Windows
   affordance here rather than a convenience.
-- **URL encoding** — path segments go through `encodeURIComponent` per segment
-  when building `smb://`; separators must not be encoded. Spaces and `#` in
-  audiobook directory names are the common case, not an edge case.
+- **URL encoding** — build `smb://` by `encodeURIComponent`-ing each path
+  segment and joining with unencoded `/`. Measured behaviour of
+  `encodeURIComponent` (node, 2026-08-20), since the intuition here is wrong in
+  both directions:
+
+  | Characters | Result | Note |
+  | --- | --- | --- |
+  | `(` `)` `'` `!` `*` `~` | passed through unescaped | the "parentheses will break it" worry is unfounded |
+  | `[` `]` | `%5B` `%5D` | **`[Unabridged]` is pervasive in this library** |
+  | `&` `#` `%` | `%26` `%23` `%25` | frequent |
+  | space | `%20` | universal |
+
+  **This is the one unverified assumption left in the design.** The `smb:`
+  handler binding was confirmed against LaunchServices; whether *Finder* decodes
+  `%5B` / `%26` / `%23` back to literals when resolving a share path was not.
+  RFC 3986 says it should. The implementation plan must verify it first — one
+  `open "smb://…"` against a directory containing `[Unabridged]` — because if
+  Finder does not decode, the encoding rule changes and every href changes with
+  it. Do not build on top of it before checking.
 
 ## Testing
 
@@ -249,6 +285,17 @@ Config (DB blob)
 - `web/src/components/common/PathLinks.test.tsx` — anchor present iff
   `href !== null`; `copyText` is the unabbreviated path; renders one line when
   no alias matches.
+- **Three-string consistency (the test that matters).** One row produces three
+  different strings for one file: the abbreviated `display`
+  (`$(books)/Brandon Sanderson/…`), the literal `copyText`
+  (`/mnt/bigdata/books/Brandon Sanderson/…`), and the `href`
+  (`smb://<server>/books/Brandon%20Sanderson/…`). Each looks correct in
+  isolation, so a mismatch between what the link opens and what the clipboard
+  pastes would pass every test listed above and every human review. Assert that
+  all three renderings of a single row **resolve back to the same underlying
+  path** — un-abbreviate `display`, percent-decode and de-prefix `href`, and
+  require both to equal `copyText`. Run it over a table of awkward names
+  (spaces, `[Unabridged]`, `&`, `#`, apostrophes, non-ASCII).
 - Go: `PathAliases` round-trips through `internal/config/persistence.go` and
   appears on the `/config` response.
 - Existing `formatPath` tests must remain untouched and green — proof the
