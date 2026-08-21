@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-08-20-dual-path-display.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: d87b37ef-85ee-4494-b629-6ef01de479af -->
 <!-- last-edited: 2026-08-20 -->
 
@@ -80,12 +80,25 @@ This is why the Windows line is copy-only rather than a link.
 
 ### Decision 1: a new config type, not a widened `ITunes.PathMappings`
 
-`config.ITunes.PathMappings` is `[]ITunesPathMap{From,To}` over URL-encoded
-`file://localhost/W:/…` prefixes, consumed by `reconcile.TranslateITunesPath`
-for import healing. It is the wrong shape (two fields, one direction) and the
-wrong layer (import repair). Widening it would couple import repair to UI
-display so that a change to how the review page renders a path could alter how
-iTunes rows are healed.
+`config.ITunes.PathMappings` is `[]ITunesPathMap{From,To}`, consumed by
+`reconcile.TranslateITunesPath` for import healing.
+
+**Correction to an earlier draft of this section.** It claimed the field holds
+URL-encoded `file://localhost/W:/…` prefixes. That is what the type's doc
+comment shows, but it is not what production holds. Queried 2026-08-20:
+
+```json
+"path_mappings": [{"from": "W:", "to": "/mnt/bigdata/books"}]
+```
+
+So the exact mapping this feature needs is **already configured**, in a clean
+prefix-pair form. That changes the argument but not the conclusion: the field
+stays owned by import healing, because widening its consumers means a
+display-motivated edit could alter how iTunes rows are repaired. It is the
+wrong layer even though it now turns out to be the right shape.
+
+What it does change is that the user must not have to type the same
+`W: ↔ /mnt/bigdata/books` fact twice. See the seeding migration below.
 
 Add a new type instead:
 
@@ -117,10 +130,38 @@ must keep forward slashes would populate neither. Adding a knob to express
 configuring a fact, and it would let a mis-set config emit `W:/foo`, which is
 not a thing. The unit tests below pin the flip so it cannot drift silently.
 
-**The default is the empty slice.** With no aliases configured the review page
-renders exactly what it renders today: one POSIX line, no second line, no
-anchor, no copy button. The feature is invisible until someone configures it,
-which makes the rollout a no-op and the revert trivial.
+**Seeding migration.** On load, when `PathAliases` is unset and
+`ITunes.PathMappings` is non-empty, seed one alias per mapping with
+`Root = mapping.To`, `Windows = mapping.From`, and `UNC`/`SMBURL` left empty.
+Recording the same fact in two places is the drift this design otherwise
+avoids; seeding means it is entered once and copied, not retyped.
+
+Because the renderings degrade independently, prod lights up with the Windows
+line immediately and the `smb://` anchor and UNC line stay dark until someone
+configures a share — a graceful per-rendering rollout rather than an all-or-
+nothing switch.
+
+**With neither configured the default is the empty slice**, and the review page
+renders exactly what it renders today: one POSIX line, no extra lines, no
+anchor, no copy button. Clearing `path_aliases` reverts the UI without a deploy.
+
+**Known duplication, recorded rather than hidden.** After seeding, the `W:` fact
+lives in both `ITunes.PathMappings` and `PathAliases`, and nothing forces them
+to agree afterwards. The correct long-term fix is for `PathAliases` to become
+the single source and import healing to read from it, which means touching
+`TranslateITunesPath` and is out of scope here. A test asserts the two do not
+contradict each other when both are set, so drift fails CI rather than
+silently mis-rendering.
+
+**Related field, deliberately left alone.** `config.ITunes.WindowsRootPath` is
+documented in `internal/organizer/organizer.go:342` as "the Windows equivalent
+of RootDir" and is used only to budget MAX_PATH during organize. Note the
+anchor differs: it is relative to `RootDir`
+(`/mnt/bigdata/books/audiobook-organizer`), whereas the `[books]` share and the
+`path_mappings` entry are relative to its **parent**, `/mnt/bigdata/books`.
+Reusing it would reintroduce exactly the root confusion this design warns
+about. In production it is `""` with `path_trim_enabled: false`, so the overlap
+is currently theoretical.
 
 ### Decision 2: Windows is copy-only, not a protocol handler
 
@@ -157,8 +198,37 @@ line never claims more authority than the POSIX line above it. The display
 stays honest about a data problem instead of papering over it.
 
 This means a derived `W:\` path can be confidently wrong for a substantial
-minority of rows. That
-is a pre-existing data defect surfaced, not introduced, by this feature.
+minority of rows. That is a pre-existing data defect surfaced, not introduced,
+by this feature.
+
+**`CompareSpine` already renders the stored path.** All three of its render
+sites follow `file_path` with a conditional blue line:
+
+```tsx
+{r.book.itunes_path && (
+  <Typography variant="caption" sx={{ color: 'info.main', ... }}>
+    iTunes: {r.book.itunes_path}
+```
+
+So on the compare lane a card will carry both the stored `iTunes: W:\…` and
+this feature's derived `W:\…`, and on the corrupt rows described above **they
+will visibly disagree**. That is the correct outcome and must not be smoothed
+over — the two answer different questions. The stored line is provenance: where
+iTunes recorded the file. The derived line is a transform of where the app
+currently believes the file is. A disagreement is a corruption signal, and
+seeing it is strictly better than not seeing it.
+
+Requirements that follow, rather than a redesign:
+
+- **The existing `iTunes:` line is left exactly as it is.** Deleting or folding
+  it in is adjacent work nobody asked for, and it would destroy the one signal
+  that makes the disagreement visible.
+- The derived lines must be **visually distinguishable** from it — the `iTunes:`
+  line is `color: 'info.main'` and prefixed, so the derived lines must be
+  neither. They carry no prefix and inherit the POSIX line's caption styling.
+- A test pins that a row with a stale `itunes_path` renders **both** lines with
+  their differing values, so a later well-meaning "dedupe these two lines"
+  change fails CI.
 
 ### Decision 4: derivation is frontend-only, and does not touch the mirror
 
@@ -335,6 +405,14 @@ Config (DB blob)
 - `web/src/components/common/PathLinks.test.tsx` — anchor present iff
   `href !== null`; `copyText` is the unabbreviated path; renders one line when
   no alias matches.
+- A row whose `itunes_path` disagrees with the derived Windows path renders
+  **both**, with their differing values, and the stored line keeps its
+  `info.main` colour and `iTunes:` prefix while the derived line has neither.
+- Seeding: `PathAliases` unset + `ITunes.PathMappings` non-empty yields one
+  alias per mapping with `Root`/`Windows` populated and `UNC`/`SMBURL` empty;
+  `PathAliases` already set is left untouched.
+- Seeding consistency: a `PathAlias` contradicting a `PathMappings` entry for
+  the same root fails, so the recorded duplication cannot drift silently.
 - `UNC` and `Windows` render independently: each present alone, both present,
   neither present, with `Root` matching in every case.
 - `href` is null for a simulated Windows client and for an undetectable
