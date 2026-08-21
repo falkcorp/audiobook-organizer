@@ -1,7 +1,7 @@
 <!-- file: docs/plans/DECISIONS-PENDING.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 38115603-5a52-4745-83a5-2c9ca4528a9d -->
-<!-- last-edited: 2026-07-18 -->
+<!-- last-edited: 2026-08-21 -->
 
 # Decisions Pending — the STOP-FOR-HUMAN queue
 
@@ -21,6 +21,35 @@ not a passing text reply). Consolidated from the 2026-07-17 docs audit.
 | 8 | **Flip `review_apply_enabled` ON in prod** | enable globally / enable per-hold-type / keep OFF | Sandbox-first validation before any enable | Review-queue apply path doing real work (merged #1953, default OFF) | [`2026-07-13-review-queue-and-regroup.md`](2026-07-13-review-queue-and-regroup.md); [`../operations/pending-prod-actions.md`](../operations/pending-prod-actions.md) row 8 |
 | 9 | **PH-2b purge wave scope** — which residual populations get purged, and how | per-population ops (fragment-floor / title-leak / stub) vs review-only drain | Never blanket-purge (four-population analysis) | Draining the ~9,074 exact-pending backlog | [`../dedup/STATUS.md`](../dedup/STATUS.md); [`../operations/pending-prod-actions.md`](../operations/pending-prod-actions.md) row 1 |
 | 10 | **Should `unified.ComposeScore` clamp primary-signal `Confidence` against `cfg.Signals[kind].Min/MaxConfidence`?** (TODO item 6 follow-up, 2026-07-18) — `config.DedupSignalConfig.Confidence` now persists per-kind confidence bounds and `unified.LoadScoreConfig` merges them, but `ComposeScore` still reads `Signal.Confidence` verbatim and ignores those bounds, so they have zero effect on live scoring (only `dedup.calibrate-composite`'s own simulation consumes them today) | (a) add clamping to `ComposeScore` for primary kinds only (mirrors the `scoreWithClamp` simulation already in `calibrate_composite.go`), confirmed no-op under default config by a test, THEN also route `calibrate-composite`'s Round 2 confidence suggestions through `UpdateConfig` (behind a separate `apply_confidence` param, not the existing `apply` band gate); (b) leave `ComposeScore` untouched and keep Round 2 advisory-only — the new field only helps a hand-edited `config.yaml`-equivalent persist across restarts | — | Whether the confidence round can ever move production auto-merge scores, vs. remaining report-only | [`../../internal/plugins/dedup/calibrate_composite.go`](../../internal/plugins/dedup/calibrate_composite.go) (see "Two calibration surfaces" doc comment); [`../../internal/dedup/unified/compose.go`](../../internal/dedup/unified/compose.go) |
+
+## Decisions recorded 2026-08-21 (owner, via AskUserQuestion)
+
+All ten rows above plus six newly surfaced gated items were put to the owner on
+2026-08-21 as part of the TODO completion master plan
+([`2026-08-21-todo-completion-master-plan.md`](2026-08-21-todo-completion-master-plan.md)).
+Outcomes:
+
+| # | Decision | Outcome | Effect on the plan |
+|---|----------|---------|--------------------|
+| 1 | REPO-SIZE-1 | **(d)** forward-only hygiene + GitHub Support gc | hygiene tasks briefable; no history rewrite, ever |
+| 2 | INIT-5 T2 Deluge spike | **PARKED** | torrent-relocation track excluded |
+| 3 | INIT-6 workflow-system spec | **PARKED** | WF-2/3/4/5 excluded; PR #1935 stays open |
+| 4 | INIT-8 community fingerprint index | **PARKED** | excluded |
+| 5 | INIT-7 Responses-API | **KEEP ON HOLD** | AI-RESP-* excluded |
+| 6 | `internal/server` test-package structure | **(c)** migrate ~60 call sites to a `newTestServer` helper | briefable as a Sonnet sweep |
+| 7 | Product rename | **PARKED** | branding sweep excluded |
+| 8 | `review_apply_enabled` | **verify prod state, record, close row** — no flip | one prod-run row in `pending-prod-actions.md` |
+| 9 | PH-2b purge-wave scope | **review-only drain**; per-population REPORT ops allowed; **no purge ops** | delete ops excluded |
+| 10 | `ComposeScore` confidence clamping | **(a)** clamp primary kinds + route Round-2 via a separate `apply_confidence` param | briefable, Opus-tier, default-config no-op test required |
+| 11 | `generateTargetPath` has no uniqueness guarantee (`TODO.md` "OWNER DECISION") | **detection-only counter now**; the fix is deferred | counter briefable; options 1/2/3 excluded |
+| 12 | Missing-file lane / 16,265 fully-broken books | **build REPOINT repair, `apply=false` default; owner runs apply**; fully-broken books untouched | repair code briefable, review-critical; every apply is a prod run |
+| 13 | 41.8 % of `book_file` rows with no bytes (#2515/#2516) | **categorising REPORT op only** | no mutation op |
+| 14 | E08 write-back prerequisites, ABS listening-stats surface, chapters backfill E02 | **build whatever still matters**; every prod run deferred to `pending-prod-actions.md` | code briefable; ABS body is all-or-nothing (12 fields); E02 never via `library.scan` while applies are pending |
+
+Execution conventions fixed at the same time: PRs are opened and admin-merged on
+green CI overnight, **except** PRs on a prod-data path (review-critical), which
+stay open for the owner. Model split: Haiku for mechanical edits, Sonnet by
+default, Opus only for review-critical or cross-cutting work.
 
 ## Process
 
