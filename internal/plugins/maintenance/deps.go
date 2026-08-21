@@ -165,6 +165,13 @@ type StoreProvider interface {
 	// gets its own accessor rather than widening the 53-method common path for
 	// one caller.
 	MetadataCacheStore() database.MetadataCacheStore
+	// FileProvenanceStore serves runFileProvenanceCapture. The provenance
+	// chain is its own keyspace ("file_prov:*") deliberately kept out of the
+	// wide Store interface, so like the metadata cache it gets its own
+	// accessor rather than widening the common path for one caller. Returns
+	// nil when the underlying store does not implement it, and the op treats
+	// that as "not initialized" rather than panicking.
+	FileProvenanceStore() database.FileProvenanceStore
 }
 
 // MetadataRunners runs the metadata enrichment and write-back operations.

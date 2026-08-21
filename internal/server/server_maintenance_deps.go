@@ -58,6 +58,19 @@ func (s *Server) PlaylistStore() database.UserPlaylistStore { return s.store }
 // keyspace that OpsStore does not cover.
 func (s *Server) MetadataCacheStore() database.MetadataCacheStore { return s.store }
 
+// FileProvenanceStore exposes the append-only file provenance chain.
+//
+// The provenance methods are intentionally not part of database.Store, so this
+// asserts rather than returning s.store directly. A store that does not
+// implement them (a narrow test double, for instance) yields nil, and callers
+// are required to treat nil as "not initialized".
+func (s *Server) FileProvenanceStore() database.FileProvenanceStore {
+	if fp, ok := s.store.(database.FileProvenanceStore); ok {
+		return fp
+	}
+	return nil
+}
+
 // ---- delegated run helpers ----
 
 func (s *Server) RunIsbnEnrichment(ctx context.Context, progress operations.ProgressReporter, opID string) error {
