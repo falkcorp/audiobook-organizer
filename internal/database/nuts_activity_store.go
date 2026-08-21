@@ -1,7 +1,7 @@
 // file: internal/database/nuts_activity_store.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c3d4e5f6-a7b8-0003-cdef-000000000003
-// last-edited: 2026-08-11
+// last-edited: 2026-08-21
 
 package database
 
@@ -237,15 +237,23 @@ func (s *NutsActivityStore) Query(_ context.Context, f ActivityFilter) ([]Activi
 	return filtered[start:end], total, nil
 }
 
-// Summarize groups old entries by (operation_id, type), writes a summary row,
-// and deletes the originals. Returns count of deleted rows.
+// Summarize groups old entries by (day, operation_id, type), writes one
+// summary row per day, and deletes the originals. Returns count of deleted
+// rows.
+//
+// The day is part of the group key — not just an artifact of scan order —
+// because entries sharing an operation_id and type (most commonly both
+// empty, e.g. routine "scan_progress" noise) can otherwise span the entire
+// olderThan window. Without the day boundary, a single summary row silently
+// swallowed weeks or months of entries into one "N entries (day1 to dayN)"
+// row, the opposite of the per-day boundary CompactByDay enforces.
 func (s *NutsActivityStore) Summarize(ctx context.Context, olderThan time.Time, tier string) (int, error) {
 	entries, err := s.scanTier(tier, nil, &olderThan)
 	if err != nil {
 		return 0, err
 	}
 
-	type groupKey struct{ opID, typ string }
+	type groupKey struct{ day, opID, typ string }
 	type group struct {
 		entries []ActivityEntry
 	}
@@ -255,7 +263,11 @@ func (s *NutsActivityStore) Summarize(ctx context.Context, olderThan time.Time, 
 		if e.PrunedAt != nil {
 			continue
 		}
-		k := groupKey{opID: e.OperationID, typ: e.Type}
+		k := groupKey{
+			day:  e.Timestamp.UTC().Format("2006-01-02"),
+			opID: e.OperationID,
+			typ:  e.Type,
+		}
 		if groups[k] == nil {
 			groups[k] = &group{}
 		}

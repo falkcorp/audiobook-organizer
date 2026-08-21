@@ -1,19 +1,25 @@
 // file: internal/database/activity_compact_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-11
+// last-edited: 2026-08-21
 
 package database
 
 import (
 	"context"
 	"encoding/json"
+	"regexp"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// summarizeSpanRE matches the "Summary: N <type> entries (first to last)"
+// text Summarize generates, capturing the count and the RFC3339 span.
+var summarizeSpanRE = regexp.MustCompile(`Summary: (\d+) \S+ entries \((\S+) to (\S+)\)`)
 
 // newTestNutsActivityStore creates a temp NutsActivityStore and registers cleanup.
 func newTestNutsActivityStore(t *testing.T) *NutsActivityStore {
@@ -438,4 +444,128 @@ func TestNutsActivityStore_RecompactDigests(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, res2.Touched, "second run: should be idempotent (0 touched)")
 	assert.Equal(t, 1, res2.Skipped, "second run: digest should be skipped as already clean")
+}
+
+// summaryDateSpan parses the "(first to last)" RFC3339 span out of a
+// Summarize-generated Summary string and returns the entry count and each
+// side's calendar date.
+func summaryDateSpan(t *testing.T, summary string) (count int, firstDate, lastDate string) {
+	t.Helper()
+	m := summarizeSpanRE.FindStringSubmatch(summary)
+	require.Lenf(t, m, 4, "summary %q did not match expected format", summary)
+	n, err := strconv.Atoi(m[1])
+	require.NoError(t, err)
+	first, err := time.Parse(time.RFC3339, m[2])
+	require.NoError(t, err)
+	last, err := time.Parse(time.RFC3339, m[3])
+	require.NoError(t, err)
+	return n, first.UTC().Format("2006-01-02"), last.UTC().Format("2006-01-02")
+}
+
+// TestSummarize_GroupsByDay verifies that Summarize does not fold entries
+// from different calendar days into a single cross-day summary row, even
+// when they share the same (operation_id, type) group key. Before this fix,
+// entries sharing an empty operation_id and type across the whole
+// summarization window collapsed into one "N entries (day1 to dayN)" row —
+// the opposite of the per-day boundary CompactByDay enforces.
+func TestSummarize_GroupsByDay(t *testing.T) {
+	s := newTestNutsActivityStore(t)
+	ctx := context.Background()
+
+	day1 := time.Date(2025, 6, 1, 10, 0, 0, 0, time.UTC)
+	day2 := time.Date(2025, 6, 5, 10, 0, 0, 0, time.UTC)
+
+	for i := 0; i < 3; i++ {
+		_, err := s.Record(ActivityEntry{
+			Tier:      "change",
+			Type:      "scan_progress",
+			Level:     "info",
+			Source:    "scanner",
+			Summary:   "scan progress",
+			Timestamp: day1.Add(time.Duration(i) * time.Minute),
+		})
+		require.NoError(t, err)
+	}
+	for i := 0; i < 2; i++ {
+		_, err := s.Record(ActivityEntry{
+			Tier:      "change",
+			Type:      "scan_progress",
+			Level:     "info",
+			Source:    "scanner",
+			Summary:   "scan progress",
+			Timestamp: day2.Add(time.Duration(i) * time.Minute),
+		})
+		require.NoError(t, err)
+	}
+
+	olderThan := time.Date(2025, 6, 10, 0, 0, 0, 0, time.UTC)
+	deleted, err := s.Summarize(ctx, olderThan, "change")
+	require.NoError(t, err)
+	assert.Equal(t, 5, deleted)
+
+	all, total, err := s.Query(ctx, ActivityFilter{Tier: "change", Limit: 50})
+	require.NoError(t, err)
+	require.Equal(t, 2, total, "one summary row per day, not one row merged across days")
+
+	counts := make(map[string]int)
+	for _, e := range all {
+		assert.Equal(t, "summarize", e.Source)
+		n, firstDate, lastDate := summaryDateSpan(t, e.Summary)
+		assert.Equal(t, firstDate, lastDate, "a single summary row must not span more than one calendar day")
+		counts[firstDate] = n
+	}
+	assert.Equal(t, 3, counts["2025-06-01"])
+	assert.Equal(t, 2, counts["2025-06-05"])
+}
+
+// TestPebbleActivityStore_Summarize_GroupsByDay is the PebbleActivityStore
+// parity test for TestSummarize_GroupsByDay.
+func TestPebbleActivityStore_Summarize_GroupsByDay(t *testing.T) {
+	s := newTestPebbleActivityStore(t)
+	ctx := context.Background()
+
+	day1 := time.Date(2025, 6, 1, 10, 0, 0, 0, time.UTC)
+	day2 := time.Date(2025, 6, 5, 10, 0, 0, 0, time.UTC)
+
+	for i := 0; i < 3; i++ {
+		_, err := s.Record(ActivityEntry{
+			Tier:      "change",
+			Type:      "scan_progress",
+			Level:     "info",
+			Source:    "scanner",
+			Summary:   "scan progress",
+			Timestamp: day1.Add(time.Duration(i) * time.Minute),
+		})
+		require.NoError(t, err)
+	}
+	for i := 0; i < 2; i++ {
+		_, err := s.Record(ActivityEntry{
+			Tier:      "change",
+			Type:      "scan_progress",
+			Level:     "info",
+			Source:    "scanner",
+			Summary:   "scan progress",
+			Timestamp: day2.Add(time.Duration(i) * time.Minute),
+		})
+		require.NoError(t, err)
+	}
+
+	olderThan := time.Date(2025, 6, 10, 0, 0, 0, 0, time.UTC)
+	deleted, err := s.Summarize(ctx, olderThan, "change")
+	require.NoError(t, err)
+	assert.Equal(t, 5, deleted)
+
+	all, total, err := s.Query(ctx, ActivityFilter{Tier: "change", Limit: 50})
+	require.NoError(t, err)
+	require.Equal(t, 2, total, "one summary row per day, not one row merged across days")
+
+	counts := make(map[string]int)
+	for _, e := range all {
+		assert.Equal(t, "summarize", e.Source)
+		n, firstDate, lastDate := summaryDateSpan(t, e.Summary)
+		assert.Equal(t, firstDate, lastDate, "a single summary row must not span more than one calendar day")
+		counts[firstDate] = n
+	}
+	assert.Equal(t, 3, counts["2025-06-01"])
+	assert.Equal(t, 2, counts["2025-06-05"])
 }
