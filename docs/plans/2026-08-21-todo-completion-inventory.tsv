@@ -1,386 +1,386 @@
-tier	encoding	todo_line	id	section	domains	body_chars	title
-A	cb	280		✅ Second, unrelated Coverage Floor failure — FIXED in this PR	(unresolved)	252	`syscall.Kill(os.Getpid(), syscall.SIGTERM)` signals the **entire test binary**, not a
-A	cb	283		✅ Second, unrelated Coverage Floor failure — FIXED in this PR	(unresolved)	166	The unconditional `time.Sleep(6 * time.Second)` before the signal is pure wall-clock
-A	cb	476		ABS surface — what is still missing after the series/playlist fix	(unresolved)	571	**Series DETAIL is still not served.** `/api/series/:id` 301s into the app API, the
-A	cb	697		Follow-up on the op itself	(unresolved)	217	`registry.RunItems` label re-render (fixed 2026-08-13) changed shared
-A	cb	928		ghcommon reusable-workflow pins are a month apart — decide, don't drif	(unresolved)	187	Not done unattended on purpose: this was left for a human on 2026-08-18
-A	cb	3718		"C716 resolved: the ""3,954-book API-vs-store gap"" decomposes to 3,953 i"	(unresolved)	670	**`show_quarantined=true` SHRINKS the list.** A flag that can only
-A	cb	3729		"C716 resolved: the ""3,954-book API-vs-store gap"" decomposes to 3,953 i"	(unresolved)	262	`is_primary_version=false` answers 22,552 — exactly the known
-A	cb	4064		✅ Root cause (2026-08-14, fixed in `fix/author-getter-conformance`)	(unresolved)	463	**After this deploys**, drop `skip_author_ids: [46627]` from the repair
-A	cb	4081		✅ Root cause (2026-08-14, fixed in `fix/author-getter-conformance`)	(unresolved)	1267	**CORRECTION to `20260814-matcher-writeback-background-job.md`: the
-A	cb	4470		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	491	**Backfill legacy operation rows stuck at `pending`.** #2483 fixed the forward path
-A	cb	6394		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	1675	**`scan-import-organize.spec.ts` (7 failures) — Settings tab deep-link
-A	cb	8220		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	930	**`UpsertBookToMemDB` holds go-memdb's global writer mutex across Pebble
-A	cb	10074	TODO-DEPS-VULN	Decision needed	(unresolved)	123	**TODO-DEPS-VULN** GitHub reports 5 Dependabot vulnerabilities on the
-A	cb	10077	TODO-SEC-BIND	Decision needed	(unresolved)	645	**TODO-SEC-BIND** The service binds every interface
-A	cb	10088	TODO-SEC-JWT	Decision needed	(unresolved)	363	**TODO-SEC-JWT** Rotate `ABS_JWT_SECRET` — it was pasted in plaintext into
-A	cb	10094	TODO-SEC-SYSTEMD	Decision needed	(unresolved)	585	**TODO-SEC-SYSTEMD** The unit has `User=audiobook`, `NoNewPrivileges`,
-A	nb	10600		Workflow / ops (4)	(unresolved)	209	**INTERNAL-SERVER-PKG-STALL structural decision** (H1:849-877) — leak fixed;
-A	nb	10665		UX (4)	(unresolved)	145	**Fleet-tasks reconciliation** — real residuals = 030/031/036 (≡ 4.10/4.8/1.16);
-A	nb	10715		Other / close-out (10)	(unresolved)	795	**Duration/filesize aggregation** — Book fields show snapshots instead of sums;
-A	cb	10057	TODO-SSO-EDGE	Decision needed	ci/scripts	1135	**TODO-SSO-EDGE** Neither native-app auth mode is actually configured at
-A	cb	3734		"C716 resolved: the ""3,954-book API-vs-store gap"" decomposes to 3,953 i"	ci/scripts;internal/logging	854	**CA12 wave 2: model `logging.Sanitize`/`SanitizeErr`/`logger.sanitizeLogLine`
-A	cb	10104	TODO-SRVTIMEOUT	Decision needed	ci/scripts;internal/server;internal/server/	7566	**TODO-SRVTIMEOUT** Split or speed up the `internal/server` test package —
-A	cb	10447		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	docs	758	**iTunes book_file PID uniqueness — apply the backfill repair (gated).** Forward
-A	nb	10512		Dedup (10)	docs	731	**INIT-1 T05 follow-up — per-kind confidence field in `DedupSignalConfig`** (H1:250)
-A	nb	10584		Pipeline (8)	docs	158	**Torrent relocation INIT-5 T2–T7** ([plan](docs/plans/2026-07-10-torrent-relocation.md))
-A	nb	10639		Infra (5)	docs	137	**Consultancy wave 4+ residuals** ([roadmap](docs/consultancy/00-ROADMAP.md)) —
-A	cb	6087		Missing-file lane — follow-ups after the report-only change (#2614)	docs;internal/audiobooks;web (frontend)	2735	**Replace library sorting with server-side Go sorting.** Owner decision 2026-08-09:
-A	cb	2267	ROWCOUNT-REVERIFY	Config	docs;web (frontend)	3227	**ROWCOUNT-REVERIFY** Re-measure every production table row count once the
-A	cb	7819		Missing-file lane — follow-ups after the report-only change (#2614)	internal/audiobooks;internal/server/handlers;web (frontend)	6392	"**Fix the Library ""In Progress"" nav item — the selection highlight never"
-A	cb	1815		Config	internal/database;internal/playlist	1808	✅ **Confirm playlists are book-level, not file-level — and delete the dead
-A	nb	10622		Infra (5)	internal/database;internal/server/server_lifecycle.go	686	**CPU busy-loop: `CountPrimaryBooks` full-scan on the 5s metrics ticker** — ✅ DONE
-A	nb	10641		Infra (5)	internal/metrics;internal/operations	1009	**Op-progress Prometheus metric (T12 follow-up)** — ✅ DONE (PR #2014,
-A	cb	10038	TODO-ABS-MODEB	Decision needed	internal/oauth;internal/server/handlers;internal/server/middleware	1212	**TODO-ABS-MODEB** A Cloudflare **service-token** assertion is rejected as
-A	cb	2125	ORGANIZE-4TH-COPY	Config	internal/server/handlers	2888	**ORGANIZE-4TH-COPY** `internal/server/handlers/filesystem.go:286` is a
-A	cb	2467		Config	internal/server/handlers;internal/server/metadata_ops.go	947	**Repair books applied from the Metadata Review screen before the tag-write fix.**
-A	cb	8316		Missing-file lane — follow-ups after the report-only change (#2614)	internal/transcribe	4451	**Per-file intro transcription as the primary book-identity signal** — owner
-A	cb	7209		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	2293	"**The library ""Sort by"" control no longer exists — 4 e2e tests target a"
-B	cb	42		CI / automation	(unresolved)	297	Decide whether the 22 `gha-*` repos (plus `magnet-handler`) should keep their
-B	cb	534		ABS API — sweep every endpoint for accepted-but-ignored query paramete	(unresolved)	3505	💾 **Run `maintenance.booksig-sidecar-migrate` on production** — the op is
-B	cb	921		ghcommon reusable-workflow pins are a month apart — decide, don't drif	(unresolved)	459	Decide whether to bump the eight, and do it in **at least two PRs** —
-B	cb	1000		Interface width: the five the sweep did not reach	(unresolved)	544	**Re-probe `itunesservice.Store` after those two land.** Its measured
-B	cb	1275		Config	(unresolved)	625	**Related asymmetry found while tracing the above: auto-fetch embeds cover
-B	cb	3571		Author table: copyright text and HTML entities leaked into artist tags	(unresolved)	354	Decide whether author-name ingest should HTML-unescape at all. If it should,
-B	cb	3799		3. Real authors, genuinely duplicated	(unresolved)	291	Decide what to DO with types 1 and 2 rather than merging them. Merging 25
-B	cb	3893		Likely cause	(unresolved)	219	Decide whether the author listing SHOULD expose non-primary books at all.
-B	cb	4356		`?version_group_id=` lists the whole library, and cannot be guarded	(unresolved)	286	Decide whether the list should filter on `version_group_id` at all. There
-B	cb	4910		🐛 `book_file.missing` / `file_exists` are stale — nothing maintains th	(unresolved)	599	**Decide what to do with the books whose EVERY `book_file` row is dead.** The
-B	cb	5275		Contributor data cleanup — follow-ups to `maintenance.purge-empty-auth	(unresolved)	456	**Decide what the 822 zero-book-but-has-files authors actually are.** Measured
-B	cb	5458		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	184	**Decide what happens to the 16,265 fully-broken books** (every file entry dead).
-B	nb	10586		Pipeline (8)	(unresolved)	148	**Fingerprint UI verifications ×2** (H1:1383-1384) — [hold] verify the 14K
-B	nb	10662		UX (4)	(unresolved)	78	**1.17 — product rename/branding sweep** (H1:2751) — blocked on name decision.
-B	nb	10663		UX (4)	(unresolved)	109	**3.8 Plex-style media server API; 3.9 LLM series detection; 3.10 AI cover art**
-B	nb	10727		Other / close-out (10)	(unresolved)	80	**Library centralization backlog** — needs a brainstorming session; future work.
-B	cb	1403	E2EGATE-NOTREQUIRED	Config	ci/scripts;web (frontend)	2863	**E2EGATE-NOTREQUIRED** The E2E suite runs on every qualifying PR and its
-B	cb	1009		Interface width: the five the sweep did not reach	docs	1032	Decide whether maintenance jobs should take per-job store interfaces instead of the
-B	cb	8125		Missing-file lane — follow-ups after the report-only change (#2614)	docs	1471	**Give the 466 low-confidence series positions somewhere to go** — deferred
-B	cb	10435		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	docs	861	**iTunes 2-way-sync — continuation (P3 redefine + reverse sync + footgun audit).**
-B	nb	10598		Workflow / ops (4)	docs	167	**PD-1 — subprocess isolation via parent-RPC bridge + MDA3 `Isolate:false` revert**
-B	cb	10418		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	docs;internal/itunes	1314	**🚧 P2 BLOCKER — location-form guard rejects the entire live AO library (F7).** The
-B	cb	2537		⚠️ The activity channel overflows during organize and DROPS records	internal/database	1708	**`BookFile.Duration` is `int` seconds, so every per-track duration is truncated and
-B	cb	5054		Update 2026-08-16: one of these was NOT pre-existing	internal/database;internal/metafetch;internal/plugins/itunes;internal/plugins/maintenance;internal/server/handlers	1885	**`make ci` cannot pass on `main` — staticcheck has 10 findings and aborts the target**
-B	cb	1143		Dedup	internal/dedup	1100	`Engine.SetLSHStore` and `Engine.SetAcoustIDBookFileStore`
-B	cb	806		6,157 books are invisible in the web UI — `vg-` singleton groups elect	internal/server/handlers	1927	🤔 **Decide whether the newly-implemented filter fields belong in
-B	cb	2589		⚠️ The activity channel overflows during organize and DROPS records	internal/server/handlers	438	"**`timeBase` is hardcoded `""1/1000""` at `internal/server/handlers/abs/mapper.go:645`**"
-B	cb	1957		Config	internal/server/maintenance_fixups.go	829	**`wipeActivity` dry-run count saturates at 2.** `wipeActivity` in
-B	cb	3362		Search / version-group census corrections (2026-08-13)	internal/server/search_coverage.go	506	**Decide whether to force a search-index rebuild on prod.** The boot-time
-C	cb	46		CI / automation	(unresolved)	267	Add a scheduled detect-only backstop for `auto-revert.yml`: if `main`'s tip has
-C	cb	96		CI / automation	(unresolved)	318	🌐 **Per-stream `language` is always `nil` (N-12).** `mapper.go:676` returns nil
-C	cb	127		ABS	(unresolved)	1890	**Align the ABS conformance fixtures with the oracle capture so the value gate can be
-C	cb	229		Tasks	(unresolved)	210	Capture a goroutine dump from a real failure. **Do NOT `gh run rerun` before saving the
-C	cb	235		Tasks	(unresolved)	193	Consider a per-test deadline (`t.Context()` / `context.WithTimeout`) so a hang fails in
-C	cb	238		Tasks	(unresolved)	133	Reduce the wait-bound cost while there — 200–280s for a `-short` run of one package is
-C	cb	484		ABS surface — what is still missing after the series/playlist fix	(unresolved)	462	**The series list ignores `limit` and `page`.** It returned all 14,625 series in one
-C	cb	491		ABS surface — what is still missing after the series/playlist fix	(unresolved)	459	**`testdata/abs-fixtures/get_api_libraries_id_series.json` contains ZERO series.**
-C	cb	595		ABS API — sweep every endpoint for accepted-but-ignored query paramete	(unresolved)	719	🎧 **Run `maintenance.chapters-backfill` against production.** The op ships
-C	cb	629		ABS API — sweep every endpoint for accepted-but-ignored query paramete	(unresolved)	454	🧩 **Investigate per-chapter split files standing as their own books.** While
-C	cb	642		Library data integrity — surfaced by the chapters-backfill cohort run	(unresolved)	1602	**`BookFile.FilePath` rows point at files that do not exist — 16,130 books
-C	cb	665		Library data integrity — surfaced by the chapters-backfill cohort run	(unresolved)	342	**`Book.FilePath` and `BookFile.FilePath` disagree for the same book.** For
-C	cb	670		Library data integrity — surfaced by the chapters-backfill cohort run	(unresolved)	717	**`Book.FilePath` is NOT unique — 1,264 values are shared by more than one
-C	cb	680		Library data integrity — surfaced by the chapters-backfill cohort run	(unresolved)	353	**Stored `duration` is short of the real container by 119–186s on 7 cohort
-C	cb	685		Library data integrity — surfaced by the chapters-backfill cohort run	(unresolved)	303	**Multi-file chapter synthesis produces a timeline that stops short.** One of
-C	cb	689		Library data integrity — surfaced by the chapters-backfill cohort run	(unresolved)	352	**Duplicate book rows per title under different author folders** (`Deadly Jobs`
-C	cb	872		Organize/apply rename paths: three hand-verified silent failures	(unresolved)	575	**F5 (remainder) — `OrganizeBookDirectory` still cannot tell a resumed
-C	cb	903		Organize/apply rename paths: three hand-verified silent failures	(unresolved)	429	"Audit existing ""we use the wide type because X requires it"" comments across the"
-C	cb	969		Interface width: the five the sweep did not reach	(unresolved)	76	`database.Store` (40) — make unreachable rather than smaller (plan phase 2).
-C	cb	970		Interface width: the five the sweep did not reach	(unresolved)	176	`itunes/service.Store` (17 declared / 24 called) — 7 assignability
-C	cb	973		Interface width: the five the sweep did not reach	(unresolved)	134	`maintenance.JobStore` (12) — deliberate choice from the #2534 arbitration;
-C	cb	975		Interface width: the five the sweep did not reach	(unresolved)	237	`audiobookStore` / `audiobookUpdateStore` (11 each) — the service calls **44
-C	cb	984		Interface width: the five the sweep did not reach	(unresolved)	1028	**Narrow `positionSyncStore` and `pathRepairerStore` — both blocked on a wide
-C	cb	1063		Config	(unresolved)	2105	**Audit every config option name — the set has grown by accretion and the
-C	cb	1350		Config	(unresolved)	2978	"🏷️ **""Browse by Tag"" surfaces internal bookkeeping tags and formats them"
-C	cb	1462		Config	(unresolved)	3024	🔴 **The binary ITL parser extracts ZERO smart playlists from real iTunes
-C	cb	1517	ITUNES-SMARTCRIT-PARSE	Config	(unresolved)	5618	**ITUNES-SMARTCRIT-PARSE** `ParseSmartCriteria` does not understand the
-C	cb	1744		Config	(unresolved)	1207	🟡 **`batch-operations.spec.ts:100` [webkit] is an intermittent flake —
-C	cb	1945	VGBACKFILL-BOUNDS-FRAGILE	Config	(unresolved)	720	**VGBACKFILL-BOUNDS-FRAGILE** Separately, and still worth doing: the
-C	cb	1970		Config	(unresolved)	621	**`WipeAllActivity` still does an uncancellable full scan on a request
-C	cb	2431	UI-LOCKUP-2	Config	(unresolved)	1828	**UI-LOCKUP-2** The web interface still locks up despite the virtualization
-C	cb	2481		Config	(unresolved)	278	**Consider the same file-I/O audit for the remaining apply-shaped
-C	cb	2568		⚠️ The activity channel overflows during organize and DROPS records	(unresolved)	1053	"**`deviceInfo.deviceType` is always `""unknown""`, and the capture cannot tell us what"
-C	cb	2583		⚠️ The activity channel overflows during organize and DROPS records	(unresolved)	425	**`publishedYear` loses the era: `Book.PrintYear` is an `int`, so the oracle's
-C	cb	3156		Make metadata fields on the book page clickable (future improvement)	(unresolved)	353	**Author name → library filtered by that author.** The most-wanted one. The API
-C	cb	3161		Make metadata fields on the book page clickable (future improvement)	(unresolved)	204	**Series name → library filtered by that series.** `series_id` is on the payload
-C	cb	3164		Make metadata fields on the book page clickable (future improvement)	(unresolved)	280	**Narrator, publisher, genre, and release year.** Same idea, but check each has a
-C	cb	3168		Make metadata fields on the book page clickable (future improvement)	(unresolved)	808	**⚠️ Do not link `version_group_id` to a filtered view until the filter works.**
-C	cb	3340		Search / version-group census corrections (2026-08-13)	(unresolved)	327	**765 books, not 6,157, are wrongly hidden by the primary-version filter** (1.20%,
-C	cb	3344		Search / version-group census corrections (2026-08-13)	(unresolved)	335	**Find the writer that creates a `vg-` group without electing a primary.** The lead
-C	cb	3348		Search / version-group census corrections (2026-08-13)	(unresolved)	424	**`is_primary_version` in the payload disagrees with the filter for 5,731 books.**
-C	cb	3354		Search / version-group census corrections (2026-08-13)	(unresolved)	107	**41 ungrouped books are hidden anyway** and do not fit the rule above. Small
-C	cb	3356		Search / version-group census corrections (2026-08-13)	(unresolved)	350	**`version_group_id` is silently ignored as a filter** on `/api/v1/audiobooks` —
-C	cb	3377		Search / version-group census corrections (2026-08-13)	(unresolved)	505	**Quoted phrases do not produce a `MatchPhraseQuery`.** The server-side
-C	cb	3391		Search / version-group census corrections (2026-08-13)	(unresolved)	465	**A one-book version group can have no primary member.**
-C	cb	3414		Search-index coverage repair — production findings (2026-08-13)	(unresolved)	668	**The store reports 67,824 live books; the API list endpoint reports 63,870.**
-C	cb	3423		Search-index coverage repair — production findings (2026-08-13)	(unresolved)	749	**The coverage gate compares two slightly different populations.**
-C	cb	3433		Search-index coverage repair — production findings (2026-08-13)	(unresolved)	731	**The search index has ZERO metrics.** A live `/metrics` scrape returns 50 metric
-C	cb	3443		Search-index coverage repair — production findings (2026-08-13)	(unresolved)	442	**`audiobook_organizer_books_total` reports the PRIMARY count, not the total.**
-C	cb	3449		Search-index coverage repair — production findings (2026-08-13)	(unresolved)	358	**Re-measure the per-cohort coverage now that a true figure exists.** The
-C	cb	3469		Search follow-ups from the wildcard/phrase fix (2026-08-13)	(unresolved)	440	**Fuzzy queries (`~`) have the same case-sensitivity defect the wildcard fix just
-C	cb	3476		Search follow-ups from the wildcard/phrase fix (2026-08-13)	(unresolved)	704	**A04's designated probe cannot verify the op-ID audit trail.**
-C	cb	3488		Search follow-ups from the wildcard/phrase fix (2026-08-13)	(unresolved)	885	**Activity log: auto-compact after 7 days, user-configurable.** Owner
-C	cb	3517		Search follow-ups from the wildcard/phrase fix (2026-08-13)	(unresolved)	390	**Metadata-apply activity rows don't NAME the book.** Same screenshot:
-C	cb	3561		Author table: copyright text and HTML entities leaked into artist tags	(unresolved)	129	Author id 46583 is named `&#169` — an HTML entity for `©` with its
-C	cb	3563		Author table: copyright text and HTML entities leaked into artist tags	(unresolved)	162	Author id 51870 is named `&#169;2013 by HarperCollinsPublishers` — a whole
-C	cb	3566		Author table: copyright text and HTML entities leaked into artist tags	(unresolved)	363	Find where the entity loses its `;`. `SplitCompositeAuthorName`'s semicolon
-C	cb	3576		Author table: copyright text and HTML entities leaked into artist tags	(unresolved)	145	Consider a `isDirtyAuthorName` rule for names starting with `©`/`&#`/a
-C	cb	3586		Author table: book titles are being comma-split into author rows	(unresolved)	94	id 46595 `and Thanks for All the Fish` (2 books) — from *So Long, and
-C	cb	3588		Author table: book titles are being comma-split into author rows	(unresolved)	43	id 46989 `and the Farm Boy (DBY)` (5 books)
-C	cb	3589		Author table: book titles are being comma-split into author rows	(unresolved)	47	id 47193 `and Make Better Decisions` (16 books)
-C	cb	3595		Author table: book titles are being comma-split into author rows	(unresolved)	189	The real defect is that `SplitCompositeAuthorName`'s comma branch has no
-C	cb	3598		Author table: book titles are being comma-split into author rows	(unresolved)	254	Consider requiring a part to look like a personal name (2-4 words, no
-C	cb	3602		Author table: book titles are being comma-split into author rows	(unresolved)	140	Check how many other author rows are title fragments without the `and`
-C	cb	3607		Author table: misspelling shared by both rows of a duplicate pair	(unresolved)	257	`Sylverster McCoy` (2 books) and `& Sylverster McCoy` (1 book) are *both*
-C	cb	3680		C111 census: the nil `is_primary_version` population is 5,702 (all ung	(unresolved)	108	Make every raw `*bool` post-filter treat nil as true (matching
-C	cb	3682		C111 census: the nil `is_primary_version` population is 5,702 (all ung	(unresolved)	144	better: backfill explicit `true` onto the 5,702 nil rows (dry-run
-C	cb	3685		C111 census: the nil `is_primary_version` population is 5,702 (all ung	(unresolved)	62	Fix the 41 ungrouped-false rows to true in the same op (C314).
-C	cb	3686		C111 census: the nil `is_primary_version` population is 5,702 (all ung	(unresolved)	112	Re-run this census as the post-fix verification: expected end state is
-C	cb	3790		3. Real authors, genuinely duplicated	(unresolved)	322	Normalize whitespace (and probably case) in author lookup/creation, so a
-C	cb	3795		3. Real authors, genuinely duplicated	(unresolved)	259	Merge the type-3 real-author duplicates. The existing
-C	cb	3803		3. Real authors, genuinely duplicated	(unresolved)	324	🚨 Do NOT write a single op that treats all three kinds the same. Type 3
-C	cb	3884		Likely cause	(unresolved)	310	Decide the single meaning of a nil `IsPrimaryVersion` and apply it in both
-C	cb	3889		Likely cause	(unresolved)	280	Add a conformance test in the shape used by #2406/#2410/#2411: one
-C	cb	3910		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	223	First MEASURE, don't assume: confirm what `SearchBooks(q, 0, 0)` returns
-C	cb	3914		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	252	If it returns nothing: the iTunes search surface has been silently empty
-C	cb	3918		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	126	If it returns everything: that is the opposite failure (unbounded
-C	cb	3921		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	1125	"**Legacy operation rows never leave ""pending"" — the ops UI shows"
-C	cb	3960		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	341	**Verify the dry-run default on prod after deploy.** `GET
-C	cb	3976		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	307	**Consider making the resume path's fallback observable.** When no saved
-C	cb	3982		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	327	**Metadata matcher: shift-click range selection.** Owner request
-C	cb	3988		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	389	"**Metadata matcher: ""skip all"" / hide-multiples control.** Owner request"
-C	cb	3995		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	695	"**Metadata matcher: apply falsely reports ""signed out — no changes were"
-C	cb	4007		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	699	**Metadata matcher: multi-file write-to-files must dispatch as a
-C	cb	4117		Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross	(unresolved)	542	**The original CI flake (run 30702594886, 39/40 books) CANNOT be the
-C	cb	4126		Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross	(unresolved)	489	**Verify op-ID audit trail on prod after deploying the run-context fix.** Trigger
-C	cb	4132		Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross	(unresolved)	404	**Historical gap is permanent — do not chase it.** Every maintenance op run before
-C	cb	4137		Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross	(unresolved)	482	**Audit the eight `ctxOpID` consumers now that the ID actually arrives.** Their
-C	cb	4144		Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross	(unresolved)	1304	"**Organize renames with placeholder metadata — ""Unknown Author"" gets"
-C	cb	4166		Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross	(unresolved)	625	**E07 residue: 2 ambiguous duplicate-PID groups need a human pick.**
-C	cb	4186		Bleve index holds ~3,953 docs for soft-deleted books	(unresolved)	349	Add/verify a reconcile pass that REMOVES index docs whose book is
-C	cb	4192		Bleve index holds ~3,953 docs for soft-deleted books	(unresolved)	97	Verify with a bogus-value control: search for a known trashed title
-C	cb	4204		2026-06-22 security-sweep: the items still open after the status pass	(unresolved)	105	**SEC-4 residue** — no CSP header yet (middleware comment defers until a
-C	cb	4206		2026-06-22 security-sweep: the items still open after the status pass	(unresolved)	140	**SEC-8 residue** — Dockerfile build-dep tarballs (`utfcpp`, `taglib`)
-C	cb	4211	TOOL-1	2026-06-22 security-sweep: the items still open after the status pass	(unresolved)	70	**TOOL-1** — `testdata` is 2.2G tracked; decide fetched-dataset split.
-C	cb	4214		2026-06-22 security-sweep: the items still open after the status pass	(unresolved)	135	ARCH-3/4/5/7/8 remain structural programs; ARCH-8's panicking string
-C	cb	4295		Series table integrity — follow-ups from the 2026-08-14 prune repair	(unresolved)	579	"**`WithOpID` is never called in production code**, so `ctxOpID(ctx)` returns """""
-C	cb	4304		Series table integrity — follow-ups from the 2026-08-14 prune repair	(unresolved)	498	**~2,270 series look like they were created from a book title rather than a real
-C	cb	4329		Soft-deleting a book UPSERTS it into the search index	(unresolved)	295	Make the soft-delete transition enqueue a Bleve DELETE instead: either
-C	cb	4334		Soft-deleting a book UPSERTS it into the search index	(unresolved)	108	Regression test: soft-delete an indexed book, assert a title probe
-C	cb	4360		`?version_group_id=` lists the whole library, and cannot be guarded	(unresolved)	372	"If yes: add a `case ""version_group_id""` to `bookFieldValue` and the name"
-C	cb	4365		`?version_group_id=` lists the whole library, and cannot be guarded	(unresolved)	204	If no: it still must not answer with the whole library. Extend the guard
-C	cb	4375		`?version_group_id=` lists the whole library, and cannot be guarded	(unresolved)	1009	**124 files remain 0600 after the fix-file-modes repair (1,547 repaired),
-C	cb	4417		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	1647	**ABS series list emits a non-ABS `books[]` shape, and no series render in ABS clients.**
-C	cb	4449		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	863	**The AI-scan cancel wiring is unverified, and it fails silently.**
-C	cb	4463		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	442	**August executive-summary roundup is stale.** `2026-08-31-august-monthly-roundup-executive-summary.md`
-C	cb	4477		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	842	**Cancelling an operation the registry has never heard of reports success.**
-C	cb	4491		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	686	"**""Dynamic"" collections are currently *manually* refreshed.** A query-backed"
-C	cb	4501		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	393	**`AddBookToCollection` is read-modify-write with no version check.** Two
-C	cb	4507		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	334	**`POST /api/session/local-all` 404s.** Observed from the app alongside the
-C	cb	4563		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	348	**`/tasks/*` and `/maintenance-window/*` are NOT v1 operations.** Six routes
-C	cb	4569		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	347	**`library.import`, `library.organize` and `library.transcode` still carry the
-C	cb	4575		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	717	**Convert the remaining long-running `ResumeDrop` ops to real resume.** The
-C	cb	4832		Stranded `.tmp-rename` recovery — bisect complete, recovery outstandin	(unresolved)	525	Recovery tool. Dry-run by default, full report before anything moves.
-C	cb	4840		Stranded `.tmp-rename` recovery — bisect complete, recovery outstandin	(unresolved)	259	Compare with per-file SHA-256; where hashes differ because of embedded
-C	cb	4844		Stranded `.tmp-rename` recovery — bisect complete, recovery outstandin	(unresolved)	293	Investigate book rows affected as a side effect. `scrubVar`'s own comment
-C	cb	4848		Stranded `.tmp-rename` recovery — bisect complete, recovery outstandin	(unresolved)	158	Confirm no new bogus directories appear now that both the pattern and the
-C	cb	4861		Stranded `.tmp-rename` recovery — bisect complete, recovery outstandin	(unresolved)	402	**Maintenance window: watchdog cancels it, then the plugin reports success.** Prod
-C	cb	4901		🐛 `book_file.missing` / `file_exists` are stale — nothing maintains th	(unresolved)	126	**Decide the 16,265 books with no surviving file** (was believed to be 5,
-C	cb	4903		🐛 `book_file.missing` / `file_exists` are stale — nothing maintains th	(unresolved)	154	**`missing-file-repair` dry run hit the 20,000 `max_deletes` cap.** The true
-C	cb	4905		🐛 `book_file.missing` / `file_exists` are stale — nothing maintains th	(unresolved)	181	**1,006 missing rows are under the iTunes tree**, contradicting the
-C	cb	4908		🐛 `book_file.missing` / `file_exists` are stale — nothing maintains th	(unresolved)	71	**61 rows carry a mangled `/X:/books/itunes/Audiobooks` Windows path.**
-C	cb	4919		🐛 `book_file.missing` / `file_exists` are stale — nothing maintains th	(unresolved)	304	**Answer why the organizer recorded destination rows it never populated.**
-C	cb	4924		🐛 `book_file.missing` / `file_exists` are stale — nothing maintains th	(unresolved)	431	**Register `HEAD` for the audio/file routes.** The server registers no `HEAD` handler
-C	cb	5021		Update 2026-08-16: one of these was NOT pre-existing	(unresolved)	1089	**Add an `{edition_suffix}` folder-pattern token.** Two editions of the same
-C	cb	5271		Contributor data cleanup — follow-ups to `maintenance.purge-empty-auth	(unresolved)	277	**Narrator equivalent of the empty-author purge.** There is no
-C	cb	5281		Contributor data cleanup — follow-ups to `maintenance.purge-empty-auth	(unresolved)	685	**Author↔narrator swap repair.** Measured lower bound: 1,052 names appear in
-C	cb	5290		Contributor data cleanup — follow-ups to `maintenance.purge-empty-auth	(unresolved)	492	**`DeleteAuthor`'s junction cleanup is dead code.** It iterates the
-C	cb	5449		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	391	**Run the classify pass in prod** and record the numbers.
-C	cb	5461		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	300	**Missing-file audit Phase 1a still has no PR and is not mutation-tested.**
-C	cb	5650		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	4159	"**`book-detail.spec.ts` ""soft delete, restore, and purge flow"" fails only in the full"
-C	cb	6425		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	2609	**E2E repair progress — measured 2026-08-09. Supersedes the stale
-C	cb	6484		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	1907	**`version-management.spec.ts` (6 failures) — version management MOVED off
-C	cb	6988		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	3215	**Audit every e2e mock handler against whether its app-side reader
-C	cb	7254		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	1111	**The unified Dedup view has no e2e coverage at all.** Found 2026-08-09
-C	cb	7404		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	1532	**Stop Deluge writing in-progress downloads directly into the new-books
-C	cb	7435		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	2481	**Require every operation to support `dry_run`, and enforce it at the
-C	cb	7736		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	4612	**Move library filtering/search into the Go server as a real, declared
-C	cb	8094		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	1695	"**~180 ""bracketed series"" are actually one shattered book each** — found by"
-C	cb	8151		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	1423	**react-router GHSA-qwww-vcr4-c8h2 — accepted, not reachable, do not
-C	cb	8236		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	499	**`DeleteBookFilesForBook` leaves stale memdb rows behind.** It never calls
-C	cb	8245		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	1414	**The 3 dangerous multidisc holds are DUPLICATES, not series — feed them to
-C	cb	8273		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	2190	**Frontend framework versions — how far behind we actually are, and the
-C	cb	8551		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	1841	**Version-group acoustic audit op** — verify that books marked as VERSIONS
-C	cb	8611		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	1934	**Backfill chapters into files that lack them, using a duplicate as the
-C	cb	8675		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	1803	**Reading status and review/rating must sync from the app back to the
-C	cb	8707		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	1594	**Use Deluge as a metadata and identity source** — owner idea 2026-08-05:
-C	cb	8738		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	1994	**Use Deluge's per-torrent file list as ground truth for GROUPING** — owner
-C	cb	8890		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	2728	"**""First Aid"" — one sequenced library validate + repair system** — owner"
-C	cb	8943		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	740	**Never delete — re-associate (duplicate resolution)**. Deleting a
-C	cb	9000		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	904	**Remaining after the first apply:** 1,019 directory-shaped books held for
-C	cb	9020		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	449	**Re-run `regroup-shattered-ai` after relink and re-measure the queue.**
-C	cb	9659		Status 2026-08-04	(unresolved)	484	**`The Trapped Mind Project` is a 13-second stub, not an audiobook**
-C	cb	9666		Status 2026-08-04	(unresolved)	230	**5 books are multi-copy, not row-duplicated** — distinct paths for the same
-C	cb	9669		Status 2026-08-04	(unresolved)	113	**`Call to Arms` (9,957h)** — 96 *distinct* files, unchanged by the dedupe run.
-C	cb	9671		Status 2026-08-04	(unresolved)	204	**Corrected aggregates are invisible until memdb refreshes** — see the
-C	cb	10290		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	(unresolved)	524	**ABS-SYNC: exempt the ABS surface from `BasicAuth()` when `basic_auth_enabled`
-C	cb	10298		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	(unresolved)	291	**ABS-SYNC: prune expired `abs_sess:` records on a schedule.**
-C	cb	10333		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	(unresolved)	310	**ABS-SYNC: wave 3 — backfill + survival proof.** TASK-04 (idempotent sync-ID
-C	cb	10337		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	(unresolved)	553	**ABS-SYNC: TASK-11 — auth core, both credential modes.** Brief not yet written.
-C	cb	10344		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	(unresolved)	465	**ABS-SYNC: Phase 3 — DTO mapping + library browse.** Depends on waves 1–2 and
-C	cb	10354		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	(unresolved)	276	**ABS-SYNC: Phase 7 — socket.io (Absorb only).** AudioBooth needs no websocket at
-C	cb	10358		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	(unresolved)	514	**ABS-SYNC: Phase 8 — topology, runbook, migration guide.** Cloudflare Access
-C	cb	10366	REGROUP-PARTCHAPTER-PARSER	"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	(unresolved)	343	"**REGROUP-PARTCHAPTER-PARSER** The Mistborn-style ""Ambiguous folder"" case"
-C	cb	10383		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	(unresolved)	480	**iTunes 2-way-sync — remaining P0 measurements.** (a) Cross-type PID collisions
-C	nb	10507		Dedup (10)	(unresolved)	96	**REVIEW-band candidate producer for the review queue** (H1:35) — B2 fast-follow;
-C	nb	10509		Dedup (10)	(unresolved)	144	**Flip `review_apply_enabled` ON in prod** — apply path merged (#1953) but default
-C	nb	10511		Dedup (10)	(unresolved)	81	**C8 — auto-file issues per `not_dup` cluster** (H1:1332; INIT-10 T5) — deferred.
-C	nb	10521		Dedup (10)	(unresolved)	144	**Async breakdown-refresh for bulk/cluster dismiss** (H1:1877) — per-pair synchronous
-C	nb	10525		Dedup (10)	(unresolved)	81	**Regression tests for the 2 untested deluge hydrate sites** (H1:568) — optional.
-C	nb	10526		Dedup (10)	(unresolved)	94	**Hide system-sourced tags from the Browse-by-Tag cloud** (H1:433) — UX preference,
-C	nb	10531		Identification / metadata (5)	(unresolved)	113	**AI-enrichment tier for the ambiguous regroup pile** (H1:35) — B2 fast-follow;
-C	nb	10533		Identification / metadata (5)	(unresolved)	56	**Cover recovery fast-follow** (H1:35) — B2 fast-follow.
-C	nb	10537		Identification / metadata (5)	(unresolved)	77	**Description fetch campaign — ~29,083 books without descriptions** (H1:790).
-C	nb	10538		Identification / metadata (5)	(unresolved)	300	**LLM/embeddings backend-mode toggle** (extracted from the archived 2026-07-02
-C	nb	10572		Pipeline (8)	(unresolved)	126	**iTunes path-heal residuals** (H1:899-906) — 3,720 ambiguous / 5,349 not-found /
-C	nb	10574		Pipeline (8)	(unresolved)	95	**AP-1b — physically co-locate survivor's files after Combine** (H1:936) — inside
-C	nb	10576		Pipeline (8)	(unresolved)	98	**AP-3 duration-reextract ~721-book tail** (H1:949) — re-enqueue apply
-C	nb	10582		Pipeline (8)	(unresolved)	137	**CONS-18 Part 2 — file-tag duration write-back** (H1:1019; spec 2026-06-19 DRAFT)
-C	nb	10603		Workflow / ops (4)	(unresolved)	130	**Responses-API migration AI-RESP-A/B/E/F (INIT-7)** (H1:2596-2603) — [hold,
-C	nb	10610		Logging / verification / security-ops (5)	(unresolved)	172	**SLOG-W13 residual ~1,346 raw slog calls** (H1:2037) — remaining calls enumerated
-C	nb	10613		Logging / verification / security-ops (5)	(unresolved)	86	**SEC-AUDIT-11 — CodeQL bulk-dismissal rationales** (H1:2267) — GitHub-console
-C	nb	10617		Logging / verification / security-ops (5)	(unresolved)	118	**I1 + I6 — prod pprof verification** (H1:1515, 1538) — measure chromem-lazy
-C	nb	10660		UX (4)	(unresolved)	133	**1.16 — resizable/sortable columns** (H1:2750) — remaining: dedup results,
-C	nb	10706		Other / close-out (10)	(unresolved)	314	**2026-05-01 re-audit block close-out pass** (H1:3137-3177) — TEST-2, DEP-1a-e,
-C	nb	10710		Other / close-out (10)	(unresolved)	101	**WaitForWarmup hazard note** (H1:3118) — latent create-then-read-memdb test
-C	nb	10712		Other / close-out (10)	(unresolved)	87	**GFO-4 — graceful-file-ops sub-op phase tracking** — last open graceful-file-ops
-C	nb	10714		Other / close-out (10)	(unresolved)	61	**Performance items #1/#2/#6** (2026-04-14 set) — still open.
-C	nb	10728		Other / close-out (10)	(unresolved)	118	**Transcription quality filter** — ~40% of transcripts low-quality/unparsed; list
-C	nb	10730		Other / close-out (10)	(unresolved)	113	**iTunes heal Layer-6 re-trigger** (H1:897) — re-run after path-heal residuals
-C	nb	10783		Dedup + review consolidation (3) — 2026-07-18 owner request	(unresolved)	400	"**Overhaul the review interface (""make it not suck"")** — the review page UX is a"
-C	nb	10788		Dedup + review consolidation (3) — 2026-07-18 owner request	(unresolved)	451	**Consolidate the dedup page into the review page** — slim the dedup page down to
-C	cb	10831		Remaining — execution state (briefs)	(unresolved)	355	"**T03** — **sandbox** purge wave: `maintenance.dedup-exact-triage {""apply"":true}` (dismiss"
-C	cb	10849		Remaining — execution state (briefs)	(unresolved)	129	**T13** — docs truth-up with measured sandbox/prod numbers (dedup/STATUS.md, pending-prod-actions.md, exec summary) — in progress
-C	cb	50		CI / automation	ci/scripts	152	`scripts/test_check_memory_leaks.py` is executed by no workflow. Either wire it
-C	cb	1852		Config	ci/scripts	2417	**A `todo.d` fragment assembled between the PR that files it and the PR
-C	cb	4312		Series table integrity — follow-ups from the 2026-08-14 prune repair	ci/scripts	512	**Check `scripts/setup-prometheus-auth.py` for the dead-indentation
-C	cb	8044		Missing-file lane — follow-ups after the report-only change (#2614)	ci/scripts	2787	**Never accumulate more than 10 RCs on a version — cut the stable release
-C	cb	2219	LEAKSCAN-SCOPE	Config	ci/scripts;web (frontend)	1077	**LEAKSCAN-SCOPE** `scripts/check-memory-leaks.py` reports a false
-C	cb	6701		Missing-file lane — follow-ups after the report-only change (#2614)	cmd/root.go;docs;internal/database	3388	**⚖️ DECIDE which sort indexes to enable — the design-doc cost estimate was ~10×
-C	cb	101		CI / automation	docs	1565	📚 **Docs consolidation follow-ups (from the 2026-08-11 inventory).** Full evidence in
-C	cb	157		Dedup	docs	1423	**Exact-candidate backlog is re-accumulating — fix the source, not the symptom.** The
-C	cb	397		Docs	docs	1122	**Give the 2026-06-22 security sweep a status column so it can eventually be retired.**
-C	cb	497		ABS surface — what is still missing after the series/playlist fix	docs	488	"**`docs/reference/abs-target-client-contract.md` §11 lists playlists as ""safe to"
-C	cb	1194		Dedup	docs	1971	🧊 **`*PebbleStore` struct split — LOWEST PRIORITY. Literally do anything else
-C	cb	1317	CFG-AUDIT	Config	docs	1291	**CFG-AUDIT** Triage the findings in
-C	cb	2238	REVIEW-PREVIEW	Config	docs	1493	**REVIEW-PREVIEW** Play the first ~2 minutes of audio directly from the
-C	cb	4660		Import-path scan no longer surfaces per-file scan errors	docs	637	**3 scheduled tasks are ENABLED but can never run.** Startup logs
-C	cb	4894		🐛 `book_file.missing` / `file_exists` are stale — nothing maintains th	docs	467	**Classify the 71,954 missing `book_file` rows by shape before any
-C	cb	5037		Update 2026-08-16: one of these was NOT pre-existing	docs	1213	**Investigate the LLM host's GPU cooling before running another full `library.scan`.**
-C	cb	5466		Missing-file lane — follow-ups after the report-only change (#2614)	docs	401	**`database.Store` is grouped, not yet unreachable.** `.interface-width-baseline`
-C	cb	10372		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	docs	946	**iTunes 2-way-sync P3 (cleanup) — decision: MEASURE-AND-STOP, no removal machinery.**
-C	cb	10390		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	docs	1276	**iTunes 2-way-sync P2 — relocate-only sync cycle (MVP end).** All prerequisites are
-C	cb	10457		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	docs	640	**iTunes 2-way sync writeback (edit-in-place, preserve play-state).** The deployed
-C	nb	10500		Dedup (10)	docs	481	**PH-2 — run `maintenance.dedup-exact-triage` on prod + review populations; PH-2b
-C	nb	10523		Dedup (10)	docs	121	**Omnibus detection + dedup** — spec-only
-C	nb	10534		Identification / metadata (5)	docs	184	**Community audiobook fingerprint index (INIT-8)** — spec-only
-C	nb	10591		Workflow / ops (4)	docs	583	**Workflow system WF-0/2/3/4/5 (INIT-6)** (H1:1128-1133;
-C	nb	10608		Logging / verification / security-ops (5)	docs	127	**SLOG-PROD-VERIFY** (H1:2038; [runbook](docs/operations/slog-prod-verify.md)) —
-C	nb	10615		Logging / verification / security-ops (5)	docs	146	**PD-3 — post-deploy prod verification checklist** (H1:1568-1574;
-C	nb	10632		Infra (5)	docs	239	**REPO-SIZE-1 decision** ([plan](docs/plans/2026-07-10-repo-size-history-rewrite-plan.md),
-C	nb	10635		Infra (5)	docs	213	**Execution-manifest human gates**
-C	nb	10670		Other / close-out (10)	docs;internal/audiobooks;internal/database;internal/maintenance;internal/server;internal/server/;internal/server/handlers;internal/server/interfaces.go	2235	"**4.8 — Store ISP sweep** (H1:2787) — **RE-SCOPED 2026-07-18; the ""~38-file + 18"
-C	cb	4721		Store-interface audit — defects found incidentally (each independent o	docs;internal/database	264	`internal/database/store.go:17` cites
-C	cb	1227		Dedup	docs;internal/database;internal/plugins/maintenance;internal/server/indexed_store.go;internal/server/server.go;internal/server/server_maintenance_deps.go;internal/testutil	1192	**Finish killing `database.Store` — 18 references left outside `internal/database`.**
-C	cb	10406		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	docs;internal/itunes	939	**`isAudiobookITL` under-classifies audiobooks (fail-safe, but fix carefully).**
-C	cb	2025	REVIEW-COMBINE-FIRST	Config	docs;internal/merge;internal/reconcile;internal/server/wire_dedup_routes.go;web (frontend)	2732	**REVIEW-COMBINE-FIRST** Let the owner combine two books into one, or
-C	cb	10329		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	docs;internal/scanner	449	**ABS-SYNC: wave 2 — scanner + merge wiring.** Briefs in
-C	cb	6133		Missing-file lane — follow-ups after the report-only change (#2614)	docs;internal/search	1750	**The checked-in `.api-token` no longer authenticates, and it blocked a real
-C	cb	5494		Missing-file lane — follow-ups after the report-only change (#2614)	docs;internal/server/handlers	4552	**AudiobookShelf-compatible API: series are broken, and collections/playlists are
-C	cb	296		Docs / API	docs;internal/server/server.go	3083	**The OpenAPI spec still documents 48 endpoints that no router serves.** After the
-C	cb	53		CI / automation	docs;internal/server/spa_fallback.go	2555	🔌 **ABS coverage gaps N-1 … N-10** (audit:
-C	cb	376		Security	docs;web (frontend)	1171	**SEC-9: the OpenAI API key is sent from the browser.**
-C	cb	7549	TODO-MUI-1	Missing-file lane — follow-ups after the report-only change (#2614)	docs;web (frontend)	1392	**TODO-MUI-1** MUI upgrade Step 1 — `@mui/*` 5.14 → 6.x (brief:
-C	cb	7573	TODO-MUI-2	Missing-file lane — follow-ups after the report-only change (#2614)	docs;web (frontend)	1759	**TODO-MUI-2** MUI upgrade Step 2 — `@mui/*` 6.x → 7.x including the
-C	cb	7603	TODO-MUI-3	Missing-file lane — follow-ups after the report-only change (#2614)	docs;web (frontend)	1366	**TODO-MUI-3** MUI upgrade Step 3 — React 18 → 19 (OPTIONAL but
-C	cb	7626	TODO-MUI-4	Missing-file lane — follow-ups after the report-only change (#2614)	docs;web (frontend)	2062	**TODO-MUI-4** MUI upgrade Step 4 — `@mui/*` 7.x → 9.x (final hop; there
-C	cb	4548		Search placeholder hint missing when navigating to All Books from Fini	internal/aiscan	635	**`ClearStaleOperations` is still wired, deliberately.** `POST
-C	cb	888		Organize/apply rename paths: three hand-verified silent failures	internal/audiobooks	1029	**Split `AudiobookService`, not just its store interface.** `audiobookStore`
-C	cb	2595	SEC-CODEQL-BACKLOG	⚠️ The activity channel overflows during organize and DROPS records	internal/audiobooks;internal/backup;internal/covers;internal/database;internal/fileops;internal/httputil;internal/metadata;internal/mtls;internal/server/handlers;internal/server/server.go	3870	**SEC-CODEQL-BACKLOG** 326 open CodeQL alerts on `main`, including **2
-C	cb	1980	SEARCH-CACHE	Config	internal/audiobooks;internal/server/search_reconciler.go;web (frontend)	2157	**SEARCH-CACHE** Search results are not cached anywhere on the server.
-C	cb	10303		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	internal/audioutil;internal/config;internal/diagnosis	731	**ABS-SYNC: consolidate the two DRM detection paths, and wire one into the
-C	cb	5197		Compound narrator names are not split into individual narrators	internal/auth;internal/maintenance;internal/operations;internal/server/maintenance_dispatcher.go;internal/server/maintenance_job_op.go;internal/server/wire_operations_routes.go	3108	**`OperationDef.Permissions` is enforced by nothing — and PR-3 is about to delete the code that *is* doing the enforcing**
-C	cb	90		CI / automation	internal/config	365	⚙️ **Decide `ABS_API_ENABLED` for production (N-11).** It defaults to `false`
-C	cb	1247		Config	internal/config;internal/metafetch	1601	**Rename `write_back_metadata` → `auto_write_tags_on_fetch`.** The current name
-C	cb	232		Tasks	internal/database	188	Once a stuck test is named: find the unbounded wait. Look for `sync.WaitGroup.Wait`,
-C	cb	468		ABS surface — what is still missing after the series/playlist fix	internal/database	644	**Collections do not exist — this is a FEATURE, not a wiring fix.** `/api/collections`
-C	cb	3526		Author delete paths guard with the listing counter, same shape as the 	internal/database	1653	"**`BulkDeleteAuthors` and `DeleteEmptyAuthor` decide ""is this author empty?"""
-C	cb	3948		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	internal/database	729	**`opstate:<id>:params` keys are never swept.** `runMaintenanceJob` now
-C	cb	4678		Store-interface audit — defects found incidentally (each independent o	internal/database	565	`internal/database/store.go` — `globalStore` is guarded by `globalStoreMu sync.RWMutex`
-C	cb	4694		Store-interface audit — defects found incidentally (each independent o	internal/database	260	`internal/database/iface_assert.go` — its comment claims compile-time proof that
-C	cb	4728		Store-interface audit — defects found incidentally (each independent o	internal/database	330	⚠ `internal/database/mock_store.go` — ~88 of `MockStore`'s 399 methods have no `Func`
-C	cb	1627	MERGE-CACHE-EVICT	Config	internal/database;internal/dedup;internal/merge;internal/search;internal/server/handlers	3373	**MERGE-CACHE-EVICT** A merge must evict (or dirty-flag) every merged-away
-C	cb	5424		`ResumeRequeue` has two live implementations that disagree about param	internal/database;internal/dedup;internal/metafetch;internal/plugins/acoustid;internal/plugins/maintenance;internal/reconcile;internal/server;internal/server/handlers;internal/versions	1574	**Store-parameter narrowing: 54 declarations remain.** Re-measured 2026-08-17 by AST.
-C	cb	2181	PLAYBACK-IMPORT	Config	internal/database;internal/itunes;internal/readstatus	2127	**PLAYBACK-IMPORT** Listened / in-progress status is not coming across from
-C	cb	2373	VG-DOUBLE-PRIMARY	Config	internal/database;internal/merge;internal/reconcile	2870	**VG-DOUBLE-PRIMARY** A version group can end up with **two** members both
-C	cb	9259		Missing-file lane — follow-ups after the report-only change (#2614)	internal/database;internal/plugins/maintenance;internal/server/audiobooks_helpers.go;internal/server/handlers	4170	**Corrected book aggregates are invisible until memdb refreshes.**
-C	cb	4685		Store-interface audit — defects found incidentally (each independent o	internal/database;internal/server/wire_abs_routes.go	507	`internal/server/wire_abs_routes.go:494` — bare `s.Store().(*database.PebbleStore)`
-C	cb	17	MERGE-UNDO	📥 Inbox	internal/dedup	1484	**MERGE-UNDO** Make a review-initiated merge reversible. The machinery is
-C	cb	1162		Dedup	internal/dedup	1894	**Clean up the 2,504 already-orphaned dedup candidates — use the existing
-C	cb	3966		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	internal/dedup	603	**`dedup.series-dedup` still has no dry-run parameter at all.**
-C	cb	4719		Store-interface audit — defects found incidentally (each independent o	internal/dedup	138	"`internal/dedup/collectors_metadata.go:51` — ""`database.EnsureSingletonBookTag` (which"
-C	nb	10750		Dedup + review consolidation (3) — 2026-07-18 owner request	internal/dedup;internal/fingerprint;internal/plugins/acoustid	2470	**Fingerprint-confirmed dedup + shattered-book reassembly against the original
-C	cb	4288		Series table integrity — follow-ups from the 2026-08-14 prune repair	internal/dedup;internal/maintenance	422	**Two more series deleters have no cache invalidation and no ref guard**, and
-C	cb	10313		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	internal/dedup;internal/merge;internal/reconcile;internal/scanner	1166	**ABS-SYNC TASK-12 (P1, data-loss class): close the three identity gaps so §4.3's
-C	cb	4222		Series table integrity — follow-ups from the 2026-08-14 prune repair	internal/dedup;internal/scanner	2718	**Identify what produced the 2026-08-11 burst of phantom series references.**
-C	cb	10350		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	internal/httputil	301	**ABS-SYNC: Phase 5b — playback routes.** `POST /api/items/:id/play`,
-C	cb	4714		Store-interface audit — defects found incidentally (each independent o	internal/importer	172	`internal/importer/service.go:27-31` — `type Store = database.Store` justified by
-C	cb	1767		Config	internal/itunes	2522	🎧 **iTunes dynamic-playlist import and playlist push-back are fully
-C	cb	4208	PERF-5	2026-06-22 security-sweep: the items still open after the status pass	internal/itunes	165	**PERF-5** — `internal/itunes/backfill.go:60-68` offset pagination over
-C	cb	4521		Search placeholder hint missing when navigating to All Books from Fini	internal/itunes	452	**Wire `itunes.position-sync` or drop it.** `internal/itunes/service/position_sync.go`
-C	cb	4605		Search placeholder hint missing when navigating to All Books from Fini	internal/logger	471	**Audit the other two silently-stubbed `StandardLogger` methods.**
-C	cb	3939		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	internal/maintenance;internal/operations;internal/server;internal/server/...	568	**Check GitHub CI on the merge commit.** Merged on an explicit instruction
-C	cb	4698		Store-interface audit — defects found incidentally (each independent o	internal/merge;internal/plugins/acoustid	421	`internal/merge/service.go:34-42` — `AsExternalIDReassigner` uses a bare
-C	cb	860		Organize/apply rename paths: three hand-verified silent failures	internal/metafetch	694	**F6 — `ensureLibraryCopy` treats an empty organize as success.**
-C	cb	1338	SCORE-REC	Config	internal/metafetch	773	**SCORE-REC** Route `ScoreOneResultWithBreakdown` through `scoreRecorder`
-C	cb	3502		Search follow-ups from the wildcard/phrase fix (2026-08-13)	internal/metafetch	876	"**Activity-log summaries drop their data — ""cover art saved to"" (to"
-C	cb	847		Organize/apply rename paths: three hand-verified silent failures	internal/metafetch;internal/server/batch_apply_one.go;internal/server/handlers	823	**F7 — `ApplyMetadataFileIO` returns nothing, so rename failure is
-C	cb	606		ABS API — sweep every endpoint for accepted-but-ignored query paramete	internal/operations	750	"🔁 **Wire a durable ""probed, found none"" marker before this op is ever"
-C	cb	4703		Store-interface audit — defects found incidentally (each independent o	internal/operations	233	`internal/operations/registry/register.go:40-42` — `prodSchedulerStore` embeds
-C	cb	4743		Store-interface audit — defects found incidentally (each independent o	internal/operations	76	`internal/operations/mocks` — 206 generated lines, effectively unreferenced.
-C	cb	700		Follow-up on the op itself	internal/operations;internal/plugins/maintenance	293	One unreproduced failure of `internal/plugins/maintenance` was observed on
-C	cb	4586		Search placeholder hint missing when navigating to All Books from Fini	internal/organizer;internal/reconcile;internal/scanner	1222	**Forward `IsCanceled()` through `reporterLogger` and exercise the four guards it wakes up.**
-C	cb	4513		Search placeholder hint missing when navigating to All Books from Fini	internal/plugins/itunes;internal/server/itunes_ops.go	599	**Finish (or delete) the iTunes plugin op migration.** `internal/plugins/itunes/`
-C	cb	5454		Missing-file lane — follow-ups after the report-only change (#2614)	internal/plugins/maintenance	328	**Build the re-point repair.** It must UPDATE `file_path` to the flat name the
-C	cb	8433		Missing-file lane — follow-ups after the report-only change (#2614)	internal/plugins/maintenance	2037	**Investigate: 79% of books with a stored transcript are marked
-C	cb	8837		Missing-file lane — follow-ups after the report-only change (#2614)	internal/plugins/maintenance	1583	**Canary the multidisc applies behind a before/after snapshot** — owner
-C	cb	4107		Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross	internal/plugins/maintenance;internal/quarantine	607	**5 more walkers share the exposure** (whole-library offset loops over
-C	cb	4739		Store-interface audit — defects found incidentally (each independent o	internal/scanner	294	`internal/scanner/mocks` — 442 generated lines, **zero** importers, while
-C	cb	4852		Stranded `.tmp-rename` recovery — bisect complete, recovery outstandin	internal/scanner	603	**Give the AI parser typed provider errors.** `internal/scanner/ai_failure.go`
-C	cb	618		ABS API — sweep every endpoint for accepted-but-ignored query paramete	internal/search	704	🔍 **Index track names so smart playlists can match them.** The Bleve
-C	cb	3369		Search / version-group census corrections (2026-08-13)	internal/search	553	**`all` and `and` are stopwords and are silently dropped from queries.**
-C	cb	4202	SEC-2	2026-06-22 security-sweep: the items still open after the status pass	internal/server/bootstrap.go	130	**SEC-2** — bootstrap still writes plaintext credential files
-C	cb	2329		Config	internal/server/handlers	1996	🐛 **`GET /audiobooks/soft-deleted` computes its `total` by fetching up to
-C	cb	4281		Series table integrity — follow-ups from the 2026-08-14 prune repair	internal/server/handlers	409	**`BulkDeleteSeries` still deletes on a filtered count.**
-C	cb	4716		Store-interface audit — defects found incidentally (each independent o	internal/server/handlers	264	`internal/server/handlers/organize.go:57-62` — `type OrganizeStore = database.Store`
-C	cb	8177		Missing-file lane — follow-ups after the report-only change (#2614)	internal/server/handlers;web (frontend)	1502	**Two frontend navigation sinks are unvalidated and safe only by
-C	cb	4732		Store-interface audit — defects found incidentally (each independent o	internal/server/organize_service_test.go	301	⚠ `internal/server/organize_service_test.go:34` — vacuous test. It sets `GetAllBooksFunc`;
-C	cb	3384		Search / version-group census corrections (2026-08-13)	internal/server/search_reconciler.go	488	**`SearchIndexDroppedCount` is not actually exposed on `/metrics`.** The
-C	cb	3635		B06 chapters end-to-end: VERIFIED on prod — E02 backfill only needs th	internal/server/server_maintenance_deps.go	896	**`bulk-write-back` cannot do the approved E08 library-wide run as-is.**
-C	cb	8583		Missing-file lane — follow-ups after the report-only change (#2614)	internal/syncapi	1495	**Verify the server actually returns chapters to clients** — confirm the
-C	cb	8646		Missing-file lane — follow-ups after the report-only change (#2614)	internal/syncapi	1532	**Playlists — implement the whole surface** — owner request 2026-08-05:
-C	cb	8399		Missing-file lane — follow-ups after the report-only change (#2614)	internal/transcribe	1987	**Stand up a second Whisper worker on the spare CPU node.** Owner request
-C	cb	1727		Config	web (frontend)	1101	🟡 **Why does React silently drop a `setState` issued from a `setTimeout`
-C	cb	2077		Config	web (frontend)	2415	🚨 **E2E runs in one worktree can silently be served by a DIFFERENT
-C	cb	2486		Config	web (frontend)	737	**17 API calls will now surface an expired session that previously
-C	cb	4212		2026-06-22 security-sweep: the items still open after the status pass	web (frontend)	134	**FE-2/FE-3/FE-4** — the three stale-deps findings' line anchors have
-C	cb	4960		🔴 `dedup.llm-review` holds a library write with no `ConcurrencyKey` — 	web (frontend)	2126	**Six E2E mocks point at operation URLs that no longer exist, and two
-C	cb	5722		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	974	"**Change Log rows lost their visible ""Compare snapshot"" affordance and are"
-C	cb	5736		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	390	**Dead `expanded` state in `TagComparison`.** `web/src/components/TagComparison.tsx:69`
-C	cb	5742		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	1111	"**Delete the unreachable ""Bulk Fetch Metadata"" dialog and its handler.**"
-C	cb	5758		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	679	**Audit `setupMockApi` for more branches shadowed by earlier prefix catch-alls.**
-C	cb	5904		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	1069	"**You cannot sort the library from the UI.** The ""Sort by"" and ""Order"""
-C	cb	5972		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	1099	"**Per-field ""Use File"" / ""Use Fetched"" one-click apply is gone from Book Detail"
-C	cb	5987		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	713	**Visual-regression goldens exist only for darwin.**
-C	cb	6241		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	759	**You can no longer navigate between versions of a book.** Book Detail used to
-C	cb	6252		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	335	"**The version-group summary lost its count and its ""you are here"" marker.**"
-C	cb	6258		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	474	**The library card's overflow menu button has no accessible name.**
-C	cb	7937		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	5725	"**The Library must never show an empty ""no items"" state unless the"
+tier	encoding	todo_line	id	section	primary_domain	all_domains	body_chars	title
+A	cb	280		✅ Second, unrelated Coverage Floor failure — FIXED in this PR	(unresolved)	(unresolved)	252	`syscall.Kill(os.Getpid(), syscall.SIGTERM)` signals the **entire test binary**, not a
+A	cb	283		✅ Second, unrelated Coverage Floor failure — FIXED in this PR	(unresolved)	(unresolved)	166	The unconditional `time.Sleep(6 * time.Second)` before the signal is pure wall-clock
+A	cb	476		ABS surface — what is still missing after the series/playlist fix	(unresolved)	(unresolved)	571	**Series DETAIL is still not served.** `/api/series/:id` 301s into the app API, the
+A	cb	697		Follow-up on the op itself	(unresolved)	(unresolved)	217	`registry.RunItems` label re-render (fixed 2026-08-13) changed shared
+A	cb	928		ghcommon reusable-workflow pins are a month apart — decide, don't drif	(unresolved)	(unresolved)	187	Not done unattended on purpose: this was left for a human on 2026-08-18
+A	cb	3718		"C716 resolved: the ""3,954-book API-vs-store gap"" decomposes to 3,953 i"	(unresolved)	(unresolved)	670	**`show_quarantined=true` SHRINKS the list.** A flag that can only
+A	cb	3729		"C716 resolved: the ""3,954-book API-vs-store gap"" decomposes to 3,953 i"	(unresolved)	(unresolved)	262	`is_primary_version=false` answers 22,552 — exactly the known
+A	cb	4064		✅ Root cause (2026-08-14, fixed in `fix/author-getter-conformance`)	(unresolved)	(unresolved)	463	**After this deploys**, drop `skip_author_ids: [46627]` from the repair
+A	cb	4081		✅ Root cause (2026-08-14, fixed in `fix/author-getter-conformance`)	(unresolved)	(unresolved)	1267	**CORRECTION to `20260814-matcher-writeback-background-job.md`: the
+A	cb	4470		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	(unresolved)	491	**Backfill legacy operation rows stuck at `pending`.** #2483 fixed the forward path
+A	cb	6394		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	1675	**`scan-import-organize.spec.ts` (7 failures) — Settings tab deep-link
+A	cb	8220		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	930	**`UpsertBookToMemDB` holds go-memdb's global writer mutex across Pebble
+A	cb	10074	TODO-DEPS-VULN	Decision needed	(unresolved)	(unresolved)	123	**TODO-DEPS-VULN** GitHub reports 5 Dependabot vulnerabilities on the
+A	cb	10077	TODO-SEC-BIND	Decision needed	(unresolved)	(unresolved)	645	**TODO-SEC-BIND** The service binds every interface
+A	cb	10088	TODO-SEC-JWT	Decision needed	(unresolved)	(unresolved)	363	**TODO-SEC-JWT** Rotate `ABS_JWT_SECRET` — it was pasted in plaintext into
+A	cb	10094	TODO-SEC-SYSTEMD	Decision needed	(unresolved)	(unresolved)	585	**TODO-SEC-SYSTEMD** The unit has `User=audiobook`, `NoNewPrivileges`,
+A	nb	10600		Workflow / ops (4)	(unresolved)	(unresolved)	209	**INTERNAL-SERVER-PKG-STALL structural decision** (H1:849-877) — leak fixed;
+A	nb	10665		UX (4)	(unresolved)	(unresolved)	145	**Fleet-tasks reconciliation** — real residuals = 030/031/036 (≡ 4.10/4.8/1.16);
+A	nb	10715		Other / close-out (10)	(unresolved)	(unresolved)	795	**Duration/filesize aggregation** — Book fields show snapshots instead of sums;
+A	cb	10057	TODO-SSO-EDGE	Decision needed	ci/scripts	ci/scripts	1135	**TODO-SSO-EDGE** Neither native-app auth mode is actually configured at
+A	cb	10447		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	docs	docs	758	**iTunes book_file PID uniqueness — apply the backfill repair (gated).** Forward
+A	nb	10512		Dedup (10)	docs	docs	731	**INIT-1 T05 follow-up — per-kind confidence field in `DedupSignalConfig`** (H1:250)
+A	nb	10584		Pipeline (8)	docs	docs	158	**Torrent relocation INIT-5 T2–T7** ([plan](docs/plans/2026-07-10-torrent-relocation.md))
+A	nb	10639		Infra (5)	docs	docs	137	**Consultancy wave 4+ residuals** ([roadmap](docs/consultancy/00-ROADMAP.md)) —
+A	cb	6087		Missing-file lane — follow-ups after the report-only change (#2614)	internal/audiobooks	internal/audiobooks;web (frontend);docs	2735	**Replace library sorting with server-side Go sorting.** Owner decision 2026-08-09:
+A	cb	7819		Missing-file lane — follow-ups after the report-only change (#2614)	internal/audiobooks	internal/audiobooks;internal/server/handlers;web (frontend)	6392	"**Fix the Library ""In Progress"" nav item — the selection highlight never"
+A	cb	1815		Config	internal/database	internal/database;internal/playlist	1808	✅ **Confirm playlists are book-level, not file-level — and delete the dead
+A	nb	10622		Infra (5)	internal/database	internal/database;internal/server/server_lifecycle.go	686	**CPU busy-loop: `CountPrimaryBooks` full-scan on the 5s metrics ticker** — ✅ DONE
+A	cb	3734		"C716 resolved: the ""3,954-book API-vs-store gap"" decomposes to 3,953 i"	internal/logging	internal/logging;ci/scripts	854	**CA12 wave 2: model `logging.Sanitize`/`SanitizeErr`/`logger.sanitizeLogLine`
+A	nb	10641		Infra (5)	internal/metrics	internal/metrics;internal/operations	1009	**Op-progress Prometheus metric (T12 follow-up)** — ✅ DONE (PR #2014,
+A	cb	10038	TODO-ABS-MODEB	Decision needed	internal/oauth	internal/oauth;internal/server/handlers;internal/server/middleware	1212	**TODO-ABS-MODEB** A Cloudflare **service-token** assertion is rejected as
+A	cb	10104	TODO-SRVTIMEOUT	Decision needed	internal/server	internal/server;internal/server/;ci/scripts	7566	**TODO-SRVTIMEOUT** Split or speed up the `internal/server` test package —
+A	cb	2125	ORGANIZE-4TH-COPY	Config	internal/server/handlers	internal/server/handlers	2888	**ORGANIZE-4TH-COPY** `internal/server/handlers/filesystem.go:286` is a
+A	cb	2467		Config	internal/server/handlers	internal/server/handlers;internal/server/metadata_ops.go	947	**Repair books applied from the Metadata Review screen before the tag-write fix.**
+A	cb	8316		Missing-file lane — follow-ups after the report-only change (#2614)	internal/transcribe	internal/transcribe	4451	**Per-file intro transcription as the primary book-identity signal** — owner
+A	cb	2267	ROWCOUNT-REVERIFY	Config	web (frontend)	web (frontend);docs	3227	**ROWCOUNT-REVERIFY** Re-measure every production table row count once the
+A	cb	7209		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	web (frontend)	2293	"**The library ""Sort by"" control no longer exists — 4 e2e tests target a"
+B	cb	42		CI / automation	(unresolved)	(unresolved)	297	Decide whether the 22 `gha-*` repos (plus `magnet-handler`) should keep their
+B	cb	534		ABS API — sweep every endpoint for accepted-but-ignored query paramete	(unresolved)	(unresolved)	3505	💾 **Run `maintenance.booksig-sidecar-migrate` on production** — the op is
+B	cb	921		ghcommon reusable-workflow pins are a month apart — decide, don't drif	(unresolved)	(unresolved)	459	Decide whether to bump the eight, and do it in **at least two PRs** —
+B	cb	1000		Interface width: the five the sweep did not reach	(unresolved)	(unresolved)	544	**Re-probe `itunesservice.Store` after those two land.** Its measured
+B	cb	1275		Config	(unresolved)	(unresolved)	625	**Related asymmetry found while tracing the above: auto-fetch embeds cover
+B	cb	3571		Author table: copyright text and HTML entities leaked into artist tags	(unresolved)	(unresolved)	354	Decide whether author-name ingest should HTML-unescape at all. If it should,
+B	cb	3799		3. Real authors, genuinely duplicated	(unresolved)	(unresolved)	291	Decide what to DO with types 1 and 2 rather than merging them. Merging 25
+B	cb	3893		Likely cause	(unresolved)	(unresolved)	219	Decide whether the author listing SHOULD expose non-primary books at all.
+B	cb	4356		`?version_group_id=` lists the whole library, and cannot be guarded	(unresolved)	(unresolved)	286	Decide whether the list should filter on `version_group_id` at all. There
+B	cb	4910		🐛 `book_file.missing` / `file_exists` are stale — nothing maintains th	(unresolved)	(unresolved)	599	**Decide what to do with the books whose EVERY `book_file` row is dead.** The
+B	cb	5275		Contributor data cleanup — follow-ups to `maintenance.purge-empty-auth	(unresolved)	(unresolved)	456	**Decide what the 822 zero-book-but-has-files authors actually are.** Measured
+B	cb	5458		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	184	**Decide what happens to the 16,265 fully-broken books** (every file entry dead).
+B	nb	10586		Pipeline (8)	(unresolved)	(unresolved)	148	**Fingerprint UI verifications ×2** (H1:1383-1384) — [hold] verify the 14K
+B	nb	10662		UX (4)	(unresolved)	(unresolved)	78	**1.17 — product rename/branding sweep** (H1:2751) — blocked on name decision.
+B	nb	10663		UX (4)	(unresolved)	(unresolved)	109	**3.8 Plex-style media server API; 3.9 LLM series detection; 3.10 AI cover art**
+B	nb	10727		Other / close-out (10)	(unresolved)	(unresolved)	80	**Library centralization backlog** — needs a brainstorming session; future work.
+B	cb	1009		Interface width: the five the sweep did not reach	docs	docs	1032	Decide whether maintenance jobs should take per-job store interfaces instead of the
+B	cb	8125		Missing-file lane — follow-ups after the report-only change (#2614)	docs	docs	1471	**Give the 466 low-confidence series positions somewhere to go** — deferred
+B	cb	10435		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	docs	docs	861	**iTunes 2-way-sync — continuation (P3 redefine + reverse sync + footgun audit).**
+B	nb	10598		Workflow / ops (4)	docs	docs	167	**PD-1 — subprocess isolation via parent-RPC bridge + MDA3 `Isolate:false` revert**
+B	cb	2537		⚠️ The activity channel overflows during organize and DROPS records	internal/database	internal/database	1708	**`BookFile.Duration` is `int` seconds, so every per-track duration is truncated and
+B	cb	5054		Update 2026-08-16: one of these was NOT pre-existing	internal/database	internal/database;internal/metafetch;internal/plugins/itunes;internal/plugins/maintenance;internal/server/handlers	1885	**`make ci` cannot pass on `main` — staticcheck has 10 findings and aborts the target**
+B	cb	1143		Dedup	internal/dedup	internal/dedup	1100	`Engine.SetLSHStore` and `Engine.SetAcoustIDBookFileStore`
+B	cb	10418		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	internal/itunes	internal/itunes;docs	1314	**🚧 P2 BLOCKER — location-form guard rejects the entire live AO library (F7).** The
+B	cb	806		6,157 books are invisible in the web UI — `vg-` singleton groups elect	internal/server/handlers	internal/server/handlers	1927	🤔 **Decide whether the newly-implemented filter fields belong in
+B	cb	2589		⚠️ The activity channel overflows during organize and DROPS records	internal/server/handlers	internal/server/handlers	438	"**`timeBase` is hardcoded `""1/1000""` at `internal/server/handlers/abs/mapper.go:645`**"
+B	cb	1957		Config	internal/server/maintenance_fixups.go	internal/server/maintenance_fixups.go	829	**`wipeActivity` dry-run count saturates at 2.** `wipeActivity` in
+B	cb	3362		Search / version-group census corrections (2026-08-13)	internal/server/search_coverage.go	internal/server/search_coverage.go	506	**Decide whether to force a search-index rebuild on prod.** The boot-time
+B	cb	1403	E2EGATE-NOTREQUIRED	Config	web (frontend)	web (frontend);ci/scripts	2863	**E2EGATE-NOTREQUIRED** The E2E suite runs on every qualifying PR and its
+C	cb	46		CI / automation	(unresolved)	(unresolved)	267	Add a scheduled detect-only backstop for `auto-revert.yml`: if `main`'s tip has
+C	cb	96		CI / automation	(unresolved)	(unresolved)	318	🌐 **Per-stream `language` is always `nil` (N-12).** `mapper.go:676` returns nil
+C	cb	127		ABS	(unresolved)	(unresolved)	1890	**Align the ABS conformance fixtures with the oracle capture so the value gate can be
+C	cb	229		Tasks	(unresolved)	(unresolved)	210	Capture a goroutine dump from a real failure. **Do NOT `gh run rerun` before saving the
+C	cb	235		Tasks	(unresolved)	(unresolved)	193	Consider a per-test deadline (`t.Context()` / `context.WithTimeout`) so a hang fails in
+C	cb	238		Tasks	(unresolved)	(unresolved)	133	Reduce the wait-bound cost while there — 200–280s for a `-short` run of one package is
+C	cb	484		ABS surface — what is still missing after the series/playlist fix	(unresolved)	(unresolved)	462	**The series list ignores `limit` and `page`.** It returned all 14,625 series in one
+C	cb	491		ABS surface — what is still missing after the series/playlist fix	(unresolved)	(unresolved)	459	**`testdata/abs-fixtures/get_api_libraries_id_series.json` contains ZERO series.**
+C	cb	595		ABS API — sweep every endpoint for accepted-but-ignored query paramete	(unresolved)	(unresolved)	719	🎧 **Run `maintenance.chapters-backfill` against production.** The op ships
+C	cb	629		ABS API — sweep every endpoint for accepted-but-ignored query paramete	(unresolved)	(unresolved)	454	🧩 **Investigate per-chapter split files standing as their own books.** While
+C	cb	642		Library data integrity — surfaced by the chapters-backfill cohort run	(unresolved)	(unresolved)	1602	**`BookFile.FilePath` rows point at files that do not exist — 16,130 books
+C	cb	665		Library data integrity — surfaced by the chapters-backfill cohort run	(unresolved)	(unresolved)	342	**`Book.FilePath` and `BookFile.FilePath` disagree for the same book.** For
+C	cb	670		Library data integrity — surfaced by the chapters-backfill cohort run	(unresolved)	(unresolved)	717	**`Book.FilePath` is NOT unique — 1,264 values are shared by more than one
+C	cb	680		Library data integrity — surfaced by the chapters-backfill cohort run	(unresolved)	(unresolved)	353	**Stored `duration` is short of the real container by 119–186s on 7 cohort
+C	cb	685		Library data integrity — surfaced by the chapters-backfill cohort run	(unresolved)	(unresolved)	303	**Multi-file chapter synthesis produces a timeline that stops short.** One of
+C	cb	689		Library data integrity — surfaced by the chapters-backfill cohort run	(unresolved)	(unresolved)	352	**Duplicate book rows per title under different author folders** (`Deadly Jobs`
+C	cb	872		Organize/apply rename paths: three hand-verified silent failures	(unresolved)	(unresolved)	575	**F5 (remainder) — `OrganizeBookDirectory` still cannot tell a resumed
+C	cb	903		Organize/apply rename paths: three hand-verified silent failures	(unresolved)	(unresolved)	429	"Audit existing ""we use the wide type because X requires it"" comments across the"
+C	cb	969		Interface width: the five the sweep did not reach	(unresolved)	(unresolved)	76	`database.Store` (40) — make unreachable rather than smaller (plan phase 2).
+C	cb	970		Interface width: the five the sweep did not reach	(unresolved)	(unresolved)	176	`itunes/service.Store` (17 declared / 24 called) — 7 assignability
+C	cb	973		Interface width: the five the sweep did not reach	(unresolved)	(unresolved)	134	`maintenance.JobStore` (12) — deliberate choice from the #2534 arbitration;
+C	cb	975		Interface width: the five the sweep did not reach	(unresolved)	(unresolved)	237	`audiobookStore` / `audiobookUpdateStore` (11 each) — the service calls **44
+C	cb	984		Interface width: the five the sweep did not reach	(unresolved)	(unresolved)	1028	**Narrow `positionSyncStore` and `pathRepairerStore` — both blocked on a wide
+C	cb	1063		Config	(unresolved)	(unresolved)	2105	**Audit every config option name — the set has grown by accretion and the
+C	cb	1350		Config	(unresolved)	(unresolved)	2978	"🏷️ **""Browse by Tag"" surfaces internal bookkeeping tags and formats them"
+C	cb	1462		Config	(unresolved)	(unresolved)	3024	🔴 **The binary ITL parser extracts ZERO smart playlists from real iTunes
+C	cb	1517	ITUNES-SMARTCRIT-PARSE	Config	(unresolved)	(unresolved)	5618	**ITUNES-SMARTCRIT-PARSE** `ParseSmartCriteria` does not understand the
+C	cb	1744		Config	(unresolved)	(unresolved)	1207	🟡 **`batch-operations.spec.ts:100` [webkit] is an intermittent flake —
+C	cb	1945	VGBACKFILL-BOUNDS-FRAGILE	Config	(unresolved)	(unresolved)	720	**VGBACKFILL-BOUNDS-FRAGILE** Separately, and still worth doing: the
+C	cb	1970		Config	(unresolved)	(unresolved)	621	**`WipeAllActivity` still does an uncancellable full scan on a request
+C	cb	2431	UI-LOCKUP-2	Config	(unresolved)	(unresolved)	1828	**UI-LOCKUP-2** The web interface still locks up despite the virtualization
+C	cb	2481		Config	(unresolved)	(unresolved)	278	**Consider the same file-I/O audit for the remaining apply-shaped
+C	cb	2568		⚠️ The activity channel overflows during organize and DROPS records	(unresolved)	(unresolved)	1053	"**`deviceInfo.deviceType` is always `""unknown""`, and the capture cannot tell us what"
+C	cb	2583		⚠️ The activity channel overflows during organize and DROPS records	(unresolved)	(unresolved)	425	**`publishedYear` loses the era: `Book.PrintYear` is an `int`, so the oracle's
+C	cb	3156		Make metadata fields on the book page clickable (future improvement)	(unresolved)	(unresolved)	353	**Author name → library filtered by that author.** The most-wanted one. The API
+C	cb	3161		Make metadata fields on the book page clickable (future improvement)	(unresolved)	(unresolved)	204	**Series name → library filtered by that series.** `series_id` is on the payload
+C	cb	3164		Make metadata fields on the book page clickable (future improvement)	(unresolved)	(unresolved)	280	**Narrator, publisher, genre, and release year.** Same idea, but check each has a
+C	cb	3168		Make metadata fields on the book page clickable (future improvement)	(unresolved)	(unresolved)	808	**⚠️ Do not link `version_group_id` to a filtered view until the filter works.**
+C	cb	3340		Search / version-group census corrections (2026-08-13)	(unresolved)	(unresolved)	327	**765 books, not 6,157, are wrongly hidden by the primary-version filter** (1.20%,
+C	cb	3344		Search / version-group census corrections (2026-08-13)	(unresolved)	(unresolved)	335	**Find the writer that creates a `vg-` group without electing a primary.** The lead
+C	cb	3348		Search / version-group census corrections (2026-08-13)	(unresolved)	(unresolved)	424	**`is_primary_version` in the payload disagrees with the filter for 5,731 books.**
+C	cb	3354		Search / version-group census corrections (2026-08-13)	(unresolved)	(unresolved)	107	**41 ungrouped books are hidden anyway** and do not fit the rule above. Small
+C	cb	3356		Search / version-group census corrections (2026-08-13)	(unresolved)	(unresolved)	350	**`version_group_id` is silently ignored as a filter** on `/api/v1/audiobooks` —
+C	cb	3377		Search / version-group census corrections (2026-08-13)	(unresolved)	(unresolved)	505	**Quoted phrases do not produce a `MatchPhraseQuery`.** The server-side
+C	cb	3391		Search / version-group census corrections (2026-08-13)	(unresolved)	(unresolved)	465	**A one-book version group can have no primary member.**
+C	cb	3414		Search-index coverage repair — production findings (2026-08-13)	(unresolved)	(unresolved)	668	**The store reports 67,824 live books; the API list endpoint reports 63,870.**
+C	cb	3423		Search-index coverage repair — production findings (2026-08-13)	(unresolved)	(unresolved)	749	**The coverage gate compares two slightly different populations.**
+C	cb	3433		Search-index coverage repair — production findings (2026-08-13)	(unresolved)	(unresolved)	731	**The search index has ZERO metrics.** A live `/metrics` scrape returns 50 metric
+C	cb	3443		Search-index coverage repair — production findings (2026-08-13)	(unresolved)	(unresolved)	442	**`audiobook_organizer_books_total` reports the PRIMARY count, not the total.**
+C	cb	3449		Search-index coverage repair — production findings (2026-08-13)	(unresolved)	(unresolved)	358	**Re-measure the per-cohort coverage now that a true figure exists.** The
+C	cb	3469		Search follow-ups from the wildcard/phrase fix (2026-08-13)	(unresolved)	(unresolved)	440	**Fuzzy queries (`~`) have the same case-sensitivity defect the wildcard fix just
+C	cb	3476		Search follow-ups from the wildcard/phrase fix (2026-08-13)	(unresolved)	(unresolved)	704	**A04's designated probe cannot verify the op-ID audit trail.**
+C	cb	3488		Search follow-ups from the wildcard/phrase fix (2026-08-13)	(unresolved)	(unresolved)	885	**Activity log: auto-compact after 7 days, user-configurable.** Owner
+C	cb	3517		Search follow-ups from the wildcard/phrase fix (2026-08-13)	(unresolved)	(unresolved)	390	**Metadata-apply activity rows don't NAME the book.** Same screenshot:
+C	cb	3561		Author table: copyright text and HTML entities leaked into artist tags	(unresolved)	(unresolved)	129	Author id 46583 is named `&#169` — an HTML entity for `©` with its
+C	cb	3563		Author table: copyright text and HTML entities leaked into artist tags	(unresolved)	(unresolved)	162	Author id 51870 is named `&#169;2013 by HarperCollinsPublishers` — a whole
+C	cb	3566		Author table: copyright text and HTML entities leaked into artist tags	(unresolved)	(unresolved)	363	Find where the entity loses its `;`. `SplitCompositeAuthorName`'s semicolon
+C	cb	3576		Author table: copyright text and HTML entities leaked into artist tags	(unresolved)	(unresolved)	145	Consider a `isDirtyAuthorName` rule for names starting with `©`/`&#`/a
+C	cb	3586		Author table: book titles are being comma-split into author rows	(unresolved)	(unresolved)	94	id 46595 `and Thanks for All the Fish` (2 books) — from *So Long, and
+C	cb	3588		Author table: book titles are being comma-split into author rows	(unresolved)	(unresolved)	43	id 46989 `and the Farm Boy (DBY)` (5 books)
+C	cb	3589		Author table: book titles are being comma-split into author rows	(unresolved)	(unresolved)	47	id 47193 `and Make Better Decisions` (16 books)
+C	cb	3595		Author table: book titles are being comma-split into author rows	(unresolved)	(unresolved)	189	The real defect is that `SplitCompositeAuthorName`'s comma branch has no
+C	cb	3598		Author table: book titles are being comma-split into author rows	(unresolved)	(unresolved)	254	Consider requiring a part to look like a personal name (2-4 words, no
+C	cb	3602		Author table: book titles are being comma-split into author rows	(unresolved)	(unresolved)	140	Check how many other author rows are title fragments without the `and`
+C	cb	3607		Author table: misspelling shared by both rows of a duplicate pair	(unresolved)	(unresolved)	257	`Sylverster McCoy` (2 books) and `& Sylverster McCoy` (1 book) are *both*
+C	cb	3680		C111 census: the nil `is_primary_version` population is 5,702 (all ung	(unresolved)	(unresolved)	108	Make every raw `*bool` post-filter treat nil as true (matching
+C	cb	3682		C111 census: the nil `is_primary_version` population is 5,702 (all ung	(unresolved)	(unresolved)	144	better: backfill explicit `true` onto the 5,702 nil rows (dry-run
+C	cb	3685		C111 census: the nil `is_primary_version` population is 5,702 (all ung	(unresolved)	(unresolved)	62	Fix the 41 ungrouped-false rows to true in the same op (C314).
+C	cb	3686		C111 census: the nil `is_primary_version` population is 5,702 (all ung	(unresolved)	(unresolved)	112	Re-run this census as the post-fix verification: expected end state is
+C	cb	3790		3. Real authors, genuinely duplicated	(unresolved)	(unresolved)	322	Normalize whitespace (and probably case) in author lookup/creation, so a
+C	cb	3795		3. Real authors, genuinely duplicated	(unresolved)	(unresolved)	259	Merge the type-3 real-author duplicates. The existing
+C	cb	3803		3. Real authors, genuinely duplicated	(unresolved)	(unresolved)	324	🚨 Do NOT write a single op that treats all three kinds the same. Type 3
+C	cb	3884		Likely cause	(unresolved)	(unresolved)	310	Decide the single meaning of a nil `IsPrimaryVersion` and apply it in both
+C	cb	3889		Likely cause	(unresolved)	(unresolved)	280	Add a conformance test in the shape used by #2406/#2410/#2411: one
+C	cb	3910		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	(unresolved)	223	First MEASURE, don't assume: confirm what `SearchBooks(q, 0, 0)` returns
+C	cb	3914		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	(unresolved)	252	If it returns nothing: the iTunes search surface has been silently empty
+C	cb	3918		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	(unresolved)	126	If it returns everything: that is the opposite failure (unbounded
+C	cb	3921		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	(unresolved)	1125	"**Legacy operation rows never leave ""pending"" — the ops UI shows"
+C	cb	3960		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	(unresolved)	341	**Verify the dry-run default on prod after deploy.** `GET
+C	cb	3976		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	(unresolved)	307	**Consider making the resume path's fallback observable.** When no saved
+C	cb	3982		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	(unresolved)	327	**Metadata matcher: shift-click range selection.** Owner request
+C	cb	3988		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	(unresolved)	389	"**Metadata matcher: ""skip all"" / hide-multiples control.** Owner request"
+C	cb	3995		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	(unresolved)	695	"**Metadata matcher: apply falsely reports ""signed out — no changes were"
+C	cb	4007		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	(unresolved)	(unresolved)	699	**Metadata matcher: multi-file write-to-files must dispatch as a
+C	cb	4117		Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross	(unresolved)	(unresolved)	542	**The original CI flake (run 30702594886, 39/40 books) CANNOT be the
+C	cb	4126		Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross	(unresolved)	(unresolved)	489	**Verify op-ID audit trail on prod after deploying the run-context fix.** Trigger
+C	cb	4132		Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross	(unresolved)	(unresolved)	404	**Historical gap is permanent — do not chase it.** Every maintenance op run before
+C	cb	4137		Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross	(unresolved)	(unresolved)	482	**Audit the eight `ctxOpID` consumers now that the ID actually arrives.** Their
+C	cb	4144		Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross	(unresolved)	(unresolved)	1304	"**Organize renames with placeholder metadata — ""Unknown Author"" gets"
+C	cb	4166		Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross	(unresolved)	(unresolved)	625	**E07 residue: 2 ambiguous duplicate-PID groups need a human pick.**
+C	cb	4186		Bleve index holds ~3,953 docs for soft-deleted books	(unresolved)	(unresolved)	349	Add/verify a reconcile pass that REMOVES index docs whose book is
+C	cb	4192		Bleve index holds ~3,953 docs for soft-deleted books	(unresolved)	(unresolved)	97	Verify with a bogus-value control: search for a known trashed title
+C	cb	4204		2026-06-22 security-sweep: the items still open after the status pass	(unresolved)	(unresolved)	105	**SEC-4 residue** — no CSP header yet (middleware comment defers until a
+C	cb	4206		2026-06-22 security-sweep: the items still open after the status pass	(unresolved)	(unresolved)	140	**SEC-8 residue** — Dockerfile build-dep tarballs (`utfcpp`, `taglib`)
+C	cb	4211	TOOL-1	2026-06-22 security-sweep: the items still open after the status pass	(unresolved)	(unresolved)	70	**TOOL-1** — `testdata` is 2.2G tracked; decide fetched-dataset split.
+C	cb	4214		2026-06-22 security-sweep: the items still open after the status pass	(unresolved)	(unresolved)	135	ARCH-3/4/5/7/8 remain structural programs; ARCH-8's panicking string
+C	cb	4295		Series table integrity — follow-ups from the 2026-08-14 prune repair	(unresolved)	(unresolved)	579	"**`WithOpID` is never called in production code**, so `ctxOpID(ctx)` returns """""
+C	cb	4304		Series table integrity — follow-ups from the 2026-08-14 prune repair	(unresolved)	(unresolved)	498	**~2,270 series look like they were created from a book title rather than a real
+C	cb	4329		Soft-deleting a book UPSERTS it into the search index	(unresolved)	(unresolved)	295	Make the soft-delete transition enqueue a Bleve DELETE instead: either
+C	cb	4334		Soft-deleting a book UPSERTS it into the search index	(unresolved)	(unresolved)	108	Regression test: soft-delete an indexed book, assert a title probe
+C	cb	4360		`?version_group_id=` lists the whole library, and cannot be guarded	(unresolved)	(unresolved)	372	"If yes: add a `case ""version_group_id""` to `bookFieldValue` and the name"
+C	cb	4365		`?version_group_id=` lists the whole library, and cannot be guarded	(unresolved)	(unresolved)	204	If no: it still must not answer with the whole library. Extend the guard
+C	cb	4375		`?version_group_id=` lists the whole library, and cannot be guarded	(unresolved)	(unresolved)	1009	**124 files remain 0600 after the fix-file-modes repair (1,547 repaired),
+C	cb	4417		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	(unresolved)	1647	**ABS series list emits a non-ABS `books[]` shape, and no series render in ABS clients.**
+C	cb	4449		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	(unresolved)	863	**The AI-scan cancel wiring is unverified, and it fails silently.**
+C	cb	4463		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	(unresolved)	442	**August executive-summary roundup is stale.** `2026-08-31-august-monthly-roundup-executive-summary.md`
+C	cb	4477		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	(unresolved)	842	**Cancelling an operation the registry has never heard of reports success.**
+C	cb	4491		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	(unresolved)	686	"**""Dynamic"" collections are currently *manually* refreshed.** A query-backed"
+C	cb	4501		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	(unresolved)	393	**`AddBookToCollection` is read-modify-write with no version check.** Two
+C	cb	4507		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	(unresolved)	334	**`POST /api/session/local-all` 404s.** Observed from the app alongside the
+C	cb	4563		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	(unresolved)	348	**`/tasks/*` and `/maintenance-window/*` are NOT v1 operations.** Six routes
+C	cb	4569		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	(unresolved)	347	**`library.import`, `library.organize` and `library.transcode` still carry the
+C	cb	4575		Search placeholder hint missing when navigating to All Books from Fini	(unresolved)	(unresolved)	717	**Convert the remaining long-running `ResumeDrop` ops to real resume.** The
+C	cb	4832		Stranded `.tmp-rename` recovery — bisect complete, recovery outstandin	(unresolved)	(unresolved)	525	Recovery tool. Dry-run by default, full report before anything moves.
+C	cb	4840		Stranded `.tmp-rename` recovery — bisect complete, recovery outstandin	(unresolved)	(unresolved)	259	Compare with per-file SHA-256; where hashes differ because of embedded
+C	cb	4844		Stranded `.tmp-rename` recovery — bisect complete, recovery outstandin	(unresolved)	(unresolved)	293	Investigate book rows affected as a side effect. `scrubVar`'s own comment
+C	cb	4848		Stranded `.tmp-rename` recovery — bisect complete, recovery outstandin	(unresolved)	(unresolved)	158	Confirm no new bogus directories appear now that both the pattern and the
+C	cb	4861		Stranded `.tmp-rename` recovery — bisect complete, recovery outstandin	(unresolved)	(unresolved)	402	**Maintenance window: watchdog cancels it, then the plugin reports success.** Prod
+C	cb	4901		🐛 `book_file.missing` / `file_exists` are stale — nothing maintains th	(unresolved)	(unresolved)	126	**Decide the 16,265 books with no surviving file** (was believed to be 5,
+C	cb	4903		🐛 `book_file.missing` / `file_exists` are stale — nothing maintains th	(unresolved)	(unresolved)	154	**`missing-file-repair` dry run hit the 20,000 `max_deletes` cap.** The true
+C	cb	4905		🐛 `book_file.missing` / `file_exists` are stale — nothing maintains th	(unresolved)	(unresolved)	181	**1,006 missing rows are under the iTunes tree**, contradicting the
+C	cb	4908		🐛 `book_file.missing` / `file_exists` are stale — nothing maintains th	(unresolved)	(unresolved)	71	**61 rows carry a mangled `/X:/books/itunes/Audiobooks` Windows path.**
+C	cb	4919		🐛 `book_file.missing` / `file_exists` are stale — nothing maintains th	(unresolved)	(unresolved)	304	**Answer why the organizer recorded destination rows it never populated.**
+C	cb	4924		🐛 `book_file.missing` / `file_exists` are stale — nothing maintains th	(unresolved)	(unresolved)	431	**Register `HEAD` for the audio/file routes.** The server registers no `HEAD` handler
+C	cb	5021		Update 2026-08-16: one of these was NOT pre-existing	(unresolved)	(unresolved)	1089	**Add an `{edition_suffix}` folder-pattern token.** Two editions of the same
+C	cb	5271		Contributor data cleanup — follow-ups to `maintenance.purge-empty-auth	(unresolved)	(unresolved)	277	**Narrator equivalent of the empty-author purge.** There is no
+C	cb	5281		Contributor data cleanup — follow-ups to `maintenance.purge-empty-auth	(unresolved)	(unresolved)	685	**Author↔narrator swap repair.** Measured lower bound: 1,052 names appear in
+C	cb	5290		Contributor data cleanup — follow-ups to `maintenance.purge-empty-auth	(unresolved)	(unresolved)	492	**`DeleteAuthor`'s junction cleanup is dead code.** It iterates the
+C	cb	5449		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	391	**Run the classify pass in prod** and record the numbers.
+C	cb	5461		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	300	**Missing-file audit Phase 1a still has no PR and is not mutation-tested.**
+C	cb	5650		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	4159	"**`book-detail.spec.ts` ""soft delete, restore, and purge flow"" fails only in the full"
+C	cb	6425		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	2609	**E2E repair progress — measured 2026-08-09. Supersedes the stale
+C	cb	6484		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	1907	**`version-management.spec.ts` (6 failures) — version management MOVED off
+C	cb	6988		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	3215	**Audit every e2e mock handler against whether its app-side reader
+C	cb	7254		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	1111	**The unified Dedup view has no e2e coverage at all.** Found 2026-08-09
+C	cb	7404		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	1532	**Stop Deluge writing in-progress downloads directly into the new-books
+C	cb	7435		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	2481	**Require every operation to support `dry_run`, and enforce it at the
+C	cb	7736		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	4612	**Move library filtering/search into the Go server as a real, declared
+C	cb	8094		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	1695	"**~180 ""bracketed series"" are actually one shattered book each** — found by"
+C	cb	8151		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	1423	**react-router GHSA-qwww-vcr4-c8h2 — accepted, not reachable, do not
+C	cb	8236		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	499	**`DeleteBookFilesForBook` leaves stale memdb rows behind.** It never calls
+C	cb	8245		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	1414	**The 3 dangerous multidisc holds are DUPLICATES, not series — feed them to
+C	cb	8273		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	2190	**Frontend framework versions — how far behind we actually are, and the
+C	cb	8551		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	1841	**Version-group acoustic audit op** — verify that books marked as VERSIONS
+C	cb	8611		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	1934	**Backfill chapters into files that lack them, using a duplicate as the
+C	cb	8675		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	1803	**Reading status and review/rating must sync from the app back to the
+C	cb	8707		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	1594	**Use Deluge as a metadata and identity source** — owner idea 2026-08-05:
+C	cb	8738		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	1994	**Use Deluge's per-torrent file list as ground truth for GROUPING** — owner
+C	cb	8890		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	2728	"**""First Aid"" — one sequenced library validate + repair system** — owner"
+C	cb	8943		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	740	**Never delete — re-associate (duplicate resolution)**. Deleting a
+C	cb	9000		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	904	**Remaining after the first apply:** 1,019 directory-shaped books held for
+C	cb	9020		Missing-file lane — follow-ups after the report-only change (#2614)	(unresolved)	(unresolved)	449	**Re-run `regroup-shattered-ai` after relink and re-measure the queue.**
+C	cb	9659		Status 2026-08-04	(unresolved)	(unresolved)	484	**`The Trapped Mind Project` is a 13-second stub, not an audiobook**
+C	cb	9666		Status 2026-08-04	(unresolved)	(unresolved)	230	**5 books are multi-copy, not row-duplicated** — distinct paths for the same
+C	cb	9669		Status 2026-08-04	(unresolved)	(unresolved)	113	**`Call to Arms` (9,957h)** — 96 *distinct* files, unchanged by the dedupe run.
+C	cb	9671		Status 2026-08-04	(unresolved)	(unresolved)	204	**Corrected aggregates are invisible until memdb refreshes** — see the
+C	cb	10290		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	(unresolved)	(unresolved)	524	**ABS-SYNC: exempt the ABS surface from `BasicAuth()` when `basic_auth_enabled`
+C	cb	10298		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	(unresolved)	(unresolved)	291	**ABS-SYNC: prune expired `abs_sess:` records on a schedule.**
+C	cb	10333		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	(unresolved)	(unresolved)	310	**ABS-SYNC: wave 3 — backfill + survival proof.** TASK-04 (idempotent sync-ID
+C	cb	10337		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	(unresolved)	(unresolved)	553	**ABS-SYNC: TASK-11 — auth core, both credential modes.** Brief not yet written.
+C	cb	10344		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	(unresolved)	(unresolved)	465	**ABS-SYNC: Phase 3 — DTO mapping + library browse.** Depends on waves 1–2 and
+C	cb	10354		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	(unresolved)	(unresolved)	276	**ABS-SYNC: Phase 7 — socket.io (Absorb only).** AudioBooth needs no websocket at
+C	cb	10358		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	(unresolved)	(unresolved)	514	**ABS-SYNC: Phase 8 — topology, runbook, migration guide.** Cloudflare Access
+C	cb	10366	REGROUP-PARTCHAPTER-PARSER	"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	(unresolved)	(unresolved)	343	"**REGROUP-PARTCHAPTER-PARSER** The Mistborn-style ""Ambiguous folder"" case"
+C	cb	10383		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	(unresolved)	(unresolved)	480	**iTunes 2-way-sync — remaining P0 measurements.** (a) Cross-type PID collisions
+C	nb	10507		Dedup (10)	(unresolved)	(unresolved)	96	**REVIEW-band candidate producer for the review queue** (H1:35) — B2 fast-follow;
+C	nb	10509		Dedup (10)	(unresolved)	(unresolved)	144	**Flip `review_apply_enabled` ON in prod** — apply path merged (#1953) but default
+C	nb	10511		Dedup (10)	(unresolved)	(unresolved)	81	**C8 — auto-file issues per `not_dup` cluster** (H1:1332; INIT-10 T5) — deferred.
+C	nb	10521		Dedup (10)	(unresolved)	(unresolved)	144	**Async breakdown-refresh for bulk/cluster dismiss** (H1:1877) — per-pair synchronous
+C	nb	10525		Dedup (10)	(unresolved)	(unresolved)	81	**Regression tests for the 2 untested deluge hydrate sites** (H1:568) — optional.
+C	nb	10526		Dedup (10)	(unresolved)	(unresolved)	94	**Hide system-sourced tags from the Browse-by-Tag cloud** (H1:433) — UX preference,
+C	nb	10531		Identification / metadata (5)	(unresolved)	(unresolved)	113	**AI-enrichment tier for the ambiguous regroup pile** (H1:35) — B2 fast-follow;
+C	nb	10533		Identification / metadata (5)	(unresolved)	(unresolved)	56	**Cover recovery fast-follow** (H1:35) — B2 fast-follow.
+C	nb	10537		Identification / metadata (5)	(unresolved)	(unresolved)	77	**Description fetch campaign — ~29,083 books without descriptions** (H1:790).
+C	nb	10538		Identification / metadata (5)	(unresolved)	(unresolved)	300	**LLM/embeddings backend-mode toggle** (extracted from the archived 2026-07-02
+C	nb	10572		Pipeline (8)	(unresolved)	(unresolved)	126	**iTunes path-heal residuals** (H1:899-906) — 3,720 ambiguous / 5,349 not-found /
+C	nb	10574		Pipeline (8)	(unresolved)	(unresolved)	95	**AP-1b — physically co-locate survivor's files after Combine** (H1:936) — inside
+C	nb	10576		Pipeline (8)	(unresolved)	(unresolved)	98	**AP-3 duration-reextract ~721-book tail** (H1:949) — re-enqueue apply
+C	nb	10582		Pipeline (8)	(unresolved)	(unresolved)	137	**CONS-18 Part 2 — file-tag duration write-back** (H1:1019; spec 2026-06-19 DRAFT)
+C	nb	10603		Workflow / ops (4)	(unresolved)	(unresolved)	130	**Responses-API migration AI-RESP-A/B/E/F (INIT-7)** (H1:2596-2603) — [hold,
+C	nb	10610		Logging / verification / security-ops (5)	(unresolved)	(unresolved)	172	**SLOG-W13 residual ~1,346 raw slog calls** (H1:2037) — remaining calls enumerated
+C	nb	10613		Logging / verification / security-ops (5)	(unresolved)	(unresolved)	86	**SEC-AUDIT-11 — CodeQL bulk-dismissal rationales** (H1:2267) — GitHub-console
+C	nb	10617		Logging / verification / security-ops (5)	(unresolved)	(unresolved)	118	**I1 + I6 — prod pprof verification** (H1:1515, 1538) — measure chromem-lazy
+C	nb	10660		UX (4)	(unresolved)	(unresolved)	133	**1.16 — resizable/sortable columns** (H1:2750) — remaining: dedup results,
+C	nb	10706		Other / close-out (10)	(unresolved)	(unresolved)	314	**2026-05-01 re-audit block close-out pass** (H1:3137-3177) — TEST-2, DEP-1a-e,
+C	nb	10710		Other / close-out (10)	(unresolved)	(unresolved)	101	**WaitForWarmup hazard note** (H1:3118) — latent create-then-read-memdb test
+C	nb	10712		Other / close-out (10)	(unresolved)	(unresolved)	87	**GFO-4 — graceful-file-ops sub-op phase tracking** — last open graceful-file-ops
+C	nb	10714		Other / close-out (10)	(unresolved)	(unresolved)	61	**Performance items #1/#2/#6** (2026-04-14 set) — still open.
+C	nb	10728		Other / close-out (10)	(unresolved)	(unresolved)	118	**Transcription quality filter** — ~40% of transcripts low-quality/unparsed; list
+C	nb	10730		Other / close-out (10)	(unresolved)	(unresolved)	113	**iTunes heal Layer-6 re-trigger** (H1:897) — re-run after path-heal residuals
+C	nb	10783		Dedup + review consolidation (3) — 2026-07-18 owner request	(unresolved)	(unresolved)	400	"**Overhaul the review interface (""make it not suck"")** — the review page UX is a"
+C	nb	10788		Dedup + review consolidation (3) — 2026-07-18 owner request	(unresolved)	(unresolved)	451	**Consolidate the dedup page into the review page** — slim the dedup page down to
+C	cb	10831		Remaining — execution state (briefs)	(unresolved)	(unresolved)	355	"**T03** — **sandbox** purge wave: `maintenance.dedup-exact-triage {""apply"":true}` (dismiss"
+C	cb	10849		Remaining — execution state (briefs)	(unresolved)	(unresolved)	129	**T13** — docs truth-up with measured sandbox/prod numbers (dedup/STATUS.md, pending-prod-actions.md, exec summary) — in progress
+C	cb	50		CI / automation	ci/scripts	ci/scripts	152	`scripts/test_check_memory_leaks.py` is executed by no workflow. Either wire it
+C	cb	1852		Config	ci/scripts	ci/scripts	2417	**A `todo.d` fragment assembled between the PR that files it and the PR
+C	cb	4312		Series table integrity — follow-ups from the 2026-08-14 prune repair	ci/scripts	ci/scripts	512	**Check `scripts/setup-prometheus-auth.py` for the dead-indentation
+C	cb	8044		Missing-file lane — follow-ups after the report-only change (#2614)	ci/scripts	ci/scripts	2787	**Never accumulate more than 10 RCs on a version — cut the stable release
+C	cb	6701		Missing-file lane — follow-ups after the report-only change (#2614)	cmd/root.go	cmd/root.go;internal/database;docs	3388	**⚖️ DECIDE which sort indexes to enable — the design-doc cost estimate was ~10×
+C	cb	101		CI / automation	docs	docs	1565	📚 **Docs consolidation follow-ups (from the 2026-08-11 inventory).** Full evidence in
+C	cb	157		Dedup	docs	docs	1423	**Exact-candidate backlog is re-accumulating — fix the source, not the symptom.** The
+C	cb	397		Docs	docs	docs	1122	**Give the 2026-06-22 security sweep a status column so it can eventually be retired.**
+C	cb	497		ABS surface — what is still missing after the series/playlist fix	docs	docs	488	"**`docs/reference/abs-target-client-contract.md` §11 lists playlists as ""safe to"
+C	cb	1194		Dedup	docs	docs	1971	🧊 **`*PebbleStore` struct split — LOWEST PRIORITY. Literally do anything else
+C	cb	1317	CFG-AUDIT	Config	docs	docs	1291	**CFG-AUDIT** Triage the findings in
+C	cb	2238	REVIEW-PREVIEW	Config	docs	docs	1493	**REVIEW-PREVIEW** Play the first ~2 minutes of audio directly from the
+C	cb	4660		Import-path scan no longer surfaces per-file scan errors	docs	docs	637	**3 scheduled tasks are ENABLED but can never run.** Startup logs
+C	cb	4894		🐛 `book_file.missing` / `file_exists` are stale — nothing maintains th	docs	docs	467	**Classify the 71,954 missing `book_file` rows by shape before any
+C	cb	5037		Update 2026-08-16: one of these was NOT pre-existing	docs	docs	1213	**Investigate the LLM host's GPU cooling before running another full `library.scan`.**
+C	cb	5466		Missing-file lane — follow-ups after the report-only change (#2614)	docs	docs	401	**`database.Store` is grouped, not yet unreachable.** `.interface-width-baseline`
+C	cb	10372		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	docs	docs	946	**iTunes 2-way-sync P3 (cleanup) — decision: MEASURE-AND-STOP, no removal machinery.**
+C	cb	10390		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	docs	docs	1276	**iTunes 2-way-sync P2 — relocate-only sync cycle (MVP end).** All prerequisites are
+C	cb	10457		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	docs	docs	640	**iTunes 2-way sync writeback (edit-in-place, preserve play-state).** The deployed
+C	nb	10500		Dedup (10)	docs	docs	481	**PH-2 — run `maintenance.dedup-exact-triage` on prod + review populations; PH-2b
+C	nb	10523		Dedup (10)	docs	docs	121	**Omnibus detection + dedup** — spec-only
+C	nb	10534		Identification / metadata (5)	docs	docs	184	**Community audiobook fingerprint index (INIT-8)** — spec-only
+C	nb	10591		Workflow / ops (4)	docs	docs	583	**Workflow system WF-0/2/3/4/5 (INIT-6)** (H1:1128-1133;
+C	nb	10608		Logging / verification / security-ops (5)	docs	docs	127	**SLOG-PROD-VERIFY** (H1:2038; [runbook](docs/operations/slog-prod-verify.md)) —
+C	nb	10615		Logging / verification / security-ops (5)	docs	docs	146	**PD-3 — post-deploy prod verification checklist** (H1:1568-1574;
+C	nb	10632		Infra (5)	docs	docs	239	**REPO-SIZE-1 decision** ([plan](docs/plans/2026-07-10-repo-size-history-rewrite-plan.md),
+C	nb	10635		Infra (5)	docs	docs	213	**Execution-manifest human gates**
+C	cb	4548		Search placeholder hint missing when navigating to All Books from Fini	internal/aiscan	internal/aiscan	635	**`ClearStaleOperations` is still wired, deliberately.** `POST
+C	cb	888		Organize/apply rename paths: three hand-verified silent failures	internal/audiobooks	internal/audiobooks	1029	**Split `AudiobookService`, not just its store interface.** `audiobookStore`
+C	cb	1980	SEARCH-CACHE	Config	internal/audiobooks	internal/audiobooks;internal/server/search_reconciler.go;web (frontend)	2157	**SEARCH-CACHE** Search results are not cached anywhere on the server.
+C	cb	2595	SEC-CODEQL-BACKLOG	⚠️ The activity channel overflows during organize and DROPS records	internal/audiobooks	internal/audiobooks;internal/backup;internal/covers;internal/database;internal/fileops;internal/httputil;internal/metadata;internal/mtls;internal/server/handlers;internal/server/server.go	3870	**SEC-CODEQL-BACKLOG** 326 open CodeQL alerts on `main`, including **2
+C	nb	10670		Other / close-out (10)	internal/audiobooks	internal/audiobooks;internal/database;internal/maintenance;internal/server;internal/server/;internal/server/handlers;internal/server/interfaces.go;docs	2235	"**4.8 — Store ISP sweep** (H1:2787) — **RE-SCOPED 2026-07-18; the ""~38-file + 18"
+C	cb	10303		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	internal/audioutil	internal/audioutil;internal/config;internal/diagnosis	731	**ABS-SYNC: consolidate the two DRM detection paths, and wire one into the
+C	cb	5197		Compound narrator names are not split into individual narrators	internal/auth	internal/auth;internal/maintenance;internal/operations;internal/server/maintenance_dispatcher.go;internal/server/maintenance_job_op.go;internal/server/wire_operations_routes.go	3108	**`OperationDef.Permissions` is enforced by nothing — and PR-3 is about to delete the code that *is* doing the enforcing**
+C	cb	90		CI / automation	internal/config	internal/config	365	⚙️ **Decide `ABS_API_ENABLED` for production (N-11).** It defaults to `false`
+C	cb	1247		Config	internal/config	internal/config;internal/metafetch	1601	**Rename `write_back_metadata` → `auto_write_tags_on_fetch`.** The current name
+C	cb	232		Tasks	internal/database	internal/database	188	Once a stuck test is named: find the unbounded wait. Look for `sync.WaitGroup.Wait`,
+C	cb	468		ABS surface — what is still missing after the series/playlist fix	internal/database	internal/database	644	**Collections do not exist — this is a FEATURE, not a wiring fix.** `/api/collections`
+C	cb	1227		Dedup	internal/database	internal/database;internal/plugins/maintenance;internal/server/indexed_store.go;internal/server/server.go;internal/server/server_maintenance_deps.go;internal/testutil;docs	1192	**Finish killing `database.Store` — 18 references left outside `internal/database`.**
+C	cb	1627	MERGE-CACHE-EVICT	Config	internal/database	internal/database;internal/dedup;internal/merge;internal/search;internal/server/handlers	3373	**MERGE-CACHE-EVICT** A merge must evict (or dirty-flag) every merged-away
+C	cb	2181	PLAYBACK-IMPORT	Config	internal/database	internal/database;internal/itunes;internal/readstatus	2127	**PLAYBACK-IMPORT** Listened / in-progress status is not coming across from
+C	cb	2373	VG-DOUBLE-PRIMARY	Config	internal/database	internal/database;internal/merge;internal/reconcile	2870	**VG-DOUBLE-PRIMARY** A version group can end up with **two** members both
+C	cb	3526		Author delete paths guard with the listing counter, same shape as the 	internal/database	internal/database	1653	"**`BulkDeleteAuthors` and `DeleteEmptyAuthor` decide ""is this author empty?"""
+C	cb	3948		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	internal/database	internal/database	729	**`opstate:<id>:params` keys are never swept.** `runMaintenanceJob` now
+C	cb	4678		Store-interface audit — defects found incidentally (each independent o	internal/database	internal/database	565	`internal/database/store.go` — `globalStore` is guarded by `globalStoreMu sync.RWMutex`
+C	cb	4685		Store-interface audit — defects found incidentally (each independent o	internal/database	internal/database;internal/server/wire_abs_routes.go	507	`internal/server/wire_abs_routes.go:494` — bare `s.Store().(*database.PebbleStore)`
+C	cb	4694		Store-interface audit — defects found incidentally (each independent o	internal/database	internal/database	260	`internal/database/iface_assert.go` — its comment claims compile-time proof that
+C	cb	4721		Store-interface audit — defects found incidentally (each independent o	internal/database	internal/database;docs	264	`internal/database/store.go:17` cites
+C	cb	4728		Store-interface audit — defects found incidentally (each independent o	internal/database	internal/database	330	⚠ `internal/database/mock_store.go` — ~88 of `MockStore`'s 399 methods have no `Func`
+C	cb	5424		`ResumeRequeue` has two live implementations that disagree about param	internal/database	internal/database;internal/dedup;internal/metafetch;internal/plugins/acoustid;internal/plugins/maintenance;internal/reconcile;internal/server;internal/server/handlers;internal/versions	1574	**Store-parameter narrowing: 54 declarations remain.** Re-measured 2026-08-17 by AST.
+C	cb	9259		Missing-file lane — follow-ups after the report-only change (#2614)	internal/database	internal/database;internal/plugins/maintenance;internal/server/audiobooks_helpers.go;internal/server/handlers	4170	**Corrected book aggregates are invisible until memdb refreshes.**
+C	cb	17	MERGE-UNDO	📥 Inbox	internal/dedup	internal/dedup	1484	**MERGE-UNDO** Make a review-initiated merge reversible. The machinery is
+C	cb	1162		Dedup	internal/dedup	internal/dedup	1894	**Clean up the 2,504 already-orphaned dedup candidates — use the existing
+C	cb	3966		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	internal/dedup	internal/dedup	603	**`dedup.series-dedup` still has no dry-run parameter at all.**
+C	cb	4222		Series table integrity — follow-ups from the 2026-08-14 prune repair	internal/dedup	internal/dedup;internal/scanner	2718	**Identify what produced the 2026-08-11 burst of phantom series references.**
+C	cb	4288		Series table integrity — follow-ups from the 2026-08-14 prune repair	internal/dedup	internal/dedup;internal/maintenance	422	**Two more series deleters have no cache invalidation and no ref guard**, and
+C	cb	4719		Store-interface audit — defects found incidentally (each independent o	internal/dedup	internal/dedup	138	"`internal/dedup/collectors_metadata.go:51` — ""`database.EnsureSingletonBookTag` (which"
+C	cb	10313		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	internal/dedup	internal/dedup;internal/merge;internal/reconcile;internal/scanner	1166	**ABS-SYNC TASK-12 (P1, data-loss class): close the three identity gaps so §4.3's
+C	nb	10750		Dedup + review consolidation (3) — 2026-07-18 owner request	internal/dedup	internal/dedup;internal/fingerprint;internal/plugins/acoustid	2470	**Fingerprint-confirmed dedup + shattered-book reassembly against the original
+C	cb	10350		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	internal/httputil	internal/httputil	301	**ABS-SYNC: Phase 5b — playback routes.** `POST /api/items/:id/play`,
+C	cb	4714		Store-interface audit — defects found incidentally (each independent o	internal/importer	internal/importer	172	`internal/importer/service.go:27-31` — `type Store = database.Store` justified by
+C	cb	1767		Config	internal/itunes	internal/itunes	2522	🎧 **iTunes dynamic-playlist import and playlist push-back are fully
+C	cb	4208	PERF-5	2026-06-22 security-sweep: the items still open after the status pass	internal/itunes	internal/itunes	165	**PERF-5** — `internal/itunes/backfill.go:60-68` offset pagination over
+C	cb	4521		Search placeholder hint missing when navigating to All Books from Fini	internal/itunes	internal/itunes	452	**Wire `itunes.position-sync` or drop it.** `internal/itunes/service/position_sync.go`
+C	cb	10406		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	internal/itunes	internal/itunes;docs	939	**`isAudiobookITL` under-classifies audiobooks (fail-safe, but fix carefully).**
+C	cb	4605		Search placeholder hint missing when navigating to All Books from Fini	internal/logger	internal/logger	471	**Audit the other two silently-stubbed `StandardLogger` methods.**
+C	cb	3939		PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`	internal/maintenance	internal/maintenance;internal/operations;internal/server;internal/server/...	568	**Check GitHub CI on the merge commit.** Merged on an explicit instruction
+C	cb	2025	REVIEW-COMBINE-FIRST	Config	internal/merge	internal/merge;internal/reconcile;internal/server/wire_dedup_routes.go;web (frontend);docs	2732	**REVIEW-COMBINE-FIRST** Let the owner combine two books into one, or
+C	cb	4698		Store-interface audit — defects found incidentally (each independent o	internal/merge	internal/merge;internal/plugins/acoustid	421	`internal/merge/service.go:34-42` — `AsExternalIDReassigner` uses a bare
+C	cb	847		Organize/apply rename paths: three hand-verified silent failures	internal/metafetch	internal/metafetch;internal/server/batch_apply_one.go;internal/server/handlers	823	**F7 — `ApplyMetadataFileIO` returns nothing, so rename failure is
+C	cb	860		Organize/apply rename paths: three hand-verified silent failures	internal/metafetch	internal/metafetch	694	**F6 — `ensureLibraryCopy` treats an empty organize as success.**
+C	cb	1338	SCORE-REC	Config	internal/metafetch	internal/metafetch	773	**SCORE-REC** Route `ScoreOneResultWithBreakdown` through `scoreRecorder`
+C	cb	3502		Search follow-ups from the wildcard/phrase fix (2026-08-13)	internal/metafetch	internal/metafetch	876	"**Activity-log summaries drop their data — ""cover art saved to"" (to"
+C	cb	606		ABS API — sweep every endpoint for accepted-but-ignored query paramete	internal/operations	internal/operations	750	"🔁 **Wire a durable ""probed, found none"" marker before this op is ever"
+C	cb	700		Follow-up on the op itself	internal/operations	internal/operations;internal/plugins/maintenance	293	One unreproduced failure of `internal/plugins/maintenance` was observed on
+C	cb	4703		Store-interface audit — defects found incidentally (each independent o	internal/operations	internal/operations	233	`internal/operations/registry/register.go:40-42` — `prodSchedulerStore` embeds
+C	cb	4743		Store-interface audit — defects found incidentally (each independent o	internal/operations	internal/operations	76	`internal/operations/mocks` — 206 generated lines, effectively unreferenced.
+C	cb	4586		Search placeholder hint missing when navigating to All Books from Fini	internal/organizer	internal/organizer;internal/reconcile;internal/scanner	1222	**Forward `IsCanceled()` through `reporterLogger` and exercise the four guards it wakes up.**
+C	cb	4513		Search placeholder hint missing when navigating to All Books from Fini	internal/plugins/itunes	internal/plugins/itunes;internal/server/itunes_ops.go	599	**Finish (or delete) the iTunes plugin op migration.** `internal/plugins/itunes/`
+C	cb	4107		Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross	internal/plugins/maintenance	internal/plugins/maintenance;internal/quarantine	607	**5 more walkers share the exposure** (whole-library offset loops over
+C	cb	5454		Missing-file lane — follow-ups after the report-only change (#2614)	internal/plugins/maintenance	internal/plugins/maintenance	328	**Build the re-point repair.** It must UPDATE `file_path` to the flat name the
+C	cb	8433		Missing-file lane — follow-ups after the report-only change (#2614)	internal/plugins/maintenance	internal/plugins/maintenance	2037	**Investigate: 79% of books with a stored transcript are marked
+C	cb	8837		Missing-file lane — follow-ups after the report-only change (#2614)	internal/plugins/maintenance	internal/plugins/maintenance	1583	**Canary the multidisc applies behind a before/after snapshot** — owner
+C	cb	4739		Store-interface audit — defects found incidentally (each independent o	internal/scanner	internal/scanner	294	`internal/scanner/mocks` — 442 generated lines, **zero** importers, while
+C	cb	4852		Stranded `.tmp-rename` recovery — bisect complete, recovery outstandin	internal/scanner	internal/scanner	603	**Give the AI parser typed provider errors.** `internal/scanner/ai_failure.go`
+C	cb	10329		"SEC: origin is reachable from the LAN — ""bind loopback"" is NOT achieva"	internal/scanner	internal/scanner;docs	449	**ABS-SYNC: wave 2 — scanner + merge wiring.** Briefs in
+C	cb	618		ABS API — sweep every endpoint for accepted-but-ignored query paramete	internal/search	internal/search	704	🔍 **Index track names so smart playlists can match them.** The Bleve
+C	cb	3369		Search / version-group census corrections (2026-08-13)	internal/search	internal/search	553	**`all` and `and` are stopwords and are silently dropped from queries.**
+C	cb	6133		Missing-file lane — follow-ups after the report-only change (#2614)	internal/search	internal/search;docs	1750	**The checked-in `.api-token` no longer authenticates, and it blocked a real
+C	cb	4202	SEC-2	2026-06-22 security-sweep: the items still open after the status pass	internal/server/bootstrap.go	internal/server/bootstrap.go	130	**SEC-2** — bootstrap still writes plaintext credential files
+C	cb	2329		Config	internal/server/handlers	internal/server/handlers	1996	🐛 **`GET /audiobooks/soft-deleted` computes its `total` by fetching up to
+C	cb	4281		Series table integrity — follow-ups from the 2026-08-14 prune repair	internal/server/handlers	internal/server/handlers	409	**`BulkDeleteSeries` still deletes on a filtered count.**
+C	cb	4716		Store-interface audit — defects found incidentally (each independent o	internal/server/handlers	internal/server/handlers	264	`internal/server/handlers/organize.go:57-62` — `type OrganizeStore = database.Store`
+C	cb	5494		Missing-file lane — follow-ups after the report-only change (#2614)	internal/server/handlers	internal/server/handlers;docs	4552	**AudiobookShelf-compatible API: series are broken, and collections/playlists are
+C	cb	8177		Missing-file lane — follow-ups after the report-only change (#2614)	internal/server/handlers	internal/server/handlers;web (frontend)	1502	**Two frontend navigation sinks are unvalidated and safe only by
+C	cb	4732		Store-interface audit — defects found incidentally (each independent o	internal/server/organize_service_test.go	internal/server/organize_service_test.go	301	⚠ `internal/server/organize_service_test.go:34` — vacuous test. It sets `GetAllBooksFunc`;
+C	cb	3384		Search / version-group census corrections (2026-08-13)	internal/server/search_reconciler.go	internal/server/search_reconciler.go	488	**`SearchIndexDroppedCount` is not actually exposed on `/metrics`.** The
+C	cb	296		Docs / API	internal/server/server.go	internal/server/server.go;docs	3083	**The OpenAPI spec still documents 48 endpoints that no router serves.** After the
+C	cb	3635		B06 chapters end-to-end: VERIFIED on prod — E02 backfill only needs th	internal/server/server_maintenance_deps.go	internal/server/server_maintenance_deps.go	896	**`bulk-write-back` cannot do the approved E08 library-wide run as-is.**
+C	cb	53		CI / automation	internal/server/spa_fallback.go	internal/server/spa_fallback.go;docs	2555	🔌 **ABS coverage gaps N-1 … N-10** (audit:
+C	cb	8583		Missing-file lane — follow-ups after the report-only change (#2614)	internal/syncapi	internal/syncapi	1495	**Verify the server actually returns chapters to clients** — confirm the
+C	cb	8646		Missing-file lane — follow-ups after the report-only change (#2614)	internal/syncapi	internal/syncapi	1532	**Playlists — implement the whole surface** — owner request 2026-08-05:
+C	cb	8399		Missing-file lane — follow-ups after the report-only change (#2614)	internal/transcribe	internal/transcribe	1987	**Stand up a second Whisper worker on the spare CPU node.** Owner request
+C	cb	376		Security	web (frontend)	web (frontend);docs	1171	**SEC-9: the OpenAI API key is sent from the browser.**
+C	cb	1727		Config	web (frontend)	web (frontend)	1101	🟡 **Why does React silently drop a `setState` issued from a `setTimeout`
+C	cb	2077		Config	web (frontend)	web (frontend)	2415	🚨 **E2E runs in one worktree can silently be served by a DIFFERENT
+C	cb	2219	LEAKSCAN-SCOPE	Config	web (frontend)	web (frontend);ci/scripts	1077	**LEAKSCAN-SCOPE** `scripts/check-memory-leaks.py` reports a false
+C	cb	2486		Config	web (frontend)	web (frontend)	737	**17 API calls will now surface an expired session that previously
+C	cb	4212		2026-06-22 security-sweep: the items still open after the status pass	web (frontend)	web (frontend)	134	**FE-2/FE-3/FE-4** — the three stale-deps findings' line anchors have
+C	cb	4960		🔴 `dedup.llm-review` holds a library write with no `ConcurrencyKey` — 	web (frontend)	web (frontend)	2126	**Six E2E mocks point at operation URLs that no longer exist, and two
+C	cb	5722		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	web (frontend)	974	"**Change Log rows lost their visible ""Compare snapshot"" affordance and are"
+C	cb	5736		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	web (frontend)	390	**Dead `expanded` state in `TagComparison`.** `web/src/components/TagComparison.tsx:69`
+C	cb	5742		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	web (frontend)	1111	"**Delete the unreachable ""Bulk Fetch Metadata"" dialog and its handler.**"
+C	cb	5758		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	web (frontend)	679	**Audit `setupMockApi` for more branches shadowed by earlier prefix catch-alls.**
+C	cb	5904		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	web (frontend)	1069	"**You cannot sort the library from the UI.** The ""Sort by"" and ""Order"""
+C	cb	5972		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	web (frontend)	1099	"**Per-field ""Use File"" / ""Use Fetched"" one-click apply is gone from Book Detail"
+C	cb	5987		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	web (frontend)	713	**Visual-regression goldens exist only for darwin.**
+C	cb	6241		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	web (frontend)	759	**You can no longer navigate between versions of a book.** Book Detail used to
+C	cb	6252		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	web (frontend)	335	"**The version-group summary lost its count and its ""you are here"" marker.**"
+C	cb	6258		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	web (frontend)	474	**The library card's overflow menu button has no accessible name.**
+C	cb	7549	TODO-MUI-1	Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	web (frontend);docs	1392	**TODO-MUI-1** MUI upgrade Step 1 — `@mui/*` 5.14 → 6.x (brief:
+C	cb	7573	TODO-MUI-2	Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	web (frontend);docs	1759	**TODO-MUI-2** MUI upgrade Step 2 — `@mui/*` 6.x → 7.x including the
+C	cb	7603	TODO-MUI-3	Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	web (frontend);docs	1366	**TODO-MUI-3** MUI upgrade Step 3 — React 18 → 19 (OPTIONAL but
+C	cb	7626	TODO-MUI-4	Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	web (frontend);docs	2062	**TODO-MUI-4** MUI upgrade Step 4 — `@mui/*` 7.x → 9.x (final hop; there
+C	cb	7937		Missing-file lane — follow-ups after the report-only change (#2614)	web (frontend)	web (frontend)	5725	"**The Library must never show an empty ""no items"" state unless the"

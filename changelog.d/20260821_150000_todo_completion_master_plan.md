@@ -3,8 +3,8 @@
 #### A tiered census of every open TODO, and a plan to finish them
 
 `TODO.md` had grown to 10,849 lines and nobody could say how much work was
-actually left in it. It now has an answer: **385 open items**, tiered, with a
-plan for retiring each tier.
+actually left in it. It now has an answer: **roughly 378 distinct open items**,
+tiered, with a plan for retiring each tier.
 
 The count took two tries. `TODO.md` encodes tasks two different ways — checkbox
 bullets through the body, and a numbered backlog in the tail where "done" is
