@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.6.0
+# version: 3.7.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-08-20
 
@@ -87,15 +87,17 @@ jobs:
   # for a wide interface later). Mutation-verified 3/3 on 2026-08-18 against a
   # fresh clone of main.
   #
-  # ⚠️ THIS JOB REPORTS BUT DOES NOT BLOCK. Read 2026-08-18, main's required
-  # checks are exactly: "Minimal CI / Minimal CI Summary", "Require changelog
-  # fragment", "TODO Fragment Headers". This job is none of them, and unlike
-  # go-lint -- which reaches the required summary because reusable-ci-minimal
-  # aggregates it -- a repo-level job has nothing to roll up into. Until someone
-  # adds "Interface Width Ratchet" to the required-checks list, a PR that widens
-  # an interface goes red here and merges anyway. That is a branch-protection
-  # change, i.e. a human action, not something to work around by moving this
-  # check into an unrelated job that happens to be required.
+  # This job reports and does not block -- and that is the design, not a gap.
+  # main has NO required status checks (verified 2026-08-20, after classic branch
+  # protection was removed to match .github/branch-protection.json, which has
+  # declared "required_status_checks": null since 2026-01-31). Nothing here gates
+  # a merge. The gate runs after the merge instead: auto-revert.yml watches this
+  # workflow on main and restores the last green commit when it fails.
+  # So do NOT "fix" this by adding the job to a required-checks list. Pre-merge
+  # gating was deliberately given up -- it forces a rebase and a second full CI
+  # cycle every time an unrelated commit lands first, and it deadlocked the TODO
+  # collector for ten days by requiring checks its `[skip ci]` commits can never
+  # produce.
   interface-width:
     name: Interface Width Ratchet
     runs-on: ubuntu-latest
@@ -173,14 +175,10 @@ jobs:
   # format gate cannot precede its own sweep without being red on 43 pre-existing
   # files, which is the trap the --enable-only comment above describes.
   #
-  # ⚠️ THIS JOB REPORTS BUT DOES NOT BLOCK — same caveat as the interface-width
-  # ratchet above. Read 2026-08-20, main's required checks are exactly "Minimal
-  # CI / Minimal CI Summary", "Require changelog fragment", and "TODO Fragment
-  # Headers". This job is none of them, so a PR that re-breaks any of these three
-  # checks goes red here and merges anyway. Making it binding means adding "Repo
-  # Guards" to the required-checks list, which is a branch-protection change and
-  # therefore a human action — not something to work around by smuggling these
-  # steps into an unrelated job that happens to already be required.
+  # Reports without blocking, for the same reason as interface-width above: main
+  # has no required status checks, and auto-revert.yml is what makes a red gate
+  # consequential. A PR that re-breaks sdkguard, the bench build or gofmt merges
+  # anyway -- and then this job fails on main, and the merge gets reverted.
   repo-guards:
     name: Repo Guards
     runs-on: ubuntu-latest
@@ -231,6 +229,13 @@ jobs:
 
       - name: Check Go formatting
         run: make fmt-check
+
+      # The auto-revert selector decides which commits get reverted off main, so
+      # it gets tested somewhere that actually runs. Stdlib unittest, no pip step
+      # -- scripts/test_check_memory_leaks.py sits in this repo executed by
+      # nothing, which is the failure mode being avoided here.
+      - name: Test the auto-revert span selector
+        run: python3 -m unittest discover -s .github/workflows/scripts -p 'test_*.py' -v
 
   # Project-specific: verify mockery mocks are not stale
   mocks-check:
