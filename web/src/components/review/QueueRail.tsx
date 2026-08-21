@@ -1,7 +1,7 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
-// last-edited: 2026-08-20
+// last-edited: 2026-08-21
 //
 // The left rail: everything that decides WHICH candidates are in front of the
 // reviewer, plus a queue overview of the ones that made it through.
@@ -45,6 +45,7 @@ import {
 import ClearIcon from '@mui/icons-material/Clear';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import HistoryIcon from '@mui/icons-material/History';
+import SearchIcon from '@mui/icons-material/Search';
 import type { CandidateResult } from '../../services/api';
 import { PAGE_SIZE_OPTIONS, type MetadataFilters } from './lanes/useMetadataLane';
 import { isDecided, scoreColor, type RowState } from './spine/rowState';
@@ -132,6 +133,17 @@ export interface QueueRailProps {
   onRefetchStale?: () => void;
   /** Refetch one row. */
   onRefetchRow?: (bookId: string) => void;
+  /**
+   * Raised when the reviewer wants to search for this book with a query they
+   * type themselves.
+   *
+   * Distinct from onRefetchRow, which re-runs the AUTOMATIC fetch using the
+   * book's own tags. That is exactly what already failed on a no_match row: if
+   * the tags are wrong -- an author field holding a release-group tag or a book
+   * title -- refetching asks the same bad question again and gets the same
+   * answer. A human-supplied query is the only thing that moves those rows.
+   */
+  onSearchRow?: (bookId: string) => void;
   /** Disables both refetch affordances while a request is in flight. */
   refetching?: boolean;
 }
@@ -215,6 +227,7 @@ export function QueueRail({
   onRefresh,
   onRefetchStale,
   onRefetchRow,
+  onSearchRow,
   refetching = false,
 }: QueueRailProps) {
   return (
@@ -475,6 +488,24 @@ export function QueueRail({
                     </Typography>
                   )}
                 </Box>
+                {/* Only on rows the automatic fetch could not match. A
+                    matched row already has a candidate to review, and offering
+                    a manual search there invites re-litigating a decision the
+                    reviewer has not made yet. */}
+                {r.status === 'no_match' && onSearchRow && (
+                  <Tooltip title="No match was found automatically. Search with your own title and author.">
+                    <IconButton
+                      size="small"
+                      aria-label={`Search metadata for ${r.book.title}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSearchRow(r.book.id);
+                      }}
+                    >
+                      <SearchIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                )}
                 {/* Explicitly false, not falsy: a row with no age is not a
                     stale row, and marking it as one would be a claim the
                     payload never made. */}

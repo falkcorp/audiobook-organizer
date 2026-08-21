@@ -459,6 +459,7 @@ export function ReviewWorkspace() {
           viewMode={viewMode}
           unmatchedCount={unmatchedCount}
           onRefetchStale={() => setConfirmRefetchStale(true)}
+          toast={toast}
         />
       )}
 

@@ -17,8 +17,12 @@
 // intent and the shell decides how to ask. A single-row refetch needs no dialog
 // and is handled here.
 
+import { useCallback, useState } from 'react';
 import { Box } from '@mui/material';
 
+import * as api from '../../services/api';
+import type { Book } from '../../services/api';
+import { MetadataSearchDialog } from '../audiobooks/MetadataSearchDialog';
 import { QueueRail } from './QueueRail';
 import { CompareSpine, type SpineViewMode } from './spine/CompareSpine';
 import { ActionBar } from './ActionBar';
@@ -36,6 +40,12 @@ export interface MetadataPanelProps {
    * absent handler as "not offered" rather than rendering a dead button.
    */
   onRefetchStale?: () => void;
+  /** Surface errors and confirmations; also handed to the search dialog. */
+  toast: (
+    message: string,
+    severity?: 'success' | 'error' | 'warning' | 'info',
+    action?: { label: string; onClick: () => void }
+  ) => void;
 }
 
 export function MetadataPanel({
@@ -43,7 +53,29 @@ export function MetadataPanel({
   viewMode,
   unmatchedCount,
   onRefetchStale,
+  toast,
 }: MetadataPanelProps) {
+  // The rail carries CandidateBookInfo, which is not the full Book the search
+  // dialog edits, so opening the dialog needs a fetch. Held as the book itself
+  // rather than an id so the dialog never renders against a half-loaded row.
+  const [searchBook, setSearchBook] = useState<Book | null>(null);
+
+  const openSearch = useCallback(
+    (bookId: string) => {
+      void (async () => {
+        try {
+          setSearchBook(await api.getBook(bookId));
+        } catch (err) {
+          toast(
+            err instanceof Error ? err.message : 'Could not load that book',
+            'error'
+          );
+        }
+      })();
+    },
+    [toast]
+  );
+
   return (
     <>
       <Box
@@ -81,6 +113,7 @@ export function MetadataPanel({
             // metadata providers; a single book is not worth a dialog.
             void metadata.refetchBooks([bookId]);
           }}
+          onSearchRow={openSearch}
         />
 
         <Box sx={{ minWidth: 0, overflowY: 'auto' }}>
@@ -103,6 +136,30 @@ export function MetadataPanel({
         dispatch={metadata.dispatch}
         confirm={(message) => Promise.resolve(window.confirm(message))}
       />
+
+      {/*
+        The manual-search escape hatch. Automatic fetching keys off a book's own
+        tags, so it cannot rescue a book whose tags are the problem -- and the
+        library has plenty: author fields holding a release-group tag, a studio
+        name, or the book's own title. Those rows sit at no_match forever
+        because every automatic retry asks the same wrong question. Until this
+        was wired the only way to type a corrected query was a dialog on a
+        different screen.
+      */}
+      {searchBook && (
+        <MetadataSearchDialog
+          open
+          book={searchBook}
+          onClose={() => setSearchBook(null)}
+          onApplied={() => {
+            setSearchBook(null);
+            // The row's status and candidate both changed server-side; refresh
+            // rather than patching one row, so the summary counts stay true.
+            metadata.refresh();
+          }}
+          toast={toast}
+        />
+      )}
     </>
   );
 }
