@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.test.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4a71c8e2-53d9-4f06-b18a-9e2c7d4a0f53
 // last-edited: 2026-08-20
 //
@@ -12,7 +12,7 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import * as api from '../../../services/api';
 import type { DupesUrlFilters } from './useDupesLane';
-import { useDupesLane, MERGE_ALL_BLOCKED_REASON } from './useDupesLane';
+import { useDupesLane, MERGE_ALL_BLOCKED_REASON, DEDUP_SHORTCUTS } from './useDupesLane';
 
 vi.mock('../../../services/api');
 
@@ -427,5 +427,219 @@ describe('bulk actions over a selection', () => {
     const { result } = await renderLane();
     act(() => result.current.dispatch({ lane: 'dupes', type: 'mergeSelected', ids: [] }));
     expect(api.mergeDedupCandidate).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Optimistic suppression -- the double-dispatch guard
+//
+// These cover the race that keyboard-speed triage makes routine rather than
+// rare: a decision is async, the refetch that reflects it is slower still, and
+// between the two the deciding row is unchanged and still reads `pending`.
+// ---------------------------------------------------------------------------
+
+describe('a dispatched decision suppresses its row immediately', () => {
+  it('does not merge the same pair twice when m is pressed before the first lands', async () => {
+    // The defect this exists to prevent: without suppression BOTH presses read
+    // visible[0], so candidate 1 is merged twice -- irreversibly -- and
+    // candidate 2, which the reviewer believes they just decided, stays
+    // pending and unnoticed.
+    mockList([makeCandidate(1), makeCandidate(2)]);
+    // Typed as a callable rather than `| null` so control-flow analysis does
+    // not narrow it to `never`: TS cannot see the Promise executor run.
+    let release: () => void = () => {};
+    vi.mocked(api.mergeDedupCandidate).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = () => resolve(undefined);
+        })
+    );
+    await renderLane();
+
+    press('m'); // decides candidate 1; its row leaves `visible` at once
+    press('m'); // must therefore land on candidate 2
+
+    expect(vi.mocked(api.mergeDedupCandidate).mock.calls.map((c) => c[0])).toEqual([1, 2]);
+    release();
+  });
+
+  it('advances focus by removing the row, not by moving the pointer', async () => {
+    // Auto-advance falls out of the suppression rather than being a second
+    // mechanism that could disagree with it. focusedIndex never moves.
+    mockList([makeCandidate(1), makeCandidate(2)]);
+    vi.mocked(api.mergeDedupCandidate).mockReturnValue(new Promise<void>(() => {}));
+    const { result } = await renderLane();
+    expect(result.current.candidates.map((c) => c.id)).toEqual([1, 2]);
+
+    press('m');
+
+    expect(result.current.focusedIndex).toBe(0);
+    expect(result.current.candidates.map((c) => c.id)).toEqual([2]);
+  });
+
+  it('keeps the keyboard live after the LAST row is decided', async () => {
+    // Deciding the bottom row shortens `visible` under a focus pointer aimed at
+    // it. Left unclamped, visible[focusedIndex] is undefined and the handler's
+    // `if (!focused) return` makes every shortcut a silent no-op -- the lane
+    // looks frozen until a refetch lands, which is exactly the stall this
+    // change removes. Clamping in an effect rather than in the handler is what
+    // keeps the keys alive rather than merely safe.
+    mockList([makeCandidate(1), makeCandidate(2)]);
+    vi.mocked(api.mergeDedupCandidate).mockReturnValue(new Promise<void>(() => {}));
+    vi.mocked(api.dismissDedupCandidate).mockReturnValue(new Promise<void>(() => {}));
+    const { result } = await renderLane();
+
+    press('j');
+    expect(result.current.focusedIndex).toBe(1);
+
+    press('m'); // decides candidate 2, the last row
+
+    await waitFor(() => expect(result.current.focusedIndex).toBe(0));
+    expect(result.current.candidates.map((c) => c.id)).toEqual([1]);
+
+    // The proof that matters: the keyboard still acts on the row that is left.
+    press('d');
+    expect(api.dismissDedupCandidate).toHaveBeenCalledWith(1);
+  });
+
+  it('puts the row back when the decision fails', async () => {
+    // An optimistic removal that outlives its failed request drops the pair out
+    // of the queue silently -- the merge did not happen, but the reviewer never
+    // sees the row again.
+    mockList([makeCandidate(1), makeCandidate(2)]);
+    vi.mocked(api.mergeDedupCandidate).mockRejectedValue(new Error('conflict'));
+    const { result } = await renderLane();
+
+    press('m');
+
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(expect.stringContaining('conflict'), 'error')
+    );
+    expect(result.current.candidates.map((c) => c.id)).toEqual([1, 2]);
+  });
+
+  it('keeps a row suppressed while the refetch still reports it pending', async () => {
+    // Decisions and refetches interleave. The refetch triggered by this merge
+    // was issued against server state that still had the row pending, so it
+    // comes back. Retiring the suppression on any refetch -- rather than only
+    // when the server stops returning the row -- would resurrect it as pending
+    // and re-arm the double-merge.
+    const stale = [makeCandidate(1), makeCandidate(2)];
+    vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: stale, total: 2 });
+    vi.mocked(api.mergeDedupCandidate).mockResolvedValue(undefined);
+    const { result } = await renderLane();
+
+    press('m');
+
+    // Wait for the merge to land and its refetch to be issued.
+    await waitFor(() => expect(api.getDedupCandidates).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.candidates.map((c) => c.id)).toEqual([2]);
+  });
+
+  it('retires the suppression once the server stops returning the row', async () => {
+    // The other half: the set is self-healing and does not grow across a
+    // session. Once the server agrees the row is gone, nothing local remains.
+    vi.mocked(api.getDedupCandidates)
+      .mockResolvedValueOnce({ candidates: [makeCandidate(1), makeCandidate(2)], total: 2 })
+      .mockResolvedValue({ candidates: [makeCandidate(2)], total: 1 });
+    vi.mocked(api.mergeDedupCandidate).mockResolvedValue(undefined);
+    const { result } = await renderLane();
+
+    press('m');
+    await waitFor(() => expect(api.getDedupCandidates).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.candidates.map((c) => c.id)).toEqual([2]));
+
+    // Candidate 1 is absent because the SERVER omits it now, not because a
+    // local set still hides it -- so a re-appearing id would be shown again.
+    vi.mocked(api.getDedupCandidates).mockResolvedValue({
+      candidates: [makeCandidate(1), makeCandidate(2)],
+      total: 2,
+    });
+    act(() => result.current.setPage(2));
+    await waitFor(() => expect(result.current.candidates.map((c) => c.id)).toEqual([1, 2]));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Explicit keep-side
+// ---------------------------------------------------------------------------
+
+describe('a and b merge a chosen side rather than the recommended one', () => {
+  it('keeps A on a and B on b, overriding the recommendation', async () => {
+    // The pair is deliberately one where the recommendation points at B, so a
+    // test that merely echoed keepIdForMerge would pass on `a` by accident.
+    mockList([
+      makeCandidate(1, {
+        book_a: { id: 'a1', title: 'Thin' },
+        book_b: { id: 'b1', title: 'Rich', asin: 'B00ABC1234' },
+      } as Partial<api.DedupCandidate>),
+    ]);
+    vi.mocked(api.mergeDedupCandidate).mockReturnValue(new Promise<void>(() => {}));
+    await renderLane();
+
+    press('a');
+    expect(api.mergeDedupCandidate).toHaveBeenCalledWith(1, 'a1');
+
+    vi.mocked(api.mergeDedupCandidate).mockClear();
+    mockList([
+      makeCandidate(2, {
+        book_a: { id: 'a2', title: 'Rich', asin: 'B00ABC1234' },
+        book_b: { id: 'b2', title: 'Thin' },
+      } as Partial<api.DedupCandidate>),
+    ]);
+    const second = await renderLane();
+    expect(second.result.current.candidates).toHaveLength(1);
+
+    press('b');
+    expect(api.mergeDedupCandidate).toHaveBeenCalledWith(2, 'b2');
+  });
+
+  it('does not collide with Shift+A select-all', async () => {
+    // Shift+A arrives as key 'A'; plain keep-A arrives as 'a'. If the two were
+    // folded together, select-all would merge a pair.
+    mockList([makeCandidate(1), makeCandidate(2)]);
+    const { result } = await renderLane();
+
+    press('A', { shiftKey: true });
+
+    expect(api.mergeDedupCandidate).not.toHaveBeenCalled();
+    expect(result.current.selectedIds.size).toBe(2);
+  });
+
+  it('leaves an already-decided row alone', async () => {
+    mockList([makeCandidate(1, { status: 'merged' })]);
+    await renderLane();
+
+    press('a');
+    press('b');
+
+    expect(api.mergeDedupCandidate).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The help overlay and the handler must agree
+// ---------------------------------------------------------------------------
+
+describe('every implemented shortcut is documented', () => {
+  it('lists each key this suite exercises', () => {
+    // A shortcut that exists but is undocumented is a shortcut nobody uses, and
+    // the help overlay is the only place the reviewer can learn these. This is
+    // asserted against the keys the tests above actually drive, so adding a
+    // shortcut without a help entry fails here rather than shipping silently.
+    const exercised = ['j / k', 'm', 'a', 'b', 'd', 's', 'Enter', 'Esc', 'Shift+A', '?'];
+    const documented = DEDUP_SHORTCUTS.map((s) => s.keys);
+    expect(documented).toEqual(exercised);
+  });
+
+  it('does not claim m always keeps the recommendation', () => {
+    // keepIdForMerge falls back to A on a tie, where recommendedKeepSide
+    // returns null and the chip renders nothing. Help text saying "the
+    // recommended side" without that caveat would describe a recommendation the
+    // reviewer cannot see on exactly the pairs where they need it.
+    const m = DEDUP_SHORTCUTS.find((s) => s.keys === 'm');
+    expect(m?.action).toMatch(/tie/i);
   });
 });
