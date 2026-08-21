@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-08-20
 //
@@ -168,6 +168,7 @@ export function ReviewWorkspace() {
   const [dupesExpandedId, setDupesExpandedId] = useState<number | null>(null);
   // Rescore-with-apply asks first. See the command pair below.
   const [rescoreConfirmOpen, setRescoreConfirmOpen] = useState(false);
+  const [confirmRefetchStale, setConfirmRefetchStale] = useState(false);
   const regroup = useRegroupLane(toast, lane === 'regroup');
 
   const unmatchedCount = useMemo(
@@ -482,6 +483,16 @@ export function ReviewWorkspace() {
               isSelected={metadata.spineCtx.isSelected}
               onToggleSelect={metadata.spineCtx.onToggleSelect}
               onRefresh={metadata.refresh}
+              refetching={metadata.refetching}
+              onRefetchStale={
+                metadata.staleIds.length ? () => setConfirmRefetchStale(true) : undefined
+              }
+              onRefetchRow={(bookId) => {
+                // One row goes straight through. The confirm below exists
+                // because a bulk refetch is thousands of calls to external
+                // metadata providers; a single book is not worth a dialog.
+                void metadata.refetchBooks([bookId]);
+              }}
             />
 
             <Box sx={{ minWidth: 0, overflowY: 'auto' }}>
@@ -530,6 +541,42 @@ export function ReviewWorkspace() {
             }}
           >
             Rescore and apply
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/*
+        Refetching every stale row is one click but thousands of calls to
+        external metadata providers -- on production 5,771 of 5,774 reviewable
+        rows are stale. The count goes in the dialog because "refetch stale"
+        reads as a tidy-up until you see the number.
+      */}
+      <Dialog open={confirmRefetchStale} onClose={() => setConfirmRefetchStale(false)}>
+        <DialogTitle>Refetch {metadata.staleIds.length.toLocaleString()} stale books?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Every one of these was last fetched more than 30 days ago. Refetching queries the
+            metadata providers once per book and replaces each cached candidate list, so any
+            review decision you have not yet applied to these rows will be re-derived from the
+            new results.
+          </DialogContentText>
+          <DialogContentText sx={{ mt: 2 }}>
+            This runs as a background operation — you can keep reviewing while it works, and
+            progress shows in the operations list.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmRefetchStale(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="warning"
+            data-testid="refetch-stale-confirm"
+            onClick={() => {
+              setConfirmRefetchStale(false);
+              void metadata.refetchBooks(metadata.staleIds);
+            }}
+          >
+            Refetch {metadata.staleIds.length.toLocaleString()}
           </Button>
         </DialogActions>
       </Dialog>

@@ -1,5 +1,5 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
 // last-edited: 2026-08-20
 //
@@ -124,6 +124,16 @@ export interface QueueRailProps {
   isSelected: (id: string) => boolean;
   onToggleSelect: (id: string) => void;
   onRefresh: () => void;
+  /**
+   * Refetch every stale row in the library, not just the ones on this page.
+   * Optional so the rail still renders without a refetch path wired up; when
+   * absent the stale chip stays a plain read-out, which is what it was before.
+   */
+  onRefetchStale?: () => void;
+  /** Refetch one row. */
+  onRefetchRow?: (bookId: string) => void;
+  /** Disables both refetch affordances while a request is in flight. */
+  refetching?: boolean;
 }
 
 /**
@@ -203,6 +213,9 @@ export function QueueRail({
   isSelected,
   onToggleSelect,
   onRefresh,
+  onRefetchStale,
+  onRefetchRow,
+  refetching = false,
 }: QueueRailProps) {
   return (
     <Box
@@ -233,16 +246,37 @@ export function QueueRail({
             // MetadataCacheTTL's contract says stale entries stay readable and
             // the UI flags them; before this the review surface received no age
             // at all, so month-old candidates looked freshly fetched.
+            // The tooltip has always ended "refetch to be sure", which named a
+            // remedy the workspace had no way to reach -- the only fetch entry
+            // point was a dialog on the Library page. Clicking the chip is now
+            // that path, so the sentence stops being a suggestion the UI cannot
+            // honour.
             <Tooltip
-              title={`${summary.stale.toLocaleString()} of these were fetched more than 30 days ago. They are still reviewable, but the source may have changed since — refetch to be sure.`}
+              title={
+                `${summary.stale.toLocaleString()} of these were fetched more than 30 days ago. ` +
+                'They are still reviewable, but the source may have changed since' +
+                (onRefetchStale ? ' — click to refetch them all.' : ' — refetch to be sure.')
+              }
             >
-              <Chip
-                size="small"
-                variant="outlined"
-                color="warning"
-                icon={<HistoryIcon fontSize="small" />}
-                label={`${summary.stale.toLocaleString()} stale`}
-              />
+              {/* A disabled Chip does not fire the events Tooltip needs, so the
+                  span keeps the tooltip alive while a request is in flight. */}
+              <Box component="span" sx={{ display: 'inline-flex' }}>
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  color="warning"
+                  icon={<HistoryIcon fontSize="small" />}
+                  label={`${summary.stale.toLocaleString()} stale`}
+                  clickable={Boolean(onRefetchStale)}
+                  disabled={Boolean(onRefetchStale) && refetching}
+                  onClick={onRefetchStale}
+                  aria-label={
+                    onRefetchStale
+                      ? `Refetch ${summary.stale.toLocaleString()} stale books`
+                      : undefined
+                  }
+                />
+              </Box>
             </Tooltip>
           )}
           {summary.unreviewable > 0 && (
@@ -444,17 +478,38 @@ export function QueueRail({
                 {/* Explicitly false, not falsy: a row with no age is not a
                     stale row, and marking it as one would be a claim the
                     payload never made. */}
-                {r.is_fresh === false && (
-                  <Tooltip title={staleRowTitle(r.fetched_at)}>
-                    <Box
-                      component="span"
-                      sx={{ display: 'flex' }}
-                      aria-label={staleRowTitle(r.fetched_at)}
-                    >
-                      <HistoryIcon fontSize="small" color="warning" />
-                    </Box>
-                  </Tooltip>
-                )}
+                {r.is_fresh === false &&
+                  (onRefetchRow ? (
+                    <Tooltip title={`${staleRowTitle(r.fetched_at)} Click to refetch this book.`}>
+                      <IconButton
+                        size="small"
+                        disabled={refetching}
+                        aria-label={`Refetch metadata for ${r.book.title}`}
+                        onClick={(e) => {
+                          // Defensive, and currently a no-op: the row Box has no
+                          // onClick, so selection is driven only by the checkbox
+                          // above. Kept because this button sits inside the row's
+                          // bounds, and the day the row becomes clickable the
+                          // failure would be silent -- refetching a book would
+                          // also select it.
+                          e.stopPropagation();
+                          onRefetchRow(r.book.id);
+                        }}
+                      >
+                        <HistoryIcon fontSize="small" color="warning" />
+                      </IconButton>
+                    </Tooltip>
+                  ) : (
+                    <Tooltip title={staleRowTitle(r.fetched_at)}>
+                      <Box
+                        component="span"
+                        sx={{ display: 'flex' }}
+                        aria-label={staleRowTitle(r.fetched_at)}
+                      >
+                        <HistoryIcon fontSize="small" color="warning" />
+                      </Box>
+                    </Tooltip>
+                  ))}
                 {r.candidate && (
                   <Chip
                     size="small"

@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-08-20
 //
@@ -309,6 +309,30 @@ export interface MetadataLane {
 
   previewCover: string | null;
   setPreviewCover: (url: string | null) => void;
+
+  /**
+   * Book ids whose cached candidate is past MetadataCacheTTL.
+   *
+   * Derived here rather than in the rail because the rail only ever sees a
+   * page, and the whole point of the stale set is that it spans the library:
+   * on production 5,771 of 5,774 reviewable rows are stale, which no page can
+   * show. `results` holds every row (the lane fetches with limit=0 and
+   * paginates client-side), so the full set is available without a round trip.
+   */
+  staleIds: string[];
+  /**
+   * True while a refetch REQUEST is in flight -- not while the resulting
+   * operation runs. The op is a background job tracked by the operations list;
+   * this flag exists only to stop a second click landing before the first
+   * request has been answered.
+   */
+  refetching: boolean;
+  /**
+   * Start a metadata refetch for the given books. Resolves to the operation id,
+   * or null when nothing was started (empty input, an already-running fetch, or
+   * a failure -- all three are reported to the user by toast).
+   */
+  refetchBooks: (ids: string[]) => Promise<string | null>;
 
   /** Satisfies the spine's contract directly -- see the note on SpineContext. */
   spineCtx: SpineContext;
@@ -846,6 +870,48 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     [rowStates, selectedIds, toggleSelect, dispatch, expandedId, toggleExpand]
   );
 
+  // Explicitly `=== false`, not falsy: a row the server sent no age for is not
+  // a stale row, and sweeping it into a refetch would act on a claim the
+  // payload never made. Same predicate the per-row marker uses.
+  const staleIds = useMemo(
+    () => results.filter((r) => r.is_fresh === false).map((r) => r.book.id),
+    [results]
+  );
+
+  const [refetching, setRefetching] = useState(false);
+  const refetchBooks = useCallback(
+    async (ids: string[]): Promise<string | null> => {
+      // Defensive depth on the hook's public surface, not a UI path: both
+      // callers are gated (the chip on staleIds.length, the row on one id), so
+      // no interaction can reach this and no component test covers it. It stays
+      // because `refetchBooks` is exported on MetadataLane and an empty POST is
+      // a worse failure than an early return.
+      if (!ids.length) return null;
+      setRefetching(true);
+      try {
+        const resp = await api.batchFetchCandidates({ book_ids: ids });
+        if (!resp.operation_id) {
+          // The server declining to start is not a failure: it means these
+          // books are already in a running fetch. Say which it was.
+          toast(resp.message ?? 'Those books are already being fetched.', 'info');
+          return null;
+        }
+        toast(
+          `Refetching metadata for ${ids.length.toLocaleString()} book${ids.length !== 1 ? 's' : ''} — ` +
+            'watch the operations list for progress.',
+          'info'
+        );
+        return resp.operation_id;
+      } catch {
+        toast('Failed to start the metadata refetch.', 'error');
+        return null;
+      } finally {
+        setRefetching(false);
+      }
+    },
+    [toast]
+  );
+
   return {
     loading,
     results,
@@ -871,6 +937,9 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     allVisiblePendingIds,
     previewCover,
     setPreviewCover,
+    staleIds,
+    refetching,
+    refetchBooks,
     spineCtx,
     dispatch,
     refresh,
