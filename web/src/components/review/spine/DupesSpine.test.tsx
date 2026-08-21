@@ -1,23 +1,45 @@
 // file: web/src/components/review/spine/DupesSpine.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b6d9e40-51c8-4a37-8f92-c704a1d5e836
-// last-edited: 2026-08-20
+// last-edited: 2026-08-21
 //
-// Covers the signal chips on a dupes row.
+// Covers the signal chips on a dupes row, plus (Task 8) the dual-path display
+// wired into BookSide.
 //
-// Written because a mutation exposed the gap: deleting the entire chip-render
-// block left all 687 other tests green. `primarySignals` was well covered as a
-// function, which proves nothing about whether a chip reaches the screen -- and
-// reaching the screen is the whole feature, since its purpose is to answer
-// "why is this pair here" WITHOUT the reviewer expanding anything.
-
-import { describe, expect, it, vi } from 'vitest';
+// The chip coverage was written because a mutation exposed the gap: deleting
+// the entire chip-render block left all 687 other tests green. `primarySignals`
+// was well covered as a function, which proves nothing about whether a chip
+// reaches the screen -- and reaching the screen is the whole feature, since its
+// purpose is to answer "why is this pair here" WITHOUT the reviewer expanding
+// anything.
+//
+// Task 8 wired PathLinks into BookSide, which pulls in usePathVars()
+// (formatPath.ts) and usePathAliases() (PathLinks.tsx) -- both call
+// api.getConfig() independently, and DupesSpine now calls usePathAliases()
+// itself once and threads it down as a prop. Automock the module and supply
+// path_aliases so the derived Windows/UNC rows have something to match;
+// without this the real apiFetch call resolves via the generic {} fallback in
+// src/test/setup.ts, which yields path_aliases: [] and a POSIX-only render
+// (harmless for the chip tests above, which don't set file_path, but wrong for
+// the wiring tests below that do).
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { ThemeProvider } from '@mui/material/styles';
 import { MemoryRouter } from 'react-router-dom';
 import { DupesSpine, type DupesSpineContext } from './DupesSpine';
 import { appTheme } from '../../../theme';
-import type { DedupCandidate } from '../../../services/api';
+import * as api from '../../../services/api';
+import type { Config, DedupCandidate, PathAlias } from '../../../services/api';
+
+vi.mock('../../../services/api');
+
+const ALIASES: PathAlias[] = [
+  { root: '/library/books', windows: 'W:', unc: '\\\\host\\books', smb_url: 'smb://host/books' },
+];
+
+beforeEach(() => {
+  vi.mocked(api.getConfig).mockResolvedValue({ root_dir: '', path_aliases: ALIASES } as Config);
+});
 
 function candidate(over: Partial<DedupCandidate> = {}): DedupCandidate {
   return {
@@ -127,5 +149,55 @@ describe('signal chips on a dupes row', () => {
     expect(screen.getByTestId('signal-chip-some_future_collector')).toHaveTextContent(
       'some_future_collector'
     );
+  });
+});
+
+describe('dual-path display on a dupes row', () => {
+  it('renders a monospace path row with its copy button when file_path is set', () => {
+    renderSpine([
+      candidate({
+        book_a: { id: 'a1', title: 'Book A', file_path: '/library/books/a.m4b' },
+      } as unknown as Partial<DedupCandidate>),
+    ]);
+
+    const copyButton = screen.getByRole('button', { name: 'Copy Linux path' });
+    expect(copyButton).toBeInTheDocument();
+    const pathText = screen.getByText('/library/books/a.m4b');
+    expect(getComputedStyle(pathText).fontFamily).toBe('monospace');
+  });
+
+  it('threads pathAliases through so the Windows and UNC rows actually render', async () => {
+    // The POSIX row renders even with an empty aliases array (see the test
+    // above, and PathLinks's own renderPath, which always emits it), so a
+    // test that only checked for the POSIX row would still pass if DupesSpine
+    // never wired usePathAliases() through CandidateRow to BookSide at all --
+    // that is exactly the regression this test exists to catch. Only the
+    // Windows/UNC rows are proof the alias actually reached PathLinks and
+    // matched. usePathAliases() resolves asynchronously (a useEffect around
+    // the mocked getConfig() promise), so this awaits the rows rather than
+    // asserting synchronously.
+    renderSpine([
+      candidate({
+        book_a: { id: 'a1', title: 'Book A', file_path: '/library/books/Author/Title/x.m4b' },
+      } as unknown as Partial<DedupCandidate>),
+    ]);
+
+    expect(await screen.findByRole('button', { name: 'Copy Windows path' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy UNC path' })).toBeInTheDocument();
+  });
+
+  it('renders no path row, and does not crash, when the book is missing', () => {
+    renderSpine([candidate({ book_a: null } as unknown as Partial<DedupCandidate>)]);
+
+    expect(screen.getByTestId('dupes-spine')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /copy/i })).not.toBeInTheDocument();
+  });
+
+  it('renders no path row, and does not crash, when file_path is absent', () => {
+    // The default candidate() fixture has book_a/book_b with no file_path.
+    renderSpine([candidate()]);
+
+    expect(screen.getByTestId('dupes-spine')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /copy/i })).not.toBeInTheDocument();
   });
 });

@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/DupesSpine.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c4e7b21-6a58-4d03-8b7f-1e5d2a9c6403
-// last-edited: 2026-08-20
+// last-edited: 2026-08-21
 //
 // The duplicate-candidate renderer: book against book.
 //
@@ -30,13 +30,14 @@ import {
   Typography,
 } from '@mui/material';
 import StarIcon from '@mui/icons-material/Star';
-import type { Book, DedupCandidate } from '../../../services/api';
+import type { Book, DedupCandidate, PathAlias } from '../../../services/api';
 import type { DupesAction } from '../reviewActions';
 import { dedupEvidence } from '../evidence/adapters';
 import { primarySignals } from '../evidence/signalLabels';
 import { EvidencePanel } from '../evidence/EvidencePanel';
 import { FolderFilesChip } from '../../dedup/FolderFilesChip';
 import { metadataQuality, qualityBand, recommendedKeepSide } from '../lanes/keepDecision';
+import { PathLinks, usePathAliases } from '../../common/PathLinks';
 import type { SpineViewMode } from './CompareSpine';
 
 export interface DupesSpineContext {
@@ -91,10 +92,12 @@ function BookSide({
   book,
   id,
   recommended,
+  pathAliases,
 }: {
   book: Book | null | undefined;
   id: string;
   recommended: boolean;
+  pathAliases: PathAlias[];
 }) {
   const missing = !book;
   const path = book?.file_path ?? '';
@@ -174,23 +177,7 @@ function BookSide({
           </Typography>
         )}
 
-        {path && (
-          <Tooltip title={path} placement="bottom-start">
-            <Typography
-              variant="caption"
-              sx={{
-                color: 'text.secondary',
-                fontFamily: 'monospace',
-                fontSize: '0.72rem',
-                lineHeight: 1.2,
-                wordBreak: 'break-all',
-                opacity: 0.75,
-              }}
-            >
-              {path}
-            </Typography>
-          </Tooltip>
-        )}
+        {path && <PathLinks path={path} aliases={pathAliases} />}
 
         {!missing && (
           <Box>
@@ -207,11 +194,13 @@ function CandidateRow({
   ctx,
   twoColumn,
   index,
+  pathAliases,
 }: {
   candidate: DedupCandidate;
   ctx: DupesSpineContext;
   twoColumn: boolean;
   index: number;
+  pathAliases: PathAlias[];
 }) {
   const rec = recommendedKeepSide(candidate);
   const decided = candidate.status !== 'pending';
@@ -303,11 +292,13 @@ function CandidateRow({
           book={candidate.book_a}
           id={candidate.entity_a_id}
           recommended={rec?.label === 'A'}
+          pathAliases={pathAliases}
         />
         <BookSide
           book={candidate.book_b}
           id={candidate.entity_b_id}
           recommended={rec?.label === 'B'}
+          pathAliases={pathAliases}
         />
       </Stack>
 
@@ -371,6 +362,10 @@ export function DupesSpine({
   deepLinkedBookId,
 }: DupesSpineProps) {
   const twoColumn = viewMode === 'two-column';
+  // Called once here and threaded down to every row as a plain prop, matching
+  // CompareSpine/RegroupSpine -- the render-only CandidateRow/BookSide pair
+  // stays pure and doesn't each re-fetch config on its own.
+  const pathAliases = usePathAliases();
 
   if (candidates.length === 0) {
     return (
@@ -391,7 +386,14 @@ export function DupesSpine({
   return (
     <Box data-testid="dupes-spine" data-view-mode={viewMode} sx={{ p: 1 }}>
       {candidates.map((c, i) => (
-        <CandidateRow key={c.id} candidate={c} ctx={ctx} twoColumn={twoColumn} index={i} />
+        <CandidateRow
+          key={c.id}
+          candidate={c}
+          ctx={ctx}
+          twoColumn={twoColumn}
+          index={i}
+          pathAliases={pathAliases}
+        />
       ))}
     </Box>
   );
