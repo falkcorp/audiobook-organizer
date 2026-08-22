@@ -133,13 +133,14 @@ re-measured since; do not read as current state.**):
 | Stage | exact-pending | total-pending | dismissed |
 |---|---|---|---|
 | baseline (2026-07-17 baseline figures) | 9,074 | 10,319 | 1,351 |
-| after title-repair (555) + breakdown-backfill (9,421) | 9,074 | 10,319 | 1,351 |
+| after title-repair (555) + breakdown-backfill (9,421) — still at the 2026-07-17 baseline | 9,074 | 10,319 | 1,351 |
 | **after triage purge-apply** (classified purgeable=**7,891**, keep=278, review=2,150 → **dismissed=7,891**, `dismiss_errors=0`) | **1,183** | 2,428 | 9,242 |
 | after purge-stale | 1,181 | 2,426 | 9,242 |
 | **final** after full-scan (embedding re-emission) | **1,311** | 2,554 | 9,242 |
 
-**Net on prod, 2026-07-18: exact-pending 9,074 → 1,311 (−85.5%); total-pending
-10,319 → 2,554 (−75%); 7,891 title-leak/stub junk candidates dismissed, 0 errors.**
+**Net on prod, 2026-07-18: exact-pending 9,074 (the 2026-07-17 baseline) → 1,311
+(−85.5%); total-pending 10,319 (the 2026-07-17 baseline) → 2,554 (−75%); 7,891
+title-leak/stub junk candidates dismissed, 0 errors.**
 Prod healthy post-run. The dismissals are reversible; no books or files were
 deleted.
 
