@@ -1,5 +1,5 @@
 // file: internal/server/server_ops_store.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
 // last-edited: 2026-08-22
 
@@ -17,9 +17,11 @@ import (
 // the dominant `store := s.Ops(); store.X()` idiom is followed -- 271 of 315
 // uses are not immediately dotted and a grep cannot see them): the 216 call
 // sites in this package invoked exactly 88 methods, out of database.Store's 398.
-// It is 89 now — runMaintenanceJob added DeleteOperationWithLogs to clean up a
-// v1 row whose enqueue merged into an already-active run. The 216 figure is the
-// original measurement and has not been re-taken.
+// It is 90 now — runMaintenanceJob added DeleteOperationWithLogs to clean up a
+// v1 row whose enqueue merged into an already-active run, and the periodic
+// session sweep added DeleteExpiredABSSessions so ABS sessions expire on the
+// same schedule as auth sessions. The 216 figure is the original measurement
+// and has not been re-taken.
 //
 // 🔑 WHY THIS IS NOT THE WHOLE STORY, and why storeForWiring still exists.
 // Narrowing this accessor does NOT narrow what the wiring sites can reach. Those
