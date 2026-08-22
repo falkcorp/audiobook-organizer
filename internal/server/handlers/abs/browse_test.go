@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8b3e10c4-6d97-4a52-bf08-2e4c95d7130a
 // last-edited: 2026-08-22
 
@@ -424,6 +424,37 @@ func TestSearch_EmptyQueryIsEmptyResultNotError(t *testing.T) {
 	}
 	if n := len(body.(map[string]any)["book"].([]any)); n != 0 {
 		t.Fatalf("empty query must match nothing, got %d", n)
+	}
+}
+
+// TestSearch_NarratorsOmitNumBooks verifies that narrator objects in search
+// results do not include a numBooks field — the field must be omitted entirely,
+// not present with a value of 0, per ABS contract.
+func TestSearch_NarratorsOmitNumBooks(t *testing.T) {
+	h, seed, tok := newBrowseHarness(t)
+	// Attach a narrator to a book so it appears in search results
+	seed.lib.attachNarrators(seed.singleID, "Samuel Butler")
+
+	code, body := h.doAny(t, request{
+		method: http.MethodGet, path: "/api/libraries/" + h.libraryID() + "/search?q=samuel",
+		headers: bearer(tok),
+	})
+	if code != http.StatusOK {
+		t.Fatalf("got %d want 200", code)
+	}
+
+	resp := body.(map[string]any)
+	narrators := resp["narrators"].([]any)
+	if len(narrators) == 0 {
+		t.Fatalf("expected at least one narrator in search results for 'samuel'")
+	}
+
+	// Verify that none of the narrator objects contain a numBooks field
+	for i, n := range narrators {
+		narrator := n.(map[string]any)
+		if _, ok := narrator["numBooks"]; ok {
+			t.Errorf("narrator[%d] must not contain 'numBooks' field, but it does: %v", i, narrator)
+		}
 	}
 }
 
