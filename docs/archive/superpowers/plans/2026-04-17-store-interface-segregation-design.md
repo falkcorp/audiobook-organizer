@@ -1,6 +1,7 @@
-<!-- file: docs/superpowers/specs/2026-04-17-store-interface-segregation-design.md -->
+<!-- file: docs/archive/superpowers/plans/2026-04-17-store-interface-segregation-design.md -->
 <!-- version: 1.0.0 -->
 <!-- guid: 6915fa3e-b5ea-4e39-98f0-45aa8548ce1e -->
+<!-- last-edited: 2026-08-22 -->
 
 # Store Interface Segregation — Design
 
