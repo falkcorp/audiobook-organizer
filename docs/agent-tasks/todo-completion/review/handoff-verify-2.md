@@ -1,3 +1,8 @@
+<!-- file: docs/agent-tasks/todo-completion/review/handoff-verify-2.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 5f7f3b3b-e46d-41a9-aa55-df15705e20bf -->
+<!-- last-edited: 2026-08-22 -->
+
 # Handoff — verify-2 (group 2: database, misc-go, operations)
 
 ## Briefs examined (full read + verdict written to patches/verify-2.json)

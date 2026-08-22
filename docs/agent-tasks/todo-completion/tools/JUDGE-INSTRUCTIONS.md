@@ -1,3 +1,8 @@
+<!-- file: docs/agent-tasks/todo-completion/tools/JUDGE-INSTRUCTIONS.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: cb66ecbd-cf2e-4510-9a13-a621943e19d3 -->
+<!-- last-edited: 2026-08-22 -->
+
 # Design-judge instructions (adversarial, read-only)
 
 You are an adversarial reviewer of a planning package, through ONE lens (given in your prompt). Attack it; do not praise it. Materials (all read-only):

@@ -1,3 +1,8 @@
+<!-- file: docs/agent-tasks/todo-completion/tools/SCOUT-INSTRUCTIONS.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 73c72577-4553-4432-91dd-0f34b354e8d4 -->
+<!-- last-edited: 2026-08-22 -->
+
 # Scout instructions (read-only — you NEVER edit repo files)
 
 Repo: /Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer  (branch main, HEAD 8f6d0d99). Go backend + React/TS frontend (web/).
