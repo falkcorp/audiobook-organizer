@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-010-add-top-level-permissions-blocks-to-the-3-workfl.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 16447904-8714-498f-aec6-93a04920d0f1 -->
+<!-- guid: 7d8cdd30-5711-4aca-98ed-d3ba4973b12d -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-010 — Add top-level `permissions:` blocks to the 3 workflows flagged by actions/missing-workflow-permissions (SEC-CODEQL-BACKLOG)
 
-**Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · ci-tooling subagent · **Why:** Mechanical, 3 files, same fix pattern each time — add a minimal top-level permissions block scoped to what the workflow's steps actually need. · **Depends on:** none · **Wave:** 2
+**Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · ci-tooling subagent · **Why:** Mechanical, 3 files, same fix pattern each time — add a minimal top-level permissions block scoped to what the workflow's steps actually need. · **Depends on:** none · **Wave:** 1
 
 Source: `TODO.md` line 2595 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**SEC-CODEQL-BACKLOG**" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-04.json`.
 

@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-186-measure-the-real-double-primary-rate-library-wid.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 8721282d-6eb7-497e-9dab-899129181d3a -->
+<!-- guid: 60ebc4ce-f428-47d6-a045-7aeda47f5924 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-186 — Measure the real double-primary rate library-wide, then build the demote-extras sibling of ElectMissingPrimaries (VG-DOUBLE-PRIMARY)
 
-**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · misc-go subagent · **Why:** Report + repair op following an existing, well-documented, in-repo sibling pattern (ElectMissingPrimaries) -- moderate size, low novelty once the exact reuse target (electPrimaryFor) is identified. · **Depends on:** none · **Wave:** 5 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · misc-go subagent · **Why:** Report + repair op following an existing, well-documented, in-repo sibling pattern (ElectMissingPrimaries) -- moderate size, low novelty once the exact reuse target (electPrimaryFor) is identified. · **Depends on:** none · **Wave:** 6 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 2373 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**VG-DOUBLE-PRIMARY**" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-17-rescope.json`.
 

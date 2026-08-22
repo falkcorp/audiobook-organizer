@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-014-remove-committed-mtls-bridge-build-artifact-and-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 4af33339-4e73-4e09-b106-8b8d041aac0d -->
+<!-- guid: 9b0fba50-a850-488e-bdc8-b29ef9ea3a85 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-014 — Remove committed mtls-bridge build artifact and gitignore it (REPO-SIZE-1)

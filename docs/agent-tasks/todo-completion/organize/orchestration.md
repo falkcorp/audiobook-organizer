@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/organize/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 2c5b668b-0d15-49a3-8502-89ada879cbfb -->
+<!-- guid: 950fb59a-952e-48f1-87da-7dee1bdd0c0d -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — organize workstream (todo-completion)
@@ -19,7 +19,11 @@ flowchart LR
     subgraph Wave2
       TASK120[TASK-120 route-the-three-organize-ren]
     end
+    subgraph Wave4
+      TASK203[TASK-203 add-a-detection-only-counter]
+    end
     TASK119 --> TASK120
+    TASK121 --> TASK203
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -28,7 +32,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/metafetch/... ./internal/organizer/... -count=1 ; go build ./... && go vet ./... && go test ./internal/organizer/... -count=1`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/metafetch/... ./internal/organizer/... -count=1 ; go build ./... && go vet ./... && go test ./internal/metrics/... ./internal/organizer/... -count=1 ; go build ./... && go vet ./... && go test ./internal/organizer/... -count=1`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

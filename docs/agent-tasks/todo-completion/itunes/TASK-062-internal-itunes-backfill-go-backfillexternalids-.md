@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/TASK-062-internal-itunes-backfill-go-backfillexternalids-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 4e97d543-2a08-4141-8e84-9412aad31221 -->
+<!-- guid: 5bfb8921-9cb5-4813-bb8b-0e2c4f436c39 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-062 — internal/itunes/backfill.go BackfillExternalIDs: replace offset pagination with GetAllBooksFullFrom cursor (PERF-5)

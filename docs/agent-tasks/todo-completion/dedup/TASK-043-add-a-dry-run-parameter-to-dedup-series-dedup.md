@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-043-add-a-dry-run-parameter-to-dedup-series-dedup.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 56bc26ca-95b9-48aa-a4a4-d79fcb18ea15 -->
+<!-- guid: 3c376abe-b055-48d2-9fe8-4be1e0014270 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-043 — Add a dry-run parameter to dedup.series-dedup (TODO.md L3966)

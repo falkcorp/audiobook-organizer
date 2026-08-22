@@ -30,6 +30,11 @@
   "fails": []
  },
  {
+  "brief": "docs/agent-tasks/todo-completion/audiobooks/TASK-190-root-cause-and-fix-show-quarantined-true-silentl.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
   "brief": "docs/agent-tasks/todo-completion/ci-tooling/TASK-006-add-a-scheduled-detect-only-backstop-workflow-fo.md",
   "greps": 4,
   "fails": []
@@ -37,11 +42,6 @@
  {
   "brief": "docs/agent-tasks/todo-completion/ci-tooling/TASK-007-wire-scripts-test-check-memory-leaks-py-into-a-c.md",
   "greps": 3,
-  "fails": []
- },
- {
-  "brief": "docs/agent-tasks/todo-completion/ci-tooling/TASK-008-bump-the-github-common-reusable-workflow-pins-in-at-l.md",
-  "greps": 2,
   "fails": []
  },
  {
@@ -77,6 +77,11 @@
  {
   "brief": "docs/agent-tasks/todo-completion/ci-tooling/TASK-015-stop-committing-series-dedup-py-s-generated-dump.md",
   "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/ci-tooling/TASK-191-bump-the-github-common-reusable-workflow-pins-in.md",
+  "greps": 2,
   "fails": []
  },
  {
@@ -275,6 +280,16 @@
   "fails": []
  },
  {
+  "brief": "docs/agent-tasks/todo-completion/dedup/TASK-192-clamp-composescore-against-per-kind-confidence-b.md",
+  "greps": 8,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/dedup/TASK-193-wire-round-2-confidence-bound-clamping-into-a-di.md",
+  "greps": 11,
+  "fails": []
+ },
+ {
   "brief": "docs/agent-tasks/todo-completion/docs/TASK-051-delete-the-34-group-relative-duplicate-paths-fro.md",
   "greps": 1,
   "fails": []
@@ -316,7 +331,7 @@
  },
  {
   "brief": "docs/agent-tasks/todo-completion/docs/TASK-059-close-out-the-2026-05-01-re-audit-block-test-2-d.md",
-  "greps": 7,
+  "greps": 8,
   "fails": []
  },
  {
@@ -332,6 +347,11 @@
  {
   "brief": "docs/agent-tasks/todo-completion/docs/TASK-183-write-file-header-for-the-35-current-live-docs-s.md",
   "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/docs/TASK-194-harden-the-systemd-unit-protectsystem-strict-rea.md",
+  "greps": 4,
   "fails": []
  },
  {
@@ -435,6 +455,11 @@
   "fails": []
  },
  {
+  "brief": "docs/agent-tasks/todo-completion/maintenance/TASK-195-add-a-zero-size-bucket-to-maintenance-missing-fi.md",
+  "greps": 8,
+  "fails": []
+ },
+ {
   "brief": "docs/agent-tasks/todo-completion/metadata/TASK-079-route-scoreoneresultwithbreakdown-s-base-0-path-.md",
   "greps": 5,
   "fails": []
@@ -446,6 +471,11 @@
  },
  {
   "brief": "docs/agent-tasks/todo-completion/metadata/TASK-081-prefix-metadata-apply-activity-summaries-with-th.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/metadata/TASK-196-build-an-async-fanned-out-background-operation-f.md",
   "greps": 5,
   "fails": []
  },
@@ -487,6 +517,11 @@
  {
   "brief": "docs/agent-tasks/todo-completion/misc-go/TASK-186-measure-the-real-double-primary-rate-library-wid.md",
   "greps": 7,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/misc-go/TASK-197-audit-every-registry-runitems-caller-s-custom-la.md",
+  "greps": 3,
   "fails": []
  },
  {
@@ -620,6 +655,31 @@
   "fails": []
  },
  {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-198-diagnose-and-fix-scan-import-organize-spec-ts-s-.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-199-render-library-sub-nav-items-in-progress-finishe.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-200-build-the-tiered-per-file-intro-transcription-ba.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-201-wire-per-file-intro-classification-into-the-regr.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-202-wire-per-file-intro-classification-into-first-ai.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
   "brief": "docs/agent-tasks/todo-completion/operations/TASK-115-distinguish-nothing-to-cancel-from-cancelled-in-.md",
   "greps": 5,
   "fails": []
@@ -657,6 +717,11 @@
  {
   "brief": "docs/agent-tasks/todo-completion/organize/TASK-122-add-an-edition-suffix-folder-pattern-token.md",
   "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/organize/TASK-203-add-a-detection-only-counter-structured-log-for-.md",
+  "greps": 7,
   "fails": []
  },
  {
@@ -760,6 +825,16 @@
   "fails": []
  },
  {
+  "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-212-add-get-api-libraries-libraryid-series-seriesid-.md",
+  "greps": 8,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-213-replace-the-single-file-organizebook-call-in-fil.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
   "brief": "docs/agent-tasks/todo-completion/server/TASK-127-log-abs-api-enabled-s-actual-boot-time-value-unc.md",
   "greps": 3,
   "fails": []
@@ -832,6 +907,46 @@
  {
   "brief": "docs/agent-tasks/todo-completion/server/TASK-141-add-regression-tests-for-the-2-untested-deluge-h.md",
   "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-204-guard-testserverstartgracefulshutdown-s-sigterm-.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-205-replace-testserverstartgracefulshutdown-s-fixed-.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-206-split-or-speed-up-the-internal-server-test-packa.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-207-duplicate-reference-internal-server-pkg-stall-st.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-208-migrate-internal-server-test-fixtures-to-setupte.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-209-migrate-internal-server-test-fixtures-to-setupte.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-210-migrate-internal-server-test-fixtures-to-setupte.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-211-migrate-internal-server-test-fixtures-to-setupte.md",
+  "greps": 3,
   "fails": []
  },
  {

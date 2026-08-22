@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 49692306-d5af-4fe2-8eb3-535e6bd24d28 -->
+<!-- guid: 2d0e2bb2-7f78-4cc4-b659-f77be3caee94 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — ci-tooling workstream (todo-completion)
@@ -14,18 +14,18 @@ flowchart LR
     subgraph Wave1
       TASK006[TASK-006 add-a-scheduled-detect-only-]
       TASK007[TASK-007 wire-scripts-test-check-memo]
-      TASK008[TASK-008 bump-the-github-common-reusable-w]
       TASK009[TASK-009 teach-the-abs-fixture-captur]
+      TASK010[TASK-010 add-top-level-permissions-bl]
       TASK011[TASK-011 pin-sha256-checksums-for-doc]
       TASK012[TASK-012 scripts-setup-prometheus-aut]
       TASK013[TASK-013 build-a-report-only-scan-for]
       TASK014[TASK-014 remove-committed-mtls-bridge]
     end
     subgraph Wave2
-      TASK010[TASK-010 add-top-level-permissions-bl]
+      TASK191[TASK-191 bump-the-github-common-reusa]
       TASK015[TASK-015 stop-committing-series-dedup]
     end
-    TASK008 --> TASK010
+    TASK010 --> TASK191
     TASK014 --> TASK015
 ```
 

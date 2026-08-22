@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-177-add-a-per-test-deadline-context-withtimeout-to-i.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 3628e30c-a326-42d0-b9b3-afcc190ee8f6 -->
+<!-- guid: 02d550f6-e495-4a5c-983c-769c9c804292 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-177 — Add a per-test deadline (context.WithTimeout) to internal/database's riskiest unbounded-wait test helpers (TODO.md L235)

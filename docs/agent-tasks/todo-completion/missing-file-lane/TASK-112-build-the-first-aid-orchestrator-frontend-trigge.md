@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-112-build-the-first-aid-orchestrator-frontend-trigge.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: da1a03b3-1358-4334-9e8d-6f2dc1814f6a -->
+<!-- guid: a9f1ff8f-a43f-46fe-8d61-655ae2c24387 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-112 — Build the First Aid orchestrator + frontend trigger button (dry-run by default, no schedule) (TODO.md L8890)
 
-**Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · missing-file-lane subagent · **Why:** sequencing/orchestration across a dozen-plus existing ops with a convergence (re-investigate after fixers) loop and a new frontend surface — architecturally significant even though most called ops already exist · **Depends on:** TASK-113 · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · missing-file-lane subagent · **Why:** sequencing/orchestration across a dozen-plus existing ops with a convergence (re-investigate after fixers) loop and a new frontend surface — architecturally significant even though most called ops already exist · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 8890 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**\"First Aid\" — one sequenced library validate + r" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-12.json`.
 

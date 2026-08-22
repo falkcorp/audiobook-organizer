@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 870656a9-b6e2-45e4-b48c-be3e31237ad0 -->
+<!-- guid: a5e812e4-1788-41b0-bf50-571ee9147d33 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — audiobooks workstream (todo-completion)
@@ -16,25 +16,32 @@ flowchart LR
       TASK005[TASK-005 wire-onlyparsedtranscription]
     end
     subgraph Wave2
-      TASK002[TASK-002 fix-the-3-way-disagreement-i]
+      TASK190[TASK-190 root-cause-and-fix-show-quar]
     end
     subgraph Wave3
       TASK001[TASK-001 add-a-short-ttl-cache-to-the]
     end
     subgraph Wave4
-      TASK003[TASK-003 fix-the-author-path-post-fil]
+      TASK002[TASK-002 fix-the-3-way-disagreement-i]
     end
     subgraph Wave5
+      TASK003[TASK-003 fix-the-author-path-post-fil]
+    end
+    subgraph Wave6
       TASK004[TASK-004 add-a-conformance-test-asser]
     end
+    TASK001 --> TASK002
     TASK001 --> TASK003
-    TASK002 --> TASK001
     TASK002 --> TASK003
     TASK003 --> TASK004
     TASK005 --> TASK001
     TASK005 --> TASK002
     TASK005 --> TASK003
+    TASK005 --> TASK190
     TASK023 --> TASK001
+    TASK190 --> TASK001
+    TASK190 --> TASK002
+    TASK190 --> TASK003
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -43,7 +50,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/audiobooks/... -count=1 ; go build ./... && go vet ./... && go test ./internal/audiobooks/... ./internal/server/handlers/audiobooks/... -count=1 ; go build ./... && go vet ./... && go test ./tools/cmd/orphan-nonprimary-census/... -count=1`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/audiobooks/... -count=1 ; go build ./... && go vet ./... && go test ./internal/audiobooks/... ./internal/database/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/audiobooks/... ./internal/server/handlers/audiobooks/... -count=1 ; go build ./... && go vet ./... && go test ./tools/cmd/orphan-nonprimary-census/... -count=1`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

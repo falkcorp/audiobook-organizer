@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/config/TASK-021-scan-and-fingerprint-the-assembled-source-downlo.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 73bf925f-cd41-4ad9-991c-6dfbb4fc3ad7 -->
+<!-- guid: bfa6a086-1d69-49d0-8fbe-25c6c70f8388 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-021 — Scan and fingerprint the assembled-source download root as a read-only reference corpus (TODO.md L10750)

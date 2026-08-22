@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-048-physically-co-locate-a-combine-survivor-s-files-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f2112318-6557-442f-a1b7-9c5d353d580d -->
+<!-- guid: 2681fbce-6ce7-41a4-983d-645feda3e58d -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-048 — Physically co-locate a Combine survivor's files under RootDir after CombineBooks (AP-1b)

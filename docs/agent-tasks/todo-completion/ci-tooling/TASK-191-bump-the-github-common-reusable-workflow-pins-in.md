@@ -1,11 +1,11 @@
-<!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-008-bump-the-github-common-reusable-workflow-pins-in-at-l.md -->
+<!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-191-bump-the-github-common-reusable-workflow-pins-in.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 625facea-abd0-48ad-89ed-db5e0290a7a7 -->
+<!-- guid: 5621202d-0ac6-4089-9f5a-16b2556241bd -->
 <!-- last-edited: 2026-08-21 -->
 
-# TASK-008 — Bump the github-common reusable-workflow pins in at least two PRs, low-consequence first (TODO.md L921)
+# TASK-191 — Bump the github-common reusable-workflow pins in at least two PRs, low-consequence first (TODO.md L921)
 
-**Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · ci-tooling subagent · **Why:** mechanical version-pin bumps across 8 files but requires splitting into >=2 sequenced PRs with a nightly-run wait between the low- and high-consequence groups, which is process/sequencing work, not pure mechanics · **Depends on:** none · **Wave:** 1
+**Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · ci-tooling subagent · **Why:** mechanical version-pin bumps across 8 files but requires splitting into >=2 sequenced PRs with a nightly-run wait between the low- and high-consequence groups, which is process/sequencing work, not pure mechanics · **Depends on:** none · **Wave:** 2
 
 Source: `TODO.md` line 921 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**at least two PRs**" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-02.json`.
 
@@ -15,8 +15,8 @@ Source: `TODO.md` line 921 as of commit 46628240 (later edits shift lines) — r
 # ⛔ START HERE — do not touch code before this block succeeds
 REPO=/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer   # adjust to your clone
 git -C "$REPO" fetch origin
-git -C "$REPO" worktree add "$REPO/.worktrees/ci-tooling-008-bump-the-github-common-reusable-workflow-pins-in-at-l" -b agent/ci-tooling-008-bump-the-github-common-reusable-workflow-pins-in-at-l origin/main
-cd "$REPO/.worktrees/ci-tooling-008-bump-the-github-common-reusable-workflow-pins-in-at-l"
+git -C "$REPO" worktree add "$REPO/.worktrees/ci-tooling-191-bump-the-github-common-reusable-workflow-pins-in" -b agent/ci-tooling-191-bump-the-github-common-reusable-workflow-pins-in origin/main
+cd "$REPO/.worktrees/ci-tooling-191-bump-the-github-common-reusable-workflow-pins-in"
 git rebase origin/main
 # Go task: do NOT run 'go work init .' — it breaks the build (ambiguous genproto imports)
 ```
@@ -52,7 +52,7 @@ Bump all 7 stale falkcorp/github-common SHA pins to the current main SHA, split 
 Then, always:
 - Keep the change purely transform — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
 - Bump the file header (`version` + `last-edited: 2026-08-21`) on every file you touch; keep existing guids. New files get a fresh guid (`uuidgen | tr A-Z a-z`).
-- Add a changelog fragment `changelog.d/20260821_ci-tooling_008.md` (NO file header; format per `changelog.d/README.md`: a `### Fixed|Changed|Added` heading, a `####` title, one paragraph).
+- Add a changelog fragment `changelog.d/20260821_ci-tooling_191.md` (NO file header; format per `changelog.d/README.md`: a `### Fixed|Changed|Added` heading, a `####` title, one paragraph).
 - Do NOT edit `TODO.md` — the coordinator closes the source item in one commit per wave (every brief in a wave would otherwise collide on it). In your final report, state the exact `TODO.md` line text to check off. Never add new TODO items directly — use a `todo.d/` fragment (no header).
 
 ### Edge-case semantics (conservative defaults — treat unknown as unknown, never as disqualifying)
@@ -80,12 +80,12 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only'` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
-- [ ] Changelog fragment present: `test -f changelog.d/20260821_ci-tooling_008.md`.
+- [ ] Changelog fragment present: `test -f changelog.d/20260821_ci-tooling_191.md`.
 
 ## Commit message
 
 ```
-refactor(ci-tooling): Bump the github-common reusable-workflow pins in at least two PRs (TODO L921)
+refactor(ci-tooling): Bump the github-common reusable-workflow pins in at least tw (TODO L921)
 
 <why the change was needed; what it protects; what it deliberately does NOT change>
 

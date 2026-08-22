@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 89bd954d-5d73-48ca-8965-d6e8eacfb6af -->
+<!-- guid: b121909c-fb62-4873-bb9c-0e95e57ab964 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — dedup (todo-completion)
 
-13 tasks projected from the 2026-08-21 TODO-completion skeleton (`../skeleton.json`). Every fact here is a projection of that skeleton — edit the skeleton and regenerate, never this file.
+15 tasks projected from the 2026-08-21 TODO-completion skeleton (`../skeleton.json`). Every fact here is a projection of that skeleton — edit the skeleton and regenerate, never this file.
 
 | Task | TODO id | Title | Priority | Effort | Tier | Wave |
 |------|---------|-------|----------|--------|------|------|
@@ -19,37 +19,45 @@
 | TASK-045 | L4304 | Build a dry-run report-only classifier for series that look like they  | P2 | M | Sonnet-class | 1 |
 | TASK-046 | L4698 | Route merge.AsExternalIDReassigner through database.AsCapability inste | P1 | S | Sonnet-class | 4 |
 | TASK-047 | L4719 | Narrow CollectDuration's tagStore param from dedup.Store to database.B | P2 | S | Haiku-class | 2 |
+| TASK-192 | INIT-1 T05 | Clamp ComposeScore against per-kind confidence bounds; route calibrate | P1 | L | Opus-class | 1 |
 | TASK-048 | AP-1b | Physically co-locate a Combine survivor's files under RootDir after Co | P1 | M | Opus-class | 5 |
 | TASK-049 | L10750 | Acoustic-confirm signal: promote near-dupe title-leak pairs using Whol | P1 | M | Opus-class | 2 |
 | TASK-050 | L10750 | Shattered-book reassembly: match fragment file-sets against the refere | P1 | L | Opus-class | 8 |
+| TASK-193 | DEC-10 | Wire Round-2 confidence-bound clamping into a distinct apply_confidenc | P1 | L | Opus-class | 8 |
 
 ## Ground rules
 
 - Worktree per task (the ⛔ START HERE block in each brief). Never edit `main`.
 - Gate for every task in this workstream:
   ```bash
-  go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/dedup/... ./internal/merge/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/maintenance/jobs/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/itunes/service/... ./internal/scanner/... -count=1 ; go build ./... && go vet ./... && go test ./internal/merge/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1
+  go build ./... && go vet ./... && go test ./internal/config/... ./internal/dedup/... ./internal/dedup/unified/... ./internal/models/... ./internal/plugins/dedup/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/dedup/... ./internal/merge/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/maintenance/jobs/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/unified/... ./internal/plugins/dedup/... -count=1 ; go build ./... && go vet ./... && go test ./internal/itunes/service/... ./internal/scanner/... -count=1 ; go build ./... && go vet ./... && go test ./internal/merge/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1
   ```
 - **Verify every file:line anchor with `grep` before editing** — line numbers in each brief are a starting point, not a guarantee.
 - Review-critical tasks (prod-data paths) are Opus-class and their PRs stay open for the owner.
 
 ## Collision / wave note
 
-- `internal/dedup/auto_resolve.go`: TASK-040, TASK-049 → serialize by wave (TASK-040=w1, TASK-049=w2)
+- `internal/config/config.go`: TASK-016, TASK-017, TASK-018, TASK-019, TASK-020, TASK-021, TASK-193, TASK-070 → serialize by wave (TASK-016=w6, TASK-017=w1, TASK-018=w2, TASK-019=w3, TASK-020=w4, TASK-021=w7, TASK-193=w8, TASK-070=w5)
+- `internal/dedup/auto_resolve.go`: TASK-040, TASK-049, TASK-193 → serialize by wave (TASK-040=w1, TASK-049=w2, TASK-193=w8)
 - `internal/dedup/collectors_metadata.go`: TASK-041, TASK-047 → serialize by wave (TASK-041=w1, TASK-047=w2)
 - `internal/dedup/series_dedup.go`: TASK-029, TASK-043, TASK-044 → serialize by wave (TASK-029=w2, TASK-043=w1, TASK-044=w3)
+- `internal/dedup/unified/compose.go`: TASK-192, TASK-193 → serialize by wave (TASK-192=w1, TASK-193=w8)
+- `internal/dedup/unified/compose_test.go`: TASK-192, TASK-193 → serialize by wave (TASK-192=w1, TASK-193=w8)
+- `internal/dedup/unified/config.go`: TASK-192, TASK-193 → serialize by wave (TASK-192=w1, TASK-193=w8)
 - `internal/merge/service.go`: TASK-023, TASK-040, TASK-042, TASK-046, TASK-048 → serialize by wave (TASK-023=w2, TASK-040=w1, TASK-042=w3, TASK-046=w4, TASK-048=w5)
+- `internal/plugins/dedup/calibrate_composite.go`: TASK-192, TASK-193 → serialize by wave (TASK-192=w1, TASK-193=w8)
+- `internal/plugins/dedup/calibrate_composite_test.go`: TASK-192, TASK-193 → serialize by wave (TASK-192=w1, TASK-193=w8)
 - `internal/scanner/scanner.go`: TASK-021, TASK-181, TASK-106 → serialize by wave (TASK-021=w7, TASK-181=w2, TASK-106=w1)
 - `internal/server/duplicates_ops.go`: TASK-043, TASK-096 → serialize by wave (TASK-043=w1, TASK-096=w2)
 
 | Wave | Tasks | Prereq | Parallel-safe because |
 |------|-------|--------|-----------------------|
-| 1 | TASK-040, TASK-041, TASK-180, TASK-043, TASK-045 | none | disjoint files within the wave (computed collision matrix) |
+| 1 | TASK-040, TASK-041, TASK-180, TASK-043, TASK-045, TASK-192 | none | disjoint files within the wave (computed collision matrix) |
 | 2 | TASK-181, TASK-047, TASK-049 | wave 1 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
 | 3 | TASK-042, TASK-044 | wave 2 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
 | 4 | TASK-046 | wave 3 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
 | 5 | TASK-048 | wave 4 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
-| 8 | TASK-050 | wave 7 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
+| 8 | TASK-050, TASK-193 | wave 7 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
 
 Waves are GLOBAL across the package: a wave-2 task here may be waiting on a wave-1 task in another workstream that shares a file (see `../BREAKDOWN-2026-08-21.md` collision table).
 

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/TASK-061-import-the-224-materialized-playlist-items-smart.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e1f9b4b7-da1e-4807-b3a4-c87b255ee554 -->
+<!-- guid: 3b5eb89d-22a6-42fc-9e7a-9a407fa57903 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-061 — Import the 224 materialized-Playlist-Items smart playlists as static snapshots (no criteria parsing needed) (ITUNES-SMARTCRIT-PARSE)

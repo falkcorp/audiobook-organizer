@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-181-find-the-createbook-path-s-that-copy-a-dangling-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: ae143ceb-4fc9-44ae-80d0-af8c86821ec5 -->
+<!-- guid: b47bb9eb-50ff-49c3-8d82-2fb9c9cd2999 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-181 — Find the CreateBook path(s) that copy a dangling SeriesID onto newly-created per-chapter book rows -- narrowed to 4 remaining candidate call sites after ruling out assignAuthorAndSeries (TODO.md L4222)

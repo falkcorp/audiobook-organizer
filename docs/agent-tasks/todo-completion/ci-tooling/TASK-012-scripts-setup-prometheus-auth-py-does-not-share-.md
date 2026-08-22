@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-012-scripts-setup-prometheus-auth-py-does-not-share-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b7c561b9-ac54-4490-a16c-97f79b5e9c8d -->
+<!-- guid: 7a1fa65a-8ae8-42b0-8427-a3a1d3341e2e -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-012 — scripts/setup-prometheus-auth.py does NOT share the server-side shell script's dead-indentation bug (TODO.md L4312)

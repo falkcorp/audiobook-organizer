@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/operations/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: fa559ccc-edf6-4045-aebc-faaee40c0814 -->
+<!-- guid: b708c191-ca9b-4d84-a1d9-88f3e4b31286 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — operations (todo-completion)

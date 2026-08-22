@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-035-add-deletenarrator-to-the-store-crud-building-bl.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 9b3a77df-da16-4539-847e-f05af591b98c -->
+<!-- guid: 7aac6e7b-f361-4afc-ae26-35bddbc64316 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-035 — Add DeleteNarrator to the store (CRUD building block only) (TODO.md L5271)

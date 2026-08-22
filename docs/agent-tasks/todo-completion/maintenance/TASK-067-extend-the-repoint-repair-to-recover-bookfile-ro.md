@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-067-extend-the-repoint-repair-to-recover-bookfile-ro.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 551b6d88-2fa6-4741-8452-33b3f81f355f -->
+<!-- guid: 97753196-b576-4b0f-8310-392bca3fc7f4 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-067 — Extend the REPOINT repair to recover BookFile rows via Book.FilePath (the #2372 fallback shape), not just the padded-filename shape (TODO.md L642)
 
-**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · maintenance subagent · **Why:** extends an existing production-critical repair op's candidate-derivation strategy; must not change the existing padded-filename candidate path or its RequireSizeMatch safety gate · **Depends on:** TASK-068 · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · maintenance subagent · **Why:** extends an existing production-critical repair op's candidate-derivation strategy; must not change the existing padded-filename candidate path or its RequireSizeMatch safety gate · **Depends on:** TASK-068 · **Wave:** 3 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 642 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**`BookFile.FilePath` rows point at files that do " TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-02.json`.
 

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-059-close-out-the-2026-05-01-re-audit-block-test-2-d.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: eb4844c9-19ef-4c2a-af76-b64a2776e91e -->
+<!-- guid: f8378e74-b1b4-40c8-afde-2e4ce214c18f -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-059 — Close out the 2026-05-01 re-audit block (TEST-2/DEP-1/DEAD-1/CTX-4/LOG-5/R-9/R-10) (TODO.md L10706)
@@ -41,6 +41,7 @@ Rewrite TODO.md's item 42 bullet (L10706-10709, '2026-05-01 re-audit block close
   grep -rn 'book\.ITunesPath\b' --include=*.go internal/   # 0 hits outside _test.go — DEP-1a-d done (no non-test reads of the deprecated Book field)
   grep -n 'ITunesPath ' internal/database/store.go; grep -n 'ITunesPath: b.ITunesPath\|ITunesPath: c.ITunesPath' internal/database/bookcore.go   # 1 hit + 2 hits — DEP-1e still open — field still declared and copied
   grep -n 'func TestStoreAdditionalCoverageSQLite' -A3 internal/database/store_extra_test.go   # 1 hit, body calls setupTestDB (PebbleStore-backed) — TEST-2 test exists and is not SQLite-backed anymore
+  grep -n 'ITunesPath: *b.ITunesPath\|ITunesPath: *c.ITunesPath' internal/database/bookcore.go   # 2 hits (L207, L321), tolerant of gofmt alignment spaces — DEP-1e still open — field still declared and copied
   ```
 
 ### Reuse — don't invent

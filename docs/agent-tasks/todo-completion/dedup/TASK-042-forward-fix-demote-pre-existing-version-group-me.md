@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-042-forward-fix-demote-pre-existing-version-group-me.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e7888b36-2df8-4397-9212-d96ec1be66cf -->
+<!-- guid: acc4c0b4-9aa6-4a6b-a623-62346e1fe7c7 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-042 — Forward fix: demote pre-existing version-group members when a merge reuses their group ID (VG-DOUBLE-PRIMARY)

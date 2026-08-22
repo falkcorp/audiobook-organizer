@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/config/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 66126525-9dfc-4bf0-82fb-349b0909064e -->
+<!-- guid: 7d906b73-5aee-4e34-98f5-d5b47df118df -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — config (todo-completion)
@@ -28,8 +28,9 @@
 
 ## Collision / wave note
 
-- `internal/config/config.go`: TASK-016, TASK-017, TASK-018, TASK-019, TASK-020, TASK-021, TASK-070 → serialize by wave (TASK-016=w6, TASK-017=w1, TASK-018=w2, TASK-019=w3, TASK-020=w4, TASK-021=w7, TASK-070=w5)
+- `internal/config/config.go`: TASK-016, TASK-017, TASK-018, TASK-019, TASK-020, TASK-021, TASK-193, TASK-070 → serialize by wave (TASK-016=w6, TASK-017=w1, TASK-018=w2, TASK-019=w3, TASK-020=w4, TASK-021=w7, TASK-193=w8, TASK-070=w5)
 - `internal/database/store.go`: TASK-020, TASK-031, TASK-033, TASK-037, TASK-039 → serialize by wave (TASK-020=w4, TASK-031=w1, TASK-033=w2, TASK-037=w6, TASK-039=w3)
+- `internal/plugins/acoustid/backfill.go`: TASK-021, TASK-197 → serialize by wave (TASK-021=w7, TASK-197=w2)
 - `internal/scanner/scanner.go`: TASK-021, TASK-181, TASK-106 → serialize by wave (TASK-021=w7, TASK-181=w2, TASK-106=w1)
 
 | Wave | Tasks | Prereq | Parallel-safe because |

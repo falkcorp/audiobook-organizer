@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-027-build-a-diagnostic-reconciling-the-3-954-book-ga.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 0a130591-3860-4fe7-8b90-55846a7eac41 -->
+<!-- guid: 72a41c54-246b-43ac-ac0a-e0a706aa192f -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-027 — Build a diagnostic reconciling the 3,954-book gap between the store's live-book count and the API list endpoint's total (TODO.md L3414)

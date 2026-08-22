@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/TASK-065-p2-relocate-only-sync-cycle-the-composed-cycle-a.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: d10802b5-7581-4b46-85ee-516a9a7822a5 -->
+<!-- guid: 395dcec6-3108-41c1-a1f8-1dc00e5ea7db -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-065 — P2 relocate-only sync cycle — the composed cycle already exists (RunRelocateSyncCycle); wire it to a caller and add an end-to-end test (TODO.md L10390)
 
-**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · itunes subagent · **Why:** The hard/dangerous part (the composition, guard wiring, quiescence, oracle) is already built and reviewed-in; what remains is wiring a real write path to prod data plus an end-to-end test, which still needs careful review given the review_critical blast radius even though the diff is smaller than building the cycle from scratch · **Depends on:** none · **External blockers:** TODO.md L10383 (prod_run) — not a task in this package; coordinator confirms it is resolved or explicitly waives it before dispatch · **Wave:** 5 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · itunes subagent · **Why:** The hard/dangerous part (the composition, guard wiring, quiescence, oracle) is already built and reviewed-in; what remains is wiring a real write path to prod data plus an end-to-end test, which still needs careful review given the review_critical blast radius even though the diff is smaller than building the cycle from scratch · **Depends on:** none · **External blockers:** TODO.md L10383 (prod_run) — not a task in this package; coordinator confirms it is resolved or explicitly waives it before dispatch · **Wave:** 6 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 10390 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**iTunes 2-way-sync P2 — relocate-only sync cycle " TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-13.json`.
 

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-165-review-the-17-apifetch-callers-catch-handlers-fo.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 59f8b508-f422-4e5f-91ff-07217908608a -->
+<!-- guid: 2a843ecc-e71d-49a1-84dd-6f91d2df9249 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-165 — Review the 17 apiFetch-callers' catch handlers for session-expiry messaging (TODO.md L2486)

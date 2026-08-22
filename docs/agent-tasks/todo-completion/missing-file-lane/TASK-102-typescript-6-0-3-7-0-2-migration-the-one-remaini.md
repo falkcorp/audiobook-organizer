@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-102-typescript-6-0-3-7-0-2-migration-the-one-remaini.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 811fafaa-b0cf-4581-afe4-9a22d19dcad8 -->
+<!-- guid: a5cfeeac-f67c-41b2-b653-71b2782c9d4f -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-102 — TypeScript 6.0.3 → 7.0.2 migration (the one remaining piece of the frontend-framework-versions survey) (TODO.md L8273)

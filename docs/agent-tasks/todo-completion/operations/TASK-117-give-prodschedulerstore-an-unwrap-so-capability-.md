@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/operations/TASK-117-give-prodschedulerstore-an-unwrap-so-capability-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 73782e3e-bde7-4349-b9d2-aff07114564c -->
+<!-- guid: d67472a0-d061-4a02-a668-df3b74248aa3 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-117 — Give prodSchedulerStore an Unwrap() so capability lookups can see past it (TODO.md L4703)

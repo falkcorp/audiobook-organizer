@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-055-document-the-todo-d-fragment-race-assembled-betw.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: fee9ed49-cc1e-4073-9ffd-ad0dfffed110 -->
+<!-- guid: 8ba1e93e-4c8a-4d11-a663-8b3a286180c6 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-055 — Document the todo.d fragment race (assembled between filing and finishing) as a process rule, not a mechanical guard (TODO.md L1852)

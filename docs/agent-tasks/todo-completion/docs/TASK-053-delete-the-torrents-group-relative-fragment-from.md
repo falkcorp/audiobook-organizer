@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-053-delete-the-torrents-group-relative-fragment-from.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 78044743-b9d7-4585-9957-3a89026cd4f5 -->
+<!-- guid: a266a738-885a-4b40-974a-5bea668cf91e -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-053 — Delete the /torrents group-relative fragment from openapi.json (TODO.md L296)

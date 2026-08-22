@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-082-fix-the-go-zipslip-finding-on-the-backup-restore.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: cfbdbeff-ddee-439c-87be-d39f2f98ec56 -->
+<!-- guid: 9bb7910b-898d-4e4f-a4fb-aa39928dcd9b -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-082 — Fix the go/zipslip finding on the backup-restore extraction path (SEC-CODEQL-BACKLOG)

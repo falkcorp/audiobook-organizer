@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-175-add-resizable-sortable-columns-to-the-split-book.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 6f3da298-5483-4d6e-837a-a7bfbb5d2bc6 -->
+<!-- guid: 4ee3da6f-a39c-4618-ae18-de59ab2ad5ee -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-175 — Add resizable/sortable columns to the split-book dedup candidates table (TODO.md L10660)

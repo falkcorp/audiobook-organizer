@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 3b2ff5b8-0e26-4afd-ae7b-768f2d8b106b -->
+<!-- guid: ee7fe139-a583-41ea-8f65-5f66f302611f -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — server workstream (todo-completion)
@@ -13,20 +13,27 @@ Read the package-level [`../../ORCHESTRATION.md`](../../ORCHESTRATION.md) first.
 flowchart LR
     subgraph Wave1
       TASK127[TASK-127 log-abs-api-enabled-s-actual]
+      TASK204[TASK-204 guard-testserverstartgracefu]
       TASK132[TASK-132 fix-indexedstore-updatebook-]
       TASK134[TASK-134 add-a-wiring-level-test-prov]
       TASK135[TASK-135 convert-metadata-batch-apply]
       TASK136[TASK-136 convert-reconcile-apply-from]
       TASK137[TASK-137 fix-testorganizeservice-perf]
+      TASK206[TASK-206 split-or-speed-up-the-intern]
       TASK138[TASK-138 exempt-the-abs-router-group-]
       TASK140[TASK-140 retire-the-unsafe-cleanup-me]
       TASK141[TASK-141 add-regression-tests-for-the]
+      TASK208[TASK-208 migrate-internal-server-test]
+      TASK209[TASK-209 migrate-internal-server-test]
+      TASK210[TASK-210 migrate-internal-server-test]
+      TASK211[TASK-211 migrate-internal-server-test]
     end
     subgraph Wave2
       TASK128[TASK-128 fix-enableratelimit-false-no]
       TASK129[TASK-129 fix-wipeactivity-dry-run-cou]
       TASK130[TASK-130 register-searchindexdroppedc]
       TASK133[TASK-133 regression-test-soft-deletin]
+      TASK207[TASK-207 duplicate-reference-internal]
     end
     subgraph Wave3
       TASK131[TASK-131 fix-audiobook-organizer-book]
@@ -34,11 +41,20 @@ flowchart LR
     subgraph Wave4
       TASK139[TASK-139 prune-expired-abs-sess-recor]
     end
+    subgraph Wave5
+      TASK205[TASK-205 replace-testserverstartgrace]
+    end
     TASK128 --> TASK131
     TASK128 --> TASK139
+    TASK128 --> TASK205
     TASK130 --> TASK131
     TASK131 --> TASK139
+    TASK131 --> TASK205
     TASK132 --> TASK133
+    TASK139 --> TASK205
+    TASK204 --> TASK205
+    TASK206 --> TASK207
+    TASK209 --> TASK133
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.

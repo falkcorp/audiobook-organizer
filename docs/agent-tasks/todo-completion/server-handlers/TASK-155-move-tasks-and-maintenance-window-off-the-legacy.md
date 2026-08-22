@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-155-move-tasks-and-maintenance-window-off-the-legacy.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e39db686-301a-4b24-9cc4-3a577174b678 -->
+<!-- guid: 8e089e3d-f97c-44df-a0ad-f3754db16a16 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-155 — Move /tasks/* and /maintenance-window/* off the legacy v1 operations handler into their own scheduler-config handler (TODO.md L4563)

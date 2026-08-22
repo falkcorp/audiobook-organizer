@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/metadata/TASK-080-assess-the-2-critical-go-request-forgery-ssrf-co.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 3e6c6188-3288-4d6a-8ba9-ef63d5a62ec2 -->
+<!-- guid: f616038e-11ed-4571-a7b9-40dd7cb6d0f2 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-080 — Assess the 2 critical go/request-forgery (SSRF) CodeQL alerts on cover-fetch paths (SEC-CODEQL-BACKLOG)

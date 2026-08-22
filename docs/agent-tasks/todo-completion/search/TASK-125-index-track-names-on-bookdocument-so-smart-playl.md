@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/search/TASK-125-index-track-names-on-bookdocument-so-smart-playl.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f547581c-356b-4819-98b6-85e57efb577a -->
+<!-- guid: 8ff65908-573f-4a38-b871-70a6a81b3bdb -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-125 — Index track names on BookDocument so smart playlists can match them (TODO.md L618)

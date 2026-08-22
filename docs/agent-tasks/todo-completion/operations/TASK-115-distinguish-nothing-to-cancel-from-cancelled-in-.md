@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/operations/TASK-115-distinguish-nothing-to-cancel-from-cancelled-in-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 0e0c4ca7-e5b0-468b-a6f0-81ad015aa649 -->
+<!-- guid: 369bc86c-50bd-4af1-a5b6-8dfe8c60f4ca -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-115 — Distinguish 'nothing to cancel' from 'cancelled' in registry.Cancel so unknown-id cancels 404 instead of lying 204 (TODO.md L4477)

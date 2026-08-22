@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-188-harden-muimenu-against-the-documented-react-sets.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: a5ac5694-ffc2-4d91-b386-bf00cb0fd3fc -->
+<!-- guid: 9e7f8b30-078a-41b2-842b-789bcf94995f -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-188 — Harden MuiMenu against the documented React setState-drop defect (exit:0 -> exit:false), given the root-cause research is already extensively recorded at HEAD and remains unresolved (TODO.md L1727)

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-028-guard-author-delete-paths-with-an-unfiltered-aut.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 93503167-85c7-4eed-9cd8-b5587b4f98c6 -->
+<!-- guid: 15719764-88db-42bf-95f2-03b34f136ff7 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-028 — Guard author delete paths with an unfiltered author-reference counter (twin of the series-delete fix) (TODO.md L3526)

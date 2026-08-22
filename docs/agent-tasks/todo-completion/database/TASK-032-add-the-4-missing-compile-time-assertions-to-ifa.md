@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-032-add-the-4-missing-compile-time-assertions-to-ifa.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: a957cf7b-e4c0-46ed-a9f4-8e9ecd02d8bc -->
+<!-- guid: c82c7544-d2d0-45a0-b30a-2a9ddb15a69b -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-032 — Add the 4 missing compile-time assertions to iface_assert.go (TODO.md L4694)

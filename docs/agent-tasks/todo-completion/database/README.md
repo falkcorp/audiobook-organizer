@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 8c6c739f-cca5-41b3-bd7e-1ec364b5521b -->
+<!-- guid: f5cf9d9d-a33f-4ab5-8abc-220b98148d43 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — database (todo-completion)
@@ -44,8 +44,8 @@
 
 - `.github/workflows/ci.yml`: TASK-007, TASK-179 → serialize by wave (TASK-007=w1, TASK-179=w2)
 - `internal/database/bookcore.go`: TASK-037, TASK-039 → serialize by wave (TASK-037=w6, TASK-039=w3)
-- `internal/database/memdb_summaries.go`: TASK-026, TASK-039 → serialize by wave (TASK-026=w1, TASK-039=w3)
-- `internal/database/pebble_store.go`: TASK-029, TASK-039, TASK-186 → serialize by wave (TASK-029=w2, TASK-039=w3, TASK-186=w5)
+- `internal/database/memdb_summaries.go`: TASK-190, TASK-026, TASK-039 → serialize by wave (TASK-190=w2, TASK-026=w1, TASK-039=w3)
+- `internal/database/pebble_store.go`: TASK-029, TASK-039, TASK-186 → serialize by wave (TASK-029=w2, TASK-039=w3, TASK-186=w6)
 - `internal/database/pebble_store_authors.go`: TASK-035, TASK-036 → serialize by wave (TASK-035=w1, TASK-036=w2)
 - `internal/database/pebble_store_test.go`: TASK-177, TASK-178 → serialize by wave (TASK-177=w1, TASK-178=w2)
 - `internal/database/store.go`: TASK-020, TASK-031, TASK-033, TASK-037, TASK-039 → serialize by wave (TASK-020=w4, TASK-031=w1, TASK-033=w2, TASK-037=w6, TASK-039=w3)
@@ -55,7 +55,8 @@
 - `internal/search/index_builder.go`: TASK-023, TASK-125 → serialize by wave (TASK-023=w2, TASK-125=w1)
 - `internal/server/handlers/audiobooks/handler.go`: TASK-005, TASK-037, TASK-095, TASK-098 → serialize by wave (TASK-005=w1, TASK-037=w6, TASK-095=w2, TASK-098=w3)
 - `internal/server/maintenance_fixups.go`: TASK-025, TASK-129 → serialize by wave (TASK-025=w1, TASK-129=w2)
-- `internal/server/server_lifecycle.go`: TASK-026, TASK-065, TASK-128, TASK-131, TASK-139 → serialize by wave (TASK-026=w1, TASK-065=w5, TASK-128=w2, TASK-131=w3, TASK-139=w4)
+- `internal/server/server.go`: TASK-026, TASK-205 → serialize by wave (TASK-026=w1, TASK-205=w5)
+- `internal/server/server_lifecycle.go`: TASK-026, TASK-065, TASK-205, TASK-128, TASK-131, TASK-139 → serialize by wave (TASK-026=w1, TASK-065=w6, TASK-205=w5, TASK-128=w2, TASK-131=w3, TASK-139=w4)
 - `web/src/pages/BookDetail.tsx`: TASK-037, TASK-100, TASK-165 → serialize by wave (TASK-037=w6, TASK-100=w1, TASK-165=w8)
 - `web/src/services/api.ts`: TASK-037, TASK-070 → serialize by wave (TASK-037=w6, TASK-070=w5)
 

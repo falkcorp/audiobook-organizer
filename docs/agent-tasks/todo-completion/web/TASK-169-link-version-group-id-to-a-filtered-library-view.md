@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-169-link-version-group-id-to-a-filtered-library-view.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: eb8dbcd7-7d7b-4595-9caf-570d0d87c771 -->
+<!-- guid: f4448032-e14b-45fb-9d02-f4befb9e85f5 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-169 — Link version_group_id to a filtered library view (now unblocked — the filter works as of commit b0ebccb0) (TODO.md L3168)

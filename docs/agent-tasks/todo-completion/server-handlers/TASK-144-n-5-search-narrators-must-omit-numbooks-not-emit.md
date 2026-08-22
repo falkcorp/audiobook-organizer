@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-144-n-5-search-narrators-must-omit-numbooks-not-emit.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: afe70eb4-92b6-477a-8189-0d5a75c1e91e -->
+<!-- guid: 378382a1-1605-4728-b3d8-febe76faa584 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-144 — N-5: /search narrators must omit numBooks, not emit 0 (ABS-N5)

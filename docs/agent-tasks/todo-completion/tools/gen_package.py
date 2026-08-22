@@ -141,6 +141,7 @@ for t in tasks:
 # depends_on by todo_line → ids
 NONTASK_VERDICT = {o.get("todo_line"): o.get("verdict") for o in items if o.get("verdict") != "actionable"}
 by_line = collections.defaultdict(list)
+idx_by_id = {t["id"]: t for t in tasks}
 for t in tasks: by_line[int(t.get("todo_line") or 0)].append(t["id"])
 for t in tasks:
     deps = []
@@ -150,6 +151,9 @@ for t in tasks:
         try: ln = int(ln)
         except: continue
         hit = [i for i in by_line.get(ln, []) if i != t["id"]]
+        if ln == int(t.get("todo_line") or 0):   # same-line dependency = earlier parts only (never a sibling cycle)
+            me = int(t.get("part") or 0)
+            hit = [i for i in hit if int(idx_by_id[i].get("part") or 0) < me]
         if hit: deps += hit
         else:
             v = NONTASK_VERDICT.get(ln, "unknown")
@@ -175,11 +179,16 @@ wave_of = {}
 # topological by depends_on, then earliest wave w/o collision
 order = sorted(tasks, key=lambda t: (bool(t.get("review_critical")), t["id"]))  # held (review-critical) PRs placed after siblings on the same file so a held PR never blocks a lane
 placed = set()
+_placing = set()
 def place(t):
     if t["id"] in wave_of: return wave_of[t["id"]]
+    if t["id"] in _placing:
+        raise SystemExit(f"DEPENDENCY CYCLE through {t['id']}: {sorted(_placing)}")
+    _placing.add(t["id"])
     minw = 1
     for d in t["depends_on"]:
         if d in idx: minw = max(minw, place(idx[d]) + 1)
+    _placing.discard(t["id"])
     w = minw
     while True:
         clash = False

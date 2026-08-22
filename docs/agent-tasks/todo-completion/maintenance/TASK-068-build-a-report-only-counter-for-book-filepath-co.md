@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-068-build-a-report-only-counter-for-book-filepath-co.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 2321cc46-d0bc-44dc-a7d7-1edec8a0bd79 -->
+<!-- guid: 3dae6153-4672-449c-a35e-b964585df44c -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-068 — Build a REPORT-ONLY counter for Book.FilePath collisions (rows sharing the same path across different books) (TODO.md L670)

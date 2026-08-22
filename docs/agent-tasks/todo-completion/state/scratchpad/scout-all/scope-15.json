@@ -643,6 +643,11 @@
     "claim": "TEST-2 test exists and is not SQLite-backed anymore",
     "grep_cmd": "grep -n 'func TestStoreAdditionalCoverageSQLite' -A3 internal/database/store_extra_test.go",
     "expect": "1 hit, body calls setupTestDB (PebbleStore-backed)"
+   },
+   {
+    "claim": "DEP-1e still open \u2014 field still declared and copied",
+    "grep_cmd": "grep -n 'ITunesPath: *b.ITunesPath\\|ITunesPath: *c.ITunesPath' internal/database/bookcore.go",
+    "expect": "2 hits (L207, L321), tolerant of gofmt alignment spaces"
    }
   ],
   "reuse": [],
@@ -676,7 +681,9 @@
   "gate": "n/a (docs)",
   "notes": "This is a housekeeping pass, not new code \u2014 the only enduring deliverable is DEP-1e as a fresh small follow-up task, correctly separated out rather than left buried in a stale close-out bullet.",
   "review_notes": [
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
+   "[verify-4.json] exact_files is [] (empty) in skeleton.json for TASK-059, but Step 2 requires creating a new todo.d/ fragment file for DEP-1e, and Step 1 (per the brief's own text) edits TODO.md directly \u2014 neither file is listed in exact_files. Verified: python3 -c \"import json;d=json.load(open('skeleton.json'));pri",
+   "[verify-4.json] The DEP-1e re-verify anchor's second grep \u2014 `grep -n 'ITunesPath: b.ITunesPath\\|ITunesPath: c.ITunesPath' internal/database/bookcore.go` \u2014 returns 0 hits at HEAD (verified by running it directly), not the 2 hits the brief's inline comment claims ('1 hit + 2 hits'). The actual source at bookcore.go:2"
   ]
  },
  {

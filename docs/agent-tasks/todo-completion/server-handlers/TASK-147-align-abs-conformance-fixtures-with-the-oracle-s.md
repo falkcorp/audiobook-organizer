@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-147-align-abs-conformance-fixtures-with-the-oracle-s.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 5c30e73b-e9f1-47b6-b601-04718aee3c02 -->
+<!-- guid: 32a6a591-8746-457f-b32b-09db055768c0 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-147 — Align ABS conformance fixtures with the oracle so CompareValues stays green permanently (TODO.md L127)

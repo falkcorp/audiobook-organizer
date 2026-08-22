@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-104-build-the-version-group-acoustic-audit-op-tier-2.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 225bf4a4-cc17-43e0-94a2-ba85016edd5d -->
+<!-- guid: 269f516d-df63-45c7-bdaa-91bb9a6a9ce5 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-104 — Build the version-group acoustic audit op (tier 2 of First Aid) (TODO.md L8551)

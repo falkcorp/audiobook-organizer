@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-003-fix-the-author-path-post-filter-to-treat-nil-isp.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f9027e9e-22c8-4c95-8b68-e576bcc924c0 -->
+<!-- guid: 4bf6d88b-6eb6-42d2-9948-8e01a4aaf0d0 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-003 — Fix the author-path post-filter to treat nil IsPrimaryVersion as primary, matching storage's default (TODO.md L3884)
 
-**Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · audiobooks subagent · **Why:** One-line fix but on a prod-data-shaped read path with subtle nil semantics -- worth a careful reviewer, not pure mechanical. · **Depends on:** TASK-002 · **Wave:** 4 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · audiobooks subagent · **Why:** One-line fix but on a prod-data-shaped read path with subtle nil semantics -- worth a careful reviewer, not pure mechanical. · **Depends on:** TASK-002 · **Wave:** 5 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 3884 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "Decide the single meaning of a nil `IsPrimaryVersi" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-06.json`.
 

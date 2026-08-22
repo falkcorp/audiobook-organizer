@@ -198,7 +198,7 @@
   ],
   "polarity": "additive",
   "effort": "M",
-  "tier": "sonnet",
+  "tier": "opus",
   "why_tier": "Mostly mechanical handler + route wiring following the existing handler.go conventions (auth, error responses, event publishing), but touches a prod merge/undo surface so needs care on authz and idempotency, not pure boilerplate.",
   "review_critical": true,
   "goal": "Add two admin-only endpoints: GET /api/v1/dedup/merges (list recent AutoMergeJournalEntry rows via ListAutoMergeJournalEntries, newest first, capped) and POST /api/v1/dedup/merges/:key/undo (calls Engine.UnmergeAuto(key) \u2014 the fully-reversing version from part 2 once that lands \u2014 and returns 200 on success, 404 if the journal key does not exist, 409 if already reverted).",
@@ -237,7 +237,8 @@
    "[correctness.json] An admin-invokable undo endpoint is shipped before the undo actually undoes, with no dependency edge. TASK-152 (wave 1, sonnet, review_critical) adds POST /api/v1/dedup/merges/:key/undo calling Engine.UnmergeAuto. TASK-042 (wave 2, opus, review_critical) is what makes UnmergeAuto reverse external-ID",
    "[ops-rollback.json] The admin 'undo merge' endpoint ships 12 waves BEFORE the code that makes the undo actually reverse anything beyond the book record, and there is no depends_on edge between them. An operator who hits POST /api/v1/dedup/merges/:key/undo in wave 1 gets a 200 'unmerged' while the loser's external-ID ma",
    "[ops-rollback.json] Double-undo is unguarded and the endpoint's own contract cannot be implemented. TASK-154's goal promises '409 if already reverted', but no reverted marker exists anywhere: TASK-044 only says 'consider marking a journal entry reverted after first successful undo', in an edge_cases bullet, and its ste",
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
+   "[verify-4.json] Skeleton's machine `tier` field says 'sonnet' but `tier_label` (what the rendered brief header and README both show) says 'Opus-class', for a REVIEW-CRITICAL prod-data-path task. Verified via: python3 -c \"import json; d=json.load(open('skeleton.json')); [print(t['id'], t['tier'], t['tier_label']) fo"
   ]
  },
  {
@@ -1663,11 +1664,14 @@
    "A route registered through BOTH a direct top-level path AND inside a group (unlikely but possible for back-compat) must not be deleted \u2014 this is exactly why step 2 requires checking the REAL route table, not assuming from the list alone."
   ],
   "anti_over_suppression": "N/A",
-  "depends_on_lines": [],
+  "depends_on_lines": [
+   "TASK-051 (wave1) -> TASK-052 (wave2, depends on TASK-051) -> TASK-053 (wave3, depends on TASK-052), all serialized on docs/api/openapi.json"
+  ],
   "gate": "n/a (docs)",
   "notes": "Split from the same L296 TODO item; part 2 covers the 16 removed-maintenance-endpoint paths (need individual triage, not blind deletion) and part 3 covers /torrents.",
   "review_notes": [
-   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three"
+   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three",
+   "[verify-4.json] docs/README.md's collision section says 'No same-file collisions inside this workstream' and wave 1 is 'disjoint files within the wave (computed collision matrix)', but TASK-051, TASK-052, and TASK-053 all list exact_files=['docs/api/openapi.json'] and are all Wave 1 with Depends on: none. Verified:"
   ]
  },
  {
@@ -1708,11 +1712,14 @@
    "If the real ops-API dispatch endpoint is generic (e.g. a single POST /api/v1/operations/:opID for ALL registry ops, not 15 separate paths), redocumenting as 15 separate OpenAPI paths would be WRONG \u2014 in that case a single generic entry with an enum of valid opID values is the more accurate representation; confirm the real shape before choosing."
   ],
   "anti_over_suppression": "N/A",
-  "depends_on_lines": [],
+  "depends_on_lines": [
+   "TASK-051 (wave1) -> TASK-052 (wave2, depends on TASK-051) -> TASK-053 (wave3, depends on TASK-052), all serialized on docs/api/openapi.json"
+  ],
   "gate": "n/a (docs)",
   "notes": "This needs a quick owner check-in on delete-vs-redocument policy before executing at scale, even though each individual path's 'is it gone' fact is independently verifiable.",
   "review_notes": [
-   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three"
+   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three",
+   "[verify-4.json] docs/README.md's collision section says 'No same-file collisions inside this workstream' and wave 1 is 'disjoint files within the wave (computed collision matrix)', but TASK-051, TASK-052, and TASK-053 all list exact_files=['docs/api/openapi.json'] and are all Wave 1 with Depends on: none. Verified:"
   ]
  },
  {
@@ -1751,11 +1758,14 @@
    "N/A"
   ],
   "anti_over_suppression": "N/A",
-  "depends_on_lines": [],
+  "depends_on_lines": [
+   "TASK-051 (wave1) -> TASK-052 (wave2, depends on TASK-051) -> TASK-053 (wave3, depends on TASK-052), all serialized on docs/api/openapi.json"
+  ],
   "gate": "n/a (docs)",
   "notes": "Trivially batchable with part 1's execution \u2014 separated here only to mirror the source TODO's own grouping.",
   "review_notes": [
-   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three"
+   "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three",
+   "[verify-4.json] docs/README.md's collision section says 'No same-file collisions inside this workstream' and wave 1 is 'disjoint files within the wave (computed collision matrix)', but TASK-051, TASK-052, and TASK-053 all list exact_files=['docs/api/openapi.json'] and are all Wave 1 with Depends on: none. Verified:"
   ]
  },
  {

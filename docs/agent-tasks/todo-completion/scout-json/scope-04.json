@@ -46,7 +46,7 @@
   ],
   "polarity": "additive",
   "effort": "M",
-  "tier": "sonnet",
+  "tier": "opus",
   "why_tier": "Multi-file investigation across handler packages requiring judgment about which paths mutate on-disk-relevant state; no novel design.",
   "review_critical": true,
   "goal": "For each apply-shaped endpoint in exact_files, read its handler body and determine whether it (a) never touches on-disk tags/cover art, (b) already schedules a tag/cover writeback, or (c) mutates book metadata in the DB with no file writeback \u2014 the exact defect BatchApplyFromCache had before fix/review-apply-writes-tags. Record one subsection per endpoint in a new docs/audits/2026-08-21-apply-endpoint-fileio-audit.md with verdict + grep citation. Only propose a shared 'apply + schedule file I/O' helper if a case-(c) endpoint is actually found.",
@@ -78,7 +78,8 @@
   "notes": "Owner phrasing is 'Consider the same file-I/O audit' \u2014 the audit document is the deliverable; a shared helper is speculative and out of scope unless the audit finds a live second defect.",
   "review_notes": [
    "[simplicity-scope.json] Two different deliverables in one task: TASK-150 both writes an audit document (docs/audits/2026-08-21-apply-endpoint-fileio-audit.md) and edits six production handlers (ai.go, diagnostics.go, metadata/handler.go, metadata_cache.go, organize.go, review/handler.go) to add missing tag/file-I/O writeba",
-   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat",
+   "[verify-4.json] Skeleton's machine `tier` field says 'sonnet' but `tier_label` (what the rendered brief header and README both show) says 'Opus-class', for a REVIEW-CRITICAL prod-data-path task. Verified via: python3 -c \"import json; d=json.load(open('skeleton.json')); [print(t['id'], t['tier'], t['tier_label']) fo"
   ]
  },
  {

@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: ca697c35-386d-4e8c-863c-aea484d3691f -->
+<!-- guid: e2fab60d-f351-4841-a6cf-a49cbe083874 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — server-handlers (todo-completion)
 
-16 tasks projected from the 2026-08-21 TODO-completion skeleton (`../skeleton.json`). Every fact here is a projection of that skeleton — edit the skeleton and regenerate, never this file.
+18 tasks projected from the 2026-08-21 TODO-completion skeleton (`../skeleton.json`). Every fact here is a projection of that skeleton — edit the skeleton and regenerate, never this file.
 
 | Task | TODO id | Title | Priority | Effort | Tier | Wave |
 |------|---------|-------|----------|--------|------|------|
@@ -15,8 +15,10 @@
 | TASK-145 | ABS-N6 | N-6: log + metric when listening-stats read fails (currently silent 0) | P2 | S | Haiku-class | 1 |
 | TASK-146 | ABS-N10 | N-10: advertised login rate limit (10/10min) does not match the real t | P2 | S | Haiku-class | 2 |
 | TASK-147 | L127 | Align ABS conformance fixtures with the oracle so CompareValues stays  | P2 | L | Opus-class | 3 |
+| TASK-212 | L476 | Add GET /api/libraries/:libraryId/series/:seriesId to the ABS surface | P2 | M | Sonnet-class | 3 |
 | TASK-148 | L491 | Re-capture the series ABS fixture against a populated library (it curr | P2 | S | Sonnet-class | 4 |
 | TASK-149 | L685 | Detect multi-file books whose synthesized chapter timeline stops short | P2 | S | Sonnet-class | 1 |
+| TASK-213 | ORGANIZE-4TH-COPY | Replace the single-file OrganizeBook call in filesystem.go's auto-orga | P1 | S | Sonnet-class | 2 |
 | TASK-150 | L2481 | Audit apply-shaped endpoints for missing tag/file-I/O writeback | P1 | M | Opus-class | 1 |
 | TASK-151 | L2589 | Document the hardcoded ABS timeBase as a permanent, owner-approved all | P2 | S | Haiku-class | 2 |
 | TASK-152 | PERF-4 | Bound the iTunes search handler's unbounded SearchBooks(search, 0, 0)  | P2 | S | Sonnet-class | 1 |
@@ -38,20 +40,21 @@
 
 ## Collision / wave note
 
-- `internal/server/handlers/abs/browse.go`: TASK-089, TASK-144 → serialize by wave (TASK-089=w1, TASK-144=w2)
+- `internal/server/handlers/abs/browse.go`: TASK-089, TASK-144, TASK-212 → serialize by wave (TASK-089=w1, TASK-144=w2, TASK-212=w3)
 - `internal/server/handlers/abs/dto.go`: TASK-143, TASK-146 → serialize by wave (TASK-143=w1, TASK-146=w2)
-- `internal/server/handlers/abs/handler.go`: TASK-153, TASK-154 → serialize by wave (TASK-153=w1, TASK-154=w2)
+- `internal/server/handlers/abs/handler.go`: TASK-212, TASK-153, TASK-154 → serialize by wave (TASK-212=w3, TASK-153=w1, TASK-154=w2)
 - `internal/server/handlers/abs/library_fake_test.go`: TASK-089, TASK-147 → serialize by wave (TASK-089=w1, TASK-147=w3)
 - `internal/server/handlers/abs/mapper.go`: TASK-149, TASK-151 → serialize by wave (TASK-149=w1, TASK-151=w2)
 - `internal/server/handlers/abs/play.go`: TASK-153, TASK-154 → serialize by wave (TASK-153=w1, TASK-154=w2)
 - `internal/server/handlers/dedup/handler.go`: TASK-142, TASK-157 → serialize by wave (TASK-142=w1, TASK-157=w2)
-- `internal/server/wire_abs_routes.go`: TASK-127, TASK-156 → serialize by wave (TASK-127=w1, TASK-156=w2)
+- `internal/server/handlers/filesystem.go`: TASK-083, TASK-213 → serialize by wave (TASK-083=w1, TASK-213=w2)
+- `internal/server/wire_abs_routes.go`: TASK-127, TASK-212, TASK-156 → serialize by wave (TASK-127=w1, TASK-212=w3, TASK-156=w2)
 
 | Wave | Tasks | Prereq | Parallel-safe because |
 |------|-------|--------|-----------------------|
 | 1 | TASK-142, TASK-143, TASK-145, TASK-149, TASK-150, TASK-152, TASK-153, TASK-155 | none | disjoint files within the wave (computed collision matrix) |
-| 2 | TASK-144, TASK-146, TASK-151, TASK-154, TASK-156, TASK-157 | wave 1 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
-| 3 | TASK-147 | wave 2 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
+| 2 | TASK-144, TASK-146, TASK-213, TASK-151, TASK-154, TASK-156, TASK-157 | wave 1 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
+| 3 | TASK-147, TASK-212 | wave 2 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
 | 4 | TASK-148 | wave 3 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
 
 Waves are GLOBAL across the package: a wave-2 task here may be waiting on a wave-1 task in another workstream that shares a file (see `../BREAKDOWN-2026-08-21.md` collision table).

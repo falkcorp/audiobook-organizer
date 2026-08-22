@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-060-docs-truth-up-with-measured-sandbox-prod-dedup-n.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 3026c892-724c-4f93-9f68-5270795d0048 -->
+<!-- guid: 97969510-d708-48b8-95f8-d4535b748fd9 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-060 — Docs truth-up with measured sandbox/prod dedup numbers (T13)

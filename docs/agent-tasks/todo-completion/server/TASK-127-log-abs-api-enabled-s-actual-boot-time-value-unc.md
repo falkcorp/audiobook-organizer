@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-127-log-abs-api-enabled-s-actual-boot-time-value-unc.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: cb54aac4-3938-45fe-a15f-1c30048fb07d -->
+<!-- guid: c472f390-6d8b-448b-925c-c1b213e8ef10 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-127 — Log ABS_API_ENABLED's actual boot-time value unconditionally (currently silent when disabled) (N-11)
