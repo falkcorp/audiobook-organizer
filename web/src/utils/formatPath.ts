@@ -1,7 +1,7 @@
 // file: web/src/utils/formatPath.ts
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d9a2c84-7e61-4f30-b8a2-0c6f1e9d4a72
-// last-edited: 2026-06-19
+// last-edited: 2026-08-22
 
 // Path abbreviation for the UI: replace known library roots with literal
 // $(var) tokens so paths render short. Mirrors the backend rules in
@@ -78,4 +78,19 @@ export function usePathVars(): PathVar[] {
     };
   }, []);
   return vars;
+}
+
+/**
+ * Test-only: clears the module-scope config-fetch cache so the next
+ * usePathVars()/loadPathVars() call re-fetches. Mirrors
+ * __resetPathAliasesCacheForTests in components/common/PathLinks.tsx -- call it
+ * from beforeEach/afterEach in any test file that needs a fresh or per-test var
+ * set, so the first test in a file cannot seed the promise for every later one.
+ *
+ * Safe to call while a fetch is still in flight: nulling the `let` only means
+ * that promise's result stops being cached, and the in-flight consumer's
+ * `.then` still fires against its own promise reference.
+ */
+export function __resetPathVarsCacheForTests(): void {
+  cachedVarsPromise = null;
 }
