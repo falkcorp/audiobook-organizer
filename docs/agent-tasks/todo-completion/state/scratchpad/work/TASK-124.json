@@ -1,0 +1,106 @@
+{
+  "todo_line": 4852,
+  "src_id": null,
+  "title": "Reuse internal/ai's existing typed OpenAI error classification in scanner.isPermanentAIFailure instead of re-parsing error text",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/scanner/ai_failure.go:47-58 still does substring matching (`strings.Contains(msg, marker)`) against a hand-maintained marker list, and its own comment (line 17-19) says the typed-error fix 'is tracked in todo.d/20260816-typed-ai-provider-errors.md' \u2014 but that typed fix ALREADY EXISTS, six weeks earlier, one package over: internal/ai/retry.go:34-53 `isPermanentAIError` already does `var apiErr *openai.Error; errors.As(err, &apiErr)` against the real openai-go SDK error type (StatusCode, Code fields) and DoWithRetry (internal/ai/retry.go:83-89) already wraps a detected-permanent failure as the exported `*ai.PermanentError` before returning it up through ParseBatch. `internal/ai/openai_parser.go`'s aiParser is concretely `*ai.OpenAIParser` (scanner.go:782), so this is not a design gap \u2014 it is an un-reused fix that already shipped in a sibling function.",
+  "domain": "internal/scanner",
+  "exact_files": [
+    "internal/scanner/ai_failure.go"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "ai_failure.go still substring-matches, with a comment pointing at a todo fragment",
+      "grep_cmd": "grep -n \"strings.Contains\\|todo.d/20260816-typed-ai-provider-errors\" internal/scanner/ai_failure.go",
+      "expect": "2 hits ~L18, L53"
+    },
+    {
+      "claim": "internal/ai already has typed classification via errors.As against *openai.Error",
+      "grep_cmd": "grep -n \"func isPermanentAIError\" -A 13 internal/ai/retry.go",
+      "expect": "1 hit ~L40, body uses `var apiErr *openai.Error; errors.As(err, &apiErr)`, switches on apiErr.StatusCode and apiErr.Code"
+    },
+    {
+      "claim": "the typed classification predates ai_failure.go by 6 weeks",
+      "grep_cmd": "git log -1 --format=%ai bf110a3a -- internal/ai/retry.go; git log -1 --format=%ai a662ec0c -- internal/scanner/ai_failure.go",
+      "expect": "bf110a3a: 2026-07-03; a662ec0c: 2026-08-16"
+    },
+    {
+      "claim": "DoWithRetry wraps a detected-permanent error in the exported *ai.PermanentError before it propagates out of ParseBatch",
+      "grep_cmd": "grep -n \"type PermanentError struct\\|isPermanentAIError(err)\" internal/ai/retry.go",
+      "expect": "2 hits ~L22, L84; L84 body is `if isPermanentAIError(err) { return \\u0026PermanentError{Err: err} }`"
+    },
+    {
+      "claim": "the scanner's aiParser is concretely *ai.OpenAIParser (an openai-go SDK client), so *openai.Error is the right, reachable type",
+      "grep_cmd": "grep -n \"var aiParser \\*ai.OpenAIParser\" internal/scanner/scanner.go",
+      "expect": "1 hit ~L782"
+    },
+    {
+      "claim": "the fragment this comment points at no longer exists in todo.d/",
+      "grep_cmd": "find todo.d -iname \"*typed-ai-provider*\"",
+      "expect": "0 hits in todo.d/"
+    },
+    {
+      "claim": "the fragment was already folded into TODO.md at this exact item",
+      "grep_cmd": "grep -n \"typed provider errors\" TODO.md",
+      "expect": "1 hit in TODO.md at L4852"
+    }
+  ],
+  "reuse": [
+    {
+      "name": "ai.PermanentError (exported, wraps the classified error, satisfies errors.As)",
+      "file": "internal/ai/retry.go",
+      "verify_grep": "grep -n \"type PermanentError struct\" internal/ai/retry.go"
+    },
+    {
+      "name": "isPermanentAIError's *openai.Error / errors.As pattern (unexported, but the pattern to mirror or export)",
+      "file": "internal/ai/retry.go",
+      "verify_grep": "grep -n \"func isPermanentAIError\" internal/ai/retry.go"
+    }
+  ],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Not pure mechanical: requires reasoning about which of ai_failure.go's marker strings become provably redundant once errors.As(*ai.PermanentError) is checked first (400/401/403/404 already covers invalid_api_key/account_deactivated by status code) versus which still need a text fallback (Anthropic-style markers are currently dead code since aiParser is OpenAI-only; Ollama-via-baseURL errors may not always come back as structured *openai.Error and could still need the text fallback) \u2014 a judgment call, not a copy-paste.",
+  "review_critical": false,
+  "goal": "Change internal/scanner/isPermanentAIFailure to check `errors.As(err, &permErr)` for `*ai.PermanentError` FIRST (reusing the classification internal/ai/retry.go's DoWithRetry already computed via the real openai-go SDK error type), falling back to the existing substring-marker list only for errors that are not an *ai.PermanentError (e.g. errors that never went through DoWithRetry, or a non-structured error from an OpenAI-compatible-but-not-quite endpoint like Ollama's baseURL mode).",
+  "background": [
+    "isPermanentAIError's switch (internal/ai/retry.go:45-52) currently covers: StatusCode 400/401/403/404 (always permanent) and StatusCode 429 with Code==\\\"insufficient_quota\\\" specifically. It does NOT check for 'credit_balance_exhausted' or 'account_deactivated' by Code \u2014 those are two of ai_failure.go's marker strings that may or may not map to a status code already in the 400/401/403/404 bucket; this needs verification against real OpenAI API error payloads (or the openai-go SDK's own documented error codes) rather than assumption before deciding to drop them from the fallback list.",
+    "The Anthropic-style markers ('authentication_error', 'permission_error') in ai_failure.go are dead code today: `aiParser` is concretely `*ai.OpenAIParser` (scanner.go:782), never an Anthropic client \u2014 but the marker-list fallback is still worth keeping as defense-in-depth for the Ollama-via-OpenAI-baseURL path (scanner.go:798, ai.NewOpenAIParserWithBaseURL), whose errors may not always deserialize into a structured *openai.Error the same way OpenAI's own API does."
+  ],
+  "steps": [
+    "Verify, via the openai-go SDK source or OpenAI's public API error-code documentation, whether 'credit_balance_exhausted' and 'account_deactivated' error responses carry an HTTP status already inside isPermanentAIError's 400/401/403/404 bucket (they almost certainly do \u2014 billing/auth errors are 4xx) \u2014 if confirmed, they are provably redundant with the typed check and can be dropped from ai_failure.go's marker list; if NOT confirmed, keep them in the text-fallback list.",
+    "In internal/scanner/ai_failure.go, import \\\"errors\\\" and the internal/ai package.",
+    "Rewrite isPermanentAIFailure: first do `var permErr *ai.PermanentError; if errors.As(err, &permErr) { return true }`, THEN fall through to the existing `for _, marker := range permanentAIFailureMarkers { if strings.Contains(msg, marker) { return true } }` loop as a fallback for errors that are not *ai.PermanentError.",
+    "Trim permanentAIFailureMarkers down to only the entries NOT provably covered by isPermanentAIError's status-code switch, per step 1's finding \u2014 at minimum this removes '401 Unauthorized' and '403 Forbidden' (directly covered by StatusCode 401/403) if step 1 confirms the SDK's *openai.Error.Error() string format doesn't already get caught pre-wrap in some other way.",
+    "Update the doc comment (currently citing the now-stale todo.d fragment path) to reference internal/ai/retry.go's isPermanentAIError/PermanentError directly instead.",
+    "Bump both files' version headers if either is touched beyond ai_failure.go (retry.go should not need changes for this item)."
+  ],
+  "tests": [
+    "internal/scanner/ai_failure_test.go: add TestIsPermanentAIFailure_TypedPermanentError \u2014 wrap a fake error in &ai.PermanentError{Err: errors.New(\\\"whatever\\\")} and assert isPermanentAIFailure returns true even when the wrapped message contains none of the substring markers (proves the typed path is checked, not just the text path).",
+    "Existing TestIsPermanentAIFailure-style table tests (grep -n \\\"func Test\\\" internal/scanner/ai_failure_test.go) must keep passing for the substring-fallback cases that remain in the marker list after trimming.",
+    "Anti-over-suppression: TestIsPermanentAIFailure_TransientErrorNotFlagged \u2014 a plain network-timeout error (not *ai.PermanentError, no marker substring) must still return false, so the phase keeps retrying transient failures instead of aborting on everything."
+  ],
+  "acceptance": [
+    "go build ./internal/scanner/... ./internal/ai/... exits 0.",
+    "go test ./internal/scanner/... -run TestIsPermanentAIFailure -v exits 0 including the new typed-error test.",
+    "grep -n \"errors.As(err, &permErr)\" internal/scanner/ai_failure.go returns 1 hit."
+  ],
+  "edge_cases": [
+    "err is nil: isPermanentAIFailure's existing `if err == nil { return false }` guard must stay first, before the errors.As check (errors.As(nil, ...) is safe but the early return is clearer and matches existing style).",
+    "err is a *ai.PermanentError wrapping ANOTHER *ai.PermanentError (double-wrap, shouldn't happen but errors.As unwraps recursively so it is harmless either way) \u2014 no special handling needed, errors.As already walks the chain.",
+    "err comes from the Ollama-via-baseURL path and is a plain fmt.Errorf-wrapped string with no *openai.Error anywhere in its chain: falls through to the substring-marker fallback exactly as today \u2014 behavior-preserving for that path."
+  ],
+  "anti_over_suppression": "TestIsPermanentAIFailure_TransientErrorNotFlagged",
+  "depends_on_lines": [],
+  "gate": "go build ./... && go vet ./... && go test ./internal/scanner/... -count=1",
+  "notes": "This is a 'hand-rolled = weaker copy' finding (see this repo's own standing feedback lesson of that name): the correct fix already exists in a sibling file and predates the workaround by 6 weeks; the workaround's own comment even names the right destination (a typed error) without noticing it had already arrived. Flagging per CLAUDE.md's 'Fix It Right: depth' \u2014 the minimal patch would be to just add one more substring marker; the correct fix is to consume the classification that already exists.",
+  "id": "TASK-124",
+  "stable_key": "scope-09.json|4852|None|Reuse internal/ai's existing typed OpenAI error classificati",
+  "ws": "scanner",
+  "slug": "reuse-internal-ai-s-existing-typed-openai-error-",
+  "scope_file": "scope-09.json",
+  "dropped_files": [],
+  "tier_label": "Sonnet-class",
+  "depends_on": [],
+  "wave": 1
+}

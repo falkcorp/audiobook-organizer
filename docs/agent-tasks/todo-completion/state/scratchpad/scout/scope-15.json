@@ -1,0 +1,861 @@
+[
+ {
+  "todo_line": 10632, "src_id": "REPO-SIZE-1", "part": 1,
+  "title": "Remove committed mtls-bridge build artifact and gitignore it",
+  "verdict": "actionable",
+  "verdict_evidence": "`git ls-files -s mtls-bridge` shows a tracked 9.3MB Mach-O binary at repo root (mode 100755), and `make build-mtls-bridge` (Makefile:574-577) builds exactly that path with `go build -o mtls-bridge ./cmd/mtls-bridge` — it is a committed build artifact, not source. .gitignore has no `mtls-bridge` entry (`grep -n mtls .gitignore` only shows `.mtls/` at L289).",
+  "domain": "ci/scripts",
+  "exact_files": [".gitignore", "mtls-bridge", "scripts/setup-git-hooks.sh"],
+  "verified_anchors": [
+   {"claim": "mtls-bridge is a tracked Mach-O binary at repo root", "grep_cmd": "git ls-files -s mtls-bridge", "expect": "1 hit, mode 100755"},
+   {"claim": "Makefile builds this exact file", "grep_cmd": "grep -n 'build-mtls-bridge:' -A2 Makefile", "expect": "1 hit ~L575-577, -o mtls-bridge"},
+   {"claim": ".gitignore has no entry for it", "grep_cmd": "grep -n mtls-bridge .gitignore", "expect": "0 hits"}
+  ],
+  "reuse": [{"name": "pre-commit hook installer", "file": "scripts/setup-git-hooks.sh", "verify_grep": "grep -n HOOK_FILE scripts/setup-git-hooks.sh"}],
+  "polarity": "removal",
+  "effort": "S", "tier": "haiku", "why_tier": "git rm + two-line gitignore add + a small size-guard addition to an existing hook script; no ambiguity",
+  "review_critical": false,
+  "goal": "Stop the compiled mtls-bridge binary (and its Windows twin) from living in git history going forward, per owner-approved Option (d) forward-only hygiene (docs/plans/2026-07-10-repo-size-history-rewrite-plan.md L195-223): remove the tracked binary from HEAD, gitignore it and its Windows counterpart, and add a pre-commit size guard so a rebuilt binary can never be re-added silently.",
+  "background": [
+   "Option (d) forward-only hygiene was explicitly adopted by the owner (`docs/plans/2026-07-10-repo-size-history-rewrite-plan.md:223` 'Adopt Option (d): forward-only hygiene + GitHub Support gc. Do not rewrite history.') — this scout run's decision #1 restates the same call.",
+   "Step 2 of Option (d)'s GitHub-side steps (`docs/plans/2026-07-10-repo-size-history-rewrite-plan.md:206-207`) literally says 'Remove the live mtls-bridge binary from HEAD; add it + build outputs to .gitignore; enable push protection / a pre-commit size guard.'",
+   "`git ls-files -s mtls-bridge` confirms the binary (9,291,954 bytes, arm64 Mach-O) is still tracked at HEAD.",
+   "`Makefile:580-582` also has `build-mtls-bridge-windows` producing `mtls-bridge.exe` — not currently tracked (`git ls-files | grep mtls-bridge.exe` = 0 hits) but should be gitignored preemptively.",
+   "`scripts/setup-git-hooks.sh` installs a pre-commit hook (`.git/hooks/pre-commit` via `--git-common-dir`) that currently only blocks committing named credential files and secret-pattern diffs — no file-size guard exists (`grep -n size scripts/setup-git-hooks.sh` = 0 hits)."
+  ],
+  "steps": [
+   "1. Run `git rm --cached mtls-bridge` (do not delete the local file if the owner wants to keep it for local dev; or `git rm mtls-bridge` if it should also vanish from the working tree — prefer `git rm --cached` plus a `chmod`-friendly local rebuild via `make build-mtls-bridge`).",
+   "2. In `.gitignore`, add a new stanza (near the existing `build/`/`dist/`/`bin/` block around L57-198) with `/mtls-bridge` and `/mtls-bridge.exe`.",
+   "3. In `scripts/setup-git-hooks.sh`, extend the heredoc pre-commit hook (the `cat > \"$HOOK_FILE\" <<'EOF' ... EOF` block) with a size guard: iterate `git diff --cached --name-only --diff-filter=A` (newly added files), stat each staged blob's size via `git cat-file -s :<path>`, and reject the commit (exit 1) if any single added file exceeds e.g. 5MB, printing the offending path(s) and instructing the author to use Git LFS or externalize it instead.",
+   "4. Bump the file-header version on `scripts/setup-git-hooks.sh` (currently 1.2.0) per repo convention.",
+   "5. Update `.standards`-style version headers are N/A for `.gitignore` (no header convention for it in this repo — verify with `head -5 .gitignore`)."
+  ],
+  "tests": [
+   "Manual: `bash scripts/setup-git-hooks.sh && dd if=/dev/zero of=/tmp/big.bin bs=1M count=6 && cp /tmp/big.bin big.bin && git add big.bin && git commit -m test` — expect the hook to reject the commit citing the size guard; then `git reset HEAD big.bin && rm big.bin`.",
+   "scripts/test-git-hooks.sh already exists (`ls scripts/test-git-hooks.sh`) — extend it with a case for the new size guard, verifying both a small file passes and an oversized file is rejected."
+  ],
+  "acceptance": [
+   "`git ls-files mtls-bridge` returns no output (file no longer tracked).",
+   "`grep -n 'mtls-bridge' .gitignore` returns 2 hits (mtls-bridge and mtls-bridge.exe).",
+   "`bash scripts/test-git-hooks.sh` passes including the new size-guard case."
+  ],
+  "edge_cases": [
+   "A legitimately large file the repo already tracks via Git LFS (`.gitattributes` has `*.m4b`/`*.m4a`/`*.mp3`/`*.flac`/`*.png`/`*.webm` LFS rules) must not be blocked by the new guard — only check files NOT already covered by an LFS filter pattern, or check the staged blob is not an LFS pointer.",
+   "A worktree where `.git/hooks` isn't the shared common-dir hooks path (already handled by the script's `--git-common-dir` usage, per its own header comment) — no new risk introduced."
+  ],
+  "anti_over_suppression": "N/A — this is a removal/hygiene task, not a filter/guard whose over-suppression would hide real bugs; the size-guard test case is the guard's own correctness check.",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Owner decision #1 (2026-08-21) already settled Option (d) vs history rewrite. The GitHub Support gc ticket (step 1 of the 4-step plan) is an ops action for the owner, not code — do not attempt it. Do NOT touch git history or run filter-repo."
+ },
+ {
+  "todo_line": 10632, "src_id": "REPO-SIZE-1", "part": 2,
+  "title": "Stop committing series_dedup.py's generated dump/fix cache files",
+  "verdict": "actionable",
+  "verdict_evidence": "testdata/series_dump.json (1.67MB) and testdata/series_fix.json (2.24MB) are tracked but are script-generated cache/output files (`scripts/series_dedup.py:40-41` `DUMP_FILE = os.path.join(TESTDATA_DIR, 'series_dump.json')`), not Go test fixtures — no `.go` file references either filename (`grep -rn series_dump --include='*.go' .` = 0 hits), so a `testdata/fetch.go` downloader (as the plan literally proposed) is unnecessary; the fix is to stop committing script output.",
+  "domain": "ci/scripts",
+  "exact_files": [".gitignore", "testdata/series_dump.json", "testdata/series_fix.json"],
+  "verified_anchors": [
+   {"claim": "series_dump.json/series_fix.json are script cache output, not go test fixtures", "grep_cmd": "grep -n series_dump scripts/series_dedup.py", "expect": "1 hit ~L40, DUMP_FILE = ..."},
+   {"claim": "no Go test consumes them", "grep_cmd": "grep -rln series_dump --include=*.go .", "expect": "0 hits"},
+   {"claim": "files are currently tracked and large", "grep_cmd": "git ls-files -s testdata/series_dump.json testdata/series_fix.json", "expect": "2 hits"}
+  ],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "S", "tier": "haiku", "why_tier": "git rm + gitignore two lines; investigation already confirmed no downstream Go consumer",
+  "review_critical": false,
+  "goal": "Remove testdata/series_dump.json and testdata/series_fix.json from git tracking and add them to .gitignore so scripts/series_dedup.py's local run output stops being committed, closing out the 'externalize live large fixtures' step of the owner-approved forward-only Option (d) plan — using the simpler correct fix (gitignore, not a downloader) once investigation showed they are not real test fixtures.",
+  "background": [
+   "docs/plans/2026-07-10-repo-size-history-rewrite-plan.md:207 proposed 'Externalize live large fixtures (testdata/series_*.json) via a testdata/fetch.go downloader (#1650)' assuming they were Go test fixtures.",
+   "Investigation shows they are actually the DUMP_FILE/FIX_FILE constants in scripts/series_dedup.py (a maintenance script that fetches series data from a running server and writes analysis output locally) — i.e. generated artifacts of running the script, not inputs any test needs.",
+   "No .go file anywhere in the repo references either filename."
+  ],
+  "steps": [
+   "1. `git rm --cached testdata/series_dump.json testdata/series_fix.json`.",
+   "2. Add `testdata/series_dump.json` and `testdata/series_fix.json` to .gitignore (near the existing `testdata/` entries at L253-259/286/351).",
+   "3. Confirm scripts/series_dedup.py's `--apply-fixes` flow (referenced at L556) still works locally against a freshly generated (untracked) series_fix.json — it doesn't require the file to be pre-committed, only present on disk when run with that flag."
+  ],
+  "tests": ["No automated test exists for series_dedup.py (it's an operator script, not covered by `make test`) — verify manually with `python3 scripts/series_dedup.py --help` still runs without error after the gitignore change."],
+  "acceptance": [
+   "`git ls-files testdata/series_dump.json testdata/series_fix.json` returns no output.",
+   "`grep -n series_dump.json .gitignore` returns 1 hit."
+  ],
+  "edge_cases": ["If any CI job or doc references these files as committed fixtures, must update it — checked `grep -rn series_dump.json docs/` and only the two repo-size planning docs mention them, which are historical analysis, not a live dependency."],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs/tooling, no Go/web build path touches these files)",
+  "notes": "This deviates from the plan doc's literal 'downloader' suggestion because investigation found the premise (these are fixtures) was wrong — flagging per Fix-It-Right depth rule rather than building an unneeded testdata/fetch.go."
+ },
+ {
+  "todo_line": 10635, "src_id": null,
+  "title": "Update execution-manifest doc to reflect the now-settled human gates",
+  "verdict": "actionable",
+  "verdict_evidence": "docs/plans/2026-07-10-execution-manifest.md:24-27 still shows INIT-5/6/7/8 and REPO-SIZE-1 as open 'DECISIONS-PENDING #1-#5' gates, but this scout run's owner-decision list (2026-08-21) items #1-#5 already resolved all five (REPO-SIZE-1 → Option (d); INIT-5 T2, INIT-6, INIT-7, INIT-8 → parked) — the manifest doc is now stale and needs a docs update to close the loop, not further human sign-off.",
+  "domain": "docs",
+  "exact_files": ["docs/plans/2026-07-10-execution-manifest.md"],
+  "verified_anchors": [
+   {"claim": "manifest lists these 5 items as open human gates with DECISIONS-PENDING refs", "grep_cmd": "grep -n 'DECISIONS-PENDING' docs/plans/2026-07-10-execution-manifest.md", "expect": "≥5 hits at L24-27,81-85"}
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S", "tier": "haiku", "why_tier": "mechanical status-table edit reflecting decisions already made elsewhere in this session",
+  "review_critical": false,
+  "goal": "Edit the status/notes columns of docs/plans/2026-07-10-execution-manifest.md's INIT-5, INIT-6, INIT-7, INIT-8, and REPO-SIZE-1 (INIT-9 TASK-06) rows to record the 2026-08-21 owner decisions (all four INIT items PARKED; REPO-SIZE-1 decided as Option (d) forward-only), and remove/annotate the 'DECISIONS-PENDING #1-#5' section (L81-85) as resolved.",
+  "background": [
+   "docs/plans/2026-07-10-execution-manifest.md:24 'INIT-5 ... T2 = real-Deluge spike, STOP-FOR-HUMAN sign-off before T3 ... 1/7 ... T2 spike = human gate blocking T3-T7 (DECISIONS-PENDING #2)'.",
+   "L25 'INIT-6 ... STOP-FOR-HUMAN ... GATED ... spec review open (PR #1935; DECISIONS-PENDING #3)'.",
+   "L26 'INIT-7 ... HOLD ... greenlight not given (DECISIONS-PENDING #5)'.",
+   "L27 'INIT-8 ... GATED ... STOP-FOR-HUMAN review session (DECISIONS-PENDING #4)'.",
+   "L28 'INIT-9 ... TASK-06 REPO-SIZE-1 = STOP-FOR-HUMAN plan-only ... T06 REPO-SIZE-1 plan written, decision pending (DECISIONS-PENDING #1)'.",
+   "L81-85 lists the same five items under a 'Human decisions needed' section."
+  ],
+  "steps": [
+   "1. Edit L24: change status cell to note 'PARKED 2026-08-21 (owner decision #2, this scout package) — T2 Deluge spike not resumed'.",
+   "2. Edit L25: change status cell to 'PARKED 2026-08-21 (owner decision #3)'.",
+   "3. Edit L26: change status cell to 'PARKED 2026-08-21 (owner decision #5) — hold-lift not given'.",
+   "4. Edit L27: change status cell to 'PARKED 2026-08-21 (owner decision #4)'.",
+   "5. Edit L28: change status cell to 'DECIDED 2026-08-21 (owner decision #1): Option (d) forward-only + GitHub Support gc, no rewrite — see docs/plans/2026-07-10-repo-size-history-rewrite-plan.md:223'.",
+   "6. Edit the L81-85 'Human decisions needed' list: either delete it or replace each bullet with '[RESOLVED 2026-08-21] <original text>'.",
+   "7. Bump the file's version header comment (check for one near the top of the file; add/update per repo Markdown header convention if present)."
+  ],
+  "tests": ["n/a — documentation-only edit; no test asserts manifest table contents."],
+  "acceptance": ["`grep -n DECISIONS-PENDING docs/plans/2026-07-10-execution-manifest.md` returns 0 hits (all resolved and reworded) or all remaining hits are inside a 'RESOLVED' annotation."],
+  "edge_cases": ["None — pure status doc update, no code path depends on this file's content."],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "This is purely a doc close-out reflecting decisions already made in this scout package's owner-decision list; do not re-litigate the decisions themselves."
+ },
+ {
+  "todo_line": 10660, "src_id": null, "part": 1,
+  "title": "Add resizable/sortable columns to the acoustic dedup candidates table",
+  "verdict": "actionable",
+  "verdict_evidence": "internal candidates table in web/src/components/dedup/DedupAcousticTab.tsx L1136-1308 is a plain MUI <Table> (TableContainer/Table/TableHead/TableBody, no ConfigurableTable) with a checkbox-select column, Book A/Book B/Similarity/Actions columns and no expand/collapse rows — a clean fit for the existing `useConfigurableTable` hook already used elsewhere (web/src/components/settings/WriteBackPreviewTable.tsx:23-25).",
+  "domain": "web",
+  "exact_files": ["web/src/components/dedup/DedupAcousticTab.tsx"],
+  "verified_anchors": [
+   {"claim": "AcousticDedupTab candidates table uses plain MUI Table, not ConfigurableTable", "grep_cmd": "grep -n 'TableContainer\\|ConfigurableTable' web/src/components/dedup/DedupAcousticTab.tsx", "expect": "hits at L1136-1137, no ConfigurableTable import"},
+   {"claim": "rows are non-expandable, one candidate per row", "grep_cmd": "grep -n 'candidates.map((c) =>' web/src/components/dedup/DedupAcousticTab.tsx", "expect": "1 hit ~L1163"}
+  ],
+  "reuse": [
+   {"name": "useConfigurableTable hook + ResizableHeaderCell", "file": "web/src/components/common/ConfigurableTable.tsx", "verify_grep": "grep -n 'export function useConfigurableTable\\|export function ResizableHeaderCell' web/src/components/common/ConfigurableTable.tsx"},
+   {"name": "reference integration pattern", "file": "web/src/components/settings/WriteBackPreviewTable.tsx", "verify_grep": "grep -n useConfigurableTable web/src/components/settings/WriteBackPreviewTable.tsx"}
+  ],
+  "polarity": "additive",
+  "effort": "M", "tier": "sonnet", "why_tier": "requires preserving the checkbox-select-all column and busy/selected row styling while swapping in ConfigurableTable's column model — not pure mechanical copy",
+  "review_critical": false,
+  "goal": "Convert the acoustic-dedup candidates table (web/src/components/dedup/DedupAcousticTab.tsx, the `<TableContainer>` block starting ~L1136 inside AcousticDedupTab) to use `useConfigurableTable`/`ResizableHeaderCell` from web/src/components/common/ConfigurableTable.tsx, giving it resizable + sortable columns exactly like WriteBackPreviewTable.tsx, while keeping the existing checkbox-select-all and per-row busy/selected styling intact.",
+  "background": [
+   "WriteBackPreviewTable.tsx is the canonical reuse example: it calls `useConfigurableTable({storageKey, columns, defaultSortField, defaultSortDir})` and renders `<ResizableHeaderCell>` per column plus `sortRows(rows)` before mapping (verify: `grep -n sortRows web/src/components/settings/WriteBackPreviewTable.tsx`).",
+   "ColumnDef<T> supports a custom `render(row) => ReactNode` per column and an optional `sortValue(row) => string|number` (web/src/components/common/ConfigurableTable.tsx:23-42) — the checkbox column can be declared with `sortable: false` and a `render` that renders the existing <Checkbox> JSX unchanged.",
+   "Column widths/visibility persist to localStorage keyed by `storageKey` (ConfigurableTable.tsx:104, `${STORAGE_KEYS.TABLE_CONFIG}_${storageKey}`) — pick a unique storageKey such as 'dedup-acoustic-candidates'."
+  ],
+  "steps": [
+   "1. Import `useConfigurableTable`, `ResizableHeaderCell`, and `ColumnDef` from '../common/ConfigurableTable' in DedupAcousticTab.tsx.",
+   "2. Define a `columns: ColumnDef<DedupCandidate>[]` array outside/above the AcousticDedupTab component (or via useMemo inside it) covering: select-checkbox (sortable:false, custom render), Book A (sortValue by book title via bookCache lookup), Book B (same), Similarity (sortValue: c.similarity ?? 0), Actions (sortable:false).",
+   "3. Call `const table = useConfigurableTable({storageKey: 'dedup-acoustic-candidates', columns, defaultSortField: 'similarity', defaultSortDir: 'desc'})` inside AcousticDedupTab.",
+   "4. Replace the `<TableHead><TableRow>` static `<TableCell>` headers (L1138-1159) with a map over `table.visibleColumns` rendering `<ResizableHeaderCell>` per WriteBackPreviewTable's pattern (verify exact JSX with `grep -n ResizableHeaderCell -A15 web/src/components/settings/WriteBackPreviewTable.tsx`).",
+   "5. Replace `candidates.map((c) => ...)` (L1163) with `table.sortRows(candidates).map((c) => ...)`, keeping the existing per-row `<TableRow selected sx={...}>` wrapper and cell content, but iterate `table.visibleColumns` to decide which cells to render (or keep static cells gated by `table.isColumnVisible(key)` if a full generic-row-render refactor is out of scope for this pass).",
+   "6. Bump the file-header version comment at the top of DedupAcousticTab.tsx."
+  ],
+  "tests": [
+   "web/src/components/dedup/__tests__/DedupAcousticTab.test.tsx (create if absent — check `find web/src -iname 'DedupAcousticTab*test*'` first) — assert clicking a column header toggles sort direction and the candidate order changes accordingly (render with 3 fixture candidates of differing similarity, click 'Similarity' header, assert new row order).",
+   "Anti-over-suppression: a test asserting the checkbox column's select-all/select-one behavior still works after the refactor (no regression in `selectedCandIds` state)."
+  ],
+  "acceptance": [
+   "`npm --prefix web run lint` passes with no new errors in DedupAcousticTab.tsx.",
+   "Manual: load the Dedup > Acoustic tab, drag a column header edge, confirm the column resizes and the width persists across a page reload (localStorage)."
+  ],
+  "edge_cases": ["Empty candidates list — table should render header only, no crash on `table.sortRows([])`.", "A candidate whose bookCache entry hasn't loaded yet (async) — sortValue must handle undefined book gracefully (fallback to empty string, not throw)."],
+  "anti_over_suppression": "test: 'select-all checkbox still selects all visible rows after ConfigurableTable conversion'",
+  "depends_on_lines": [],
+  "gate": "npm --prefix web run lint && npm --prefix web test",
+  "notes": "The smaller per-candidate segment-detail table in the same file (L461-514, 4 fixed columns: Segment/Book A fingerprint/Book B fingerprint/Match) is a nested detail view inside a compare panel, not a list of many rows — resizable/sortable columns add little value there; left out of this task's scope deliberately (small, low-value, would need its own decision if pursued)."
+ },
+ {
+  "todo_line": 10660, "src_id": null, "part": 2,
+  "title": "Add resizable/sortable columns to iTunes write-back preview table",
+  "verdict": "stale_done",
+  "verdict_evidence": "web/src/components/settings/WriteBackPreviewTable.tsx already uses `useConfigurableTable`/`ConfigurableTable` (imports at L23-25) with `sortable: true` and `sortValue` set on 6 of its columns (title, author, itunes_path, itunes_path_translated, ao_path, ao_itunes_translated_path, path_differs — grep shows 7 `sortable: true` hits) and resizable headers via `ResizableHeaderCell`/`startResize` (ConfigurableTable.tsx L162-201) — the file's own doc comment even says 'click-to-sort and drag-to-resize headers' (L31).",
+  "domain": "web",
+  "exact_files": [],
+  "verified_anchors": [
+   {"claim": "WriteBackPreviewTable already uses ConfigurableTable with sortable columns", "grep_cmd": "grep -n 'sortable: true' web/src/components/settings/WriteBackPreviewTable.tsx", "expect": "7 hits"},
+   {"claim": "component doc comment confirms resize+sort UX shipped", "grep_cmd": "grep -n 'click-to-sort and drag-to-resize' web/src/components/settings/WriteBackPreviewTable.tsx", "expect": "1 hit ~L31"}
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S", "tier": "haiku", "why_tier": "n/a — no work, verification only",
+  "review_critical": false,
+  "goal": "n/a — already implemented.",
+  "background": ["WriteBackPreviewTable.tsx is the reference implementation the other three parts of this TODO item (dedup results, activity log) should copy — see part 1's 'reuse' field."],
+  "steps": [],
+  "tests": [],
+  "acceptance": ["grep confirms sortable/resizable already present; no further action needed"],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "The TODO.md item's phrasing 'remaining: dedup results, activity log, iTunes write-back preview, metadata review' listed this as still-remaining, but it was already shipped — TODO.md should be corrected to drop iTunes write-back preview from the remaining list."
+ },
+ {
+  "todo_line": 10660, "src_id": null, "part": 3,
+  "title": "Metadata-review table surface no longer exists (retired in favor of review panels)",
+  "verdict": "not_a_task",
+  "verdict_evidence": "The tabular 'metadata review' page this TODO item names was retired: `git log --oneline --all -- '*MetadataReview*'` shows commit eae9e2f7 'feat(review)!: retire the surfaces /review replaces'. The current /review workspace (web/src/components/review/{QueueRail,MetadataPanel,DupesPanel,RegroupPanel}.tsx) is card/panel-based with no `<Table>`/`TableContainer` anywhere (`grep -n TableContainer web/src/components/review/*.tsx` = 0 hits) — there is no table left to add resizable/sortable columns to.",
+  "domain": "web",
+  "exact_files": [],
+  "verified_anchors": [
+   {"claim": "old metadata-review table surface was retired", "grep_cmd": "git log --oneline --all -- '*MetadataReview*'", "expect": "commit eae9e2f7 present"},
+   {"claim": "current review panels have no table markup", "grep_cmd": "grep -n TableContainer web/src/components/review/QueueRail.tsx web/src/components/review/MetadataPanel.tsx web/src/components/review/DupesPanel.tsx web/src/components/review/RegroupPanel.tsx", "expect": "0 hits"}
+  ],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "S", "tier": "haiku", "why_tier": "n/a — no code work, only a TODO.md correction",
+  "review_critical": false,
+  "goal": "No code deliverable. The 'metadata review' item in this TODO bullet should simply be struck — the surface it referred to (a data table) was intentionally retired and replaced with the panel-based /review workspace, which has nothing resembling a resizable/sortable column grid.",
+  "background": ["commit eae9e2f7 'feat(review)!: retire the surfaces /review replaces' removed the old metadata-review table page.", "The replacement review workspace (ReviewWorkspace.tsx + QueueRail/MetadataPanel/DupesPanel/RegroupPanel) is card/list based, confirmed by 0 TableContainer hits across those four files."],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "If the owner later wants the review workspace's card lists to gain a resizable/sortable *grid view*, that is new scope requiring a design decision (list-vs-grid), not a continuation of this old TODO line."
+ },
+ {
+  "todo_line": 10660, "src_id": null, "part": 4,
+  "title": "Add resizable/sortable columns to the Activity Log table",
+  "verdict": "actionable",
+  "verdict_evidence": "web/src/pages/ActivityLog.tsx's entries table (TableContainer/Table at L2091-2092) is a plain MUI table with static headers (Time/Level/Type/Summary/Source/Tags, L2093-2100) and no ConfigurableTable usage; rows are heterogeneous (plain entries, `<BatchActivityEntry>` sub-component for batched entries L2105-2114, and inline digest-expansion rows), so this needs more than a drop-in swap.",
+  "domain": "web",
+  "exact_files": ["web/src/pages/ActivityLog.tsx"],
+  "verified_anchors": [
+   {"claim": "ActivityLog table is a plain MUI Table with static TableCell headers", "grep_cmd": "grep -n 'TableContainer\\|<TableCell>Time' web/src/pages/ActivityLog.tsx", "expect": "hits at L2091-2093"},
+   {"claim": "rows branch into 3 shapes: plain, batched, digest", "grep_cmd": "grep -n 'BatchActivityEntry\\|entry.tier ===' web/src/pages/ActivityLog.tsx", "expect": "≥2 hits ~L2105-2115"}
+  ],
+  "reuse": [
+   {"name": "useConfigurableTable + ResizableHeaderCell (header-only usage)", "file": "web/src/components/common/ConfigurableTable.tsx", "verify_grep": "grep -n 'export function' web/src/components/common/ConfigurableTable.tsx"}
+  ],
+  "polarity": "additive",
+  "effort": "L", "tier": "sonnet", "why_tier": "row bodies are heterogeneous (plain/batched/digest) so only the header (resize+visibility) can reuse ConfigurableTable directly; sort must be applied to the pre-render `entries` array by a chosen field before any of the three row-render branches run, which needs care to not break existing digest-expansion state",
+  "review_critical": false,
+  "goal": "Give the Activity Log's entries table resizable columns (Time/Level/Type/Summary/Source/Tags) via `useConfigurableTable`'s header machinery, and sortable columns by wrapping the existing `entries` array with `table.sortRows()` before the three-way row-type branch (plain/batched/digest) runs, without altering the batched/digest row rendering logic itself.",
+  "background": [
+   "The header row (web/src/pages/ActivityLog.tsx L2093-2100) is static TableCells for Time/Level/Type/Summary/(Source)/(Tags), with Source and Tags conditionally hidden on mobile (`!isMobile &&`).",
+   "Row rendering branches three ways inside `entries.map((entry) => {...})` (L2105+): batched entries render `<BatchActivityEntry>`, digest-tier entries render an expand/collapse summary, everything else presumably renders a plain row further down in the same map callback.",
+   "ConfigurableTable's `sortRows()` only needs a `sortValue(row) => string|number` per column and works on any array — it does not require uniform row rendering, so it can be used purely for sort+resize while leaving the three-way row branch untouched."
+  ],
+  "steps": [
+   "1. Import `useConfigurableTable`, `ResizableHeaderCell`, `ColumnDef` from '../components/common/ConfigurableTable' into ActivityLog.tsx.",
+   "2. Define `columns: ColumnDef<ActivityEntry>[]` for Time (sortValue: entry.timestamp), Level (sortValue: entry.tier or level field — check the entry type's actual field name via `grep -n 'interface ActivityEntry' web/src/pages/ActivityLog.tsx` or wherever it's imported from), Type, Summary, Source, Tags — mark Summary/Source/Tags as `sortable: false` if they don't have a sensible single-value sort (Tags is an array).",
+   "3. Call `const table = useConfigurableTable({storageKey: 'activity-log', columns, defaultSortField: 'time', defaultSortDir: 'desc'})`.",
+   "4. Replace the static header `<TableRow>` (L2093-2100) with a map over `table.visibleColumns` using `<ResizableHeaderCell>`, preserving the `!isMobile &&` conditional visibility (either via column `defaultVisible` gated on `isMobile`, recomputed with a `useMemo` keyed on `isMobile`, or by leaving Source/Tags always in `columns` and letting the user's own visibility toggle handle small screens).",
+   "5. Change `entries.map((entry) => {...})` to `table.sortRows(entries).map((entry) => {...})`, leaving the batched/digest/plain branch logic inside the callback completely unchanged.",
+   "6. Bump the file-header version comment at the top of ActivityLog.tsx."
+  ],
+  "tests": [
+   "web/src/pages/__tests__/ActivityLog.test.tsx (check `find web/src -iname 'ActivityLog*test*'` for existing coverage first) — add a case asserting clicking the 'Time' header reverses row order, and that batched/digest rows still render correctly after a sort is applied."
+  ],
+  "acceptance": [
+   "`npm --prefix web run lint` passes.",
+   "Manual: Activity Log page — resize a column by dragging its edge, reload the page, confirm the width persisted; click 'Type' header, confirm rows re-sort without breaking digest-entry expand/collapse."
+  ],
+  "edge_cases": [
+   "A batched entry's summary field may be synthesized/absent — sortValue for Summary must handle undefined without throwing.",
+   "Sorting must not desync from the live-refresh polling (existing 'stale data' warning banner at L2087) — sort is applied client-side per render, so a background refresh naturally reflows through the same sortRows() call; no extra care needed beyond not caching a stale sorted copy in state."
+  ],
+  "anti_over_suppression": "test: 'digest-entry expand/collapse still works after entries are sorted by a resizable-column header click'",
+  "depends_on_lines": [],
+  "gate": "npm --prefix web run lint && npm --prefix web test",
+  "notes": "Larger/riskier than the WriteBackPreviewTable pattern because of the three-way row branch; if a cold Haiku agent struggles with the header-visibility/mobile interaction in step 4, it is acceptable to keep Source/Tags columns always declared and rely on ConfigurableTable's own visibility toggle instead of the old isMobile conditional — flag that simplification in the PR description rather than guessing silently."
+ },
+ {
+  "todo_line": 10660, "src_id": null, "part": 5,
+  "title": "Add resizable/sortable columns to the split-book dedup candidates table",
+  "verdict": "actionable",
+  "verdict_evidence": "web/src/components/dedup/DedupSplitBookTab.tsx's candidates table (TableContainer/Table L345-346) uses a plain MUI table with a custom `<CandidateRow>` sub-component per row (L358-365, taking `expanded`/`onToggle` props) plus `<TablePagination>` below it (L369+) — expand/collapse state per row means only the header can cleanly reuse ConfigurableTable's resize/sort machinery, similar to part 4's Activity Log case.",
+  "domain": "web",
+  "exact_files": ["web/src/components/dedup/DedupSplitBookTab.tsx"],
+  "verified_anchors": [
+   {"claim": "split-book table uses a custom expandable CandidateRow, not plain cells", "grep_cmd": "grep -n 'CandidateRow\\|TablePagination' web/src/components/dedup/DedupSplitBookTab.tsx", "expect": "hits at L358-365 and ~L369"}
+  ],
+  "reuse": [
+   {"name": "useConfigurableTable header-only usage (same pattern as part 4)", "file": "web/src/components/common/ConfigurableTable.tsx", "verify_grep": "grep -n 'export function useConfigurableTable' web/src/components/common/ConfigurableTable.tsx"}
+  ],
+  "polarity": "additive",
+  "effort": "M", "tier": "sonnet", "why_tier": "header-only ConfigurableTable integration plus sorting the already-paginated `candidates` array before `pageSlice` is computed — needs care that sort doesn't fight the existing client-side pagination state",
+  "review_critical": false,
+  "goal": "Give the split-book detector's candidates table (columns: Parent folder / Suggested title / Suggested author / Books / Actions) resizable + sortable headers via ConfigurableTable, applying `table.sortRows()` to the `candidates` array before `pageSlice` is derived, while leaving the expandable `<CandidateRow>` row component and `<TablePagination>` untouched.",
+  "background": [
+   "DedupSplitBookTab.tsx L326-368: `pageSlice.map((c) => <CandidateRow key={c.id} candidate={c} expanded={expanded.has(c.id)} onToggle={...} ... />)` — find where `pageSlice` is derived from `candidates` (likely `candidates.slice(page*rowsPerPage, ...)`) via `grep -n pageSlice web/src/components/dedup/DedupSplitBookTab.tsx`.",
+   "TablePagination props (count, page, rowsPerPage) already reference `candidates.length` (L370) so sorting the underlying array before pagination is applied keeps page boundaries correct."
+  ],
+  "steps": [
+   "1. Import `useConfigurableTable`, `ResizableHeaderCell`, `ColumnDef` in DedupSplitBookTab.tsx.",
+   "2. Define columns for the 5 header cells (Parent folder, Suggested title, Suggested author, Books count, Actions — mark Actions `sortable: false`), with sortValue reading `c.parent_folder`, `c.suggested_title`, `c.suggested_author`, `c.book_ids.length` respectively.",
+   "3. Call `const table = useConfigurableTable({storageKey: 'dedup-split-book-candidates', columns, defaultSortField: 'parent_folder', defaultSortDir: 'asc'})`.",
+   "4. Replace the static `<TableHead><TableRow>` (with the leading blank `<TableCell />` for the expand toggle kept as-is, non-configurable) with a map over `table.visibleColumns` rendering `<ResizableHeaderCell>`.",
+   "5. Find the `pageSlice` derivation and wrap its source with `table.sortRows(candidates)` before slicing, e.g. `const sorted = table.sortRows(candidates); const pageSlice = sorted.slice(page * rowsPerPage, (page + 1) * rowsPerPage);` — locate the exact current expression via `grep -n 'pageSlice =' web/src/components/dedup/DedupSplitBookTab.tsx`.",
+   "6. Bump the file-header version comment."
+  ],
+  "tests": [
+   "web/src/components/dedup/__tests__/DedupSplitBookTab.test.tsx (check `find web/src/components/dedup -iname 'DedupSplitBookTab*test*'` for existing coverage) — add a case asserting a header click re-sorts candidates and pagination page resets/stays consistent (e.g. clicking a header while on page 2 either resets to page 0 or keeps showing valid rows, whichever the existing pagination component does by default — assert current behavior, don't invent new behavior)."
+  ],
+  "acceptance": [
+   "`npm --prefix web run lint` passes.",
+   "Manual: Dedup > Split-book tab, resize/sort a column, confirm pagination still shows the correct total count and rows."
+  ],
+  "edge_cases": ["Sorting while a row is expanded (`expanded.has(c.id)`) — the Set is keyed by candidate id, not row index, so expand state survives resorting automatically; verify no regression."],
+  "anti_over_suppression": "test: 'expanded row state survives a column-header sort'",
+  "depends_on_lines": [],
+  "gate": "npm --prefix web run lint && npm --prefix web test",
+  "notes": "Same header-only integration pattern as part 4 (Activity Log) — both tables have non-uniform row rendering that rules out a full drop-in ConfigurableTable body swap."
+ },
+ {
+  "todo_line": 10662, "src_id": null,
+  "title": "Product rename/branding sweep",
+  "verdict": "parked",
+  "verdict_evidence": "Owner decision #7 in this scout package's decision list: 'Product rename: PARKED'. TODO.md:10663 itself states this is 'blocked on name decision'.",
+  "domain": "docs",
+  "exact_files": [],
+  "verified_anchors": [{"claim": "item text says blocked on name decision", "grep_cmd": "grep -n '1.17 — product rename' TODO.md", "expect": "1 hit ~L10662"}],
+  "reuse": [], "polarity": "transform", "effort": "S", "tier": "haiku", "why_tier": "n/a — parked, no work assigned",
+  "review_critical": false,
+  "goal": "n/a — parked per owner decision #7.",
+  "background": [], "steps": [], "tests": [], "acceptance": [], "edge_cases": [],
+  "anti_over_suppression": "N/A", "depends_on_lines": [], "gate": "n/a",
+  "notes": "Do not brief this item; wait for an explicit name decision from the owner before any branding sweep work is scoped."
+ },
+ {
+  "todo_line": 10663, "src_id": null,
+  "title": "Plex-style media server API, LLM series detection, AI cover art (all on hold)",
+  "verdict": "parked",
+  "verdict_evidence": "TODO.md:10663-10664 explicitly tags all three (3.8 Plex-style API, 3.9 LLM series detection, 3.10 AI cover art) as '[hold]' in the roadmap; none of the 14 owner decisions in this scout package's list unparks them, and they are speculative future features with no design spec in docs/specs/ (`find docs/specs -iname '*plex*' -o -iname '*ai-cover*'` = 0 hits).",
+  "domain": "docs",
+  "exact_files": [],
+  "verified_anchors": [
+   {"claim": "item explicitly marked [hold]", "grep_cmd": "grep -n '3.8 Plex-style media server API' TODO.md", "expect": "1 hit ~L10663"},
+   {"claim": "no design spec exists for any of the three", "grep_cmd": "find docs/specs -iname '*plex*' -o -iname '*cover-art*' -o -iname '*series-detect*'", "expect": "0 hits"}
+  ],
+  "reuse": [], "polarity": "transform", "effort": "S", "tier": "haiku", "why_tier": "n/a — parked",
+  "review_critical": false,
+  "goal": "n/a — parked; explicitly [hold] with no design spec.",
+  "background": [], "steps": [], "tests": [], "acceptance": [], "edge_cases": [],
+  "anti_over_suppression": "N/A", "depends_on_lines": [], "gate": "n/a",
+  "notes": "Each of the three is independently speculative (a media-server-compatible API, an LLM-based series detector, and AI-generated cover art) — if unparked later they should be split into three separate design-then-build tracks, not one item."
+ },
+ {
+  "todo_line": 10670, "src_id": "4.8", "title": "Store ISP sweep — narrow the 8 handlers/*/interfaces.go + internal/server/interfaces.go DI seams",
+  "verdict": "stale_done",
+  "verdict_evidence": "All non-comment `database.Store` references in internal/server/handlers are gone: `grep -rln 'database\\.Store\\b' internal/server/handlers --include='*.go' | grep -v _test.go` still lists 14 files but every hit in them is now a historical/doc comment ('It was `= database.Store`... until 2026-08-19', 'Was database.Store (398 methods) until 2026-08-19' in organize.go:61, oauth_login.go:277, ai.go:132, diagnostics.go:123, versions.go:58, itunes.go:221) — not live type usage. All 7 handlers/*/interfaces.go subpackages (audiobooks, operations, system, metadata, duplicates, entities, dedup) already declare narrow *Store interfaces (AudiobooksStore, OperationsStore, SystemStore, MetadataStore, DuplicatesStore, EntitiesStore, DedupStore), and top-level internal/server/handlers/interfaces.go has 0 references to database.Store at all. `internal/server/interfaces.go` (the 8th file named in the TODO text) never existed in git history (`git log --oneline --all -- internal/server/interfaces.go` = 0 hits) — it was a planning-doc misreference to the already-covered internal/server/handlers/interfaces.go.",
+  "domain": "internal/server/handlers",
+  "exact_files": [],
+  "verified_anchors": [
+   {"claim": "all 7 handler subpackages have a narrow *Store interface", "grep_cmd": "grep -ln 'is the narrow database.Store subset' internal/server/handlers/*/interfaces.go", "expect": "6+ hits (dedup, entities, audiobooks, duplicates, system; operations/metadata phrase it slightly differently but also compose narrow sub-interfaces)"},
+   {"claim": "remaining database.Store mentions in handlers/*.go are historical comments, not live params", "grep_cmd": "grep -n 'database\\.Store' internal/server/handlers/organize.go internal/server/handlers/oauth_login.go internal/server/handlers/ai.go internal/server/handlers/diagnostics.go internal/server/handlers/versions.go internal/server/handlers/itunes.go", "expect": "all hits are inside // comments, none are a type declaration"},
+   {"claim": "internal/server/interfaces.go never existed", "grep_cmd": "git log --oneline --all -- internal/server/interfaces.go", "expect": "0 hits"}
+  ],
+  "reuse": [], "polarity": "removal", "effort": "S", "tier": "haiku", "why_tier": "n/a — verification only, no work remains",
+  "review_critical": false,
+  "goal": "n/a — already implemented; TODO.md's 'Still not started: the 8 internal/server/handlers/*/interfaces.go + internal/server/interfaces.go DI seams' claim is stale and should be checked off / corrected.",
+  "background": [
+   "Commits 70026166, 70bcfd52, 118e5527, 80e733e2, c4b66da8, 7954c73c, 13ad9df4, cc8bcd38, 6ab265b1, 1a02be54, 231c3c39 (and more, `git log --oneline --grep=narrow -i --since=2026-08-15 -- internal/server/handlers`) collectively narrowed every remaining wide-Store consumer in this package tree between 2026-08-15 and 2026-08-21.",
+   "This matches the project memory note '[✅ BOTH wide-store accessors SPLIT] — #2612 + #2617; reach 216→49' and '[🟢 Store decoupling DONE] — refs 172→8, AsPebbleStore→0, width baseline 0.'"
+  ],
+  "steps": [], "tests": [], "acceptance": [], "edge_cases": [],
+  "anti_over_suppression": "N/A", "depends_on_lines": [], "gate": "n/a",
+  "notes": "TODO.md item 40 (L10670) and its 4.8 Fleet-tasks cross-ref (L10665) should be checked off; the struct-split follow-on to this sweep is separately PARKED per project memory ('🛑 struct-split PARKED') and out of scope even if this item were reopened."
+ },
+ {
+  "todo_line": 10706, "src_id": null, "title": "Close out the 2026-05-01 re-audit block (TEST-2/DEP-1/DEAD-1/CTX-4/LOG-5/R-9/R-10)",
+  "verdict": "actionable",
+  "verdict_evidence": "Every sub-item independently re-verified at HEAD is resolved or moot: DEAD-1 symbols (legacySaveConfigToDatabase_REMOVED/bookTagKeyspace/bookSummarySelectColumnsQualified) — 0 hits; CTX-4 (context.Context on ActivityStore.Summarize/CompactByDay) — present on all 6 implementations; LOG-5 (fmt.Printf/log.Printf in sqlite_store/pebble_store/migrations/playlist/organizer) — 0 hits and sqlite_store.go no longer exists; R-9 (stale N1-2 TODO comments in sqlite_store.go) — moot, file gone; R-10 (12 capitalized error strings in 6 metadata packages) — 0 hits; DEP-1 (Book.ITunesPath usage outside BookFile.ITunesPath) — 0 non-test hits of `book.ITunesPath`; TEST-2 (TestStoreAdditionalCoverageSQLite failure) — test exists, runs against PebbleStore via setupTestDB, no evidence of a current failure. Only DEP-1e (drop the deprecated `books.itunes_path` column / `Book.ITunesPath` struct field) is genuinely still open: the field is still declared (internal/database/store.go:220) and still copied through struct clones (internal/database/bookcore.go:207,321).",
+  "domain": "docs",
+  "exact_files": ["TODO.md"],
+  "verified_anchors": [
+   {"claim": "DEAD-1 symbols removed", "grep_cmd": "grep -rn 'legacySaveConfigToDatabase_REMOVED\\|bookTagKeyspace\\|bookSummarySelectColumnsQualified' --include=*.go .", "expect": "0 hits"},
+   {"claim": "CTX-4 done on all ActivityStore implementations", "grep_cmd": "grep -rn 'func.*Summarize(ctx context.Context\\|func.*CompactByDay(ctx context.Context' --include=*.go internal/database internal/activity", "expect": "≥6 hits"},
+   {"claim": "LOG-5 done, sqlite_store.go gone", "grep_cmd": "find . -iname sqlite_store.go; grep -rn 'fmt.Printf\\|log.Printf' internal/database internal/playlist internal/organizer --include=*.go", "expect": "0 hits both"},
+   {"claim": "R-10 done", "grep_cmd": "grep -rn 'errors.New(\"[A-Z]\\|fmt.Errorf(\"[A-Z]' internal/metadata/audible.go internal/metadata/audnexus.go internal/metadata/googlebooks.go internal/metadata/hardcover.go internal/metadata/openlibrary.go internal/metadata/wikipedia.go", "expect": "0 hits"},
+   {"claim": "DEP-1a-d done (no non-test reads of the deprecated Book field)", "grep_cmd": "grep -rn 'book\\.ITunesPath\\b' --include=*.go internal/", "expect": "0 hits outside _test.go"},
+   {"claim": "DEP-1e still open — field still declared and copied", "grep_cmd": "grep -n 'ITunesPath ' internal/database/store.go; grep -n 'ITunesPath: b.ITunesPath\\|ITunesPath: c.ITunesPath' internal/database/bookcore.go", "expect": "1 hit + 2 hits"},
+   {"claim": "TEST-2 test exists and is not SQLite-backed anymore", "grep_cmd": "grep -n 'func TestStoreAdditionalCoverageSQLite' -A3 internal/database/store_extra_test.go", "expect": "1 hit, body calls setupTestDB (PebbleStore-backed)"}
+  ],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "S", "tier": "haiku", "why_tier": "editing a TODO.md prose bullet to record verified closure; no code change beyond the DEP-1e follow-up which is a separate, smaller task",
+  "review_critical": false,
+  "goal": "Rewrite TODO.md's item 42 bullet (L10706-10709, '2026-05-01 re-audit block close-out pass') to record that TEST-2/DEP-1a-d/DEAD-1/CTX-4/LOG-5/R-9/R-10/PERF-1 are all confirmed resolved-or-moot with the grep evidence above, and spin DEP-1e (drop `Book.ITunesPath` / `books.itunes_path`) out as its own small forward-looking TODO line since it is the one genuinely unresolved sub-item.",
+  "background": [
+   "docs/archive/codebase-evaluation.md's '2026-05-01 Re-Audit — New Findings' section (L30, TOC L16) is the original source of this finding set; docs/archive/todo-2026-H1.md:3185-3226 has the frozen original bullet text (non-checkbox format) for TEST-2/DEP-1/DEAD-1/CTX-4/LOG-5/R-9/R-10.",
+   "PERF-1 (referenced in the same item text) was independently confirmed obsolete via commit 19e129d4 'future-proof remaining whole-library ops against fixed-limit truncation' (see scope item 45's own finding) — the two findings corroborate each other."
+  ],
+  "steps": [
+   "1. In TODO.md, replace the L10706-10709 bullet body with a closure note: 'CLOSED 2026-08-21 — TEST-2/DEAD-1/CTX-4/LOG-5/R-9/R-10/DEP-1a-d all verified resolved or moot at HEAD (see grep evidence in scout package). DEP-1e (drop deprecated Book.ITunesPath field / books.itunes_path column) spun out separately below.'",
+   "2. Add a new todo.d/ fragment (per the repo's fragment system, headerless) describing DEP-1e as a standalone small task: remove the `ITunesPath *string` field from `internal/database/store.go`'s `Book` struct (~L220) and its two copy-sites in bookcore.go (L207, L321), after confirming (again, at execution time) that nothing else reads it.",
+   "3. Do NOT implement DEP-1e itself in this pass — it is scoped as future work; this item's job is the close-out + fragment, not the removal."
+  ],
+  "tests": ["n/a — docs-only edit for this pass; DEP-1e's own future task will need `go build ./...` + `make test` after the field removal to catch any remaining reference."],
+  "acceptance": ["`grep -n 'CLOSED 2026-08-21' TODO.md` returns 1 hit at the rewritten L10706 area.", "A new fragment file exists under todo.d/ describing DEP-1e."],
+  "edge_cases": ["If a future grep at execution time finds a NEW non-test read of `book.ITunesPath` that didn't exist at this scout pass, DEP-1e's removal must be aborted and the field kept — the close-out note should say 're-grep before removing' explicitly."],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "This is a housekeeping pass, not new code — the only enduring deliverable is DEP-1e as a fresh small follow-up task, correctly separated out rather than left buried in a stale close-out bullet."
+ },
+ {
+  "todo_line": 10710, "src_id": null, "title": "WaitForWarmup hazard — already fixed, not just documented",
+  "verdict": "stale_done",
+  "verdict_evidence": "The 'add a WaitForWarmup() helper to setupPebbleTestDB' follow-up proposed in docs/archive/todo-2026-H1.md's FLAKY-DB-TESTS-2026-06-17 note is fully implemented and adopted: `internal/database/pebble_store.go:174` defines `func (p *PebbleStore) WaitForWarmup()`, and it is now called at ~100+ test call sites across internal/database, internal/plugins/maintenance, internal/audiobooks, internal/organizer, internal/versions, internal/itunes, internal/server, and internal/maintenance/jobs — not merely documented as a latent hazard.",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [
+   {"claim": "WaitForWarmup helper exists on PebbleStore", "grep_cmd": "grep -n 'func (p \\*PebbleStore) WaitForWarmup' internal/database/pebble_store.go", "expect": "1 hit ~L174"},
+   {"claim": "helper is called pervasively across create-then-read tests", "grep_cmd": "grep -rln 'WaitForWarmup()' --include=*_test.go .", "expect": ">30 files"}
+  ],
+  "reuse": [], "polarity": "additive", "effort": "S", "tier": "haiku", "why_tier": "n/a — verification only",
+  "review_critical": false,
+  "goal": "n/a — already implemented and adopted; TODO.md item 43 should be checked off.",
+  "background": ["The hazard was: memSync is a no-op while mem()==nil during async memdb warmup, so a test that creates data then immediately reads via memdb-backed paths could observe an empty/stale result.", "WaitForWarmup() blocks until that warmup goroutine has published, per its own doc comment at pebble_store.go:157."],
+  "steps": [], "tests": [], "acceptance": [], "edge_cases": [],
+  "anti_over_suppression": "N/A", "depends_on_lines": [], "gate": "n/a",
+  "notes": "Also cross-referenced by internal/testutil/integration.go:54,66-67 (SetupIntegration calls WaitForWarmup before returning) and internal/testutil/integration_test.go:30,45 — the fix propagated into the shared integration test harness too, not just ad hoc call sites."
+ },
+ {
+  "todo_line": 10712, "src_id": "GFO-4", "title": "GFO-4 graceful-file-ops sub-op phase tracking — already shipped",
+  "verdict": "stale_done",
+  "verdict_evidence": "The design in docs/archive/superpowers/plans/2026-04-17-phase-checkpoints-gfo4.md (per-phase checkpoint keys so rename/tags/itunes phases skip on resume) is implemented: internal/organizer/checkpoint.go declares PhaseRename/PhaseTags/PhaseITunes constants with SetCheckpoint/HasCheckpoint (tested in internal/organizer/checkpoint_test.go), and internal/metafetch/service_writeback.go:602,615-619 gates the tag-write and iTunes-enqueue steps behind `!hasCheckpoint(mfs.db, id, phaseTags)` / `phaseITunes`, clearing all checkpoints on full completion (L622-623 'All phases complete — clear checkpoints.'). docs/archive/todo-2026-H1.md:2918 already has this checked '[x] GFO-4 Phase checkpoints in apply pipeline — rename/tags/itunes phases skip on recovery'.",
+  "domain": "internal/organizer",
+  "exact_files": [],
+  "verified_anchors": [
+   {"claim": "checkpoint phase constants + helpers exist", "grep_cmd": "grep -n 'PhaseRename\\|PhaseTags\\|PhaseITunes' internal/organizer/checkpoint.go", "expect": "≥3 hits"},
+   {"claim": "checkpoints are tested", "grep_cmd": "grep -n 'func Test' internal/organizer/checkpoint_test.go", "expect": "≥3 hits"},
+   {"claim": "apply pipeline actually gates on checkpoints and clears them on completion", "grep_cmd": "grep -n 'hasCheckpoint\\|setCheckpoint\\|clearCheckpoints' internal/metafetch/service_writeback.go", "expect": "≥4 hits"}
+  ],
+  "reuse": [], "polarity": "additive", "effort": "S", "tier": "haiku", "why_tier": "n/a — verification only",
+  "review_critical": false,
+  "goal": "n/a — already implemented; TODO.md item 44 should be checked off as the last open graceful-file-ops item, closing out the whole GFO-1..5 set.",
+  "background": ["GFO-1..3 and GFO-5 were already marked [x] in docs/archive/todo-2026-H1.md:2915-2918 before this pass; GFO-4 is now also confirmed done, completing the set."],
+  "steps": [], "tests": [], "acceptance": [], "edge_cases": [],
+  "anti_over_suppression": "N/A", "depends_on_lines": [], "gate": "n/a",
+  "notes": "Naming differs slightly from the original plan doc (PhaseTags vs PhaseTagWrite, PhaseITunes vs PhaseITunesEnqueue; GetApplyCheckpoints/SetApplyCheckpoint were implemented as the lower-level HasCheckpoint/SetCheckpoint + a package-level hasCheckpoint/setCheckpoint wrapper in metafetch) but the functional design (per-phase skip-on-resume) matches exactly."
+ },
+ {
+  "todo_line": 10714, "src_id": null, "title": "Performance items #1/#2/#6 (2026-04-14 set) — already resolved",
+  "verdict": "stale_done",
+  "verdict_evidence": "docs/archive/todo-2026-H1.md:2490-2491 has PERF-2 and PERF-6 both checked '[x]' with shipped PR references (#1583, #1601): PERF-2 batched createBookFilesForBook upserts (N calls → 1), PERF-6 added GetAllBooksFrom cursor pagination replacing O(offset) GetAllBooks in the search backfill loop. PERF-1 (paginate 20+ unbounded GetAllBooks(0,0) calls, L3213, unchecked) is independently confirmed obsoleted-as-scoped by commit 19e129d4 'fix(maintenance): future-proof remaining whole-library ops against fixed-limit truncation' plus siblings 55738710/7ff8fb2f/a1c1e830/f9743637 (~2026-07-16), which made whole-library ops deliberately unbounded (an alternate, deliberate fix for the same OOM concern) rather than paginated.",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [
+   {"claim": "PERF-2 and PERF-6 marked done with PR refs", "grep_cmd": "grep -n 'PERF-2\\|PERF-6' docs/archive/todo-2026-H1.md", "expect": "2 hits, both prefixed '- [x]' with PR # citations"},
+   {"claim": "PERF-1's whole-library truncation concern was independently addressed by making ops deliberately unbounded", "grep_cmd": "git log --oneline --all --grep='future-proof remaining whole-library ops against fixed-limit truncation'", "expect": "1 hit, commit 19e129d4"}
+  ],
+  "reuse": [], "polarity": "additive", "effort": "S", "tier": "haiku", "why_tier": "n/a — verification only",
+  "review_critical": false,
+  "goal": "n/a — all three (#1/#2/#6 in the 2026-04-14 P0/P1 numbering, mapping to PERF-1/PERF-2/PERF-6 in the later re-audit numbering) are resolved or superseded; TODO.md item 45 should be checked off.",
+  "background": [],
+  "steps": [], "tests": [], "acceptance": [], "edge_cases": [],
+  "anti_over_suppression": "N/A", "depends_on_lines": [10706], "gate": "n/a",
+  "notes": "Corroborates and independently re-verifies (rather than merely trusts) the PERF-1 obsolescence claim already made in this scope's item 42 text — grep evidence for both is included above so this item stands on its own."
+ },
+ {
+  "todo_line": 10727, "src_id": null, "title": "Library centralization backlog",
+  "verdict": "needs_design",
+  "verdict_evidence": "TODO.md:10727 itself says 'needs a brainstorming session; future work' — no scope, files, or acceptance criteria are defined anywhere in the repo (`grep -rn 'library centralization' TODO.md docs/` finds only this one bullet).",
+  "domain": "docs",
+  "exact_files": [],
+  "verified_anchors": [{"claim": "no other doc elaborates this item", "grep_cmd": "grep -rn -i 'library centralization' TODO.md docs/", "expect": "1 hit, the TODO.md bullet itself"}],
+  "reuse": [], "polarity": "additive", "effort": "S", "tier": "haiku", "why_tier": "n/a — cannot be briefed",
+  "review_critical": false,
+  "goal": "n/a — cannot be scoped into a code task without first answering: what does 'library centralization' mean here (multi-library support? a single canonical library across multiple physical roots? something else)? That question is not covered by any of this scout package's 14 owner decisions.",
+  "background": [], "steps": [], "tests": [], "acceptance": [], "edge_cases": [],
+  "anti_over_suppression": "N/A", "depends_on_lines": [], "gate": "n/a",
+  "notes": "Needs an owner brainstorming session (as TODO.md itself says) before any brief can be written."
+ },
+ {
+  "todo_line": 10728, "src_id": null, "part": 1,
+  "title": "Wire OnlyParsedTranscription-style filtering into the interactive audiobooks list endpoint",
+  "verdict": "actionable",
+  "verdict_evidence": "operations.FilterSpec.OnlyParsedTranscription (internal/operations/types.go:36-41) already exists and is fully wired end-to-end for BACKGROUND OPERATION targeting (internal/server/metadata_ops.go:524, resolveFilterToBookIDs), with its own doc comment claiming 'FilterSpec mirrors the query params accepted by GET /api/v1/audiobooks' (types.go:22) — but `audiobooks.ListFilters` (internal/audiobooks/service_types.go:78-96), the struct actually used by the interactive GET /api/v1/audiobooks list handler (internal/server/handlers/audiobooks/handler.go:314 ListAudiobooks), has no equivalent field, and no `only_parsed_transcription` query param is parsed anywhere in that handler (`grep -n only_parsed_transcription internal/server/handlers/audiobooks/handler.go` = 0 hits) — the doc comment's claim is false for this one field.",
+  "domain": "internal/audiobooks",
+  "exact_files": ["internal/audiobooks/service_types.go", "internal/audiobooks/service_filtering.go", "internal/audiobooks/service_query.go", "internal/server/handlers/audiobooks/handler.go"],
+  "verified_anchors": [
+   {"claim": "OnlyParsedTranscription exists only on operations.FilterSpec, used only for bulk-op targeting", "grep_cmd": "grep -rn OnlyParsedTranscription internal/operations/types.go internal/server/metadata_ops.go", "expect": "3 hits, all in bulk-op resolution code"},
+   {"claim": "ListFilters (interactive list) has no such field", "grep_cmd": "grep -n 'type ListFilters struct' -A20 internal/audiobooks/service_types.go", "expect": "no transcription-related field in the 20 lines"},
+   {"claim": "the interactive handler parses no such query param", "grep_cmd": "grep -n only_parsed_transcription internal/server/handlers/audiobooks/handler.go", "expect": "0 hits"},
+   {"claim": "FingerprintStatus is the closest existing analog to copy the wiring pattern from", "grep_cmd": "grep -n FingerprintStatus internal/server/handlers/audiobooks/handler.go internal/audiobooks/service_types.go internal/audiobooks/service_filtering.go", "expect": "≥5 hits across the 3 files"}
+  ],
+  "reuse": [
+   {"name": "FingerprintStatus wiring pattern (query parse → ListFilters field → service_filtering.go predicate)", "file": "internal/server/handlers/audiobooks/handler.go", "verify_grep": "grep -n 'FingerprintStatus:  httputil.ParseQueryString' internal/server/handlers/audiobooks/handler.go"},
+   {"name": "existing boolean semantics to copy exactly (TranscribedTitle non-empty test)", "file": "internal/server/metadata_ops.go", "verify_grep": "grep -n 'TranscribedTitle == nil' internal/server/metadata_ops.go"}
+  ],
+  "polarity": "additive",
+  "effort": "M", "tier": "sonnet", "why_tier": "touches 4 files across 2 packages (query parsing, ListFilters struct, and the actual filter predicate applied during both the indexed/pebble-scan path and the memdb path) and must respect the project's documented bareParamAllowList gotcha",
+  "review_critical": false,
+  "goal": "Add a new boolean field to `audiobooks.ListFilters` (e.g. `OnlyParsedTranscription bool`) mirroring `operations.FilterSpec.OnlyParsedTranscription`'s exact semantics (TranscribedTitle non-nil and non-empty-after-trim), parse it from a new `?only_parsed_transcription=true` query param in `ListAudiobooks` (internal/server/handlers/audiobooks/handler.go), and apply it as a predicate in the same place FingerprintStatus is applied in internal/audiobooks/service_filtering.go and service_query.go, so an interactive Library-page user (not just a background bulk op) can filter the list to books whose transcript actually parsed.",
+  "background": [
+   "internal/operations/types.go:36-41 documents the exact semantics to replicate: 'restricts the resolved set to books whose Whisper intro parsed into a usable title (TranscribedTitle non-empty)... works for books transcribed before the statusUnparsed split too — no backfill required.'",
+   "internal/server/metadata_ops.go:523-526 is the reference implementation of the predicate itself: `if f.OnlyParsedTranscription && (b.TranscribedTitle == nil || strings.TrimSpace(*b.TranscribedTitle) == \"\") { continue }`.",
+   "CRITICAL gotcha (internal/server/handlers/audiobooks/handler.go:240-259, `bareParamAllowList`): the endpoint has a guard that rejects unrecognized bare query params against a 'KnownFilterFields' derivation; a name must be added to `bareParamAllowList` the moment it gets a real accessor on this endpoint, mirroring how `fingerprint_status` was pre-declared there before its accessor existed, or a request using the new param could be wrongly rejected — this project has a documented history of two near-misses on exactly this guard (see the comment block at L240-259).",
+   "internal/audiobooks/service_types.go:132-137 (`strippedMemdbFields`) confirms `TranscribedTitle` is NOT stripped from memdb-resident Book copies — so, unlike `description`/`version_notes`/`book_sig_v1`, this predicate is safe to apply against the default memdb-backed list path without needing a Pebble re-fetch."
+  ],
+  "steps": [
+   "1. Add `OnlyParsedTranscription bool` to `ListFilters` in internal/audiobooks/service_types.go:78-96 (near FingerprintStatus).",
+   "2. In internal/server/handlers/audiobooks/handler.go, parse `only_parsed_transcription` via `httputil.ParseQueryBoolPtr(c, \"only_parsed_transcription\")` (or the plain-bool helper used for `show_quarantined` at L595) into the `filters := audiobookspkg.ListFilters{...}` literal at ~L513-523.",
+   "3. Add `\"only_parsed_transcription\": {}` to `bareParamAllowList` (L256-259) with a one-line comment explaining why, following the existing `fingerprint_status` precedent.",
+   "4. In internal/audiobooks/service_filtering.go (near the FingerprintStatus predicate block ~L994-1039), add: if `f.OnlyParsedTranscription` and `(b.TranscribedTitle == nil || strings.TrimSpace(*b.TranscribedTitle) == \"\")`, exclude the book — copy the exact predicate from metadata_ops.go:524-526 verbatim for consistency.",
+   "5. In internal/audiobooks/service_query.go, find the equivalent indexed/pebble-scan-path filter application (the sibling of the L404 FingerprintStatus check) and add the same predicate so both the memdb and indexed paths agree.",
+   "6. Bump file-header versions on all 4 touched files."
+  ],
+  "tests": [
+   "internal/server/handlers/audiobooks/handler_test.go or a new test file — add a case: seed 2 books, one with TranscribedTitle set and one nil, GET /api/v1/audiobooks?only_parsed_transcription=true, assert only the parsed one is returned.",
+   "internal/audiobooks/*_test.go — a unit test on the filtering predicate mirroring the existing pattern in internal/audiobooks/transcribed_title_pushdown_test.go (which already guards that TranscribedTitle survives the memdb summary pushdown — extend/pair with a test that OnlyParsedTranscription actually filters using it).",
+   "Anti-over-suppression: a test asserting `only_parsed_transcription` OMITTED (default false) returns both books unfiltered — the new param must not accidentally become a default-on filter."
+  ],
+  "acceptance": [
+   "`grep -n OnlyParsedTranscription internal/audiobooks/service_types.go` returns 1 hit.",
+   "`curl -s \"$API/api/v1/audiobooks?only_parsed_transcription=true\"` (or the equivalent test) returns only books with a non-empty TranscribedTitle.",
+   "`make test` passes for internal/audiobooks and internal/server/handlers/audiobooks."
+  ],
+  "edge_cases": [
+   "A book whose TranscribedTitle is an empty string (not nil) — must also be excluded (per the exact reference predicate's TrimSpace check), not just nil-checked.",
+   "Combined with other filters (e.g. `&library_state=organized`) — must AND together, not override; verify by testing with 2+ simultaneous query params."
+  ],
+  "anti_over_suppression": "test: 'only_parsed_transcription omitted returns the full unfiltered set (including unparsed-transcript books)'",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "This closes the literal contradiction between operations/types.go's doc comment (claims FilterSpec params all mirror the list endpoint) and reality for this one field — a small, well-scoped correctness fix, not new product surface."
+ },
+ {
+  "todo_line": 10728, "src_id": null, "part": 2,
+  "title": "Add transcribe_status to the book-summary list projection and a frontend quality filter control",
+  "verdict": "actionable",
+  "verdict_evidence": "database.BookSummary (internal/database/store.go:377-412) already carries `TranscribedTitle` for filter-pushdown but omits `TranscribeStatus`/`TranscribeAttemptedAt` (store.go:344-357 on the full Book struct), so a frontend list/grid view has no way to distinguish 'not yet transcribed' from 'transcribed but unparsed' from 'transcribed and parsed' without a per-book detail fetch — matching this TODO item's literal text 'list endpoint omits transcription fields'.",
+  "domain": "internal/database",
+  "exact_files": ["internal/database/store.go", "internal/database/pebble_store.go", "internal/database/memdb_summaries.go", "internal/database/bookcore.go"],
+  "verified_anchors": [
+   {"claim": "BookSummary has TranscribedTitle but not TranscribeStatus", "grep_cmd": "grep -n 'TranscribedTitle\\|TranscribeStatus' internal/database/store.go", "expect": "TranscribedTitle inside BookSummary (~L405); TranscribeStatus only on the full Book struct (~L350), not BookSummary"},
+   {"claim": "two BookSummary construction sites both need updating", "grep_cmd": "grep -n 'func bookToSummary' internal/database/pebble_store.go; grep -n 'BookSummary{' internal/database/memdb_summaries.go", "expect": "1 hit ~L1043 and 1 hit ~L220"}
+  ],
+  "reuse": [{"name": "existing TranscribedTitle plumbing as the copy-paste template", "file": "internal/database/pebble_store.go", "verify_grep": "grep -n 'TranscribedTitle:' internal/database/pebble_store.go internal/database/memdb_summaries.go"}],
+  "polarity": "additive",
+  "effort": "M", "tier": "sonnet", "why_tier": "touches the database summary projection (2 construction sites) plus a new frontend filter control; must not break the memdb round-trip contract",
+  "review_critical": false,
+  "goal": "Add `TranscribeStatus *string` to `database.BookSummary` (store.go ~L405, next to TranscribedTitle), populate it at both summary-construction sites (pebble_store.go's `bookToSummary` and memdb_summaries.go's list builder), and add a simple frontend filter control (e.g. a 3-state chip: not-transcribed / unparsed / parsed) to the Library page using the part-1 `only_parsed_transcription` query param plus this new status field for display.",
+  "background": [
+   "internal/database/store.go:344-350 documents TranscribeStatus's existing values: it 'records the outcome of the most recent transcription ATTEMPT... lets an operator filter books by status to see exactly why transcription is/isn't producing data.'",
+   "internal/plugins/maintenance/intro_transcribe.go:759,818 already writes a `statusUnparsed` value distinguishing 'attempted but no usable title' from other outcomes — this is the exact status value a frontend quality badge would key off.",
+   "web/src/hooks/useColumnConfig.ts and web/src/pages/Library.tsx (the only current useColumnConfig consumer) are the natural home for a new filter control, following the project's existing column-config UI pattern."
+  ],
+  "steps": [
+   "1. Add `TranscribeStatus *string `json:\"transcribe_status,omitempty\"`` to `BookSummary` in internal/database/store.go, next to the existing `TranscribedTitle` field (~L405).",
+   "2. In internal/database/pebble_store.go's `bookToSummary(b *Book) BookSummary` (~L1043-1064), add `TranscribeStatus: b.TranscribeStatus,` next to the existing `TranscribedTitle: b.TranscribedTitle,` line (~L1064).",
+   "3. In internal/database/memdb_summaries.go's summary-builder loop (~L220-240), add the same field assignment.",
+   "4. Confirm `strippedMemdbFields` (internal/audiobooks/service_types.go:132-137) does NOT include transcribe_status (it currently only lists description/version_notes/book_sig_v1) — no change needed there, just verify.",
+   "5. In web/src/services/api.ts (or wherever the Book/BookSummary TypeScript type mirrors the Go struct), add `transcribe_status?: string` to the type.",
+   "6. In web/src/pages/Library.tsx, add a filter chip/dropdown wired to the part-1 `only_parsed_transcription` query param, and optionally render a small status badge per row using the new `transcribe_status` field (reusing an existing Chip-based badge pattern from web/src/components/dedup/dedupHelpers.tsx if one fits).",
+   "7. Bump file-header versions on all touched files."
+  ],
+  "tests": [
+   "internal/database/pebble_store_test.go or an existing BookSummary conformance test — assert TranscribeStatus round-trips through bookToSummary.",
+   "internal/database/memdb_strip_test.go — extend the existing pattern (it already tests TranscribedTitle survives memdb strip, L123-152) with a TranscribeStatus case.",
+   "web/src/pages/__tests__/Library.test.tsx — assert the new filter control renders and toggling it appends `?only_parsed_transcription=true` to the API call."
+  ],
+  "acceptance": [
+   "`grep -n TranscribeStatus internal/database/store.go` shows it on both Book and BookSummary.",
+   "`npm --prefix web run lint && npm --prefix web test` pass.",
+   "`make test` passes for internal/database."
+  ],
+  "edge_cases": ["A book that has never been through intro_transcribe.go has TranscribeStatus == nil — the frontend badge must render a distinct 'not attempted' state, not confuse it with 'unparsed'."],
+  "anti_over_suppression": "test: 'TranscribeStatus=nil (never attempted) renders differently from TranscribeStatus=statusUnparsed (attempted, failed to parse)'",
+  "depends_on_lines": [10728],
+  "gate": "make ci && npm --prefix web run lint && npm --prefix web test",
+  "notes": "Depends on part 1 (todo_line 10728 part 1) landing first since the frontend filter control wires to the query param that part adds; can be built in parallel but should merge after."
+ },
+ {
+  "todo_line": 10730, "src_id": null, "title": "iTunes heal Layer-6 re-trigger",
+  "verdict": "prod_run",
+  "verdict_evidence": "Already tracked as an operator-run action in docs/operations/pending-prod-actions.md:28 ('iTunes heal Layer-6 re-trigger ... re-enqueue the iTunes path-heal op after the residual pools shrink ... operator-run'), listing the exact residual pools (3,720 ambiguous / 5,349 not-found / 4,734 doubled-path) this TODO item references — no code deliverable, purely an operation to re-run once its precondition (residual pools shrinking) is met.",
+  "domain": "internal/reconcile",
+  "exact_files": [],
+  "verified_anchors": [{"claim": "already tracked in pending-prod-actions.md as operator-run", "grep_cmd": "grep -n 'iTunes heal Layer-6' docs/operations/pending-prod-actions.md", "expect": "1 hit ~L28"}],
+  "reuse": [], "polarity": "transform", "effort": "S", "tier": "haiku", "why_tier": "n/a — operation, not code",
+  "review_critical": true,
+  "goal": "n/a — no code deliverable; this is a production operation gated on residual-pool shrinkage, per the standing rule 'never apply metadata while a scan runs' and this project's iTunes-active-library hands-off policy.",
+  "background": [],
+  "steps": [], "tests": [], "acceptance": [], "edge_cases": [],
+  "anti_over_suppression": "N/A", "depends_on_lines": [], "gate": "n/a",
+  "notes": "review_critical=true because it re-triggers iTunes path healing against production data; TODO.md's own item is a duplicate pointer to the already-tracked pending-prod-actions.md row — no separate brief is needed, just check off the TODO.md bullet with a cross-reference to that row."
+ },
+ {
+  "todo_line": 10750, "src_id": null, "part": 1,
+  "title": "Scan and fingerprint the assembled-source download root as a read-only reference corpus",
+  "verdict": "actionable",
+  "verdict_evidence": "config.Config has exactly one library root (`RootDir string` at internal/config/config.go:623, the only root-path field in the whole struct — `grep -n 'LibraryPath\\|ScanRoot\\|RootDir' internal/config/config.go` shows only RootDir), so there is currently no way to scan a second, distinct root as a read-only reference corpus without conflating it with the active organized library — this is the genuine prerequisite gap the scope text itself identifies ('the assembled source-download root is NOT a configured scan path... title search for a known source book = 0 hits').",
+  "domain": "internal/config",
+  "exact_files": ["internal/config/config.go", "internal/scanner/scanner.go", "internal/plugins/acoustid/backfill.go"],
+  "verified_anchors": [
+   {"claim": "only one scan root exists in config today", "grep_cmd": "grep -n 'RootDir ' internal/config/config.go", "expect": "1 struct-field hit ~L623"},
+   {"claim": "fpidx LSH index already exists and is the target index for this reference corpus", "grep_cmd": "grep -rln fpidx internal/database internal/fingerprint internal/plugins/acoustid", "expect": "≥3 files"}
+  ],
+  "reuse": [{"name": "existing AcoustID backfill worker-pool pattern (registry.RunItems)", "file": "internal/plugins/acoustid/backfill.go", "verify_grep": "grep -n RunItems internal/plugins/acoustid/backfill.go internal/operations/registry/run_items.go"}],
+  "polarity": "additive",
+  "effort": "L", "tier": "opus", "why_tier": "new config surface (a second scan root with different semantics — read-only, non-organizing, non-mutating) plus a new maintenance op that must never touch the active iTunes/organized tree; high blast-radius if the read-only guarantee is violated",
+  "review_critical": true,
+  "goal": "Add a new config field (e.g. `ReferenceCorpusPaths []string` or a single `SourceCorpusRoot string`) distinct from `RootDir`, and a new maintenance op (e.g. `maintenance.scan-reference-corpus`) that walks it, computes AcoustID fingerprints via the existing fpcalc pipeline, and indexes them into `fpidx` — WITHOUT creating `Book`/`BookFile` rows in the primary organized-library tables and WITHOUT ever writing to the scanned files (per the standing NEVER-mutate-iTunes-tree rule, extended here to this new root too, since it is explicitly framed as a reference/identity corpus, not a library to organize).",
+  "background": [
+   "Scope text: '94% file-level raw-fingerprint coverage... the one real gap: the assembled source-download root is NOT a configured scan path, so its folders are on disk but not in the DB.'",
+   "Owner design constraint (2026-07-19, restated in the scope text): 'dedup AGAINST the original source as the identity reference, but keep the organized (primary) copy canonical; reflink new files on import. NEVER mutate the active iTunes tree — read-only at most.'",
+   "internal/plugins/acoustid/backfill.go already has a bounded-worker-pool fingerprinting pipeline (registry.RunItems-based) per this repo's mandatory concurrency pattern for whole-library loops — reuse its fpcalc-calling logic rather than writing a new one.",
+   "The existing `fpidx` LSH index (internal/database/pebble_store_lsh.go, internal/fingerprint/lsh.go) is a general-purpose fingerprint→candidate index; indexing the reference corpus into the SAME index (tagged with a distinct source/kind marker so query results can tell reference-corpus hits from organized-library hits) is simpler than building a parallel index."
+  ],
+  "steps": [
+   "1. Add a new config field for the reference-corpus root(s) in internal/config/config.go, distinct from RootDir, with its own viper binding (mirroring RootDir's `viper.GetString(\"root_dir\")` at L1635) and its own env var (e.g. `AUDIOBOOK_REFERENCE_CORPUS_ROOT`, per this repo's os.Getenv-not-viper convention for new env-driven config — verify which pattern RootDir itself actually uses before copying).",
+   "2. Design a minimal record shape for a reference-corpus file: enough to know its path + AcoustID fingerprint + which folder/'book' it groups under (for the containment match in part 3), WITHOUT reusing the full Book/BookFile schema (to keep 'not organized-library rows' true) — likely a new small table/keyspace, e.g. `internal/database` keys under a `refcorpus:` prefix.",
+   "3. Write a new maintenance op `maintenance.scan-reference-corpus` (new file under internal/plugins/maintenance/) that: walks the configured reference-corpus root (read-only, os.Open/ReadDir only, never os.Rename/os.Remove/os.WriteFile on anything under that root), computes fpcalc fingerprints via the same call reused from internal/plugins/acoustid/backfill.go, and indexes each into `fpidx` tagged with a `source=\"refcorpus\"` marker plus the refcorpus folder key.",
+   "4. Bound the walk + fingerprint loop with a worker pool sized to runtime.NumCPU() (mandatory per this repo's concurrency rule for whole-library-scale loops) — follow registry.RunItems's existing shape rather than a raw `for range` loop.",
+   "5. Add a dry-run-first default (apply=false is meaningless here since nothing mutates the corpus itself, but DO gate actually writing into fpidx behind an explicit flag so a first run can be a report-only count of files-that-would-be-indexed) — consistent with this project's report-then-apply convention for maintenance ops.",
+   "6. Bump file-header versions on all new/touched files."
+  ],
+  "tests": [
+   "internal/plugins/maintenance/scan_reference_corpus_test.go (new) — seed a temp dir with 2-3 fake audio fixtures, run the op, assert fpidx contains entries tagged source=refcorpus and no Book/BookFile rows were created in the primary store.",
+   "A guard test asserting the op NEVER calls any file-mutating function (os.Remove/os.Rename/os.WriteFile) on paths under the reference-corpus root — e.g. via a fake filesystem wrapper that panics on any write call, run through the op end-to-end."
+  ],
+  "acceptance": [
+   "`grep -n refcorpus internal/database/*.go` shows the new keyspace/marker.",
+   "Running the op against a fixture dir populates fpidx entries queryable via the existing LSH lookup API, with zero new rows in the `book`/`book_file` tables.",
+   "make ci passes."
+  ],
+  "edge_cases": [
+   "A file under the reference-corpus root that is also, coincidentally, already present under RootDir (same content) — the op must not conflate them; tag by source so downstream matching (part 3) can distinguish 'this is the reference copy' from 'this is the organized copy'.",
+   "The reference-corpus root does not exist on disk / is misconfigured — the op must fail loudly (clear error) rather than silently indexing zero files and reporting success."
+  ],
+  "anti_over_suppression": "test: 'the read-only guard actually panics/fails the op if any write syscall were attempted against the reference-corpus root' (not just a happy-path assertion that no writes happened to happen)",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "This is the load-bearing prerequisite for parts 2 and 3 of this same TODO item and for the whole shattered-book-reassembly feature (part 3 below) — without it there is no ground truth to match fragments against. review_critical=true given the standing 'NEVER mutate the active iTunes tree' rule extends to this new root by explicit owner design constraint."
+ },
+ {
+  "todo_line": 10750, "src_id": null, "part": 2,
+  "title": "Acoustic-confirm signal: promote near-dupe title-leak pairs using WholeFileSimilarity",
+  "verdict": "actionable",
+  "verdict_evidence": "`fingerprint.WholeFileSimilarity` already exists (internal/fingerprint/wholefile.go:144) and already feeds dedup scoring in 2 places (internal/dedup/engine.go:4104, internal/dedup/collectors_acoustid.go:326), and the auto-resolve gate `autoResolveEligible` (internal/dedup/auto_resolve.go:213-272) already has an explicit extension point — a corroboration count of '≥2 distinct primary signal kinds' plus a documented fallback branch ('whole-book-signature true_dup label', L259-264) — that a new acoustic-confirm branch can parallel; `config.AppConfig.Dedup.AutoResolveEnabled` is the existing kill switch (auto_resolve.go:122) this must stay behind.",
+  "domain": "internal/dedup",
+  "exact_files": ["internal/dedup/auto_resolve.go"],
+  "verified_anchors": [
+   {"claim": "WholeFileSimilarity already used as a scoring signal", "grep_cmd": "grep -n WholeFileSimilarity internal/dedup/engine.go internal/dedup/collectors_acoustid.go internal/fingerprint/wholefile.go", "expect": "3 hits across the 3 files"},
+   {"claim": "autoResolveEligible's corroboration gate and its existing fallback branch", "grep_cmd": "grep -n 'DistinctAutoResolvePrimaryKinds\\|whole-book-signature true_dup' internal/dedup/auto_resolve.go", "expect": "≥2 hits ~L250,262"},
+   {"claim": "AutoResolveEnabled kill switch gates all apply=true auto-resolve calls", "grep_cmd": "grep -n AutoResolveEnabled internal/dedup/auto_resolve.go", "expect": "≥2 hits ~L96-122"}
+  ],
+  "reuse": [
+   {"name": "WholeFileSimilarity", "file": "internal/fingerprint/wholefile.go", "verify_grep": "grep -n 'func WholeFileSimilarity' internal/fingerprint/wholefile.go"},
+   {"name": "autoResolveEligible's existing fallback-branch pattern to copy", "file": "internal/dedup/auto_resolve.go", "verify_grep": "grep -n 'GetLabeledExample' internal/dedup/auto_resolve.go"}
+  ],
+  "polarity": "additive",
+  "effort": "M", "tier": "opus", "why_tier": "modifies the auto-merge eligibility gate on a prod-data-mutating path (dedup merges); must not weaken the existing suppressor/plausible-audio/identifier-conflict guards, only add a new corroborating path alongside them",
+  "review_critical": true,
+  "goal": "Add a new corroboration path to `autoResolveEligible` (internal/dedup/auto_resolve.go): when both sides of a CERTAIN-band candidate have an AcoustID fingerprint, compute `fingerprint.WholeFileSimilarity` between them and, if it is close enough (a new configured threshold, e.g. `config.AppConfig.Dedup.AcousticConfirmThreshold`), count it as satisfying the corroboration requirement (either as one more 'distinct primary signal kind' or as its own fallback branch mirroring the existing whole-book-signature-label branch), so a 'same file, one extra character' title-leak near-dupe pair that would otherwise fall 1 signal short of auto-merge eligibility gets confirmed — while a genuinely distinct pair (different WholeFileSimilarity) still falls back to today's scoring, unchanged.",
+  "background": [
+   "Scope text: 'where both sides of a candidate pair are fingerprinted, use WholeFileSimilarity closeness as a *confirming* signal to auto-promote the \"same file, one extra character\" title-leak near-dupes to auto-merge; distinct pairs fall back to today's scoring.'",
+   "internal/dedup/auto_resolve.go:213-272's existing structure: band must be CERTAIN, no active suppressors, PairEligibility must pass live, plausible-audio + no identifier conflict, THEN either ≥2 distinct primary signal kinds OR a whole-book-signature true_dup label. The new acoustic-confirm path is a third alternative at the same tier as the true_dup-label fallback, not a replacement for any existing guard.",
+   "This must stay behind `config.AppConfig.Dedup.AutoResolveEnabled` for apply=true, per auto_resolve.go:122's existing kill-switch pattern — report-only (apply=false) already always works regardless, per the comment at L96-99."
+  ],
+  "steps": [
+   "1. Add a new field to `DedupConfig` in internal/config/config.go (~L260-341, near other Dedup* fields) for the acoustic-confirm similarity threshold, e.g. `AcousticConfirmThreshold float64` with a sane conservative default (start high, e.g. 0.97+, to bias toward false-negative over false-positive on an auto-merge path).",
+   "2. In internal/dedup/auto_resolve.go's `autoResolveEligible`, after the existing `distinct := DistinctAutoResolvePrimaryKinds(...)` check (L250) fails to reach 2, before falling through to the whole-book-signature-label check (L259), add: if `bookA.AcoustIDFingerprint != \"\" && bookB.AcoustIDFingerprint != \"\"`, compute `sim, err := fingerprint.WholeFileSimilarity(bookA.AcoustIDFingerprint, bookB.AcoustIDFingerprint)` and if `err == nil && sim >= config.AppConfig.Dedup.AcousticConfirmThreshold`, return `true, fmt.Sprintf(\"acoustic confirm: WholeFileSimilarity=%.4f\", sim)`.",
+   "3. Do NOT touch the existing suppressor/plausible-audio/identifier-conflict guards above this point — they must still gate the acoustic-confirm path exactly as they gate the other two paths (this is enforced by placement: the new check happens after those guards, inside the same function, so it inherits them for free).",
+   "4. Bump the file-header version on internal/dedup/auto_resolve.go and internal/config/config.go."
+  ],
+  "tests": [
+   "internal/dedup/auto_resolve_test.go (check for existing coverage first: `grep -n autoResolveEligible internal/dedup/auto_resolve_test.go`) — add a case: 2 books, CERTAIN band, only 1 distinct primary signal, but AcoustIDFingerprint set on both with WholeFileSimilarity above threshold → eligible=true with the new reason string.",
+   "A second case: same setup but WholeFileSimilarity below threshold → eligible=false, unchanged reason ('insufficient corroboration...').",
+   "A case with the acoustic-confirm signal present AND an active suppressor → eligible=false (suppressor still wins; proves the new path did not bypass existing guards)."
+  ],
+  "acceptance": [
+   "`go test ./internal/dedup/... -run TestAutoResolveEligible` (or the actual test function name found above) passes including the 3 new cases.",
+   "`make ci` passes."
+  ],
+  "edge_cases": [
+   "One side has an AcoustIDFingerprint and the other doesn't — must fall through to the existing false/insufficient-corroboration path, never treat a missing fingerprint as a match (mirrors the project's standing 'absent evidence means cannot verify, never refuted' rule already documented elsewhere in TODO.md for the same signal).",
+   "WholeFileSimilarity itself returns an error (e.g. malformed fingerprint bytes) — must be treated as 'no confirmation', not silently ignored into a panic or a false positive."
+  ],
+  "anti_over_suppression": "test: 'a genuinely distinct pair (fingerprinted, similarity below threshold, only 1 distinct signal kind) is correctly NOT auto-resolved — the new acoustic-confirm path does not make the gate looser for non-matching pairs'",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "review_critical=true: this directly changes what gets auto-merged in production dedup. Keep the threshold conservative and behind AutoResolveEnabled; do not change existing signal-kind or suppressor logic."
+ },
+ {
+  "todo_line": 10750, "src_id": null, "part": 3,
+  "title": "Shattered-book reassembly: match fragment file-sets against the reference corpus via fpidx containment",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/dedup/split_book_detector.go's existing `DetectSplitBookCandidates` (L92) is entirely metadata/title-shape based (chapter-marker stripping, sequential-run detection, author-name resolution — `detectFromSlim`/`stripChapterMarker`/`sequentialRun` at L154-315) with no fingerprint-set matching against any external corpus — the fingerprint-set-containment safety-confirmation this TODO item describes (`fragments ⊆ source_folder` via `fpidx`) is genuinely new work, not a duplicate of existing split-book detection.",
+  "domain": "internal/dedup",
+  "exact_files": ["internal/dedup/split_book_detector.go"],
+  "verified_anchors": [
+   {"claim": "existing split-book detection is metadata/title-shape only, no fingerprint matching", "grep_cmd": "grep -n 'AcoustID\\|Fingerprint\\|fpidx' internal/dedup/split_book_detector.go", "expect": "0 hits"},
+   {"claim": "fpidx LSH lookup API exists to build the containment match on", "grep_cmd": "grep -n 'func.*Lookup\\|func.*Query' internal/database/pebble_store_lsh.go internal/fingerprint/lsh.go", "expect": "≥1 hit"}
+  ],
+  "reuse": [{"name": "existing SplitBookCandidate type + detection entrypoint to extend rather than replace", "file": "internal/dedup/split_book_detector.go", "verify_grep": "grep -n 'type SplitBookCandidate' internal/dedup/split_book_detector.go"}],
+  "polarity": "additive",
+  "effort": "L", "tier": "opus", "why_tier": "new matching algorithm (set containment over an LSH index) feeding an auto-regroup decision on prod data; must compose correctly with the existing metadata-based detector rather than replace it",
+  "review_critical": true,
+  "goal": "Extend `DetectSplitBookCandidates` (or add a parallel confirmation step consumed by it) so that, for a candidate group of fragments (author-first shards of a multi-author anthology), the set of each fragment's AcoustID fingerprint is looked up in `fpidx` against the reference-corpus index (built in part 1) to find a source-corpus folder whose file-set CONTAINS the fragment set (`fragments ⊆ source_folder`); metadata (album/iTunes-XML/PID/version-group, i.e. the existing detector's signal) remains the PRIMARY regroup key, and this fingerprint-set match is layered on as a safety CONFIRMATION that makes an auto-regroup safe, per the owner's explicit design constraint.",
+  "background": [
+   "Scope text: 'match the fragments' per-file fingerprint set against the assembled ORIGINAL source folder (set containment fragments ⊆ source_folder) via the existing fpidx LSH index → the source folder whose file-set contains them identifies the true whole book... Metadata... is the primary regroup key; the fingerprint-set match is the safety confirmation that makes the auto-regroup safe.'",
+   "This depends on part 1 (todo_line 10750 part 1) having already scanned+indexed the reference corpus into fpidx — without it there is no source-folder ground truth to test containment against.",
+   "internal/dedup/split_book_detector.go's `SplitBookCandidate` type (referenced but not dumped here — check its fields via `grep -n 'type SplitBookCandidate struct' -A20 internal/dedup/split_book_detector.go`) is the natural place to add an optional confirmation field (e.g. `FingerprintConfirmed bool` + `MatchedSourceFolder string`)."
+  ],
+  "steps": [
+   "1. Read `type SplitBookCandidate struct` in full (internal/dedup/split_book_detector.go) to find its existing fields before adding new ones — do not guess field names.",
+   "2. Write a new function (e.g. `confirmAgainstReferenceCorpus(ctx, candidate SplitBookCandidate) (matchedFolder string, confirmed bool, err error)`) that: for each fragment in the candidate, looks up its AcoustID fingerprint in fpidx restricted to `source=refcorpus`-tagged entries (from part 1), collects the set of reference-corpus folder keys each fragment's fingerprint appears under, and checks whether any single folder's fingerprint set is a SUPERSET of the fragment set.",
+   "3. Wire this as a post-filter/annotation step after `DetectSplitBookCandidates` returns its metadata-based candidates — do NOT make containment confirmation a precondition for a candidate to be returned/reported (metadata stays primary per the design constraint); instead set the new confirmation field on candidates where a containing source folder was found.",
+   "4. Wherever auto-regroup/apply logic consumes `SplitBookCandidate` (find via `grep -rn SplitBookCandidate internal/dedup/*.go internal/plugins/dedup/*.go`), gate any AUTO-apply path (not the report/review path) on `FingerprintConfirmed == true`, leaving unconfirmed candidates for manual review only — this is the actual safety mechanism the owner's design constraint calls for.",
+   "5. Bound the per-candidate fpidx lookup loop with a worker pool if candidate counts are whole-library-scale (mandatory concurrency rule) — check the actual call site's expected candidate volume before deciding a pool is needed vs. candidates being few enough to run serially (a handful of shattered-book groups is plausible; verify before over-engineering).",
+   "6. Bump file-header versions."
+  ],
+  "tests": [
+   "internal/dedup/split_book_detector_test.go — add a case: 3 fragments whose fingerprints are all present in a fake reference-corpus folder's fpidx entries → FingerprintConfirmed=true, MatchedSourceFolder set correctly.",
+   "A case where fragments' fingerprints are a SUPERSET of any single reference folder (i.e. no single folder contains them all) → FingerprintConfirmed=false, candidate still returned (metadata-only) for manual review.",
+   "A case with one fragment lacking a fingerprint entirely → must not crash and must not falsely confirm (absent evidence ≠ refuted, but also ≠ confirmed — the containment check should treat a missing fingerprint as 'cannot confirm containment for this fragment', not skip it silently)."
+  ],
+  "acceptance": [
+   "`go test ./internal/dedup/... -run TestSplitBookDetector` (or actual test name) passes including new fingerprint-confirmation cases.",
+   "Any auto-apply split-book merge path is verifiably gated on FingerprintConfirmed (grep the apply function for the new field).",
+   "make ci passes."
+  ],
+  "edge_cases": [
+   "A reference-corpus folder that itself contains MORE files than the fragment set (superset, not exact match) — this is expected and should still count as containment (fragments ⊆ source_folder, not fragments == source_folder), per the scope text's own notation.",
+   "Two different reference-corpus folders both contain the fragment set (ambiguous match) — must not silently pick one; either report both as candidates or mark ambiguous/unconfirmed rather than guessing."
+  ],
+  "anti_over_suppression": "test: 'a fragment set that is NOT contained in any reference folder correctly stays unconfirmed and does not block the metadata-only candidate from being reported for manual review'",
+  "depends_on_lines": [10750],
+  "gate": "make ci",
+  "notes": "review_critical=true: feeds an auto-regroup/merge decision on prod data. Hard dependency on part 1 (the reference-corpus scan) landing first — there is no fpidx data to match against otherwise. NEVER mutate the reference-corpus or active iTunes tree from this code path; it only reads fpidx and writes regroup decisions to the organized-library side."
+ },
+ {
+  "todo_line": 10783, "src_id": null, "title": "Overhaul the review interface (\"make it not suck\") — needs a redesign spec first",
+  "verdict": "needs_design",
+  "verdict_evidence": "The item's own text prescribes the deliverable as a SPEC, not code: 'Needs a concrete redesign spec: read-only audit of the current review page... → propose redesign.' No target interaction model, layout, or acceptance criteria are given anywhere — 'not suck' names a pain point, not a design. None of this scout package's 14 owner decisions address the review-page UX (they cover REPO-SIZE-1, INIT-5/6/7/8, product rename, review_apply_enabled prod state, PH-2b purge scope, ComposeScore clamping, generateTargetPath, missing-file lane, book_file byte-count report, E08/ABS/chapters build-vs-run split — none is 'what should the redesigned review UI look like').",
+  "domain": "web",
+  "exact_files": [],
+  "verified_anchors": [
+   {"claim": "current review workspace's component boundaries, to ground a future audit", "grep_cmd": "ls web/src/components/review/", "expect": "ActionBar.tsx, CommandBar.tsx, DupesPanel.tsx, evidence/, lanes/, MetadataPanel.tsx, QueueRail.tsx, RegroupPanel.tsx, ReviewWorkspace.tsx, spine/"}
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S", "tier": "haiku", "why_tier": "n/a — cannot be briefed as code work; the deliverable itself is a design document",
+  "review_critical": false,
+  "goal": "n/a for code. The open question that blocks a brief: what should the redesigned review page's interaction model be (current pain points per the item: 'per-hold actions', general UX friction) — a call only the owner/a product-design pass can make. A follow-up scout or docs-agent task CAN be scoped to produce the read-only audit half of this ('what it shows today, interaction friction, per-hold actions') as pure documentation, but the redesign proposal itself needs owner sign-off before any code briefs can be written.",
+  "background": [
+   "Current review workspace lives in web/src/components/review/ (ActionBar, CommandBar, DupesPanel, MetadataPanel, QueueRail, RegroupPanel, ReviewWorkspace, plus evidence/ and lanes/ and spine/ subdirectories) — already substantially built out (per recent commits: 'refactor(review): give the metadata lane its own panel', 'feat(review): let a reviewer search metadata for an unmatched book').",
+   "Ties to the review-queue track referenced in the item text: 'A1/A2/B1 shipped; B2 apply path merged #1953, default OFF.'",
+   "This item is an explicit PREREQUISITE for item 52 (todo_line 10788, consolidate dedup page into review page) — that item cannot be briefed until this one produces a concrete spec."
+  ],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "If the coordinator wants forward progress without an owner design session, the SAFE actionable subset is: commission a read-only UX audit (docs-agent or a scout-style investigation) of the current review page's friction points, written up as a docs/ design-input doc — but the redesign proposal and any code changes must wait for owner sign-off on that audit's findings."
+ },
+ {
+  "todo_line": 10788, "src_id": null, "title": "Consolidate the dedup page into the review page",
+  "verdict": "needs_design",
+  "verdict_evidence": "The item's own text says this 'Depends on item 51 (the review UI must be good enough to absorb the dedup results first)' and instructs to 'Investigate current dedup-page vs review-page component boundaries before committing to a plan' — i.e. it is explicitly gated on item 51's not-yet-written redesign spec, and even its own scope ('slim dedup page to run-control only... move ALL candidate/result display + review actions into the review page') is a plan, not a brief, until 51 lands.",
+  "domain": "web",
+  "exact_files": [],
+  "verified_anchors": [
+   {"claim": "current dedup page is a large tabbed component hosting 9 dedup-type tabs, confirming the scale of what would need to move", "grep_cmd": "grep -n 'Tabs\\|Tab label' web/src/pages/BookDedup.tsx", "expect": "≥2 hits (Tabs import + Tab usage) at L8,65"},
+   {"claim": "review page is a separate, already-built panel workspace", "grep_cmd": "grep -n 'export function ReviewWorkspace' web/src/components/review/ReviewWorkspace.tsx", "expect": "1 hit"}
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S", "tier": "haiku", "why_tier": "n/a — cannot be briefed until item 51's spec exists",
+  "review_critical": false,
+  "goal": "n/a for code — blocked on item 51 (todo_line 10783) by the item's own text.",
+  "background": [
+   "web/src/pages/BookDedup.tsx (`function BookDedup()`, L41) hosts 9 tab components: DedupBookTab, DedupAuthorTab, DedupAcousticTab, DedupReconcileTab, DedupEmbeddingTab, DedupAdvancedScanTab, DedupSeriesTab, DedupSplitBookTab, DedupAIReviewTab (per `ls web/src/components/dedup/*.tsx`) — this is the surface that would need to shrink to run-control-only.",
+   "web/src/components/review/ReviewWorkspace.tsx is the target surface that would need to absorb candidate/result display + review actions."
+  ],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [10783],
+  "gate": "n/a",
+  "notes": "The 'investigate current dedup-page vs review-page component boundaries' half of this item's ask IS answerable now without a design decision (see background above — 9 dedup tabs vs the review workspace's panel set) and could be handed to a docs-agent as input to item 51's audit, but the consolidation plan itself cannot be briefed until 51 resolves."
+ },
+ {
+  "todo_line": 10831, "src_id": "T03", "title": "Sandbox purge wave: dedup-exact-triage apply + purge-stale + full-scan + measure",
+  "verdict": "prod_run",
+  "verdict_evidence": "TODO.md:10831-10835 describes running an already-merged op (`maintenance.dedup-exact-triage {\"apply\":true}`, merged in PR #2008 per T03-BUILD note at L10502-10506) against the SANDBOX environment, followed by purge-stale → full-scan → measurement — no code remains to write; T04 (the equivalent prod run) is already checked done at L10836-10839, confirming this is purely an environment/ops action, not a code deliverable.",
+  "domain": "internal/plugins/maintenance",
+  "exact_files": [],
+  "verified_anchors": [
+   {"claim": "the apply op already exists and is merged", "grep_cmd": "grep -n 'dedup-exact-triage' internal/plugins/maintenance/dedup_triage.go", "expect": "≥1 hit ~L301 (op ID registration)"},
+   {"claim": "T04's equivalent prod run is already done, confirming this op is execution-ready", "grep_cmd": "grep -n 'T04.*ALL DONE' TODO.md", "expect": "1 hit ~L10836"}
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S", "tier": "haiku", "why_tier": "n/a — operation, not code",
+  "review_critical": true,
+  "goal": "n/a — no code deliverable. Needs a sandbox redeploy with current main first (per the item text), then an operator runs `maintenance.dedup-exact-triage {\"apply\":true}` on sandbox, followed by purge-stale and full-scan, then compares the resulting exact-pending count against the 9,074 baseline (2026-07-17) and the T02-measured 7,878 sandbox purgeable count.",
+  "background": [
+   "T02 (sandbox triage measurement, 7,878 purgeable) is already done (`- [x] **T02**`, TODO.md:10824).",
+   "T04 (the same apply op run on PROD) is already done, with results `dismissed=7891 dismiss_errors=0` (TODO.md:10836-10839) — this sandbox run is now purely a validation-parity check against a result already known to work on prod, not exploratory.",
+   "T13 (docs truth-up, this same scope's next item) DEPENDS ON this item completing per docs/agent-tasks/error-correction-2026-07/TASKS.md:400 ('DEPENDS ON: T02+T03... ideally T04')."
+  ],
+  "steps": [],
+  "tests": [],
+  "acceptance": [],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a",
+  "notes": "Technically a SANDBOX operation, not literally production, but per the JSON schema's verdict definitions the closest fit is prod_run ('no code deliverable; it is an operation to run') — flagged review_critical=true since it purges dedup candidate rows (irreversible-by-design purge-stale step) even though it's the sandbox environment. Blocks T13's full completion."
+ },
+ {
+  "todo_line": 10849, "src_id": "T13", "title": "Docs truth-up with measured sandbox/prod dedup numbers",
+  "verdict": "actionable",
+  "verdict_evidence": "docs/agent-tasks/error-correction-2026-07/TASKS.md:398-412 gives a complete, concrete 4-step brief (update docs/dedup/STATUS.md, docs/operations/pending-prod-actions.md, an executive summary, and a stale-number grep sweep) with an explicit ACCEPTANCE line — this is a real, scoped docs task, though it formally 'DEPENDS ON: T02+T03 (sandbox numbers), ideally T04 (prod numbers)' (TASKS.md:400) and T03 (this scope's prior item) has NOT yet run, so only the T04-derived (prod) portions can be completed now; the T02/T03-derived (sandbox) portions remain blocked.",
+  "domain": "docs",
+  "exact_files": ["docs/dedup/STATUS.md", "docs/operations/pending-prod-actions.md"],
+  "verified_anchors": [
+   {"claim": "T13's brief is fully specified with 4 concrete steps and an acceptance line", "grep_cmd": "grep -n 'T13 — Docs truth-up' -A15 docs/agent-tasks/error-correction-2026-07/TASKS.md", "expect": "1 hit ~L398, 4 numbered steps + ACCEPTANCE line through L413"},
+   {"claim": "T04 (prod numbers) is available now", "grep_cmd": "grep -n 'T04.*ALL DONE' TODO.md", "expect": "1 hit ~L10836, dismissed=7891"},
+   {"claim": "T03 (sandbox numbers) is NOT yet available, so sandbox-derived doc updates are blocked", "grep_cmd": "grep -n '\\*\\*T03\\*\\*' TODO.md", "expect": "1 hit ~L10831, unchecked '- [ ]'"}
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S", "tier": "haiku", "why_tier": "mechanical doc-number updates against already-measured values, following a fully pre-written brief",
+  "review_critical": false,
+  "goal": "Execute the 4 steps in docs/agent-tasks/error-correction-2026-07/TASKS.md:398-412 for the parts that don't require the still-pending T03 sandbox run: (1) update docs/dedup/STATUS.md and (2) docs/operations/pending-prod-actions.md's CONS-10/PH-2 rows with T04's measured PROD numbers (dismissed=7891, dismiss_errors=0, outcome=completed — TODO.md:10836-10839); (3) add/confirm the executive-summary backlog-drain entry for T04's prod apply; (4) grep docs/ for the stale baseline numbers 9,074/9074 and 10,319 and label every hit as the 2026-07-17 baseline rather than current state. Leave the T02/T03-sourced sandbox-specific rows explicitly marked 'pending T03' rather than filling them with stale or extrapolated numbers.",
+  "background": [
+   "TASKS.md:410-411: 'Verify no stale claims remain: grep docs/ for 9,074/9074 and 10,319 — every hit must be labeled as the 2026-07-17 baseline, not current state.'",
+   "TODO.md:10828-10830 already contains a clarifying note this task should propagate into docs/dedup/STATUS.md: the sandbox (7,878) and prod (7,891) purgeable counts are two DIFFERENT populations, not a drift, per a 2026-08-11 docs-audit correction — make sure the truth-up doesn't reintroduce that confusion."
+  ],
+  "steps": [
+   "1. Run `grep -n '9,074\\|9074\\|10,319' docs/dedup/STATUS.md docs/operations/pending-prod-actions.md docs/executive-summaries/*.md` to find every stale-baseline mention.",
+   "2. In docs/dedup/STATUS.md, replace/annotate any bare 9,074-style projection with the T04 measured result (dismissed=7891) labeled '2026-07-18 PROD apply result', explicitly distinguishing it from the T02 sandbox measurement (7,878) as noted in TODO.md:10828-10830 — do not merge them into one number.",
+   "3. In docs/operations/pending-prod-actions.md, update the CONS-10/PH-2 rows (search `grep -n 'CONS-10\\|PH-2' docs/operations/pending-prod-actions.md`) to reflect T04's completed state.",
+   "4. Check `docs/executive-summaries/2026-08-*.md` (current month, per this repo's convention of using the CURRENT month's summary) for a T04 backlog-drain entry in plain language ('thousands of false duplicate suggestions removed'); add one if missing.",
+   "5. For any row that genuinely needs the T03 sandbox-run number (not yet available), write 'PENDING — awaiting T03 sandbox purge wave (TODO.md:10831)' rather than guessing or reusing the T02 pre-purge number.",
+   "6. Add a changelog.d/ fragment (headerless, per this repo's fragment convention) noting the docs truth-up."
+  ],
+  "tests": ["n/a — docs-only change; no automated test covers doc content."],
+  "acceptance": [
+   "`grep -n '9,074\\|9074\\|10,319' docs/dedup/STATUS.md docs/operations/pending-prod-actions.md` — every remaining hit is inside a sentence explicitly labeling it as the 2026-07-17 baseline.",
+   "`grep -n 'dismissed=7891' docs/dedup/STATUS.md` returns ≥1 hit (T04's real measured number is now recorded)."
+  ],
+  "edge_cases": ["Do not backfill sandbox-only rows with the prod number (7891) as a stand-in for the sandbox number (which will be different once T03 runs, per the 7,878-vs-7,891 two-populations note) — mark them PENDING instead."],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [10831],
+  "gate": "n/a (docs)",
+  "notes": "Partial completion only: the T04/prod-derived doc updates can land now; the T02/T03/sandbox-derived rows must wait for todo_line 10831 (T03) to actually run on sandbox. Do not mark T13 fully checked off in TODO.md until T03 lands — check off only the prod-numbers portion, or leave the box open with a progress note."
+ }
+]

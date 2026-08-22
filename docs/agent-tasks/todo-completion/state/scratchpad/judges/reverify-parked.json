@@ -1,0 +1,169 @@
+[
+ {
+  "id": "L1194",
+  "todo_line": 1194,
+  "title": "PebbleStore struct split \u2014 deliberately parked, do not re-derive",
+  "anchors": [
+   {
+    "cmd": "grep -n '14.*558\\|2.5%' docs/plans/2026-08-19-pebblestore-struct-split-decision.md",
+    "rc": 0,
+    "nlines": 2,
+    "out": "48:**14 of 558 methods (2.5%) touch any domain-local field.** `db` alone is touched\n223:**Corrected: the headline was 20 (3.6%); it is 14 (2.5%).** This was not a",
+    "err": "",
+    "expect": "1+ hits",
+    "claim": "the decision doc exists and documents the parked status with the 14/558 figure"
+   }
+  ]
+ },
+ {
+  "id": "L4304",
+  "todo_line": 4304,
+  "title": "Title-leak series repair (merge/delete) stays parked pending hand-audit and its own apply gate",
+  "anchors": []
+ },
+ {
+  "id": "L4901",
+  "todo_line": 4901,
+  "title": "Decide fate of 16,265 books with no surviving file",
+  "anchors": [
+   {
+    "cmd": "grep -n '16,265' docs/audits/2026-08-17-missing-file-audit-full-population.md",
+    "rc": 0,
+    "nlines": 8,
+    "out": "31:| books fully broken (every row dead) | **16,265** (26.4%) |\n56:| books with no surviving file | 5 (4.2%) | **16,265 (26.4%)** |\n69:\ud83d\uded1 **The standing STOP-AND-ASK is about \"5 books\". It is 16,265 books.** That is\n288:4. The 16,265 fully-broken books remain a human decision (\u00a71).\n355:the 16,265 books that will not load. The delete plan addresses the smaller share.\n407:The 16,265 fully-broken book",
+    "err": "",
+    "expect": ">=1 hit",
+    "claim": "the audit doc records BooksFullyBroken = 16,265"
+   }
+  ]
+ },
+ {
+  "id": "L4910",
+  "todo_line": 4910,
+  "title": "Decide repair for books whose every book_file row is dead (duplicate of L4901)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'Deletion was REMOVED from this op on 2026-08-19' internal/plugins/maintenance/missing_file_repair.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "119:\t// \ud83d\udd34 Deletion was REMOVED from this op on 2026-08-19. Rejecting apply loudly",
+    "err": "",
+    "expect": "1 hit, L119",
+    "claim": "missing-file-repair's delete capability, which this item assumed still existed, was removed"
+   }
+  ]
+ },
+ {
+  "id": "L5458",
+  "todo_line": 5458,
+  "title": "Decide what happens to the 16,265 fully-broken books",
+  "anchors": [
+   {
+    "cmd": "grep -n \"16,265 books with zero resolvable files\" internal/plugins/maintenance/missing_file_repoint.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "18:// not exist, leaving 16,265 books with zero resolvable files (unplayable and",
+    "err": "",
+    "expect": "1 hit ~L18",
+    "claim": "16,265 fully-broken books figure is current"
+   }
+  ]
+ },
+ {
+  "id": "L7404",
+  "todo_line": 7404,
+  "title": "Stop Deluge writing in-progress downloads into the import directory",
+  "anchors": []
+ },
+ {
+  "id": "L8125",
+  "todo_line": 8125,
+  "title": "Build a review-queue Kind for the 466 low-confidence series positions",
+  "anchors": [
+   {
+    "cmd": "grep -n 'review_apply_enabled IS STILL THE GATE' internal/server/handlers/review/handler_action_test.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "314:// \ud83d\udd34 review_apply_enabled IS STILL THE GATE, AND THE OVERRIDE IS STILL RECORDED.",
+    "err": "",
+    "expect": "1 hit ~L314",
+    "claim": "review_apply_enabled is still a live gate in the review handler/replay path"
+   }
+  ]
+ },
+ {
+  "id": "L8837",
+  "todo_line": 8837,
+  "title": "Canary-apply the 138 pending multidisc holds by flipping review_apply_enabled",
+  "anchors": [
+   {
+    "cmd": "grep -n 'review_apply_enabled IS STILL THE GATE' internal/server/handlers/review/handler_action_test.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "314:// \ud83d\udd34 review_apply_enabled IS STILL THE GATE, AND THE OVERRIDE IS STILL RECORDED.",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "review_apply_enabled is still a live, tested gate at HEAD"
+   }
+  ]
+ },
+ {
+  "id": "L10534",
+  "todo_line": 10534,
+  "title": "Community audiobook fingerprint index (INIT-8) \u2014 parked",
+  "anchors": []
+ },
+ {
+  "id": "L10591",
+  "todo_line": 10591,
+  "title": "Workflow system WF-0/2/3/4/5 (INIT-6) \u2014 parked",
+  "anchors": []
+ },
+ {
+  "id": "L10603",
+  "todo_line": 10603,
+  "title": "Responses-API migration AI-RESP-A/B/E/F (INIT-7) \u2014 parked",
+  "anchors": []
+ },
+ {
+  "id": "L10662",
+  "todo_line": 10662,
+  "title": "Product rename/branding sweep",
+  "anchors": [
+   {
+    "cmd": "grep -n '1.17 \u2014 product rename' TODO.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "10686:37. **1.17 \u2014 product rename/branding sweep** (H1:2751) \u2014 blocked on name decision.",
+    "err": "",
+    "expect": "1 hit ~L10662",
+    "claim": "item text says blocked on name decision"
+   }
+  ]
+ },
+ {
+  "id": "L10663",
+  "todo_line": 10663,
+  "title": "Plex-style media server API, LLM series detection, AI cover art (all on hold)",
+  "anchors": [
+   {
+    "cmd": "grep -n '3.8 Plex-style media server API' TODO.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "10687:38. **3.8 Plex-style media server API; 3.9 LLM series detection; 3.10 AI cover art**",
+    "err": "",
+    "expect": "1 hit ~L10663",
+    "claim": "item explicitly marked [hold]"
+   },
+   {
+    "cmd": "find docs/specs -iname '*plex*' -o -iname '*cover-art*' -o -iname '*series-detect*'",
+    "rc": 0,
+    "nlines": 0,
+    "out": "",
+    "err": "",
+    "expect": "0 hits",
+    "claim": "no design spec exists for any of the three"
+   }
+  ]
+ }
+]

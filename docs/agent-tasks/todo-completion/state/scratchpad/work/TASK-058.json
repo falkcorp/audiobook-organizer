@@ -1,0 +1,64 @@
+{
+  "todo_line": 10635,
+  "src_id": null,
+  "title": "Update execution-manifest doc to reflect the now-settled human gates",
+  "verdict": "actionable",
+  "verdict_evidence": "docs/plans/2026-07-10-execution-manifest.md:24-27 still shows INIT-5/6/7/8 and REPO-SIZE-1 as open 'DECISIONS-PENDING #1-#5' gates, but this scout run's owner-decision list (2026-08-21) items #1-#5 already resolved all five (REPO-SIZE-1 \u2192 Option (d); INIT-5 T2, INIT-6, INIT-7, INIT-8 \u2192 parked) \u2014 the manifest doc is now stale and needs a docs update to close the loop, not further human sign-off.",
+  "domain": "docs",
+  "exact_files": [
+    "docs/plans/2026-07-10-execution-manifest.md"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "manifest lists these 5 items as open human gates with DECISIONS-PENDING refs",
+      "grep_cmd": "grep -n 'DECISIONS-PENDING' docs/plans/2026-07-10-execution-manifest.md",
+      "expect": "\u22655 hits at L24-27,81-85"
+    }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "mechanical status-table edit reflecting decisions already made elsewhere in this session",
+  "review_critical": false,
+  "goal": "Edit the status/notes columns of docs/plans/2026-07-10-execution-manifest.md's INIT-5, INIT-6, INIT-7, INIT-8, and REPO-SIZE-1 (INIT-9 TASK-06) rows to record the 2026-08-21 owner decisions (all four INIT items PARKED; REPO-SIZE-1 decided as Option (d) forward-only), and remove/annotate the 'DECISIONS-PENDING #1-#5' section (L81-85) as resolved.",
+  "background": [
+    "docs/plans/2026-07-10-execution-manifest.md:24 'INIT-5 ... T2 = real-Deluge spike, STOP-FOR-HUMAN sign-off before T3 ... 1/7 ... T2 spike = human gate blocking T3-T7 (DECISIONS-PENDING #2)'.",
+    "L25 'INIT-6 ... STOP-FOR-HUMAN ... GATED ... spec review open (PR #1935; DECISIONS-PENDING #3)'.",
+    "L26 'INIT-7 ... HOLD ... greenlight not given (DECISIONS-PENDING #5)'.",
+    "L27 'INIT-8 ... GATED ... STOP-FOR-HUMAN review session (DECISIONS-PENDING #4)'.",
+    "L28 'INIT-9 ... TASK-06 REPO-SIZE-1 = STOP-FOR-HUMAN plan-only ... T06 REPO-SIZE-1 plan written, decision pending (DECISIONS-PENDING #1)'.",
+    "L81-85 lists the same five items under a 'Human decisions needed' section."
+  ],
+  "steps": [
+    "1. Edit L24: change status cell to note 'PARKED 2026-08-21 (owner decision #2, this scout package) \u2014 T2 Deluge spike not resumed'.",
+    "2. Edit L25: change status cell to 'PARKED 2026-08-21 (owner decision #3)'.",
+    "3. Edit L26: change status cell to 'PARKED 2026-08-21 (owner decision #5) \u2014 hold-lift not given'.",
+    "4. Edit L27: change status cell to 'PARKED 2026-08-21 (owner decision #4)'.",
+    "5. Edit L28: change status cell to 'DECIDED 2026-08-21 (owner decision #1): Option (d) forward-only + GitHub Support gc, no rewrite \u2014 see docs/plans/2026-07-10-repo-size-history-rewrite-plan.md:223'.",
+    "6. Edit the L81-85 'Human decisions needed' list: either delete it or replace each bullet with '[RESOLVED 2026-08-21] <original text>'.",
+    "7. Bump the file's version header comment (check for one near the top of the file; add/update per repo Markdown header convention if present)."
+  ],
+  "tests": [
+    "n/a \u2014 documentation-only edit; no test asserts manifest table contents."
+  ],
+  "acceptance": [
+    "`grep -n DECISIONS-PENDING docs/plans/2026-07-10-execution-manifest.md` returns 0 hits (all resolved and reworded) or all remaining hits are inside a 'RESOLVED' annotation."
+  ],
+  "edge_cases": [
+    "None \u2014 pure status doc update, no code path depends on this file's content."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only'",
+  "notes": "This is purely a doc close-out reflecting decisions already made in this scout package's owner-decision list; do not re-litigate the decisions themselves.",
+  "id": "TASK-058",
+  "stable_key": "scope-15.json|10635|None|Update execution-manifest doc to reflect the now-settled hum",
+  "ws": "docs",
+  "slug": "update-execution-manifest-doc-to-reflect-the-now",
+  "scope_file": "scope-15.json",
+  "dropped_files": [],
+  "tier_label": "Haiku-class",
+  "depends_on": [],
+  "wave": 1
+}

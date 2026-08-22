@@ -1,0 +1,90 @@
+{
+  "todo_line": 685,
+  "src_id": null,
+  "title": "Detect multi-file books whose synthesized chapter timeline stops short of Book.Duration (per-file BookFile.Duration missing or wrong)",
+  "verdict": "actionable",
+  "verdict_evidence": "audioutil.SynthesizeChapters (internal/audioutil/timeline.go:54-70) has no zero-duration guard: `end := start + t.DurationSec` silently produces a degenerate (zero-width or short) chapter when a track's DurationSec is 0 or wrong, and mapper.go's loadChapters (mapper.go:256-264) builds each TrackInfo.DurationSec directly from `float64(f.Duration)` (fileView.DurationSec at mapper.go:217) with no validation against Book.Duration. The TODO's own example (one of two 'Genesis' rows, 1,189 files, ends at 32,636s against a 258,256s Book.Duration while its byte-identical twin ends correctly) shows this is a live, silent data-quality bug, not hypothetical.",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+    "internal/server/handlers/abs/mapper.go"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "SynthesizeChapters has no guard against a zero or missing per-track duration",
+      "grep_cmd": "grep -n 'func SynthesizeChapters' internal/audioutil/timeline.go",
+      "expect": "1 hit L54; body shows `end := start + t.DurationSec` with no validation"
+    },
+    {
+      "claim": "loadChapters builds TrackInfo.DurationSec directly from BookFile.Duration with no cross-check against Book.Duration",
+      "grep_cmd": "grep -n 'DurationSec: f.DurationSec' internal/server/handlers/abs/mapper.go",
+      "expect": "1 hit L261"
+    },
+    {
+      "claim": "fileView.DurationSec is a direct cast of BookFile.Duration, no validation",
+      "grep_cmd": "grep -n 'DurationSec: float64(f.Duration)' internal/server/handlers/abs/mapper.go",
+      "expect": "1 hit L217"
+    }
+  ],
+  "reuse": [
+    {
+      "name": "SynthesizeChapters / TrackInfo (the function to add a guard around, or a caller-side check before it)",
+      "file": "internal/audioutil/timeline.go",
+      "verify_grep": "grep -n 'type TrackInfo struct' internal/audioutil/timeline.go"
+    },
+    {
+      "name": "view.DurationSec running total already computed by the caller loop (mapper.go:187-188) as the ground truth to compare against",
+      "file": "internal/server/handlers/abs/mapper.go",
+      "verify_grep": "grep -n 'view.DurationSec += fv.DurationSec' internal/server/handlers/abs/mapper.go"
+    }
+  ],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "small, localized fix in one file's request-time code path plus a log-based detector; low risk since it only adds observability, not a behavior change to what's served",
+  "review_critical": false,
+  "goal": "Add a divergence check inside loadChapters (mapper.go:243-265): after synthesizing the chapter list for a multi-file book with no persisted chapters, compare the last chapter's EndSec against view.DurationSec (the summed BookFile.Duration, already computed at mapper.go:188 and passed in as book-level context); when they diverge by more than a small tolerance, emit a slog.Warn naming the book ID and both durations so the underlying per-file Duration data-quality bug becomes visible in logs instead of only in ABS's rendered (silently wrong) chapter list. This is a detection/observability fix; correcting the underlying BookFile.Duration values themselves is a data-repair problem (likely via duration-reextract, subject to L680's tolerance-floor caveat) that this item does not attempt to solve.",
+  "background": [
+    "TODO.md L685-L186: one of two 'Genesis' rows (1,189 files) serves 1,189 chapters ending at 32,636s against a 258,256s duration; its twin ends correctly at 258,256s -- same content, different per-file duration data, confirming the bug is in the STORED BookFile.Duration values on one row's segments, not in SynthesizeChapters' arithmetic itself (which is correct given correct inputs -- verified by reading timeline.go:54-70).",
+    "loadChapters (mapper.go:243-265) has no access today to Book.Duration or view.DurationSec at the point it builds tracks -- it only receives bookID and []fileView, so the check needs either a signature change or to be hoisted into the caller (buildItemView at mapper.go:181-206, which already has both view.DurationSec and view.Chapters in scope after the loadChapters call at line 201)."
+  ],
+  "steps": [
+    "1. In internal/server/handlers/abs/mapper.go, after `view.Chapters = h.loadChapters(book.ID, view.Files)` (mapper.go:201), add a check: if len(view.Chapters) > 0, compute `lastEnd := view.Chapters[len(view.Chapters)-1].EndSec` and compare against `view.DurationSec` (already the summed BookFile.Duration from the loop at mapper.go:182-191).",
+    "2. If `view.DurationSec - lastEnd` exceeds a small tolerance (e.g. 5 seconds, matching the pattern in duration_reextract.go's durationAbsToleranceS), emit `slog.Warn(\"abs mapper: synthesized chapter timeline stops short of book duration\", \"book_id\", book.ID, \"chapters_end_sec\", lastEnd, \"book_duration_sec\", view.DurationSec)`.",
+    "3. Do NOT change what is served to the client in this change -- this is detection-only, matching the project's decision pattern of shipping a detector before a fix (see decision #11's precedent: 'build a DETECTION-ONLY counter now; the fix itself is deferred').",
+    "4. Optionally (if reviewer wants it in the same PR): also log a per-file breakdown of which BookFile rows have Duration <= 0 among view.Files, to make root-causing a flagged book faster."
+  ],
+  "tests": [
+    "internal/server/handlers/abs/mapper_test.go: TestLoadChapters_DivergentDurationLogsWarning -- a multi-file book fixture with one BookFile.Duration == 0 among several non-zero durations produces a synthesized chapter list whose last EndSec is well short of the summed intended duration; assert the warning fires (capture via a test slog handler) with the correct book_id and both duration values.",
+    "TestLoadChapters_ConsistentDurations_NoWarning -- a fixture where all BookFile.Duration values are populated and consistent produces no warning (anti-over-suppression: proves the check doesn't fire on healthy data)."
+  ],
+  "acceptance": [
+    "go test ./internal/server/handlers/abs/... -run TestLoadChapters passes.",
+    "grep -n 'synthesized chapter timeline stops short' internal/server/handlers/abs/mapper.go returns 1 hit after the change."
+  ],
+  "edge_cases": [
+    "A book with persisted (not synthesized) chapters (the `if h.chapters != nil` early-return branch at mapper.go:244-251) is out of scope for this check -- persisted chapters are trusted as-is; only the live-synthesis fallback path needs the guard.",
+    "A single-file book (len(files)==1): SynthesizeChapters still runs but there is only one chapter equal to the one file's duration, so lastEnd == view.DurationSec by construction -- the check should be a no-op here, not a false positive.",
+    "view.DurationSec == 0 (book with no BookFile rows, duration pulled from book.Duration per mapper.go:194-196): loadChapters returns nil chapters for zero files, so the len(view.Chapters) > 0 guard already skips this case."
+  ],
+  "anti_over_suppression": "TestLoadChapters_ConsistentDurations_NoWarning",
+  "depends_on_lines": [
+    680
+  ],
+  "gate": "go build ./... && go vet ./... && go test ./internal/server/handlers/abs/... -count=1",
+  "notes": "This is intentionally scoped to detection/logging only, not to correcting the underlying BookFile.Duration values -- that correction is duration-reextract's job, and L680 already flags that duration-reextract's tolerance floor may not catch every case this detector would surface. Once this logs in production, it becomes new evidence for L680's blast-radius question.",
+  "review_notes": [
+    "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ],
+  "id": "TASK-149",
+  "stable_key": "scope-02.json|685|None|Detect multi-file books whose synthesized chapter timeline s",
+  "ws": "server-handlers",
+  "slug": "detect-multi-file-books-whose-synthesized-chapte",
+  "scope_file": "scope-02.json",
+  "dropped_files": [],
+  "tier_label": "Sonnet-class",
+  "external_blockers": [
+    "TODO.md L680 (needs_design) \u2014 not a task in this package; coordinator confirms it is resolved or explicitly waives it before dispatch"
+  ],
+  "depends_on": [],
+  "wave": 1
+}

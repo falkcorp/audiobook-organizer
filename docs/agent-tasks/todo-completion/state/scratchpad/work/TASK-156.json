@@ -1,0 +1,70 @@
+{
+  "todo_line": 10354,
+  "src_id": "ABS-SYNC-Phase7",
+  "title": "Phase 7 \u2014 socket.io for Absorb (deprioritized by the item's own text; still unbuilt)",
+  "verdict": "actionable",
+  "verdict_evidence": "Confirmed unbuilt: `grep -rn 'socket.io\\|socketio\\|emit.*auth' internal/server/handlers/abs/*.go` -> 0 hits. Not covered by any of the 14 owner decisions above (none mention socket.io/Absorb), so this cannot be marked 'parked' on that basis \u2014 but the item's own text already deprioritizes it ('Deprioritized: the primary client ships without it'), so it is scoped here as low-effort/low-priority rather than dropped outright.",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+    "internal/server/handlers/abs/socketio.go",
+    "internal/server/wire_abs_routes.go"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "no socket.io implementation exists in the ABS handler package",
+      "grep_cmd": "grep -rn 'socket.io\\|socketio' internal/server/handlers/abs/*.go",
+      "expect": "0 hits"
+    },
+    {
+      "claim": "socket.io IS already excluded from the SPA-fallback 200-HTML bug for the AudioBooth/Absorb clients",
+      "grep_cmd": "grep -n 'socket.io' internal/server/spa_fallback.go",
+      "expect": "\u22652 hits (nonSPAPrefixes/nonSPAExact per abs-implementation-status.md's N-1 finding)"
+    }
+  ],
+  "reuse": [
+    {
+      "name": "absGroup registration pattern to add a new route group",
+      "file": "internal/server/wire_abs_routes.go",
+      "verify_grep": "grep -n 'absGroup := s.router.Group' internal/server/wire_abs_routes.go"
+    }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "New protocol surface (socket.io) with a narrow scope (Absorb-only, one auth handshake), but nontrivial because it needs an actual socket.io-compatible server, not just a REST handler",
+  "review_critical": false,
+  "goal": "Implement a minimal socket.io endpoint sufficient to stop Absorb going offline after 5 failed reconnects: accept the socket.io handshake, respond to `emit('auth', <raw token string>)` by validating the token through the existing ABSIdentityResolver, and keep the connection alive. AudioBooth needs none of this (verified against its Package.swift per the item) \u2014 scope strictly to Absorb compatibility.",
+  "background": [
+    "AudioBooth (the primary client, per the item) ships without any websocket dependency; only Absorb requires this, and only to avoid its own reconnect-storm/offline behavior \u2014 this is a compatibility shim, not a feature AO needs for its own sake."
+  ],
+  "steps": [
+    "1. Confirm no existing Go socket.io library is already vendored (`grep -n 'socket.io\\|googollee' go.mod go.sum`) before choosing a dependency; TASK-11's owner-decision note in this same scope ('Only this task may touch go.mod') suggests go.mod changes are gated \u2014 check whether TASK-11 has already landed and closed that gate, or whether adding a socket.io dependency needs the same sign-off.",
+    "2. Add a minimal socket.io v2/v3-compatible handshake handler (either via a vendored library or a hand-rolled minimal implementation, given the tiny surface needed: handshake + one 'auth' event) registered on the ABS router group in internal/server/wire_abs_routes.go.",
+    "3. On receiving `emit('auth', <token>)`, validate the token via the existing internal/server/middleware/absauth.go ABSIdentityResolver.ResolveBearer (or equivalent) and keep the socket open on success; close it (or respond with an auth-failure event) on failure \u2014 do not silently accept unauthenticated sockets.",
+    "4. Bump version headers on new/touched files."
+  ],
+  "tests": [
+    "internal/server/handlers/abs/socketio_test.go: TestSocketIOHandshake_AcceptsValidToken and TestSocketIOHandshake_RejectsInvalidToken \u2014 simulate the handshake + auth emit with a valid/invalid bearer token and assert the connection is kept/closed accordingly."
+  ],
+  "acceptance": [
+    "`go test ./internal/server/handlers/abs/... -run SocketIO` passes"
+  ],
+  "edge_cases": [
+    "A socket that never sends the auth event within a reasonable timeout should be closed, not left open indefinitely (resource leak)."
+  ],
+  "anti_over_suppression": "N/A \u2014 this is new functionality, not a filter",
+  "depends_on_lines": [
+    10337
+  ],
+  "gate": "go build ./... && go vet ./... && go test ./internal/server/... ./internal/server/handlers/abs/... -count=1",
+  "notes": "Item's own text explicitly deprioritizes this ('the primary client ships without it') \u2014 recommend the owner confirm it's still worth building before spending an M-effort task on it, rather than this scout assuming 'parked' on their behalf.",
+  "id": "TASK-156",
+  "stable_key": "scope-13.json|10354|None|Phase 7 \u2014 socket.io for Absorb (deprioritized by the item's ",
+  "ws": "server-handlers",
+  "slug": "phase-7-socket-io-for-absorb-deprioritized-by-th",
+  "scope_file": "scope-13.json",
+  "dropped_files": [],
+  "tier_label": "Sonnet-class",
+  "depends_on": [],
+  "wave": 2
+}

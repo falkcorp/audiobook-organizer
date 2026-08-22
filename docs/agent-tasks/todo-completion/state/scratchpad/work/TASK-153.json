@@ -1,0 +1,93 @@
+{
+  "todo_line": 4507,
+  "src_id": null,
+  "title": "Implement POST /api/session/local (2xx stub)",
+  "part": 1,
+  "verdict": "actionable",
+  "verdict_evidence": "Neither /api/session/local nor /api/session/local-all is registered anywhere: `grep -rn 'session/local' internal/server/` returns zero route registrations (only the reserved-prefix comment at internal/server/wire_abs_routes.go:70 and the unrelated :id/sync,:id/close routes). A full design spec already exists and marks both as REQUIRED for the two target ABS clients: docs/specs/2026-07-29-abs-sync-api-design.md \u00a71.8.8 item 1 ('/api/session/local must exist and return 2xx') and \u00a71.9.1's 'Still required despite narrowing' list explicitly keeps this requirement even after client-scope narrowing.",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+    "internal/server/handlers/abs/handler.go",
+    "internal/server/handlers/abs/play.go"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "no route exists for /api/session/local or /api/session/local-all today",
+      "grep_cmd": "grep -rn '\"/api/session/' internal/server/handlers/abs/handler.go",
+      "expect": "2 hits, both for /api/session/:id/sync and /api/session/:id/close only"
+    },
+    {
+      "claim": "/api/session/ is a reserved ABS path prefix (protects the route from silently matching a wrong handler)",
+      "grep_cmd": "grep -n '\"/api/session/\"' internal/server/wire_abs_routes.go",
+      "expect": "1 hit at L70"
+    },
+    {
+      "claim": "a design spec already requires this endpoint and documents exact behavior",
+      "grep_cmd": "grep -n 'api/session/local' docs/specs/2026-07-29-abs-sync-api-design.md",
+      "expect": ">=4 hits including \u00a71.8.8 and \u00a71.9.1"
+    },
+    {
+      "claim": "the upstream API reference tracks this as unimplemented",
+      "grep_cmd": "grep -n 'session/local' docs/reference/abs-upstream-api-reference.md",
+      "expect": "1 hit, row marked \u274c"
+    }
+  ],
+  "reuse": [
+    {
+      "name": "respondPlainOK(c) \u2014 the idempotent-200 helper already used by applySessionUpdate for the same 'never 404, always succeed' contract",
+      "file": "internal/server/handlers/abs/play.go",
+      "verify_grep": "grep -n 'func respondPlainOK' internal/server/handlers/abs/*.go"
+    },
+    {
+      "name": "servermiddleware.CurrentUser(c) \u2014 auth extraction pattern used by every other ABS write handler",
+      "file": "internal/server/handlers/abs/play.go",
+      "verify_grep": "grep -n 'servermiddleware.CurrentUser' internal/server/handlers/abs/play.go"
+    }
+  ],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "A single trivial route: authenticate, respond 200 with a non-empty body, per the spec's own note that Absorb tolerates 404/501 here and only AudioBooth needs a bare 2xx (no body parsing required for this half).",
+  "review_critical": false,
+  "goal": "Add POST /api/session/local, returning an idempotent 2xx for any authenticated request, matching the spec's minimum bar (\u00a71.8.8 item 1: 'ShelfPlayer sends it after every play/pause with maxAttempts:1, so a 404 immediately marks the connection offline'; \u00a71.9.1 narrows this to 'still implement it, but a 404 is no longer fatal' for the two target clients).",
+  "background": [
+    "This is the simpler sibling of /api/session/local-all (see part 2): the spec does not require this endpoint to persist anything beyond returning success, only that it never 404s so AudioBooth/Absorb do not mark the connection offline.",
+    "internal/server/handlers/abs/play.go:356-419 (applySessionUpdate) establishes the project's existing 'always 200, never leak internal state via status code' convention for this exact API family \u2014 new handlers here should match it."
+  ],
+  "steps": [
+    "1. In internal/server/handlers/abs/play.go, add `func (h *Handler) SessionLocal(c *gin.Context) { defer respondPlainOK(c); _, ok := servermiddleware.CurrentUser(c); if !ok { return } }` (auth-gated but still always-200 on success; unauthenticated still gets whatever respondPlainOK sends since 401 handling for ABS routes should match the existing pattern elsewhere in this file \u2014 check what applySessionUpdate does on an auth failure and mirror it exactly rather than inventing a new convention).",
+    "2. Register the route in internal/server/handlers/abs/handler.go's Register method, alongside the existing `/api/session/:id/sync` and `/api/session/:id/close` registrations (around line 534-535): `r.POST(\"/api/session/local\", auth, h.SessionLocal)`.",
+    "3. Add the new route path to the documented route list near internal/server/wire_abs_routes.go:636-637 (the comment block listing implemented /api/session/ routes) so the reserved-prefix documentation stays accurate.",
+    "4. Bump version headers on both touched files."
+  ],
+  "tests": [
+    {
+      "file": "internal/server/handlers/abs/play_test.go",
+      "name": "TestSessionLocal_ReturnsOK (new)",
+      "asserts": "POST /api/session/local as an authenticated user returns 2xx with a non-empty body"
+    }
+  ],
+  "acceptance": [
+    "`curl -X POST /api/session/local` (authenticated) returns 2xx, not 404.",
+    "`go test ./internal/server/handlers/abs/... -run TestSessionLocal` passes."
+  ],
+  "edge_cases": [
+    "Unauthenticated request: match whatever applySessionUpdate does today (verify at internal/server/handlers/abs/play.go:370-373) rather than assuming 401 is correct \u2014 the spec's 'never 404' concern is about connectivity probing, not necessarily about auth."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "go build ./... && go vet ./... && go test ./internal/server/handlers/abs/... -count=1",
+  "notes": "See part 2 (same todo_line) for the more substantial /api/session/local-all endpoint, which actually applies progress.",
+  "review_notes": [
+    "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ],
+  "id": "TASK-153",
+  "stable_key": "scope-08.json|4507|1|Implement POST /api/session/local (2xx stub)",
+  "ws": "server-handlers",
+  "slug": "implement-post-api-session-local-2xx-stub",
+  "scope_file": "scope-08.json",
+  "dropped_files": [],
+  "tier_label": "Haiku-class",
+  "depends_on": [],
+  "wave": 1
+}

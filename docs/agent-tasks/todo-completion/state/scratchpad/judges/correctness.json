@@ -1,0 +1,423 @@
+{
+ "lens": "correctness",
+ "verdict": "CHALLENGED",
+ "package_snapshot": {
+  "note": "The package regenerated FOUR times during this review (19:06 / 19:21 / 19:26 / 19:43). Findings were authored against md5 876ff31a76e21f874a06bb422d0abafc (19:26, 185 tasks) and then RE-VERIFIED against md5 7c71d51c497d875c14f2718815ecfad0 (19:43, 180 tasks; b2=65 b3=33 stale_done=114 parked=13 not_a_task=27). Task IDs are POSITIONAL and were completely re-assigned between the two cuts \u2014 e.g. TASK-090 'Measure the real double-primary rate' became TASK-085 and moved wave 1 -> 4; TASK-105 'Require every mutating operation to declare and enforce dry_run' became TASK-100, wave 1 -> 2; TASK-139 'Reproduce and classify the persistent UI lockup' became TASK-134; TASK-163 '/tasks/* and /maintenance-window/*' became TASK-158; TASK-077 'per-job store interfaces' became TASK-072. Each finding below carries `stable_key` (todo_line + title fragment), which survives regeneration; re-map by that, never by ID. `task_ids` are the 19:26 IDs and `task_ids_1943` the 19:43 IDs where they were re-derived.",
+  "repo_head": "35d3adc5 chore(todo): close 8 Tier A items verified done against HEAD",
+  "method": "Every verified_anchors[].grep_cmd in all 6 buckets (~750 greps) was executed in the main checkout and diffed against its `expect`. Coverage was computed as a set-diff of the inventory TSV todo_line column against the union of todo_line over all buckets. All 14 recorded owner decisions were regex-probed against json.dumps of every item.",
+  "todo_line_index": "IMPORTANT: every `todo_line` in skeleton.json and in the inventory TSV indexes /Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer/.worktrees/todo-master-plan/TODO.md (branch plan/todo-master-plan, HEAD e7ae2b4d, 10849 lines) \u2014 NOT main's TODO.md at 35d3adc5 (10879 lines). The two differ by 30 lines and the offset is not uniform (main is +20 in the 10000s, +1 in the 2000s, identical at L1009). Verified: worktree TODO.md:3348 = the nil is_primary_version item (TASK-002), :7435 = the dry_run enforcement item (TASK-105), :4563 = the /tasks//maintenance-window item (TASK-163), :2431 = UI-LOCKUP-2 (TASK-139); main's TODO.md at those same lines is unrelated prose. All TODO.md:NNNNN citations below use the WORKTREE index. Repo greps (internal/**, docs/**) were run against main at 35d3adc5."
+ },
+ "findings": [
+  {
+   "severity": "blocker",
+   "task_ids": [
+    "TASK-002",
+    "TASK-004"
+   ],
+   "task_ids_1943": [],
+   "stable_key": "todo_line 3348 'Fix the 3-way disagreement in how a nil IsPrimaryVersion is treated' + todo_line 3884 'Fix the author-path post-filter to treat nil IsPrimaryVersion as primary'",
+   "problem": "REVIEW LAUNDERING: this judge's own finding text was ingested by the 19:43 regeneration and used as the verdict_evidence for a stale_done verdict on the very items it was reporting as broken. Finding #1 of the 19:26 pass said the nil-IsPrimaryVersion fix was briefed TWICE (L3348 and L3884) and that ONE of the two should be dropped. In the 19:43 cut BOTH todo_lines were moved out of tasks[] into buckets.stale_done \u2014 i.e. 'already done, check the box' \u2014 and both entries' verdict_evidence now literally opens with '[correctness.json] The same fix is briefed twice under two different todo_lines...'. A duplicate-work report was converted into a done verdict for both copies. The code is unchanged at HEAD: internal/audiobooks/service_query.go:346 and :531 still read `bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion`, and service_filtering.go:737 still passes the raw nullable straight to the DTO. The stale_done entries even retain the original anchors that PROVE the item is live ('2 hits, at L346 and L532'), so each entry now asserts done and not-done simultaneously. Two wave-1 tasks in the same cut (TASK-002 L3354, TASK-003 L3889) declare depends_on_lines [3348] \u2014 they are gated on an item the package just checked off without fixing.",
+   "evidence": "skeleton.json (md5 7c71d51c, 19:43) buckets.stale_done, todo_line 3348 and 3884, verdict='stale_done', verdict_evidence begins: \"[correctness.json] The same fix is briefed twice under two different todo_lines with no depends_on edge. TASK-002 (L3348, wave 1, review_critical) step 1 and TASK-004 (L3884, wave 3, review_critical) step 2 are the identical edit...\" \u2014 that string is finding #1 of this file's 19:26 revision, verbatim.\nRetained anchor on L3348: {'grep_cmd': \"grep -n 'bPrimary := b.IsPrimaryVersion != nil && \\\\*b.IsPrimaryVersion' internal/audiobooks/service_query.go\", 'expect': '2 hits, at L346 and L532'}.\nAt HEAD 35d3adc5: `sed -n '346p;531p' internal/audiobooks/service_query.go` => both lines are `bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion`; `sed -n '737p;864p' internal/audiobooks/service_filtering.go` => `IsPrimaryVersion: summary.IsPrimaryVersion,` and `eff := s.IsPrimaryVersion == nil || *s.IsPrimaryVersion`. The three-way divergence the item names is fully intact.\nDangling-edge scan on the 19:43 cut: TASK-002 (L3354) and TASK-003 (L3889) both carry depends_on_lines [3348], which now resolves to a stale_done entry, not a task.",
+   "fix": {
+    "verdict_override": "bucket_1",
+    "note": "Restore both todo_lines to Bucket 1 (merging them into one task, which is what the duplicate finding actually asked for), and put a human gate between judge output and regeneration: a judge finding may open a task or change a brief, but must never by itself produce a stale_done verdict. Any stale_done whose verdict_evidence cites a judge file rather than a repo artifact should be re-derived from the repo."
+   }
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-002",
+    "TASK-004"
+   ],
+   "problem": "[SUPERSEDED BY BLOCKER #1 \u2014 retained because it is the finding that was laundered.] The same fix is briefed twice under two different todo_lines with no depends_on edge. TASK-002 (L3348, wave 1, review_critical) step 1 and TASK-004 (L3884, wave 3, review_critical) step 2 are the identical edit to the identical line: internal/audiobooks/service_query.go:346, `bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion` -> `== nil || *`. TASK-002 additionally does the twin at L531 and the DTO. Once TASK-002 lands, TASK-004's own re-verify grep returns zero hits and every brief's START-HERE rule says a zero-hit grep means STOP and report \u2014 so TASK-004 burns a review_critical slot and a PR the owner must review, for nothing.",
+   "evidence": "skeleton: TASK-002.steps[0] and TASK-004.steps[1] both name service_query.go:346 with the same before/after expression; both depends_on=[]. At HEAD: `grep -n \"bPrimary := b.IsPrimaryVersion\" internal/audiobooks/service_query.go` -> 2 hits, L346 and L531.\nSTATUS at the 19:43 cut: both todo_lines were moved to buckets.stale_done rather than merged; see blocker #1. The duplication described here was real in the 19:26 cut and the correct resolution was to merge the two briefs into one Bucket-1 task, NOT to close both.",
+   "fix": {
+    "verdict_override": "stale_done",
+    "reason": "TASK-004 is wholly subsumed by TASK-002, which changes L346 AND L531 AND the DTO. Drop it. If kept it must carry depends_on:[\"TASK-002\"] and a goal covering only what TASK-002 leaves \u2014 which is nothing."
+   },
+   "stable_key": "not task-scoped (bucket/coverage/decision-level finding)"
+  },
+  {
+   "severity": "blocker",
+   "task_ids": [
+    "TASK-105"
+   ],
+   "problem": "TASK-105 adds a NEW required field (SupportsDryRun) to OperationDef and makes ValidateOpDef reject any CapLibraryWrite def that leaves it false. SupportsDryRun does not exist anywhere in the repo today, so every write-capable def defaults to false the moment step 2 lands. ValidateOpDef is called by RegisterOp, RegisterOp returns the error, and every plugin's Register loop returns on first error \u2014 so the failure is not 'ops silently skipped', it aborts registration for the whole plugin and propagates to boot. exact_files lists 2 files; 88 non-test files reference CapLibraryWrite. Worse, step 3's own audit grep is scoped to internal/plugins/ and therefore misses ~17 files under internal/server/ and internal/scheduler/extra_ops.go (11 RegisterOp call sites in that one file), which are exactly the ops that would then fail to register.",
+   "evidence": "grep -rn 'SupportsDryRun' --include='*.go' . => 0 hits (field does not exist).\ninternal/operations/registry/registry.go:432 `func ValidateOpDef(def OperationDef) error`; :478 `func (r *Registry) RegisterOp(def OperationDef) error { if err := ValidateOpDef(def); err != nil { return err }`.\ninternal/plugins/maintenance/plugin.go:146-149 `for _, d := range defs { if err := r.RegisterOp(d); err != nil { return err } }` \u2014 same shape in acoustid/plugin.go:57, deluge/plugin.go:58, itunes/plugin.go:94, metafetch/plugin.go:59, dedup/plugin.go:89.\ngrep -rln 'CapLibraryWrite' --include='*.go' . | grep -v _test => 88 files, incl. internal/scheduler/extra_ops.go and 15 files under internal/server/ (ai_ops.go, batch_apply_op.go, batch_save_op.go, duplicates_ops.go, entities_ops.go, folder_autoscan_op.go, itunes_ops.go, itunes_path_ops.go, library_core_ops.go, library_writeback_op.go, metadata_candidate_op.go, openlibrary_ops.go, reconcile_ops.go, scheduler_maintenance_window_op.go).\nTASK-105.exact_files = ['internal/operations/registry/registry.go','internal/operations/registry/types.go']. TASK-105 step 3 grep = `grep -rln 'CapLibraryWrite' internal/plugins/` \u2014 misses internal/server/ and internal/scheduler/ entirely.",
+   "fix": {
+    "exact_files": [
+     "internal/operations/registry/registry.go",
+     "internal/operations/registry/types.go",
+     "internal/scheduler/extra_ops.go",
+     "internal/server/library_writeback_op.go",
+     "internal/server/batch_apply_op.go",
+     "internal/server/batch_save_op.go",
+     "internal/server/duplicates_ops.go",
+     "internal/server/entities_ops.go",
+     "internal/server/folder_autoscan_op.go",
+     "internal/server/itunes_ops.go",
+     "internal/server/itunes_path_ops.go",
+     "internal/server/library_core_ops.go",
+     "internal/server/metadata_candidate_op.go",
+     "internal/server/openlibrary_ops.go",
+     "internal/server/reconcile_ops.go",
+     "internal/server/scheduler_maintenance_window_op.go",
+     "internal/server/ai_ops.go"
+    ],
+    "note": "exact_files above lists the internal/server + internal/scheduler half only; the other ~70 files are the per-op def files under internal/plugins/{maintenance,dedup,acoustid,deluge} enumerated by `grep -rln CapLibraryWrite --include='*.go' . | grep -v _test`. Split the task in two: (A) add the field defaulted permissive plus a REPORTING test that lists non-conforming defs, no rejection; (B) flip ValidateOpDef to reject only once (A) reports an empty list. Also correct step 3's audit grep, which is scoped to internal/plugins/ and misses every internal/server and internal/scheduler def."
+   },
+   "stable_key": "todo_line 7435 'Require every mutating operation to declare and enforce dry_run support at the registry'",
+   "task_ids_1943": [
+    "TASK-100"
+   ]
+  },
+  {
+   "severity": "blocker",
+   "task_ids": [],
+   "problem": "Coverage hole: all 37 Tier-A rows of the companion inventory appear in NO bucket \u2014 not Bucket 1, not needs_design, not prod_run, not stale_done, not parked, not not_a_task. The BREAKDOWN claims '432 scoped items ... verified against HEAD and sorted into buckets' and nowhere states Tier A is out of scope; the master plan explicitly warns Tier A is a keyword-derived hypothesis where 'every Tier A item needs one confirming grep before its box is checked'. At least six are still unchecked open items at HEAD, three of them security items.",
+   "evidence": "Set-diff of docs/plans/2026-08-21-todo-completion-inventory.tsv todo_line against the union over all 6 buckets: 37 uncovered, Counter(tier) over those 37 == {'A': 37}, and the TSV holds exactly 37 tier-A rows. Still `- [ ]` at HEAD: TODO.md:10088 **TODO-SEC-JWT** (rotate ABS_JWT_SECRET, pasted in plaintext), TODO.md:10077 **TODO-SEC-BIND** (binds every interface), TODO.md:10057 **TODO-SSO-EDGE**, TODO.md:10104 **TODO-SRVTIMEOUT**, TODO.md:2267 **ROWCOUNT-REVERIFY**, TODO.md:2125 **ORGANIZE-4TH-COPY**. Also uncovered: inventory L2467 'Repair books applied from the Metadata Review screen before the tag-write fix' and L10447 'iTunes book_file PID uniqueness \u2014 apply the backfill repair (gated)'.\nConcrete example: TODO.md:10584 `22. **Torrent relocation INIT-5 T2-T7**` (T2 = human-gated Deluge spike, blocks T3-T7) is in NO bucket \u2014 python set-membership over tasks[] + all six buckets returns False for 10584 \u2014 even though TASK-064 (L10635) exists solely to record in docs/plans/2026-07-10-execution-manifest.md that INIT-5/6/7/8 are PARKED per the 2026-08-21 decisions. The decision is briefed into a doc edit but the TODO line it governs is never routed to the `parked` bucket, so its checkbox is never reached.\nRe-verified with the correct index: set-diff of the inventory TSV's todo_line column (385 rows, docs/plans/2026-08-21-todo-completion-inventory.tsv in the todo-master-plan worktree) against the union of todo_line over tasks[] + all 6 buckets => 37 uncovered, Counter(tier)=={'A':37}. Membership check for each cited line returns covered=False for 10088, 10077, 10057, 10104, 2267, 2125, 10584, 2467, 10447. All six named items are still `- [ ]` open in BOTH TODO.md copies (grep '\\*\\*TODO-SEC-JWT\\*\\*' etc.), so the gap is real regardless of which index a reader uses; only the line numbers shift (main: 10108/10097/10075/10124/2268/2126).",
+   "fix": {
+    "note": "Scope the 37 Tier-A rows into buckets with a confirming grep each. ORGANIZE-4TH-COPY, L2467 and L10447 are prod-data-shaped, not check-the-box."
+   },
+   "stable_key": "not task-scoped (bucket/coverage/decision-level finding)"
+  },
+  {
+   "severity": "blocker",
+   "task_ids": [
+    "TASK-002",
+    "TASK-090"
+   ],
+   "problem": "TASK-002 canonizes 'nil IsPrimaryVersion == primary' but scopes itself to internal/audiobooks (exact_files = service_filtering.go, service_query.go). Partitioning every non-test use of the field BY STRUCTURE (not by naming grep) shows 13 sites implementing the opposite rule; TASK-002 fixes 2 of them. The 11 survivors are in no task's exact_files and in no collision-matrix entry. Worst of them is internal/reconcile/elect_primaries.go:150 \u2014 the primary-election counter \u2014 because TASK-090 (wave 1, same wave as TASK-002, depends_on=[]) builds DemoteExtraPrimaries as a sibling in that same file and gates on 'zero groups with >1 primary'. Counting with the divergent rule, an all-nil group scores primaries==0, so DemoteExtraPrimaries demotes nothing and TASK-090's acceptance passes while every read path (memdb_reads.go:831, pebble_store.go:953, memdb_summaries.go:165/299) still renders every member of that group as primary. TASK-090 also writes prod rows.",
+   "evidence": "grep -rn 'IsPrimaryVersion' --include='*.go' internal | grep -v _test, partitioned by expression shape:\n  DIVERGENT `!= nil && *x` (nil => NOT primary) = 13: internal/database/pebble_store.go:3293,:3296 (sortVersions); internal/database/dbtest/invariants.go:92; internal/reconcile/elect_primaries.go:150,:207; internal/reconcile/reconcile.go:941; internal/plugins/maintenance/itunes_regroup.go:166; internal/plugins/maintenance/regroup_apply.go:298; internal/audiobooks/service_query.go:346,:531; internal/organizer/service.go:646,:1380; internal/server/library_list_warmer.go:111.\n  AGREEING `!= nil && !*x` / `== nil || *x` (nil => primary) = 50, incl. all of internal/database/memdb_reads.go and most of pebble_store*.go.\nTASK-002.exact_files = ['internal/audiobooks/service_filtering.go','internal/audiobooks/service_query.go'] \u2014 covers service_query.go:346 and :531 only. TASK-090.exact_files = ['internal/reconcile/elect_primaries.go','internal/reconcile/elect_primaries_test.go','internal/server/reconcile.go']; TASK-090.wave=1, TASK-090.depends_on=[]. skeleton.collisions has no entry for internal/reconcile/elect_primaries.go.\nThe 11 sites TASK-002 leaves behind, ranked by consequence (not all equal \u2014 a reviewer should fix the first group before the third):\n  (a) CHANGES A WRITE DECISION \u2014 must be fixed with TASK-002: internal/reconcile/elect_primaries.go:150 (the primaries counter feeding `if gs.primaries > 0` at :158, i.e. whether a group gets a primary elected AND the base TASK-090 extends to demote), :207; internal/reconcile/reconcile.go:941.\n  (b) CHANGES ORDERING/GROUPING VISIBLE TO USERS: internal/database/pebble_store.go:3293,:3296 (sortVersions \u2014 a nil-primary book sorts last instead of first); internal/plugins/maintenance/itunes_regroup.go:166; internal/organizer/service.go:646,:1380; internal/server/library_list_warmer.go:111.\n  (c) COSTS A REDUNDANT WRITE OR IS TEST-ONLY, safe to defer: internal/plugins/maintenance/regroup_apply.go:298 (idempotence comparison \u2014 nil-as-non-primary re-writes a row that was already correct); internal/database/dbtest/invariants.go:92 (test helper).",
+   "fix": {
+    "exact_files": [
+     "internal/audiobooks/service_filtering.go",
+     "internal/audiobooks/service_query.go",
+     "internal/reconcile/elect_primaries.go",
+     "internal/reconcile/reconcile.go",
+     "internal/database/pebble_store.go",
+     "internal/organizer/service.go",
+     "internal/server/library_list_warmer.go",
+     "internal/plugins/maintenance/itunes_regroup.go"
+    ],
+    "depends_on_lines": {
+     "TASK-090": [
+      3348
+     ]
+    },
+    "note": "Minimum viable fix = group (a) plus the 2 sites TASK-002 already has; group (b) in the same PR is preferable since sortVersions and the warmer are read paths users see; group (c) can be a follow-up. TASK-090 must not stay in wave 1 alongside TASK-002 \u2014 it writes prod rows using the rule TASK-002 is reversing. depends_on_lines is keyed by the task that needs the edge, valued by the TODO line of its prerequisite (TASK-002 = todo_line 3348)."
+   },
+   "stable_key": "todo_line 2373 'Measure the real double-primary rate library-wide, then build the demote-extras sibling'",
+   "task_ids_1943": [
+    "TASK-085"
+   ]
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-152",
+    "TASK-042"
+   ],
+   "problem": "An admin-invokable undo endpoint is shipped before the undo actually undoes, with no dependency edge. TASK-152 (wave 1, sonnet, review_critical) adds POST /api/v1/dedup/merges/:key/undo calling Engine.UnmergeAuto. TASK-042 (wave 2, opus, review_critical) is what makes UnmergeAuto reverse external-ID reassignment and iTunes write-back removals. Both are todo_line 17; both depends_on=[]. Nothing stops the wave-1 PR merging first (they touch disjoint files, so the scheduler will happily run them concurrently), exposing an endpoint advertised as 'undo merge' that leaves external identity on the winner and iTunes PIDs removed \u2014 a silent partial revert on a prod-data path.",
+   "evidence": "TASK-152.goal: 'calls Engine.UnmergeAuto(key) \u2014 the fully-reversing version from part 2 once that lands'. TASK-152.wave=1, TASK-042.wave=2, both depends_on=[]. TASK-042.steps[5] updates the SCOPE LIMIT comment at internal/dedup/auto_resolve.go:383-388 recording what is still NOT reversed.",
+   "fix": {
+    "depends_on": [
+     "TASK-042"
+    ],
+    "note": "on TASK-152, and re-wave TASK-152 to at least wave 3."
+   },
+   "stable_key": "todo_line 17 'Expose UnmergeAuto through an admin undo-merge endpoint' ; todo_line 17 'Make UnmergeAuto reverse external-ID reassignment and iTunes write-back'",
+   "task_ids_1943": [
+    "TASK-147",
+    "TASK-040"
+   ]
+  },
+  {
+   "severity": "major",
+   "task_ids": [],
+   "problem": "Recorded owner decision 6 ('internal/server tests: (c) migrate ~60 call sites to newTestServer helper') produced no item anywhere in the package. The owner answered a blocking decision and the unblocked work was dropped. The master plan's own Tier-B table names this decision as the blocker for TODO-SRVTIMEOUT (#2112), which is itself one of the 37 uncovered Tier-A rows and is still `- [ ]` open at HEAD.",
+   "evidence": "Regex 'newTestServer' over json.dumps of all 185 tasks + all 5 buckets -> 0 matches. TODO.md:10124 `- [ ] **TODO-SRVTIMEOUT** Split or speed up the internal/server test package`.",
+   "fix": {
+    "note": "Add a Bucket-1 task for the ~60-call-site newTestServer migration, or record why an answered decision produced no work."
+   },
+   "stable_key": "not task-scoped (bucket/coverage/decision-level finding)"
+  },
+  {
+   "severity": "major",
+   "task_ids": [],
+   "problem": "Recorded owner decision 10 ('ComposeScore: (a) add clamping + route Round-2 via apply_confidence (Opus-tier)') produced no item. The decision even pre-assigns the model tier, so it was clearly expected to become a brief.",
+   "evidence": "Regex 'ComposeScore' over all 185 tasks + 5 buckets -> 1 match, and it is the b2_needs_design blob 'Overhaul the review interface (\"make it not suck\")' whose text matches nearly every probe. Regex 'apply_confidence' -> 0 matches anywhere in the package.",
+   "fix": {
+    "note": "Add an Opus-tier Bucket-1 task: ComposeScore clamping + Round-2 routing via apply_confidence."
+   },
+   "stable_key": "not task-scoped (bucket/coverage/decision-level finding)"
+  },
+  {
+   "severity": "major",
+   "task_ids": [],
+   "problem": "Recorded owner decision 11 ('generateTargetPath collision (TODO.md:2945): detection-only counter now; fix deferred') produced no item. The owner explicitly authorised a bounded, safe piece of work \u2014 the counter \u2014 and it is not briefed; the TODO line is in no bucket.",
+   "evidence": "TODO line 2945/2948 is not a todo_line in any bucket (set-diff). `grep -n generateTargetPath TODO.md` at HEAD -> 2948, 2950. Regex 'generateTargetPath' over the package matches only the placeholder-author census task (incidental mention) and two needs_design blobs.",
+   "fix": {
+    "note": "Add a Bucket-1 task: detection-only collision counter in generateTargetPath, no path-selection change."
+   },
+   "stable_key": "not task-scoped (bucket/coverage/decision-level finding)"
+  },
+  {
+   "severity": "major",
+   "task_ids": [],
+   "problem": "Recorded owner decision 13 ('book_file no-bytes (41.8%): categorizing REPORT op only; no mutation') produced no item. The only report-only categorizing op in Bucket 1 (TASK-112) covers the transcribe_status vs IntroTranscription drift \u2014 a different population.",
+   "evidence": "Regex '2515|2516|no bytes|zero bytes|41\\.8' over all 185 tasks + 5 buckets -> 1 match, TASK-112, whose title is 'Build a report-only op categorizing the transcribe_status vs IntroTranscription drift'. The decided population is 41.8% of book_file rows (#2515/#2516).",
+   "fix": {
+    "note": "Add the decided categorizing REPORT op for the no-bytes book_file population, read-only, no mutation."
+   },
+   "stable_key": "not task-scoped (bucket/coverage/decision-level finding)"
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-094",
+    "TASK-140"
+   ],
+   "problem": "A brief step contradicts the wave plan. TASK-094 (wave 1) step 5 instructs 'Land this in the same PR as todo_line 3384's search_index_dropped_total / search_index_dirty_backlog gauges' \u2014 that is TASK-140, which the collision matrix places in wave 2 as a SEPARATE PR (both serialize on internal/metrics/metrics.go). Neither declares a depends_on. A weak model following step 5 literally will implement TASK-140's gauges inside TASK-094's PR; TASK-140's agent then finds the work done, or collides on the registration block.",
+   "evidence": "skeleton TASK-094.steps[-1] quoted above. collisions['internal/metrics/metrics.go'] = ['TASK-094','TASK-140','TASK-141']; TASK-094.wave=1, TASK-140.wave=2; both depends_on=[].",
+   "fix": {
+    "note": "Merge TASK-094 and TASK-140 into one metrics.go PR, or delete step 5 and give TASK-140 depends_on:['TASK-094']."
+   },
+   "stable_key": "not task-scoped (bucket/coverage/decision-level finding)"
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-040",
+    "TASK-169",
+    "TASK-170"
+   ],
+   "problem": "Three tasks redefine what the Browse-by-Tag cloud shows, using two INCOMPATIBLE definitions of 'hide', in the same and adjacent waves, with no depends_on between them. TASK-169 (wave 1, frontend) hides by NAMESPACE (dedup:*, metadata:source:*). TASK-040 (wave 1, backend) changes /tags to return only rows whose BookTag.Source=='user'. These sets are not equal in either direction: a user-sourced dedup:* tag survives TASK-040 but is hidden by TASK-169, and a system-sourced non-namespaced tag survives TASK-169 but is dropped by TASK-040. Both land in wave 1 with no ordering, so the resulting widget behaviour depends on merge order, and TASK-170 (wave 2, reformat metadata:* labels) may have nothing left to format.",
+   "evidence": "Both source values are real for the same namespace at HEAD: internal/database/extra_coverage_test.go:652-653 `AddBookTagWithSource(bookID, \"dedup:pair:abc\", \"system\")` and `AddBookTagWithSource(bookID, \"dedup:pair:def\", \"user\")`; internal/database/store_coverage_test.go:836 `AddBookTagWithSource(nsBook, \"metadata:source:audible\", \"system\")`. skeleton: TASK-040.wave=1 (internal/audiobooks/service_tags.go + internal/database/*), TASK-169.wave=1 (web/src/components/library/TagCloud.tsx), TASK-170.wave=2 (same tsx); all three depends_on=[]. collisions['web/src/components/library/TagCloud.tsx'] = ['TASK-169','TASK-170'] \u2014 the backend task is invisible to that row because it collides semantically, not on a file.",
+   "fix": {
+    "depends_on": [
+     "TASK-040"
+    ],
+    "note": "on TASK-169 and TASK-170; pick ONE definition of hidden (source-based or namespace-based) and state it in all three goals. Consider dropping TASK-169 as subsumed by TASK-040."
+   },
+   "stable_key": "not task-scoped (bucket/coverage/decision-level finding)"
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-024"
+   ],
+   "problem": "A wave-1 Opus-class review_critical task carries a prerequisite that is deliberately PARKED and can therefore never be satisfied. TASK-024 ('Finish killing database.Store') declares depends_on_lines [1194]; TODO line 1194 resolves only to the parked entry 'PebbleStore struct split \u2014 deliberately parked, do not re-derive'. Either the edge is spurious and actively misleads the agent into re-deriving parked work (exactly what that parked entry exists to prevent \u2014 it has already been costed and rejected twice), or the task is blocked and must not be in wave 1.",
+   "evidence": "skeleton TASK-024.depends_on_lines=[1194], depends_on=[]; buckets.parked contains todo_line 1194 'PebbleStore struct split \u2014 deliberately parked, do not re-derive'; no Bucket-1 task has todo_line 1194.",
+   "fix": {
+    "depends_on_lines": [],
+    "note": "Replace the edge with a background line: 'the PebbleStore struct split (TODO.md:1194) is parked and must NOT be attempted as part of this task'."
+   },
+   "stable_key": "not task-scoped (bucket/coverage/decision-level finding)"
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-014",
+    "TASK-024",
+    "TASK-048",
+    "TASK-060",
+    "TASK-066",
+    "TASK-073",
+    "TASK-077",
+    "TASK-081",
+    "TASK-114",
+    "TASK-129",
+    "TASK-158",
+    "TASK-160",
+    "TASK-164",
+    "TASK-179"
+   ],
+   "problem": "17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are load-bearing beyond bookkeeping: TASK-073 (wave 1, opus, review_critical) depends on L10383, bucketed prod_run and therefore deferred by owner decision 14; TASK-158 (wave 1) depends on L680, bucketed needs_design (an undesigned Book.Duration vs container-duration discrepancy) \u2014 so a wave-1 brief is gated on a design that does not exist.",
+   "evidence": "Computed over skeleton: for each task, every depends_on_lines value whose covering set contains no other Bucket-1 task. TASK-014->stale_done L4832; TASK-024->parked L1194; TASK-048->stale_done L4281; TASK-060->stale_done L468 and L484; TASK-066->prod_run L10831; TASK-073->prod_run L10383; TASK-077->not_a_task L973; TASK-081->stale_done L4295; TASK-114->stale_done L8583; TASK-129->stale_done L860; TASK-158->needs_design L680; TASK-160->stale_done L3910 and not_a_task L3914; TASK-164->stale_done L10337; TASK-179->stale_done L3356.",
+   "fix": {
+    "note": "Resolve each to either a depends_on task id or a background line ('prerequisite already shipped at HEAD' / 'parked' / 'deferred to prod-run'). TASK-073 and TASK-158 must not stay in wave 1."
+   },
+   "stable_key": "todo_line 1009 'Give maintenance jobs (v1, internal/maintenance) per-job store interfaces'",
+   "task_ids_1943": [
+    "TASK-072"
+   ]
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-005"
+   ],
+   "problem": "TASK-005 (the nil-IsPrimaryVersion conformance test, wave 4, review_critical) depends on TASK-004 alone. TASK-004 is the duplicate that should be dropped (finding 1), and it is not the task that establishes the semantics the test asserts \u2014 TASK-002 is, since it changes both L346 and L531 plus the DTO serialization the library path exercises. As briefed, dropping TASK-004 dangles the dependency; keeping it means TASK-005 gates on a no-op.",
+   "evidence": "skeleton TASK-005.depends_on=['TASK-004'], depends_on_lines=[3884]; TASK-004.exact_files=['internal/audiobooks/service_query.go'] and touches L346 only; TASK-002 changes L346 + L531 + service_filtering.go:737.",
+   "fix": {
+    "depends_on": [
+     "TASK-002"
+    ],
+    "depends_on_lines": [
+     3348
+    ]
+   },
+   "stable_key": "not task-scoped (bucket/coverage/decision-level finding)"
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-003"
+   ],
+   "problem": "Type error in the dependency schema plus a garbage verified_anchor. TASK-003.depends_on_lines is `[\"TASK-002\"]` \u2014 a task ID string in a field that every other task populates with integer TODO line numbers, and that my coverage/dependency tooling (and presumably the wave scheduler and plan-auditor) parse as ints. Because it is not in depends_on either, the real TASK-003 -> TASK-002 edge is invisible to the scheduler. Separately, one of its verified_anchors is `bfs 2>/dev/null; ls internal/ledger` \u2014 `bfs` is not a command in this repo's toolchain and the anchor asserts a directory does NOT exist, which proves nothing about the census tool being built.",
+   "evidence": "skeleton TASK-003.depends_on=[], depends_on_lines=['TASK-002'] (string, not int). Every other task's depends_on_lines holds integers. TASK-003.verified_anchors[1].grep_cmd == 'bfs 2>/dev/null; ls internal/ledger', expect 'No such file or directory'.",
+   "fix": {
+    "depends_on": [
+     "TASK-002"
+    ],
+    "depends_on_lines": [
+     3348
+    ],
+    "note": "and delete or replace the `bfs` anchor."
+   },
+   "stable_key": "not task-scoped (bucket/coverage/decision-level finding)"
+  },
+  {
+   "severity": "minor",
+   "task_ids": [
+    "TASK-004"
+   ],
+   "problem": "A verified_anchor expectation is wrong at HEAD, and the brief's whole framing ('THE author-path post-filter') rests on the uniqueness it asserts. There are two identical sites, so an agent following the anchor cannot tell which one it is meant to edit \u2014 and picking the wrong one silently changes the non-author query branch instead.",
+   "evidence": "Anchor: `grep -n \"bPrimary := b.IsPrimaryVersion\" internal/audiobooks/service_query.go`, expect '1 hit L346'. Actual at HEAD: 2 hits, L346 and L531.",
+   "fix": {
+    "verified_anchors": [
+     {
+      "claim": "the author-path post-filter site (there are two structurally identical sites)",
+      "grep_cmd": "grep -n \"bPrimary := b.IsPrimaryVersion\" internal/audiobooks/service_query.go",
+      "expect": "2 hits \u2014 L346 (author-path post-filter, the target) and L531 (the other post-filter branch, out of scope for this task)"
+     }
+    ]
+   },
+   "stable_key": "not task-scoped (bucket/coverage/decision-level finding)"
+  },
+  {
+   "severity": "minor",
+   "task_ids": [],
+   "problem": "Three stale_done verdicts rest on anchors that return zero hits at HEAD while expecting one. The substantive claims survive hand-inspection \u2014 the quoted strings straddle a line break, or the doc uses an em-dash where the grep uses a hyphen \u2014 but the plan's own gate (plan-auditor fails anything whose re-verify grep returns zero hits) rejects all three, and a Tier-A close-out commit would be checking boxes on evidence that cannot be reproduced.",
+   "evidence": "All verified_anchors for the 112 stale_done entries were executed in the main checkout; 109/112 clean. Failures: (a) L847 `grep -n 'Until 2026-08-16 it returned nothing' internal/metafetch/service_files.go` -> 0; real text spans internal/metafetch/service_files.go:82-83. (b) L970 `grep -n 'which is how the result came in at 7 entries' docs/audits/2026-08-18-interface-width-shapes.md` -> 0; the doc says '17 \u2192 7 entries' at L93/L228. (c) L975 `grep -n 'audiobookUpdateStore (11) -- .deleted, not split.'` -> 0; the doc uses an em-dash at L91/L214.\nMethod note: re-running each anchor only proves the QUOTE is accurate, not that it proves the CLAIM. A second pass classified all 112 stale_done entries by anchor SHAPE and found 4 whose anchors are all bare single-identifier existence greps: L17 (MergeJournaled), L53 N-2 (CompareValues), L53 N-8 (the string 'N-8'), L4360 (version_group_id). Hand-checking all four: L17, N-2 and L4360 hold up against the real implementations (internal/dedup/merge_journaled.go:50 + handlers/dedup/handler.go:1414; abs_test.go:474; service_filtering.go:528-529 + :654 + memdb_reads.go:632). N-8 does not - see the separate blocker.",
+   "fix": {
+    "note": "Re-quote the three anchors against the actual bytes (grep a shorter substring that does not cross a line break or a dash)."
+   },
+   "stable_key": "not task-scoped (bucket/coverage/decision-level finding)"
+  },
+  {
+   "severity": "minor",
+   "task_ids": [
+    "TASK-058",
+    "TASK-059",
+    "TASK-065"
+   ],
+   "problem": "Three Bucket-1 briefs fail the package's own evidence bar. TASK-058 and TASK-059 carry zero verified_anchors \u2014 the only two of 185. TASK-065 has an empty exact_files, so there is no commit scope at all. TASK-058 is additionally mis-bucketed: its stated outcome is a binary judgement call ('delete, or document as ops-API equivalents') across 16 API paths, which is a needs_design question, not something a weak model can execute deterministically.",
+   "evidence": "Computed over skeleton: tasks with len(verified_anchors)==0 -> TASK-058, TASK-059. Tasks with empty exact_files -> TASK-065 ('Close out the 2026-05-01 re-audit block (TEST-2/DEP-1/DEAD-1/CTX-4/LOG-5/R-9/R-10)'). TASK-058.title: 'Triage the 16 removed POST /maintenance/* paths in openapi.json \u2014 delete, or document as ops-API equivalents'.",
+   "fix": {
+    "verdict_override": "needs_design",
+    "reason": "TASK-058 only \u2014 its outcome is a delete-vs-document decision. TASK-059 needs anchors and TASK-065 needs exact_files; neither needs re-bucketing."
+   },
+   "stable_key": "not task-scoped (bucket/coverage/decision-level finding)"
+  },
+  {
+   "severity": "minor",
+   "task_ids": [],
+   "problem": "Two non-Bucket-1 verdicts also rest on zero-hit anchors, one a case-sensitivity slip that makes an existing stub look absent. b2_needs_design L4513 ('Finish or delete the iTunes plugin's remaining stub op bodies') greps `func.*Run` for a function actually named `runSync`. The verdict happens to hold, but on evidence that does not reproduce \u2014 and the same slip in the other direction would have produced a false stale_done.",
+   "evidence": "`grep -n 'func.*Run' internal/plugins/itunes/sync.go` -> 0 hits. Actual: internal/plugins/itunes/sync.go:38 `func (p *Plugin) runSync(...)` returning `errNotImplemented(\"itunes.sync\")` at :41. Also b3_prod_run L4660: `grep -n 'needs your decision, deliberately not changed' docs/handoffs/2026-08-16-overnight-silent-failure-fixes.md` -> 0.",
+   "fix": {
+    "note": "Re-quote both anchors (case-insensitive or the real symbol name); keep the verdicts."
+   },
+   "stable_key": "not task-scoped (bucket/coverage/decision-level finding)"
+  },
+  {
+   "severity": "minor",
+   "task_ids": [],
+   "problem": "The package is not stable under regeneration and task IDs are positional, so every cross-reference to a TASK-nnn made outside skeleton.json rots silently. Between 19:06 and 19:26 the package regenerated three times: 175 -> 189 -> 185 Bucket-1 tasks, and 'Make UnmergeAuto reverse external-ID reassignment' was TASK-040, then TASK-044, then TASK-042 while its wave moved 6 -> 13 -> 2. Any depends_on, collision row, orchestration note, PR title or human review comment written against one cut is wrong after the next.",
+   "evidence": "skeleton.json md5 43d4ccbba1c6860598bd4bf39f83f380 (19:21, 189 tasks) vs 876ff31a76e21f874a06bb422d0abafc (19:26, 185 tasks). Title 'Make UnmergeAuto reverse' -> TASK-044 wave 13 in the 19:21 cut, TASK-042 wave 2 in the 19:26 cut. BREAKDOWN counts moved 175 -> 185 in step with it.",
+   "fix": {
+    "note": "Key tasks on a stable identifier (src_id / todo_line + slug) rather than a positional TASK-nnn, or freeze the package before any downstream artifact references it."
+   },
+   "stable_key": "not task-scoped (bucket/coverage/decision-level finding)"
+  },
+  {
+   "severity": "blocker",
+   "task_ids": [],
+   "problem": "WRONG stale_done verdict, measured. buckets.stale_done carries 'N-8: absRouteList() route-coverage guard now includes all registered routes (already fixed - check the box)' for TODO.md:53. Its sole anchor greps for the string 'N-8' in a doc comment, which proves a comment was written, not that the list is complete. At HEAD the list is NOT complete: absRouteList() returns 49 entries while internal/server/handlers/abs/handler.go's Register registers 55 routes. The 6 missing ones are the ABS collections CRUD surface added 2026-08-16 - i.e. the same commit the sibling N-4 stale_done entry cites as proof collections became a real feature is the commit that reopened N-8. This matters beyond bookkeeping: wire_abs_routes_test.go:40-48 states TestABSReservedPath_CoversEVERYRegisteredUnversionedRoute 'derives its input from absRouteList()', so a route absent from the list is a route the reserved-path guard never checks, and per that same comment 'a missing exclusion does not 404 ... the endpoint looks implemented while the client silently receives the app API's shape or a 401'. Checking this box closes an item that is measurably still broken.",
+   "evidence": "Set-diff of the two lists (python, regex over both files):\n  listed 49 / registered 55\n  REGISTERED BUT NOT LISTED: GET /api/collections/:id, POST /api/collections, PATCH /api/collections/:id, DELETE /api/collections/:id, POST /api/collections/:id/book, DELETE /api/collections/:id/book/:bookId  (internal/server/handlers/abs/handler.go:478-483)\n  LISTED BUT NOT REGISTERED: none\nThe repo itself says the completeness guard does not exist: internal/server/wire_abs_routes_test.go:604-607 'A full list-vs-router completeness test needs the abs handler harness (different package); until that exists, membership here at least makes silent removal fail with a name.'\nThe stale_done anchor as filed: {'grep_cmd': \"grep -n 'N-8' internal/server/wire_abs_routes.go\", 'expect': '1 hit inside absRouteList's doc comment, dated 2026-08-14'}.",
+   "fix": {
+    "verdict_override": "bucket_1",
+    "note": "Re-brief as a real task: add the 6 collections routes to absRouteList(), then build the list-vs-router completeness test the code comment says is missing (move absRouteList or the test so the abs handler harness is reachable), so the invariant is enforced rather than re-asserted."
+   },
+   "stable_key": "not task-scoped (bucket/coverage/decision-level finding)"
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-139"
+   ],
+   "problem": "Mis-bucketed: an interactive human investigation is filed as a Bucket-1 agent brief. TASK-139 (L2431, wave 1, sonnet, review_critical=false) asks an agent to reproduce a UI freeze 'with browser DevTools Network tab open, on both a freshly-restarted server (within the ~10min warmup window) and a warmed-up one' and to 'use the React DevTools Profiler'. That needs a running prod-like server, a server restart, and a human at a browser. Its only exact_file is a docs/audits/ markdown file that does not exist yet, tests is empty, and its acceptance is a judgment ('states ... which of the three is the binding constraint'), not a checkable exit condition. The package's own gate field admits it: 'n/a (investigation; make ci only if code changes result from a follow-up)' - it is 1 of only 2 tasks in Bucket 1 with an investigation gate.",
+   "evidence": "skeleton.tasks TASK-139: exact_files=['docs/audits/2026-08-21-ui-lockup-classification.md']; tests=[]; gate='n/a (investigation; make ci only if code changes result from a follow-up)'; acceptance=['docs/audits/2026-08-21-ui-lockup-classification.md exists and states, with DevTools/Profiler evidence, which of the three candidate causes is the actual binding constraint for the reproduced freeze.']; steps 1/4 quote 'with browser DevTools Network tab open' and 'use the React DevTools Profiler'. Gate histogram over tasks[]: 'make ci' 114, 'n/a (docs)' 17, ... 'n/a (investigation...)' 2.",
+   "fix": {
+    "verdict_override": "b3_prod_run",
+    "note": "Same test applies to the other investigation-gated task. The discriminator: if acceptance cannot be reduced to a command, an agent cannot know it is done."
+   },
+   "stable_key": "todo_line 2431 'Reproduce and classify the persistent UI lockup'",
+   "task_ids_1943": [
+    "TASK-134"
+   ]
+  },
+  {
+   "severity": "major",
+   "task_ids": [
+    "TASK-077"
+   ],
+   "problem": "The package's own source plan says the shared gate cannot pass, and 128 tasks are gated on it anyway. docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md:143-145 states `make ci` currently CANNOT pass on main (10 staticcheck findings, none introduced by that work) and instructs readers not to read a red make ci as a signal. TASK-077 is the task derived from that plan and correctly exempts itself. But 114 other Bucket-1 tasks carry gate 'make ci' verbatim, 9 more 'make ci (Go)', 4 'make ci && npm ...', and 1 'make ci (once the new gate is wired into CI...)' \u2014 128 of 185. Every one of them will either stall on a pre-existing red gate or be waved through on a judgement the brief does not authorize, and neither the master plan nor any orchestration.md repeats the exemption. This is not a citation error; it is an unpropagated known-red gate.",
+   "evidence": "grep -n 'make ci' docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md =>\n  143: `- \\`make ci\\` currently **cannot pass on \\`main\\`** (10 staticcheck findings, 0 introduced by`\n  145: `  fixed, and do not read a red \\`make ci\\` as a signal from these changes.`\ngrep -n 'make ci' .worktrees/todo-master-plan/docs/plans/2026-08-21-todo-completion-master-plan.md => 0 hits (the master plan never mentions the gate at all).\nskeleton gate histogram over tasks[]: 'make ci' 114, 'n/a (docs)' 17, npm-only 23, 'make ci (Go)' 9, 'make ci && npm ...' 4, TASK-077's exemption 1, 'n/a (investigation...)' 2, remainder one-offs.",
+   "fix": {
+    "note": "Run `make ci` once at HEAD and record the result in the master plan. If still red, either add a wave-0 task to clear the 10 staticcheck findings, or state the substitute gate (go build ./... + targeted go test) ONCE at package level so all 128 tasks inherit it instead of one task carrying it in free text."
+   },
+   "stable_key": "todo_line 1009 'Give maintenance jobs (v1, internal/maintenance) per-job store interfaces'",
+   "task_ids_1943": [
+    "TASK-072"
+   ]
+  },
+  {
+   "severity": "minor",
+   "task_ids": [],
+   "problem": "A stale_done entry self-certifies its own proof as insufficient yet still carries the stale_done verdict, which is the verdict that causes a TODO box to be checked. stale_done L53 'N-7: golden fixtures never loaded by any test' notes: 'Medium confidence stale_done - recommend the executor re-run step 2's pending-path check before checking the TODO box, since the string-literal grep alone is a necessary-not-sufficient proof.' A verdict whose own note says the evidence is not sufficient should be a Bucket-1 verification task, not a closure.",
+   "evidence": "skeleton.buckets.stale_done, todo_line 53, title 'N-7: golden fixtures never loaded by any test (appears resolved - verify then check the box)'; notes field quoted above. Its single anchor is a `comm -23` of fixture filenames against quoted *.json string literals - it proves no fixture is unreferenced by NAME, not that any test loads one. It is the only stale_done entry of 112 that hedges its own confidence in writing.",
+   "fix": {
+    "verdict_override": "bucket_1"
+   },
+   "stable_key": "not task-scoped (bucket/coverage/decision-level finding)"
+  },
+  {
+   "severity": "minor",
+   "task_ids": [
+    "TASK-163"
+   ],
+   "problem": "A route migration ships with tests: []. TASK-163 moves 6 routes (/tasks/*, /maintenance-window/*) off the legacy v1 operations handler onto a new scheduler-config handler and touches the frontend fetch layer, but declares no tests. Its acceptance is a grep that the routes are registered against the new handler plus 'go build ./... and go test ./internal/server/... both pass with no behavior change' - existing tests passing is not evidence that a re-pointed route still returns the same response, since nothing pins the old behaviour. 6 of 185 Bucket-1 tasks have an empty tests array; this is the only one that moves live routes.",
+   "evidence": "skeleton.tasks TASK-163 (L4563, wave 1): tests=[]; exact_files=['internal/server/handlers/operations/handler.go','internal/server/handlers/scheduler_admin.go','internal/server/wire_operations_routes.go','web/src/utils/apiFetch.test.ts','web/src/utils/apiFetch.ts']; acceptance as quoted. Empty-tests set (6): TASK-013, TASK-061, TASK-062, TASK-069, TASK-139, TASK-163.",
+   "fix": {
+    "tests": [
+     "internal/server/wire_operations_routes_test.go: a table over the 6 moved routes asserting status code and response shape are identical before and after the move (record the current responses first)."
+    ]
+   },
+   "stable_key": "todo_line 4563 'Move /tasks/* and /maintenance-window/* off the legacy v1 operations handler'",
+   "task_ids_1943": [
+    "TASK-158"
+   ]
+  }
+ ],
+ "reverified_against_1943": [
+  "37 uncovered inventory rows, Counter(tier)=={'A':37} \u2014 UNCHANGED.",
+  "stale_done L53 N-8 present with the same single 'grep -n N-8' anchor \u2014 UNCHANGED; absRouteList() 49 vs 55 registered still true at HEAD.",
+  "17 dangling depends_on_lines edges \u2014 same count; 2 of them (TASK-002->3348, TASK-003->3348) now point at the laundered stale_done entry.",
+  "Gates: 113 'make ci' + 8 'make ci (Go)' + 4 combined = 125 of 180 tasks gated on a command docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md:143-145 says cannot pass on main.",
+  "6 tasks with tests: [] \u2014 still includes the UI-lockup investigation (TASK-134) and the route move (TASK-158).",
+  "Owner decisions 6 (newTestServer), 10 (ComposeScore/apply_confidence), 13 (book_file no-bytes REPORT op) still produce 0 matching tasks; decision 11 (generateTargetPath counter) matches only TASK-077, an unrelated unknown-author census.",
+  "The nil-IsPrimaryVersion duplicate (findings pinned to 19:26 IDs TASK-002/TASK-004) was 'resolved' by marking BOTH stale_done \u2014 see blocker #1."
+ ]
+}

@@ -1,0 +1,68 @@
+{
+  "todo_line": 53,
+  "src_id": "ABS-N3",
+  "part": 3,
+  "title": "N-3: stop advertising Delete/Update permissions the library surface cannot honor",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/server/handlers/abs/dto.go defaultPermissions() (~L283-297) sets Delete:true, Update:true unconditionally; internal/server/handlers/abs/handler.go:181-188's LibraryStore interface embeds only 6 reader interfaces (LibraryBookReader/LibrarySummaryReader/LibrarySearchReader/LibraryCreditReader/LibraryAuthorReader/LibrarySeriesReader) with no writer, and no PUT/POST/DELETE routes for /api/libraries or /api/items exist (grep for router.PUT/POST/DELETE on those paths returns 0 hits).",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+    "internal/server/handlers/abs/dto.go"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "defaultPermissions sets Delete and Update true",
+      "grep_cmd": "grep -n \"Delete: *true\\|Update: *true\" internal/server/handlers/abs/dto.go",
+      "expect": "2 hits inside defaultPermissions()"
+    },
+    {
+      "claim": "LibraryStore has no write methods",
+      "grep_cmd": "grep -n \"type LibraryStore interface\" -A 8 internal/server/handlers/abs/handler.go",
+      "expect": "6 embedded *Reader interfaces only"
+    }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Small, localized DTO change, but requires judgment about what value is truthful (false vs. omit) and checking no client hard-requires true regardless of capability \u2014 worth a careful read of the ABS client contract doc, not pure mechanics.",
+  "review_critical": false,
+  "goal": "Set userPermissions.Delete and .Update to false in defaultPermissions() (internal/server/handlers/abs/dto.go) so Absorb/AudioBooth do not render edit/delete affordances this server cannot service, matching the honesty principle already applied elsewhere on this surface (e.g. N-1's socket.io fix, PlayMethod always 0).",
+  "background": [
+    "The comment directly above defaultPermissions() (dto.go, just before L283) already says 'update/delete/download must be present and true or the clients disable working features' \u2014 this claim needs to be RE-VERIFIED against docs/reference/abs-target-client-contract.md before flipping the values, since if it is accurate, flipping breaks a currently-working feature (this is exactly the kind of stale in-code justification CLAUDE.md's 'verify the claim before believing it' rule warns about).",
+    "The correct fix depends on what update/delete are gating client-side: if they gate ONLY server-management actions (which we do not implement) it is safe to set false; if they also gate something we DO support (e.g. per-item progress/bookmark deletion, which /api/me DOES implement per userdata.go's UserDataLibraryStore), setting Update/Delete false wholesale would break a working feature \u2014 this needs the client-contract doc check as step 1, not a blind flip."
+  ],
+  "steps": [
+    "1. Read docs/reference/abs-target-client-contract.md for what `update`/`delete` on the user-permissions object gate client-side (search for 'permissions' or 'Delete' in that doc).",
+    "2. If update/delete gate ONLY unimplemented server-management actions: in internal/server/handlers/abs/dto.go's defaultPermissions(), change `Delete: true` to `Delete: false` and `Update: true` to `Update: false`, updating the adjacent comment to explain why (cite this TODO / the audit finding).",
+    "3. If update/delete ALSO gate something implemented (e.g. bookmark/progress deletion), instead leave them true but add a comment citing the specific implemented capability that requires it, and downgrade this TODO sub-item to not_a_task/false-positive in a follow-up docs note rather than silently closing it.",
+    "4. Bump the file version header per repo convention."
+  ],
+  "tests": [
+    "internal/server/handlers/abs/abs_test.go: TestUserPermissions_DeleteUpdateReflectCapability \u2014 assert the /api/me user object's permissions.delete/update match whatever step 2/3 decided, with a comment citing the client-contract doc line that justifies it."
+  ],
+  "acceptance": [
+    "`grep -n 'Delete:\\|Update:' internal/server/handlers/abs/dto.go` shows the corrected values with a comment citing this decision."
+  ],
+  "edge_cases": [
+    "A client that treats permissions.delete=false as 'hide the button' vs 'grey it out and 403 on click' \u2014 either way false is more honest than true when no route backs it; do not overthink beyond checking the contract doc."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "go build ./... && go vet ./... && go test ./internal/server/handlers/abs/... -count=1",
+  "notes": "Read the client-contract doc FIRST (step 1) \u2014 the existing in-code comment claiming true is required may itself be stale, per the worked example in this repo's CLAUDE.md about not trusting an unre-verified justification comment.",
+  "review_notes": [
+    "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
+    "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,",
+    "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ],
+  "id": "TASK-143",
+  "stable_key": "scope-01.json|53|3|N-3: stop advertising Delete/Update permissions the library ",
+  "ws": "server-handlers",
+  "slug": "n-3-stop-advertising-delete-update-permissions-t",
+  "scope_file": "scope-01.json",
+  "dropped_files": [],
+  "tier_label": "Sonnet-class",
+  "depends_on": [],
+  "wave": 1
+}

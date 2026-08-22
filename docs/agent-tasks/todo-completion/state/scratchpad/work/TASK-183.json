@@ -1,0 +1,103 @@
+{
+  "todo_line": 101,
+  "part": 6,
+  "src_id": null,
+  "title": "Write file-header for the 35 current live docs still missing one",
+  "verdict": "actionable",
+  "verdict_evidence": "Re-ran the exact grep at HEAD: 35 live (non-archived) Markdown files under docs/ lack the required <!-- file: --> header (the audit-time count of 34 has drifted by +1). Full exhaustive list obtained below.",
+  "domain": "docs",
+  "exact_files": [
+    "docs/architecture/2026-06-01-server-handler-extraction-design.md",
+    "docs/architecture/embedding-store-db-selection.md",
+    "docs/development/writing-a-plugin.md",
+    "docs/itl-binary-format.md",
+    "docs/observability/OPENTELEMETRY_SETUP.md",
+    "docs/private/unresolved-relinks-2026-04-28.md",
+    "docs/security/audit-2026-05-03/raw/sec-audit-11-query-results.md",
+    "docs/security/path-validation-policy.md",
+    "docs/superpowers/fleet-status/024-ops-1-11-async-embed-batch-api-status.md",
+    "docs/superpowers/fleet-status/028-acoustid-dedup-1-status.md",
+    "docs/superpowers/fleet-status/029-acoustid-compare-1-status.md",
+    "docs/superpowers/fleet-status/030-arch-4-10-service-tests-status.md",
+    "docs/superpowers/fleet-status/031-arch-4-12-isp-interfaces-status.md",
+    "docs/superpowers/fleet-status/032-arch-4-13-itunes-extract-status.md",
+    "docs/superpowers/fleet-status/033-arch-6-4-itl-partial-export-status.md",
+    "docs/superpowers/fleet-status/034-arch-7-1-tag-policies-status.md",
+    "docs/superpowers/fleet-status/035-arch-7-9-itunes-rebuild-status.md",
+    "docs/superpowers/fleet-status/036-fe-1-16-resizable-columns-status.md",
+    "docs/superpowers/fleet-status/README.md",
+    "docs/superpowers/fleet-tasks/024-ops-1-11-async-embed-batch-api.md",
+    "docs/superpowers/fleet-tasks/028-acoustid-dedup-1.md",
+    "docs/superpowers/fleet-tasks/029-acoustid-compare-1.md",
+    "docs/superpowers/fleet-tasks/030-arch-4-10-service-tests.md",
+    "docs/superpowers/fleet-tasks/031-arch-4-12-isp-interfaces.md",
+    "docs/superpowers/fleet-tasks/032-arch-4-13-itunes-extract.md",
+    "docs/superpowers/fleet-tasks/033-arch-6-4-itl-partial-export.md",
+    "docs/superpowers/fleet-tasks/034-arch-7-1-tag-policies.md",
+    "docs/superpowers/fleet-tasks/035-arch-7-9-itunes-rebuild.md",
+    "docs/superpowers/fleet-tasks/036-fe-1-16-resizable-columns.md",
+    "docs/superpowers/plans/2026-05-19-acoustic-compare-covers-implementation.md",
+    "docs/superpowers/plans/2026-05-19-fingerprint-library-implementation.md",
+    "docs/superpowers/plans/2026-05-19-scan-maintenance-optimize-implementation.md",
+    "docs/superpowers/specs/2026-05-19-acoustic-compare-covers-design.md",
+    "docs/superpowers/specs/2026-05-19-fingerprint-library-design.md",
+    "docs/superpowers/specs/2026-05-19-scan-maintenance-optimize-design.md"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "35 live docs lack the required header at HEAD (drifted from the audit's 34)",
+      "grep_cmd": "find docs -maxdepth 4 -iname '*.md' -not -path '*/archive/*' | xargs grep -L '^<!-- file:' | wc -l",
+      "expect": "35"
+    },
+    {
+      "claim": "docs/architecture/2026-06-01-server-handler-extraction-design.md has no header comment (uses a bold-label ADR format instead)",
+      "grep_cmd": "head -6 docs/architecture/2026-06-01-server-handler-extraction-design.md",
+      "expect": "starts with '# Server Handler Extraction' and '**Date:**', no '<!-- file:' line"
+    },
+    {
+      "claim": "docs/superpowers/fleet-status files are agent-written status trackers, not yet documented as header-exempt anywhere",
+      "grep_cmd": "head -8 docs/superpowers/fleet-status/README.md",
+      "expect": "describes the file-naming/status-value convention; no exemption from the file-header rule is stated"
+    }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "haiku",
+  "why_tier": "Purely mechanical: prepend the standard 4-line header block per CLAUDE.md's format to each of 35 files, no content judgment needed beyond picking today's date and a fresh guid.",
+  "review_critical": false,
+  "goal": "Add the mandatory <!-- file/version/guid/last-edited --> header block to every live (non-archived) doc under docs/ currently missing one -- the 35 files listed in exact_files.",
+  "background": [
+    "Per CLAUDE.md: 'Every file you create or modify must have its version header updated' -- this is the same rule applied retroactively to files that predate strict enforcement. todo.d/ and changelog.d/ fragments are explicitly EXEMPT; none of the 35 files are under those directories, so none are exempt on that basis.",
+    "docs/superpowers/fleet-status/*.md and docs/superpowers/fleet-tasks/*.md (19 of the 35) are agent-written, ephemeral task-tracking files, similar in spirit to the exempt todo.d/changelog.d fragments -- but no exemption for them is documented anywhere in the repo (checked docs/superpowers/fleet-status/README.md, which describes only the naming/status-value convention). Per this repo's 'a documented exception loses to a global rule' standing convention, treat them as IN SCOPE unless the owner explicitly grants an exemption first."
+  ],
+  "steps": [
+    "1. Re-run `find docs -maxdepth 4 -iname '*.md' -not -path '*/archive/*' | xargs grep -L '^<!-- file:'` to confirm the current exact list (may have shifted from 35 by execution time).",
+    "2. Confirm none of the listed files use an alternative accepted header convention (checked: all 35 use either no header or a bold-label '**Date:**'/'**Author:**' ADR-style block, which is NOT the accepted docs convention per .standards/instructions/file-headers.md -- verify against that standard before batch-editing).",
+    "3. For each file, prepend: `<!-- file: <repo-relative-path> -->` / `<!-- version: 1.0.0 -->` / `<!-- guid: <fresh-uuid4> -->` / `<!-- last-edited: <today> -->`, generating each guid with `python3 -c \"import uuid; print(uuid.uuid4())\"` (never reuse one across files).",
+    "4. Do this in small batches (e.g. 5-10 files at a time) with a real diff review, not one blind pass across all 35."
+  ],
+  "tests": [
+    "Confirm no repo-wide docs-header lint job exists to run locally: `grep -rn 'file-header' .github/workflows/*.yml` (the only header-lint job found, todo-header-lint, is TODO-fragment-specific, not general docs)."
+  ],
+  "acceptance": [
+    "`find docs -maxdepth 4 -iname '*.md' -not -path '*/archive/*' | xargs grep -L '^<!-- file:' | wc -l` returns 0."
+  ],
+  "edge_cases": [
+    "docs/architecture/2026-06-01-server-handler-extraction-design.md and docs/architecture/embedding-store-db-selection.md use a bold-label ADR header ('**Date:**', '**Status:**', '**Author:**') instead of HTML comments -- add the standard comment header ABOVE the existing title/ADR block rather than replacing it; the ADR metadata is content, not a competing header format.",
+    "The 19 fleet-status/fleet-tasks files may warrant an owner decision to formally exempt them (matching the todo.d/changelog.d precedent) before this item is executed -- flag this to the coordinator rather than silently excluding them."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only'",
+  "notes": "19 of the 35 files (fleet-status + fleet-tasks) are agent-generated tracking files that may deserve the same header exemption todo.d/changelog.d already have -- this is a real open question worth surfacing to the owner before a haiku agent blindly headers all 35, not a decision this rescope can make unilaterally.",
+  "id": "TASK-183",
+  "stable_key": "scope-17-rescope.json|101|6|Write file-header for the 35 current live docs still missing",
+  "ws": "docs",
+  "slug": "write-file-header-for-the-35-current-live-docs-s",
+  "scope_file": "scope-17-rescope.json",
+  "dropped_files": [],
+  "tier_label": "Haiku-class",
+  "depends_on": [],
+  "wave": 1
+}

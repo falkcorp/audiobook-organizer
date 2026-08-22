@@ -1,0 +1,88 @@
+{
+  "todo_line": 10706,
+  "src_id": null,
+  "title": "Close out the 2026-05-01 re-audit block (TEST-2/DEP-1/DEAD-1/CTX-4/LOG-5/R-9/R-10)",
+  "verdict": "actionable",
+  "verdict_evidence": "Every sub-item independently re-verified at HEAD is resolved or moot: DEAD-1 symbols (legacySaveConfigToDatabase_REMOVED/bookTagKeyspace/bookSummarySelectColumnsQualified) \u2014 0 hits; CTX-4 (context.Context on ActivityStore.Summarize/CompactByDay) \u2014 present on all 6 implementations; LOG-5 (fmt.Printf/log.Printf in sqlite_store/pebble_store/migrations/playlist/organizer) \u2014 0 hits and sqlite_store.go no longer exists; R-9 (stale N1-2 TODO comments in sqlite_store.go) \u2014 moot, file gone; R-10 (12 capitalized error strings in 6 metadata packages) \u2014 0 hits; DEP-1 (Book.ITunesPath usage outside BookFile.ITunesPath) \u2014 0 non-test hits of `book.ITunesPath`; TEST-2 (TestStoreAdditionalCoverageSQLite failure) \u2014 test exists, runs against PebbleStore via setupTestDB, no evidence of a current failure. Only DEP-1e (drop the deprecated `books.itunes_path` column / `Book.ITunesPath` struct field) is genuinely still open: the field is still declared (internal/database/store.go:220) and still copied through struct clones (internal/database/bookcore.go:207,321).",
+  "domain": "docs",
+  "exact_files": [],
+  "verified_anchors": [
+    {
+      "claim": "DEAD-1 symbols removed",
+      "grep_cmd": "grep -rn 'legacySaveConfigToDatabase_REMOVED\\|bookTagKeyspace\\|bookSummarySelectColumnsQualified' --include=*.go .",
+      "expect": "0 hits"
+    },
+    {
+      "claim": "CTX-4 done on all ActivityStore implementations",
+      "grep_cmd": "grep -rn 'func.*Summarize(ctx context.Context\\|func.*CompactByDay(ctx context.Context' --include=*.go internal/database internal/activity",
+      "expect": "\u22656 hits"
+    },
+    {
+      "claim": "LOG-5 done, sqlite_store.go gone",
+      "grep_cmd": "find . -iname sqlite_store.go; grep -rn 'fmt.Printf\\|log.Printf' internal/database internal/playlist internal/organizer --include=*.go",
+      "expect": "0 hits both"
+    },
+    {
+      "claim": "R-10 done",
+      "grep_cmd": "grep -rn 'errors.New(\"[A-Z]\\|fmt.Errorf(\"[A-Z]' internal/metadata/audible.go internal/metadata/audnexus.go internal/metadata/googlebooks.go internal/metadata/hardcover.go internal/metadata/openlibrary.go internal/metadata/wikipedia.go",
+      "expect": "0 hits"
+    },
+    {
+      "claim": "DEP-1a-d done (no non-test reads of the deprecated Book field)",
+      "grep_cmd": "grep -rn 'book\\.ITunesPath\\b' --include=*.go internal/",
+      "expect": "0 hits outside _test.go"
+    },
+    {
+      "claim": "DEP-1e still open \u2014 field still declared and copied",
+      "grep_cmd": "grep -n 'ITunesPath ' internal/database/store.go; grep -n 'ITunesPath: b.ITunesPath\\|ITunesPath: c.ITunesPath' internal/database/bookcore.go",
+      "expect": "1 hit + 2 hits"
+    },
+    {
+      "claim": "TEST-2 test exists and is not SQLite-backed anymore",
+      "grep_cmd": "grep -n 'func TestStoreAdditionalCoverageSQLite' -A3 internal/database/store_extra_test.go",
+      "expect": "1 hit, body calls setupTestDB (PebbleStore-backed)"
+    }
+  ],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "editing a TODO.md prose bullet to record verified closure; no code change beyond the DEP-1e follow-up which is a separate, smaller task",
+  "review_critical": false,
+  "goal": "Rewrite TODO.md's item 42 bullet (L10706-10709, '2026-05-01 re-audit block close-out pass') to record that TEST-2/DEP-1a-d/DEAD-1/CTX-4/LOG-5/R-9/R-10/PERF-1 are all confirmed resolved-or-moot with the grep evidence above, and spin DEP-1e (drop `Book.ITunesPath` / `books.itunes_path`) out as its own small forward-looking TODO line since it is the one genuinely unresolved sub-item.",
+  "background": [
+    "docs/archive/codebase-evaluation.md's '2026-05-01 Re-Audit \u2014 New Findings' section (L30, TOC L16) is the original source of this finding set; docs/archive/todo-2026-H1.md:3185-3226 has the frozen original bullet text (non-checkbox format) for TEST-2/DEP-1/DEAD-1/CTX-4/LOG-5/R-9/R-10.",
+    "PERF-1 (referenced in the same item text) was independently confirmed obsolete via commit 19e129d4 'future-proof remaining whole-library ops against fixed-limit truncation' (see scope item 45's own finding) \u2014 the two findings corroborate each other."
+  ],
+  "steps": [
+    "1. In TODO.md, replace the L10706-10709 bullet body with a closure note: 'CLOSED 2026-08-21 \u2014 TEST-2/DEAD-1/CTX-4/LOG-5/R-9/R-10/DEP-1a-d all verified resolved or moot at HEAD (see grep evidence in scout package). DEP-1e (drop deprecated Book.ITunesPath field / books.itunes_path column) spun out separately below.'",
+    "2. Add a new todo.d/ fragment (per the repo's fragment system, headerless) describing DEP-1e as a standalone small task: remove the `ITunesPath *string` field from `internal/database/store.go`'s `Book` struct (~L220) and its two copy-sites in bookcore.go (L207, L321), after confirming (again, at execution time) that nothing else reads it.",
+    "3. Do NOT implement DEP-1e itself in this pass \u2014 it is scoped as future work; this item's job is the close-out + fragment, not the removal."
+  ],
+  "tests": [
+    "n/a \u2014 docs-only edit for this pass; DEP-1e's own future task will need `go build ./...` + `make test` after the field removal to catch any remaining reference."
+  ],
+  "acceptance": [
+    "`grep -n 'CLOSED 2026-08-21' TODO.md` returns 1 hit at the rewritten L10706 area.",
+    "A new fragment file exists under todo.d/ describing DEP-1e."
+  ],
+  "edge_cases": [
+    "If a future grep at execution time finds a NEW non-test read of `book.ITunesPath` that didn't exist at this scout pass, DEP-1e's removal must be aborted and the field kept \u2014 the close-out note should say 're-grep before removing' explicitly."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only'",
+  "notes": "This is a housekeeping pass, not new code \u2014 the only enduring deliverable is DEP-1e as a fresh small follow-up task, correctly separated out rather than left buried in a stale close-out bullet.",
+  "review_notes": [
+    "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+  ],
+  "id": "TASK-059",
+  "stable_key": "scope-15.json|10706|None|Close out the 2026-05-01 re-audit block (TEST-2/DEP-1/DEAD-1",
+  "ws": "docs",
+  "slug": "close-out-the-2026-05-01-re-audit-block-test-2-d",
+  "scope_file": "scope-15.json",
+  "dropped_files": [],
+  "tier_label": "Haiku-class",
+  "depends_on": [],
+  "wave": 1
+}

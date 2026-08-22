@@ -1,0 +1,1977 @@
+[
+ {
+  "todo_line": 2481,
+  "src_id": null,
+  "title": "Audit apply-shaped endpoints for missing tag/file-I/O writeback",
+  "verdict": "actionable",
+  "verdict_evidence": "BatchApplyFromCache (metadata_cache.go:448) and applyAudiobookMetadataImpl (metadata/handler.go:577) are the two known apply paths; grep -n 'func.*[Aa]pply' internal/server/handlers/*.go finds 5 more untouched candidates: ApplyRename (organize.go:157), ApplyScanResults (ai.go:484), ApplyAuthorReview (ai.go:697), ApplySuggestions (diagnostics.go:472), RegisterApplyHandler (review/handler.go:137).",
+  "domain": "internal/server/handlers",
+  "exact_files": [
+   "internal/server/handlers/organize.go",
+   "internal/server/handlers/ai.go",
+   "internal/server/handlers/diagnostics.go",
+   "internal/server/handlers/review/handler.go",
+   "internal/server/handlers/metadata/handler.go",
+   "internal/server/handlers/metadata_cache.go",
+   "docs/audits/2026-08-21-apply-endpoint-fileio-audit.md"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "ApplyRename handler exists",
+    "grep_cmd": "grep -n 'func (h \\*OrganizeHandler) ApplyRename' internal/server/handlers/organize.go",
+    "expect": "1 hit at L157"
+   },
+   {
+    "claim": "ApplyScanResults and ApplyAuthorReview handlers exist",
+    "grep_cmd": "grep -n 'func (h \\*AIHandler) Apply' internal/server/handlers/ai.go",
+    "expect": "2 hits at L484 and L697"
+   },
+   {
+    "claim": "ApplySuggestions handler exists",
+    "grep_cmd": "grep -n 'func (h \\*DiagnosticsHandler) ApplySuggestions' internal/server/handlers/diagnostics.go",
+    "expect": "1 hit at L472"
+   },
+   {
+    "claim": "review package has a pluggable apply-handler registry",
+    "grep_cmd": "grep -n 'RegisterApplyHandler' internal/server/handlers/review/handler.go",
+    "expect": "1 hit at L137"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "runBulkWriteBack (library.bulk-write-back op)",
+    "file": "internal/server/metadata_ops.go",
+    "verify_grep": "grep -n 'runBulkWriteBack' internal/server/metadata_ops.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Multi-file investigation across handler packages requiring judgment about which paths mutate on-disk-relevant state; no novel design.",
+  "review_critical": true,
+  "goal": "For each apply-shaped endpoint in exact_files, read its handler body and determine whether it (a) never touches on-disk tags/cover art, (b) already schedules a tag/cover writeback, or (c) mutates book metadata in the DB with no file writeback \u2014 the exact defect BatchApplyFromCache had before fix/review-apply-writes-tags. Record one subsection per endpoint in a new docs/audits/2026-08-21-apply-endpoint-fileio-audit.md with verdict + grep citation. Only propose a shared 'apply + schedule file I/O' helper if a case-(c) endpoint is actually found.",
+  "background": [
+   "BatchApplyFromCache updated the DB without writing tags/cover art; fixed in fix/review-apply-writes-tags.",
+   "No shared apply+writeback helper exists: grep -rn 'WriteTags|writeTagsAndCover|scheduleFileWriteback' internal/server shows scattered call sites in batch_apply_one.go, batch_apply_op.go, movement_atom_cleanup.go, handlers/metadata_cache.go, handlers/metadata/handler.go."
+  ],
+  "steps": [
+   "1. Read organize.go:157 ApplyRename end-to-end; note whether it calls a tag/cover writeback function.",
+   "2. Read ai.go:484 ApplyScanResults and ai.go:697 ApplyAuthorReview; same check.",
+   "3. Read diagnostics.go:472 ApplySuggestions; same check.",
+   "4. Read review/handler.go:137 RegisterApplyHandler and grep -rn 'RegisterApplyHandler(' internal/server to find every registered ApplyFunc; check each.",
+   "5. Write one subsection per endpoint to docs/audits/2026-08-21-apply-endpoint-fileio-audit.md: name, file:line, verdict, one-sentence reasoning.",
+   "6. If a DEFECT FOUND case turns up, add a changelog.d fragment and a separate todo.d follow-up fragment scoped to fixing only that endpoint \u2014 do not fix it inline here."
+  ],
+  "tests": [
+   "N/A for the audit itself. Any follow-up fix must add a regression test mirroring the tag-write assertion pattern in internal/server/handlers/metadata_cache_test.go."
+  ],
+  "acceptance": [
+   "docs/audits/2026-08-21-apply-endpoint-fileio-audit.md exists with >=5 '## ' subsections, one per audited endpoint."
+  ],
+  "edge_cases": [
+   "An endpoint that never touches book metadata should be marked 'not applicable', not skipped silently.",
+   "review/handler.go's registry must be expanded to every registered ApplyFunc, not just the registry function itself."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Owner phrasing is 'Consider the same file-I/O audit' \u2014 the audit document is the deliverable; a shared helper is speculative and out of scope unless the audit finds a live second defect.",
+  "review_notes": [
+   "[simplicity-scope.json] Two different deliverables in one task: TASK-150 both writes an audit document (docs/audits/2026-08-21-apply-endpoint-fileio-audit.md) and edits six production handlers (ai.go, diagnostics.go, metadata/handler.go, metadata_cache.go, organize.go, review/handler.go) to add missing tag/file-I/O writeba",
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ]
+ },
+ {
+  "todo_line": 2486,
+  "src_id": null,
+  "title": "Review the 17 apiFetch-callers' catch handlers for session-expiry messaging",
+  "verdict": "actionable",
+  "verdict_evidence": "apiFetch throws ApiAuthRedirectError (web/src/utils/apiFetch.ts:100,110); of the 17 named callers only useMetadataLane.ts special-cases it \u2014 grep -rln \"isAuthRedirectError|ApiAuthRedirectError\" web/src --include=*.tsx --include=*.ts (excluding tests and apiFetch.ts itself) returns exactly web/src/components/review/lanes/useMetadataLane.ts.",
+  "domain": "web",
+  "exact_files": [
+   "web/src/components/audiobooks/BulkMetadataSearchDialog.tsx",
+   "web/src/components/audiobooks/MetadataSearchDialog.tsx",
+   "web/src/components/audiobooks/VersionManagement.tsx",
+   "web/src/components/common/ServerFileBrowser.tsx",
+   "web/src/components/dedup/CandidateCompareDrawer.tsx",
+   "web/src/components/dedup/DedupAcousticTab.tsx",
+   "web/src/components/layout/UserMenu.tsx",
+   "web/src/components/review/lanes/useDupesLane.ts",
+   "web/src/components/review/lanes/useMetadataLane.ts",
+   "web/src/components/review/reviewActions.ts",
+   "web/src/components/settings/APIKeysTab.tsx",
+   "web/src/components/system/MaintenanceTab.tsx",
+   "web/src/hooks/useBackupHandlers.ts",
+   "web/src/hooks/useColumnConfig.ts",
+   "web/src/hooks/useImportFolderHandlers.ts",
+   "web/src/pages/BookDetail.tsx",
+   "web/src/pages/FileManager.tsx",
+   "web/src/pages/Library.tsx",
+   "web/src/utils/apiFetch.test.ts",
+   "web/src/utils/apiFetch.ts"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "apiFetch throws ApiAuthRedirectError on a login-page response",
+    "grep_cmd": "grep -n 'throw new ApiAuthRedirectError' web/src/utils/apiFetch.ts",
+    "expect": "2 hits at L100 and L110"
+   },
+   {
+    "claim": "quarantineBook/unquarantineBook/restoreSoftDeletedBook use apiFetch and only check response.ok",
+    "grep_cmd": "sed -n '1192,1218p' web/src/services/api.ts",
+    "expect": "3 functions, each 'const response = await apiFetch(...)' then 'if (!response.ok)'"
+   },
+   {
+    "claim": "only one caller special-cases the auth-redirect error today",
+    "grep_cmd": "grep -rln \"isAuthRedirectError\\|ApiAuthRedirectError\" web/src --include=*.tsx --include=*.ts | grep -v test | grep -v apiFetch.ts",
+    "expect": "1 hit: web/src/components/review/lanes/useMetadataLane.ts"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "isAuthRedirectError(err)",
+    "file": "web/src/utils/apiFetch.ts",
+    "verify_grep": "grep -n 'export function isAuthRedirectError' web/src/utils/apiFetch.ts"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "L",
+  "tier": "sonnet",
+  "why_tier": "Mechanically similar review across 18 files, but each catch site needs a judgment call on whether the existing message reads sensibly for a session-expiry vs. a genuine failure \u2014 not pure mechanical replacement.",
+  "review_critical": true,
+  "goal": "For each of the 17 functions (quarantineBook, unquarantineBook, restoreSoftDeletedBook, removeImportPath, changePassword, linkBookVersion, markNoMatch, includeFilesystemPath, deleteBackup, clearMetadataNoMatch, runMaintenanceWindow, updateTaskConfig, saveUserColumnConfig, saveSavedFilterPresets, mergeDedupCandidate, dismissDedupCandidate, revokeAPIKey), find its call site(s) in exact_files, check whether the surrounding try/catch (or .catch()) shows the raw error message to the user. Where it would show something misleading (e.g. 'Failed to quarantine audiobook' for what is actually an expired session), branch on isAuthRedirectError(err) from web/src/utils/apiFetch.ts and show a distinct 'Your session expired \u2014 please sign in again' message instead.",
+  "background": [
+   "apiFetch(...) throws ApiAuthRedirectError before the caller ever inspects response.ok, so the existing 'if (!response.ok) throw await buildApiError(...)' block inside each api.ts function is never reached on an expired session (confirmed for quarantineBook/unquarantineBook/restoreSoftDeletedBook).",
+   "isAuthRedirectError(err) is already exported from web/src/utils/apiFetch.ts and used by exactly one caller today (useMetadataLane.ts)."
+  ],
+  "steps": [
+   "1. For each function name, run grep -n \"<name>(\" on its caller file(s) listed in exact_files to find the call site and its enclosing try/catch or .catch(err => ...).",
+   "2. Read the current error-display code (toast/snackbar/alert call) at that site.",
+   "3. If the message is generic enough to already read sensibly on session expiry (e.g. a raw 'err.message' passthrough with no book-specific wording), leave it \u2014 note 'OK as-is' and move on.",
+   "4. If the message would mislead (e.g. hard-coded 'Failed to X' text that implies the operation itself failed), add an `if (isAuthRedirectError(err)) { <show session-expired toast>; return; }` branch before the generic handler, importing isAuthRedirectError from '../../utils/apiFetch' (adjust relative path per file).",
+   "5. Repeat useMetadataLane.ts's existing pattern (read it first) for the toast wording so all 17 sites are consistent."
+  ],
+  "tests": [
+   "web/src/pages/BookDetail.test.tsx (or nearest existing test file per component) \u2014 add a case that mocks the API call to reject with an ApiAuthRedirectError instance and asserts the session-expired message is shown, not the generic failure message.",
+   "Happy-path anti-over-suppression: existing tests asserting the ORIGINAL generic failure message on a non-auth error (e.g. a 500) must still pass \u2014 do not let the new branch swallow real failures."
+  ],
+  "acceptance": [
+   "npm --prefix web run lint && npm --prefix web test passes.",
+   "grep -c 'isAuthRedirectError' across exact_files increases from 1 to 17 call-site checks performed (not all 17 necessarily need a code change \u2014 some may already be fine)."
+  ],
+  "edge_cases": [
+   "A caller with no user-visible error surface at all (e.g. a fire-and-forget background save) should get a console.warn distinguishing session-expiry from a genuine save failure, not silently do nothing differently.",
+   "mergeDedupCandidate/dismissDedupCandidate are on the dedup-apply path \u2014 a session-expiry there must not be mistaken for 'merge failed, data unchanged' when in fact the request never reached the server in a way the UI can distinguish without this fix."
+  ],
+  "anti_over_suppression": "Test asserting a genuine 500 still shows the original 'Failed to X' message, not the session-expired one.",
+  "depends_on_lines": [],
+  "gate": "npm --prefix web run lint && npm --prefix web test (web)",
+  "notes": "This is the direct consequence of apiFetch's ApiAuthRedirectError throw already shipping \u2014 the fix 'is working', per the TODO text; this item is purely about auditing/upgrading 18 call-site messages. Good candidate for a parallel-refactor-sweep given the repeated pattern across files.",
+  "review_notes": [
+   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
+   "[simplicity-scope.json] Over-scoped, and it is the hub that serializes the back half of the web workstream. TASK-165 lists 18 files ('Review the 17 apiFetch-callers' catch handlers for session-expiry messaging') and sits at web wave 4, where it collides with Library.tsx, BookDetail.tsx and DedupAcousticTab.tsx and therefor"
+  ]
+ },
+ {
+  "todo_line": 2537,
+  "src_id": null,
+  "title": "Decide storage precision for per-file duration (int seconds vs. float ms)",
+  "verdict": "needs_design",
+  "verdict_evidence": "database.BookFile.Duration is `int` (internal/database/store.go:825, struct BookFile at :800); mapper.go:217 widens it with `DurationSec: float64(f.Duration)` which cannot recover sub-second precision. AcoustIDFingerprintDurationSec on the same struct is already float64 (store.go:845), proving sub-second precision is a recognized need elsewhere on this exact struct.",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "BookFile.Duration is an int seconds field",
+    "grep_cmd": "grep -n '^[[:space:]]*Duration ' internal/database/store.go",
+    "expect": "hit at L825 inside `type BookFile struct` (L800): 'Duration int'"
+   },
+   {
+    "claim": "mapper widens int back to float64 with no precision to recover",
+    "grep_cmd": "grep -n 'DurationSec: float64(f.Duration)' internal/server/handlers/abs/mapper.go",
+    "expect": "1 hit at L217"
+   },
+   {
+    "claim": "a sibling field on the same struct is already float64",
+    "grep_cmd": "grep -n 'AcoustIDFingerprintDurationSec float64' internal/database/store.go",
+    "expect": "1 hit at L845"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "L",
+  "tier": "opus",
+  "why_tier": "Touches a core production field's type across store, mappers, importers, and needs a backfill migration \u2014 schema change with wide blast radius on a prod-data path.",
+  "review_critical": true,
+  "goal": "NOT a coding task until the owner answers: does BookFile gain a new DurationMillis (or DurationSec float64) field alongside the existing truncated Duration int (backward-compatible, but two fields to keep in sync), or does Duration itself change type from int to float64 (breaking on-disk value semantics for every existing row, requiring a backfill pass to reinterpret already-stored integer-second values)? Either choice then needs importers (internal/scanner, internal/itunes/service/importer.go, any ffprobe-driven ingest) updated to capture sub-second precision at write time, since a backfill can only re-derive from source files, not from the already-truncated stored value.",
+  "background": [
+   "The ABS conformance suite (#2337) measured drift: oracle sum(audioFiles.duration)=9975.431111s vs int-truncated sum=9973s (2.431s short over 6 files); startOffset drift compounds ~0.4s per track boundary, reaching ~10s by the final track on a 24-part book.",
+   "Not fixed alongside the conformance work by owner decision on 2026-08-12: a core field's type change had no business riding along with test-fixture changes.",
+   "The conformance assertions carry bounded allowances (fail if drift exceeds the known truncation), so the defect stays visible rather than becoming a silently-accepted baseline."
+  ],
+  "steps": [
+   "This item cannot be briefed as concrete edit steps until the design question above is answered \u2014 see 'goal'."
+  ],
+  "tests": [
+   "Once decided: internal/database/store_test.go round-trip test asserting sub-second Duration survives a write/read cycle.",
+   "internal/server/handlers/abs/mapper_test.go (or the existing ABS conformance harness) asserting DurationSec/startOffset now match the oracle within float precision, not the current bounded-truncation allowance."
+  ],
+  "acceptance": [
+   "N/A until design decision is made."
+  ],
+  "edge_cases": [
+   "Existing rows have no sub-second data to backfill from the DB alone \u2014 a backfill can only re-derive by re-probing the source audio file, which may have moved or been deleted since import.",
+   "A DurationMillis-alongside approach needs a decision on which field wins when they disagree (e.g. a future importer bug that populates one but not the other)."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci (Go)",
+  "notes": "Same shape of bug as L2583 (Book.PrintYear int loses era) \u2014 consider deciding both in the same design pass since they are the same class of typed-column-loses-precision problem, one on BookFile, one on Book."
+ },
+ {
+  "todo_line": 2568,
+  "part": 1,
+  "src_id": null,
+  "title": "Teach the ABS fixture-capture harness to record request headers",
+  "verdict": "actionable",
+  "verdict_evidence": "scripts/abs_capture_fixtures.py only preserves RESPONSE headers today: 'KEPT_HEADERS' filter is applied to `resp.headers` at line 89-90 (`k.lower(): v for k, v in resp.headers.items() if k.lower() in KEPT_HEADERS`); no code path reads or stores `req.headers` / the outgoing request's headers anywhere in the 265-line file.",
+  "domain": "ci/scripts",
+  "exact_files": [
+   "scripts/abs_capture_fixtures.py"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the harness only preserves response headers, never request headers",
+    "grep_cmd": "grep -n 'header\\|Header' scripts/abs_capture_fixtures.py",
+    "expect": "hits at L37,L89-90 (response headers) and L121/135/144 (auth headers SENT, not recorded)"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Small, self-contained script change with a clear existing pattern (KEPT_HEADERS) to extend to the request side.",
+  "review_critical": false,
+  "goal": "Add a request-headers capture to scripts/abs_capture_fixtures.py's fixture-writing logic, mirroring the existing KEPT_HEADERS response-header capture (line 37-90), so a subsequent re-capture preserves the User-Agent (and any other client-identifying headers) that produced each fixture. Do not attempt to derive deviceType in this change \u2014 that is a separate, blocked follow-up (part 2 of this item).",
+  "background": [
+   "The real ABS server derived deviceType='wearable' for a request whose captured JSON body carried only clientName and deviceId \u2014 the distinguishing signal must have been in the User-Agent header, which the harness currently discards.",
+   "0 of 28 existing fixtures record any request header (verified: no `req.headers` write anywhere in the harness)."
+  ],
+  "steps": [
+   "1. In scripts/abs_capture_fixtures.py, find where each fixture JSON is written (the function containing the KEPT_HEADERS response-header block around line 89).",
+   "2. Add a REQUEST_HEADERS_TO_KEEP set (start with at least 'user-agent') alongside the existing KEPT_HEADERS constant.",
+   "3. At the point the outgoing request is issued (the `sess.get`/`sess.post`/etc. call), capture the headers actually sent (session default headers merged with any per-call headers) and filter through REQUEST_HEADERS_TO_KEEP.",
+   "4. Add a 'request_headers' key to the written fixture JSON structure, alongside the existing 'headers' (response) key.",
+   "5. Re-run the harness against the real ABS docker-compose instance (testdata/abs-fixtures/docker-compose.yml) to confirm at least one regenerated fixture now has a non-empty request_headers.user-agent."
+  ],
+  "tests": [
+   "No new Go test required for the script itself; verify manually per step 5 since this is a Python capture tool, not shipped application code."
+  ],
+  "acceptance": [
+   "grep -c 'request_headers' testdata/abs-fixtures/*.json returns >0 after a re-capture run.",
+   "grep -n 'REQUEST_HEADERS_TO_KEEP' scripts/abs_capture_fixtures.py returns 1 hit."
+  ],
+  "edge_cases": [
+   "Auth headers (Authorization, x-return-tokens, x-refresh-token) must NOT be captured into fixtures \u2014 they are credentials, not diagnostic data; keep REQUEST_HEADERS_TO_KEEP to a strict allowlist, mirroring KEPT_HEADERS' allowlist approach rather than capturing all headers."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "This unblocks part 2 (deriving the UA->deviceType mapping) but is independently useful as harness hygiene even if part 2 never happens."
+ },
+ {
+  "todo_line": 2568,
+  "part": 2,
+  "src_id": null,
+  "title": "Derive deviceType from captured User-Agent once headers are recorded",
+  "verdict": "needs_design",
+  "verdict_evidence": "play.go:307 hardcodes deviceType='unknown' and play.go:315-317 only echoes a client-supplied deviceInfo map; there is no derivation logic to build because there is no recorded User-Agent sample to derive a rule from yet (blocked on part 1 landing and a re-capture happening).",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+   "internal/server/handlers/abs/play.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "deviceType defaults to unknown and is only echoed, never derived",
+    "grep_cmd": "sed -n '301,317p' internal/server/handlers/abs/play.go",
+    "expect": "deviceInfoDTO sets deviceType: \"unknown\" then overwrites with `for k, v := range req.DeviceInfo { out[k] = v }`"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "deviceInfoDTO",
+    "file": "internal/server/handlers/abs/play.go",
+    "verify_grep": "grep -n 'func (h \\*Handler) deviceInfoDTO' internal/server/handlers/abs/play.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Once unblocked, the actual mapping is a small pure function \u2014 the design question is what rule to derive, not implementation complexity.",
+  "review_critical": false,
+  "goal": "Not codeable yet. Open question that cannot be answered from evidence: what User-Agent substring(s) map to which deviceType values in real AudiobookShelf semantics? Answering this requires the recapture from part 1 (todo_line 2568 part 1) to actually run against a real device whose User-Agent is known to produce 'wearable' or another non-unknown value, so a mapping rule can be written against a real (UA, deviceType) pair instead of guessing from the single retracted tagTrack-style sample.",
+  "background": [
+   "Real ABS answered deviceType='wearable' for a request body carrying only clientName and deviceId \u2014 the derivation must read something outside the JSON body, almost certainly the User-Agent header.",
+   "Explicitly low priority: nothing in the client contract reads deviceType; it is diagnostic-only, shown in the sessions list."
+  ],
+  "steps": [
+   "Blocked \u2014 see goal. Once a recaptured fixture has a real (User-Agent, expected deviceType) pair, add a case to deviceInfoDTO (play.go, after the 'unknown' default and before the echo loop) that pattern-matches c.Request.Header.Get('User-Agent') against the derived rule."
+  ],
+  "tests": [
+   "A table-driven test in play_test.go asserting specific User-Agent strings map to the derived deviceType, once the rule exists."
+  ],
+  "acceptance": [
+   "N/A until unblocked."
+  ],
+  "edge_cases": [
+   "A client that explicitly supplies deviceType in its request body must still win over any derived value \u2014 the existing echo-after-default ordering already guarantees this and must be preserved."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   2568
+  ],
+  "gate": "make ci (Go)",
+  "notes": "Low priority per the TODO text itself. Do not infer a UA->deviceType rule from the single un-recorded 'wearable' sample \u2014 that is exactly the single-sample mistake that produced the retracted tagTrack finding, called out explicitly in the source item."
+ },
+ {
+  "todo_line": 2583,
+  "src_id": null,
+  "title": "Decide storage representation for pre-CE / era-suffixed publication years",
+  "verdict": "needs_design",
+  "verdict_evidence": "Book.PrintYear is `*int` (internal/database/store.go:202 'PrintYear *int'); the ABS DTO layer renders publishedYear as a string sourced from this int (browse.go:1262 'year = books[i].PrintYear', dto_library.go:12 comment 'publishedYear ... are STRINGS or null'), so an era suffix like \"800BC\" cannot survive the int column and comes back as \"800\".",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "PrintYear is stored as a plain int, not a string with era",
+    "grep_cmd": "grep -n 'PrintYear ' internal/database/store.go",
+    "expect": "hit at L202: 'PrintYear *int'"
+   },
+   {
+    "claim": "the ABS layer serializes publishedYear from PrintYear as a string",
+    "grep_cmd": "grep -n 'year = books\\[i\\].PrintYear' internal/server/handlers/abs/browse.go",
+    "expect": "1 hit at L1262"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Same class of bug as L2537 (BookFile.Duration) but narrower blast radius (one column, one facet) \u2014 still needs a type/backfill decision before any code is written.",
+  "review_critical": false,
+  "goal": "NOT codeable until decided: does Book gain a PrintYearRaw string (or PrintYear itself becomes string) to preserve era suffixes like \"BC\"/\"BCE\", and if so how does publishedDecades (the derived filter facet) handle a non-numeric or negative-year value? This is explicitly low priority (only visible on pre-CE material) so the decision may reasonably be \"accept as documented, revisit if a real pre-CE book surfaces the issue in production\".",
+  "background": [
+   "ABS passes the raw date tag through unmodified; the oracle's \"800BC\" example demonstrates real source tags do carry era suffixes.",
+   "The publishedDecades filter facet is derived from PrintYear and inherits the same loss.",
+   "Only visible on pre-CE material \u2014 owner-described as genuinely low priority, but flagged as \"the same class of bug\" as the (higher-priority, review_critical) L2537 duration truncation, worth deciding alongside it rather than independently."
+  ],
+  "steps": [
+   "Not codeable until the design question in 'goal' is answered."
+  ],
+  "tests": [
+   "Once decided: a unit test in internal/server/handlers/abs/browse_test.go asserting a book with a BC-era PrintYear round-trips through publishedYear without losing the suffix."
+  ],
+  "acceptance": [
+   "N/A until design decision is made."
+  ],
+  "edge_cases": [
+   "publishedDecades bucketing logic (likely integer division by 10) would need explicit handling for a non-purely-numeric year string.",
+   "Negative-year representations (-800) vs suffix representations (800BC) are two different possible fixes with different backfill implications \u2014 the decision should pick one, not both."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   2537
+  ],
+  "gate": "make ci (Go)",
+  "notes": "Consider deciding this in the same pass as L2537 (todo_line 2537) since both are \"typed column loses precision from the tag\" bugs on adjacent Book/BookFile struct fields."
+ },
+ {
+  "todo_line": 2589,
+  "src_id": null,
+  "title": "Document the hardcoded ABS timeBase as a permanent, owner-approved allowance",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/server/handlers/abs/mapper.go:645 sets `TimeBase: \"1/1000\"` unconditionally with no explanatory comment; owner decision 2026-08-12 already approved this as a documented permanent allowance rather than adding an ingest field, so the only remaining work is writing the comment down.",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+   "internal/server/handlers/abs/mapper.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "TimeBase is hardcoded with no explanatory comment today",
+    "grep_cmd": "sed -n '635,648p' internal/server/handlers/abs/mapper.go",
+    "expect": "TimeBase: \\\"1/1000\\\", with no preceding // comment block specific to it"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Single-line comment addition at a known anchor; no logic change, no design decision left to make (owner already decided).",
+  "review_critical": false,
+  "goal": "Add a comment immediately above `TimeBase: \"1/1000\",` at internal/server/handlers/abs/mapper.go:645 explaining that this is a deliberate, owner-approved permanent allowance (not a bug): the real ABS reports ffprobe's actual stream time_base (e.g. 1/14112000), but this codebase does not capture time_base at import, and no known client is known to divide by this value, so the field is set to a fixed placeholder rather than adding an ingest field + backfill for a value nothing consumes. Note that the allowance should be revisited only if a client is found to actually use timeBase.",
+  "background": [
+   "Owner decision 2026-08-12: allow the hardcoded value with a documented permanent allowance rather than add an ingest field and backfill."
+  ],
+  "steps": [
+   "1. Open internal/server/handlers/abs/mapper.go and locate line 645 (`TimeBase: \"1/1000\",` inside the fileView-to-DTO mapping function).",
+   "2. Insert a `//` comment block directly above the TimeBase field assignment (or above the containing composite literal's TimeBase line specifically) stating: this value is a fixed placeholder, real ABS reports ffprobe's stream time_base which this codebase does not capture at import, owner-approved 2026-08-12 as a permanent allowance since no known client divides by it, revisit only if that changes.",
+   "3. Bump the file's version header per the repo's file-header standard."
+  ],
+  "tests": [
+   "N/A \u2014 comment-only change; existing ABS conformance tests should continue to pass unchanged since no behavior changes."
+  ],
+  "acceptance": [
+   "grep -B3 'TimeBase:.*1/1000' internal/server/handlers/abs/mapper.go shows a comment block mentioning 'permanent allowance' or equivalent owner-decision language."
+  ],
+  "edge_cases": [
+   "N/A \u2014 documentation-only change."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci (Go)",
+  "notes": "Purely a documentation task; the owner decision already resolved the design question."
+ },
+ {
+  "todo_line": 2595,
+  "part": 1,
+  "src_id": "SEC-CODEQL-BACKLOG",
+  "title": "Assess the 2 critical go/request-forgery (SSRF) CodeQL alerts on cover-fetch paths",
+  "verdict": "actionable",
+  "verdict_evidence": "Both flagged lines exist unchanged and unassessed at HEAD: internal/metadata/cover.go:135 `resp, err := client.Get(coverURL) //nolint:noctx` and internal/covers/covers.go:82 `resp, err := http.Get(coverURL) //nolint:gosec` \u2014 both nolint comments suppress the STYLE lint, not the CodeQL SSRF finding, and neither line validates coverURL's host/scheme before fetching.",
+  "domain": "internal/metadata",
+  "exact_files": [
+   "internal/metadata/cover.go",
+   "internal/covers/covers.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "cover.go fetches an unvalidated remote URL",
+    "grep_cmd": "sed -n '130,140p' internal/metadata/cover.go",
+    "expect": "'resp, err := client.Get(coverURL) //nolint:noctx // URL already validated above'"
+   },
+   {
+    "claim": "covers.go fetches an unvalidated remote URL",
+    "grep_cmd": "sed -n '78,88p' internal/covers/covers.go",
+    "expect": "'resp, err := http.Get(coverURL) //nolint:gosec // URL is validated by caller'"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "opus",
+  "why_tier": "Critical-severity SSRF finding on a path that fetches a URL sourced from third-party metadata-provider responses (untrusted input) \u2014 needs careful review of what 'already validated above' / 'validated by caller' actually means before deciding fix vs. dismiss.",
+  "review_critical": true,
+  "goal": "Read the full call chain into both cover.go:135 and covers.go:82 to determine what, if anything, validates coverURL before the fetch (the nolint comments claim validation happens elsewhere \u2014 confirm or refute this for the SSRF threat model specifically: can a malicious metadata provider return a coverURL pointing at an internal/link-local address like 169.254.169.254 or a file:// scheme?). If no real validation exists, add a scheme allowlist (http/https only) and a private/link-local IP block (using net.IP.IsPrivate/IsLoopback/IsLinkLocalUnicast after resolving the host) before the Get call. If validation genuinely already prevents SSRF, add an `// lgtm[go/request-forgery]` comment citing exactly where the validation happens, since CodeQL does not read #nolint/#nosec-style suppressions.",
+  "background": [
+   "internal/metadata/cover.go:117 already calls validateCoverURL() (scheme allowlist) before the fetch at cover.go:137, and the client used there is built with a custom safeCoverDialContext (cover.go:71-89) that resolves the host and rejects private/loopback/link-local IPv4 AND IPv6 ranges. This is real, comprehensive SSRF protection already in place for alert #662.",
+   "internal/covers/covers.go:82's http.Get(coverURL) has exactly one caller: internal/server/covers.go's handleCoverProxy, which calls covers.IsAllowedCoverSource(coverURL) (a 4-domain allowlist: openlibrary/google books/amazon) and rejects before ever calling FetchAndCacheCover. This is real, comprehensive SSRF protection already in place for alert #645.",
+   "internal/metadata/cover_test.go already asserts a 169.254.169.254 cover URL is SSRF-blocked; internal/covers/covers_test.go already has TestIsAllowedCoverSource asserting both the blocked case and several legitimate URLs pass. Do not re-add these tests \u2014 verify they exist and pass."
+  ],
+  "steps": [
+   "1. Read internal/metadata/cover.go top-to-bottom around lines 20-137: confirm validateCoverURL (scheme allowlist) and safeCoverDialContext (private/loopback/link-local IPv4+IPv6 block via DNS-resolved-IP check) are both wired into the client used at line 137.",
+   "2. Read internal/covers/covers.go's only caller (internal/server/covers.go:24-45) and confirm covers.IsAllowedCoverSource(coverURL) gates every call to FetchAndCacheCover.",
+   "3. Given both sites have real, host/IP-resolved validation already present, add `// lgtm[go/request-forgery]` directly above cover.go:137 and covers.go:82, each citing the exact validating function/file:line found above (do not add a duplicate/parallel validator).",
+   "4. Run `grep -n 169.254 internal/metadata/cover_test.go` and `grep -n TestIsAllowedCoverSource internal/covers/covers_test.go` to confirm the anti-over-suppression and blocked-case tests already exist and pass; do not add duplicate tests."
+  ],
+  "tests": [
+   "internal/metadata/cover_test.go: add a case asserting a coverURL of `http://169.254.169.254/latest/meta-data/` (or file://, or a private-range IP) is rejected before any network call.",
+   "internal/covers/covers_test.go: same pattern."
+  ],
+  "acceptance": [
+   "go vet ./... and make ci pass.",
+   "The two alert lines each have either a fix (scheme/IP validation) or an `lgtm[go/request-forgery]` suppression with a cited validating function \u2014 not left silent."
+  ],
+  "edge_cases": [
+   "A legitimate cover host that resolves via DNS to a public IP must still work \u2014 do not block by hostname string alone if it could break real providers (e.g. archive.org, openlibrary.org covers); validate the RESOLVED IP, not just the URL string, to prevent DNS-rebinding bypasses.",
+   "IPv6 link-local/unique-local ranges must be checked too, not just IPv4 private ranges."
+  ],
+  "anti_over_suppression": "cover_test.go / covers_test.go case asserting a normal public HTTPS cover URL still fetches successfully after the fix (not just that the bad case is blocked).",
+  "depends_on_lines": [],
+  "gate": "make ci (Go)",
+  "notes": "Read first per the item's own suggested order \u2014 these are the only 2 critical-severity alerts in the 326-alert backlog and sit on untrusted-input paths.",
+  "review_notes": [
+   "[verify-1.json] Background section is materially stale/wrong and would mislead the executing model. Verified at HEAD: internal/metadata/cover.go ALREADY has full SSRF protection on the exact flagged line (client.Get(coverURL) at cover.go:137) \u2014 validateCoverURL() (scheme allowlist, called at cover.go:117) PLUS safe",
+   "[verify-1.json] TODO.md's SEC-CODEQL-BACKLOG item (line 2595) is a single checkbox covering all 326 alerts (302 log-injection, 17 high, 3 medium workflow-permission, etc.), of which only the 2 critical SSRF alerts are this task's scope. The brief's generic instruction 'If the task is a TODO.md close-out, check the ",
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+  ]
+ },
+ {
+  "todo_line": 2595,
+  "part": 2,
+  "src_id": "SEC-CODEQL-BACKLOG",
+  "title": "Fix the go/zipslip finding on the backup-restore extraction path",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/backup/backup.go's tar extraction loop (around line 265-280, `tarReader := tar.NewReader(gzipReader)` then `header, err := tarReader.Next()`) writes extracted entries using the archive-supplied header.Name with no path-traversal check visible in the surrounding code.",
+  "domain": "internal/backup",
+  "exact_files": [
+   "internal/backup/backup.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the restore path extracts tar entries by their archive-supplied name",
+    "grep_cmd": "sed -n '265,285p' internal/backup/backup.go",
+    "expect": "tar.NewReader / tarReader.Next() loop with no filepath.Clean/prefix-check visible in this window"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Well-understood, mechanical fix pattern (validate extracted path stays within the target directory) on a data-mutating restore path.",
+  "review_critical": true,
+  "goal": "Before writing each extracted file in internal/backup/backup.go's restore loop, join header.Name against the target restore directory, clean the resulting path, and verify it is still lexically within the target directory (reject '../' escapes and absolute paths in header.Name) before creating the file \u2014 the standard Go zip-slip mitigation, applied here to a tar/gzip archive.",
+  "background": [
+   "This is the restore path \u2014 a wrong answer here costs data (a maliciously or corruptly crafted backup archive could write outside the intended restore directory), not just log noise, per the item's own framing of why this alert is worth reading before the log-injection sweep."
+  ],
+  "steps": [
+   "1. Open internal/backup/backup.go and read the full extraction loop starting at the tar.NewReader call (~line 269) through wherever it calls os.Create/os.OpenFile for each entry.",
+   "2. Immediately after `header, err := tarReader.Next()`, compute `targetPath := filepath.Join(restoreDir, header.Name)`.",
+   "3. Add a check: `if !strings.HasPrefix(filepath.Clean(targetPath), filepath.Clean(restoreDir)+string(os.PathSeparator))` (or equivalent using filepath.Rel and checking for a leading '..') then skip the entry and record an error/warning rather than writing it.",
+   "4. Apply the same check to any directory-creation calls (header.Typeflag == tar.TypeDir) in the same loop, not just file writes.",
+   "5. Add `// lgtm[go/zipslip]` only if, after review, this turns out to already be safe for another reason discovered in step 1 \u2014 otherwise the fix in steps 2-4 is expected to close the alert."
+  ],
+  "tests": [
+   "internal/backup/backup_test.go: craft a tar.gz fixture with a header.Name of \"../../etc/passwd\" (or similar) and assert restore rejects/skips it rather than writing outside restoreDir.",
+   "Existing restore-round-trip test (find it via grep -rn 'func Test.*Restore' internal/backup) must still pass with legitimate archive contents."
+  ],
+  "acceptance": [
+   "go build ./... and make ci pass.",
+   "The new malicious-path test fails before the fix and passes after (verify by temporarily reverting the check)."
+  ],
+  "edge_cases": [
+   "A tar entry with an absolute path (header.Name starting with '/') must also be rejected, not just relative '../' traversal.",
+   "Symlink entries (tar.TypeSymlink) pointing outside restoreDir are a related but distinct vector \u2014 check whether the current loop even follows/creates symlinks, and if so apply the same containment check to the link target."
+  ],
+  "anti_over_suppression": "Test asserting a normal, non-malicious backup archive still restores all its files correctly after the fix.",
+  "depends_on_lines": [],
+  "gate": "make ci (Go)",
+  "notes": "Alert #13. Suggested to read before the log-injection sweep since it is on a file-mutating path.",
+  "review_notes": [
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+  ]
+ },
+ {
+  "todo_line": 2595,
+  "part": 3,
+  "src_id": "SEC-CODEQL-BACKLOG",
+  "title": "Fix or verify the 4 still-open go/path-injection findings (1 of the original 5 is already suppressed)",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/audiobooks/service_mutation.go:63 already carries `if _, err := os.Stat(absNewPath); err != nil { // lgtm[go/path-injection]` \u2014 a genuine CodeQL suppression with justification, so only 4 of the 5 listed findings (safe_operations.go:122, safe_operations.go:157, assemble.go:272, filesystem.go:271) remain unaddressed; their cited line numbers have drifted from the file's current content and need re-locating before fixing.",
+  "domain": "internal/fileops",
+  "exact_files": [
+   "internal/fileops/safe_operations.go",
+   "internal/metadata/assemble.go",
+   "internal/server/handlers/filesystem.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "service_mutation.go's path-injection alert is already suppressed with justification",
+    "grep_cmd": "grep -n 'lgtm\\[go/path-injection\\]' internal/audiobooks/service_mutation.go",
+    "expect": "1 hit, preceded by a comment citing fileops.IsAllowedPath as the validating gate"
+   },
+   {
+    "claim": "safe_operations.go still performs unchecked file writes in a rollback path",
+    "grep_cmd": "grep -n 'os.Stat(op.backupPath)\\|copyFile(op.backupPath' internal/fileops/safe_operations.go",
+    "expect": "\u22652 hits, no lgtm suppression nearby"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "fileops.IsAllowedPath",
+    "file": "internal/fileops/*.go",
+    "verify_grep": "grep -rn 'func IsAllowedPath' internal/fileops/"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "4 similar findings needing the same allow-list-gate pattern already used successfully in service_mutation.go \u2014 mechanical once the pattern is confirmed, but each site touches file-mutating code.",
+  "review_critical": true,
+  "goal": "For each of safe_operations.go (2 findings, around its rollback/restore-from-backup logic), assemble.go:272 area (listAudioFiles), and filesystem.go:271 area (the synchronous-scan fallback), determine the real current line of the flagged operation (line numbers have drifted since the alerts were filed), and either (a) confirm the path already passes through fileops.IsAllowedPath or an equivalent gate \u2014 same reasoning as the already-suppressed service_mutation.go:63 \u2014 and add a matching `// lgtm[go/path-injection]` comment citing the gate, or (b) if no such gate exists on that path, add one before the file operation.",
+  "background": [
+   "5 go/path-injection alerts were originally filed against safe_operations.go:122 (#1477), safe_operations.go:157 (#1478), assemble.go:272 (#1429), filesystem.go:271 (#1105), service_mutation.go:63 (#1104).",
+   "service_mutation.go:63 already has `// lgtm[go/path-injection]` plus a comment: \"absNewPath is gated by fileops.IsAllowedPath above; CodeQL does not model that custom allow-list barrier, so suppress the false positive.\" \u2014 this is the template to follow or refute for the other 4."
+  ],
+  "steps": [
+   "1. Re-locate the current line numbers: grep -n 'os.Stat\\|copyFile' internal/fileops/safe_operations.go to find the rollback logic near the two originally-flagged lines.",
+   "2. Trace backward from each flagged operation to see whether op.backupPath / op.targetPath were validated through fileops.IsAllowedPath (or an equivalent) before this point in the call chain.",
+   "3. Do the same trace for internal/metadata/assemble.go's listAudioFiles (dirPath parameter) and internal/server/handlers/filesystem.go's synchronous-scan fallback (folder.Path).",
+   "4. For each of the 4, either add the lgtm suppression with a specific cited gate (matching the service_mutation.go template exactly), or add the missing fileops.IsAllowedPath check if none exists.",
+   "5. Do NOT touch service_mutation.go:63 \u2014 it is already correctly handled; re-verify only, do not re-suppress or modify."
+  ],
+  "tests": [
+   "For any site where a missing gate is added: a test asserting a path outside the allowed import-path set is rejected (mirror the pattern in internal/fileops's existing IsAllowedPath tests)."
+  ],
+  "acceptance": [
+   "make ci (Go) passes.",
+   "grep -c 'lgtm\\[go/path-injection\\]' across internal/fileops/safe_operations.go internal/metadata/assemble.go internal/server/handlers/filesystem.go internal/audiobooks/service_mutation.go equals 5 once all 4 remaining are resolved (1 already present + 4 newly resolved)."
+  ],
+  "edge_cases": [
+   "safe_operations.go's rollback path runs AFTER a failure has already occurred \u2014 adding a validation check there must not itself fail in a way that leaves the corrupt target file in place with no rollback attempted at all (the surrounding comments already describe this exact failure mode as a known prior bug)."
+  ],
+  "anti_over_suppression": "N/A \u2014 this class of finding is either fixed or suppressed-with-citation, not silenced with a bare nolint.",
+  "depends_on_lines": [],
+  "gate": "make ci (Go)",
+  "notes": "Read before the log-injection sweep per the item's suggested order, since these are on file-mutating paths.",
+  "review_notes": [
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+  ]
+ },
+ {
+  "todo_line": 2595,
+  "part": 4,
+  "src_id": "SEC-CODEQL-BACKLOG",
+  "title": "Add CodeQL-specific lgtm suppressions for the 3 already-justified go/disabled-certificate-check findings",
+  "verdict": "actionable",
+  "verdict_evidence": "All 3 flagged InsecureSkipVerify sites already carry a lint-suppression comment with justification (tools/cmd/merge-split-books/main.go:93 and tools/cmd/reconcile-paths/main.go:117 both `//nolint:gosec`; internal/mtls/provisioning.go:142 has a full `#nosec G402` comment explaining the bootstrap-only, single-use rationale) \u2014 but `//nolint` and `#nosec` are golangci-lint conventions, not CodeQL's `// lgtm[rule-id]` suppression syntax, so the CodeQL alerts likely remain open despite being genuinely already-justified.",
+  "domain": "internal/mtls",
+  "exact_files": [
+   "internal/mtls/provisioning.go",
+   "tools/cmd/merge-split-books/main.go",
+   "tools/cmd/reconcile-paths/main.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "provisioning.go's InsecureSkipVerify already has a detailed justification comment",
+    "grep_cmd": "sed -n '138,143p' internal/mtls/provisioning.go",
+    "expect": "'#nosec G402 -- bootstrap-only: InsecureSkipVerify is required during initial mTLS cert provisioning...'"
+   },
+   {
+    "claim": "both tools/cmd one-offs already have nolint suppressions",
+    "grep_cmd": "grep -n 'InsecureSkipVerify' tools/cmd/merge-split-books/main.go tools/cmd/reconcile-paths/main.go",
+    "expect": "2 hits, both with '//nolint:gosec'"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Small, well-understood \u2014 add one comment line per site; the design/risk judgment is already done, only the CodeQL-specific suppression syntax is missing.",
+  "review_critical": false,
+  "goal": "For internal/mtls/provisioning.go:142 (the one that 'matters more' per the item's own framing \u2014 it is production code, not a one-off tool) confirm the existing #nosec justification still holds (single bootstrap-only use, never in normal operation), then add `// lgtm[go/disabled-certificate-check]` immediately above the flagged tls.Config line, referencing the existing comment rather than duplicating it. For the two tools/cmd one-offs, add the same lgtm annotation with a one-line note that these are operator-run migration tools, not server code.",
+  "background": [
+   "Distinguish the 'matters more' production site (internal/mtls/provisioning.go:142) from the two low-stakes one-off tool sites (tools/cmd/merge-split-books, tools/cmd/reconcile-paths) \u2014 the item explicitly ranks them differently."
+  ],
+  "steps": [
+   "1. Open internal/mtls/provisioning.go and read the full #nosec comment at line ~140-141 to confirm it is still accurate (still bootstrap-only, still single-use).",
+   "2. Add `// lgtm[go/disabled-certificate-check]` on the line immediately above `&tls.Config{InsecureSkipVerify: true, ...}`.",
+   "3. Repeat for tools/cmd/merge-split-books/main.go:93 and tools/cmd/reconcile-paths/main.go:117, adding a one-line comment noting operator-run tool context if none already exists nearby."
+  ],
+  "tests": [
+   "N/A \u2014 comment-only change, no behavior change."
+  ],
+  "acceptance": [
+   "grep -c 'lgtm\\[go/disabled-certificate-check\\]' across the 3 files returns 3."
+  ],
+  "edge_cases": [
+   "If re-reading provisioning.go's context reveals the bootstrap-only claim no longer holds (e.g. the code path is now reachable outside first-install), do NOT add the suppression \u2014 escalate as a real finding instead."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci (Go)",
+  "notes": "This assumes CodeQL alert-dismissal happens via in-code lgtm comments in this repo's workflow; if the repo instead dismisses via the GitHub code-scanning UI, the equivalent action is to dismiss alerts #<id> there with 'used in code, but not exploitable' and the same justification text \u2014 confirm which mechanism this repo's CodeQL workflow actually honors before proceeding.",
+  "review_notes": [
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+  ]
+ },
+ {
+  "todo_line": 2595,
+  "part": 5,
+  "src_id": "SEC-CODEQL-BACKLOG",
+  "title": "Decide sweep-vs-accept for the 302 go/log-injection alerts",
+  "verdict": "needs_design",
+  "verdict_evidence": "Not covered by any of the 14 owner decisions listed for this scout run. The item itself frames it as a single decision to make ('sweep or explicitly accept as a whole, never one PR at a time'), and states the PR-gate consequence is already actively harmful (2 real PRs, #2320 and #2321, each added new log-injection instances and turned CodeQL red on unrelated work) \u2014 this is exactly the kind of decision needing owner sign-off before any code is written.",
+  "domain": "internal/server/handlers",
+  "exact_files": [],
+  "verified_anchors": [],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "L",
+  "tier": "opus",
+  "why_tier": "The decision itself (sweep now vs. formally accept) is not code, but whichever way it goes commits the team to either a large mechanical sweep across ~30 files or a permanent CI-gate policy change \u2014 high-leverage, needs owner sign-off, not a coding task.",
+  "review_critical": false,
+  "goal": "NOT codeable until the owner picks one: (a) do the mechanical sweep now \u2014 a shared log-sanitizing helper (e.g. wrapping user-controlled strings with a newline-strip before any slog/log call) applied across ~30 files in one coordinated change (this repo's parallel-refactor-sweep skill is a plausible vehicle given the mechanical, repeated-pattern shape), or (b) formally accept the 302 alerts as a documented baseline (dismiss them in the GitHub code-scanning UI with a standing justification) and instead fix the CI gate so it only fails on NEW alerts in changed code (which may already be the CodeQL default behavior \u2014 confirm before assuming a gate change is needed), so PRs like #2320/#2321 stop going red on unrelated pre-existing debt.",
+  "background": [
+   "302 of 326 open alerts are all go/log-injection, spread across ~30 files \u2014 one pattern (user-supplied strings reaching a log call without newline stripping), not 302 independent defects.",
+   "#2320 added 7 new go/log-injection instances in internal/server/handlers/metadata_cache.go; #2321 surfaced 3 more in internal/httputil/respond.go \u2014 both turned the PR CodeQL check red for unrelated work, which is the stated reason \"a red CodeQL check on a PR carries almost no signal\" today."
+  ],
+  "steps": [
+   "Not codeable until the owner decides. If (a) sweep is chosen: the next step is a separate, larger scouting pass enumerating all ~30 files (grep the CodeQL API results by rule=go/log-injection) as its own parallel-sweep task list \u2014 out of scope for this single TODO item.",
+   "If (b) accept is chosen: the next step is dismissing the 302 alerts in the GitHub code-scanning UI with a standing justification, and confirming/adjusting the CodeQL workflow's alert-diff behavior so only NEW alerts in a PR's diff fail the check."
+  ],
+  "tests": [
+   "N/A until a path is chosen."
+  ],
+  "acceptance": [
+   "N/A until a path is chosen."
+  ],
+  "edge_cases": [
+   "A partial sweep (some files fixed, most not) is explicitly the wrong outcome per the item's own framing (\"never one PR at a time\") \u2014 whichever path is chosen should be executed as one coordinated action, not trickled in."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "This is item (3) in the item's own suggested order, after the criticals and the file-mutating highs (parts 1-3 of this todo_line)."
+ },
+ {
+  "todo_line": 2595,
+  "part": 6,
+  "src_id": "SEC-CODEQL-BACKLOG",
+  "title": "Add top-level `permissions:` blocks to the 3 workflows flagged by actions/missing-workflow-permissions",
+  "verdict": "actionable",
+  "verdict_evidence": "grep -rLn '^permissions:' .github/workflows/*.yml returns exactly 3 files \u2014 nightly-burndown.yml, hard-burndown.yml, triage-poll.yml \u2014 matching the item's cited count of 3 actions/missing-workflow-permissions alerts exactly.",
+  "domain": "ci/scripts",
+  "exact_files": [
+   ".github/workflows/nightly-burndown.yml",
+   ".github/workflows/hard-burndown.yml",
+   ".github/workflows/triage-poll.yml"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "exactly 3 workflow files lack a top-level permissions block",
+    "grep_cmd": "grep -rLn '^permissions:' .github/workflows/*.yml",
+    "expect": "3 lines: nightly-burndown.yml, hard-burndown.yml, triage-poll.yml"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "an existing workflow's permissions block as a template",
+    "file": ".github/workflows/*.yml (any file WITH a permissions: block)",
+    "verify_grep": "grep -l '^permissions:' .github/workflows/*.yml | head -1"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Mechanical, 3 files, same fix pattern each time \u2014 add a minimal top-level permissions block scoped to what the workflow's steps actually need.",
+  "review_critical": false,
+  "goal": "For each of the 3 workflow files, read what GITHUB_TOKEN-consuming actions the workflow's jobs actually use (checkout, gh CLI calls, PR/issue comments, etc.), and add a top-level `permissions:` block granting only those scopes (e.g. `contents: read`, `issues: write`, `pull-requests: write` as actually needed) instead of the implicit default (often broader than necessary).",
+  "background": [
+   "This is the standard CodeQL/actions hardening rule: a workflow with no explicit permissions: block runs with the repository's default token permissions, which may be broader than the workflow needs."
+  ],
+  "steps": [
+   "1. Read .github/workflows/nightly-burndown.yml in full; list every `uses:`/`run: gh ...` step to determine what token scopes it needs.",
+   "2. Add a `permissions:` block at the top level of the workflow (alongside `on:`/`jobs:`), listing only the needed scopes explicitly (default everything else to none by omission, or add `contents: read` as a safe baseline if unsure).",
+   "3. Repeat for hard-burndown.yml and triage-poll.yml.",
+   "4. Re-run each workflow (or at minimum validate YAML syntax) to confirm the narrowed permissions don't break a step that needed a scope not initially spotted."
+  ],
+  "tests": [
+   "N/A \u2014 CI config change; validated by the workflow actually running successfully on its next trigger (or a manual workflow_dispatch test run if available)."
+  ],
+  "acceptance": [
+   "grep -rLn '^permissions:' .github/workflows/*.yml returns 0 lines (down from 3) after the change.",
+   "The next scheduled/triggered run of each of the 3 workflows completes without a permissions-denied error."
+  ],
+  "edge_cases": [
+   "If a workflow calls `gh pr comment` or similar, it needs `pull-requests: write`, not just `issues: write` \u2014 verify the exact gh subcommand used, since GitHub's permission model treats PR and issue comments as needing overlapping but not identical scopes."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "Cheapest, most mechanical part of the whole CodeQL backlog item \u2014 good haiku-tier task."
+ },
+ {
+  "todo_line": 2595,
+  "part": 7,
+  "src_id": "SEC-CODEQL-BACKLOG",
+  "title": "Assess the go/weak-sensitive-data-hashing finding on API token hashing",
+  "verdict": "needs_design",
+  "verdict_evidence": "internal/database/apikey_token.go:32-34 `HashAPIKeyToken` uses plain `sha256.Sum256([]byte(raw))` with no salt or work factor; whether this is a real finding or an accepted false positive depends on whether `raw` is a high-entropy random token (bcrypt/scrypt-style slow hashing is unnecessary and counterproductive for random tokens looked up by exact hash) or something with guessable structure \u2014 that classification is not stated anywhere in the code and is the actual decision needed.",
+  "domain": "internal/database",
+  "exact_files": [
+   "internal/database/apikey_token.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "HashAPIKeyToken uses unsalted SHA-256",
+    "grep_cmd": "sed -n '19,35p' internal/database/apikey_token.go",
+    "expect": "GenerateAPIKeyToken (L19) mints raw, HashAPIKeyToken (L32) does 'sha256.Sum256([]byte(raw))' with no salt/pepper"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Small code surface, but the fix-vs-accept call needs someone to confirm the entropy/generation properties of `raw` first \u2014 a wrong call either weakens real security or adds needless latency to every API-key auth check.",
+  "review_critical": true,
+  "goal": "Read GenerateAPIKeyToken (apikey_token.go:19) to confirm `raw` is generated from crypto/rand with sufficient entropy (not user-chosen, not low-entropy). If confirmed, this is very likely an accepted false positive for the reason CodeQL's rule doesn't model (SHA-256 is fine for a lookup-by-exact-hash of a high-entropy random token \u2014 it is not a password hash and doesn't need to be slow) \u2014 add `// lgtm[go/weak-sensitive-data-hashing]` with that reasoning cited. If raw's entropy or generation method turns out to be weaker than expected, this becomes a real fix (add a pepper/HMAC with a server-side secret) rather than a suppression.",
+  "background": [
+   "Alert #1466. Not yet assessed per the item's own framing \u2014 this is a first-pass classification, not a known-safe finding like the %T clear-text-logging or the uncontrolled-allocation-size items."
+  ],
+  "steps": [
+   "1. Read internal/database/apikey_token.go:19 GenerateAPIKeyToken in full to see the entropy source (expect crypto/rand or similar).",
+   "2. Read every call site of HashAPIKeyToken (grep -rn 'HashAPIKeyToken' internal/) to confirm it is always used for exact-match lookup, never as a password-equivalent needing offline-brute-force resistance.",
+   "3. Based on steps 1-2, either add the lgtm suppression with cited reasoning, or open this as a real fix (HMAC-SHA256 with a server secret, or similar) if raw's entropy is not what's assumed."
+  ],
+  "tests": [
+   "If fixed rather than suppressed: internal/database/apikey_token_test.go \u2014 assert the new hash function is still deterministic for lookup purposes and that a token generated via GenerateAPIKeyToken still authenticates correctly end-to-end."
+  ],
+  "acceptance": [
+   "Either an lgtm suppression with cited entropy-source evidence, or a passing test suite with the strengthened hash in place."
+  ],
+  "edge_cases": [
+   "If a pepper/HMAC secret is added, its rotation story (what happens to already-issued, already-hashed tokens if the secret changes) must be decided before shipping \u2014 do not add a secret-dependent hash without a migration plan for existing keys."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci (Go)",
+  "notes": "Listed among the 'highs worth reading before the log-injection sweep' since it is on an auth-relevant path, distinct from the 2 criticals and the zipslip/path-injection group."
+ },
+ {
+  "todo_line": 2595,
+  "part": 8,
+  "src_id": "SEC-CODEQL-BACKLOG",
+  "title": "Triage the remaining misc CodeQL alerts: JS findings, uncontrolled-allocation-size FP, and the drifted clear-text-logging FP",
+  "verdict": "actionable",
+  "verdict_evidence": "3x js/remote-property-injection, 2x js/trivial-conditional, 1x js/insecure-temporary-file, 1x go/uncontrolled-allocation-size, and 1x go/clear-text-logging remain from the 12-item breakdown; the uncontrolled-allocation-size finding's clamp code is confirmed present at internal/database/memdb_summaries.go:151-154 but carries no lgtm suppression yet, and the clear-text-logging finding's cited line (server.go:360, `fmt.Sprintf(\"%T\", s.Store())`) no longer exists at HEAD \u2014 grep found no `%T` + `Store()` combination anywhere in internal/server/server.go, so its exact current location needs re-locating before it can be re-assessed or re-suppressed.",
+  "domain": "internal/database",
+  "exact_files": [
+   "internal/database/memdb_summaries.go",
+   "internal/server/server.go",
+   "internal/server/server_lifecycle.go",
+   "internal/server/handlers/system/handler.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "uncontrolled-allocation-size is clamped (cap0 <= 4096)",
+    "grep_cmd": "grep -n 'cap0 > 4096' internal/database/memdb_summaries.go",
+    "expect": "1 hit at L151"
+   },
+   {
+    "claim": "no CodeQL suppression comment (lgtm/nosec/nolint) exists near the allocation",
+    "grep_cmd": "grep -n 'lgtm\\|nosec\\|nolint' internal/database/memdb_summaries.go",
+    "expect": "0 hits \u2014 no suppression comment anywhere in the file"
+   },
+   {
+    "claim": "the originally-cited clear-text-logging line no longer exists as described",
+    "grep_cmd": "grep -n '%T.*Store()\\|Sprintf(\\\"%T' internal/server/server.go",
+    "expect": "0 hits \u2014 the code has moved or been refactored since the alert was filed"
+   },
+   {
+    "claim": "the %T pattern does still exist elsewhere in the server package",
+    "grep_cmd": "grep -rn 'Sprintf(\\\"%T\\\"' internal/server/",
+    "expect": "hits in server_lifecycle.go:1178 and handlers/system/handler.go:553, neither is 's.Store()'"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "A grab-bag of small, mostly-independent findings; each is individually mechanical but re-locating the drifted clear-text-logging alert requires some detective work across the code-scanning API.",
+  "review_critical": false,
+  "goal": "(1) Add `// lgtm[go/uncontrolled-allocation-size]` above the `out := make([]BookSummary, 0, cap0)` line in internal/database/memdb_summaries.go (~line 154), citing the existing clamp logic at lines 80 and 151-152 as already-verified bounds. (2) Query the GitHub code-scanning API for alert on server.go's original go/clear-text-logging finding to get its current file:line (it has moved since the alert's line-151 snapshot); re-verify the %T-does-not-render-values reasoning still applies at its new location, then either re-affirm the suppression there or dismiss the stale alert in the UI if the flagged code was deleted entirely. (3) Pull the 3 js/remote-property-injection, 2 js/trivial-conditional, and 1 js/insecure-temporary-file alerts from the code-scanning API (their files were not named in the TODO item) and triage each individually \u2014 these are lower severity ('high'/'none') and were explicitly deprioritized behind the Go findings in the item's suggested order.",
+  "background": [
+   "The item explicitly separates 2 already-assessed false positives (server.go clear-text-logging, memdb_summaries.go uncontrolled-allocation-size) from everything else, \"so nobody re-derives it\" \u2014 but the clear-text-logging one has since drifted out of existence at its cited location, so the FP status needs re-anchoring, not re-deriving from scratch."
+  ],
+  "steps": [
+   "1. Add the memdb_summaries.go lgtm comment as described in goal (1) \u2014 this one is straightforward, no re-location needed.",
+   "2. Use `gh api /repos/<org>/<repo>/code-scanning/alerts/662` (or the correct alert number for the clear-text-logging finding) to get its current `most_recent_instance.location` file/line, which will show where CodeQL now sees the flagged pattern (if it still exists) or that the alert auto-closed (if the flagged code was deleted).",
+   "3. If the alert is still open at a new location, re-verify the %T-argument reasoning holds there (the dynamic-type-name-only argument does not depend on which function calls it) and add the lgtm comment there instead of at the stale server.go:360.",
+   "4. Pull the JS alert list via the code-scanning API filtered by rule (js/remote-property-injection, js/trivial-conditional, js/insecure-temporary-file) to get their actual files, since the TODO item didn't name them.",
+   "5. Triage each JS alert individually \u2014 read the flagged code, decide fix vs. suppress, same pattern as the Go findings in parts 1-4 of this todo_line."
+  ],
+  "tests": [
+   "N/A for lgtm-only suppressions.",
+   "For any JS finding that gets a real code fix: whatever test framework covers that file (Vitest for web/, or the relevant CI script's own test harness)."
+  ],
+  "acceptance": [
+   "grep -n 'lgtm\\[go/uncontrolled-allocation-size\\]' internal/database/memdb_summaries.go returns 1 hit.",
+   "The clear-text-logging alert (whatever its current alert number/location) is either re-suppressed at its real current location or confirmed auto-closed \u2014 not left silently stale at a line that no longer exists."
+  ],
+  "edge_cases": [
+   "If the code-scanning API shows the clear-text-logging alert already auto-closed (common when the flagged line is deleted by a refactor), no action is needed beyond confirming closure \u2014 do not manually add a suppression for code that no longer exists."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci (Go) for Go changes; npm --prefix web run lint && npm --prefix web test for any JS fix",
+  "notes": "Lowest priority sub-part of the CodeQL backlog per the item's own suggested order (criticals, then zipslip/path-injection, then log-injection sweep decision, then re-check the gate) \u2014 do this last."
+ },
+ {
+  "todo_line": 3156,
+  "src_id": null,
+  "title": "Make the book-detail page's Author field(s) link to a library view filtered by that author",
+  "verdict": "actionable",
+  "verdict_evidence": "Author is rendered as plain text today: web/src/components/bookdetail/BookDetailInfoTab.tsx builds `authorVal = book.authors.map(a => a.name).join(' & ')` (or book.author_name fallback) and renders it via `<Typography variant=\\\"body1\\\">{item.value}</Typography>` with no <a>/Link. The backend already supports the target: internal/server/handlers/audiobooks/handler.go:345 `authorID := httputil.ParseQueryIntPtr(c, \\\"author_id\\\")`. Neither web/src/pages/Library.tsx nor web/src/hooks/useLibraryQuery.ts currently read an author_id URL param at all (grep for it returns 0 hits in both files), so this needs new frontend wiring, not just a link.",
+  "domain": "web",
+  "exact_files": [
+   "web/src/components/bookdetail/BookDetailInfoTab.tsx",
+   "web/src/pages/Library.tsx",
+   "web/src/hooks/useLibraryQuery.ts"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "author is rendered as plain, non-linked text",
+    "grep_cmd": "sed -n '213,226p' web/src/components/bookdetail/BookDetailInfoTab.tsx",
+    "expect": "authorVal built from book.authors[].name, pushed into coreFields, rendered later via <Typography>{item.value}</Typography>"
+   },
+   {
+    "claim": "the backend already accepts author_id as a filter param",
+    "grep_cmd": "grep -n 'author_id' internal/server/handlers/audiobooks/handler.go",
+    "expect": "hit at L345: httputil.ParseQueryIntPtr(c, \\\"author_id\\\")"
+   },
+   {
+    "claim": "the frontend has no existing author_id URL-param handling",
+    "grep_cmd": "grep -n 'author_id' web/src/pages/Library.tsx web/src/hooks/useLibraryQuery.ts",
+    "expect": "0 hits in both files"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "authorID query-param parsing (backend, already exists)",
+    "file": "internal/server/handlers/audiobooks/handler.go",
+    "verify_grep": "grep -n 'ParseQueryIntPtr(c, \\\"author_id\\\")' internal/server/handlers/audiobooks/handler.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Requires both a new UI affordance (real <a href> per author, per the item's own notes) and new URL-param plumbing in useLibraryQuery.ts/Library.tsx that does not exist yet \u2014 more than a trivial link swap.",
+  "review_critical": false,
+  "goal": "In BookDetailInfoTab.tsx, replace the single joined author string with one real `<a href>` (React Router `<Link>`) per entry in book.authors[] (each carrying its own id, name, role, position \u2014 a multi-author book must link each contributor separately, not just the primary), targeting `/library?author_id=<id>` (or a hash-router equivalent matching this app's routing). Add author_id URL-param reading to Library.tsx/useLibraryQuery.ts so landing on that URL actually narrows the list \u2014 this param handling does not exist today and is new work, not reuse.",
+  "background": [
+   "The book payload already carries author_id plus an authors[] array with id, name, role, and position per the item's own text \u2014 confirmed present in BookDetailInfoTab.tsx's use of book.authors[].name.",
+   "The Library page's filter state currently narrows via the `filters` JSON param (buildFieldFilters in Library.tsx) for text fields like author/series/genre/language, and via dedicated int query params (author_id, series_id) that the BACKEND already parses but the FRONTEND never reads or sets.",
+   "The page also applies is_primary_version=true by default \u2014 an author link that inherits that default hides non-primary copies, which the item's own notes flag as worth being deliberate about rather than accidental."
+  ],
+  "steps": [
+   "1. In web/src/components/bookdetail/BookDetailInfoTab.tsx, find the coreFields array construction (~line 222-227) and change the Author entry from a single joined string to a list of {name, id} entries rendered as separate <Link> elements (import Link from 'react-router-dom', matching whatever router the rest of the app already uses \u2014 check web/src/App.tsx or an existing <Link> usage for the exact import/base-path convention).",
+   "2. Each author link's href should be `/library?author_id=${author.id}` \u2014 grep the existing route path for the library page (likely '/' or '/library') to get the exact base path right.",
+   "3. In web/src/hooks/useLibraryQuery.ts, add reading of `searchParams.get('author_id')` (mirroring how 'search'/'sort'/'tag' are already read in Library.tsx) and pass it through to the API call as the dedicated `author_id` query param (NOT via the filters= JSON mechanism, since that's a separate code path from the dedicated int param the backend already parses).",
+   "4. Confirm the is_primary_version=true default still applies unless the item's design intent is to show all versions when arriving via an author link \u2014 if undecided, keep the existing default (safer, matches current browsing behavior) and note the tradeoff in a code comment.",
+   "5. Verify with the running app (webapp-testing skill / Playwright) that clicking an author name on a multi-author book navigates to a library view showing only that author's books, and that a middle-click / open-in-new-tab works (real <a href>, no onClick-only handler)."
+  ],
+  "tests": [
+   "web/src/components/bookdetail/BookDetailInfoTab.test.tsx: assert each author renders as a real anchor with the correct href for a multi-author book fixture.",
+   "web/src/hooks/useLibraryQuery.test.ts: assert a URL with ?author_id=42 results in the API call including author_id=42.",
+   "Playwright E2E (test-e2e or webapp-testing skill): click an author link on a book detail page, land on Library, assert only that author's books are shown."
+  ],
+  "acceptance": [
+   "npm --prefix web run lint && npm --prefix web test passes.",
+   "A book fixture with 2+ authors renders 2+ separate <a> elements, not one joined string."
+  ],
+  "edge_cases": [
+   "A book with author_name set but no authors[] array (legacy data) must still render something sensible \u2014 either a plain-text fallback with no link, or a link using author_name as a text-match filter field instead of author_id.",
+   "Empty/unknown author (no authors[], no author_name) must render nothing linkable, not a link to author_id=undefined."
+  ],
+  "anti_over_suppression": "N/A \u2014 not a filter/guard task.",
+  "depends_on_lines": [],
+  "gate": "npm --prefix web run lint && npm --prefix web test (web)",
+  "notes": "Prefer real <a href> per the item's own notes (middle-clickable, shareable). Pairs naturally with todo_line 3161 (series link) since both need the same new URL-param plumbing in useLibraryQuery.ts \u2014 consider doing them in the same PR to avoid touching that hook twice.",
+  "review_notes": [
+   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+  ]
+ },
+ {
+  "todo_line": 3161,
+  "src_id": null,
+  "title": "Make the book-detail page's Series field link to a library view filtered by that series, landing at series_index",
+  "verdict": "actionable",
+  "verdict_evidence": "Series is rendered as plain text today: BookDetailInfoTab.tsx builds `value: book.series_name ? \\`${book.series_name}${book.series_position ? ...}\\` : ''` with no link. Backend already parses series_id as a dedicated int param (handler.go:346 `seriesID := httputil.ParseQueryIntPtr(c, \\\"series_id\\\")`), but neither Library.tsx nor useLibraryQuery.ts read it from the URL today (same gap as author_id, confirmed by the same grep).",
+  "domain": "web",
+  "exact_files": [
+   "web/src/components/bookdetail/BookDetailInfoTab.tsx",
+   "web/src/pages/Library.tsx",
+   "web/src/hooks/useLibraryQuery.ts"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "series is rendered as a plain formatted string, no link",
+    "grep_cmd": "sed -n '228,233p' web/src/components/bookdetail/BookDetailInfoTab.tsx",
+    "expect": "Series field value built as a template string, pushed into coreFields alongside Author"
+   },
+   {
+    "claim": "backend already parses series_id as a dedicated param",
+    "grep_cmd": "grep -n 'series_id' internal/server/handlers/audiobooks/handler.go",
+    "expect": "hit at L346: httputil.ParseQueryIntPtr(c, \\\"series_id\\\")"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "seriesID query-param parsing (backend, already exists)",
+    "file": "internal/server/handlers/audiobooks/handler.go",
+    "verify_grep": "grep -n 'ParseQueryIntPtr(c, \\\"series_id\\\")' internal/server/handlers/audiobooks/handler.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Same shape and same new-plumbing requirement as the author link task (todo_line 3156) \u2014 new URL-param handling in useLibraryQuery.ts/Library.tsx plus a real <a href>.",
+  "review_critical": false,
+  "goal": "Replace the plain-text Series field in BookDetailInfoTab.tsx with a real <a href> linking to `/library?series_id=<id>`, and add series_id URL-param reading to Library.tsx/useLibraryQuery.ts (new work, does not exist today). Per the item's own text, pair this with series_index (the item text says series_index, matching the frontend's series_position field) so the resulting library view can, if the Library page supports it, land on/scroll to the right position in the series \u2014 confirm whether the Library page has any existing 'scroll to' or 'sort by series_number then filter' capability before committing to that stretch goal; if not, the minimal correct scope is just the series_id filter link with series_position not wired to anything yet.",
+  "background": [
+   "series_id is on the payload and ?series_id= is supported by the backend per the item's own text; the frontend has no existing series_id URL-param handling, confirmed by the same grep as todo_line 3156's author_id check."
+  ],
+  "steps": [
+   "1. In BookDetailInfoTab.tsx, change the Series field to a <Link> (react-router-dom) wrapping the existing formatted 'series_name #position' string, hrefing to `/library?series_id=${book.series_id}`.",
+   "2. Add series_id URL-param reading to useLibraryQuery.ts, mirroring the author_id work from todo_line 3156 \u2014 implement both in the same hook change if doing both items together.",
+   "3. Decide (or ask) whether the resulting library view should additionally sort_by=series_number ascending when arriving via a series_id link, so series_position is visually meaningful even without a literal scroll-to. If yes, set sort=series_number&order=asc in the same URL alongside series_id.",
+   "4. Verify a multi-book series links correctly and the resulting filtered view is ordered sensibly."
+  ],
+  "tests": [
+   "web/src/components/bookdetail/BookDetailInfoTab.test.tsx: assert the Series field renders as an anchor with the correct href.",
+   "web/src/hooks/useLibraryQuery.test.ts: assert ?series_id=7 narrows the API call to series_id=7."
+  ],
+  "acceptance": [
+   "npm --prefix web run lint && npm --prefix web test passes."
+  ],
+  "edge_cases": [
+   "A standalone book with no series (series_name empty) must render nothing linkable.",
+   "series_id present but series_name empty (data inconsistency) should still link correctly using the id, not silently fail."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   3156
+  ],
+  "gate": "npm --prefix web run lint && npm --prefix web test (web)",
+  "notes": "Do in the same PR as todo_line 3156 if practical \u2014 both need the identical new author_id/series_id URL-param plumbing added to useLibraryQuery.ts, so splitting them risks touching the same hook twice with overlapping diffs.",
+  "review_notes": [
+   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+  ]
+ },
+ {
+  "todo_line": 3164,
+  "src_id": null,
+  "title": "Make Narrator, Publisher, Genre, and Release Year fields link to filtered library views (all four have real filters behind them)",
+  "verdict": "actionable",
+  "verdict_evidence": "All four are confirmed real, working filter fields in the field-filter matcher: internal/audiobooks/service_filtering.go has case statements for \\\"narrator\\\" (L440), \\\"genre\\\" (L446), \\\"publisher\\\" (L450), and \\\"year\\\" (L538, which combines print+release year), and all four names are present in allFilterFieldNames (L647-655) which is pinned to the matcher by TestFilterFieldNames_MatchTheMatcher \u2014 so, unlike version_group_id before its recent fix, none of these four is a silently-ignored filter.",
+  "domain": "web",
+  "exact_files": [
+   "web/src/components/bookdetail/BookDetailInfoTab.tsx",
+   "web/src/pages/Library.tsx"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "narrator, genre, publisher, year are all implemented filter fields",
+    "grep_cmd": "grep -n '\\\"narrator\\\":\\|case \\\"narrator\\\"\\|case \\\"genre\\\"\\|case \\\"publisher\\\"\\|case \\\"year\\\"' internal/audiobooks/service_filtering.go",
+    "expect": "multiple hits including case statements at ~L440, L446, L450, L538"
+   },
+   {
+    "claim": "all four names are in the canonical, matcher-pinned filter-field list",
+    "grep_cmd": "sed -n '647,656p' internal/audiobooks/service_filtering.go",
+    "expect": "allFilterFieldNames includes 'narrator', 'genre', 'publisher', 'year'"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "buildFieldFilters (existing pattern for author/series/genre/language text filters)",
+    "file": "web/src/pages/Library.tsx",
+    "verify_grep": "grep -n 'const buildFieldFilters' web/src/pages/Library.tsx"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Unlike author_id/series_id (dedicated int params needing new plumbing), these four go through the EXISTING filters=JSON field-filter mechanism (buildFieldFilters already handles author/series/genre/language as text filters) \u2014 narrower, more reuse-driven change.",
+  "review_critical": false,
+  "goal": "In BookDetailInfoTab.tsx, turn Narrator, Publisher, Genre, and Release Year into real <a href> links targeting `/library?filters=[{\\\"field\\\":\\\"narrator\\\",\\\"value\\\":\\\"<name>\\\",\\\"negated\\\":false}]` (URL-encoded JSON, same shape buildFieldFilters in Library.tsx already produces for the genre/language filters that exist today), one link per narrator if multiple (book.narrators[] array, same multi-value pattern as authors[]). Release Year should filter on the 'year' field using book.audiobook_release_year (the field that most directly means 'released in Y').",
+  "background": [
+   "genre and language already have an existing UI-driven filters= path via Library.tsx's buildFieldFilters (filters.genre, filters.language) \u2014 this task reuses that exact mechanism/shape rather than inventing a new URL scheme.",
+   "narrator and publisher are new to the UI's filter state (buildFieldFilters currently only builds author/series/genre/language) but the backend field-filter matcher already supports them, so no backend work is needed."
+  ],
+  "steps": [
+   "1. In BookDetailInfoTab.tsx, for Narrator: build one <Link> per entry in book.narrators[] (mirroring the multi-author pattern from todo_line 3156), hrefing to a URL-encoded `filters=[{\\\"field\\\":\\\"narrator\\\",\\\"value\\\":\\\"<name>\\\",\\\"negated\\\":false}]`.",
+   "2. For Publisher: single <Link> (publisher is not a multi-value field on the book payload) with the same filters=JSON shape, field='publisher'.",
+   "3. For Genre: single <Link>, field='genre', reusing the exact filter shape Library.tsx's buildFieldFilters already produces for filters.genre (read that code first to match value-formatting/casing conventions exactly).",
+   "4. For Release Year: <Link> with field='year', value=String(book.audiobook_release_year) \u2014 confirm via the 'year' case in service_filtering.go (L538) that a bare year string substring-matches correctly against both print and release year before committing to this value format.",
+   "5. Verify Library.tsx correctly parses an incoming ?filters=... URL param on page load for a field it did not itself generate (narrator/publisher are new) \u2014 Library.tsx must already read an incoming filters= param generically (check how it currently seeds filter UI state from the URL) since this is how tag/genre links would already need to round-trip; confirm rather than assume."
+  ],
+  "tests": [
+   "web/src/components/bookdetail/BookDetailInfoTab.test.tsx: one assertion per field (narrator, publisher, genre, release year) that the rendered link's filters= param decodes to the expected {field, value} object.",
+   "web/src/pages/Library.test.tsx (or nearest existing test): assert landing on a URL with a narrator/publisher filters= param correctly narrows the displayed list."
+  ],
+  "acceptance": [
+   "npm --prefix web run lint && npm --prefix web test passes.",
+   "Each of the 4 fields renders as a real anchor, not an onClick-only element."
+  ],
+  "edge_cases": [
+   "A book with no narrator, publisher, or genre must render plain text, not a link to an empty-value filter (an empty-value filter is explicitly rejected server-side per commit 27f386b2 'reject empty filter values instead of matching every book' \u2014 a link that produced one would 400).",
+   "Multiple narrators must each link separately, same reasoning as multiple authors."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "npm --prefix web run lint && npm --prefix web test (web)",
+  "notes": "The item's own caution \u2014 'check each has a real filter behind it before making it a link' \u2014 is satisfied by the verified_anchors above: all four are real, unlike version_group_id was before its recent fix (see todo_line 3168/3356). library_state and tags were named by the item as 'good candidates' with existing filter support but are not book-detail-page fields in scope here.",
+  "review_notes": [
+   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+  ]
+ },
+ {
+  "todo_line": 3168,
+  "src_id": null,
+  "title": "Link version_group_id to a filtered library view (now unblocked \u2014 the filter works as of commit b0ebccb0)",
+  "verdict": "actionable",
+  "verdict_evidence": "The item's own blocking condition ('do not link until the filter works') is now satisfied: commit b0ebccb0 'feat(audiobooks): promote version_group_id to a filter field' added version_group_id to allFilterFieldNames (internal/audiobooks/service_filtering.go:654) and a matching case in bookFieldValue (L529 'case \\\"version_group_id\\\": bookValue = derefStr(book.VersionGroupID)'), verified merged to HEAD (git merge-base --is-ancestor b0ebccb0 8f6d0d99 succeeds) and covered by TestVersionGroupIDFilter_MatchesMembersOnly, which pins member/other/ungrouped semantics including 'a nil VersionGroupID must not match any group filter'.",
+  "domain": "web",
+  "exact_files": [
+   "web/src/components/bookdetail/BookDetailVersionGroup.tsx",
+   "web/src/pages/Library.tsx"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "version_group_id is now a real filter field",
+    "grep_cmd": "grep -n '\\\"version_group_id\\\"' internal/audiobooks/service_filtering.go",
+    "expect": "hits at L529 (matcher case) and L654 (allFilterFieldNames)"
+   },
+   {
+    "claim": "the fix commit is merged to the HEAD this scout ran against",
+    "grep_cmd": "git merge-base --is-ancestor b0ebccb0 8f6d0d99 && echo ancestor",
+    "expect": "'ancestor' printed"
+   },
+   {
+    "claim": "a conformance test pins the fixed semantics, including the nil-group edge case",
+    "grep_cmd": "grep -n 'TestVersionGroupIDFilter_MatchesMembersOnly' internal/audiobooks/filter_field_conformance_test.go",
+    "expect": "1 hit, with a nested assertion 'a nil VersionGroupID must not match any group filter'"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "BookDetailHeader.tsx (existing component that already reads book.version_group_id \u2014 BookDetailVersionGroup.tsx, by contrast, only receives a pre-grouped Book[] and never references the field name directly)",
+    "file": "web/src/components/bookdetail/BookDetailHeader.tsx",
+    "verify_grep": "grep -n 'version_group_id\\|VersionGroupID' web/src/components/bookdetail/BookDetailHeader.tsx"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Small, well-scoped link addition now that the backend filter is confirmed working; the main remaining work is confirming BookDetailVersionGroup.tsx already surfaces enough of the group's other members that a link is additive rather than a full new UI section.",
+  "review_critical": false,
+  "goal": "Add an '(other versions of this book)' link on the book detail page's version-group section, targeting `/library?filters=[{\\\"field\\\":\\\"version_group_id\\\",\\\"value\\\":\\\"<vg-id>\\\",\\\"negated\\\":false}]`, using the same filters=JSON mechanism as the narrator/publisher/genre links in todo_line 3164 (version_group_id is a plain field-filter, not a dedicated int param like author_id/series_id).",
+  "background": [
+   "This was explicitly blocked in the source TODO pending the filter working \u2014 the same silent-ignore bug is tracked at todo_line 3356 in this same document set, and dedicated evidence (commit b0ebccb0, 2026-08-14) shows it was fixed the day after these TODO items were filed (2026-08-13).",
+   "Per the fix commit's own message: 'nil VersionGroupID matches nothing' \u2014 a standalone book (no version group) must not render this link at all, matching the conformance test's explicit ungrouped-book assertion."
+  ],
+  "steps": [
+   "1. Read web/src/components/bookdetail/BookDetailVersionGroup.tsx to see what it already renders for a book that has a version_group_id (it likely already lists sibling versions inline).",
+   "2. Add a <Link> (react-router-dom) near that section, visible only when book.version_group_id is non-empty, targeting the URL-encoded filters=JSON shown in 'goal'.",
+   "3. Confirm the is_primary_version=true default filter does NOT suppress non-primary siblings on this specific link's target view \u2014 since the whole point is to see 'other versions', consider explicitly appending &is_primary_version=false or omitting the default in this one link's URL if the Library page's default would otherwise hide exactly the books this link exists to show. Check how Library.tsx applies its default before deciding.",
+   "4. Verify against a real multi-member version group in dev/test data that the link surfaces the sibling books."
+  ],
+  "tests": [
+   "web/src/components/bookdetail/BookDetailVersionGroup.test.tsx: assert the link is absent for a book with no version_group_id, and present with the correct filters= value for one that has it.",
+   "Reuse TestVersionGroupIDFilter_MatchesMembersOnly's fixture shape (member/other/ungrouped) as the model for what the E2E test data should look like."
+  ],
+  "acceptance": [
+   "npm --prefix web run lint && npm --prefix web test passes.",
+   "grep -n 'version_group_id' web/src/components/bookdetail/BookDetailVersionGroup.tsx returns >0 hits after the change."
+  ],
+  "edge_cases": [
+   "Per the fix's own test, a nil/empty version_group_id must not render a link at all \u2014 do not link to filters=[{field:version_group_id,value:\\\"\\\"}], which would 400 per the existing empty-filter-value rejection (commit 27f386b2)."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   3356
+  ],
+  "gate": "npm --prefix web run lint && npm --prefix web test (web)",
+  "notes": "This item's own blocking condition is resolved \u2014 cross-reference todo_line 3356 in this same scope, which is separately marked stale_done for the exact fix that unblocks this one. Downgrade any earlier assumption that this stays 'parked'.",
+  "review_notes": [
+   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+  ]
+ },
+ {
+  "todo_line": 3340,
+  "src_id": null,
+  "title": "(evidence only) Corrected count: 765 books wrongly hidden by the primary-version filter, not 6,157",
+  "verdict": "not_a_task",
+  "verdict_evidence": "This is a corrected census statement (765 = 724 no-primary-group + 41 ungrouped-but-hidden), not an imperative. The 724-book component is fully explained and already fixed: commit dd0cf645 ('fix(itunes): elect the sole member of a new version group as its primary', 2026-08-13, verified ancestor of HEAD 8f6d0d99) found '479 groups holding 724 books in this state' \u2014 the exact same 724 figure \u2014 root-caused it to the iTunes importer minting a fresh version group without electing a primary, fixed the importer, and shipped ElectMissingPrimaries as a repair for already-affected rows (wired at POST /operations/elect-missing-primaries, internal/server/server_lifecycle.go:1532).",
+  "domain": "internal/reconcile",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "724 in this item matches dd0cf645's own census exactly",
+    "grep_cmd": "git show -s --format=%B dd0cf6450a47492598c629331bba356ff8ffe242 | grep -n '724 books'",
+    "expect": "'A per-group census of all 63,870 books found 479 groups holding 724 books in this state'"
+   },
+   {
+    "claim": "dd0cf645 is merged to the HEAD this scout ran against",
+    "grep_cmd": "git merge-base --is-ancestor dd0cf6450a47492598c629331bba356ff8ffe242 8f6d0d99 && echo ancestor",
+    "expect": "'ancestor' printed"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "N/A \u2014 no code task; classification only.",
+  "review_critical": false,
+  "goal": "No code deliverable. This entry exists in the TODO only as corrected-measurement context for todo_line 3344 (finding the writer \u2014 now answered, see that item's stale_done verdict) and todo_line 3391 (the repair \u2014 now a prod_run, see that item). The remaining unexplained 41-book component is tracked separately at todo_line 3354.",
+  "background": [
+   "1.20% (765/63,870) vs. the earlier overstated 9.6% (6,157) figure.",
+   "22,266 other unreachable books are legitimately collapsed duplicates whose group DOES elect a primary \u2014 explicitly correct behavior, not a bug."
+  ],
+  "steps": [],
+  "tests": [],
+  "acceptance": [
+   "N/A"
+  ],
+  "edge_cases": [],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   3344,
+   3354,
+   3391
+  ],
+  "gate": "n/a (docs)",
+  "notes": "Do not build anything against this line directly \u2014 the 724-book component's writer-fix and repair-op already exist (see todo_line 3344 stale_done and todo_line 3391 prod_run). Only the 41-book remainder (todo_line 3354) is still open."
+ },
+ {
+  "todo_line": 3344,
+  "src_id": null,
+  "title": "(already found and fixed) The writer creating vg- groups without a primary was the iTunes importer",
+  "verdict": "stale_done",
+  "verdict_evidence": "Commit dd0cf645 (2026-08-13, ancestor of HEAD 8f6d0d99) identifies and fixes exactly this: 'The importer minted a fresh, unique version group for each newly-created book and then marked that book non-primary. Because the group was brand new the book was its only member, so the group elected no primary at all.' Its own census (479 groups / 724 books, created 2026-04-04 to 2026-07-19) matches this item's cited '472 of 7,154 vg- groups have no primary' within measurement-timing tolerance (both from the same root cause, counted at slightly different moments/methodologies). The importer line was fixed (internal/itunes/service/importer.go) with a regression test (importer_primary_version_test.go) verified capable of failing on revert.",
+  "domain": "internal/itunes",
+  "exact_files": [
+   "internal/itunes/service/importer.go",
+   "internal/itunes/service/importer_primary_version_test.go",
+   "internal/reconcile/elect_primaries.go",
+   "internal/reconcile/elect_primaries_test.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the fix commit's own root-cause description matches this item's ask exactly",
+    "grep_cmd": "git show -s --format=%B dd0cf6450a47492598c629331bba356ff8ffe242",
+    "expect": "full message describing the itunes importer minting a fresh vg group per new book and marking it non-primary"
+   },
+   {
+    "claim": "the fix touches the importer and ships a regression test",
+    "grep_cmd": "git show --stat dd0cf6450a47492598c629331bba356ff8ffe242",
+    "expect": "internal/itunes/service/importer.go (14 changed lines) and internal/itunes/service/importer_primary_version_test.go (90 new lines) both listed"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "ElectMissingPrimaries (repair for already-affected rows)",
+    "file": "internal/reconcile/elect_primaries.go",
+    "verify_grep": "grep -n 'func ElectMissingPrimaries' internal/reconcile/elect_primaries.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "N/A \u2014 verification only, not new work.",
+  "review_critical": false,
+  "goal": "No new fix needed for the itunes writer \u2014 already shipped. Remaining follow-up (optional, not required by this item's original text): confirm whether any OTHER writer besides the iTunes importer also creates a vg- group without electing a primary, since the item's 472-groups figure and dd0cf645's 479-groups figure are close but not identical, which could mean either (a) pure measurement-timing drift from the same single root cause, or (b) a second, smaller contributing writer. If pursued, grep other VersionGroupID-assigning writers (internal/merge/service.go, internal/dedup/engine.go, internal/scanner/scanner.go, internal/organizer/service.go \u2014 see verified_anchors' sibling grep) for the same 'new group, one member, not marked primary' shape.",
+  "background": [
+   "A per-group census of all 63,870 books in dd0cf645 found 479 groups / 724 books in this exact state, created 2026-04-04 to 2026-07-19 \u2014 squarely inside the iTunes-import era this codebase has, matching the item's framing that this is a 'writer' bug, singular."
+  ],
+  "steps": [
+   "If verifying no second writer exists: for each file in ['internal/merge/service.go','internal/dedup/engine.go','internal/scanner/scanner.go','internal/organizer/service.go','internal/plugins/maintenance/regroup_apply.go'], grep for 'VersionGroupID =' or 'VersionGroupID:' assignments and check whether each such assignment also sets IsPrimaryVersion for the (possibly sole) member at the same time, the way the fixed itunes importer now does."
+  ],
+  "tests": [
+   "Already shipped: internal/itunes/service/importer_primary_version_test.go and internal/reconcile/elect_primaries_test.go (364 lines), both verified capable of failing (revert-tested per the commit message)."
+  ],
+  "acceptance": [
+   "git log --oneline -1 -- internal/itunes/service/importer.go shows dd0cf645 or later touched the primary-election line.",
+   "internal/itunes/service/importer_primary_version_test.go exists and passes under `make test`."
+  ],
+  "edge_cases": [
+   "N/A \u2014 see optional follow-up in goal for the one remaining open question (single vs. multiple writers)."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci (Go)",
+  "notes": "Cross-reference todo_line 3340 (evidence) and todo_line 3391 (the repair-op prod_run) \u2014 all three items in this TODO document describe facets of the same already-largely-resolved bug."
+ },
+ {
+  "todo_line": 3348,
+  "src_id": null,
+  "title": "Fix the 3-way disagreement in how a nil IsPrimaryVersion is treated (matcher vs. pushdown vs. serialized field)",
+  "verdict": "actionable",
+  "verdict_evidence": "[correctness.json] REVIEW LAUNDERING: this judge's own finding text was ingested by the 19:43 regeneration and used as the verdict_evidence for a stale_done verdict on the very items it was reporting as broken. Finding #1 of the 19:26 pass said the nil-IsPrimaryVersion fix was briefed TWICE (L3348 and L3884) and that ONE of the two should be dropped. In the 19:43 cut BOTH todo_lines were moved out of tasks[] into buckets.stale_done \u2014 i.e. 'already done, check the box' \u2014 and both entries' verdict_evidence now literally opens with '[correctness.json] The same fix is briefed twice under two different todo_lines...'. A duplicate-work report was converted into a done verdict for both copies. The code is unchanged at HEAD: internal/audiobooks/service_query.go:346 and :531 still read `bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion`, and service_filtering.go:737 still passes the raw nullable straight to the DTO. The stale_done entries even retain the original anchors that PROVE the item is live ('2 hits, at L346 and L532'), so each entry now asserts done and not-done simultaneously. Two wave-1 tasks in the same cut (TASK-002 L3354, TASK-003 L3889) declare depends_on_lines [3348] \u2014 they are gated on an item the package just checked off without fixing. | Three different code paths compute 'is this book primary' with OPPOSITE nil semantics: internal/audiobooks/service_filtering.go:864 `eff := s.IsPrimaryVersion == nil || *s.IsPrimaryVersion` treats nil as PRIMARY (true); internal/audiobooks/service_query.go:346 and :532 both compute `bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion`, treating nil as NOT PRIMARY (false); and service_filtering.go:737 `IsPrimaryVersion: summary.IsPrimaryVersion` passes the raw nullable field straight to the API DTO with no 'effective' normalization at all \u2014 so the serialized field can read null/false for a book the filter (via the nil-is-true path) still returns as primary.",
+  "domain": "internal/audiobooks",
+  "exact_files": [
+   "internal/audiobooks/service_filtering.go",
+   "internal/audiobooks/service_query.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the post-filter path treats nil as primary (true)",
+    "grep_cmd": "sed -n '862,866p' internal/audiobooks/service_filtering.go",
+    "expect": "'eff := s.IsPrimaryVersion == nil || *s.IsPrimaryVersion'"
+   },
+   {
+    "claim": "the pushdown/memdb path treats nil as NOT primary (false), twice",
+    "grep_cmd": "grep -n 'bPrimary := b.IsPrimaryVersion != nil && \\*b.IsPrimaryVersion' internal/audiobooks/service_query.go",
+    "expect": "2 hits, at L346 and L532"
+   },
+   {
+    "claim": "the serialized DTO field is a raw passthrough of the nullable field, not the effective value",
+    "grep_cmd": "sed -n '735,739p' internal/audiobooks/service_filtering.go",
+    "expect": "'IsPrimaryVersion: summary.IsPrimaryVersion,' \u2014 direct assignment, no nil-coalescing"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Root cause is fully located (3 exact call sites); the fix is a mechanical unification of nil semantics, but on a prod-data-adjacent listing/filtering path that needs careful regression testing across both the memdb-pushdown and post-filter query strategies.",
+  "review_critical": true,
+  "goal": "Pick ONE canonical rule for what a nil IsPrimaryVersion means (recommend: nil counts as primary/true, matching the existing memdb_summaries.go GetBookSummaries sort-path behavior and the majority of the codebase's existing 'historical Pebble fallback semantics' comment), then make all three sites agree: service_query.go:346 and :532 change from `!= nil && *...` to `== nil || *...`; and the DTO serialization at service_filtering.go:737 stops passing the raw nullable field and instead serializes the SAME effective boolean the filter used, so a client reading is_primary_version from the JSON body agrees with what the is_primary_version=true filter actually returned.",
+  "background": [
+   "Production measured two independently-computed 'primary book' counts disagreeing (40,839 vs 35,108) \u2014 this 3-way nil-semantics split is the stated reason why.",
+   "5,731 books have no version_group_id and are returned by ?is_primary_version=true (via the nil-is-true path) while their own serialized field reads false \u2014 nothing is hidden by this specific defect, but any client trusting the field over the filter will disagree with the server for those 5,731 books.",
+   "Referenced in project memory as project_is_primary_version_nil_divergence.md: 'STILL LIVE; #2449 masks it' \u2014 this scout's own code reading independently reproduces and locates the exact 3 divergent call sites."
+  ],
+  "steps": [
+   "1. In internal/audiobooks/service_query.go, change line 346's `bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion` to `bPrimary := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion`.",
+   "2. Apply the identical change at service_query.go:532.",
+   "3. In internal/audiobooks/service_filtering.go, find where the DTO's IsPrimaryVersion field is populated (line 737, `IsPrimaryVersion: summary.IsPrimaryVersion`) and change it to compute and serialize the effective boolean, e.g. `effPrimary := summary.IsPrimaryVersion == nil || *summary.IsPrimaryVersion; ... IsPrimaryVersion: &effPrimary,` \u2014 keep the field type as *bool (nullable) but never let it BE nil in the output once this normalization is applied, since the whole point is 'no more nil in the wire format that disagrees with the filter'.",
+   "4. Search for any OTHER `IsPrimaryVersion != nil` or `IsPrimaryVersion == nil` comparison in internal/audiobooks and internal/database (grep -rn 'IsPrimaryVersion' internal/audiobooks internal/database | grep -v _test) to confirm no fourth divergent site was missed.",
+   "5. Update memdb_summaries.go's existing nil-is-primary comment (the one describing 'historical Pebble fallback semantics') if it references the specific line numbers changed in steps 1-2, since this fix makes that comment's semantics the codebase-wide rule rather than a special case."
+  ],
+  "tests": [
+   "internal/audiobooks/service_query_test.go: a book with IsPrimaryVersion=nil must now be INCLUDED by an is_primary_version=true filter through the pushdown path (previously excluded) \u2014 assert this directly, since it's a behavior change, not just a refactor.",
+   "internal/server/handlers/audiobooks/*_test.go: assert a book response's serialized is_primary_version field is never null and always agrees with whether that book was included under an is_primary_version=true request.",
+   "Anti-over-suppression: a book with an explicit IsPrimaryVersion=false must still be correctly EXCLUDED by is_primary_version=true in both the pushdown and post-filter paths \u2014 this fix must not accidentally make every book 'primary'."
+  ],
+  "acceptance": [
+   "[ ] `go test ./internal/audiobooks/...` passes including the new cache/nil-semantics tests.",
+   "[ ] `go test ./internal/audiobooks/... -run TestIsPrimaryVersion_NilAgreesAcrossFilterAndSerialization -v` exits 0 (new test: book with IsPrimaryVersion=nil and no version_group_id is included by is_primary_version=true AND its serialized field reads true).",
+   "[ ] Anti-over-suppression test: `service_query_test.go case: IsPrimaryVersion=false explicitly is still excluded by is_primary_version=true.` \u2014 a known-good input still passes with the new guard active.",
+   "[ ] Edge cases above hold.",
+   "[ ] Gate green: `make ci (Go)` exits 0; `go vet`/lint clean.",
+   "[ ] File headers bumped on every changed file.",
+   "[ ] Changelog fragment present: `test -f changelog.d/20260821_audiobooks_002.md`."
+  ],
+  "edge_cases": [
+   "Changing service_query.go's pushdown semantics (nil now = primary) changes which books an is_primary_version=true request returns \u2014 this is a real behavior change for however many currently-nil-and-therefore-excluded books exist via the pushdown path specifically; measure the delta before shipping, since it may need its own changelog note distinct from the 'field now agrees with filter' framing.",
+   "Once the DTO always emits a concrete true/false, any frontend code checking `book.is_primary_version === null` or `=== undefined` as a signal will stop seeing that state \u2014 grep web/src for such checks before shipping."
+  ],
+  "anti_over_suppression": "service_query_test.go case: IsPrimaryVersion=false explicitly is still excluded by is_primary_version=true.",
+  "depends_on_lines": [],
+  "gate": "make ci (Go)",
+  "notes": "Flagged in project memory as STILL LIVE and masked by #2449 \u2014 this scout's grep-verified 3-site root cause should let a fix proceed without further investigation.",
+  "review_notes": [
+   "[verify-3.json] Acceptance checkbox #2 ('A production-shaped fixture reproducing the 5,731-book case ... shows agreement between the filter result and the serialized field after the fix') names no test function, grep, or command \u2014 unlike checkbox #3 (anti-over-suppression), which names the exact test. A cold model ",
+   "[verify-3.json] Direct contradiction between two sections on how to interpret a zero-hit grep on the SAME command. Background/Re-verify section: 'a zero-hit grep means STOP and report' for `grep -n 'bPrimary := b.IsPrimaryVersion != nil && \\*b.IsPrimaryVersion' internal/audiobooks/service_query.go`. Idempotency sec",
+   "[correctness.json] REVIEW LAUNDERING: this judge's own finding text was ingested by the 19:43 regeneration and used as the verdict_evidence for a stale_done verdict on the very items it was reporting as broken. Finding #1 of the 19:26 pass said the nil-IsPrimaryVersion fix was briefed TWICE (L3348 and L3884) and that ",
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+  ]
+ },
+ {
+  "todo_line": 3356,
+  "src_id": null,
+  "title": "(already fixed) version_group_id filter is no longer silently ignored",
+  "verdict": "stale_done",
+  "verdict_evidence": "Commit b0ebccb0 'feat(audiobooks): promote version_group_id to a filter field' (2026-08-14, one day after this item was filed, verified ancestor of HEAD 8f6d0d99 via git merge-base --is-ancestor) added version_group_id to allFilterFieldNames (service_filtering.go:654) and a matching bookFieldValue case (service_filtering.go:529), with the commit's own message stating the production symptom this item describes verbatim: 'Production measured ?version_group_id=X returning all 63,869 books \u2014 the name was not a filter field, so the param was silently ignored'. TestVersionGroupIDFilter_MatchesMembersOnly (filter_field_conformance_test.go:140) pins the fixed behavior including the nil-group edge case.",
+  "domain": "internal/audiobooks",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "version_group_id is now in the canonical filter-field list",
+    "grep_cmd": "grep -n '\"version_group_id\"' internal/audiobooks/service_filtering.go",
+    "expect": "hits at L529 and L654"
+   },
+   {
+    "claim": "the fix commit is ancestor of the HEAD this scout ran against",
+    "grep_cmd": "git merge-base --is-ancestor b0ebccb0df0af717f8db4847f01d616b5acd72da 8f6d0d99 && echo ancestor",
+    "expect": "'ancestor' printed"
+   },
+   {
+    "claim": "a dedicated conformance test pins the fixed matcher semantics",
+    "grep_cmd": "grep -n 'func TestVersionGroupIDFilter_MatchesMembersOnly' internal/audiobooks/filter_field_conformance_test.go",
+    "expect": "1 hit"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "N/A \u2014 verification only.",
+  "review_critical": false,
+  "goal": "No fix needed \u2014 already shipped and tested. Note for the coordinator: the bare `?version_group_id=X` query-param form still returns a 400 (via the existing bare-filter-param guard, since version_group_id is now a KnownFilterField and not in the guard's allow-list) rather than silently ignoring the param \u2014 this is CORRECT per the guard's own design (same class of protection as the ab04824e fix), not a remaining defect. The correct client usage is `?filters=[{\"field\":\"version_group_id\",\"value\":\"<id>\"}]`.",
+  "background": [
+   "This is the same silent-filter family as the bare query-parameter rejection in ab04824e, per the item's own text \u2014 that earlier fix (ab04824e) plus its later generalization (45bb4ba7, which explicitly called out 'NOT fixed here: ?version_group_id= still lists everything... Filed in todo.d with both options') together set up exactly the fix that landed the next day in b0ebccb0."
+  ],
+  "steps": [],
+  "tests": [
+   "Already shipped: TestVersionGroupIDFilter_MatchesMembersOnly (member/other/ungrouped semantics) plus mutation-testing verification per the fix commit's own message ('removing the matcher case fails BOTH tests')."
+  ],
+  "acceptance": [
+   "grep -n 'version_group_id' internal/audiobooks/service_filtering.go returns hits in both allFilterFieldNames and the bookFieldValue switch."
+  ],
+  "edge_cases": [
+   "N/A \u2014 see goal for the one behavioral nuance (bare-param now 400s rather than silently ignoring, which is correct)."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci (Go)",
+  "notes": "This fix directly unblocks todo_line 3168 (the 'link version_group_id to a filtered view' UI task, which was explicitly parked pending this exact fix) \u2014 that item's verdict has been updated to actionable accordingly."
+ },
+ {
+  "todo_line": 3362,
+  "src_id": null,
+  "title": "Decide whether to force a search-index rebuild on prod now, or let it happen on next natural restart",
+  "verdict": "prod_run",
+  "verdict_evidence": "The item's own text is an owner call, not a code task: 'the boot-time coverage check repairs the gap on the next restart... Owner call: let it happen on the next natural restart, or schedule it.' The repair mechanism (reconcileSearchIndexCoverage) already exists and runs automatically on every boot \u2014 internal/server/search_coverage.go:74, confirmed present and set-comparison-based (not the older count comparison) at HEAD.",
+  "domain": "internal/server/search_coverage.go",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the boot-time coverage repair already exists and is a no-op on a healthy index",
+    "grep_cmd": "sed -n '60,63p' internal/server/search_coverage.go",
+    "expect": "'It is a no-op on a healthy index, so it is safe to run on every boot.'"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "reconcileSearchIndexCoverage (already runs on every boot)",
+    "file": "internal/server/search_coverage.go",
+    "verify_grep": "grep -n 'func (s \\*Server) reconcileSearchIndexCoverage' internal/server/search_coverage.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "opus",
+  "why_tier": "N/A for a prod_run \u2014 the operational decision (restart now vs. wait) needs the owner's judgment about acceptable service disruption, not engineering effort.",
+  "review_critical": true,
+  "goal": "No code to write. Record the owner's decision (restart now to force the ~40K-book reconciliation sweep immediately, or defer to the next natural restart) in docs/operations/pending-prod-actions.md per the standing owner instruction that every prod run goes there and is never auto-run.",
+  "background": [
+   "Measured gap 2026-08-13: books created 2026-08 were 2% searchable (1/50 sample), 2026-04 were 97% (38/39) \u2014 a step-function loss matching a cancelled-mid-sweep backfill, not random sampling loss, per search_coverage.go's own header comment.",
+   "The reconciler drains marked-dirty books at ~5,000/tick on a 30s ticker \u2014 a ~40K-book backlog is a multi-tick, multi-minute background operation on a live server, not instantaneous."
+  ],
+  "steps": [
+   "1. Add an entry to docs/operations/pending-prod-actions.md describing the pending restart-triggered coverage sweep, its expected scope (~40K books per the item's own figure), its ticker rate (5,000/tick, 30s ticks), and ask for an explicit go/no-go plus timing.",
+   "2. Do not restart the production server as part of this task \u2014 restarting is the prod action itself and requires separate, explicit owner approval per the standing 'never auto-run' rule."
+  ],
+  "tests": [
+   "N/A \u2014 operational decision."
+  ],
+  "acceptance": [
+   "docs/operations/pending-prod-actions.md contains an entry for this decision with a timestamp and the two options stated."
+  ],
+  "edge_cases": [
+   "A running scan clobbers applied metadata per the standing project rule \u2014 confirm no organize/dedup scan is in flight before any restart is scheduled, regardless of which option the owner picks."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "notes": "The repair CODE already exists and needs no further engineering \u2014 this is purely a scheduling/timing decision for production."
+ },
+ {
+  "todo_line": 3369,
+  "src_id": null,
+  "title": "Surface to the user when 'all'/'and' (or any stopword) is silently dropped from a search query",
+  "verdict": "actionable",
+  "verdict_evidence": "dropStopwordOnlyConjuncts (internal/search/bleve_translator.go:166, called from L89) drops free-text conjuncts that analyze to nothing (stopwords like 'all'/'and'), and this is confirmed still the current, unchanged behavior at HEAD \u2014 no user-facing surfacing mechanism exists anywhere (grep for 'dropped'/'stopword'/'ignored'/'discard' across handler and web code returns nothing), unlike the related quoted-phrase bug at todo_line 3377 which HAS already been fixed.",
+  "domain": "internal/search",
+  "exact_files": [
+   "internal/search/bleve_translator.go",
+   "internal/server/handlers/search.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the stopword-dropping function exists and behaves as described",
+    "grep_cmd": "grep -n 'func dropStopwordOnlyConjuncts' internal/search/bleve_translator.go",
+    "expect": "1 hit, with the function called at L89 from the conjunct-building path"
+   },
+   {
+    "claim": "nothing surfaces the drop to the user today",
+    "grep_cmd": "grep -rn 'stopword\\|dropped' internal/server/handlers/*.go web/src/pages/Library.tsx 2>/dev/null | grep -i 'ignored\\|discard\\|stopword'",
+    "expect": "0 hits"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "dropStopwordOnlyConjuncts",
+    "file": "internal/search/bleve_translator.go",
+    "verify_grep": "grep -n 'func dropStopwordOnlyConjuncts' internal/search/bleve_translator.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Requires threading a new signal (which terms were dropped) from the translator through the search handler response and into the UI \u2014 a small new data channel, not just a logic tweak.",
+  "review_critical": false,
+  "goal": "Change dropStopwordOnlyConjuncts (or its caller at bleve_translator.go:89) to also return the list of dropped term strings, thread that list through to the search response DTO as e.g. `dropped_terms: [\"all\", \"and\"]`, and have the Library search UI show a small inline note ('some common words were ignored in your search: all, and') when the list is non-empty. Do NOT change the dropping behavior itself \u2014 it exists specifically to fix the 'shards of oblivion' all-stopword-query bug and must keep working exactly as-is for that case.",
+  "background": [
+   "Measured via TestReproAllJobsAndClasses: 'All Jobs and Classes' searches only 'Jobs AND Classes'; 'all jobs' searches only 'jobs' \u2014 confirmed still current at HEAD.",
+   "Independent of the index-coverage bug fixed on 2026-08-13 (todo_line 3423/3433/3384) and independent of the quoted-phrase bug already fixed for todo_line 3377 \u2014 needs its own, separate change."
+  ],
+  "steps": [
+   "1. In internal/search/bleve_translator.go, change dropStopwordOnlyConjuncts (line 166) to return `([]Node, []string)` \u2014 the kept nodes plus the values of the dropped FreeTextNodes \u2014 instead of just `[]Node`.",
+   "2. Update its call site at line 89 to collect the dropped-terms slice and propagate it up through whatever function builds the final Bleve query (likely the same function containing line 89).",
+   "3. Thread the dropped-terms list into the search response struct in internal/server/handlers/search.go (or wherever the search handler builds its JSON response) as a new `dropped_terms []string` (omitempty) field.",
+   "4. In the web Library search UI (grep -rn 'search' web/src/pages/Library.tsx for the search-results rendering block), read `dropped_terms` from the API response and render a small Alert/note when non-empty, listing the dropped words.",
+   "5. Add a test asserting the API response for 'All Jobs and Classes' includes dropped_terms: ['All', 'and'] (or however TestReproAllJobsAndClasses's fixture capitalizes them) alongside the narrowed results."
+  ],
+  "tests": [
+   "internal/search/bleve_translator_test.go: assert dropStopwordOnlyConjuncts returns both the kept nodes and the correct dropped-terms list for the 'All Jobs and Classes' case.",
+   "internal/server/handlers/search_test.go: assert the API response includes dropped_terms for a query containing stopwords, and omits/empties it for a query with none.",
+   "web/src/pages/Library.test.tsx: assert the UI note renders when dropped_terms is present.",
+   "Anti-over-suppression: TestReproAllJobsAndClasses itself (or an equivalent) must still show the query narrows to 'Jobs AND Classes' \u2014 the dropping behavior itself must not change, only its visibility."
+  ],
+  "acceptance": [
+   "make ci (Go) and npm --prefix web test both pass.",
+   "A manual search for 'all jobs' shows both the narrowed results AND a visible note that 'all' was ignored."
+  ],
+  "edge_cases": [
+   "An all-stopword query (the original 'shards of oblivion' case dropStopwordOnlyConjuncts protects) returns children unchanged (dropped==0 || len(kept)==0 short-circuit at L176) \u2014 in that case there ARE no dropped terms to surface for THIS conjunct, since the function deliberately keeps everything rather than dropping to empty; confirm the surfacing logic doesn't misreport in this specific branch.",
+   "OR-disjunction stopwords are deliberately left alone per the existing comment ('Conjunction only... OR is deliberately left alone') \u2014 do not surface a false 'dropped' note for terms that were never actually dropped from a disjunction."
+  ],
+  "anti_over_suppression": "TestReproAllJobsAndClasses (or equivalent) still passes, confirming the underlying stopword-drop behavior is unchanged.",
+  "depends_on_lines": [],
+  "gate": "make ci (Go) and npm --prefix web run lint && npm --prefix web test (web)",
+  "notes": "Distinct from and unrelated to the (already-fixed) quoted-phrase bug at todo_line 3377 \u2014 do not conflate the two when scoping this fix."
+ },
+ {
+  "todo_line": 3377,
+  "src_id": null,
+  "title": "(already fixed) Quoted phrases now correctly produce a MatchPhraseQuery",
+  "verdict": "stale_done",
+  "verdict_evidence": "Commit 5b1a65b9 'fix(search): make a trailing * and quoted phrases actually work' (2026-08-13, verified ancestor of HEAD 8f6d0d99) added explicit handling for a bare quoted phrase BEFORE the bare-token scan in parseFieldOrToken (internal/search/query_parser.go:224-251), with the fix's own comment narrating the exact bug this item describes in the past tense: '`\\\"All Jobs\\\"` returned 300 rows, byte-identical to unquoted `All Jobs`... FreeTextNode.Quoted was never set \u2014 leaving the MatchPhraseQuery branch in the translator unreachable for bare free text.'",
+  "domain": "internal/search",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the parser now handles a bare quoted phrase before the bare-token scan, with Quoted:true set",
+    "grep_cmd": "sed -n '224,251p' internal/search/query_parser.go",
+    "expect": "'if p.peek() == \\\"\\\\\\\"\\\" { phrase, err := p.parseQuoted() ... return &FreeTextNode{Value: phrase, Quoted: true}, nil }' preceded by a comment describing the fixed bug"
+   },
+   {
+    "claim": "the fix commit is merged to the HEAD this scout ran against",
+    "grep_cmd": "git merge-base --is-ancestor 5b1a65b9 8f6d0d99 && echo ancestor",
+    "expect": "'ancestor' printed"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "N/A \u2014 verification only.",
+  "review_critical": false,
+  "goal": "No fix needed \u2014 already shipped. The n.Quoted branch this item said 'never fires' (bleve_translator.go:317, now around that area \u2014 re-verify exact line) is now reachable because the parser correctly sets FreeTextNode.Quoted=true for bare quoted phrases.",
+  "background": [
+   "The field-scoped form (title:\"all jobs\") was never affected per the fix commit's own comment \u2014 only bare free-text quoted phrases were broken, which is exactly what this item describes ('\"All Jobs and Classes\"' becomes the terms 'All' and 'Classes\\\"')."
+  ],
+  "steps": [],
+  "tests": [
+   "Verify a test exists asserting quoted-phrase search now differs from unquoted search: grep -rn 'MatchPhraseQuery\\|Quoted: true' internal/search/*_test.go for the regression coverage added alongside 5b1a65b9."
+  ],
+  "acceptance": [
+   "grep -n 'A bare quoted phrase' internal/search/query_parser.go returns 1 hit, confirming the fix's comment is present at HEAD."
+  ],
+  "edge_cases": [
+   "N/A \u2014 already resolved."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci (Go)",
+  "notes": "Fixed the same day this item was filed (2026-08-13). Independent of todo_line 3369 (stopword surfacing), which remains open."
+ },
+ {
+  "todo_line": 3384,
+  "src_id": null,
+  "title": "Register SearchIndexDroppedCount (and a dirty-backlog gauge) as Prometheus metrics",
+  "verdict": "actionable",
+  "verdict_evidence": "SearchIndexDroppedCount() (internal/server/search_reconciler.go:86, backed by an atomic counter searchIndexDropped) exists as a Go getter but is never registered with Prometheus \u2014 grep -rn 'SearchIndexDroppedCount\\|searchIndexDropped' internal/ finds only its definition (search_reconciler.go) and one other reference (indexed_store.go), with zero hits for a promauto/prometheus.New*Gauge/Counter wiring it to the /metrics endpoint.",
+  "domain": "internal/server",
+  "exact_files": [
+   "internal/metrics/metrics.go",
+   "internal/server/search_reconciler.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the getter exists in search_reconciler.go",
+    "grep_cmd": "grep -n 'func SearchIndexDroppedCount' internal/server/search_reconciler.go",
+    "expect": "1 hit at L86"
+   },
+   {
+    "claim": "nothing registers it as a Prometheus metric in internal/metrics/",
+    "grep_cmd": "grep -rn 'SearchIndexDropped' internal/metrics/*.go",
+    "expect": "0 hits in internal/metrics/"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "booksGauge / SetBooks pattern (existing gauge registration + updater)",
+    "file": "internal/metrics/metrics.go",
+    "verify_grep": "grep -n 'booksGauge\\|func SetBooks' internal/metrics/metrics.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Mechanical addition following an existing, well-established gauge-registration pattern in the same file (booksGauge/foldersGauge/SetBooks).",
+  "review_critical": false,
+  "goal": "Add a new prometheus.Counter (search_index_dropped_total) and a prometheus.Gauge (search_index_dirty_backlog) to internal/metrics/metrics.go, following the exact registration pattern already used for booksGauge (declared in the var block, added to the MustRegister/collector list, exposed via a setter function), then call the new setter(s) from wherever SearchIndexDroppedCount() and the dirty-set size are currently only logged (search_reconciler.go), so both are periodically pushed to the registered metric.",
+  "background": [
+   "This is the direct reason a quarter of the library was unfindable for an unknown period with nobody noticing per todo_line 3433's framing \u2014 same root issue, this item is specifically about the drop-counter piece of it.",
+   "audiobook_organizer_books_total already exists as a working example of exactly this registration pattern (internal/metrics/metrics.go:45-48, 207)."
+  ],
+  "steps": [
+   "1. In internal/metrics/metrics.go, add `searchIndexDroppedCounter = prometheus.NewCounter(prometheus.CounterOpts{Namespace: \"audiobook_organizer\", Name: \"search_index_dropped_total\", Help: \"Total search index events dropped since process start\"})` and `searchIndexDirtyGauge = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: \"audiobook_organizer\", Name: \"search_index_dirty_backlog\", Help: \"Current number of books marked dirty and pending re-index\"})` near booksGauge/foldersGauge.",
+   "2. Add both to the collector-registration list (the one booksGauge/foldersGauge/memoryAllocGauge/goroutinesGauge appear in, ~line 171).",
+   "3. Add setter functions `func SetSearchIndexDropped(n int64) { searchIndexDroppedCounter.Add(n) }` and `func SetSearchIndexDirtyBacklog(n int)  { searchIndexDirtyGauge.Set(float64(n)) }` (matching SetBooks's style at line 207).",
+   "4. In internal/server/search_reconciler.go, find where SearchIndexDroppedCount()'s underlying counter is incremented and where the dirty-set size is known (likely in the reconciler's ticker loop or wherever markIndexDirty is called), and call the new metrics.SetSearchIndexDropped/SetSearchIndexDirtyBacklog setters alongside the existing slog calls."
+  ],
+  "tests": [
+   "internal/metrics/metrics_test.go (or nearest existing test): assert the new metrics are registered and update correctly when their setters are called.",
+   "A /metrics HTTP test (if one exists for booksGauge) extended to also assert search_index_dropped_total and search_index_dirty_backlog appear in the scrape output."
+  ],
+  "acceptance": [
+   "A local /metrics scrape after the change includes 'audiobook_organizer_search_index_dropped_total' and 'audiobook_organizer_search_index_dirty_backlog'."
+  ],
+  "edge_cases": [
+   "The dirty-backlog gauge should reflect the CURRENT size of the durable dirty set, not a cumulative count \u2014 use Set(), not Add(), matching the item's own framing ('dirty-set backlog')."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci (Go)",
+  "notes": "Do this together with todo_line 3433 (which asks for the same class of missing metrics more broadly, including search_index_docs_total) \u2014 likely the same PR, since both touch internal/metrics/metrics.go."
+ },
+ {
+  "todo_line": 3391,
+  "src_id": null,
+  "title": "Run the already-built ElectMissingPrimaries repair against production (sweep + repair for headless version groups)",
+  "verdict": "prod_run",
+  "verdict_evidence": "The repair this item asks for already exists and is wired: internal/reconcile/elect_primaries.go's ElectMissingPrimaries (added by dd0cf645, 2026-08-13, ancestor of HEAD 8f6d0d99) is exposed at POST /operations/operations/elect-missing-primaries (internal/server/server_lifecycle.go:1532), defaults to a dry run (electMissingPrimariesHandler, internal/server/reconcile.go:193), and is partitioned by version group across a bounded worker pool per its own commit message ('so no two workers can ever write competing primaries into the same group'). What remains is running it against production, per owner decision 14 ('every PROD RUN goes to docs/operations/pending-prod-actions.md as prod_run').",
+  "domain": "internal/reconcile",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the repair function exists and is already concurrency-safe by group partitioning",
+    "grep_cmd": "grep -n 'func ElectMissingPrimaries' internal/reconcile/elect_primaries.go",
+    "expect": "1 hit at L121"
+   },
+   {
+    "claim": "the repair is wired to an HTTP endpoint, defaulting to dry-run",
+    "grep_cmd": "grep -n 'elect-missing-primaries\\|func (s \\*Server) electMissingPrimariesHandler' internal/server/server_lifecycle.go internal/server/reconcile.go",
+    "expect": "route registration at server_lifecycle.go:1532; handler with `dryRun := c.DefaultQuery(\\\"dry_run\\\", \\\"true\\\") != \\\"false\\\"` at reconcile.go:193"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "POST /operations/elect-missing-primaries (existing, permission-gated endpoint)",
+    "file": "internal/server/server_lifecycle.go",
+    "verify_grep": "grep -n 'elect-missing-primaries' internal/server/server_lifecycle.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "opus",
+  "why_tier": "N/A for a prod_run \u2014 the code exists; this is an operational execution + review-critical judgment call on when to apply.",
+  "review_critical": true,
+  "goal": "No new code needed. Run POST /operations/elect-missing-primaries with the default dry_run=true first to get an updated sweep count (the item's own book, 01KXXVBGQGH6PEP9WE0ZWHBJ50, should appear in that dry-run's result set if still unfixed), review the result, then re-run with ?dry_run=false to apply \u2014 logged to docs/operations/pending-prod-actions.md per the standing owner rule, never auto-run.",
+  "background": [
+   "dd0cf645's own commit message states the forward-looking itunes-importer bug is fixed and this endpoint exists specifically to repair rows already affected before that fix landed.",
+   "The endpoint already IS the 'sweep for other headless groups plus a repair' the item asks for \u2014 it processes every headless group in the store, not just the one book cited."
+  ],
+  "steps": [
+   "1. Add an entry to docs/operations/pending-prod-actions.md describing this run: endpoint, dry-run-first requirement, and a note to confirm no organize/dedup scan is in flight before applying (scans clobber applied metadata per the standing project rule).",
+   "2. Execute `POST /operations/elect-missing-primaries` (dry_run=true, the default) against production; review the returned result count and confirm 01KXXVBGQGH6PEP9WE0ZWHBJ50's group (vg-01KXXVBGMHPATT8X1X3DV5AW2Q) appears if still affected.",
+   "3. On owner approval, re-run with `?dry_run=false` to apply.",
+   "4. Record the before/after counts in the pending-prod-actions.md entry for the audit trail."
+  ],
+  "tests": [
+   "N/A \u2014 the repair's own tests (elect_primaries_test.go, 364 lines) already cover this; no new test needed to execute an existing, tested op."
+  ],
+  "acceptance": [
+   "A post-run query confirms 01KXXVBGQGH6PEP9WE0ZWHBJ50 has is_primary_version=true (it is the sole member of its group, so electing it is unambiguous)."
+  ],
+  "edge_cases": [
+   "A group that gains a primary concurrently during the run is skipped rather than double-assigned, per the fix's own re-read-before-write design \u2014 no special handling needed for this on the operator's side."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs) for scheduling; the repair itself is already gated by make ci in its original PR",
+  "notes": "Cross-reference todo_line 3340 (evidence) and todo_line 3344 (writer-found, stale_done) \u2014 all three describe the same already-largely-resolved bug family; this is the only piece still requiring action, and it's operational, not engineering."
+ },
+ {
+  "todo_line": 3414,
+  "src_id": null,
+  "title": "Build a diagnostic reconciling the 3,954-book gap between the store's live-book count and the API list endpoint's total",
+  "verdict": "actionable",
+  "verdict_evidence": "The 67,824 figure this item attributes to 'the store' is suspiciously identical in magnitude to a DIFFERENT, already-explained number: internal/server/search_coverage.go's own header comment states 'on production 2026-08-14 the index held 67,824 docs against 63,871 live books \u2014 3,953 soft-deleted books indexed by the 08-13 backfill, whose enumeration used the then-leaky trash-including ListBookIDs.' ListBookIDs today (internal/database/pebble_store.go:705-706, comment 'also filters MarkedForDeletion') no longer leaks trash, so the specific historical leak is fixed \u2014 but that does not by itself explain THIS item's claim of a gap in ListBookIDs()'s own count vs. the API list total, since ListBookIDs already excludes MarkedForDeletion per the item's own text. Cause not established, as the item itself states.",
+  "domain": "internal/database",
+  "exact_files": [
+   "tools/cmd/reconcile-book-counts/main.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "ListBookIDs already excludes MarkedForDeletion",
+    "grep_cmd": "grep -n 'ListBookIDs' internal/database/pebble_store.go | head -3",
+    "expect": "comment: 'When memdb is available, delegates to the memdb fast path (which also filters MarkedForDeletion)'"
+   },
+   {
+    "claim": "an identical 67,824 figure appears elsewhere, already explained as a stale-search-index-doc-count issue, not a store-book-count issue",
+    "grep_cmd": "grep -n '67,824' internal/server/search_coverage.go",
+    "expect": "1 hit in the file's header comment, describing Bleve DocCount()=67,824 vs live books=63,871 \u2014 a DIFFERENT axis of measurement than 'store reports 67,824 live books'"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "reconcileSearchIndexCoverage's set-comparison pattern (AllDocIDs vs ListBookIDs)",
+    "file": "internal/server/search_coverage.go",
+    "verify_grep": "grep -n 'func (s \\*Server) reconcileSearchIndexCoverage' internal/server/search_coverage.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Root cause genuinely unknown per the item's own text; requires building a small diagnostic tool and reading its output before any fix can even be scoped \u2014 investigative, not mechanical.",
+  "review_critical": false,
+  "goal": "Build a small read-only diagnostic (tools/cmd/reconcile-book-counts/main.go, or a REPORT-only maintenance op per the owner's stated preference for report-over-mutate ops) that, against a live store, computes and prints: (1) len(ListBookIDs()) \u2014 the true live-book-ID-set size, (2) the count the /api/v1/audiobooks list endpoint reports when paged with library_state empty, and (3) the actual set difference (which IDs are in (1) but not (2)) \u2014 not just the count gap. FIRST CHECK: confirm whether the '67,824' figure originally cited in this item was actually a snapshot of Bleve's DocCount() (which the search_coverage.go history shows was polluted with 3,953 stale soft-deleted docs around the same date) rather than a true ListBookIDs() count \u2014 if so, this item's premise may be a measurement mix-up rather than a third invisible-books population, and the diagnostic should say so explicitly rather than assuming a real gap exists.",
+  "background": [
+   "ListBookIDs already excludes MarkedForDeletion, so per the item's own reasoning these 3,954 are live rows that the API endpoint simply never serves.",
+   "Paging the endpoint returns exactly 63,870 distinct IDs \u2014 internally consistent, so the API is not itself broken; the question is what population ListBookIDs sees that the endpoint's underlying query does not.",
+   "A near-identical number (67,824 vs 63,871, off by only 3 from this item's 67,824 vs 63,870) shows up in search_coverage.go's own commit history as a Bleve-doc-count issue that has SINCE BEEN FIXED \u2014 strong enough coincidence to check first before assuming a new, unexplained population."
+  ],
+  "steps": [
+   "1. Write tools/cmd/reconcile-book-counts/main.go: connect to the store, call ListBookIDs(), build a set.",
+   "2. Call the same code path GetBookSummaries/the audiobooks service uses for a library_state-empty, is_primary_version-unset list (bypass the HTTP layer, call the service function directly with paging disabled or a very high limit) to get the second set.",
+   "3. Print len(set1), len(set2), and the up-to-50 IDs present in set1 but absent from set2 (set difference), plus each such book's LibraryState, MarkedForDeletion, and IsPrimaryVersion fields.",
+   "4. Before running against prod, first run this same diagnostic's DocCount()-vs-ListBookIDs() comparison (the search_coverage.go set-comparison logic already does this \u2014 reuse it or call reconcileSearchIndexCoverage in dry-run/log-only mode) to rule in/out the Bleve-doc-count mix-up hypothesis from 'goal'.",
+   "5. Document findings; if a real gap is confirmed (not a measurement mix-up), file it as its own todo.d fragment with the root cause now identified, rather than fixing inline here."
+  ],
+  "tests": [
+   "N/A for the diagnostic tool itself (read-only, ad-hoc)."
+  ],
+  "acceptance": [
+   "The diagnostic prints a definitive answer: either 'no real gap \u2014 the original 67,824 figure was a Bleve DocCount() snapshot, already explained/fixed' or a concrete list of book IDs and their differentiating field values explaining a genuine third population."
+  ],
+  "edge_cases": [
+   "If run against a live production store, must be strictly read-only \u2014 no write path in the diagnostic tool at all, to avoid any risk on a review-critical population question."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci (Go) for the tool's own build; n/a for the prod data-gathering run itself",
+  "notes": "This is a report/investigation task per the owner's PH-2b-style preference (report before mutate) \u2014 do not build a repair op until the cause is established, per the item's own explicit caution.",
+  "review_notes": [
+   "[ops-rollback.json] A prod RUN is embedded inside a briefable agent task. TASK-031's gate explicitly excuses 'the prod data-gathering run itself' from CI, i.e. the agent is expected to point the new diagnostic at the live production store - which the master plan classifies as Wave 4, 'NOT AGENT WORK', routed to pending",
+   "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ]
+ },
+ {
+  "todo_line": 3423,
+  "src_id": null,
+  "title": "(already fixed) The coverage gate now compares SETS of IDs, not counts, and logs both indexed=/books= numbers",
+  "verdict": "stale_done",
+  "verdict_evidence": "internal/server/search_coverage.go (version 2.0.0, last-edited 2026-08-14 \u2014 one day after this item, 2026-08-13) implements exactly what the item asks for: its own header comment states 'This replaced a count comparison (len(ids) <= DocCount() -> \\\"OK\\\"), which a polluted index passes forever: on production 2026-08-14 the index held 67,824 docs against 63,871 live books... The set comparison costs one sequential doc-ID pass (AllDocIDs), not per-book point lookups' \u2014 and the code builds `indexed`/`live` maps and computes `missing`/`stale` ID-set differences (lines ~104-124), logging both counts via `slog.Info(\\\"search index coverage OK\\\", \\\"indexed\\\", len(docIDs), \\\"books\\\", len(ids))` and `slog.Warn(...)` on divergence \u2014 the exact indexed=/books= pair the item asked to keep.",
+  "domain": "internal/server/search_coverage.go",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the file explicitly documents replacing a count comparison with a set comparison, citing the exact failure mode this item describes",
+    "grep_cmd": "sed -n '64,72p' internal/server/search_coverage.go",
+    "expect": "comment: 'This replaced a count comparison (len(ids) <= DocCount() -> \\\"OK\\\")... 67,824 docs against 63,871 live books'"
+   },
+   {
+    "claim": "the code builds and diffs ID sets, not just counts",
+    "grep_cmd": "grep -n 'missing\\|stale\\|indexed\\[id\\]\\|live\\[id\\]' internal/server/search_coverage.go",
+    "expect": "multiple hits implementing set membership tests, not count comparisons"
+   },
+   {
+    "claim": "both counts are logged on every boot, healthy or not",
+    "grep_cmd": "grep -n 'slog.Info(\"search index coverage OK\"' internal/server/search_coverage.go",
+    "expect": "1 hit logging both indexed and books counts"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "N/A \u2014 verification only.",
+  "review_critical": false,
+  "goal": "No fix needed \u2014 already shipped, and shipped in a form that goes beyond what the item literally asked for ('consider comparing sets') by fully replacing the count comparison with a set comparison as the PRIMARY mechanism, not an addition alongside the count check.",
+  "background": [
+   "File version header shows 2.0.0, last-edited 2026-08-14, one day after this item (2026-08-13) \u2014 timing consistent with this being a direct response to the item."
+  ],
+  "steps": [],
+  "tests": [
+   "Existing test coverage for reconcileSearchIndexCoverage (grep -rn 'func Test.*[Cc]overage' internal/server/*_test.go) should already cover the set-comparison behavior \u2014 spot-check it exists rather than assuming."
+  ],
+  "acceptance": [
+   "internal/server/search_coverage.go's file header shows version >= 2.0.0."
+  ],
+  "edge_cases": [
+   "N/A \u2014 already resolved."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci (Go)",
+  "notes": "This fix is the SAME underlying change referenced in todo_line 3414's investigation (search_coverage.go's own history explains the 67,824-vs-63,871 Bleve doc-count issue) \u2014 read that item's notes for the cross-reference."
+ },
+ {
+  "todo_line": 3433,
+  "src_id": null,
+  "title": "Add search-index metrics (docs total, dirty backlog) to /metrics \u2014 the search index has zero metrics today",
+  "verdict": "actionable",
+  "verdict_evidence": "grep -rn 'search_index\\|bleve\\|dirty' internal/server/metrics*.go internal/metrics/*.go returns 0 hits at HEAD \u2014 confirmed no search-related Prometheus metric exists anywhere in the codebase, matching the item's claim exactly. audiobook_organizer_books_total already exists as a working precedent (internal/metrics/metrics.go:45-48).",
+  "domain": "internal/metrics",
+  "exact_files": [
+   "internal/metrics/metrics.go",
+   "internal/server/server_search.go",
+   "internal/server/search_coverage.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "zero search-related metrics exist in the metrics package",
+    "grep_cmd": "grep -n 'search\\|bleve\\|dirty' internal/metrics/metrics.go",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "books_total exists as a working precedent to follow",
+    "grep_cmd": "sed -n '45,49p' internal/metrics/metrics.go",
+    "expect": "booksGauge NewGauge with Name: 'books_total'"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "booksGauge / SetBooks pattern",
+    "file": "internal/metrics/metrics.go",
+    "verify_grep": "grep -n 'booksGauge\\|func SetBooks' internal/metrics/metrics.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Follows an established registration pattern but needs a new gauge specifically for Bleve's DocCount(), read at the right cadence (boot + periodic, not just once) to be useful as a live divergence signal.",
+  "review_critical": false,
+  "goal": "Add a `search_index_docs_total` gauge (Bleve's live DocCount()) to internal/metrics/metrics.go alongside books_total, updated on the same ticker cadence as books_total (or on its own ticker if none is convenient to share), so a Grafana/Prometheus dashboard can graph search_index_docs_total against books_total and immediately see a divergence like the one that caused a quarter of the library to be unfindable with nobody noticing. This is the 'half the comparison is exported already' fix the item names directly.",
+  "background": [
+   "audiobook_organizer_books_total already exists \u2014 this item is specifically about adding its missing counterpart, search_index_docs_total, so the two can be compared on a dashboard.",
+   "Also re-confirms and should be delivered together with todo_line 3384 (SearchIndexDroppedCount + dirty-backlog gauge) \u2014 both are 'the search index has no metrics' findings, differing only in which specific numbers are missing."
+  ],
+  "steps": [
+   "1. In internal/metrics/metrics.go, add `searchIndexDocsGauge = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: \"audiobook_organizer\", Name: \"search_index_docs_total\", Help: \"Current document count in the Bleve search index\"})` alongside booksGauge.",
+   "2. Add it to the MustRegister/collector list at ~line 171.",
+   "3. Add `func SetSearchIndexDocs(n int) { searchIndexDocsGauge.Set(float64(n)) }` mirroring SetBooks (line 207).",
+   "4. Find the periodic metrics-gathering loop that currently calls metrics.SetBooks (internal/server/server_lifecycle.go, near the CountPrimaryBooks call fixed in todo_line 3443) and add a call to the search index's AllDocIDs()/DocCount() there, feeding metrics.SetSearchIndexDocs.",
+   "5. Land this in the same PR as todo_line 3384's search_index_dropped_total / search_index_dirty_backlog gauges \u2014 both touch the same metrics.go registration block."
+  ],
+  "tests": [
+   "internal/metrics/metrics_test.go: assert the new gauge registers and updates.",
+   "A /metrics scrape test asserting the metric name appears in output."
+  ],
+  "acceptance": [
+   "A local /metrics scrape after the change includes 'audiobook_organizer_search_index_docs_total'.",
+   "The value tracks the search index's actual DocCount() (verify by comparing scrape output to a direct s.searchIndex.DocCount() call in a test)."
+  ],
+  "edge_cases": [
+   "DocCount() on a nil/not-yet-initialized search index (s.searchIndex == nil, same guard reconcileSearchIndexCoverage already checks) must not panic the metrics-gathering loop \u2014 skip the update, don't crash, matching the existing nil-guard pattern in search_coverage.go."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci (Go)",
+  "notes": "Do together with todo_line 3384 \u2014 same file (internal/metrics/metrics.go), same registration block, same periodic-update call site."
+ },
+ {
+  "todo_line": 3443,
+  "src_id": null,
+  "title": "Fix audiobook_organizer_books_total to report the true total, not just primary books (or rename it)",
+  "verdict": "actionable",
+  "verdict_evidence": "The gauge (internal/metrics/metrics.go:45-48, Help: 'Current total number of books in library') is fed exclusively by CountPrimaryBooks(): internal/server/server_lifecycle.go:499 `if bc, err := s.Ops().CountPrimaryBooks(); err == nil { bookCount = bc }` then :508 `metrics.SetBooks(bookCount)` \u2014 confirmed still true at HEAD. A true-total counterpart, CountAllBooks(), already exists on the same store interface (internal/database/pebble_store.go:3028) and is simply not the one wired to this metric.",
+  "domain": "internal/server",
+  "exact_files": [
+   "internal/server/server_lifecycle.go",
+   "internal/metrics/metrics.go"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the metric is fed by CountPrimaryBooks, not a true total",
+    "grep_cmd": "sed -n '495,509p' internal/server/server_lifecycle.go",
+    "expect": "'if bc, err := s.Ops().CountPrimaryBooks(); err == nil { bookCount = bc }' ... 'metrics.SetBooks(bookCount)'"
+   },
+   {
+    "claim": "a true-total counter already exists and is unused for this metric",
+    "grep_cmd": "grep -n 'func (p \\*PebbleStore) CountAllBooks' internal/database/pebble_store.go",
+    "expect": "1 hit at L3028"
+   },
+   {
+    "claim": "the gauge's Help text claims it is the true total",
+    "grep_cmd": "sed -n '45,49p' internal/metrics/metrics.go",
+    "expect": "Help: 'Current total number of books in library'"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "CountAllBooks",
+    "file": "internal/database/pebble_store.go",
+    "verify_grep": "grep -n 'func (p \\*PebbleStore) CountAllBooks' internal/database/pebble_store.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Small, precisely located fix \u2014 either swap one function call or add a second gauge; the only judgment needed is which resolution the owner prefers.",
+  "review_critical": false,
+  "goal": "Either (preferred, since it's the smaller footprint and preserves the existing metric name's meaning for anything already dashboards on 'primary books') rename booksGauge's metric Name/Help to make clear it counts PRIMARY books only (e.g. Name: 'primary_books_total', Help: 'Current total number of primary-version books in library') and add a NEW gauge 'books_total' fed by CountAllBooks() for the true total \u2014 OR (if the owner prefers not to break the existing metric name for any consumer already keyed on it) add the new true-total gauge under a different name (e.g. 'books_total_all_versions') while leaving the existing (misleadingly-named) one alone. Either way, both values should end up exported so a dashboard built on the current name is not silently wrong forever.",
+  "background": [
+   "Live production value: 40,841 (primary count) against 67,824 live books in the store \u2014 under-reporting the library by ~40%. Any dashboard built on the current metric is currently wrong about library size."
+  ],
+  "steps": [
+   "1. In internal/metrics/metrics.go, add a second gauge (e.g. `booksTotalAllGauge`) with Name: 'books_total_all' (or the owner's preferred final name) and Help: 'Current total number of books in library, all versions' \u2014 following the exact same NewGauge/MustRegister/setter pattern as booksGauge.",
+   "2. In internal/server/server_lifecycle.go's metrics-gathering loop (~line 495-509), add a second call: `if bc, err := s.Ops().CountAllBooks(); err == nil { metrics.SetBooksTotalAll(bc) }` alongside the existing CountPrimaryBooks call.",
+   "3. Update booksGauge's Help text (internal/metrics/metrics.go:48) to explicitly say 'primary-version books' rather than the current ambiguous 'total number of books', since it will continue to report the primary-only count.",
+   "4. Add a CHANGELOG fragment noting the metric's Help text was corrected and a new true-total metric was added, since any existing dashboard reading the OLD Help text's claim was wrong and should be flagged."
+  ],
+  "tests": [
+   "internal/metrics/metrics_test.go: assert both gauges reflect the correct, DIFFERENT values when primary and total book counts differ in a test fixture."
+  ],
+  "acceptance": [
+   "A /metrics scrape shows both the (corrected-Help) primary-books gauge and the new true-total gauge, with the true-total gauge's value equal to a direct CountAllBooks() call in a test."
+  ],
+  "edge_cases": [
+   "If CountAllBooks() and CountPrimaryBooks() ever return an error independently, each metric update must be independently guarded (matching the existing `if err == nil` pattern) so a failure in one does not suppress the other."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci (Go)",
+  "notes": "Do together with todo_line 3433/3384 if practical \u2014 all three touch internal/metrics/metrics.go's registration block and internal/server/server_lifecycle.go's same periodic metrics-gathering loop."
+ },
+ {
+  "todo_line": 3449,
+  "src_id": null,
+  "title": "Re-measure per-cohort search-index coverage now that the true reconciler figures exist",
+  "verdict": "prod_run",
+  "verdict_evidence": "This is explicitly a re-measurement task against production data ('Re-measure the per-cohort coverage now that a true figure exists'), not a code change \u2014 the 'true figure' it refers to (16,738) already comes from the fixed reconciler (internal/server/search_coverage.go, todo_line 3423, verified stale_done/shipped) which logs indexed=/books= on every boot; running the per-cohort breakdown again is an operational query against prod, gated behind the same 'never auto-run against prod' standing rule as the other prod_run items in this scope.",
+  "domain": "internal/server/search_coverage.go",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the reconciler this re-measurement depends on already ships the true-figure logging",
+    "grep_cmd": "grep -n 'slog.Warn(\"search index diverges' internal/server/search_coverage.go",
+    "expect": "1 hit, logging indexed/books/missing/stale counts"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "N/A for a prod_run \u2014 a query/report task against live data, not an engineering task.",
+  "review_critical": false,
+  "goal": "No code to write beyond, at most, a small ad-hoc query script (reuse the pattern from todo_line 3414's diagnostic if that lands first) that buckets the reconciler's now-accurate missing/stale ID lists by book creation month, to produce updated per-cohort percentages superseding the sampled 2%-August/97%-April figures.",
+  "background": [
+   "The earlier 2%/97% figures were sampled (n=51 and n=39) and pointed the right direction but understated the total scope: 16,738 affected books is more than a single month's intake, so the gap spans wider than the August cohort alone.",
+   "Depends on todo_line 3423's fix (already shipped, stale_done) having actually run in production at least once to produce the 16,738 figure the re-measurement would refine further."
+  ],
+  "steps": [
+   "1. After the boot-time reconciler (todo_line 3423, already shipped) has run against production at least once, pull its logged missing/stale ID lists (from journald/logs) or re-run a read-only equivalent query.",
+   "2. Bucket the missing IDs by creation month (ULID timestamp, same technique the reconciler's own header comment describes for why book loss skews toward newer books).",
+   "3. Publish an updated per-cohort percentage table, explicitly marked as superseding the sampled 2%/97% figures, in the same findings document series (20260813-search-index-repair-prod-findings.md or its successor)."
+  ],
+  "tests": [
+   "N/A \u2014 reporting task."
+  ],
+  "acceptance": [
+   "An updated per-cohort table exists and is dated after the reconciler's confirmed production run."
+  ],
+  "edge_cases": [
+   "If the reconciler has not yet been triggered by a production restart (see todo_line 3362, itself a pending prod_run decision), this re-measurement cannot proceed \u2014 it depends on that restart having happened first."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   3362,
+   3423,
+   3433
+  ],
+  "gate": "n/a (docs)",
+  "notes": "Blocked on todo_line 3362's restart-timing decision actually happening in production first \u2014 sequence after that, not before."
+ }
+]

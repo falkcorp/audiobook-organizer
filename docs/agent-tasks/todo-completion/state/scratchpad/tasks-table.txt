@@ -1,0 +1,350 @@
+TASK-001 | audiobooks |w2 | sonnet | M |rc= 1 |dep= ['TASK-023'] |L1980 | Add a short-TTL cache to the search branch of GetAudiobooksWithTotal (explicit first-cut, defer
+    files: internal/audiobooks/service_query.go
+TASK-002 | audiobooks |w1 | sonnet | M |rc= 1 |dep= [] |L3348 | Fix the 3-way disagreement in how a nil IsPrimaryVersion is treated (matcher vs. pushdown vs. s
+    files: internal/audiobooks/service_filtering.go; internal/audiobooks/service_query.go
+TASK-003 | audiobooks |w3 | sonnet | S |rc= 1 |dep= [] |L3884 | Fix the author-path post-filter to treat nil IsPrimaryVersion as primary, matching storage's de
+    files: internal/audiobooks/service_query.go
+TASK-004 | audiobooks |w4 | sonnet | S |rc= 1 |dep= ['TASK-003'] |L3889 | Add a conformance test asserting the library path and author path classify nil/true/false IsPri
+    files: internal/audiobooks/service_query_isprimary_conformance_test.go
+TASK-005 | audiobooks |w4 | sonnet | M |rc= 0 |dep= [] |L10728 | Wire OnlyParsedTranscription-style filtering into the interactive audiobooks list endpoint
+    files: internal/audiobooks/service_filtering.go; internal/audiobooks/service_query.go; internal/audiobooks/service_types.go; internal/server/handlers/audiobooks/handler.go
+TASK-006 | ci-tooling |w1 | sonnet | M |rc= 0 |dep= [] |L46 | Add a scheduled detect-only backstop workflow for auto-revert.yml
+    files: .github/workflows/auto-revert-backstop.yml
+TASK-007 | ci-tooling |w1 | haiku | S |rc= 0 |dep= [] |L50 | Wire scripts/test_check_memory_leaks.py into a CI job (repo-guards)
+    files: .github/workflows/ci.yml
+TASK-008 | ci-tooling |w1 | sonnet | M |rc= 0 |dep= [] |L921 | Bump the ghcommon reusable-workflow pins in at least two PRs, low-consequence first
+    files: .github/workflows/frontend-ci.yml; .github/workflows/hard-burndown.yml; .github/workflows/nightly-burndown.yml; .github/workflows/nightly.yml; .github/workflows/prerelease.yml; .github/workflows/release-prod.yml; .github/workflows/security.yml; .github/workflows/triage-poll.yml
+TASK-009 | ci-tooling |w1 | sonnet | S |rc= 0 |dep= [] |L2568 | Teach the ABS fixture-capture harness to record request headers
+    files: scripts/abs_capture_fixtures.py
+TASK-010 | ci-tooling |w2 | haiku | S |rc= 0 |dep= [] |L2595 | Add top-level `permissions:` blocks to the 3 workflows flagged by actions/missing-workflow-perm
+    files: .github/workflows/hard-burndown.yml; .github/workflows/nightly-burndown.yml; .github/workflows/triage-poll.yml
+TASK-011 | ci-tooling |w1 | haiku | S |rc= 0 |dep= [] |L4206 | Pin SHA256 checksums for Dockerfile-fetched utfcpp/taglib tarballs
+    files: Dockerfile
+TASK-012 | ci-tooling |w1 | haiku | S |rc= 0 |dep= [] |L4312 | scripts/setup-prometheus-auth.py does NOT share the server-side shell script's dead-indentation
+    files: scripts/setup-prometheus-auth.py
+TASK-013 | ci-tooling |w1 | sonnet | M |rc= 0 |dep= [] |L4844 | Build a report-only scan for book rows that may have been spuriously created by the .tmp-rename
+    files: scripts/find_spurious_stranded_book_rows.py
+TASK-014 | ci-tooling |w1 | haiku | S |rc= 0 |dep= [] |L10632 | Remove committed mtls-bridge build artifact and gitignore it
+    files: .gitignore; mtls-bridge; scripts/setup-git-hooks.sh
+TASK-015 | ci-tooling |w2 | haiku | S |rc= 0 |dep= [] |L10632 | Stop committing series_dedup.py's generated dump/fix cache files
+    files: .gitignore; testdata/series_dump.json; testdata/series_fix.json
+TASK-016 | config |w1 | sonnet | M |rc= 1 |dep= [] |L1247 | Rename write_back_metadata config key to auto_write_tags_on_fetch with deprecated-alias migrati
+    files: internal/config/config.go; internal/config/config_unit_test.go; internal/config/persistence.go; internal/metafetch/service_fetch.go
+TASK-017 | config |w2 | haiku | S |rc= 0 |dep= [] |L1317 | Fix APIRateLimitPerMinute default drift between fresh-install (0) and ResetToDefaults/.env.exam
+    files: .env.example; internal/config/config.go
+TASK-018 | config |w3 | sonnet | S |rc= 0 |dep= [] |L1317 | Fix ai_backend.local_base_url hardcoded developer LAN IP default
+    files: internal/config/config.go
+TASK-019 | config |w4 | haiku | S |rc= 0 |dep= [] |L1317 | Fix ChapterConsolidationThresholdMin omitted from ResetToDefaults (factory reset silently disab
+    files: internal/config/config.go
+TASK-020 | config |w5 | sonnet | M |rc= 0 |dep= [] |L1317 | Delete the fully inert --enable-sqlite3-i-know-the-risks flag and EnableSQLite config option
+    files: cmd/child_mode.go; cmd/commands_test.go; cmd/dedup_bench.go; cmd/diagnostics.go; cmd/root.go; cmd/seed.go; internal/config/config.go; internal/database/store.go
+TASK-021 | config |w6 | opus | L |rc= 1 |dep= [] |L10750 | Scan and fingerprint the assembled-source download root as a read-only reference corpus
+    files: internal/config/config.go; internal/plugins/acoustid/backfill.go; internal/scanner/scanner.go
+TASK-022 | database |w1 | opus | L |rc= 1 |dep= [] |L1227 | Finish killing database.Store — narrow the remaining references per the existing 3-bucket plan
+    files: internal/database/dbtest/invariants.go; internal/plugins/maintenance/deps.go; internal/server/indexed_store.go; internal/server/server.go; internal/server/server_maintenance_deps.go; internal/testutil/integration.go
+TASK-023 | database |w1 | opus | L |rc= 1 |dep= [] |L1627 | Investigate then evict/dirty-flag merged-away book/file IDs from every read cache so losers sto
+    files: internal/dedup/book_dedup.go; internal/merge/service.go; internal/search/bleve_index.go; internal/search/index_builder.go
+TASK-024 | database |w1 | sonnet | S |rc= 0 |dep= [] |L1945 | Replace fragile [0x30-0x3A]-only book:0..book:; bounds in the version-group backfill with a rea
+    files: internal/database/pebble_store_versiongroup_backfill.go
+TASK-025 | database |w1 | sonnet | M |rc= 0 |dep= [] |L1970 | Make WipeAllActivity cancellable (currently an uncancellable full scan reachable from a request
+    files: internal/database/activity_store_instrumented.go; internal/database/activity_storer.go; internal/database/dual_write_activity_store.go; internal/database/nuts_activity_store.go; internal/database/pebble_activity_store.go; internal/server/maintenance_fixups.go
+TASK-026 | database |w2 | sonnet | M |rc= 0 |dep= [] |L2595 | Triage the remaining misc CodeQL alerts: JS findings, uncontrolled-allocation-size FP, and the 
+    files: internal/database/memdb_summaries.go; internal/server/handlers/system/handler.go; internal/server/server.go; internal/server/server_lifecycle.go
+TASK-027 | database |w1 | sonnet | M |rc= 0 |dep= [] |L3414 | Build a diagnostic reconciling the 3,954-book gap between the store's live-book count and the A
+    files: tools/cmd/reconcile-book-counts/main.go
+TASK-028 | database |w1 | sonnet | L |rc= 1 |dep= [] |L3526 | Guard author delete paths with an unfiltered author-reference counter (twin of the series-delet
+    files: internal/database/author_bookref.go; internal/database/author_getter_conformance_test.go; internal/database/mock_store.go; internal/database/mocks/mock_store.go; internal/server/handlers/entities/author_refcount.go; internal/server/handlers/entities/handler.go
+TASK-029 | database |w2 | sonnet | M |rc= 1 |dep= ['TASK-043'] |L3966 | Add GetBooksBySeriesIDAllVersions and switch DedupSeries's merge loop to it before DeleteSeries
+    files: internal/database/iface_book.go; internal/database/memdb_reads.go; internal/database/pebble_store.go; internal/dedup/series_dedup.go
+TASK-030 | database |w2 | sonnet | M |rc= 0 |dep= [] |L4501 | Add a compare-and-swap on Collection.Version to PebbleStore.UpdateCollection
+    files: internal/database/mock_store.go; internal/database/pebble_store_collections.go
+TASK-031 | database |w1 | haiku | S |rc= 0 |dep= [] |L4678 | Lock the three bare globalStore accesses in InitializeStore/CloseStore
+    files: internal/database/store.go
+TASK-032 | database |w1 | haiku | S |rc= 0 |dep= [] |L4694 | Add the 4 missing compile-time assertions to iface_assert.go
+    files: internal/database/iface_assert.go
+TASK-033 | database |w2 | haiku | S |rc= 0 |dep= [] |L4721 | Repoint store.go:17's broken doc reference to the archived design spec
+    files: internal/database/store.go
+TASK-034 | database |w3 | haiku | L |rc= 0 |dep= [] |L4728 | Add Func override fields to MockStore's ~86 hardwired-zero-return methods
+    files: internal/database/mock_store.go
+TASK-035 | database |w4 | sonnet | M |rc= 1 |dep= [] |L5271 | Add DeleteNarrator to the store (CRUD building block only)
+    files: internal/database/iface_catalog.go; internal/database/memdb_sync.go; internal/database/mock_store.go; internal/database/pebble_store_authors.go
+TASK-036 | database |w1 | sonnet | M |rc= 1 |dep= [] |L5290 | Fix DeleteAuthor's junction cleanup: it scans the dead book_author: keyspace instead of book_au
+    files: internal/database/pebble_store_authors.go
+TASK-037 | database |w3 | opus | L |rc= 1 |dep= [] |L10523 | Omnibus/anthology book_type field — Part 1 of the omnibus-detection-and-dedup spec
+    files: internal/database/bookcore.go; internal/database/migrations.go; internal/database/store.go; internal/server/handlers/audiobooks/handler.go; web/src/pages/BookDetail.tsx; web/src/services/api.ts
+TASK-038 | database |w5 | sonnet | M |rc= 0 |dep= [] |L10526 | Filter system-sourced tags out of the Browse-by-Tag cloud
+    files: internal/audiobooks/service_tags.go; internal/database/iface_tags.go; internal/database/mock_store.go; internal/database/pebble_store_tags.go
+TASK-039 | database |w6 | sonnet | M |rc= 0 |dep= ['TASK-005'] |L10728 | Add transcribe_status to the book-summary list projection and a frontend quality filter control
+    files: internal/database/bookcore.go; internal/database/memdb_summaries.go; internal/database/pebble_store.go; internal/database/store.go
+TASK-040 | dedup |w6 | opus | L |rc= 1 |dep= [] |L17 | Make UnmergeAuto reverse external-ID reassignment and iTunes write-back removals, not just the 
+    files: internal/database/dedup_automerge_journal.go; internal/database/mock_store.go; internal/database/pebble_store_externalids.go; internal/dedup/auto_resolve.go; internal/dedup/merge_journaled.go; internal/merge/service.go
+TASK-041 | dedup |w1 | sonnet | S |rc= 0 |dep= [] |L903 | Audit remaining 'we use the wide type because X requires it' justification comments -- one genu
+    files: internal/dedup/collectors_metadata.go
+TASK-042 | dedup |w2 | sonnet | M |rc= 1 |dep= [] |L2373 | Forward fix: demote pre-existing version-group members when a merge reuses their group ID
+    files: internal/merge/service.go
+TASK-043 | dedup |w1 | sonnet | S |rc= 1 |dep= [] |L3966 | Add a dry-run parameter to dedup.series-dedup
+    files: internal/dedup/series_dedup.go; internal/dedup/series_dedup_test.go; internal/server/duplicates_ops.go
+TASK-044 | dedup |w3 | sonnet | M |rc= 1 |dep= [] |L4288 | Apply the unfiltered ref-count guard to the two remaining series deleters (internal/dedup/serie
+    files: internal/dedup/series_dedup.go; internal/maintenance/jobs/cleanup_series.go
+TASK-045 | dedup |w1 | sonnet | M |rc= 0 |dep= [] |L4304 | Build a dry-run report-only classifier for series that look like they were minted from a book t
+    files: internal/plugins/maintenance/plugin.go; internal/plugins/maintenance/series_title_leak_audit.go
+TASK-046 | dedup |w3 | haiku | S |rc= 1 |dep= [] |L4698 | Route merge.AsExternalIDReassigner through database.AsCapability instead of a bare assertion
+    files: internal/merge/service.go
+TASK-047 | dedup |w2 | haiku | S |rc= 0 |dep= [] |L4719 | Narrow CollectDuration's tagStore param from dedup.Store to database.BookTagSingletonStore
+    files: internal/dedup/collectors_metadata.go
+TASK-048 | dedup |w4 | sonnet | M |rc= 1 |dep= [] |L10574 | Physically co-locate a Combine survivor's files under RootDir after CombineBooks
+    files: internal/merge/service.go
+TASK-049 | dedup |w1 | opus | M |rc= 1 |dep= [] |L10750 | Acoustic-confirm signal: promote near-dupe title-leak pairs using WholeFileSimilarity
+    files: internal/dedup/auto_resolve.go
+TASK-050 | dedup |w7 | opus | L |rc= 1 |dep= ['TASK-021', 'TASK-049'] |L10750 | Shattered-book reassembly: match fragment file-sets against the reference corpus via fpidx cont
+    files: internal/dedup/split_book_detector.go
+TASK-051 | docs |w1 | sonnet | S |rc= 0 |dep= [] |L296 | Delete the 34 group-relative duplicate paths from docs/api/openapi.json (safe to delete on sigh
+    files: docs/api/openapi.json
+TASK-052 | docs |w2 | sonnet | M |rc= 0 |dep= [] |L296 | Triage the 16 removed POST /maintenance/* paths in openapi.json — delete, or document as ops-AP
+    files: docs/api/openapi.json
+TASK-053 | docs |w3 | haiku | S |rc= 0 |dep= [] |L296 | Delete the /torrents group-relative fragment from openapi.json
+    files: docs/api/openapi.json
+TASK-054 | docs |w1 | sonnet | S |rc= 0 |dep= [] |L497 | Re-verify docs/reference/abs-target-client-contract.md §11's 'safe to stub' list — playlists AN
+    files: docs/reference/abs-target-client-contract.md
+TASK-055 | docs |w1 | haiku | S |rc= 0 |dep= [] |L1852 | Document the todo.d fragment race (assembled between filing and finishing) as a process rule, n
+    files: CLAUDE.md; todo.d/README.md
+TASK-056 | docs |w1 | sonnet | L |rc= 0 |dep= [] |L4463 | Consolidate the August executive-summary roundup through 2026-08-19
+    files: docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md
+TASK-057 | docs |w1 | sonnet | M |rc= 1 |dep= [] |L10358 | Phase 8 — write the ABS topology, runbook, and migration guide (Cloudflare Access ordering, cov
+    files: docs/reference/abs-sync-topology-runbook.md
+TASK-058 | docs |w1 | haiku | S |rc= 0 |dep= [] |L10635 | Update execution-manifest doc to reflect the now-settled human gates
+    files: docs/plans/2026-07-10-execution-manifest.md
+TASK-059 | docs |w1 | haiku | S |rc= 0 |dep= [] |L10706 | Close out the 2026-05-01 re-audit block (TEST-2/DEP-1/DEAD-1/CTX-4/LOG-5/R-9/R-10)
+    files: TODO.md
+TASK-060 | docs |w1 | haiku | S |rc= 0 |dep= [] |L10849 | Docs truth-up with measured sandbox/prod dedup numbers
+    files: docs/dedup/STATUS.md; docs/operations/pending-prod-actions.md
+TASK-061 | itunes |w1 | sonnet | M |rc= 1 |dep= [] |L1517 | Import the 224 materialized-Playlist-Items smart playlists as static snapshots (no criteria par
+    files: internal/itunes/service/playlist_sync.go; internal/plugins/maintenance/itunes_playlist_import.go
+TASK-062 | itunes |w1 | sonnet | M |rc= 1 |dep= [] |L4208 | internal/itunes/backfill.go BackfillExternalIDs: replace offset pagination with GetAllBooksFull
+    files: internal/itunes/backfill.go
+TASK-063 | itunes |w2 | sonnet | S |rc= 1 |dep= ['TASK-062'] |L4208 | internal/itunes/backfill.go BackfillITunesTrackPIDs: same offset-pagination bug, not named in t
+    files: internal/itunes/backfill.go
+TASK-064 | itunes |w1 | opus | M |rc= 1 |dep= [] |L10366 | Add a Part->disc / Chapter->track filename parser so 'P0-C0'-style folders stop falling to ambi
+    files: internal/itunes/service/fs_regroup_shape.go; internal/itunes/service/fs_regroup_shape_test.go
+TASK-065 | itunes |w1 | opus | M |rc= 1 |dep= [] |L10390 | P2 relocate-only sync cycle — the composed cycle already exists (RunRelocateSyncCycle); wire it
+    files: internal/itunes/relocate_sync_cycle_test.go; internal/server/itl_sync_cycle.go; internal/server/server_lifecycle.go
+TASK-066 | maintenance |w2 | sonnet | M |rc= 0 |dep= [] |L606 | Wire a durable freshness stamp for maintenance.chapters-backfill before it is ever scheduled
+    files: internal/plugins/maintenance/chapters_backfill.go; internal/plugins/maintenance/deps.go; internal/server/server_maintenance_deps.go
+TASK-067 | maintenance |w2 | sonnet | M |rc= 1 |dep= ['TASK-068'] |L642 | Extend the REPOINT repair to recover BookFile rows via Book.FilePath (the #2372 fallback shape)
+    files: internal/plugins/maintenance/missing_file_repoint.go
+TASK-068 | maintenance |w1 | sonnet | S |rc= 0 |dep= [] |L670 | Build a REPORT-ONLY counter for Book.FilePath collisions (rows sharing the same path across dif
+    files: internal/plugins/maintenance/filepath_collision_report.go
+TASK-069 | maintenance |w1 | sonnet | L |rc= 0 |dep= [] |L1009 | Give maintenance jobs (v1, internal/maintenance) per-job store interfaces instead of the shared
+    files: internal/maintenance/job.go; internal/maintenance/registry.go; internal/server/maintenance_dispatcher.go; internal/server/maintenance_job_op.go
+TASK-070 | maintenance |w7 | sonnet | M |rc= 0 |dep= [] |L3488 | Add a user-configurable activity-log retention window (default 7 days, 0=never)
+    files: internal/config/config.go; internal/plugins/maintenance/cleanup.go; internal/plugins/maintenance/deps.go; internal/server/server_maintenance_deps.go; web/src/pages/ActivityLog.tsx; web/src/services/activityApi.ts; web/src/services/api.ts
+TASK-071 | maintenance |w2 | sonnet | M |rc= 0 |dep= [] |L3602 | Build a detection-only report of other title-fragment author rows (the 57 rows beginning with '
+    files: internal/plugins/maintenance/author_title_fragment_report.go; internal/plugins/maintenance/plugin.go
+TASK-072 | maintenance |w2 | sonnet | M |rc= 1 |dep= ['TASK-086'] |L3795 | New maintenance op: merge an operator-confirmed list of duplicate real-author rows
+    files: internal/plugins/maintenance/author_duplicate_merge.go; internal/plugins/maintenance/author_duplicate_merge_test.go
+TASK-073 | maintenance |w1 | sonnet | M |rc= 1 |dep= [] |L4137 | Read-through audit of the 8 ctxOpID consumer call sites now that op IDs actually arrive
+    files: internal/plugins/maintenance/cleanup.go; internal/plugins/maintenance/dedup_ops.go; internal/plugins/maintenance/metadata.go; internal/plugins/maintenance/optimize.go; internal/plugins/maintenance/reconcile.go; internal/plugins/maintenance/series.go; internal/plugins/maintenance/write_back.go
+TASK-074 | maintenance |w3 | sonnet | M |rc= 0 |dep= [] |L4144 | Build a report-only census of books with a placeholder author already baked into their organize
+    files: internal/plugins/maintenance/plugin.go; internal/plugins/maintenance/unknown_author_audit.go
+TASK-075 | maintenance |w1 | sonnet | S |rc= 0 |dep= [] |L5275 | Extend purge-empty-authors' report to categorize the 822 zero-book-but-has-files authors
+    files: internal/plugins/maintenance/author_purge_empty.go
+TASK-076 | maintenance |w1 | opus | L |rc= 1 |dep= [] |L5281 | Author-narrator swap repair, routed through the review queue (cross-table population, distinct 
+    files: internal/plugins/maintenance/author_narrator_swap_review.go
+TASK-077 | maintenance |w1 | sonnet | M |rc= 0 |dep= [] |L5424 | Narrow the 3 remaining maintenance-jobs callees off maintenance.JobStore (vgFixAuthorDirPath, m
+    files: internal/maintenance/jobs/backfill_itunes_positions.go; internal/maintenance/jobs/dedup_books.go; internal/maintenance/jobs/fix_version_groups.go
+TASK-078 | maintenance |w1 | opus | M |rc= 1 |dep= [] |L10333 | TASK-04: build the idempotent sync-ID backfill over the existing library (bounded worker pool r
+    files: internal/plugins/maintenance/backfill_sync_id.go; internal/plugins/maintenance/backfill_sync_id_test.go
+TASK-079 | metadata |w1 | sonnet | S |rc= 0 |dep= [] |L1338 | Route ScoreOneResultWithBreakdown's base==0 path through scoreRecorder instead of a hand-built 
+    files: internal/metafetch/service_scoring.go
+TASK-080 | metadata |w1 | opus | M |rc= 1 |dep= [] |L2595 | Assess the 2 critical go/request-forgery (SSRF) CodeQL alerts on cover-fetch paths
+    files: internal/covers/covers.go; internal/metadata/cover.go
+TASK-081 | metadata |w1 | haiku | S |rc= 0 |dep= [] |L3517 | Prefix metadata-apply activity summaries with the book title and render empty old-value as '(no
+    files: internal/metafetch/service_apply.go
+TASK-082 | misc-go |w1 | sonnet | M |rc= 1 |dep= [] |L2595 | Fix the go/zipslip finding on the backup-restore extraction path
+    files: internal/backup/backup.go
+TASK-083 | misc-go |w1 | sonnet | M |rc= 1 |dep= [] |L2595 | Fix or verify the 4 still-open go/path-injection findings (1 of the original 5 is already suppr
+    files: internal/fileops/safe_operations.go; internal/metadata/assemble.go; internal/server/handlers/filesystem.go
+TASK-084 | misc-go |w1 | sonnet | S |rc= 0 |dep= [] |L2595 | Add CodeQL-specific lgtm suppressions for the 3 already-justified go/disabled-certificate-check
+    files: internal/mtls/provisioning.go; tools/cmd/merge-split-books/main.go; tools/cmd/reconcile-paths/main.go
+TASK-085 | misc-go |w1 | sonnet | M |rc= 0 |dep= [] |L3433 | Add search-index metrics (docs total, dirty backlog) to /metrics — the search index has zero me
+    files: internal/metrics/metrics.go; internal/server/search_coverage.go; internal/server/server_search.go
+TASK-086 | misc-go |w1 | haiku | S |rc= 1 |dep= [] |L3790 | Collapse internal whitespace in util.NormalizeAuthor so double-spaced names dedupe correctly
+    files: internal/util/normalize.go; internal/util/normalize_test.go
+TASK-087 | misc-go |w1 | sonnet | M |rc= 0 |dep= [] |L4214 | Replace serviceregistry.Get[T]'s panicking string-key lookups with typed accessors
+    files: internal/serviceregistry/container.go
+TASK-088 | misc-go |w1 | haiku | S |rc= 0 |dep= [] |L4698 | Route acoustid lsh_backfill's lshIndexChecker lookup through database.AsCapability
+    files: internal/plugins/acoustid/lsh_backfill.go
+TASK-089 | missing-file-lane |w1 | haiku | S |rc= 0 |dep= [] |L5494 | Log a warning when GetAllSeriesBookCounts() itself errors in LibrarySeries
+    files: internal/server/handlers/abs/browse.go
+TASK-090 | missing-file-lane |w1 | sonnet | S |rc= 0 |dep= [] |L5722 | Give Change Log row 'Compare snapshot' keyboard/a11y affordance
+    files: web/src/components/ChangeLog.tsx
+TASK-091 | missing-file-lane |w1 | haiku | S |rc= 0 |dep= [] |L5736 | Remove dead expanded state in TagComparison
+    files: web/src/components/TagComparison.tsx
+TASK-092 | missing-file-lane |w1 | sonnet | M |rc= 0 |dep= [] |L5742 | Delete the unreachable Bulk Fetch Metadata dialog and its handler
+    files: web/src/components/library/LibraryDialogs.tsx; web/src/pages/Library.tsx
+TASK-093 | missing-file-lane |w1 | haiku | S |rc= 0 |dep= [] |L5758 | Audit remaining setupMockApi startsWith() catch-alls for shadowed specific branches
+    files: web/tests/e2e/utils/test-helpers.ts
+TASK-094 | missing-file-lane |w1 | sonnet | S |rc= 0 |dep= [] |L6252 | Restore version-group count and current-version marker on Book Detail
+    files: web/src/components/bookdetail/BookDetailHeader.tsx; web/src/components/bookdetail/BookDetailVersionGroup.tsx
+TASK-095 | missing-file-lane |w1 | haiku | S |rc= 0 |dep= [] |L6701 | Instrument sort_by usage to inform the enabled_sort_indexes decision
+    files: internal/server/handlers/audiobooks/handler.go
+TASK-096 | missing-file-lane |w1 | opus | L |rc= 1 |dep= [] |L7435 | Require every mutating operation to declare and enforce dry_run support at the registry
+    files: internal/operations/registry/registry.go; internal/operations/registry/types.go
+TASK-097 | missing-file-lane |w1 | haiku | S |rc= 0 |dep= [] |L7603 | Remove the now-redundant react-is override from web/package.json
+    files: web/package.json
+TASK-098 | missing-file-lane |w2 | sonnet | S |rc= 0 |dep= [] |L7736 | Echo which filters the server actually applied in the /audiobooks list response
+    files: internal/server/handlers/audiobooks/applied_filters_test.go; internal/server/handlers/audiobooks/handler.go
+TASK-099 | missing-file-lane |w2 | sonnet | S |rc= 0 |dep= [] |L8044 | Fail/warn CI when the RC ordinal for a version hits 10
+    files: .github/workflows/prerelease.yml
+TASK-100 | missing-file-lane |w1 | sonnet | S |rc= 0 |dep= [] |L8177 | Validate the two unvalidated client-side navigation sinks (Login.tsx from-state, BookDetail.tsx
+    files: web/src/pages/BookDetail.tsx; web/src/pages/Login.tsx; web/src/utils/safeReturn.test.ts; web/src/utils/safeReturn.ts
+TASK-101 | missing-file-lane |w1 | sonnet | S |rc= 0 |dep= [] |L8245 | Pin a regression test: the regroup recommender must not default to duplicate-of on equal-runtim
+    files: internal/plugins/maintenance/regroup_shattered_ai_test.go
+TASK-102 | missing-file-lane |w2 | opus | L |rc= 0 |dep= [] |L8273 | TypeScript 6.0.3 → 7.0.2 migration (the one remaining piece of the frontend-framework-versions 
+    files: web/package.json
+TASK-103 | missing-file-lane |w1 | sonnet | M |rc= 0 |dep= [] |L8433 | Build a report-only op categorizing the transcribe_status vs IntroTranscription drift (79.3% wh
+    files: internal/plugins/maintenance/transcribe_status_drift_report.go; internal/plugins/maintenance/transcribe_status_drift_report_test.go
+TASK-104 | missing-file-lane |w1 | opus | L |rc= 1 |dep= [] |L8551 | Build the version-group acoustic audit op (tier 2 of First Aid)
+    files: internal/plugins/maintenance/version_group_acoustic_audit.go; internal/plugins/maintenance/version_group_acoustic_audit_test.go
+TASK-105 | missing-file-lane |w2 | opus | L |rc= 1 |dep= ['TASK-106', 'TASK-107'] |L8611 | Build chapters backfill from a near-exact-acoustic-match duplicate (or provider data, or a cue/
+    files: internal/plugins/maintenance/chapters_backfill_from_duplicate.go; internal/plugins/maintenance/chapters_backfill_from_duplicate_test.go
+TASK-106 | missing-file-lane |w1 | opus | L |rc= 0 |dep= [] |L8646 | Import found playlist files (.m3u/.m3u8/.pls/.cue/.xspf) during scan, resolving entries to book
+    files: internal/playlist/import.go; internal/playlist/import_test.go; internal/scanner/scanner.go
+TASK-107 | missing-file-lane |w1 | sonnet | S |rc= 0 |dep= [] |L8646 | Export a playlist back to .m3u
+    files: internal/server/handlers/playlists.go; internal/server/handlers/playlists_export_test.go
+TASK-108 | missing-file-lane |w1 | sonnet | M |rc= 0 |dep= [] |L8675 | Add the review/rating half of app-to-server reading-state sync (reading status half already exi
+    files: internal/server/handlers/abs/progress.go; internal/server/handlers/abs/progress_test.go
+TASK-109 | missing-file-lane |w1 | opus | L |rc= 0 |dep= [] |L8707 | Parse Deluge torrent release names into structured candidate metadata (author/series/volume/nar
+    files: internal/deluge/metadata_candidate.go; internal/deluge/metadata_candidate_test.go
+TASK-110 | missing-file-lane |w2 | opus | L |rc= 0 |dep= ['TASK-109'] |L8738 | Audit book/file grouping against Deluge torrent file-list membership (read-only, tier 1 of the 
+    files: internal/deluge/grouping_audit.go; internal/deluge/grouping_audit_test.go
+TASK-111 | missing-file-lane |w1 | sonnet | M |rc= 1 |dep= [] |L8837 | Build the pre-apply snapshot tool for the 138 pending multidisc holds
+    files: internal/plugins/maintenance/multidisc_snapshot.go; internal/plugins/maintenance/multidisc_snapshot_test.go
+TASK-112 | missing-file-lane |w2 | opus | L |rc= 1 |dep= ['TASK-113'] |L8890 | Build the First Aid orchestrator + frontend trigger button (dry-run by default, no schedule)
+    files: internal/plugins/maintenance/first_aid_orchestrator.go; internal/plugins/maintenance/first_aid_orchestrator_test.go; web/src/pages/SystemMaintenance.tsx
+TASK-113 | missing-file-lane |w1 | opus | M |rc= 0 |dep= [] |L8890 | Missing-input triggering: enqueue the producer op when a waiting_deps requirement's input has n
+    files: internal/operations/registry/deps.go; internal/operations/registry/deps_scheduler.go; internal/operations/registry/deps_scheduler_test.go
+TASK-114 | missing-file-lane |w1 | opus | L |rc= 1 |dep= [] |L8943 | Never delete — re-associate: combine debris books into a template match by duration, then versi
+    files: internal/plugins/maintenance/combine_by_template.go; internal/plugins/maintenance/combine_by_template_test.go
+TASK-115 | operations |w2 | sonnet | M |rc= 0 |dep= [] |L4477 | Distinguish 'nothing to cancel' from 'cancelled' in registry.Cancel so unknown-id cancels 404 i
+    files: internal/operations/registry/registry.go; internal/server/handlers/interfaces.go; internal/server/handlers/operations_v2.go; internal/server/handlers/operations_v2_test.go; internal/server/operations_v2_handlers.go; internal/server/server_extra_test.go
+TASK-116 | operations |w1 | sonnet | M |rc= 1 |dep= [] |L4586 | Forward IsCanceled() through reporterLogger to the ops registry's cancellation signal
+    files: internal/operations/progress.go
+TASK-117 | operations |w1 | sonnet | S |rc= 0 |dep= [] |L4703 | Give prodSchedulerStore an Unwrap() so capability lookups can see past it
+    files: internal/operations/registry/register.go
+TASK-118 | operations |w1 | sonnet | S |rc= 0 |dep= [] |L4743 | Delete internal/operations/mocks — its only referencer is dead, permanently-untagged, currently
+    files: .mockery.yaml; internal/operations/mocks/mock_progress_reporter.go; internal/server/server_import_file_mocks_test.go
+TASK-119 | organize |w1 | sonnet | S |rc= 1 |dep= [] |L872 | Replace the size-equality heuristic in OrganizeBookDirectory's destination-adoption check with 
+    files: internal/organizer/organizer.go
+TASK-120 | organize |w2 | opus | L |rc= 1 |dep= ['TASK-119'] |L872 | Route the three organize/rename paths through organizer.MoveBookFile's verify-move-DB-update-ro
+    files: internal/metafetch/service_apply.go; internal/organizer/organizer.go
+TASK-121 | organize |w1 | opus | M |rc= 1 |dep= [] |L4919 | Make resolveOrganizedFilePath's plan-on-faith fallback loud and verify-before-write
+    files: internal/organizer/service.go
+TASK-122 | organize |w1 | sonnet | S |rc= 1 |dep= [] |L5021 | Add an {edition_suffix} folder-pattern token
+    files: internal/organizer/pathbuild.go
+TASK-123 | scanner |w2 | haiku | S |rc= 0 |dep= [] |L4739 | Delete the unused internal/scanner/mocks generated package
+    files: .mockery.yaml; internal/scanner/mocks/mock_scanner.go; internal/scanner/mocks/mock_scanner_coverage_test.go
+TASK-124 | scanner |w1 | sonnet | M |rc= 0 |dep= [] |L4852 | Reuse internal/ai's existing typed OpenAI error classification in scanner.isPermanentAIFailure 
+    files: internal/scanner/ai_failure.go
+TASK-125 | search |w2 | sonnet | M |rc= 0 |dep= [] |L618 | Index track names on BookDocument so smart playlists can match them
+    files: internal/search/bleve_index.go; internal/search/document.go; internal/search/index_builder.go
+TASK-126 | search |w1 | sonnet | M |rc= 0 |dep= [] |L3369 | Surface to the user when 'all'/'and' (or any stopword) is silently dropped from a search query
+    files: internal/search/bleve_translator.go; internal/server/handlers/search.go
+TASK-127 | server |w1 | haiku | S |rc= 0 |dep= [] |L90 | Log ABS_API_ENABLED's actual boot-time value unconditionally (currently silent when disabled)
+    files: internal/server/wire_abs_routes.go
+TASK-128 | server |w3 | sonnet | S |rc= 0 |dep= [] |L1317 | Fix EnableRateLimit=false not actually disabling rate limiting
+    files: internal/server/server_lifecycle.go
+TASK-129 | server |w2 | sonnet | M |rc= 0 |dep= [] |L1957 | Fix wipeActivity dry-run count saturating at 2
+    files: internal/server/maintenance_fixups.go
+TASK-130 | server |w2 | sonnet | S |rc= 0 |dep= [] |L3384 | Register SearchIndexDroppedCount (and a dirty-backlog gauge) as Prometheus metrics
+    files: internal/metrics/metrics.go; internal/server/search_reconciler.go
+TASK-131 | server |w4 | sonnet | S |rc= 0 |dep= [] |L3443 | Fix audiobook_organizer_books_total to report the true total, not just primary books (or rename
+    files: internal/metrics/metrics.go; internal/server/server_lifecycle.go
+TASK-132 | server |w2 | sonnet | S |rc= 1 |dep= [] |L4329 | Fix indexedStore.UpdateBook to enqueue a Bleve DELETE when the update is a soft-delete transiti
+    files: internal/server/indexed_store.go
+TASK-133 | server |w3 | sonnet | S |rc= 1 |dep= ['TASK-132'] |L4334 | Regression test: soft-deleting an indexed book must be unsearchable without a boot reconcile
+    files: internal/server/indexed_store_test.go
+TASK-134 | server |w1 | sonnet | M |rc= 0 |dep= [] |L4449 | Add a wiring-level test proving the server actually constructs CancelOperationV2 with AI-scan c
+    files: internal/server/wire_handlers_test.go
+TASK-135 | server |w1 | sonnet | M |rc= 1 |dep= [] |L4575 | Convert metadata.batch-apply-cached from ResumeDrop to real checkpoint/resume
+    files: internal/server/batch_apply_op.go
+TASK-136 | server |w1 | sonnet | M |rc= 1 |dep= [] |L4575 | Convert reconcile.apply from ResumeDrop to real checkpoint/resume
+    files: internal/server/reconcile_ops.go
+TASK-137 | server |w1 | haiku | S |rc= 0 |dep= [] |L4732 | Fix TestOrganizeService_PerformOrganize_NoBooksToOrganize to mock the method PerformOrganize ac
+    files: internal/server/organize_service_test.go
+TASK-138 | server |w1 | sonnet | S |rc= 1 |dep= [] |L10290 | Exempt the ABS router group from the global BasicAuth() middleware
+    files: internal/server/middleware/basicauth.go; internal/server/middleware/basicauth_test.go
+TASK-139 | server |w7 | haiku | S |rc= 0 |dep= [] |L10298 | Prune expired abs_sess: records on the existing session-cleanup schedule
+    files: internal/database/mock_store.go; internal/database/mocks/mock_store.go; internal/server/server_lifecycle.go; internal/server/server_ops_store.go
+TASK-140 | server |w1 | sonnet | S |rc= 1 |dep= [] |L10372 | Retire the unsafe cleanup_merged.go handler as a guarded no-op (owner decision: MEASURE-AND-STO
+    files: internal/server/itl_cleanup.go; internal/server/itl_cleanup_test.go
+TASK-141 | server |w1 | haiku | S |rc= 0 |dep= [] |L10525 | Add regression tests for the 2 untested deluge hydrate sites
+    files: internal/maintenance/jobs/bulk_deluge_import_test.go; internal/server/deluge_discovery_test.go
+TASK-142 | server-handlers |w1 | sonnet | M |rc= 1 |dep= [] |L17 | Expose UnmergeAuto through an admin undo-merge endpoint (list + invoke)
+    files: internal/server/handlers/dedup/handler.go; internal/server/handlers/dedup/interfaces.go; internal/server/wire_dedup_routes.go
+TASK-143 | server-handlers |w1 | sonnet | S |rc= 0 |dep= [] |L53 | N-3: stop advertising Delete/Update permissions the library surface cannot honor
+    files: internal/server/handlers/abs/dto.go
+TASK-144 | server-handlers |w2 | haiku | S |rc= 0 |dep= [] |L53 | N-5: /search narrators must omit numBooks, not emit 0
+    files: internal/server/handlers/abs/browse.go
+TASK-145 | server-handlers |w1 | haiku | S |rc= 0 |dep= [] |L53 | N-6: log + metric when listening-stats read fails (currently silent 0)
+    files: internal/server/handlers/abs/stats.go
+TASK-146 | server-handlers |w2 | haiku | S |rc= 0 |dep= [] |L53 | N-10: advertised login rate limit (10/10min) does not match the real throttle (15/15min)
+    files: internal/server/handlers/abs/dto.go
+TASK-147 | server-handlers |w3 | opus | L |rc= 0 |dep= ['TASK-143', 'TASK-144', 'TASK-145', 'TASK-146'] |L127 | Align ABS conformance fixtures with the oracle so CompareValues stays green permanently
+    files: internal/server/handlers/abs/library_fake_test.go
+TASK-148 | server-handlers |w4 | sonnet | S |rc= 0 |dep= ['TASK-147'] |L491 | Re-capture the series ABS fixture against a populated library (it currently contains zero serie
+    files: testdata/abs-fixtures/get_api_libraries_id_series.json
+TASK-149 | server-handlers |w1 | sonnet | S |rc= 0 |dep= [] |L685 | Detect multi-file books whose synthesized chapter timeline stops short of Book.Duration (per-fi
+    files: internal/server/handlers/abs/mapper.go
+TASK-150 | server-handlers |w1 | sonnet | M |rc= 1 |dep= [] |L2481 | Audit apply-shaped endpoints for missing tag/file-I/O writeback
+    files: docs/audits/2026-08-21-apply-endpoint-fileio-audit.md; internal/server/handlers/ai.go; internal/server/handlers/diagnostics.go; internal/server/handlers/metadata/handler.go; internal/server/handlers/metadata_cache.go; internal/server/handlers/organize.go; internal/server/handlers/review/handler.go
+TASK-151 | server-handlers |w2 | haiku | S |rc= 0 |dep= [] |L2589 | Document the hardcoded ABS timeBase as a permanent, owner-approved allowance
+    files: internal/server/handlers/abs/mapper.go
+TASK-152 | server-handlers |w1 | sonnet | S |rc= 0 |dep= [] |L3918 | Bound the iTunes search handler's unbounded SearchBooks(search, 0, 0) call
+    files: internal/server/handlers/itunes.go
+TASK-153 | server-handlers |w1 | haiku | S |rc= 0 |dep= [] |L4507 | Implement POST /api/session/local (2xx stub)
+    files: internal/server/handlers/abs/handler.go; internal/server/handlers/abs/play.go
+TASK-154 | server-handlers |w2 | sonnet | M |rc= 0 |dep= [] |L4507 | Implement POST /api/session/local-all (batch local-session sync, accept both body shapes)
+    files: internal/server/handlers/abs/handler.go; internal/server/handlers/abs/play.go
+TASK-155 | server-handlers |w1 | sonnet | M |rc= 0 |dep= [] |L4563 | Move /tasks/* and /maintenance-window/* off the legacy v1 operations handler into their own sch
+    files: internal/server/handlers/operations/handler.go; internal/server/handlers/scheduler_admin.go; internal/server/wire_operations_routes.go
+TASK-156 | server-handlers |w2 | sonnet | M |rc= 0 |dep= [] |L10354 | Phase 7 — socket.io for Absorb (deprioritized by the item's own text; still unbuilt)
+    files: internal/server/handlers/abs/socketio.go; internal/server/wire_abs_routes.go
+TASK-157 | server-handlers |w2 | sonnet | M |rc= 1 |dep= [] |L10521 | Parallelize the per-candidate synchronous label/breakdown refresh in DismissDedupCluster
+    files: internal/server/handlers/dedup/handler.go; internal/server/handlers/dedup/label_capture.go
+TASK-158 | web |w1 | sonnet | M |rc= 0 |dep= [] |L0 | Add a Settings panel section to edit path_aliases
+    files: web/src/components/settings/PathAliasesSection.test.tsx; web/src/components/settings/PathAliasesSection.tsx; web/src/hooks/useSettingsHandlers.ts; web/src/pages/Settings.tsx
+TASK-159 | web |w1 | haiku | S |rc= 0 |dep= [] |L0 | Add and use a test-reset hook for the module-scope path-alias/path-var promise caches
+    files: web/src/components/common/PathLinks.test.tsx; web/src/components/common/PathLinks.tsx; web/src/components/review/ReviewWorkspace.refetchStale.test.tsx; web/src/components/review/ReviewWorkspace.test.tsx; web/src/components/review/spine/CompareSpine.test.tsx; web/src/components/review/spine/DupesSpine.test.tsx; web/src/components/review/spine/RegroupSpine.test.tsx; web/src/utils/formatPath.ts
+TASK-160 | web |w1 | sonnet | M |rc= 0 |dep= [] |L376 | Move OpenAI API key validation server-side (currently sent from the browser)
+    files: internal/server/handlers/setup.go (or wherever the setup-wizard's other server-side calls live — confirm exact file); web/src/components/wizard/WelcomeWizard.tsx
+TASK-161 | web |w2 | sonnet | S |rc= 0 |dep= [] |L1350 | Strip dedup:* and metadata:source:* namespaces from Browse by Tag widget
+    files: web/src/components/library/TagCloud.tsx; web/src/pages/Library.tsx
+TASK-162 | web |w1 | sonnet | S |rc= 0 |dep= [] |L1350 | Reformat metadata:* tags in Browse by Tag: strip prefix, 'key: value' spacing
+    files: web/src/components/library/TagCloud.tsx
+TASK-163 | web |w1 | opus | M |rc= 0 |dep= [] |L1744 | Find the mechanism behind the intermittent webkit-only flake in batch-operations.spec.ts:100 (s
+    files: web/tests/e2e/batch-operations.spec.ts
+TASK-164 | web |w3 | opus | L |rc= 1 |dep= ['TASK-042'] |L2025 | Let the owner combine/merge duplicate books from the metadata chooser, before applying metadata
+    files: web/src/components/BatchToolbar.tsx; web/src/pages/Library.tsx
+TASK-165 | web |w4 | sonnet | L |rc= 1 |dep= [] |L2486 | Review the 17 apiFetch-callers' catch handlers for session-expiry messaging
+    files: web/src/components/audiobooks/BulkMetadataSearchDialog.tsx; web/src/components/audiobooks/MetadataSearchDialog.tsx; web/src/components/audiobooks/VersionManagement.tsx; web/src/components/common/ServerFileBrowser.tsx; web/src/components/dedup/CandidateCompareDrawer.tsx; web/src/components/dedup/DedupAcousticTab.tsx; web/src/components/layout/UserMenu.tsx; web/src/components/review/lanes/useDupesLane.ts; web/src/components/review/lanes/useMetadataLane.ts; web/src/components/review/reviewActions.ts; web/src/components/settings/APIKeysTab.tsx; web/src/components/system/MaintenanceTab.tsx; web/src/hooks/useBackupHandlers.ts; web/src/hooks/useColumnConfig.ts; web/src/hooks/useImportFolderHandlers.ts; web/src/pages/BookDetail.tsx; web/src/pages/FileManager.tsx; web/src/pages/Library.tsx
+TASK-166 | web |w5 | sonnet | M |rc= 0 |dep= [] |L3156 | Make the book-detail page's Author field(s) link to a library view filtered by that author
+    files: web/src/components/bookdetail/BookDetailInfoTab.tsx; web/src/hooks/useLibraryQuery.ts; web/src/pages/Library.tsx
+TASK-167 | web |w6 | sonnet | M |rc= 0 |dep= ['TASK-166'] |L3161 | Make the book-detail page's Series field link to a library view filtered by that series, landin
+    files: web/src/components/bookdetail/BookDetailInfoTab.tsx; web/src/hooks/useLibraryQuery.ts; web/src/pages/Library.tsx
+TASK-168 | web |w7 | sonnet | M |rc= 0 |dep= [] |L3164 | Make Narrator, Publisher, Genre, and Release Year fields link to filtered library views (all fo
+    files: web/src/components/bookdetail/BookDetailInfoTab.tsx; web/src/pages/Library.tsx
+TASK-169 | web |w8 | sonnet | S |rc= 0 |dep= [] |L3168 | Link version_group_id to a filtered library view (now unblocked — the filter works as of commit
+    files: web/src/components/bookdetail/BookDetailVersionGroup.tsx; web/src/pages/Library.tsx
+TASK-170 | web |w1 | sonnet | S |rc= 0 |dep= [] |L4960 | Retarget dedup-operations.spec.ts and dedup.spec.ts resolve-production status mocks to v2
+    files: web/tests/e2e/dedup-operations.spec.ts; web/tests/e2e/dedup.spec.ts
+TASK-171 | web |w1 | sonnet | S |rc= 0 |dep= [] |L4960 | Retarget diagnostics.spec.ts AI-submit and export status mocks to v2
+    files: web/tests/e2e/diagnostics.spec.ts
+TASK-172 | web |w1 | haiku | S |rc= 0 |dep= [] |L10586 | Add a frontend test asserting the book-sig coverage % badge renders
+    files: web/src/components/dedup/DedupEmbeddingTab.test.tsx
+TASK-173 | web |w1 | sonnet | M |rc= 0 |dep= [] |L10660 | Add resizable/sortable columns to the acoustic dedup candidates table
+    files: web/src/components/dedup/DedupAcousticTab.tsx
+TASK-174 | web |w1 | sonnet | L |rc= 0 |dep= [] |L10660 | Add resizable/sortable columns to the Activity Log table
+    files: web/src/pages/ActivityLog.tsx
+TASK-175 | web |w1 | sonnet | M |rc= 0 |dep= [] |L10660 | Add resizable/sortable columns to the split-book dedup candidates table
+    files: web/src/components/dedup/DedupSplitBookTab.tsx

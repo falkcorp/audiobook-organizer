@@ -1,0 +1,82 @@
+{
+  "todo_line": 4563,
+  "src_id": null,
+  "title": "Move /tasks/* and /maintenance-window/* off the legacy v1 operations handler into their own scheduler-config handler",
+  "verdict": "actionable",
+  "verdict_evidence": "All 6 routes are confirmed still living on the legacy operations handler: `grep -n 'protected\\.\\(GET\\|POST\\|PUT\\)(\"/tasks\\|/maintenance-window' internal/server/wire_operations_routes.go` shows all 6 registered against operationsH (internal/server/handlers/operations.Handler), the same struct that owns the v1-operations-record surface this backlog is retiring elsewhere. The item's ask ('move them to their own handler') has not happened \u2014 confirmed unchanged.",
+  "domain": "internal/server/handlers/operations",
+  "exact_files": [
+    "internal/server/handlers/operations/handler.go",
+    "internal/server/handlers/scheduler_admin.go",
+    "internal/server/wire_operations_routes.go"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "all 6 routes are registered on operationsH, the legacy v1 operations handler",
+      "grep_cmd": "grep -n '\"/tasks\\|/maintenance-window' internal/server/wire_operations_routes.go",
+      "expect": "6 hits at L84-89, all calling operationsH.<Method>"
+    },
+    {
+      "claim": "the 6 handler methods live in the same file/struct as the v1 operations-record CRUD being retired elsewhere",
+      "grep_cmd": "grep -n 'func (h \\*Handler) ListTasks\\|func (h \\*Handler) RunTask\\|func (h \\*Handler) UpdateTaskConfig\\|func (h \\*Handler) RunMaintenanceWindowNow\\|func (h \\*Handler) GetMaintenanceWindowStatus\\|func (h \\*Handler) UpdateMaintenanceWindowConfig' internal/server/handlers/operations/handler.go",
+      "expect": "6 hits at L457,467,663,752,768,798"
+    },
+    {
+      "claim": "the handler already has a documented lazy-scheduler-provider pattern to reuse (scheduler is wired after these handlers are constructed)",
+      "grep_cmd": "grep -n 'getScheduler resolves the scheduler lazily' internal/server/handlers/operations/handler.go",
+      "expect": "1 hit around L48"
+    }
+  ],
+  "reuse": [
+    {
+      "name": "the lazy scheduler-provider closure pattern (Server.scheduler is assigned in Start(), after handler construction)",
+      "file": "internal/server/handlers/operations/handler.go",
+      "verify_grep": "grep -n 'resolveScheduler' internal/server/handlers/operations/handler.go"
+    }
+  ],
+  "polarity": "removal",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "A mechanical handler-extraction refactor (move 6 methods + their route registrations to a new package, thread the same scheduler-provider dependency) with enough surface area (6 handlers, their tests, and the wiring file) to need care but no novel design.",
+  "review_critical": false,
+  "goal": "Extract ListTasks, RunTask, UpdateTaskConfig, RunMaintenanceWindowNow, GetMaintenanceWindowStatus and UpdateMaintenanceWindowConfig out of internal/server/handlers/operations.Handler into a new, small handler (suggested package: internal/server/handlers/scheduler, or a new file within an existing package if a maintainer prefers not adding a package) so that retiring the v1 operations-record handler later does not read as 'delete task scheduling' \u2014 these 6 routes are scheduler configuration/control, not operation records, and should not be coupled to that retirement.",
+  "background": [
+    "internal/server/handlers/operations/handler.go's doc comment (line 11) already self-describes as covering 'task-scheduler endpoints, and the maintenance-window endpoints' alongside the v1 operations-record surface \u2014 i.e. the file itself already flags this as three different concerns bundled together.",
+    "The scheduler dependency is threaded lazily (lines 48-99, resolveScheduler) because *Server.scheduler is only assigned in Start(), which runs AFTER NewServer's handler-construction phase \u2014 any new handler needs the exact same lazy-provider shape, not a direct *scheduler.TaskScheduler field.",
+    "This split does not change route paths, request/response shapes, or permissions (auth.PermSettingsManage is used uniformly across all 6 today) \u2014 it is purely an internal code-organization move."
+  ],
+  "steps": [
+    "1. Create internal/server/handlers/scheduler_admin.go (or a new internal/server/handlers/scheduler/ package if the project's convention for other domains \u2014 audiobooks/, collections, metadata/ \u2014 is preferred; check whether existing single-purpose handlers in this dir are flat files or subpackages before choosing) with a new Handler type taking the same lazy scheduler-provider dependency as internal/server/handlers/operations.Handler.",
+    "2. Move ListTasks (operations/handler.go:457), RunTask (:467), UpdateTaskConfig (:663), RunMaintenanceWindowNow (:752), GetMaintenanceWindowStatus (:768) and UpdateMaintenanceWindowConfig (:798) verbatim into the new handler, along with any unexported helpers they exclusively use (e.g. fixedScheduleHint at line 561 if only these methods reference it \u2014 verify with grep before moving vs. leaving it behind).",
+    "3. Update internal/server/wire_operations_routes.go lines 84-89 to register the 6 routes against the new handler instance instead of operationsH.",
+    "4. Move the corresponding test cases out of internal/server/handlers/operations/handler_test.go (or wherever they currently live \u2014 grep for `func Test.*ListTasks\\|func Test.*RunTask\\|func Test.*MaintenanceWindow` under internal/server/handlers/operations/) into a new _test.go file alongside the new handler.",
+    "5. Bump version headers on every touched/created file."
+  ],
+  "tests": [
+    "internal/server/wire_operations_routes_test.go: a table over the 6 moved routes asserting status code and response shape are identical before and after the move (record the current responses first)."
+  ],
+  "acceptance": [
+    "`grep -n '\"/tasks\\|/maintenance-window' internal/server/wire_operations_routes.go` shows the 6 routes registered against the NEW handler, not operationsH.",
+    "`go build ./...` and `go test ./internal/server/...` both pass with no behavior change (same routes, same responses)."
+  ],
+  "edge_cases": [
+    "Any other handler method in internal/server/handlers/operations/handler.go that calls ListTasks/RunTask/etc. internally (rather than only being reached via HTTP) needs its call site updated too \u2014 grep for internal callers before assuming this is purely route-registration surgery."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "go build ./... && go vet ./... && go test ./internal/server/... ./internal/server/handlers/... ./internal/server/handlers/operations/... -count=1",
+  "notes": "This is purely an internal reorganization with no behavior change \u2014 keep the PR small and mechanical so it is trivially reviewable, and do not fold it into the same PR as the actual v1-operations-record retirement work happening elsewhere in this backlog.",
+  "review_notes": [
+    "[correctness.json] A route migration ships with tests: []. TASK-163 moves 6 routes (/tasks/*, /maintenance-window/*) off the legacy v1 operations handler onto a new scheduler-config handler and touches the frontend fetch layer, but declares no tests. Its acceptance is a grep that the routes are registered against the ",
+    "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ],
+  "id": "TASK-155",
+  "stable_key": "scope-08.json|4563|None|Move /tasks/* and /maintenance-window/* off the legacy v1 op",
+  "ws": "server-handlers",
+  "slug": "move-tasks-and-maintenance-window-off-the-legacy",
+  "scope_file": "scope-08.json",
+  "dropped_files": [],
+  "tier_label": "Sonnet-class",
+  "depends_on": [],
+  "wave": 1
+}

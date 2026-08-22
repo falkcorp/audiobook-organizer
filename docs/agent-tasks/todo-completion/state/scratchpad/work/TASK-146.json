@@ -1,0 +1,71 @@
+{
+  "todo_line": 53,
+  "src_id": "ABS-N10",
+  "part": 10,
+  "title": "N-10: advertised login rate limit (10/10min) does not match the real throttle (15/15min)",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/server/handlers/abs/dto.go sets RateLimitLoginRequests: 10 and RateLimitLoginWindow: 600000 (10 minutes in ms) in the advertised /status response; internal/server/absauth/throttle.go:31-35 defines the REAL policy as MaxFailuresPerIP = 15 over Window = 15 * time.Minute.",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+    "internal/server/handlers/abs/dto.go"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "advertised limits are 10 requests / 600000ms",
+      "grep_cmd": "grep -n 'RateLimitLoginRequests\\|RateLimitLoginWindow' internal/server/handlers/abs/dto.go",
+      "expect": "RateLimitLoginRequests: 10, RateLimitLoginWindow: 600000"
+    },
+    {
+      "claim": "the real throttle is 15 failures / 15 minutes",
+      "grep_cmd": "grep -n 'MaxFailuresPerIP\\|Window =' internal/server/absauth/throttle.go",
+      "expect": "MaxFailuresPerIP = 15, Window = 15 * time.Minute"
+    }
+  ],
+  "reuse": [
+    {
+      "name": "absauth.MaxFailuresPerIP / absauth.Window constants",
+      "file": "internal/server/absauth/throttle.go",
+      "verify_grep": "grep -n 'MaxFailuresPerIP\\|^ Window' internal/server/absauth/throttle.go"
+    }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Two-constant correction, using already-exported values from absauth \u2014 fully mechanical, no design judgment needed since the real values are the source of truth.",
+  "review_critical": false,
+  "goal": "Make the advertised /status rate-limit values in dto.go derive from (or exactly match) the real absauth throttle constants, so a client that paces itself to the advertisement is not surprised by the real 429 threshold.",
+  "background": [
+    "absauth is already imported somewhere in the abs handler package or its wiring \u2014 check `grep -rn '\"github.com/falkcorp/audiobook-organizer/internal/server/absauth\"' internal/server/handlers/abs/*.go` to see whether dto.go can import it directly without a cycle, or whether the values need to be passed in via Handler config at construction time instead."
+  ],
+  "steps": [
+    "1. Check for an import cycle risk: `grep -rn 'absauth' internal/server/handlers/abs/*.go` and `grep -n 'handlers/abs' internal/server/absauth/*.go` \u2014 if absauth does not import the abs package, dto.go can safely import absauth directly.",
+    "2. In internal/server/handlers/abs/dto.go, replace the hardcoded `RateLimitLoginRequests: 10` with `RateLimitLoginRequests: absauth.MaxFailuresPerIP` and `RateLimitLoginWindow: 600000` with `RateLimitLoginWindow: absauth.Window.Milliseconds()`.",
+    "3. Add the absauth import if not already present; bump dto.go's version header."
+  ],
+  "tests": [
+    "internal/server/handlers/abs/abs_test.go: TestStatus_RateLimitMatchesRealThrottle \u2014 GET /status, assert RateLimitLoginRequests == absauth.MaxFailuresPerIP and RateLimitLoginWindow == absauth.Window.Milliseconds()."
+  ],
+  "acceptance": [
+    "`go test ./internal/server/handlers/abs/... -run TestStatus_RateLimitMatchesRealThrottle -v` passes.",
+    "`grep -n 'absauth.MaxFailuresPerIP' internal/server/handlers/abs/dto.go` returns 1 hit."
+  ],
+  "edge_cases": [
+    "If step 1 finds an import cycle, fall back to passing the two values into abs.Handler via its constructor/config struct instead of importing absauth directly \u2014 do not introduce a cycle to satisfy this cosmetic fix."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "go build ./... && go vet ./... && go test ./internal/server/handlers/abs/... -count=1",
+  "notes": "N/A",
+  "review_notes": [
+    "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,"
+  ],
+  "id": "TASK-146",
+  "stable_key": "scope-01.json|53|10|N-10: advertised login rate limit (10/10min) does not match ",
+  "ws": "server-handlers",
+  "slug": "n-10-advertised-login-rate-limit-10-10min-does-n",
+  "scope_file": "scope-01.json",
+  "dropped_files": [],
+  "tier_label": "Haiku-class",
+  "depends_on": [],
+  "wave": 2
+}

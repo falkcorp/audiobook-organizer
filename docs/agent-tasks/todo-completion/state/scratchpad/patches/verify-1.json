@@ -1,0 +1,110 @@
+[
+  {
+    "task_id": "TASK-079",
+    "verdict": "fail",
+    "findings": [
+      {
+        "severity": "fatal",
+        "check": 2,
+        "problem": "Source-line re-find grep is broken: `grep -n \"Route ScoreOneResultWithBreakd\" TODO.md` returns 0 hits at HEAD (verified). Systemic across the whole batch (see TASK-081/089 etc.) — the re-find pattern was built from the paraphrased task title, not actual TODO.md text. Not fully fatal in practice here only because the bold id 'SCORE-REC' fallback (also named in the same sentence) does correctly hit TODO.md:1338.",
+        "fix": null
+      },
+      {
+        "severity": "advisory",
+        "check": 2,
+        "problem": "Tests section quotes 'Replaying breakdown.Steps must reproduce breakdown.Score exactly' as text 'referenced in its file header comment' of service_scoring_breakdown_test.go, but that exact sentence lives in service_scoring.go's doc comment on ScoreOneResultWithBreakdown, not in the test file's header (the test file's own comment says 'TestBreakdown_RecomposesToScore is the load-bearing property: replaying the...'). The named test (TestBreakdown_RecomposesToScore) does exist and does cover this, so the substance is fine — the citation is just imprecise, and the brief never gives a `go test -run` command for it (only for TestDurationScoringGolden).",
+        "fix": null
+      }
+    ],
+    "notes": "All core anchors verified: ScoreStep{{ at service_scoring.go:704 (only such literal outside score_breakdown.go), newScoreRecorder at score_breakdown.go:115, rec := newScoreRecorder sibling usage at service_scoring.go:140, breakdown() at score_breakdown.go:199. TODO.md:1338 SCORE-REC item matches verbatim, is a self-contained close-out (safe to check the box). Tier Sonnet-class is reasonable given the explicit mutation-test requirement (not a Haiku-safe rubber stamp)."
+  },
+  {
+    "task_id": "TASK-080",
+    "verdict": "fail",
+    "findings": [
+      {
+        "severity": "fatal",
+        "check": 2,
+        "problem": "Source-line re-find grep `grep -n \"Assess the 2 critical go/reque\" TODO.md` returns 0 hits. The real TODO bold id 'SEC-CODEQL-BACKLOG' does hit (line 2595) as a fallback.",
+        "fix": null
+      },
+      {
+        "severity": "fatal",
+        "check": 2,
+        "problem": "Background section is materially stale/wrong and would mislead the executing model. Verified at HEAD: internal/metadata/cover.go ALREADY has full SSRF protection on the exact flagged line (client.Get(coverURL) at cover.go:137) — validateCoverURL() (scheme allowlist, called at cover.go:117) PLUS safeCoverDialContext (a custom DialContext that resolves the host and rejects private/loopback/link-local IPv4 AND IPv6 ranges, wired in at cover.go:101-104). internal/covers/covers.go's http.Get(coverURL) at line 82 is likewise validated by its ONLY caller (internal/server/covers.go:34, `covers.IsAllowedCoverSource(coverURL)`, a strict 4-domain allowlist) before FetchAndCacheCover is ever invoked (confirmed FetchAndCacheCover has exactly one call site). Both '//nolint' comments the brief casts doubt on ('URL already validated above' / 'URL is validated by caller') are literally TRUE, not merely unverified claims. Moreover, the exact tests the brief instructs adding already exist verbatim: internal/metadata/cover_test.go already asserts http://169.254.169.254/... is SSRF-blocked (line 80/87), and internal/covers/covers_test.go already has TestIsAllowedCoverSource covering both a blocked and multiple legitimate (openlibrary/google books/amazon) URLs. This task's underlying security work is already done; the brief's own step 5 (add lgtm[go/request-forgery] citing the validating function) is the only correct action, but nothing in Background signals this clearly, and the Tests section instructs 'adding' tests that already exist verbatim.",
+        "fix": {
+          "background": [
+            "internal/metadata/cover.go:117 already calls validateCoverURL() (scheme allowlist) before the fetch at cover.go:137, and the client used there is built with a custom safeCoverDialContext (cover.go:71-89) that resolves the host and rejects private/loopback/link-local IPv4 AND IPv6 ranges. This is real, comprehensive SSRF protection already in place for alert #662.",
+            "internal/covers/covers.go:82's http.Get(coverURL) has exactly one caller: internal/server/covers.go's handleCoverProxy, which calls covers.IsAllowedCoverSource(coverURL) (a 4-domain allowlist: openlibrary/google books/amazon) and rejects before ever calling FetchAndCacheCover. This is real, comprehensive SSRF protection already in place for alert #645.",
+            "internal/metadata/cover_test.go already asserts a 169.254.169.254 cover URL is SSRF-blocked; internal/covers/covers_test.go already has TestIsAllowedCoverSource asserting both the blocked case and several legitimate URLs pass. Do not re-add these tests — verify they exist and pass."
+          ],
+          "steps": [
+            "1. Read internal/metadata/cover.go top-to-bottom around lines 20-137: confirm validateCoverURL (scheme allowlist) and safeCoverDialContext (private/loopback/link-local IPv4+IPv6 block via DNS-resolved-IP check) are both wired into the client used at line 137.",
+            "2. Read internal/covers/covers.go's only caller (internal/server/covers.go:24-45) and confirm covers.IsAllowedCoverSource(coverURL) gates every call to FetchAndCacheCover.",
+            "3. Given both sites have real, host/IP-resolved validation already present, add `// lgtm[go/request-forgery]` directly above cover.go:137 and covers.go:82, each citing the exact validating function/file:line found above (do not add a duplicate/parallel validator).",
+            "4. Run `grep -n 169.254 internal/metadata/cover_test.go` and `grep -n TestIsAllowedCoverSource internal/covers/covers_test.go` to confirm the anti-over-suppression and blocked-case tests already exist and pass; do not add duplicate tests."
+          ]
+        }
+      },
+      {
+        "severity": "fatal",
+        "check": 10,
+        "problem": "TODO.md's SEC-CODEQL-BACKLOG item (line 2595) is a single checkbox covering all 326 alerts (302 log-injection, 17 high, 3 medium workflow-permission, etc.), of which only the 2 critical SSRF alerts are this task's scope. The brief's generic instruction 'If the task is a TODO.md close-out, check the box `- [ ]` → `- [x]` on the source line' would falsely mark the ENTIRE 326-alert backlog as resolved after only the 2 critical items are addressed — a direct violation of the repo's Status Reporting Honesty rule (never claim 'all complete' without a number backing it up).",
+        "fix": {
+          "steps_add": "Do NOT check the SEC-CODEQL-BACKLOG box (TODO.md:2595) — it covers 326 alerts and this task addresses only the 2 critical ones. Instead, append a status note directly under the two bullet lines naming cover.go:135/covers.go:82 (e.g. ' — assessed 2026-08-21 (TASK-080): both already validated, see lgtm annotations') and leave the top-level checkbox unchecked."
+        }
+      }
+    ],
+    "notes": "Correctly tier Opus-class + review_critical (SSRF on untrusted-input path) — that part of the brief is right. The two flagged fetch lines are confirmed at cover.go:137 and covers.go:82."
+  },
+  {
+    "task_id": "TASK-081",
+    "verdict": "fail",
+    "findings": [
+      {
+        "severity": "fatal",
+        "check": 2,
+        "problem": "Source-line re-find grep `grep -n \"Prefix metadata-apply activity\" TODO.md` returns 0 hits. Unlike TASK-079/080, this task has NO working bold-id fallback — its 'TODO id' in the skeleton is just 'L3517' (a line number), not a distinguishing acronym, so the brief's own '(re-find it: ... or by the bold id)' escape hatch does not actually exist for this task. A cold model given only this brief has no reliable way to relocate the source TODO item except the bare 'line ~3517' guess (which is in fact accurate: the real item is the unbulleted-id entry 'Metadata-apply activity rows don't NAME the book.' starting at TODO.md:3517).",
+        "fix": {
+          "background_add": "Re-find via: `grep -n \"Metadata-apply activity rows don't NAME the book\" TODO.md` (1 hit, TODO.md:3517) — the auto-generated re-find pattern in the header is wrong; use this instead."
+        }
+      },
+      {
+        "severity": "fatal",
+        "check": 6,
+        "problem": "Step 1 says 'Add a small helper near truncateActivity in internal/metafetch/service.go (or inline in service_apply.go)' — this is a genuine either/or left to the executor's judgment. Two reasonable models would produce different diffs: one adds `displayOrNone` as a new exported/unexported function in service.go (requiring a version-header bump on service.go too, and changing exact_files), the other inlines it locally in service_apply.go only. This also changes which files' headers must be bumped and what the acceptance grep for file-header bumps would need to check.",
+        "fix": {
+          "steps": [
+            "1. Add `func displayOrNone(s string) string { if s == \"\" { return \"(none)\" }; return s }` directly in internal/metafetch/service_apply.go, next to RecordChangeHistory (do NOT add it to service.go — keep the change confined to the one file already in scope).",
+            "2. In service_apply.go's RecordChangeHistory, change the Summary line (currently L242) to: `title := book.Title; if title == \"\" { title = book.ID }; Summary: fmt.Sprintf(\"%s: Applied %s: %s → %s\", title, c.field, displayOrNone(truncateActivity(c.oldVal, 50)), truncateActivity(c.newVal, 50))`.",
+            "3. Bump the version header on internal/metafetch/service_apply.go only."
+          ],
+          "exact_files": ["internal/metafetch/service_apply.go", "internal/metafetch/service_apply_test.go", "changelog.d/20260821_metadata_081.md"]
+        }
+      }
+    ],
+    "notes": "Core anchors verified: Summary fmt.Sprintf at service_apply.go:242 (matches claimed text exactly), RecordChangeHistory signature at :165 (book *database.Book param confirmed), truncateActivity at service.go:674-679 (empty string passes through unchanged as claimed), BookID: book.ID at :241. displayOrNone has no existing name collision in the repo. Tier Haiku-class is reasonable for the substance once the ambiguity above is closed. TODO.md:3517 item is self-contained (safe to check the box, no over-broad-checkbox issue here)."
+  },
+  {
+    "task_id": "TASK-089",
+    "verdict": "fail",
+    "findings": [
+      {
+        "severity": "fatal",
+        "check": 2,
+        "problem": "Source-line re-find grep `grep -n \"Log a warning when GetAllSerie\" TODO.md` returns 0 hits, and this task's TODO id is 'L5494' (line-number only) so there is no working bold-id fallback either — same systemic issue as TASK-081. The bare line number itself is accurate (TODO.md:5494 is the right item).",
+        "fix": null
+      },
+      {
+        "severity": "fatal",
+        "check": 9,
+        "problem": "The Tests section instructs 'Add a table-driven or standalone test ... that injects a failing GetAllSeriesBookCounts on a fake library store' (internal/server/handlers/abs/browse_test.go), implying the existing fakeLibrary (internal/server/handlers/abs/library_fake_test.go) already supports error injection for this method. Verified at HEAD: fakeLibrary.GetAllSeriesBookCounts() (library_fake_test.go:417-425) unconditionally returns `out, nil` — it does NOT check `f.listErr` the way GetAllSeries() and other fakeLibrary methods do (listErr is checked at lines 181, 271, 282, but not in the GetAllSeriesBookCounts body). To write the test the brief asks for, the executor must ALSO edit internal/server/handlers/abs/library_fake_test.go to add error-injection support to GetAllSeriesBookCounts, matching the existing f.listErr pattern used elsewhere in the same fake. That file is never named anywhere in Background/Steps/Reuse/exact_files, so a literal reading of the brief would leave the executor unable to write the required test without discovering this gap on their own.",
+        "fix": {
+          "background_add": "internal/server/handlers/abs/library_fake_test.go:417's fakeLibrary.GetAllSeriesBookCounts() does not currently honor f.listErr (unlike GetAllSeries and other fakeLibrary methods at lines 181/271/282) — it must be extended to return f.listErr when set, following the exact same pattern already used by the sibling methods in that file.",
+          "exact_files": ["internal/server/handlers/abs/browse.go", "internal/server/handlers/abs/browse_test.go", "internal/server/handlers/abs/library_fake_test.go", "changelog.d/20260821_missing-file-lane_089.md"]
+        }
+      }
+    ],
+    "notes": "Core code anchors verified: counts, err := h.library.GetAllSeriesBookCounts() at browse.go:502, existing slog.Warn usage in same file (browse.go:725 etc., confirms log/slog already imported), logSeriesBookCountMismatch at browse.go:724. LibraryStore is a real narrow interface (handler.go:180ish) composed of read-only sub-interfaces, and a fakeLibrary test double implementing it does already exist — the brief's general test approach is sound, just missing the one extra file. Tier Haiku-class reasonable for the core browse.go change itself."
+  }
+]

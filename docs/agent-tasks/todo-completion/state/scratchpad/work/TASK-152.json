@@ -1,0 +1,76 @@
+{
+  "todo_line": 3918,
+  "src_id": "PERF-4",
+  "title": "Bound the iTunes search handler's unbounded SearchBooks(search, 0, 0) call",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/server/handlers/itunes.go:709 calls h.store.SearchBooks(search, 0, 0), and per L3910's measurement limit=0 means UNBOUNDED (returns every title/author/narrator substring match across the whole library, materializing all of them before the ITunesPersistentID post-filter at itunes.go:714-718 narrows the set). Confirmed live at HEAD: grep -n 'SearchBooks(search, 0, 0)' internal/server/handlers/itunes.go -> 1 hit L709.",
+  "domain": "internal/server/handlers",
+  "exact_files": [
+    "internal/server/handlers/itunes.go"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "The unbounded call is still live at HEAD",
+      "grep_cmd": "grep -n \"SearchBooks(search, 0, 0)\" internal/server/handlers/itunes.go",
+      "expect": "1 hit L709"
+    },
+    {
+      "claim": "An established over-fetch-with-warning precedent already exists elsewhere in the codebase for this exact shape of problem",
+      "grep_cmd": "grep -n \"const searchPostFilterWindow\" internal/audiobooks/service_query.go",
+      "expect": "1 hit L649, value 10000"
+    }
+  ],
+  "reuse": [
+    {
+      "name": "searchPostFilterWindow pattern (bound + warn-on-truncation)",
+      "file": "internal/audiobooks/service_query.go",
+      "verify_grep": "grep -n \"searchPostFilterWindow\" internal/audiobooks/service_query.go"
+    }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Requires picking a sane bound and wiring a truncation warning without breaking the existing PID post-filter's correctness (a bound that's too small could hide legitimate iTunes-linked matches).",
+  "review_critical": false,
+  "goal": "Replace the unbounded SearchBooks(search, 0, 0) call in ListBooks (internal/server/handlers/itunes.go:709) with a bounded call (mirroring the existing searchPostFilterWindow=10000 precedent in internal/audiobooks/service_query.go), and log a warning when the bound is hit so a truncated result is never silently reported as complete.",
+  "background": [
+    "This call is unbounded on purpose in one sense -- it must over-fetch because the actual filter (has a non-empty ITunesPersistentID) narrows AFTER the substring search, so a small limit could return zero PID-tagged results even when PID-tagged matches exist further down the scan. A hard local limit (not literally 0/unlimited) with an explicit truncation warning fixes the DoS-shaped worst case without breaking that narrowing logic.",
+    "internal/audiobooks/service_query.go already solved this exact shape of problem for the Bleve-backed search + post-filter combo: it over-fetches to searchPostFilterWindow=10000 and logs a Warn when the window is exhausted (service_query.go:133-138), rather than fetching literally everything."
+  ],
+  "steps": [
+    "1. In internal/server/handlers/itunes.go, define a local const (e.g. `const itunesSearchOverfetchWindow = 10000`) near the top of the file or next to ListBooks, with a comment citing the internal/audiobooks/service_query.go precedent.",
+    "2. Change line 709 from `h.store.SearchBooks(search, 0, 0)` to `h.store.SearchBooks(search, itunesSearchOverfetchWindow, 0)`.",
+    "3. After the call, if `len(allBooks) >= itunesSearchOverfetchWindow`, log a slog.Warn (e.g. 'itunes ListBooks: search over-fetch window exhausted; iTunes-tagged results may be a lower bound') including the search query and window size.",
+    "4. Bump the file's version header."
+  ],
+  "tests": [
+    "internal/server/handlers/itunes_test.go (or wherever ListBooks is already tested): add a case with >itunesSearchOverfetchWindow matching books in a mock store, asserting the handler still returns the PID-tagged subset it can see within the window and does not error."
+  ],
+  "acceptance": [
+    "grep -n 'itunesSearchOverfetchWindow' internal/server/handlers/itunes.go returns >=2 hits (const def + call site).",
+    "go test ./internal/server/handlers/... -run ListBooks -v exits 0."
+  ],
+  "edge_cases": [
+    "search=\"\" -- this branch is not entered at all (the `else` branch at itunes.go:719 uses the pushdown ListBooksByITunesPID(0,0) path instead), so this fix only affects the search!=\"\" path.",
+    "A library with fewer than itunesSearchOverfetchWindow total books -- the bound never triggers, behavior unchanged."
+  ],
+  "anti_over_suppression": "N/A -- this is a perf/DoS bound, not a filter/skip.",
+  "depends_on_lines": [
+    3910,
+    3914
+  ],
+  "gate": "go build ./... && go vet ./... && go test ./internal/server/handlers/... -count=1",
+  "notes": "Route-through-Bleve-IDs alternative mentioned in the TODO is a larger rewrite (would need a Bleve query for ITunesPersistentID != \"\" ANDed with the text query) -- the bounded-call fix above is the smaller, sufficient fix for the currently-measured behavior (unbounded materialization), not a cosmetic shortcut: it directly addresses the actual defect PERF-4 measured.",
+  "review_notes": [
+    "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ],
+  "id": "TASK-152",
+  "stable_key": "scope-06.json|3918|None|Bound the iTunes search handler's unbounded SearchBooks(sear",
+  "ws": "server-handlers",
+  "slug": "bound-the-itunes-search-handler-s-unbounded-sear",
+  "scope_file": "scope-06.json",
+  "dropped_files": [],
+  "tier_label": "Sonnet-class",
+  "depends_on": [],
+  "wave": 1
+}

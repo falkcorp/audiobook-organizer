@@ -1,0 +1,380 @@
+[
+ {
+  "id": "L229",
+  "todo_line": 229,
+  "title": "Capture a goroutine dump from the next stuck-test failure (process discipline, not code)",
+  "anchors": []
+ },
+ {
+  "id": "L689",
+  "todo_line": 689,
+  "title": "Duplicate book rows per title under different author folders (pointer note)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'Pointer only; not chased here' TODO.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "693:      rather than another drain. Pointer only; not chased here.",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "the item self-identifies as a pointer, not a task"
+   }
+  ]
+ },
+ {
+  "id": "L700",
+  "todo_line": 700,
+  "title": "Capture output if the unreproduced internal/plugins/maintenance mutation-testing failure from 2026-08-13 recurs",
+  "anchors": [
+   {
+    "cmd": "grep -rln 'unreproduced' --include=*.go .",
+    "rc": 1,
+    "nlines": 0,
+    "out": "",
+    "err": "",
+    "expect": "0 hits",
+    "claim": "no code or test artifact exists for this unreproduced failure"
+   }
+  ]
+ },
+ {
+  "id": "L973",
+  "todo_line": 973,
+  "title": "maintenance.JobStore (12) stays deliberately wide per the #2534 arbitration -- pointer to the real work item, not itself a task",
+  "anchors": [
+   {
+    "cmd": "grep -n 'type JobStore interface' internal/maintenance/job.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "293:type JobStore interface {",
+    "err": "",
+    "expect": "1 hit L293",
+    "claim": "JobStore is a 7-group composition today (internal/maintenance/job.go, the v1 package -- distinct from internal/plugins/maintenance's ServerDeps)"
+   },
+   {
+    "cmd": "grep -n 'Deliberate: chosen over per-job interfaces in the #2534 arbitration' docs/audits/2026-08-18-interface-width-shapes.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "229:| `maintenance.JobStore` | 12 | \u2014 | Deliberate: chosen over per-job interfaces in the #2534 arbitration. |",
+    "err": "",
+    "expect": "1 hit ~L229",
+    "claim": "the audit doc confirms this width is a deliberate, unchanged decision from the #2534 arbitration"
+   },
+   {
+    "cmd": "grep -n 'maintenance.JobStore.*per-job interfaces' docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "112:1. **`maintenance.JobStore` (187 methods / 12 interfaces) \u2192 per-job interfaces.** This is",
+    "err": "",
+    "expect": "1 hit in Phase 2 section",
+    "claim": "Phase 2 item 1 of the kill-v1 plan is the execution-level pointer this item defers to"
+   }
+  ]
+ },
+ {
+  "id": "L1350",
+  "todo_line": 1350,
+  "title": "Confirm tags are stored per-book, not per-file",
+  "anchors": [
+   {
+    "cmd": "grep -n 'func (p \\*PebbleStore) .*BookTag' internal/database/pebble_store_tags.go",
+    "rc": 0,
+    "nlines": 10,
+    "out": "23:func (p *PebbleStore) AddBookTag(bookID, tag string) error {\n32:func (p *PebbleStore) AddBookTagWithSource(bookID, tag, source string) error {\n64:func (p *PebbleStore) RemoveBookTag(bookID, tag string) error {\n91:func (p *PebbleStore) RemoveBookTagsByPrefix(bookID, prefix, source string) error {\n116:func (p *PebbleStore) GetBookTags(bookID string) ([]string, error) {\n143:func (p *PebbleStore) G",
+    "err": "",
+    "expect": "AddBookTag(bookID, tag string), GetBookTags(bookID string), SetBookTags(bookID string, ...) \u2014 all take bookID, none take a book_file identifier",
+    "claim": "all tag storage functions are keyed by bookID, not bookFileID"
+   },
+   {
+    "cmd": "grep -n 'func.*BookFile.*Tag\\|func.*Tag.*BookFile' internal/database/pebble_store_tags.go",
+    "rc": 1,
+    "nlines": 0,
+    "out": "",
+    "err": "",
+    "expect": "0 hits",
+    "claim": "no per-file tag function exists"
+   }
+  ]
+ },
+ {
+  "id": "L3340",
+  "todo_line": 3340,
+  "title": "(evidence only) Corrected count: 765 books wrongly hidden by the primary-version filter, not 6,157",
+  "anchors": [
+   {
+    "cmd": "git show -s --format=%B dd0cf6450a47492598c629331bba356ff8ffe242 | grep -n '724 books'",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "'A per-group census of all 63,870 books found 479 groups holding 724 books in this state'"
+   },
+   {
+    "cmd": "git merge-base --is-ancestor dd0cf6450a47492598c629331bba356ff8ffe242 8f6d0d99 && echo ancestor",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "'ancestor' printed"
+   }
+  ]
+ },
+ {
+  "id": "L3561",
+  "todo_line": 3561,
+  "title": "Author id 46583 '&#169' \u2014 evidence for the C413 root-cause writeup, not itself a task",
+  "anchors": [
+   {
+    "cmd": "grep -n '46583' internal/dedup/author.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "157:// 46583 \"&#169\" and 51870 \"&#169;2013 by HarperCollinsPublishers\").",
+    "err": "",
+    "expect": "1 hit in the IsDirtyAuthorName doc comment",
+    "claim": "author row 46583 is cited as the motivating example in IsDirtyAuthorName's doc comment, confirming the root cause is already fixed in code"
+   },
+   {
+    "cmd": "grep -n 'htmlEntityRe' internal/metadata/folder_parser.go",
+    "rc": 0,
+    "nlines": 4,
+    "out": "388:// htmlEntityRe matches an HTML entity (\"&#169;\", \"&amp;\") so its terminating\n392:var htmlEntityRe = regexp.MustCompile(`&#?[a-zA-Z0-9]+;`)\n397:\t// Protect HTML-entity semicolons (see htmlEntityRe) with a sentinel that\n400:\ts = htmlEntityRe.ReplaceAllStringFunc(s, func(m string) string {",
+    "err": "",
+    "expect": ">=2 hits, defining and using the entity-safe sentinel",
+    "claim": "the entity-loses-semicolon root cause (why 46583 exists) is fixed at the ingest split site"
+   }
+  ]
+ },
+ {
+  "id": "L3586",
+  "todo_line": 3586,
+  "title": "Author id 46595 'and Thanks for All the Fish' \u2014 evidence cited by the already-shipped C414 fix, not itself a task",
+  "anchors": [
+   {
+    "cmd": "grep -n '46595' internal/dedup/author.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "272:\t// Fish\" as an author (row 46595; also 46989 \"and the Farm Boy (DBY)\" and",
+    "err": "",
+    "expect": "1 hit inside the C414 doc comment ~L272",
+    "claim": "row 46595 is cited by name in the shipped SplitCompositeAuthorName fix's comment"
+   }
+  ]
+ },
+ {
+  "id": "L3588",
+  "todo_line": 3588,
+  "title": "Author id 46989 'and the Farm Boy (DBY)' \u2014 evidence cited by the already-shipped C414 fix, not itself a task",
+  "anchors": [
+   {
+    "cmd": "grep -n '46989' internal/dedup/author.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "272:\t// Fish\" as an author (row 46595; also 46989 \"and the Farm Boy (DBY)\" and",
+    "err": "",
+    "expect": "1 hit inside the C414 doc comment",
+    "claim": "row 46989 is cited by name in the shipped fix's comment"
+   }
+  ]
+ },
+ {
+  "id": "L3589",
+  "todo_line": 3589,
+  "title": "Author id 47193 'and Make Better Decisions' \u2014 evidence cited by the already-shipped C414 fix, not itself a task",
+  "anchors": [
+   {
+    "cmd": "grep -n '47193' internal/dedup/author.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "273:\t// 47193 \"and Make Better Decisions\"). Every part must be person-shaped or",
+    "err": "",
+    "expect": "1 hit inside the C414 doc comment",
+    "claim": "row 47193 is cited by name in the shipped fix's comment"
+   }
+  ]
+ },
+ {
+  "id": "L3803",
+  "todo_line": 3803,
+  "title": "(constraint, not a task) Do not build one op that treats type-1/2/3 author duplicates the same",
+  "anchors": []
+ },
+ {
+  "id": "L3914",
+  "todo_line": 3914,
+  "title": "(conditional branch, premise false) 'if SearchBooks(0,0) returns nothing, fix it'",
+  "anchors": [
+   {
+    "cmd": "grep -n \"TestSearchBooksUnlimited\" internal/database/pebble_store_test.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "626:// TestSearchBooksUnlimited verifies that limit=0 returns all matching results\n628:func TestSearchBooksUnlimited(t *testing.T) {",
+    "err": "",
+    "expect": "1 hit L628, asserts >=5 results not 0",
+    "claim": "limit=0 returns everything, not nothing, falsifying this branch's premise"
+   }
+  ]
+ },
+ {
+  "id": "L3939",
+  "todo_line": 3939,
+  "title": "(stale operational follow-up) Check GitHub CI on a specific historical merge commit",
+  "anchors": []
+ },
+ {
+  "id": "L4132",
+  "todo_line": 4132,
+  "title": "Historical operation_changes gap is permanent \u2014 informational note only",
+  "anchors": []
+ },
+ {
+  "id": "L4365",
+  "todo_line": 4365,
+  "title": "(moot) Extend the guard with storage-only filter keys \u2014 the untaken 'no' branch",
+  "anchors": [
+   {
+    "cmd": "grep -n 'case \"version_group_id\"' internal/audiobooks/service_filtering.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "528:\tcase \"version_group_id\":",
+    "err": "",
+    "expect": "1 hit at L528",
+    "claim": "version_group_id is a real filter field today, so the 'if no' branch's premise is false"
+   }
+  ]
+ },
+ {
+  "id": "L4548",
+  "todo_line": 4548,
+  "title": "ClearStaleOperations status note \u2014 no action, explicit precondition already stated",
+  "anchors": [
+   {
+    "cmd": "grep -n 'func (h \\*Handler) ClearStaleOperations' internal/server/handlers/operations/handler.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "162:func (h *Handler) ClearStaleOperations(c *gin.Context) {",
+    "err": "",
+    "expect": "1 hit at L162",
+    "claim": "ClearStaleOperations is still wired and force-marks pending/running/queued legacy rows failed"
+   },
+   {
+    "cmd": "grep -n 'UpdateOperationStatus' internal/aiscan/pipeline.go",
+    "rc": 0,
+    "nlines": 5,
+    "out": "28:\tUpdateOperationStatus(id, status string, progress, total int, message string) error\n103:\t\t_ = pm.mainStore.UpdateOperationStatus(scan.OperationID, status, 0, 0, \"scan \"+status)\n164:\t\t_ = pm.mainStore.UpdateOperationStatus(opID, \"running\", 0, 100, \"Starting AI scan pipeline...\")\n217:\t\t_ = pm.mainStore.UpdateOperationStatus(scan.OperationID, \"running\", pct, 100,\n781:\t\t_ = pm.mainStore.UpdateOper",
+    "err": "",
+    "expect": "4 hits at L103, L164, L217, L781",
+    "claim": "the legacy operations table is still written directly by 4 call sites in the AI-scan pipeline"
+   },
+   {
+    "cmd": "find todo.d -iname '*backfill-stuck-legacy-op-rows*'",
+    "rc": 0,
+    "nlines": 0,
+    "out": "",
+    "err": "",
+    "expect": "0 hits (likely already folded into TODO.md under a different heading, or renamed)",
+    "claim": "the referenced supervised-backfill fragment is not present on disk under its old name"
+   }
+  ]
+ },
+ {
+  "id": "L5466",
+  "todo_line": 5466,
+  "title": "database.Store grouped-not-unreachable caution note \u2014 status check",
+  "anchors": [
+   {
+    "cmd": "tail -1 .interface-width-baseline",
+    "rc": 0,
+    "nlines": 1,
+    "out": "0",
+    "err": "",
+    "expect": "0",
+    "claim": "interface-width baseline is currently 0"
+   },
+   {
+    "cmd": "grep -n \"398 methods\" docs/plans/2026-08-19-split-the-pebblestore-surface.md",
+    "rc": 0,
+    "nlines": 3,
+    "out": "16:Make `database.Store` (40 sub-interfaces, ~398 methods) unreachable so it can be\n33:> \"was `database.Store` \u2014 398 methods \u2014 until 2026-08-19\" note at nearly every\n243:> comment: *\"Declaring Store here imposed 398 methods on every caller to satisfy",
+    "err": "",
+    "expect": "3 hits",
+    "claim": "the split-Store plan doc still exists and still describes 398 methods as unresolved"
+   }
+  ]
+ },
+ {
+  "id": "L5650",
+  "todo_line": 5650,
+  "title": "book-detail.spec.ts flaky-once auth-guard failure \u2014 deliberately not fixed",
+  "anchors": []
+ },
+ {
+  "id": "L6425",
+  "todo_line": 6425,
+  "title": "E2E repair progress status table (66/218/4 of 288, 55% fixed)",
+  "anchors": []
+ },
+ {
+  "id": "L8151",
+  "todo_line": 8151,
+  "title": "react-router GHSA-qwww-vcr4-c8h2 \u2014 recorded accepted risk, nothing to build",
+  "anchors": [
+   {
+    "cmd": "grep -rn '@react-router/\\|react-server\\|unstable_RSC\\|createStaticHandler' web/src",
+    "rc": 1,
+    "nlines": 0,
+    "out": "",
+    "err": "",
+    "expect": "0 hits",
+    "claim": "no RSC-mode code paths exist that would make the accepted advisory reachable"
+   },
+   {
+    "cmd": "grep -n 'react-router-dom' web/package.json",
+    "rc": 0,
+    "nlines": 1,
+    "out": "32:    \"react-router-dom\": \"^7.18.2\",",
+    "err": "",
+    "expect": "1 hit: \"react-router-dom\": \"^7.18.2\"",
+    "claim": "react-router-dom is pinned to ^7.18.2, matching the item's described trade"
+   }
+  ]
+ },
+ {
+  "id": "L8890",
+  "todo_line": 8890,
+  "title": "Duplicate detection + combine-by-template + version-group (the Successors class) \u2014 duplicate of L8943, not a separate deliverable",
+  "anchors": []
+ },
+ {
+  "id": "L9659",
+  "todo_line": 9659,
+  "title": "'The Trapped Mind Project' book-level file_size/file_exists disagreement \u2014 evidence, not a discrete task",
+  "anchors": []
+ },
+ {
+  "id": "L9669",
+  "todo_line": 9669,
+  "title": "'Call to Arms' \u2014 96 distinct files unchanged by dedupe run \u2014 undiagnosed third shape",
+  "anchors": []
+ },
+ {
+  "id": "L9671",
+  "todo_line": 9671,
+  "title": "'Corrected aggregates invisible until memdb refresh' \u2014 duplicate pointer to the L9259 entry",
+  "anchors": []
+ },
+ {
+  "id": "L10660",
+  "todo_line": 10660,
+  "title": "Metadata-review table surface no longer exists (retired in favor of review panels)",
+  "anchors": [
+   {
+    "cmd": "git log --oneline --all -- '*MetadataReview*'",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "commit eae9e2f7 present"
+   },
+   {
+    "cmd": "grep -n TableContainer web/src/components/review/QueueRail.tsx web/src/components/review/MetadataPanel.tsx web/src/components/review/DupesPanel.tsx web/src/components/review/RegroupPanel.tsx",
+    "rc": 1,
+    "nlines": 0,
+    "out": "",
+    "err": "",
+    "expect": "0 hits",
+    "claim": "current review panels have no table markup"
+   }
+  ]
+ }
+]

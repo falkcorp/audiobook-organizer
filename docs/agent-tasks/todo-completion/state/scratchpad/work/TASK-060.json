@@ -1,0 +1,76 @@
+{
+  "todo_line": 10849,
+  "src_id": "T13",
+  "title": "Docs truth-up with measured sandbox/prod dedup numbers",
+  "verdict": "actionable",
+  "verdict_evidence": "docs/agent-tasks/error-correction-2026-07/TASKS.md:398-412 gives a complete, concrete 4-step brief (update docs/dedup/STATUS.md, docs/operations/pending-prod-actions.md, an executive summary, and a stale-number grep sweep) with an explicit ACCEPTANCE line \u2014 this is a real, scoped docs task, though it formally 'DEPENDS ON: T02+T03 (sandbox numbers), ideally T04 (prod numbers)' (TASKS.md:400) and T03 (this scope's prior item) has NOT yet run, so only the T04-derived (prod) portions can be completed now; the T02/T03-derived (sandbox) portions remain blocked.",
+  "domain": "docs",
+  "exact_files": [
+    "docs/dedup/STATUS.md",
+    "docs/operations/pending-prod-actions.md"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "T13's brief is fully specified with 4 concrete steps and an acceptance line",
+      "grep_cmd": "grep -n 'T13 \u2014 Docs truth-up' -A15 docs/agent-tasks/error-correction-2026-07/TASKS.md",
+      "expect": "1 hit ~L398, 4 numbered steps + ACCEPTANCE line through L413"
+    },
+    {
+      "claim": "T04 (prod numbers) is available now",
+      "grep_cmd": "grep -n 'T04.*ALL DONE' TODO.md",
+      "expect": "1 hit ~L10836, dismissed=7891"
+    },
+    {
+      "claim": "T03 (sandbox numbers) is NOT yet available, so sandbox-derived doc updates are blocked",
+      "grep_cmd": "grep -n '\\*\\*T03\\*\\*' TODO.md",
+      "expect": "1 hit ~L10831, unchecked '- [ ]'"
+    }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "mechanical doc-number updates against already-measured values, following a fully pre-written brief",
+  "review_critical": false,
+  "goal": "Execute the 4 steps in docs/agent-tasks/error-correction-2026-07/TASKS.md:398-412 for the parts that don't require the still-pending T03 sandbox run: (1) update docs/dedup/STATUS.md and (2) docs/operations/pending-prod-actions.md's CONS-10/PH-2 rows with T04's measured PROD numbers (dismissed=7891, dismiss_errors=0, outcome=completed \u2014 TODO.md:10836-10839); (3) add/confirm the executive-summary backlog-drain entry for T04's prod apply; (4) grep docs/ for the stale baseline numbers 9,074/9074 and 10,319 and label every hit as the 2026-07-17 baseline rather than current state. Leave the T02/T03-sourced sandbox-specific rows explicitly marked 'pending T03' rather than filling them with stale or extrapolated numbers.",
+  "background": [
+    "TASKS.md:410-411: 'Verify no stale claims remain: grep docs/ for 9,074/9074 and 10,319 \u2014 every hit must be labeled as the 2026-07-17 baseline, not current state.'",
+    "TODO.md:10828-10830 already contains a clarifying note this task should propagate into docs/dedup/STATUS.md: the sandbox (7,878) and prod (7,891) purgeable counts are two DIFFERENT populations, not a drift, per a 2026-08-11 docs-audit correction \u2014 make sure the truth-up doesn't reintroduce that confusion."
+  ],
+  "steps": [
+    "1. Run `grep -n '9,074\\|9074\\|10,319' docs/dedup/STATUS.md docs/operations/pending-prod-actions.md docs/executive-summaries/*.md` to find every stale-baseline mention.",
+    "2. In docs/dedup/STATUS.md, replace/annotate any bare 9,074-style projection with the T04 measured result (dismissed=7891) labeled '2026-07-18 PROD apply result', explicitly distinguishing it from the T02 sandbox measurement (7,878) as noted in TODO.md:10828-10830 \u2014 do not merge them into one number.",
+    "3. In docs/operations/pending-prod-actions.md, update the CONS-10/PH-2 rows (search `grep -n 'CONS-10\\|PH-2' docs/operations/pending-prod-actions.md`) to reflect T04's completed state.",
+    "4. Check `docs/executive-summaries/2026-08-*.md` (current month, per this repo's convention of using the CURRENT month's summary) for a T04 backlog-drain entry in plain language ('thousands of false duplicate suggestions removed'); add one if missing.",
+    "5. For any row that genuinely needs the T03 sandbox-run number (not yet available), write 'PENDING \u2014 awaiting T03 sandbox purge wave (TODO.md:10831)' rather than guessing or reusing the T02 pre-purge number.",
+    "6. Add a changelog.d/ fragment (headerless, per this repo's fragment convention) noting the docs truth-up."
+  ],
+  "tests": [
+    "n/a \u2014 docs-only change; no automated test covers doc content."
+  ],
+  "acceptance": [
+    "`grep -n '9,074\\|9074\\|10,319' docs/dedup/STATUS.md docs/operations/pending-prod-actions.md` \u2014 every remaining hit is inside a sentence explicitly labeling it as the 2026-07-17 baseline.",
+    "`grep -n 'dismissed=7891' docs/dedup/STATUS.md` returns \u22651 hit (T04's real measured number is now recorded)."
+  ],
+  "edge_cases": [
+    "Do not backfill sandbox-only rows with the prod number (7891) as a stand-in for the sandbox number (which will be different once T03 runs, per the 7,878-vs-7,891 two-populations note) \u2014 mark them PENDING instead."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+    10831
+  ],
+  "gate": "git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only'",
+  "notes": "Partial completion only: the T04/prod-derived doc updates can land now; the T02/T03/sandbox-derived rows must wait for todo_line 10831 (T03) to actually run on sandbox. Do not mark T13 fully checked off in TODO.md until T03 lands \u2014 check off only the prod-numbers portion, or leave the box open with a progress note.",
+  "id": "TASK-060",
+  "stable_key": "scope-15.json|10849|None|Docs truth-up with measured sandbox/prod dedup numbers",
+  "ws": "docs",
+  "slug": "docs-truth-up-with-measured-sandbox-prod-dedup-n",
+  "scope_file": "scope-15.json",
+  "dropped_files": [],
+  "tier_label": "Haiku-class",
+  "external_blockers": [
+    "TODO.md L10831 (prod_run) \u2014 not a task in this package; coordinator confirms it is resolved or explicitly waives it before dispatch"
+  ],
+  "depends_on": [],
+  "wave": 1
+}

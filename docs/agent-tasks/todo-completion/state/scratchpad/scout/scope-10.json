@@ -1,0 +1,975 @@
+[
+  {
+    "todo_line": 4894,
+    "src_id": null,
+    "title": "Classify missing book_file rows by shape before repair (already built)",
+    "verdict": "stale_done",
+    "verdict_evidence": "maintenance.missing-file-repoint (registered internal/plugins/maintenance/plugin.go:64) and missing-file-audit's Classify param (missing_file_audit.go:111) already implement exactly what the item asks: a read-only shape-classify pass plus a repoint mode with apply=false default (missing_file_repoint.go:51) that never deletes; grep -n 'Classify bool' internal/plugins/maintenance/missing_file_audit.go -> 111:\tClassify bool `json:\"classify\"`.",
+    "domain": "internal/plugins/maintenance",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "missing-file-repoint is registered on the maintenance plugin", "grep_cmd": "grep -n 'p.missingFileRepointDef()' internal/plugins/maintenance/plugin.go", "expect": "1 hit, L64"},
+      {"claim": "repoint apply defaults to false (report-only)", "grep_cmd": "grep -n 'Apply must be explicitly true to write' internal/plugins/maintenance/missing_file_repoint.go", "expect": "1 hit, L51"},
+      {"claim": "audit op has a Classify param that runs the shape pass over every missing row", "grep_cmd": "grep -n 'Classify bool' internal/plugins/maintenance/missing_file_audit.go", "expect": "1 hit, L111"},
+      {"claim": "missing-file-repair's delete path was removed 2026-08-19, so the op that used to wave recoverable rows through a delete no longer deletes at all", "grep_cmd": "grep -n 'Deletion was REMOVED from this op on 2026-08-19' internal/plugins/maintenance/missing_file_repair.go", "expect": "1 hit, L119"}
+    ],
+    "reuse": [],
+    "polarity": "additive",
+    "effort": "S",
+    "tier": "haiku",
+    "why_tier": "No code change needed; just check the TODO box and cite the anchors above.",
+    "review_critical": false,
+    "goal": "Check off the TODO.md box for this item: the classify-before-repair work it asks for is already built (missing-file-audit's Classify param + the separate missing-file-repoint op, both registered and apply=false by default).",
+    "background": [
+      "docs/audits/2026-08-17-missing-file-audit-full-population.md recommended sequencing: classify first, then repoint the recoverable rows, only then consider deletion of the genuinely dead rows.",
+      "internal/plugins/maintenance/missing_file_repoint.go (version 1.2.0, last-edited 2026-08-20) implements exactly the repoint step, documented at its header as never deleting a row, apply=false by default.",
+      "internal/plugins/maintenance/missing_file_audit.go's Classify param (added after the 2026-08-17 audit) implements the classify step, with deriveTrackSlashCandidates and classifyMissingRows doing the per-row shape+disk check.",
+      "internal/plugins/maintenance/missing_file_repair.go had its delete path (applyMissingFileRepair / DeleteBookFilesByIDs) physically removed 2026-08-19 per owner decision 'never delete' — so the per-book safety-rule hazard the TODO item warned about (recoverable rows waved through a delete) can no longer occur because the delete capability itself is gone."
+    ],
+    "steps": [
+      "Open TODO.md, find the checkbox item at line 4894 ('Classify the 71,954 missing book_file rows by shape before any missing-file-repair apply.').",
+      "Change '- [ ]' to '- [x]' for that item only.",
+      "Do not touch any other checkbox in the same section (L4901/L4903/L4905/L4908/L4910/L4919 are separate items with different verdicts in this same scope)."
+    ],
+    "tests": [],
+    "acceptance": [
+      "grep -n 'p.missingFileRepointDef()' internal/plugins/maintenance/plugin.go returns 1 hit at L64",
+      "grep -n 'Classify bool' internal/plugins/maintenance/missing_file_audit.go returns 1 hit at L111",
+      "TODO.md line 4894's checkbox reads '- [x]' after the edit"
+    ],
+    "edge_cases": ["N/A — pure doc bookkeeping change."],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (docs)",
+    "notes": "This item is the source item behind owner decision #12 ('Missing-file lane: build the REPOINT repair with apply=false default'). That decision has been executed at HEAD; nothing left to build here."
+  },
+  {
+    "todo_line": 4901,
+    "src_id": null,
+    "title": "Decide fate of 16,265 books with no surviving file",
+    "verdict": "parked",
+    "verdict_evidence": "Owner decision #12 in SCOUT-INSTRUCTIONS.md: 'The 16,265 fully-broken books stay untouched (parked).' The audit's own measured figure (16,265 of 61,528 books have every book_file row dead) is at docs/audits/2026-08-17-missing-file-audit-full-population.md and remains an open human call, deliberately deferred, not code work.",
+    "domain": "docs",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "the audit doc records BooksFullyBroken = 16,265", "grep_cmd": "grep -n '16,265' docs/audits/2026-08-17-missing-file-audit-full-population.md", "expect": ">=1 hit"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "S",
+    "tier": "haiku",
+    "why_tier": "No code deliverable; a status note only.",
+    "why_tier_extra": null,
+    "review_critical": false,
+    "goal": "N/A — parked by owner decision. No code deliverable.",
+    "background": [
+      "docs/audits/2026-08-17-missing-file-audit-full-population.md ​§1 measured 16,265 of 61,528 books (26.4%) as fully broken (every book_file row missing).",
+      "SCOUT-INSTRUCTIONS.md owner decision #12 explicitly parks these books: they 'stay untouched'."
+    ],
+    "steps": [],
+    "tests": [],
+    "acceptance": [],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (docs)",
+    "notes": "Duplicate topic with L4910 below (same 16,265-books decision, phrased against the older 120-book sample). Both park to the same owner decision #12."
+  },
+  {
+    "todo_line": 4903,
+    "src_id": null,
+    "title": "missing-file-repair max_deletes cap concern is now moot — delete path removed",
+    "verdict": "stale_done",
+    "verdict_evidence": "The item's underlying worry (a capped delete-apply looking complete but not being) can no longer occur because the delete apply path was physically removed from maintenance.missing-file-repair on 2026-08-19; its successor missing-file-repoint already reports an explicit CappedAt field and logs a warning when the cap is hit — grep -n 'CappedAt' internal/plugins/maintenance/missing_file_repoint.go -> hits at L100, L217, L413.",
+    "domain": "internal/plugins/maintenance",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "missing-file-repair rejects apply=true outright (no delete capability exists to be capped)", "grep_cmd": "grep -n 'apply.*true.*is no longer supported' internal/plugins/maintenance/missing_file_repair.go", "expect": "1 hit, ~L126"},
+      {"claim": "missing-file-repoint's plan struct carries an explicit CappedAt so a capped run cannot masquerade as complete", "grep_cmd": "grep -n 'CappedAt' internal/plugins/maintenance/missing_file_repoint.go", "expect": ">=3 hits (L100, L217/218, L413/414)"}
+    ],
+    "reuse": [],
+    "polarity": "removal",
+    "effort": "S",
+    "tier": "haiku",
+    "why_tier": "Doc-only bookkeeping.",
+    "review_critical": false,
+    "goal": "Check off the TODO.md box: the specific worry (a max_deletes cap silently truncating an apply) is resolved because the deleting operation it worried about no longer exists, and its replacement explicitly surfaces its cap.",
+    "background": [
+      "docs/audits/2026-08-17-missing-file-audit-full-population.md §7 measured the true uncapped delete-plan size at 25,677 rows once past the 20,000 max_deletes default, and flagged that a capped apply would misreport as 'finished'.",
+      "internal/plugins/maintenance/missing_file_repair.go:119-127 shows the entire apply/delete code path was deleted 2026-08-19 (owner decision: never delete) — so there is no more delete-apply for a cap to silently truncate.",
+      "internal/plugins/maintenance/missing_file_repoint.go's repointPlan.CappedAt (json 'capped_at') is populated whenever the run cap is hit (L413-414) and logged as a warning (L217-219), which is exactly the 'any apply must read CappedAt explicitly' fix the audit doc asked for, just on the surviving (repoint) op instead of the retired (delete) one."
+    ],
+    "steps": [
+      "Open TODO.md, find the checkbox item at line 4903 ('missing-file-repair dry run hit the 20,000 max_deletes cap...').",
+      "Change '- [ ]' to '- [x]'.",
+      "Do not touch adjacent checkboxes in the same section."
+    ],
+    "tests": [],
+    "acceptance": [
+      "grep -n 'CappedAt' internal/plugins/maintenance/missing_file_repoint.go returns at least 3 hits",
+      "grep -n 'is no longer supported' internal/plugins/maintenance/missing_file_repair.go returns 1 hit"
+    ],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (docs)",
+    "notes": "This is the item that measured the corrected 25,677-row true total (superseded by the repoint op's own 2026-08-20 numbers, per MEMORY.md: 14,439 actually repointable after excluding target collisions)."
+  },
+  {
+    "todo_line": 4905,
+    "src_id": null,
+    "title": "iTunes-shadow-row repair strategy for the 1,006 iTunes-tree missing rows",
+    "verdict": "needs_design",
+    "verdict_evidence": "internal/plugins/maintenance/missing_file_audit.go:55-77 already documents and corrects the false header claim (the investigation asked for is done), but explicitly leaves the repair undecided: 'REPORT-ONLY, DELIBERATELY. No repair is offered because the right repair is not yet decided' (L73). missing-file-repoint (the only repair built) only handles the track-slash shape (deriveTrackSlashCandidates, L577) and has no iTunes-PID/location lookup (grep -n iTunes internal/plugins/maintenance/missing_file_repoint.go returns 0 hits), so this population is unaddressed by any built op.",
+    "domain": "internal/plugins/maintenance",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "the audit header now correctly documents the 1,006-row iTunes-tree population and explicitly defers the repair decision", "grep_cmd": "grep -n 'REPORT-ONLY, DELIBERATELY' internal/plugins/maintenance/missing_file_audit.go", "expect": "1 hit, ~L73"},
+      {"claim": "missing-file-repoint has zero iTunes-specific handling, so it cannot repoint this population", "grep_cmd": "grep -n 'itunes\\|iTunes' internal/plugins/maintenance/missing_file_repoint.go", "expect": "0 hits"}
+    ],
+    "reuse": [
+      {"name": "deriveTrackSlashCandidates (candidate-derivation pattern to model a new derivation function on)", "file": "internal/plugins/maintenance/missing_file_audit.go", "verify_grep": "grep -n 'func deriveTrackSlashCandidates' internal/plugins/maintenance/missing_file_audit.go"}
+    ],
+    "polarity": "transform",
+    "effort": "M",
+    "tier": "opus",
+    "why_tier": "Needs a design decision before any code, and the decision has a data-safety dimension (iTunes tree is hands-off per project memory) — an incorrect default could point a DB row at the wrong file or blur the hands-off boundary.",
+    "review_critical": true,
+    "goal": "Not directly actionable until the owner answers: for a book_file row whose organizer-tree file is missing AND the same book already has a resolvable book_file row under the iTunes tree, should the phantom organizer-tree row be (a) repointed at the surviving iTunes-tree file — writing only the DB row's FilePath, never touching a file inside the iTunes tree itself — (b) left exactly as report-only forever since the book already plays fine off the iTunes row, or (c) something else (e.g. marked duplicate-source)? A secondary question: does 'iTunes tree is hands-off' (project memory feedback_itunes_active_library_hands_off.md) bar even READING iTunes paths to populate a non-iTunes book_file row, or does it only bar writing/deleting inside the iTunes tree?",
+    "background": [
+      "docs/audits/2026-08-17-missing-file-audit-full-population.md §1 measured 1,006 of 71,954 missing rows under /mnt/bigdata/books/itunes.",
+      "missing_file_audit.go:62-67 describes the typical shape: a phantom row at the organizer's path plus an OK row for the same book pointing at the real file already in the iTunes tree — i.e. these books are NOT broken (they have a resolvable row), only the extra phantom row is dead.",
+      "Project memory records the iTunes tree as hands-off (feedback_itunes_active_library_hands_off.md) — the open design question is whether that restricts reading the iTunes path as a repoint source for an unrelated book_file row."
+    ],
+    "steps": [
+      "STOP: do not write code for this item until the owner answers the goal question above.",
+      "Once answered, if the decision is 'repoint': add a new derivation path alongside deriveTrackSlashCandidates in internal/plugins/maintenance/missing_file_audit.go (or a sibling function) that, for a missing organizer-tree row, looks up other book_file rows for the same BookID and proposes the first OK row under the itunes tree as the repoint candidate; wire it into missing_file_repoint.go's decision loop as a new bucket (e.g. 'itunes-shadow') alongside the existing repointable/no-shape/no-candidate-bytes buckets.",
+      "If the decision is 'leave report-only', simply document the decision in a docs/decisions or docs/audits follow-up note and check the TODO box."
+    ],
+    "tests": ["Deferred until the design decision is made — no code to test yet."],
+    "acceptance": ["A written decision (owner-authored or captured in a docs/ note) answering the goal question exists before any code lands."],
+    "edge_cases": [
+      "A book could have MULTIPLE OK iTunes rows (e.g. multi-file book) — which one does the phantom organizer row correspond to? Needs a matching rule (track number, filename stem), not 'the first one'.",
+      "A book's iTunes row could itself later go missing (iTunes library reorganized) — a repointed row would then be doubly wrong."
+    ],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (docs) until design decided; make ci if code follows",
+    "notes": "Paired with L4908 below (the 61 mangled-Windows-path rows), which is a sub-case of the same iTunes-tree population and the same open design question."
+  },
+  {
+    "todo_line": 4908,
+    "src_id": null,
+    "title": "Mangled /X:/books/itunes/Audiobooks Windows-path rows (61)",
+    "verdict": "needs_design",
+    "verdict_evidence": "Same open design question as L4905: these 61 rows are a documented sub-population of the iTunes-tree missing rows (missing_file_audit.go:57, 'iTunes tree' figure and mangled-path figure quoted together) and no repair exists for them — missing-file-repoint only derives track-slash candidates (missing_file_audit.go:577 deriveTrackSlashCandidates), which does not match a drive-letter-mangled path.",
+    "domain": "internal/plugins/maintenance",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "the 61 mangled-path rows are documented in the audit header alongside the 1,006 iTunes rows", "grep_cmd": "grep -n 'X:/books/itunes/Audiobooks' internal/plugins/maintenance/missing_file_audit.go", "expect": "1 hit, ~L57"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "S",
+    "tier": "sonnet",
+    "why_tier": "Small in scope (61 rows, likely one path-sanitization fix) but touches a prod-data path (book_file.FilePath) so needs care even though it's mechanical.",
+    "review_critical": true,
+    "goal": "Not directly actionable until the owner decides: is a mangled path like /X:/books/itunes/Audiobooks/... simply a string-sanitization bug (strip the erroneous POSIX-root-glued-to-a-drive-letter prefix, verify the corrected path resolves via os.Stat, then repoint) that can be fixed independent of the iTunes-hands-off question in L4905, or does it require the same iTunes-tree design decision first because the corrected path also points into the iTunes tree?",
+    "background": [
+      "docs/audits/2026-08-17-missing-file-audit-full-population.md §1 records 61 rows with path shape /X:/books/itunes/Audiobooks/... — a Windows drive letter with a POSIX root glued to its front.",
+      "Unlike the track-slash shape, this looks like a pure string-mangling bug (a Windows path imported without stripping the drive letter, or a path-join bug prefixing a leading '/') rather than a stale-directory-naming incident, so its root cause is still unidentified and separate from L4905's shape."
+    ],
+    "steps": [
+      "STOP: identify the actual root cause first (grep for where iTunes paths get imported/normalized, e.g. internal/plugins/itunes/ path handling) before proposing a fix — the shape suggests an import-time bug that may still be live and producing more mangled rows today.",
+      "Once root cause and repair strategy are decided, implement analogous to L4905's plan."
+    ],
+    "tests": ["Deferred until root cause and design decision are established."],
+    "acceptance": ["A written decision on repair strategy, plus (if a live import bug is found) a docs/audits note identifying it, exist before code lands."],
+    "edge_cases": ["The 61 rows may not all share the exact same mangling — verify all 61 match one shape before assuming a single string transform fixes them."],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [4905],
+    "gate": "n/a (docs) until design decided",
+    "notes": "Filed by the audit doc as 'unrelated to everything below; filed here so it is not lost' — i.e. even the original author flagged this as a separate investigation, not part of the track-slash repoint work."
+  },
+  {
+    "todo_line": 4910,
+    "src_id": null,
+    "title": "Decide repair for books whose every book_file row is dead (duplicate of L4901)",
+    "verdict": "parked",
+    "verdict_evidence": "Same 16,265-fully-broken-books decision as L4901, now formally parked by owner decision #12 ('The 16,265 fully-broken books stay untouched (parked)'). The general repair referenced in this item (missing-file-repair, option 'delete only where the book keeps a surviving file') has since had its delete capability removed entirely (missing_file_repair.go:119, 'Deletion was REMOVED from this op on 2026-08-19'), so the item's premise ('the general repair is decided and built') is itself stale, but the underlying decision it asks for is parked either way.",
+    "domain": "docs",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "missing-file-repair's delete capability, which this item assumed still existed, was removed", "grep_cmd": "grep -n 'Deletion was REMOVED from this op on 2026-08-19' internal/plugins/maintenance/missing_file_repair.go", "expect": "1 hit, L119"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "S",
+    "tier": "haiku",
+    "why_tier": "No code deliverable; a status note only.",
+    "review_critical": false,
+    "goal": "N/A — parked by owner decision #12; duplicate topic of L4901.",
+    "background": [
+      "Item text pre-dates the 2026-08-19 removal of missing-file-repair's delete path, so its framing ('the general repair ... is decided and built') is out of date, but the decision it is actually asking for (what happens to the 5-of-120 / 16,265-of-61,528 books with zero surviving files) is the same one L4901 asks for."
+    ],
+    "steps": [],
+    "tests": [],
+    "acceptance": [],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [4901],
+    "gate": "n/a (docs)",
+    "notes": "Coordinator: L4901 and L4910 should probably be checked off together as the same TODO topic once the fragment/inbox system is updated, but they are separate line numbers in TODO.md today."
+  },
+  {
+    "todo_line": 4919,
+    "src_id": null,
+    "title": "Make resolveOrganizedFilePath's plan-on-faith fallback loud and verify-before-write",
+    "verdict": "actionable",
+    "verdict_evidence": "internal/organizer/service.go:1325 resolveOrganizedFilePath's third branch (neither target nor source exists on disk) still silently returns dstPath unstated and unlogged, exactly as docs/audits/2026-08-17-orphan-destination-rows-root-cause.md described and left unfixed with three 'Suggested fixes, once the population is known' (make the branch loud; ReadDir-recover the old-name file; stat before trusting newPath in the single-file branch) — none implemented at HEAD: grep -n 'log.Warn' internal/organizer/service.go around L1325-1338 shows only the source-exists branch (L1334) logs; the final 'return dstPath' has no log call.",
+    "domain": "internal/organizer",
+    "exact_files": ["internal/organizer/service.go"],
+    "verified_anchors": [
+      {"claim": "resolveOrganizedFilePath's third branch returns the unverified planned path with no logging", "grep_cmd": "grep -n 'func resolveOrganizedFilePath' internal/organizer/service.go", "expect": "1 hit, L1325"},
+      {"claim": "the row is created unconditionally from this value", "grep_cmd": "grep -n 'newBF.FilePath = resolveOrganizedFilePath' internal/organizer/service.go", "expect": "1 hit, L1515"},
+      {"claim": "the single-file branch has no disk check at all before assigning newPath", "grep_cmd": "grep -n 'newBF.FilePath = newPath' internal/organizer/service.go", "expect": ">=1 hit"}
+    ],
+    "reuse": [
+      {"name": "logger.Logger (already threaded into resolveOrganizedFilePath as the log param)", "file": "internal/organizer/service.go", "verify_grep": "grep -n 'func resolveOrganizedFilePath(srcPath string, planned map\\[string\\]string, log logger.Logger)' internal/organizer/service.go"}
+    ],
+    "polarity": "transform",
+    "effort": "M",
+    "tier": "opus",
+    "why_tier": "Prod-data path (organize writes book_file rows from this) with a subtle three-way branch and an already-diagnosed but partially-superseded root cause (the segment_title_format bug that dominated the measured 71,954-row population was separately fixed in c54721c7) — needs careful reasoning about what's still live vs. already fixed, not mechanical.",
+    "review_critical": true,
+    "goal": "Implement the three suggested fixes from docs/audits/2026-08-17-orphan-destination-rows-root-cause.md against internal/organizer/service.go's resolveOrganizedFilePath (L1325) and its single-file caller: (1) log.Warn when the third branch (neither target nor source exists) fires, so an unverified row is visible in logs rather than indistinguishable from a verified one; (2) before falling to 'take the plan on faith', try os.ReadDir on filepath.Dir(dstPath) and match by file size against the source's known size, recovering the row instead of orphaning it, when a same-size file exists under a different name; (3) in the single-file (non-directory book) branch that assigns newBF.FilePath = newPath directly with no disk check, add an os.Stat(newPath) verification (falling back to the pre-existing srcPath / bf.FilePath when it fails, mirroring the directory-book behavior) before trusting it.",
+    "background": [
+      "docs/audits/2026-08-17-orphan-destination-rows-root-cause.md identifies internal/organizer/service.go's resolveOrganizedFilePath as creating book_file rows for paths that were never verified to exist, and lists three unfixed remediations.",
+      "docs/audits/2026-08-17-missing-file-audit-full-population.md later found the DOMINANT measured cause of the 71,954-row population was a different, already-fixed bug (the segment_title_format default, fixed in commit c54721c7 per internal/organizer/pathbuild.go:139-158) — so this item is not about re-diagnosing the historical incident, it is about a still-live code path that can independently create the same class of unverified row going forward, which is exactly what the item text means by 'without it the rows come back'.",
+      "The orphan-destination-rows doc's own caveat applies: it 'identifies a mechanism, not a measured population' — this is a code hardening task (verify-before-write, log-on-fallback), not a fresh data cleanup."
+    ],
+    "steps": [
+      "In internal/organizer/service.go, in resolveOrganizedFilePath (L1325-1338), add a log.Warn call on the final fallback branch (the one that currently does `return dstPath` with no log), before the return, stating that neither target nor source exists and the row is being written from the plan unverified — mirror the existing L1334 log.Warn call's style and argument shape.",
+      "Still inside resolveOrganizedFilePath, before falling to the final unverified branch: call os.ReadDir(filepath.Dir(dstPath)); if it succeeds, look for an entry whose size (via entry.Info() / os.Stat) matches os.Stat(srcPath)'s size (only if srcPath itself still resolves an on-disk size from an earlier stat you must add, OR skip this size check if srcPath is also gone — in that case there is nothing to compare against and the branch must fall through to the log-and-return-dstPath path from the prior step). If a same-size match is found under a different name in that directory, return that recovered path instead of dstPath, and log.Info the recovery (old name vs. recovered name) so it's auditable.",
+      "Find the single-file (non-directory book) caller referenced by the audit doc ('} else if !isDir { newBF.FilePath = newPath }', in the same function as the newBF.FilePath = resolveOrganizedFilePath(...) call at L1515 — search the surrounding ~50 lines for the isDir branch). Wrap the newPath assignment with an os.Stat(newPath) check; on stat failure, fall back to the pre-existing value (book.FilePath / bf.FilePath, matching whatever the directory-book branch falls back to) and log.Warn identically to the directory-book third branch.",
+      "Run `go build ./internal/organizer/...` to confirm no compile errors from the new os.ReadDir/os.Stat usage (imports for os and path/filepath are already present in service.go per the grep above)."
+    ],
+    "tests": [
+      "internal/organizer/service_test.go (or a new resolveOrganizedFilePath_test.go in the same package) — TestResolveOrganizedFilePath_TargetExists: dstPath present on disk -> returns dstPath, no warning logged.",
+      "TestResolveOrganizedFilePath_SourceExists: dstPath absent, srcPath present -> returns srcPath (existing behavior unchanged), one log.Warn call captured via a test logger/recorder.",
+      "TestResolveOrganizedFilePath_NeitherExists_NoRecovery: both absent, directory has no size-matching sibling -> returns dstPath AND asserts a log.Warn was emitted (the new loud-fallback behavior) — this is the anti-over-suppression test: without it, a future refactor could silently drop the new warning and no test would catch it.",
+      "TestResolveOrganizedFilePath_NeitherExists_RecoveredBySize: both absent, but the target directory contains a differently-named file of the same size as the source (simulate the #2479 scenario from the audit doc) -> returns the recovered sibling path, not dstPath, and logs the recovery at Info level.",
+      "A test for the single-file branch's new os.Stat guard, in whatever existing test file exercises OrganizeOneBook/CreateOrganizedVersion for single-file books, asserting the book_file row is NOT created with a nonexistent newPath when the file failed to actually land there."
+    ],
+    "acceptance": [
+      "go test ./internal/organizer/... -run TestResolveOrganizedFilePath passes, including the new tests above",
+      "grep -n 'log.Warn' internal/organizer/service.go shows a new call inside resolveOrganizedFilePath's final branch (previously only one log.Warn existed in the function, at the source-exists branch)",
+      "make ci passes"
+    ],
+    "edge_cases": [
+      "srcPath itself no longer resolvable when attempting the size-match recovery — there is nothing to compare sizes against, so skip straight to the log-and-return-unverified path rather than erroring.",
+      "filepath.Dir(dstPath) not existing at all (os.ReadDir returns an error) — treat identically to 'no match found', fall through to the logged unverified return, do not panic or propagate the ReadDir error upward.",
+      "Multiple same-size files in the target directory — the audit's own tier-2 analysis (in the sibling doc) warns that same-size/same-basename matching without further identity checks is a known false-positive risk; if more than one candidate matches by size, do NOT auto-recover (log and fall through to the unverified branch) rather than guessing."
+    ],
+    "anti_over_suppression": "TestResolveOrganizedFilePath_NeitherExists_NoRecovery",
+    "depends_on_lines": [],
+    "gate": "make ci",
+    "notes": "review_critical because this writes book_file.FilePath on the organize path — a wrong recovery match (multiple same-size candidates) could point a row at the WRONG file, which is worse than the current status quo of an unverified-but-at-least-honest planned path. The 'do not auto-recover on ambiguous size match' edge case above is load-bearing, not optional."
+  },
+  {
+    "todo_line": 4924,
+    "src_id": null,
+    "title": "Register HEAD for /api/items/:id/file/:ino/download (already done)",
+    "verdict": "stale_done",
+    "verdict_evidence": "r.HEAD is already registered for exactly this route: grep -n 'r.HEAD(\"/api/items/:id/file/:ino/download\"' internal/server/handlers/abs/handler.go -> 1 hit at L533, alongside r.GET at L510. The item is checked-off-ready.",
+    "domain": "internal/server/handlers/abs",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "HEAD is registered for /api/items/:id/file/:ino/download", "grep_cmd": "grep -n 'r.HEAD(\"/api/items/:id/file/:ino/download\"' internal/server/handlers/abs/handler.go", "expect": "1 hit, L533"},
+      {"claim": "GET is registered for the same route, handled by the same function", "grep_cmd": "grep -n 'r.GET(\"/api/items/:id/file/:ino/download\"' internal/server/handlers/abs/handler.go", "expect": "1 hit, L510"},
+      {"claim": "HEAD is also registered for the sibling non-download route /api/items/:id/file/:ino", "grep_cmd": "grep -n 'r.HEAD(\"/api/items/:id/file/:ino\"' internal/server/handlers/abs/handler.go", "expect": "1 hit, L532"}
+    ],
+    "reuse": [],
+    "polarity": "additive",
+    "effort": "S",
+    "tier": "haiku",
+    "why_tier": "No code change needed; just check the TODO box and cite the anchor.",
+    "review_critical": false,
+    "goal": "Check off TODO.md line 4924 — both h.ItemFileDownload (via GET and HEAD) and h.ItemFile (via GET and HEAD, and h.ItemCover via GET and HEAD) are already registered with gin's r.HEAD, both routed to the same handler as their GET counterpart.",
+    "background": [
+      "internal/server/handlers/abs/handler.go registers r.GET(\"/api/items/:id/file/:ino/download\", auth, h.ItemFileDownload) at L510 and r.HEAD on the identical path+handler at L533.",
+      "This was presumably added after the TODO item was filed — the item's premise ('the server registers no HEAD handler anywhere') is no longer true at HEAD."
+    ],
+    "steps": [
+      "Open TODO.md, find the checkbox item at line 4924 ('Register HEAD for the audio/file routes.').",
+      "Change '- [ ]' to '- [x]'.",
+      "Do not touch adjacent checkboxes."
+    ],
+    "tests": [],
+    "acceptance": [
+      "grep -n 'r.HEAD(\"/api/items/:id/file/:ino/download\"' internal/server/handlers/abs/handler.go returns 1 hit"
+    ],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (docs)",
+    "notes": null
+  },
+  {
+    "todo_line": 4960,
+    "part": 1,
+    "src_id": null,
+    "title": "Retarget dedup-operations.spec.ts and dedup.spec.ts resolve-production status mocks to v2",
+    "verdict": "actionable",
+    "verdict_evidence": "Both files still mock the retired GET /operations/:id/status shape: grep -n '\\*/status' web/tests/e2e/dedup-operations.spec.ts -> 1 hit at L118; grep -n '\\*/status' web/tests/e2e/dedup.spec.ts -> 1 hit at L163. The live client calls getOperationStatus -> GET /operations/v2/:id (web/src/services/api.ts:545) and reads def_id/progress_current/progress_total/progress_message, not the flat legacy shape both mocks currently return.",
+    "domain": "web",
+    "exact_files": ["web/tests/e2e/dedup-operations.spec.ts", "web/tests/e2e/dedup.spec.ts"],
+    "verified_anchors": [
+      {"claim": "dedup-operations.spec.ts still mocks the retired /status URL", "grep_cmd": "grep -n \"operations/\\*/status\" web/tests/e2e/dedup-operations.spec.ts", "expect": "1 hit, L118"},
+      {"claim": "dedup.spec.ts still mocks the retired /status URL", "grep_cmd": "grep -n \"operations/\\*/status\" web/tests/e2e/dedup.spec.ts", "expect": "1 hit, L163"},
+      {"claim": "the live client polls GET /operations/v2/:id", "grep_cmd": "grep -n 'operations/v2/' web/src/services/api.ts", "expect": ">=1 hit including L545"},
+      {"claim": "getOperationStatus reads the v2 field names", "grep_cmd": "grep -n 'progress_current\\|progress_total\\|progress_message' web/src/services/api.ts", "expect": ">=1 hit"}
+    ],
+    "reuse": [
+      {"name": "routeRunningStatus (v2-shaped mock pattern to copy)", "file": "web/tests/e2e/dynamic-ui-interactions.spec.ts", "verify_grep": "grep -n 'operations/v2/\\*' web/tests/e2e/dynamic-ui-interactions.spec.ts"},
+      {"name": "transcode poll mock (another already-fixed v2-shaped example, response envelope under data.operation)", "file": "web/tests/e2e/transcode-and-counting.spec.ts", "verify_grep": "grep -n 'operations/v2/op-transcode-1' web/tests/e2e/transcode-and-counting.spec.ts"}
+    ],
+    "polarity": "transform",
+    "effort": "S",
+    "tier": "sonnet",
+    "why_tier": "Mechanical but must match the exact v2 response envelope (data.operation with progress_current/progress_total/progress_message) that two already-fixed sibling mocks in this same repo demonstrate; a naive URL-only fix (as the item's own measurement showed) does not produce a passing test.",
+    "review_critical": false,
+    "goal": "In both web/tests/e2e/dedup-operations.spec.ts:118 and web/tests/e2e/dedup.spec.ts:163, change the mocked route from '**/api/v1/operations/*/status' to '**/api/v1/operations/v2/*' (or a more specific '**/api/v1/operations/v2/resolve-prod-1' if only that id is polled in the test) and change the fulfilled body from the flat legacy shape ({id, status, progress, total, message}) to the v2 envelope: { data: { operation: { id: 'resolve-prod-1', def_id: 'authors.resolve-production', status: 'completed', progress_current: 100, progress_total: 100, progress_message: 'Done', error_message: null, queued_at: <ISO string> }, logs: [] } }.",
+    "background": [
+      "web/src/services/api.ts:2044 getOperationStatus / getOperationV2 (L545) fetches GET /operations/v2/:id and requires the row under data.operation (L551, 'Unexpected response shape from GET /api/v1/operations/v2/{id}' if absent).",
+      "web/tests/e2e/dynamic-ui-interactions.spec.ts:49 and web/tests/e2e/transcode-and-counting.spec.ts:97 already demonstrate the correct v2 mock shape in this same repo — both were already retargeted (confirmed at HEAD), so this task is applying the identical, already-proven pattern to the two remaining stale files.",
+      "The TODO item's own 2026-08-16 measurement warns that retargeting the URL alone (without fixing the body shape) does not change dynamic-ui-interactions.spec.ts's pass/fail count — so this task must copy the FULL v2 envelope shape, not just the URL glob."
+    ],
+    "steps": [
+      "In web/tests/e2e/dedup-operations.spec.ts, locate the page.route call at line 118 matching '**/api/v1/operations/*/status'.",
+      "Change the route glob to '**/api/v1/operations/v2/*'.",
+      "Replace the fulfilled JSON body's flat shape ({ id: 'resolve-prod-1', status: 'completed', progress: 100, total: 100, message: 'Done' }) with the v2 envelope shown in the goal field above, keeping id='resolve-prod-1' and status='completed' but renaming progress/total/message to progress_current/progress_total/progress_message and adding def_id (use 'authors.resolve-production' unless grepping web/src for the real def_id used by the resolve-production trigger shows a different string — verify with: grep -n 'resolve-production' web/src/services/api.ts).",
+      "Repeat the identical change in web/tests/e2e/dedup.spec.ts at line 163 (same fix, same test scenario, different file).",
+      "Run the two specs locally: npx playwright test web/tests/e2e/dedup-operations.spec.ts web/tests/e2e/dedup.spec.ts --grep 'Find Real Author' to confirm the 'clicking Find Real Author calls resolve API' / 'triggers API call' tests still pass with the corrected mock."
+    ],
+    "tests": [
+      "web/tests/e2e/dedup-operations.spec.ts: 'clicking Find Real Author calls resolve API' — still passes after the mock is retargeted to v2 (this is the existing test; verify it doesn't regress).",
+      "web/tests/e2e/dedup.spec.ts: 'clicking Find Real Author triggers API call' — same."
+    ],
+    "acceptance": [
+      "grep -n \"operations/v2\" web/tests/e2e/dedup-operations.spec.ts returns a hit where line 118 used to be",
+      "grep -n \"operations/v2\" web/tests/e2e/dedup.spec.ts returns a hit where line 163 used to be",
+      "grep -n 'progress_current' web/tests/e2e/dedup-operations.spec.ts and web/tests/e2e/dedup.spec.ts each return >=1 hit",
+      "npx playwright test web/tests/e2e/dedup-operations.spec.ts web/tests/e2e/dedup.spec.ts exits 0"
+    ],
+    "edge_cases": ["If the resolve-production trigger's real def_id differs from 'authors.resolve-production', the mock's def_id field is cosmetic (getOperationStatus does not filter on it), so getting it exactly right is nice-to-have, not required for the test to pass — but check anyway rather than guessing, since a coordinator-level convention may expect it to match wire_operations_routes.go's registered ID."],
+    "anti_over_suppression": "N/A — this is a mock-accuracy fix, not a new filter/guard.",
+    "depends_on_lines": [],
+    "gate": "npm --prefix web run lint && npx playwright test web/tests/e2e/dedup-operations.spec.ts web/tests/e2e/dedup.spec.ts",
+    "notes": "Per the TODO item's own 2026-08-16 measurement, fixing this mock is the RIGHT engineering fix regardless of whether it changes any test's pass/fail count — a stale mock 'fails silently' by falling through to a 404 rather than erroring loudly, which is a correctness bug in the test fixture even if today it happens not to flip a result."
+  },
+  {
+    "todo_line": 4960,
+    "part": 2,
+    "src_id": null,
+    "title": "Retarget diagnostics.spec.ts AI-submit and export status mocks to v2",
+    "verdict": "actionable",
+    "verdict_evidence": "diagnostics.spec.ts still mocks the retired op-id URL shape (no /v2/) at two spots: grep -n \"operations/op-2\" web/tests/e2e/diagnostics.spec.ts -> 1 hit ~L80; grep -n \"operations/op-1\" web/tests/e2e/diagnostics.spec.ts -> 1 hit ~L175. Both bodies use the flat legacy shape (type/progress/total/message), not the v2 shape getOperationStatus requires.",
+    "domain": "web",
+    "exact_files": ["web/tests/e2e/diagnostics.spec.ts"],
+    "verified_anchors": [
+      {"claim": "AI-results poll mock still targets the legacy non-v2 op-2 URL", "grep_cmd": "grep -n \"operations/op-2\" web/tests/e2e/diagnostics.spec.ts", "expect": "1 hit, ~L80"},
+      {"claim": "export poll mock still targets the legacy non-v2 op-1 URL", "grep_cmd": "grep -n \"operations/op-1\" web/tests/e2e/diagnostics.spec.ts", "expect": "1 hit, ~L175"},
+      {"claim": "Diagnostics.tsx polls via the same getOperationStatus used elsewhere", "grep_cmd": "grep -n 'api.getOperationStatus' web/src/pages/Diagnostics.tsx", "expect": "1 hit, ~L154"}
+    ],
+    "reuse": [
+      {"name": "v2 mock envelope pattern", "file": "web/tests/e2e/transcode-and-counting.spec.ts", "verify_grep": "grep -n 'data: { operation' web/tests/e2e/transcode-and-counting.spec.ts"}
+    ],
+    "polarity": "transform",
+    "effort": "S",
+    "tier": "sonnet",
+    "why_tier": "Mechanical URL+body retarget across two mocks in one file, same pattern as part 1.",
+    "review_critical": false,
+    "goal": "In web/tests/e2e/diagnostics.spec.ts, change both page.route('**/api/v1/operations/op-2', ...) (~L80) and page.route('**/api/v1/operations/op-1', ...) (~L175) to '**/api/v1/operations/v2/op-2' and '**/api/v1/operations/v2/op-1' respectively, and change each fulfilled body from the flat legacy shape to the v2 envelope { data: { operation: { id, def_id, status, progress_current, progress_total, progress_message, error_message: null, queued_at }, logs: [] } }, preserving each test's existing pollCount-based status transition (running until a threshold, then completed).",
+    "background": [
+      "web/src/pages/Diagnostics.tsx:154 calls api.getOperationStatus(opId), which (per api.ts:2044) is the same v2-only function used everywhere else in the app — there is no legacy fallback left.",
+      "The op-2 mock backs 'diagnostics_ai' AI-results polling; the op-1 mock backs 'diagnostics_export' ZIP-export polling. Use def_id values 'diagnostics.submit-ai' and 'diagnostics.export' unless a grep of the real registered op IDs (search internal/server for the diagnostics operation defs) shows different strings — cosmetic either way since getOperationStatus does not branch on def_id."
+    ],
+    "steps": [
+      "In web/tests/e2e/diagnostics.spec.ts, locate the page.route call ~L80 for '**/api/v1/operations/op-2' inside setupAiResultsMocks.",
+      "Change the glob to '**/api/v1/operations/v2/op-2' and rewrite the fulfilled JSON to the v2 envelope shape (see goal), keeping the existing pollCount-driven status/progress logic (status = pollCount >= 2 ? 'completed' : 'running'; progress_current mirrors the old progress value; progress_total mirrors total).",
+      "Locate the second page.route call ~L175 for '**/api/v1/operations/op-1' (the export-ZIP test) and apply the identical URL+body fix, using op-1's existing single-shot 'completed' response.",
+      "Run: npx playwright test web/tests/e2e/diagnostics.spec.ts to confirm the AI-results and export-ZIP tests still pass."
+    ],
+    "tests": [
+      "web/tests/e2e/diagnostics.spec.ts — the AI-results flow test(s) driven by setupAiResultsMocks still pass.",
+      "web/tests/e2e/diagnostics.spec.ts — 'download ZIP flow triggers export' still passes."
+    ],
+    "acceptance": [
+      "grep -n 'operations/v2/op-2' web/tests/e2e/diagnostics.spec.ts returns 1 hit",
+      "grep -n 'operations/v2/op-1' web/tests/e2e/diagnostics.spec.ts returns 1 hit",
+      "npx playwright test web/tests/e2e/diagnostics.spec.ts exits 0"
+    ],
+    "edge_cases": ["The AI-results mock also serves a separate GET /diagnostics/ai-results/op-2 endpoint (unrelated to operation polling) — do not touch that route, only the operation-status poll route."],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "npm --prefix web run lint && npx playwright test web/tests/e2e/diagnostics.spec.ts",
+    "notes": null
+  },
+  {
+    "todo_line": 4960,
+    "part": 3,
+    "src_id": null,
+    "title": "Two of the six named mocks are already fixed — check off partially / note remaining root-cause caveat",
+    "verdict": "stale_done",
+    "verdict_evidence": "web/tests/e2e/dynamic-ui-interactions.spec.ts and web/tests/e2e/transcode-and-counting.spec.ts, two of the six files the TODO item names, are already retargeted to '**/api/v1/operations/v2/*' with v2-shaped bodies at HEAD: grep -n 'operations/v2/\\*' web/tests/e2e/dynamic-ui-interactions.spec.ts -> 1 hit L49; grep -n 'operations/v2/op-transcode-1' web/tests/e2e/transcode-and-counting.spec.ts -> 1 hit L97.",
+    "domain": "web",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "dynamic-ui-interactions.spec.ts already mocks operations/v2/*", "grep_cmd": "grep -n \"operations/v2/\\*\" web/tests/e2e/dynamic-ui-interactions.spec.ts", "expect": "1 hit, L49"},
+      {"claim": "transcode-and-counting.spec.ts already mocks operations/v2/op-transcode-1", "grep_cmd": "grep -n \"operations/v2/op-transcode-1\" web/tests/e2e/transcode-and-counting.spec.ts", "expect": "1 hit, L97"}
+    ],
+    "reuse": [],
+    "polarity": "additive",
+    "effort": "S",
+    "tier": "haiku",
+    "why_tier": "No code change; just note the sub-status of the parent TODO item.",
+    "review_critical": false,
+    "goal": "Not a separate code task — informational sub-finding for the coordinator: 2 of the 6 mocks the TODO item names are already fixed (v2 URL + v2 body). Once parts 1 and 2 above land, all 6 will be current, and TODO.md line 4960 can be checked off.",
+    "background": [
+      "The item's own 2026-08-16 measurement notes that retargeting dynamic-ui-interactions.spec.ts to v2 changed nothing (6 failed/4 passed before and after) because those 6 failures are PRE-EXISTING UI issues unrelated to the operations-endpoint mock — that measurement remains true and is not affected by parts 1/2 of this split."
+    ],
+    "steps": [
+      "After parts 1 and 2 land, change TODO.md line 4960's checkbox from '- [ ]' to '- [x]'."
+    ],
+    "tests": [],
+    "acceptance": ["All of: dynamic-ui-interactions.spec.ts, transcode-and-counting.spec.ts (already v2), dedup-operations.spec.ts, dedup.spec.ts, diagnostics.spec.ts (parts 1+2) mock the v2 URL shape."],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (docs)",
+    "notes": "The unrelated pre-existing 'spinner visible' failures in dynamic-ui-interactions.spec.ts (Scan All, Organize Library, per-path scan, dashboard, visual-regression) are OUT OF SCOPE for this TODO item per its own measurement — do not fold that investigation into this mock-fixing task."
+  },
+  {
+    "todo_line": 5021,
+    "src_id": null,
+    "title": "Add an {edition_suffix} folder-pattern token",
+    "verdict": "actionable",
+    "verdict_evidence": "No {edition_suffix} token exists at HEAD: grep -n 'edition_suffix' internal/organizer/pathbuild.go returns 0 hits. {edition} exists as a raw, unguarded value (pathbuild.go:279) and {series_prefix} (pathbuild.go:298-311) is the exact model the item asks to copy — both confirmed present and available to pattern the new token on.",
+    "domain": "internal/organizer",
+    "exact_files": ["internal/organizer/pathbuild.go"],
+    "verified_anchors": [
+      {"claim": "no edition_suffix token exists yet", "grep_cmd": "grep -n 'edition_suffix' internal/organizer/pathbuild.go", "expect": "0 hits"},
+      {"claim": "{edition} exists as a raw value in the vocabulary", "grep_cmd": "grep -n '\"{edition}\"' internal/organizer/pathbuild.go", "expect": "1 hit, L279"},
+      {"claim": "{series_prefix} is built after the trim pass as the model to copy", "grep_cmd": "grep -n 'series_prefix.*built AFTER the trim pass' internal/organizer/pathbuild.go", "expect": "1 hit, ~L298"},
+      {"claim": "PathVars.Edition field exists to source the value from", "grep_cmd": "grep -n 'Edition   string' internal/organizer/pathbuild.go", "expect": "1 hit, L198"}
+    ],
+    "reuse": [
+      {"name": "series_prefix construction block (copy this shape)", "file": "internal/organizer/pathbuild.go", "verify_grep": "grep -n 'out\\[\"{series_prefix}\"\\]' internal/organizer/pathbuild.go"}
+    ],
+    "polarity": "additive",
+    "effort": "S",
+    "tier": "sonnet",
+    "why_tier": "Small, well-scoped addition with an exact model to copy, but touches the organize target-path computation (prod-data-adjacent) so needs a careful test, not a rubber-stamp.",
+    "review_critical": true,
+    "goal": "Add a new {edition_suffix} token to internal/organizer/pathbuild.go's path-variable vocabulary, built the same way {series_prefix} is (after the trim/scrub pass, as pattern structure rather than raw metadata), so a pattern like '{author}/{series}/{title}{edition_suffix} ({print_year})' renders '' for books with no edition and ' (Unabridged)'-style separator+parens for books that have one, instead of {edition}'s current dangling-space/empty-parens problem when used raw.",
+    "background": [
+      "internal/organizer/pathbuild.go:279 already exposes {edition} as a raw scrubbed value (v.Edition), with no separator handling — a pattern author who writes '{title} ({edition})' gets ' ()' for books with no edition.",
+      "internal/organizer/pathbuild.go:298-311 builds {series_prefix} AFTER the main scrub/trim loop specifically so its trailing ' - ' survives TrimSpace and collapses to '' when series is empty — documented in the comment there as the fix for a real bug ('MySeries -Book' from an earlier version that ran the prefix through TrimSpace).",
+      "Two editions of the same title sharing {print_year} currently compute the same target path under the default pattern and collide (OrganizeBook stats the target, fires OnCollision, returns ErrTargetOccupied per rename.go/move.go) rather than clobbering — this is documented as safe-but-invisible, an ergonomics gap not a correctness bug, per the item's own 2026-08-17 deferral note."
+    ],
+    "steps": [
+      "In internal/organizer/pathbuild.go, after the `out[\"{series_prefix}\"] = ...` block (around L303-311), add a parallel block for {edition_suffix}: `if edition := out[\"{edition}\"]; edition != \"\" { out[\"{edition_suffix}\"] = \" (\" + edition + \")\" } else { out[\"{edition_suffix}\"] = \"\" }` — using a leading space + parens as the default separator, matching the {print_year} default pattern shown in the item text ({title} ({print_year})).",
+      "Confirm the new key is added to `out` (the map returned by the function), not `raw` (which goes through the TrimSpace/scrub loop and would eat the separator, exactly the bug the series_prefix comment warns about).",
+      "No changes needed to BuildPath / expandFormatSpecs / the placeholder-normalize regex — {edition_suffix} is a plain (non-format-spec) placeholder like {series_prefix}, substituted the same way.",
+      "Add a doc comment above the new block modeled on the {series_prefix} one, explaining why it must be built after the trim pass."
+    ],
+    "tests": [
+      "internal/organizer/pathbuild_test.go — TestBuildPath_EditionSuffix_Present: PathVars with Edition set to e.g. 'Unabridged', pattern '{title}{edition_suffix}' -> expect 'Some Title (Unabridged)'.",
+      "internal/organizer/pathbuild_test.go — TestBuildPath_EditionSuffix_Empty: PathVars with Edition == \"\", same pattern -> expect exactly 'Some Title' with no dangling space or empty parens (this is the anti-over-suppression / regression test — it is what proves the token collapses cleanly instead of reproducing the {edition} raw-value bug the item complains about)."
+    ],
+    "acceptance": [
+      "go test ./internal/organizer/... -run TestBuildPath_EditionSuffix passes",
+      "grep -n 'edition_suffix' internal/organizer/pathbuild.go returns hits for both the out[] assignment and the doc comment",
+      "make ci passes"
+    ],
+    "edge_cases": [
+      "Edition value containing its own parens or slashes (rare but possible if sourced from a messy metadata field) — rely on the same scrubVar/sanitization already applied to {edition} itself (out[\"{edition}\"] already went through scrubVar before this new block reads it), so no additional escaping needed.",
+      "A pattern author who uses BOTH {edition} and {edition_suffix} in the same pattern — both remain valid independently; no conflict, since they are just two different map entries."
+    ],
+    "anti_over_suppression": "TestBuildPath_EditionSuffix_Empty",
+    "depends_on_lines": [],
+    "gate": "make ci",
+    "notes": "The item's own text calls this 'deliberately deferred... an ergonomics fix, not a correctness one' (discussed 2026-08-17) — flagging for the coordinator that this is real, well-specified, low-risk work, but was explicitly deprioritized relative to correctness fixes elsewhere in this scope (e.g. L4919, L5290). Not covered by any of the 14 owner decisions in SCOUT-INSTRUCTIONS.md, so verdict is 'actionable' rather than 'parked' — but sequence it behind higher-priority items unless told otherwise."
+  },
+  {
+    "todo_line": 5037,
+    "src_id": null,
+    "title": "Investigate LLM host GPU cooling/fan-speed reporting before another full library.scan",
+    "verdict": "prod_run",
+    "verdict_evidence": "docs/plans/2026-08-17-split-scan-ai-phase.md's own 'Open questions' section explicitly scopes this outside the codebase: 'New, and it belongs to the hardware, not this codebase: why does the card reach 97C... and why does nvidia-smi report [Unknown Error] for fan speed?' No source file in this repo controls GPU fan curves or reads nvidia-smi as part of the scan pipeline (this is a physical-hardware / host-OS inspection, not a code change).",
+    "domain": "docs",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "the plan doc itself defers this to hardware, not code", "grep_cmd": "grep -n 'belongs to the hardware, not this codebase' docs/plans/2026-08-17-split-scan-ai-phase.md", "expect": "1 hit, ~L263"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "S",
+    "tier": "haiku",
+    "why_tier": "Not a code task — a physical/ops inspection of the LLM host's GPU cooler and fan-speed telemetry.",
+    "review_critical": false,
+    "goal": "No code deliverable. This is an operational task: physically inspect the LLM host's GPU cooling (why does nvidia-smi report [Unknown Error] for fan speed, and can the cooler be improved/cleaned so sustained 100%-duty inference doesn't hit the 95C shutdown spec) before scheduling another unattended full library.scan.",
+    "background": [
+      "Measured 2026-08-17: the GPU held 97C against its own 95C shutdown spec during the scan's AI-parsing phase, with HW Thermal Slowdown active and clocks pinned at 1860 MHz vs a 2130 MHz max (~87% of rated clock).",
+      "Per project memory ('GPU thermal block LIFTED'), some throttle-related fix has since landed, but post-fix thermals are unmeasured and the original '69.4% of scan wall-clock is AI parsing' figure remains thermally confounded until a re-measurement records GPU temperature and clock alongside it.",
+      "A client-side worker pool on the AI batch loop was separately ruled out (the GPU is saturated at 92-93% utilization, not idle) — that is a closed sub-question, not part of this item."
+    ],
+    "steps": [],
+    "tests": [],
+    "acceptance": ["Physical inspection of the GPU cooler/fan completed; nvidia-smi fan-speed reporting explained; a re-measurement of the AI-phase wall-clock percentage recorded alongside GPU temp/clock."],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (docs)",
+    "notes": "Do not schedule/run another unattended library.scan on this host until the cooling question is resolved, per the item's own recommendation."
+  },
+  {
+    "todo_line": 5054,
+    "src_id": null,
+    "title": "make ci staticcheck gate is clean at HEAD (already fixed)",
+    "verdict": "stale_done",
+    "verdict_evidence": "Ran `staticcheck ./...` at HEAD (same invocation as Makefile's staticcheck target, Makefile:346) and it exits 0 with zero findings. All items the TODO cites are individually confirmed resolved: internal/metafetch/service_apply.go now has a nil-guard on updatedBook at L632 before either flagged use site (L646, L675); internal/server/handlers/operations/handler.go:112 has a comment 'operationV2ToLegacy WAS HERE AND HAS BEEN DELETED (2026-08-19)' confirming that U1000 finding's dead code was removed; grep for dlIntPtr/dlInt64Ptr in internal/database/dataloss_preserve_invariant_test.go returns 0 hits.",
+    "domain": "ci/scripts",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "staticcheck ./... exits clean at HEAD", "grep_cmd": "staticcheck ./... ; echo EXIT:$?", "expect": "EXIT:0, no findings printed"},
+      {"claim": "the SA5011 nil-deref site now has a guard before both flagged use sites", "grep_cmd": "grep -n 'if updatedBook == nil' internal/metafetch/service_apply.go", "expect": "1 hit, L632, preceding L646 and L675"},
+      {"claim": "operationV2ToLegacy (one of the 6 named U1000s) was deleted", "grep_cmd": "grep -n 'operationV2ToLegacy WAS HERE AND HAS BEEN DELETED' internal/server/handlers/operations/handler.go", "expect": "1 hit, L112"},
+      {"claim": "dlIntPtr/dlInt64Ptr (another named U1000 pair) no longer exist", "grep_cmd": "grep -n 'dlIntPtr\\|dlInt64Ptr' internal/database/dataloss_preserve_invariant_test.go", "expect": "0 hits"}
+    ],
+    "reuse": [],
+    "polarity": "removal",
+    "effort": "S",
+    "tier": "haiku",
+    "why_tier": "No code change needed; check the TODO box and record the clean gate.",
+    "review_critical": false,
+    "goal": "Check off TODO.md line 5054 — all 10 staticcheck findings the item names (1 SA5011, 1 SA4006/SA4010, 6 U1000, and the remaining items) are gone at HEAD, and `make staticcheck` / `make ci` now runs clean rather than aborting.",
+    "background": [
+      "The item was filed 2026-08-17 after measuring 10 byte-identical staticcheck findings between origin/main and a feature branch.",
+      "Re-running the identical `staticcheck ./...` invocation at current HEAD (branch main, commit 8f6d0d99) returns zero findings and exit 0.",
+      "The item's suggested fix order (triage SA5011 first, then U1000s, then decide whether staticcheck belongs in required remote checks) appears to have been followed — the nil-deref guard and the dead-code removals are both present and dated 2026-08-19 in nearby comments."
+    ],
+    "steps": [
+      "Open TODO.md, find the checkbox item at line 5054 ('make ci cannot pass on main — staticcheck has 10 findings and aborts the target').",
+      "Change '- [ ]' to '- [x]'.",
+      "Optionally add a one-line changelog.d fragment noting `make staticcheck` is clean again as of this verification, if the coordinator wants it recorded (not required by the item itself)."
+    ],
+    "tests": [],
+    "acceptance": [
+      "`staticcheck ./...` (same as `make staticcheck`) exits 0 with no output",
+      "`make ci` no longer aborts at the staticcheck stage"
+    ],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "make ci",
+    "notes": "The item's last open sub-question ('decide whether staticcheck belongs in the required remote GitHub checks, since a gate that only fails locally trains people to skip it') is a separate CI-policy decision, not a code fix — flagging for the coordinator as a possible follow-up 'needs_design' item if they want it split out, but the scout instructions gave no owner decision on it so it is left out of this item's scope rather than invented."
+  },
+  {
+    "todo_line": 5197,
+    "src_id": null,
+    "title": "OperationDef.Permissions enforcement (already built and tested)",
+    "verdict": "stale_done",
+    "verdict_evidence": "internal/server/handlers/operations_v2.go's TriggerOperationV2 now enforces def.Permissions before EnqueueOp (comment 'Enforce the def's declared Permissions', loop 'for _, p := range def.Permissions { if !auth.Can(...) { RespondWithForbidden... } }'), and internal/server/handlers/operations_v2_permissions_test.go (last-edited 2026-08-18, 178 lines) pins exactly the editor-cannot-run-maintenance-op scenario the TODO item describes as the gap.",
+    "domain": "internal/server/handlers",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "TriggerOperationV2 enforces def.Permissions with an AND over auth.Can", "grep_cmd": "grep -n 'for _, p := range def.Permissions' internal/server/handlers/operations_v2.go", "expect": "1 hit, ~L354"},
+      {"claim": "a dedicated test file pins the editor-cannot-run-maintenance-op regression", "grep_cmd": "grep -n 'TestTriggerOperationV2_EditorCannotRunAMaintenanceOp' internal/server/handlers/operations_v2_permissions_test.go", "expect": "1 hit"},
+      {"claim": "bulkFetchMetadataJob's PermissionAware value is threaded into its v1 OperationDef", "grep_cmd": "grep -n 'PermissionAware' internal/server/maintenance_job_op.go", "expect": ">=1 hit"}
+    ],
+    "reuse": [],
+    "polarity": "additive",
+    "effort": "S",
+    "tier": "haiku",
+    "why_tier": "No code change needed; check the TODO box.",
+    "review_critical": false,
+    "goal": "Check off TODO.md line 5197 — the permission-enforcement gap this item warns PR-3 would silently drop is already closed: TriggerOperationV2 enforces def.Permissions, tested explicitly against the editor/scan.trigger-vs-settings.manage scenario the item calls out by name.",
+    "background": [
+      "internal/server/handlers/operations_v2.go's TriggerOperationV2 gates on h.enforcePerms + def.Permissions, dated by its surrounding comment to have addressed the exact concern: 'The route-level guard on POST /operations/v2 is a single blanket scan.trigger for EVERY op... so without this the per-def Permissions field is written to op_definitions_v2 and never read.'",
+      "internal/server/handlers/operations_v2_permissions_test.go (version 1.1.0, last-edited 2026-08-18 — one day after this item's 2026-08-17 dated measurement) has a header comment describing itself as covering exactly this gate and pinning the editor/maintenance.cleanup-backups scenario the TODO item uses as its headline example.",
+      "internal/server/maintenance_job_op.go:51-82 threads a job's PermissionAware.Permission() into its OperationDef.Permissions, which is the specific bulkFetchMetadataJob wiring the item said was still needed."
+    ],
+    "steps": [
+      "Open TODO.md, find the checkbox item at line 5197.",
+      "Change '- [ ]' to '- [x]'."
+    ],
+    "tests": [],
+    "acceptance": [
+      "grep -n 'TestTriggerOperationV2_EditorCannotRunAMaintenanceOp' internal/server/handlers/operations_v2_permissions_test.go returns 1 hit",
+      "go test ./internal/server/handlers/... -run TestTriggerOperationV2 passes"
+    ],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "make ci",
+    "notes": "This item's own text says the enforcement must land 'before PR-3 deletes the v1 dispatcher — not after.' Confirm with the coordinator whether PR-3 (v1 registry/dispatcher retirement) has since landed; if so this ordering constraint is now moot, if not it remains a hard prerequisite for that separate, unscoped PR-3 work."
+  },
+  {
+    "todo_line": 5271,
+    "part": 1,
+    "src_id": null,
+    "title": "Add DeleteNarrator to the store (CRUD building block only)",
+    "verdict": "actionable",
+    "verdict_evidence": "No DeleteNarrator exists anywhere: grep -rn 'DeleteNarrator' internal/database/*.go returns 0 hits, confirmed against grep -n 'func (p \\*PebbleStore) CreateNarrator' internal/database/pebble_store_authors.go (L669) which shows CreateNarrator exists but has no delete counterpart. DeleteAuthor (pebble_store_authors.go:157) is the exact model to mirror, adjusted for the narrator key scheme (narrator:%d record key + narrator_name:%s name-index key, both confirmed at L719/L722).",
+    "domain": "internal/database",
+    "exact_files": ["internal/database/pebble_store_authors.go", "internal/database/iface_catalog.go", "internal/database/mock_store.go", "internal/database/memdb_sync.go"],
+    "verified_anchors": [
+      {"claim": "DeleteNarrator does not exist anywhere in the store layer", "grep_cmd": "grep -rn 'DeleteNarrator' internal/database/*.go", "expect": "0 hits"},
+      {"claim": "CreateNarrator exists and writes narrator:%d plus narrator_name:%s index keys", "grep_cmd": "grep -n 'narrator_name:%s\\|narrator:%d' internal/database/pebble_store_authors.go", "expect": ">=2 hits, ~L719-722"},
+      {"claim": "CreateNarrator is declared on the Store interface (the file to add DeleteNarrator's declaration alongside)", "grep_cmd": "grep -n 'CreateNarrator(name string) (\\*Narrator, error)' internal/database/iface_catalog.go", "expect": "1 hit, L46"},
+      {"claim": "DeleteAuthor is the sibling method to mirror the shape of (batch delete + memdb cleanup)", "grep_cmd": "grep -n 'func (p \\*PebbleStore) DeleteAuthor(id int) error' internal/database/pebble_store_authors.go", "expect": "1 hit, L157"}
+    ],
+    "reuse": [
+      {"name": "DeleteAuthor (structural model: batch delete record+name-index, commit, then memdb cleanup)", "file": "internal/database/pebble_store_authors.go", "verify_grep": "grep -n 'func (p \\*PebbleStore) DeleteAuthor' internal/database/pebble_store_authors.go"},
+      {"name": "UpsertNarratorToMemDB (existing memdb helper; a DeleteNarratorFromMemDB counterpart does not yet exist and must be added)", "file": "internal/database/memdb_sync.go", "verify_grep": "grep -n 'func (p \\*PebbleStore) UpsertNarratorToMemDB' internal/database/memdb_sync.go"}
+    ],
+    "polarity": "additive",
+    "effort": "M",
+    "tier": "sonnet",
+    "why_tier": "Mechanical CRUD addition with a clear model (DeleteAuthor) to mirror, but touches the memdb dual-write path and the Store interface (multiple implementers to update), so needs care.",
+    "review_critical": true,
+    "goal": "Add `DeleteNarrator(id int) error` to the database.Store surface: declare it in internal/database/iface_catalog.go alongside CreateNarrator (L46), implement it on *PebbleStore in internal/database/pebble_store_authors.go modeled on DeleteAuthor (delete the narrator:%d record key and its narrator_name:%s index key in one batch, commit, then update the in-memory index), add a stub/passthrough on database.MockStore in mock_store.go, and add a DeleteNarratorFromMemDB helper in memdb_sync.go modeled on DeleteAuthorFromMemDB. This is infrastructure only — it does NOT wire up a maintenance.purge-empty-narrators operation (see part 2, which is blocked on the narrator-identity design question).",
+    "background": [
+      "Author deletion (DeleteAuthor, pebble_store_authors.go:157) deletes the author:%d record, the author:name:%s index, cascades alias deletion, and (buggily, see L5290 below) attempts junction cleanup — DeleteNarrator should mirror the record+index deletion and memdb cleanup shape but does NOT need the junction-cleanup step in this task, since no caller needs it yet (see part 2).",
+      "Narrator's key scheme differs slightly from author's: narrator uses `narrator_name:%s` (underscore) as its index key (pebble_store_authors.go:722), not `narrator:name:%s` (colon) the way author's index reads `author:name:%s` — get this exact or GetNarratorByName will silently stop finding narrators after a delete leaves a stale or wrongly-keyed index entry.",
+      "There is no existing DeleteNarratorFromMemDB — memdb_sync.go has UpsertNarratorToMemDB (L327) and ReplaceBookNarratorsInMemDB (L360) but no delete counterpart; one must be added alongside DeleteAuthorFromMemDB (memdb_sync.go:293) as the model."
+    ],
+    "steps": [
+      "In internal/database/iface_catalog.go, add `DeleteNarrator(id int) error` immediately after the existing `CreateNarrator(name string) (*Narrator, error)` declaration at L46.",
+      "In internal/database/pebble_store_authors.go, add a new method `func (p *PebbleStore) DeleteNarrator(id int) error` near CreateNarrator/GetNarratorByID/GetNarratorByName (~L740-780). Implementation: call GetNarratorByID(id) first (mirroring DeleteAuthor's early return on not-found); if nil, return nil (idempotent, mirroring DeleteAuthor). Open a batch; Delete narrator:<id> and narrator_name:<NormalizeAuthor(narrator.Name)> (use the same util.NormalizeAuthor call CreateNarrator uses at L722); commit with pebble.Sync; then call the new DeleteNarratorFromMemDB(id) added below.",
+      "In internal/database/memdb_sync.go, add `func (p *PebbleStore) DeleteNarratorFromMemDB(id int) { ... }` modeled on DeleteAuthorFromMemDB (L293) — remove the narrator's entry from whatever in-memory narrator index/map DeleteAuthorFromMemDB's author counterpart clears (read DeleteAuthorFromMemDB's body first to find the exact map(s) touched, then find the parallel narrator-side map populated by UpsertNarratorToMemDB at L327).",
+      "In internal/database/mock_store.go, add a DeleteNarratorFunc field plus a `func (m *MockStore) DeleteNarrator(id int) error` passthrough, modeled on the existing DeleteAuthor mock at ~L572.",
+      "Run `go build ./internal/database/...` to confirm all Store implementers (including any other iface_catalog.go conformance assertions) compile.",
+      "Do NOT add a maintenance op or wire this into any purge job in this task — that is part 2, blocked on the narrator-identity design question."
+    ],
+    "tests": [
+      "internal/database/pebble_store_authors_test.go — TestDeleteNarrator_RemovesRecordAndIndex: create a narrator via CreateNarrator, call DeleteNarrator, assert GetNarratorByID returns (nil, nil) and GetNarratorByName(name) also returns (nil, nil) (proves the narrator_name: index was cleaned up, not just the record).",
+      "internal/database/pebble_store_authors_test.go — TestDeleteNarrator_UnknownID_Idempotent: call DeleteNarrator on a nonexistent id, assert it returns nil error (not an error) — mirrors DeleteAuthor's not-found-is-a-no-op contract.",
+      "internal/database/pebble_store_authors_test.go — TestDeleteNarrator_MemDBSync: with UseMemDB enabled, delete a narrator and assert it no longer appears via the memdb-backed read path (whichever ListNarrators/GetNarratorByID variant reads through mem() when UseMemDB is true) — this is the anti-over-suppression test: without it, a DeleteNarrator that forgets the memdb cleanup step would still pass every Pebble-only test while leaving a stale entry visible through the (much more commonly hit) memdb read path."
+    ],
+    "acceptance": [
+      "go build ./internal/database/... succeeds",
+      "go test ./internal/database/... -run TestDeleteNarrator passes",
+      "grep -n 'DeleteNarrator' internal/database/iface_catalog.go internal/database/pebble_store_authors.go internal/database/mock_store.go internal/database/memdb_sync.go each return >=1 hit"
+    ],
+    "edge_cases": [
+      "A narrator referenced by one or more book_narrators:<bookID> junction rows is NOT protected against deletion by this task's scope — deleting a still-referenced narrator is the caller's responsibility to avoid (exactly analogous to L5290's DeleteAuthor junction-cleanup gap, which this task deliberately does not attempt to fix for narrators either, to keep this a pure CRUD addition)."
+    ],
+    "anti_over_suppression": "TestDeleteNarrator_MemDBSync",
+    "depends_on_lines": [],
+    "gate": "make ci",
+    "notes": "Split from the TODO item's single bullet because the store-CRUD half is unconditionally useful infrastructure, while the purge-OP half (part 2) is explicitly gated by the item's own text on 'whatever decides the narrator identity question' (L5281's author-narrator swap repair)."
+  },
+  {
+    "todo_line": 5271,
+    "part": 2,
+    "src_id": null,
+    "title": "maintenance.purge-empty-narrators operation",
+    "verdict": "needs_design",
+    "verdict_evidence": "The item's own text gates this explicitly: 'Scope it alongside whatever decides the narrator identity question below' (i.e. L5281's author-narrator swap repair, which is itself unresolved — see that item). Project memory independently flags this as deliberately sequenced last: 'Narrator purge — build LAST' (project_narrator_purge_not_worth_it.md, per MEMORY.md).",
+    "domain": "internal/plugins/maintenance",
+    "exact_files": [],
+    "verified_anchors": [],
+    "reuse": [
+      {"name": "purgeEmptyAuthorsDef / runPurgeEmptyAuthors (op shape to mirror once unblocked)", "file": "internal/plugins/maintenance/author_purge_empty.go", "verify_grep": "grep -n 'func (p \\*Plugin) purgeEmptyAuthorsDef' internal/plugins/maintenance/author_purge_empty.go"}
+    ],
+    "polarity": "additive",
+    "effort": "M",
+    "tier": "opus",
+    "why_tier": "Blocked on an open design question with a documented history of being deprioritized ('not worth it' per project memory) — needs a human call before any code, and the call has data-quality implications (narrator identity vs. author identity overlap).",
+    "review_critical": true,
+    "goal": "Not directly actionable. Requires the owner to first resolve L5281's author-narrator identity question (which names are genuinely-swapped author/narrator pairs vs. genuinely distinct people who happen to share a name) before a 'zero-book narrator' purge rule can be trusted not to delete a narrator identity that a swap-repair would otherwise have wanted to preserve or merge.",
+    "background": [
+      "Project memory (project_narrator_purge_not_worth_it.md, referenced in MEMORY.md as '🟡 Narrator purge — build LAST') already recorded a prior decision to deprioritize this exact op relative to other contributor-cleanup work.",
+      "Once part 1 (DeleteNarrator) and the L5281 identity question are both resolved, this op can mirror internal/plugins/maintenance/author_purge_empty.go's shape closely: dry-run default, RequireZeroFiles-style safety guard (narrators, unlike authors, have no direct file-count signal today — would need one derived from book_narrators lookups), apply=false default."
+    ],
+    "steps": [],
+    "tests": [],
+    "acceptance": ["A written decision on narrator identity (from L5281) exists before this op is scoped or built."],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [5281],
+    "gate": "n/a until design decided",
+    "notes": "Read project_narrator_purge_not_worth_it.md before reviving this — it may already contain the owner's reasoning for deprioritizing it entirely, which would make this 'parked' rather than merely 'needs_design' once the coordinator confirms."
+  },
+  {
+    "todo_line": 5275,
+    "src_id": null,
+    "title": "Extend purge-empty-authors' report to categorize the 822 zero-book-but-has-files authors",
+    "verdict": "actionable",
+    "verdict_evidence": "internal/plugins/maintenance/author_purge_empty.go already computes and reports the ZeroBooksWithFiles count (emptyAuthorReport.ZeroBooksWithFiles, L74-78) but only as a bare number, not a categorized/sampled list — grep -n 'ZeroBooksWithFiles' internal/plugins/maintenance/author_purge_empty.go shows the field exists and is surfaced in summary() but no per-author sample of this specific held-back population is captured (the existing Sample field, per its comment, samples the ELIGIBLE-for-delete population, not the held-back one).",
+    "domain": "internal/plugins/maintenance",
+    "exact_files": ["internal/plugins/maintenance/author_purge_empty.go"],
+    "verified_anchors": [
+      {"claim": "the report already counts (but does not sample/categorize) the 822-shaped population", "grep_cmd": "grep -n 'ZeroBooksWithFiles' internal/plugins/maintenance/author_purge_empty.go", "expect": ">=2 hits (struct field + summary usage)"},
+      {"claim": "the require_zero_files safety flag exists and is the reason this population is held back by default", "grep_cmd": "grep -n 'RequireZeroFiles' internal/plugins/maintenance/author_purge_empty.go", "expect": ">=2 hits"}
+    ],
+    "reuse": [
+      {"name": "emptyAuthorReport / emptyAuthorSampleLimit (extend, do not replace)", "file": "internal/plugins/maintenance/author_purge_empty.go", "verify_grep": "grep -n 'emptyAuthorSampleLimit' internal/plugins/maintenance/author_purge_empty.go"}
+    ],
+    "polarity": "additive",
+    "effort": "S",
+    "tier": "sonnet",
+    "why_tier": "Small, additive report extension reusing an existing op's structures, but needs a sensible per-author detail shape (file count, a sample file path or two, book_authors linkage check) for a human to actually make the decision from.",
+    "review_critical": false,
+    "goal": "Add a HeldBackSample field to emptyAuthorReport (internal/plugins/maintenance/author_purge_empty.go) that, capped at emptyAuthorSampleLimit entries, records enough detail per zero-book-but-has-files author for a human to judge whether it is a broken-junction book or genuine junk: author name, file count, and — if feasible from existing store methods — whether any book_authors:<bookID> array elsewhere in the library still references this author's ID (which would indicate a live but undercounted link rather than orphaned files). This is a report-only addition; do not change the delete/apply logic or the require_zero_files default.",
+    "background": [
+      "docs context (TODO item L5275) measured 822 of 4,975 zero-book authors have a non-zero file count — 'A zero book count with files present looks more like a book that lost its junction entry than an empty author'.",
+      "author_purge_empty.go already computes ZeroBooksWithFiles as a count via the same file-count pass that drives requireZeroFiles(), but the current Sample field (bounded by emptyAuthorSampleLimit=50, L33) only samples names, and per its own comment samples the ELIGIBLE-for-delete population, not this held-back one — so today a reviewer sees '822' with no way to eyeball who they are.",
+      "This is the same pattern already applied elsewhere per owner decision: build a categorizing REPORT op rather than deciding the mutation policy blind (see decision #13 in SCOUT-INSTRUCTIONS.md, applied to a structurally similar 'held-back, undecided population' problem for book_file rows)."
+    ],
+    "steps": [
+      "In internal/plugins/maintenance/author_purge_empty.go, add a new field to emptyAuthorReport (near Sample, ~L76): `HeldBackSample []heldBackAuthor` where `type heldBackAuthor struct { Name string; FileCount int }` (add both near the report struct).",
+      "In the loop that currently computes ZeroBooksWithFiles (find it via the RequireZeroFiles/file-counts pass referenced at L148 'author file counts (needed for the require_zero_files guard)'), when an author is held back (zero books, non-zero files) and len(report.HeldBackSample) < emptyAuthorSampleLimit, append {Name: author.Name, FileCount: <that author's file count>} to HeldBackSample.",
+      "Update summary() (or add a second log line) to mention that HeldBackSample is populated whenever ZeroBooksWithFiles > 0, so a dry run surfaces actionable names instead of only a count.",
+      "No changes to Apply/RequireZeroFiles/apply logic — this is report-only, matching the existing op's report-only-by-default posture."
+    ],
+    "tests": [
+      "internal/plugins/maintenance/author_purge_empty_test.go — TestPurgeEmptyAuthors_HeldBackSample_Populated: construct a mock store with one zero-book author that has files and one zero-book author that has zero files; run the op dry-run; assert HeldBackSample contains exactly the first author's name and FileCount, and does NOT contain the second (unambiguous-junk) author.",
+      "internal/plugins/maintenance/author_purge_empty_test.go — TestPurgeEmptyAuthors_HeldBackSample_CapAtLimit: construct more than emptyAuthorSampleLimit held-back authors, assert len(HeldBackSample) == emptyAuthorSampleLimit (the cap is respected, matching the existing Sample field's behavior) — this is the anti-over-suppression check: without a cap test, a future refactor could silently drop the cap and turn a report meant for human eyeballing into another 822-line dump."
+    ],
+    "acceptance": [
+      "go test ./internal/plugins/maintenance/... -run TestPurgeEmptyAuthors_HeldBack passes",
+      "grep -n 'HeldBackSample' internal/plugins/maintenance/author_purge_empty.go returns hits in both the struct definition and the population loop"
+    ],
+    "edge_cases": [
+      "Zero held-back authors (ZeroBooksWithFiles == 0) — HeldBackSample stays nil/empty, no special-casing needed.",
+      "An author appearing in HeldBackSample whose file count came from a stale/partial file-count pass (the existing pass already has this limitation for the ZeroBooksWithFiles count itself) — do not attempt to fix the underlying count's accuracy in this task, only surface what the existing pass already computes."
+    ],
+    "anti_over_suppression": "TestPurgeEmptyAuthors_HeldBackSample_CapAtLimit",
+    "depends_on_lines": [],
+    "gate": "make ci",
+    "notes": "This does NOT decide what the 822 authors are — it only builds the tool a human needs to look at a sample and decide, matching the item's own framing ('Someone has to look at a sample and decide before that flag is ever flipped'). The flip itself stays a human call."
+  },
+  {
+    "todo_line": 5281,
+    "src_id": null,
+    "title": "Author-narrator swap repair, routed through the review queue (cross-table population, distinct from the existing per-book fix-author-narrator-swap job)",
+    "verdict": "actionable",
+    "verdict_evidence": "An existing job, internal/maintenance/jobs/fix_author_narrator_swap.go, addresses a DIFFERENT and narrower population (same-book AuthorID name EqualFold to that book's own Narrator field, L70) and blind-applies by nulling AuthorID with no review-queue involvement (L78-93, direct store.UpdateBook call under !dryRun) — it does not implement the cross-table population this item measures (names appearing in BOTH the author and narrator tables, narrator book-count>=5, author book-count 1-2), and it does not route through review as this item explicitly requires ('Route any repair through the review queue rather than blind-applying').",
+    "domain": "internal/plugins/maintenance",
+    "exact_files": ["internal/plugins/maintenance/author_narrator_swap_review.go"],
+    "verified_anchors": [
+      {"claim": "the existing fix-author-narrator-swap job blind-applies with no review-queue call", "grep_cmd": "grep -n 'UpdateBook(book.ID' internal/maintenance/jobs/fix_author_narrator_swap.go", "expect": "1 hit, L86, inside an if !dryRun block with no UpsertReviewItem call anywhere in the file"},
+      {"claim": "the existing job's detection rule is same-book field equality, not cross-table name overlap", "grep_cmd": "grep -n 'EqualFold(author.Name' internal/maintenance/jobs/fix_author_narrator_swap.go", "expect": "1 hit, L70"},
+      {"claim": "no code implements the cross-table swap-shaped detection this item describes", "grep_cmd": "grep -rn 'swap-shaped\\|AuthorNarratorSwapCandidate' internal/", "expect": "0 hits outside docs/TODO"},
+      {"claim": "the generic review queue this item asks to route through exists and is producer-agnostic", "grep_cmd": "grep -n 'type ReviewStore interface' internal/database/iface_review.go", "expect": "1 hit, L12"},
+      {"claim": "an existing producer shows the UpsertReviewItem call pattern to model on", "grep_cmd": "grep -n 'UpsertReviewItem(item)' internal/plugins/maintenance/regroup_shattered_ai.go", "expect": "1 hit, L270"}
+    ],
+    "reuse": [
+      {"name": "ReviewStore.UpsertReviewItem + ReviewItem struct (Kind/DedupKey/FolderRef/Payload/Summary)", "file": "internal/database/review_store.go", "verify_grep": "grep -n 'type ReviewItem struct' internal/database/review_store.go"},
+      {"name": "regroup_shattered_ai.go's UpsertReviewItem call site (model for a new producer)", "file": "internal/plugins/maintenance/regroup_shattered_ai.go", "verify_grep": "grep -n 'res, uerr := store.UpsertReviewItem(item)' internal/plugins/maintenance/regroup_shattered_ai.go"},
+      {"name": "ListNarrators / GetAllAuthorBookCounts (existing count sources to build the cross-table scan on)", "file": "internal/database/pebble_store_authors.go", "verify_grep": "grep -n 'func (p \\*PebbleStore) ListNarrators\\|func (p \\*PebbleStore) GetAllAuthorBookCounts' internal/database/pebble_store_authors.go"}
+    ],
+    "polarity": "additive",
+    "effort": "L",
+    "tier": "opus",
+    "why_tier": "New cross-table detection heuristic plus review-queue integration on a prod-data path (author/narrator identity) — requires careful design of the DedupKey/Payload shape and of what a human reviewer sees to approve/reject, not mechanical.",
+    "review_critical": true,
+    "goal": "Build a new read-only detection pass (e.g. a new maintenance op, modeled structurally on author_purge_empty.go's dry-run-by-default shape) that finds names present in BOTH the author and narrator tables where the narrator side has >=5 books and the author side has 1-2 books (mirroring the item's measured 67-name/96-link lower bound), and for each candidate UPSERTs a ReviewItem (Kind e.g. 'author_narrator_swap', DedupKey derived from the shared name, Payload carrying the author ID, narrator ID, both book counts, and the affected book IDs/titles) via database.Store's ReviewStore.UpsertReviewItem — never applying the swap directly. A human then approves/rejects through the existing review-queue UI/API, and a SEPARATE apply step (out of scope for this item; note it as a follow-on) reads approved items and performs the actual author<->narrator correction.",
+    "background": [
+      "TODO item measures (2026-08-17): 1,052 names appear in both the author and narrator tables; 67 are swap-shaped (narrates >=5 books, 'authors' with only 1-2 books), accounting for ~96 book-author links; explicit named examples Ray Porter, Scott Brick, Nick Podehl, Andrea Parsneau exist as authors.",
+      "This is a LOWER BOUND by the item's own admission — the rule only sees names present in BOTH tables, so a swap whose 'author' string never separately appears as a narrator elsewhere is invisible to it. Note this limitation in the new op's doc comment so it isn't mistaken for a complete detector.",
+      "internal/database/iface_review.go's ReviewStore (PR-A1) is the 'universal review-queue surface... for a generic, producer-agnostic queue of items flagged for a human decision' — exactly the mechanism this item asks the repair to route through, and it is already used by at least one other maintenance producer (regroup_shattered_ai.go) as a model."
+    ],
+    "steps": [
+      "Create internal/plugins/maintenance/author_narrator_swap_review.go with a new op ID e.g. 'maintenance.detect-author-narrator-swaps', dry-run/report-only always (this op never applies anything — it only populates the review queue for a human to act on).",
+      "Detection: call store.ListNarrators() and (whatever the equivalent all-authors-with-book-counts call is, e.g. GetAllAuthorBookCounts plus a name lookup) to build two maps keyed by normalized name; for every name present in both, compute narrator book count (via GetNarratorsByBookIDs or a similar existing lookup — check for an author-book-count analog on the narrator side; if none exists, count via book_narrators: scan) and author book count (GetAllAuthorBookCounts, already used by author_purge_empty.go); flag a candidate when narrator book count >= 5 AND author book count is 1 or 2.",
+      "For each candidate, build a ReviewItem{Kind: \"author_narrator_swap\", DedupKey: hash of the shared normalized name (so a re-run upserts idempotently, matching every other reviewstore producer's contract), Summary: e.g. \"'<name>' narrates N books but is credited as author on M\", Payload: JSON with author ID, narrator ID, affected book IDs} and call store.UpsertReviewItem(item), following regroup_shattered_ai.go's call pattern.",
+      "Register the new op in internal/plugins/maintenance/plugin.go's RegisterOps list, following the existing purgeEmptyAuthorsDef() registration pattern.",
+      "Document in the op's header comment (mirroring author_purge_empty.go's style) that this is explicitly a LOWER BOUND and that the actual repair (moving the swapped credit) is a follow-on apply step reading APPROVED review items, out of scope for this op."
+    ],
+    "tests": [
+      "internal/plugins/maintenance/author_narrator_swap_review_test.go — TestDetectAuthorNarratorSwaps_FlagsCandidate: mock store with a narrator having 6 books under name X and an author named X with 1 book; assert exactly one UpsertReviewItem call with Kind 'author_narrator_swap' and the correct DedupKey/Payload contents.",
+      "TestDetectAuthorNarratorSwaps_SkipsBelowThreshold: narrator with 4 books (below the >=5 threshold) under a name that also exists as an author with 1 book — assert NO UpsertReviewItem call (this is the anti-over-suppression / precision test — without it, a future tweak to the threshold could silently flood the review queue with weak candidates).",
+      "TestDetectAuthorNarratorSwaps_SkipsAuthorWithManyBooks: narrator with 6 books under a name that also exists as an author with 8 books (a genuinely prolific person doing both roles, not a swap) — assert NO UpsertReviewItem call.",
+      "TestDetectAuthorNarratorSwaps_Idempotent: run detection twice against the same data — assert the second run's UpsertReviewItem call uses the identical DedupKey as the first (proves re-running the scan does not duplicate review items)."
+    ],
+    "acceptance": [
+      "go test ./internal/plugins/maintenance/... -run TestDetectAuthorNarratorSwaps passes",
+      "make ci passes",
+      "grep -n 'maintenance.detect-author-narrator-swaps' internal/plugins/maintenance/plugin.go returns 1 hit (registered)"
+    ],
+    "edge_cases": [
+      "A name matching case-insensitively but with different punctuation/spacing between the author and narrator tables — use the same util.NormalizeAuthor normalization CreateAuthor/CreateNarrator already use for their name indexes, so the cross-table join is consistent with how the rest of the codebase treats 'the same name'.",
+      "A name that is a swap candidate but the author-side row is ALSO the target of L5290's DeleteAuthor junction-cleanup bug or L5271's purge-empty-authors — do not let this op delete or merge anything; it only queues a review item, so those other ops' behavior is unaffected by (and should not be blocked by) this one.",
+      "Re-running after a human REJECTS a review item — UpsertReviewItem's documented idempotency contract (per iface_review.go's comment) never resurfaces an already-decided non-pending item, so a rejected candidate should not reappear on the next scan; verify this is exercised by an existing ReviewStore test rather than re-deriving it here."
+    ],
+    "anti_over_suppression": "TestDetectAuthorNarratorSwaps_SkipsBelowThreshold",
+    "depends_on_lines": [],
+    "gate": "make ci",
+    "notes": "The existing internal/maintenance/jobs/fix_author_narrator_swap.go job is NOT what this item is asking to fix or extend — it solves a narrower, different problem (same-book field equality) and predates the review-queue infrastructure. Do not conflate the two in a PR description; flag both to the coordinator as related-but-distinct so a reviewer doesn't assume this item is already covered."
+  },
+  {
+    "todo_line": 5290,
+    "src_id": null,
+    "title": "Fix DeleteAuthor's junction cleanup: it scans the dead book_author: keyspace instead of book_authors:",
+    "verdict": "actionable",
+    "verdict_evidence": "internal/database/pebble_store_authors.go:180-198 (DeleteAuthor) iterates LowerBound/UpperBound 'book_author:'..'book_author;' (singular) and unmarshals each value as a single BookAuthor, but the live junction data is stored as a JSON array under 'book_authors:<bookID>' (plural) — confirmed by grep -n '\"book_authors:%s\"' internal/database/pebble_store_authors.go (L463, L481, GetBookAuthors/SetBookAuthors) and by the total absence of any writer to the singular 'book_author:' keyspace: grep -rn '\"book_author:' internal/database/*.go returns only the dead reader inside DeleteAuthor itself.",
+    "domain": "internal/database",
+    "exact_files": ["internal/database/pebble_store_authors.go"],
+    "verified_anchors": [
+      {"claim": "DeleteAuthor iterates the dead singular book_author: keyspace", "grep_cmd": "grep -n 'LowerBound: \\[\\]byte(\"book_author:\")' internal/database/pebble_store_authors.go", "expect": "1 hit, inside DeleteAuthor, ~L180"},
+      {"claim": "the live junction data lives under the plural book_authors:<bookID> key, one JSON array per book", "grep_cmd": "grep -n 'func (p \\*PebbleStore) GetBookAuthors\\|func (p \\*PebbleStore) SetBookAuthors' internal/database/pebble_store_authors.go", "expect": "2 hits, L462 and L480"},
+      {"claim": "nothing else in the store writes the singular book_author: keyspace DeleteAuthor reads from", "grep_cmd": "grep -rn '\"book_author:' internal/database/*.go", "expect": "hits only inside DeleteAuthor's own iterator bounds, no writer anywhere"}
+    ],
+    "reuse": [
+      {"name": "GetBookAuthors / SetBookAuthors (correct read-modify-write pair to use instead of the singular-keyspace iterator)", "file": "internal/database/pebble_store_authors.go", "verify_grep": "grep -n 'func (p \\*PebbleStore) GetBookAuthors' internal/database/pebble_store_authors.go"},
+      {"name": "the 'book_authors:' iteration bounds already used correctly elsewhere (GetAllAuthorBookCounts) as the pattern to copy for iterating every book's junction row", "file": "internal/database/pebble_store_authors.go", "verify_grep": "grep -n 'LowerBound: \\[\\]byte(\"book_authors:\")' internal/database/pebble_store_authors.go"}
+    ],
+    "polarity": "transform",
+    "effort": "M",
+    "tier": "sonnet",
+    "why_tier": "Bug fix on the prod-data author-deletion path with a clear existing pattern (GetAllAuthorBookCounts) to copy for the correct iteration, but must be careful to only rewrite affected books' junction rows, not all of them, and to keep it inside the existing batch/commit transaction.",
+    "review_critical": true,
+    "goal": "In internal/database/pebble_store_authors.go's DeleteAuthor (~L157-207), replace the dead 'book_author:' singular-keyspace iteration (~L180-198) with a correct sweep of the 'book_authors:' plural keyspace: for every book_authors:<bookID> row, unmarshal its []BookAuthor array, and if any entry's AuthorID matches the author being deleted, rewrite that row (batch.Set) with the entry filtered out (or batch.Delete the row entirely if the filtered slice becomes empty), all within the same batch DeleteAuthor already commits.",
+    "background": [
+      "DeleteAuthor currently deletes author:<id>, author:name:<name>, cascades alias deletion, then attempts junction cleanup by iterating book_author: (singular) — a keyspace nothing in the codebase writes to, and whose bounds ('book_author:' to 'book_author;') don't even overlap the real 'book_authors:' (plural) keyspace lexicographically in a way that would accidentally catch it.",
+      "The real junction data is one JSON-array-valued key per book: book_authors:<bookID> -> []BookAuthor (GetBookAuthors/SetBookAuthors, L462-491).",
+      "Consequence today: deleting an author who HAS books leaves them referenced inside every book's book_authors array — harmless for the empty-author purge (author_purge_empty.go only deletes zero-book authors, so there are no references by definition), but a live bug for ANY other future DeleteAuthor caller (e.g. an author-merge/dedup apply path).",
+      "GetAllAuthorBookCounts (pebble_store_authors.go, iterates 'book_authors:' to 'book_authors:~') already demonstrates the correct iteration bounds and per-row []BookAuthor unmarshal pattern to copy."
+    ],
+    "steps": [
+      "In internal/database/pebble_store_authors.go's DeleteAuthor, replace the iterator's LowerBound/UpperBound from []byte(\"book_author:\")/[]byte(\"book_author;\") to []byte(\"book_authors:\")/[]byte(\"book_authors:~\") (matching GetAllAuthorBookCounts's bounds exactly, since '~' sorts after all ASCII bookID characters the way ';' does not reliably for this keyspace's actual key shape).",
+      "Change the per-row unmarshal from `var ba BookAuthor; json.Unmarshal(val, &ba)` to `var authors []BookAuthor; json.Unmarshal(val, &authors)`, since each row's value is now known to be an array, not a single struct.",
+      "For each row, filter out any entry whose AuthorID == id (the author being deleted). If the filtered slice is non-empty and differs in length from the original, batch.Set(iter.Key(), <remarshaled JSON of the filtered slice>) into the same batch DeleteAuthor already builds. If the filtered slice is empty, batch.Delete(iter.Key(), nil) instead (removing the book's now-empty junction row entirely, consistent with how SetBookAuthors([]BookAuthor{}) would be interpreted elsewhere — verify this by checking whether any reader treats an absent book_authors:<bookID> key differently from a present-but-empty-array one; if it matters, prefer Set with an empty array over Delete to stay conservative).",
+      "Keep everything inside the SAME batch that DeleteAuthor already commits at the end (do not introduce a second commit) — this preserves the existing all-or-nothing durability the rest of the function relies on.",
+      "After the batch commits, since SetBookAuthors normally also calls p.ReplaceBookAuthorsInMemDB(bookID, authors) to keep the in-memory index in sync (L489), DeleteAuthor must call the equivalent ReplaceBookAuthorsInMemDB(bookID, filteredAuthors) for every book row it actually modified, alongside its existing p.DeleteAuthorFromMemDB(id) call at the end of the function — otherwise the memdb read path (the common one when UseMemDB is true) will keep showing the deleted author on affected books even though Pebble itself is now correct."
+    ],
+    "tests": [
+      "internal/database/pebble_store_authors_test.go — TestDeleteAuthor_RemovesFromBookAuthorsJunction: create an author with 2 books via SetBookAuthors (one book with just this author, one book with this author plus a co-author), call DeleteAuthor, then assert: (a) GetBookAuthors on the single-author book returns an empty slice (or the row is gone, per whichever convention step 4 above settles on), and (b) GetBookAuthors on the two-author book returns only the co-author, not the deleted one.",
+      "internal/database/pebble_store_authors_test.go — TestDeleteAuthor_NoJunctionRows_StillSucceeds: delete a zero-book author (the existing empty-author-purge case) and assert no error and no unintended side effects — this is the regression guard proving the fix doesn't break the case that was 'harmless' before.",
+      "internal/database/pebble_store_authors_test.go — TestDeleteAuthor_MemDBReflectsJunctionRemoval: with UseMemDB enabled, repeat the two-book scenario and assert the memdb-backed GetBookAuthors read path (not just the raw Pebble read) also no longer shows the deleted author — this is the anti-over-suppression test: without it, a fix that correctly rewrites Pebble but forgets ReplaceBookAuthorsInMemDB would pass a Pebble-only test while remaining broken on the read path most of the app actually uses."
+    ],
+    "acceptance": [
+      "go test ./internal/database/... -run TestDeleteAuthor passes, including the three new tests above",
+      "make ci passes",
+      "grep -n 'LowerBound: \\[\\]byte(\"book_authors:\")' internal/database/pebble_store_authors.go shows a new hit inside DeleteAuthor (previously only GetAllAuthorBookCounts and similar had this bound; DeleteAuthor's old book_author: singular bound is gone)"
+    ],
+    "edge_cases": [
+      "A book whose book_authors:<bookID> row is malformed/unparseable JSON — mirror DeleteAuthor's existing tolerance pattern seen elsewhere in the function (skip and continue rather than aborting the whole batch), since a single bad row should not block deleting an author from every OTHER book that references them.",
+      "The author being deleted appears MULTIPLE times in the same book's BookAuthor array (e.g. as both primary and secondary credit, if that's a representable state) — filter out ALL matching entries, not just the first.",
+      "Very large libraries: this iterates every book_authors: row on every DeleteAuthor call, same as GetAllAuthorBookCounts already does — acceptable since author_purge_empty.go already does a full-library file-count pass in the same op, but flag to the coordinator per the concurrency-mandatory CLAUDE.md rule if DeleteAuthor is ever called in a tight per-author loop (e.g. from a future bulk-merge op) rather than one-at-a-time as today's only caller (the empty-author purge) does."
+    ],
+    "anti_over_suppression": "TestDeleteAuthor_MemDBReflectsJunctionRemoval",
+    "depends_on_lines": [],
+    "gate": "make ci",
+    "notes": "review_critical: true because this is the author-deletion code path and a subtle bug in the rewrite (e.g. deleting a book's ENTIRE junction row when only one of several authors should be removed) would silently strip legitimate co-author credits from unrelated books. The 'filter, don't wipe' distinction in the steps above is load-bearing."
+  },
+  {
+    "todo_line": 5424,
+    "part": 1,
+    "src_id": null,
+    "title": "Narrow the 3 remaining maintenance-jobs callees off maintenance.JobStore (vgFixAuthorDirPath, migrateOne, ddMergeDuplicateBook)",
+    "verdict": "actionable",
+    "verdict_evidence": "Of the item's 8 named maintenance PROP-tier declarations, 5 are ALREADY narrowed at HEAD to purpose-specific interfaces (not database.Store or JobStore): firstAudioFile takes bookFileLister (intro_transcribe.go:878), linkProbedFolder takes folderLinker (probe_directory_books.go:559), relinkOne takes folderLinker (relink_unlinked.go:306), ApplyMultidisc takes multidiscApplier (regroup_apply.go:105), processTranscribePage takes transcribePageStore (intro_transcribe.go:438) — all confirmed by grep, none take database.Store or maintenance.JobStore. The remaining 3 genuinely still take the wide maintenance.JobStore composite: vgFixAuthorDirPath (fix_version_groups.go:277), migrateOne (backfill_itunes_positions.go:274, a method not a free function), ddMergeDuplicateBook (dedup_books.go:329) — confirmed by grep, none narrowed.",
+    "domain": "internal/maintenance/jobs",
+    "exact_files": ["internal/maintenance/jobs/fix_version_groups.go", "internal/maintenance/jobs/backfill_itunes_positions.go", "internal/maintenance/jobs/dedup_books.go"],
+    "verified_anchors": [
+      {"claim": "firstAudioFile already takes a narrow interface, not database.Store/JobStore", "grep_cmd": "grep -n 'func firstAudioFile' internal/plugins/maintenance/intro_transcribe.go", "expect": "1 hit, L878, param type bookFileLister"},
+      {"claim": "linkProbedFolder already takes a narrow interface", "grep_cmd": "grep -n 'func linkProbedFolder' internal/plugins/maintenance/probe_directory_books.go", "expect": "1 hit, L559, param type folderLinker"},
+      {"claim": "relinkOne already takes a narrow interface", "grep_cmd": "grep -n 'func relinkOne' internal/plugins/maintenance/relink_unlinked.go", "expect": "1 hit, L306, param type folderLinker"},
+      {"claim": "ApplyMultidisc already takes a narrow interface", "grep_cmd": "grep -n 'func ApplyMultidisc' internal/plugins/maintenance/regroup_apply.go", "expect": "1 hit, L105, param type multidiscApplier"},
+      {"claim": "processTranscribePage already takes a narrow interface", "grep_cmd": "grep -n 'func (p \\*Plugin) processTranscribePage' internal/plugins/maintenance/intro_transcribe.go", "expect": "1 hit, L438, param type transcribePageStore"},
+      {"claim": "vgFixAuthorDirPath still takes the wide maintenance.JobStore", "grep_cmd": "grep -n 'func vgFixAuthorDirPath' internal/maintenance/jobs/fix_version_groups.go", "expect": "1 hit, L277"},
+      {"claim": "migrateOne still takes the wide maintenance.JobStore", "grep_cmd": "grep -n 'func (j \\*backfillITunesPositionsJob) migrateOne' internal/maintenance/jobs/backfill_itunes_positions.go", "expect": "1 hit, L274"},
+      {"claim": "ddMergeDuplicateBook still takes the wide maintenance.JobStore", "grep_cmd": "grep -n 'func ddMergeDuplicateBook' internal/maintenance/jobs/dedup_books.go", "expect": "1 hit, L329"}
+    ],
+    "reuse": [
+      {"name": "bookFileLister / folderLinker / multidiscApplier / transcribePageStore (existing narrow-interface pattern in the same package to copy the SHAPE of, one new interface per function)", "file": "internal/plugins/maintenance/store_slices.go", "verify_grep": "grep -n 'type folderLinker interface' internal/plugins/maintenance/store_slices.go"},
+      {"name": "Pattern B guidance (narrow interface, one line per site, zero call-site changes) — do not sweep Option C (split-decision) per this repo's own comparison note", "file": ".claude/notes/2026-08-17-option-b-vs-c-comparison.md", "verify_grep": "grep -n 'Option' .claude/notes/2026-08-17-option-b-vs-c-comparison.md"}
+    ],
+    "polarity": "transform",
+    "effort": "M",
+    "tier": "sonnet",
+    "why_tier": "Mechanical interface-narrowing with a clear, already-demonstrated pattern in the same file/package (5 sibling functions already done the exact same way) — low risk, but 3 separate small interfaces across 3 files.",
+    "review_critical": false,
+    "goal": "Define one new minimal interface per function (in each function's own file, next to the function, mirroring where bookFileLister/folderLinker/etc. are NOT defined — check whether store_slices.go is the maintenance/jobs package's convention too, or whether internal/maintenance/jobs has its own local-interface file/pattern to follow instead since these 3 live in a different package than the 5 already-done ones) exposing exactly the methods each function calls, and change each function's `store maintenance.JobStore` parameter to the new narrow type. Zero call sites change (Run() still holds a JobStore, which structurally satisfies each narrower interface).",
+    "background": [
+      "vgFixAuthorDirPath (fix_version_groups.go:277) calls only GetBookByID, UpdateBook, DeleteBookFilesForBook on its store parameter.",
+      "migrateOne (backfill_itunes_positions.go:274) calls only GetBookByID, ListUserPositionsForBook, GetUserBookState, SetUserPosition, SetUserBookState on its store parameter (its second parameter, bookmarkStore database.BookmarkStore, is already narrow and untouched by this task).",
+      "ddMergeDuplicateBook (dedup_books.go:329) calls only GetExternalIDsForBook, GetBookFiles, UpsertBookFile, ReassignExternalIDs, GetBookUserTags, AddBookUserTag, GetBookByID, UpdateBook on its store parameter (its enqueuer maintenance.WriteBackEnqueuer parameter is already narrow and untouched).",
+      "The 2026-08-16 handoff note (.claude/notes/2026-08-16-store-narrowing-handoff.md) recorded these exact 2 free functions plus migrateOne as 'unblocked' once their own callees (narrowed by PR #2503) stopped requiring the wide type — that PR appears to be the reason 5 of the 8 named siblings are already done; these 3 were evidently not reached in that pass."
+    ],
+    "steps": [
+      "In internal/maintenance/jobs/fix_version_groups.go, add a new interface (e.g. `type authorDirPathStore interface { GetBookByID(id string) (*database.Book, error); UpdateBook(id string, book *database.Book) (*database.Book, error); DeleteBookFilesForBook(bookID string) error }` — verify each method's exact signature against database.Store's declarations via grep before typing it, since a mismatched signature fails to compile silently as 'does not implement') near vgFixAuthorDirPath, then change its `store maintenance.JobStore` parameter to `store authorDirPathStore`.",
+      "In internal/maintenance/jobs/backfill_itunes_positions.go, add a similar new interface for migrateOne's 5 calls (GetBookByID, ListUserPositionsForBook, GetUserBookState, SetUserPosition, SetUserBookState), change its `store maintenance.JobStore` parameter to the new type.",
+      "In internal/maintenance/jobs/dedup_books.go, add a similar new interface for ddMergeDuplicateBook's 8 calls (GetExternalIDsForBook, GetBookFiles, UpsertBookFile, ReassignExternalIDs, GetBookUserTags, AddBookUserTag, GetBookByID, UpdateBook), change its `store maintenance.JobStore` parameter to the new type.",
+      "Run `go build ./internal/maintenance/...` — since JobStore embeds all of these sub-methods already (it must, or the current code wouldn't compile), every existing call site (Run() methods passing their own `store JobStore` argument through) should compile unchanged with zero edits.",
+      "Run `go vet ./...` on the FULL tree (not scoped) per this repo's own standing note that scoped vet misses test-file breakage."
+    ],
+    "tests": [
+      "No new test cases are required for a pure interface-narrowing refactor with no behavior change — but run the EXISTING test suite for each touched file (grep for the corresponding _test.go files: fix_version_groups_test.go, backfill_itunes_positions_test.go, dedup_books_test.go) to confirm zero regressions, since a mismatched method signature in the new narrow interface would be a compile error, not a silent test failure, so 'it builds' is strong evidence here."
+    ],
+    "acceptance": [
+      "go build ./... exits 0",
+      "go vet ./... exits 0",
+      "go test ./internal/maintenance/jobs/... passes with no changed test files",
+      "grep -n 'store maintenance.JobStore' internal/maintenance/jobs/fix_version_groups.go internal/maintenance/jobs/backfill_itunes_positions.go internal/maintenance/jobs/dedup_books.go returns 0 hits for these 3 specific functions (other JobStore-typed declarations in the same files, e.g. Run() itself, are out of scope and expected to remain)"
+    ],
+    "edge_cases": [
+      "Do not touch Run()'s own signature in any of the 3 files — MaintenanceJob.Run's `store JobStore` parameter is interface-fixed and explicitly excluded from this sweep by the item's own text.",
+      "migrateOne's second parameter (bookmarkStore database.BookmarkStore) is already a narrow type — leave it exactly as-is; only the first (store) parameter changes."
+    ],
+    "anti_over_suppression": "N/A — pure refactor, no filter/guard added.",
+    "depends_on_lines": [],
+    "gate": "make ci",
+    "notes": "This is the ONLY genuinely-actionable slice of the item's 'maintenance: 8 left' claim — 5 of the 8 named declarations are already done at HEAD. See part 2 below for why the 'outside maintenance: 65' portion of this item needs re-measurement before any further work is scoped against it."
+  },
+  {
+    "todo_line": 5424,
+    "part": 2,
+    "src_id": null,
+    "title": "The '65 outside maintenance' baseline is stale — re-measure before scoping further narrowing work",
+    "verdict": "stale_done",
+    "verdict_evidence": "Spot-checked all 7 of the item's largest named packages (accounting for 41 of the claimed 65: internal/server 12, internal/server/handlers 6, internal/dedup 6, internal/versions 5, internal/reconcile 4, internal/plugins/acoustid 4, internal/metafetch 4). In EVERY one, every remaining reference to database.Store found by grep is inside a COMMENT documenting a narrowing that already happened, consistently dated 2026-08-19 (e.g. internal/server/metadata_stores.go:15 'database.Store -- 398 methods -- until 2026-08-19'; internal/server/handlers/organize.go:61 'It was = database.Store... justified by a comment [that] Both had been narrowed'; internal/dedup/lifecycle.go:238 'Compile-probed 2026-08-19 against database.Store'; internal/versions/store.go:13 'Every function here took database.Store'; internal/reconcile/store.go:15 'It was database.Store -- 398 methods -- until'; internal/plugins/acoustid/reset_all.go:211 'Not on database.Store (compile-probed 2026-08-19)'; internal/metafetch/service.go:122/692 'It was previously database.Store... Each took database.Store' [past tense]). This item's own measurement is dated 2026-08-17 — TWO DAYS before the dated narrowing evidence found in these files — so a systematic sweep landed after this item's count was taken. Independently corroborated by MEMORY.md: 'Store decoupling DONE -- refs 172->8, AsPebbleStore->0, width baseline 0' and 'BOTH wide-store accessors SPLIT -- #2612 + #2617; reach 216->49', and by CLAUDE.md's own worked example describing internal/server/handlers.OrganizeStore being narrowed on 2026-08-18.",
+    "domain": "internal/server",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "internal/server files reference database.Store only in past-tense/comment form, no live wide func-params found in the largest files checked", "grep_cmd": "grep -n 'database\\.Store' internal/server/metadata_stores.go internal/server/handlers/organize.go", "expect": "hits are comments describing a completed narrowing, dated 2026-08-19"},
+      {"claim": "internal/dedup, internal/versions, internal/reconcile, internal/plugins/acoustid, internal/metafetch all show the identical past-tense pattern", "grep_cmd": "grep -n 'was database\\.Store\\|previously database\\.Store\\|Each took database\\.Store' internal/dedup/*.go internal/versions/*.go internal/reconcile/*.go internal/plugins/acoustid/*.go internal/metafetch/*.go", "expect": ">=6 hits, all past-tense narrowing-completed comments"}
+    ],
+    "reuse": [
+      {"name": "storecount / storenarrow AST tooling (referenced as the correct re-measurement instrument; likely gone from /private/tmp since it was in a DIFFERENT session's scratchpad — rebuild per the note's own instructions if missing, ~230 lines)", "file": ".claude/notes/2026-08-16-store-narrowing-handoff.md", "verify_grep": "grep -n 'storenarrow' .claude/notes/2026-08-16-store-narrowing-handoff.md"}
+    ],
+    "polarity": "removal",
+    "effort": "S",
+    "tier": "sonnet",
+    "why_tier": "Not a code task — a re-measurement task, but one that needs the AST tooling (not grep, which the same handoff note warns 'counts comments... and cannot see uses inside internal/database itself') to produce a trustworthy number, so it isn't a pure haiku doc-edit either.",
+    "review_critical": false,
+    "goal": "Before allocating any further narrowing work against the '65 outside maintenance' figure, re-run an AST-based census (not grep — this repo's own handoff note explicitly warns 'git grep database.Store counts comments (28% of hits)') of every remaining func-param/struct-field declaration whose resolved type is database.Store, scoped to the 24 packages the item names, and compare against the item's per-package breakdown (server 12, server/handlers 6, dedup 6, versions 5, reconcile 4, acoustid 4, metafetch 4, plus 13 more across the other 17 packages not spot-checked here). Given 7 of the 7 spot-checked packages show zero remaining live declarations (all narrowed), the true remaining total is very likely far below 65 and may be at or near zero for the packages checked — but the other 17 packages (accounting for 24 of the 65) were NOT spot-checked by this scout and must be verified before closing the item outright.",
+    "background": [
+      "This repo's own standing measurement-discipline memory (feedback_verify_the_instrument_with_a_bogus_value.md, feedback_never_enumerate_with_the_suspect_instrument.md) is directly on point here: the item's 'by AST' 2026-08-17 count is exactly the kind of number that goes stale fast in an area under active refactor, and this scout's own grep-based spot check — while indicative — is not the rigorous AST instrument the prior investigation itself insisted on using.",
+      "MEMORY.md's 'Store decoupling DONE' entry and CLAUDE.md's dated worked example (OrganizeStore narrowed 2026-08-18) both independently corroborate that a real, large narrowing pass landed in the 2026-08-18/19 window, which is between this item's 2026-08-17 measurement and the current HEAD (2026-08-21)."
+    ],
+    "steps": [
+      "Locate or rebuild the storecount/storenarrow AST tooling described in .claude/notes/2026-08-16-store-narrowing-handoff.md (original path under a different session's /private/tmp scratchpad is very likely gone; the note says it is ~230 lines and gives the exact invocation: `go run . ./internal/database ./internal/maintenance/... ./internal/plugins/maintenance/...`, extended to cover all 24 named packages for this task).",
+      "Run it against current HEAD and diff the result against this item's per-package table (maintenance 8, server 12, server/handlers 6, dedup 6, versions 5, reconcile 4, acoustid 4, metafetch 4, +13 elsewhere = 54 remaining narrowable + interface-fixed exclusions).",
+      "Write a short dated audit note (mirroring docs/audits/2026-08-16-store-interface-decomposition.md's format) recording the corrected count, and update or retire TODO.md line 5424 accordingly — if the true remaining count outside part 1's 3 functions is zero, check the box; if a nonzero remainder is found in the 17 unchecked packages, file fresh, individually-scoped follow-up items for those specific declarations rather than reusing this item's now-falsified numbers."
+    ],
+    "tests": [],
+    "acceptance": [
+      "A re-run AST census exists with per-package counts for all 24 packages the item names, dated after 2026-08-21",
+      "TODO.md line 5424 is either checked off (if the census confirms near-zero remainder) or replaced with fresh, individually-anchored follow-up items (never left pointing at the falsified 65-count breakdown)"
+    ],
+    "edge_cases": [
+      "The 30-of-65 'unused store param, delete instead of narrow' sub-guidance in the item is ALSO unverifiable without the same re-measurement — do not act on it against the stale 65 figure; re-derive which (if any) declarations in the corrected remainder have a genuinely unused store param before applying the delete-the-param pattern to any of them."
+    ],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (measurement task; make ci once real follow-up edits are scoped from its output)",
+    "notes": "Per this repo's CLAUDE.md 'Fix It Right' rule and its own worked example on this exact topic (OrganizeStore's stale narrow-justifying comment), the correct move here is NOT to silently mark the whole item done from a grep spot-check, nor to blindly execute a 54-declaration sweep against numbers already showing strong signs of staleness — it is to re-instrument and only then act. This item is marked 'stale_done' for the specific 41/65 spot-checked, dated, corroborated-three-ways portion; the remaining 24-declaration gap (13 outside the 7 spot-checked packages, plus the 3 genuinely-open maintenance ones already carved into part 1) still needs the real census before the coordinator allocates further sweep work here."
+  }
+]

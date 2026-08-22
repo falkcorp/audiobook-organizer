@@ -1,0 +1,233 @@
+[
+  {
+    "todo_line": 0,
+    "src_id": "2026-08-20-dual-path-settings-panel.md#1",
+    "title": "Add a Settings panel section to edit path_aliases",
+    "verdict": "actionable",
+    "verdict_evidence": "path_aliases is config-and-seed only today: web/src/services/api.ts:852 declares `path_aliases?: PathAlias[]` on Config but no component reads/writes it in web/src/pages/Settings.tsx (grep -n \"path_aliases\" web/src/pages/Settings.tsx returns 0 hits); docs/design/2026-08-20-dual-path-display.md:474 lists 'Settings UI' as an explicit open question deferred from v1.",
+    "domain": "web",
+    "exact_files": [
+      "web/src/components/settings/PathAliasesSection.tsx",
+      "web/src/components/settings/PathAliasesSection.test.tsx",
+      "web/src/pages/Settings.tsx",
+      "web/src/hooks/useSettingsHandlers.ts"
+    ],
+    "verified_anchors": [
+      {"claim": "PathAlias{root,windows,unc,smb_url} is the client-side type to edit", "grep_cmd": "grep -n \"export interface PathAlias\" web/src/services/api.ts", "expect": "1 hit L842"},
+      {"claim": "Config.path_aliases is the field this panel must read/write", "grep_cmd": "grep -n \"path_aliases\" web/src/services/api.ts", "expect": "hit at L852 (interface field)"},
+      {"claim": "PathsSettingsTab is already mounted as Settings tab index 4, the natural host tab", "grep_cmd": "grep -n \"PathsSettingsTab\" web/src/pages/Settings.tsx", "expect": "hits L36 (import), L878 (render)"},
+      {"claim": "EmbeddingSettingsSection is the precedent pattern: separate `config`/`onChange(patch)` props, its own state slot in Settings.tsx, wired into the save payload", "grep_cmd": "grep -n \"embeddingConfig\" web/src/pages/Settings.tsx", "expect": "hits L363 (useState), L731 (destructure), L859 (render)"},
+      {"claim": "useSettingsHandlers.ts spreads embeddingConfig into the PATCH payload under its own top-level config key", "grep_cmd": "grep -n \"embedding: embeddingConfig\" web/src/hooks/useSettingsHandlers.ts", "expect": "1 hit L491"},
+      {"claim": "updateConfig(Partial<Config>) is the existing save call to reuse, no new endpoint needed", "grep_cmd": "grep -n \"export async function updateConfig\" web/src/services/api.ts", "expect": "1 hit L2277"},
+      {"claim": "handleEmbeddingChange(patch) is the exact onChange-wiring precedent to copy for a new handlePathAliasesChange", "grep_cmd": "grep -n \"handleEmbeddingChange\" web/src/hooks/useSettingsHandlers.ts", "expect": "hits L130 (type), L296 (impl), L916 (return)"}
+    ],
+    "reuse": [
+      {"name": "EmbeddingSettingsSection.tsx (config/onChange(patch) props pattern)", "file": "web/src/components/settings/EmbeddingSettingsSection.tsx", "verify_grep": "grep -n \"onChange: (patch: Partial<api.EmbeddingConfig>) => void\" web/src/components/settings/EmbeddingSettingsSection.tsx"},
+      {"name": "settings.metadataSources add/remove-row list pattern", "file": "web/src/components/settings/MetadataSettingsTab.tsx", "verify_grep": "grep -n \"settings.metadataSources.map\" web/src/components/settings/MetadataSettingsTab.tsx"},
+      {"name": "updateConfig()/getConfig() API client", "file": "web/src/services/api.ts", "verify_grep": "grep -n \"export async function getConfig\" web/src/services/api.ts"}
+    ],
+    "polarity": "additive",
+    "effort": "M",
+    "tier": "sonnet",
+    "why_tier": "New component + multi-file state wiring (Settings.tsx state, useSettingsHandlers.ts payload, new test file); mechanical but touches 4 files that must stay consistent.",
+    "review_critical": false,
+    "goal": "Add an editable list UI for config.path_aliases (root / windows / unc / smb_url per row, add/remove rows) inside the existing Path Settings tab, following the EmbeddingSettingsSection controlled-component pattern (separate state slot + onChange(patch) callback, not folded into the giant flat `settings` object), and wire it into the existing PATCH /config save flow via updateConfig().",
+    "background": [
+      "Config.path_aliases: PathAlias[] already exists on the wire type (web/src/services/api.ts:842-852) and is consumed read-only by PathLinks.tsx/usePathAliases -- there is no writer anywhere in web/.",
+      "docs/design/2026-08-20-dual-path-display.md:474 explicitly deferred a Settings UI as v1 open question 1: 'v1 is config/env only. An editable Settings panel is deferred unless you want it in scope now.'",
+      "Settings.tsx already has a tab (index 4, PathsSettingsTab) dedicated to path-related settings, and a 'Protected Paths' Paper section inside it (web/src/components/settings/PathsSettingsTab.tsx:216-256) shows the in-tab layout convention (Paper + Typography + form controls) to match visually.",
+      "The EmbeddingSettingsSection pattern is the cleanest precedent for a config sub-object with its own save wiring: Settings.tsx holds `embeddingConfig` state (line 363), loads it from `config.embedding` on fetch (line 601: `if (config.embedding) setEmbeddingConfig(config.embedding)`), and useSettingsHandlers.ts spreads it into the PATCH body as `embedding: embeddingConfig` (line 491)."
+    ],
+    "steps": [
+      "1. Create web/src/components/settings/PathAliasesSection.tsx exporting `PathAliasesSection({ aliases, onChange }: { aliases: api.PathAlias[]; onChange: (aliases: api.PathAlias[]) => void })`. Render a MUI Paper with a heading 'Path Aliases', an explanatory Alert (mirror the tone of PathsSettingsTab.tsx:98-103), and one row per alias with 4 TextFields (Root, Windows, UNC, SMB URL) plus a delete IconButton, plus an 'Add Alias' Button that appends `{ root: '', windows: '', unc: '', smb_url: '' }`. Every edit calls onChange with a new array (immutable update), mirroring the map/index-based update style at web/src/components/settings/MetadataSettingsTab.tsx:227 (settings.metadataSources.map).",
+      "2. In web/src/pages/Settings.tsx: add `const [pathAliases, setPathAliases] = useState<api.PathAlias[]>([]);` near the embeddingConfig useState at line 363. In the config-load effect where `if (config.embedding) setEmbeddingConfig(config.embedding);` appears (line 601), add a sibling line `if (config.path_aliases) setPathAliases(config.path_aliases);`.",
+      "3. In web/src/pages/Settings.tsx, inside the PathsSettingsTab tab panel (around line 878-890, right after the closing `/>` of PathsSettingsTab), render `<PathAliasesSection aliases={pathAliases} onChange={handlePathAliasesChange} />` (or pass `pathAliases`/`setPathAliases` as props into PathsSettingsTab and render it there instead, matching how DelugeSettingsTab is nested inside PathsSettingsTab at PathsSettingsTab.tsx:260 -- prefer this nesting so the new section lives next to the other path-related settings).",
+      "4. In web/src/hooks/useSettingsHandlers.ts: add `pathAliases: api.PathAlias[];` to the params interface near line 110 (`embeddingConfig: api.EmbeddingConfig;`), destructure it in the params list near line 245, add a `handlePathAliasesChange` matching the shape of `handleEmbeddingChange` at line 296 (but since PathAliasesSection.tsx will already own array add/remove/edit logic and just call onChange with the full next array, `handlePathAliasesChange` can simply be `(next: api.PathAlias[]) => setPathAliases(next)` -- add the corresponding `setPathAliases` param too), and add `path_aliases: pathAliases,` to the `updates` object near line 491 (sibling to `embedding: embeddingConfig,`). Add `handlePathAliasesChange` to the hook's return object near line 916.",
+      "5. Back in Settings.tsx, pass `pathAliases`, `setPathAliases` into the useSettingsHandlers() call args (matching how embeddingConfig/setEmbeddingConfig are passed) and destructure `handlePathAliasesChange` from its return value.",
+      "6. Create web/src/components/settings/PathAliasesSection.test.tsx (mirror web/src/components/settings/EmbeddingSettingsSection.test.tsx if present, else DedupSettingsSection.test.tsx for structure): render with an initial `aliases` array, assert each field renders its value, type into the Windows field of the first row and assert onChange was called with an array where only that row's `windows` changed (siblings untouched), click 'Add Alias' and assert onChange was called with an appended empty row, click the delete icon on a row and assert onChange was called with that row removed and others in original order."
+    ],
+    "tests": [
+      "web/src/components/settings/PathAliasesSection.test.tsx 'renders one row per configured alias with root/windows/unc/smb_url values' -- pass a 2-element aliases array, assert 2 sets of 4 TextFields with matching values.",
+      "web/src/components/settings/PathAliasesSection.test.tsx 'editing one field in one row calls onChange with only that field changed' -- type into row 0's Windows field, assert the onChange payload leaves row 1 byte-identical to the input.",
+      "web/src/components/settings/PathAliasesSection.test.tsx 'Add Alias appends an empty row without touching existing rows' -- anti-over-suppression check that add doesn't clear or reorder existing aliases.",
+      "web/src/components/settings/PathAliasesSection.test.tsx 'delete removes only the targeted row' -- 3-row input, delete row index 1, assert onChange payload is [row0, row2] in that order."
+    ],
+    "acceptance": [
+      "npm --prefix web run lint passes with no new errors.",
+      "npm --prefix web test -- PathAliasesSection passes all new tests.",
+      "grep -n \"path_aliases: pathAliases\" web/src/hooks/useSettingsHandlers.ts returns 1 hit, proving the panel's state reaches the PATCH /config payload.",
+      "Manual smoke (optional, not required for CI): load Settings, Paths tab shows the new Path Aliases section seeded from GET /config path_aliases, edit a row, Save, reload page, edited value persists."
+    ],
+    "edge_cases": [
+      "config.path_aliases is null/undefined on a fresh install (SeedPathAliases may not have run yet, or DB has no config row) -- must render an empty list with just the 'Add Alias' button, not throw.",
+      "A row with all-empty fields ('' root) should still be sendable (server-side validation, not client-side, decides whether an empty root is rejected) -- do not silently drop empty rows on save, since that would surprise a user who just clicked Add and hasn't filled it in yet.",
+      "Windows/UNC/SMBURL are individually optional per the PathAlias Go struct (json tags have no omitempty on Root only) -- do not require all 4 fields to be non-empty before allowing Add/Save."
+    ],
+    "anti_over_suppression": "PathAliasesSection.test.tsx 'Add Alias appends an empty row without touching existing rows'",
+    "depends_on_lines": [],
+    "gate": "npm --prefix web run lint && npm --prefix web test",
+    "notes": "Server-side PATCH /config already accepts path_aliases (internal/config/persistence.go:904-905 calls SeedPathAliases/ValidatePathAliases on load) -- confirm during implementation whether the config PATCH handler round-trips path_aliases unchanged (it should, since Config is decoded generically), but this was not independently verified by this scout pass; if the PATCH handler drops unknown/optional fields, that's a small additional backend fix, not a redesign."
+  },
+  {
+    "todo_line": 0,
+    "src_id": "2026-08-20-dual-path-settings-panel.md#2",
+    "title": "Make PathAliases the single source for the Windows prefix used by TranslateITunesPath",
+    "verdict": "needs_design",
+    "verdict_evidence": "This TODO item asks to invert the direction of coupling that docs/design/2026-08-20-dual-path-display.md Decision 1 explicitly rejected: that decision (grep -n \"widening its consumers\" docs/design/2026-08-20-dual-path-display.md -> L96) keeps config.ITunes.PathMappings as the sole owner consumed by reconcile.TranslateITunesPath (internal/reconcile/itunes_heal.go:131, called at lines 700 and 780 with `cfg.PathMappings`) specifically so a display-motivated PathAliases edit can never alter iTunes import-repair behavior. Making PathAliases authoritative for TranslateITunesPath does exactly what Decision 1 was written to prevent.",
+    "domain": "internal/reconcile",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "TranslateITunesPath currently takes []config.ITunesPathMap, not PathAlias", "grep_cmd": "grep -n \"func TranslateITunesPath\" internal/reconcile/itunes_heal.go", "expect": "1 hit L131"},
+      {"claim": "Both call sites pass cfg.PathMappings (the field Decision 1 says import healing must keep owning)", "grep_cmd": "grep -n \"TranslateITunesPath(t.Location, cfg.PathMappings)\" internal/reconcile/itunes_heal.go", "expect": "2 hits L700, L780"},
+      {"claim": "ValidatePathAliases today only detects drift between the two fields, it does not eliminate the duplication", "grep_cmd": "grep -n \"func ValidatePathAliases\" internal/config/config.go", "expect": "1 hit L113"},
+      {"claim": "Design doc Decision 1 explicitly argues against widening PathMappings' consumers", "grep_cmd": "grep -n \"widening its consumers\" docs/design/2026-08-20-dual-path-display.md", "expect": "1 hit L96"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "M",
+    "tier": "opus",
+    "why_tier": "Not a coding task until the design conflict below is resolved by the owner; once resolved, the actual edit is moderate (one function signature + 2 call sites + config wiring) but touches iTunes import-repair correctness, which is review_critical.",
+    "review_critical": true,
+    "goal": "N/A until the design question below is answered -- do not write code.",
+    "background": [
+      "internal/config/config.go:44 PathAlias doc comment states: 'This is presentation config. It is intentionally NOT the same field as ITunes.PathMappings, which is owned by import healing (reconcile.TranslateITunesPath); see docs/design/2026-08-20-dual-path-display.md Decision 1.' -- this comment is the code-level expression of the same Decision 1 the TODO item proposes to reverse.",
+      "PathAlias{Root, Windows} and ITunesPathMap{To, From} carry equivalent information for a translation table (Root<->To, Windows<->From), so the item is technically easy -- the blocker is purely the ownership/blast-radius decision Decision 1 already made explicitly, not implementation difficulty."
+    ],
+    "steps": [
+      "Do not implement. Escalate to the owner: 'TODO item 2 in todo.d/2026-08-20-dual-path-settings-panel.md asks to invert the ownership direction that docs/design/2026-08-20-dual-path-display.md Decision 1 explicitly established (ITunes.PathMappings stays owned by import healing so a display-motivated PathAliases edit can never alter import-repair behavior). Which wins: keep Decision 1 as-is and instead retire the duplication by making config.ITunes.PathMappings itself derive PathAliases at config-load time (read-only derivation, PathAliases stays a display concern and never feeds back into TranslateITunesPath), or actually flip TranslateITunesPath to consume PathAliases as this TODO item literally asks (which supersedes Decision 1 and needs that design doc updated to say so)?'"
+    ],
+    "tests": [],
+    "acceptance": [],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (docs/design decision, not code)",
+    "notes": "This is the same underlying tension as item #4 in this fragment (path_aliases re-derivation) -- both hinge on whether PathAliases is purely-derived-and-display-only (current Decision 1 stance) or becomes a first-class config surface with its own edit/save path (which item #1 in this scope, the Settings panel, is already building). If the owner answers 'PathAliases becomes first-class and PathMappings should derive from IT instead', items #1, #2 and #4 all need to be re-planned together as one coherent design, not three independent tickets."
+  },
+  {
+    "todo_line": 0,
+    "src_id": "2026-08-20-dual-path-settings-panel.md#3",
+    "title": "Add and use a test-reset hook for the module-scope path-alias/path-var promise caches",
+    "verdict": "actionable",
+    "verdict_evidence": "cachedAliasesPromise (web/src/components/common/PathLinks.tsx:102) and cachedVarsPromise (web/src/utils/formatPath.ts:50) are both plain module-level `let` variables with no exported reset function, confirmed by reading both files in full -- neither file exports anything named reset/clear, and grep -rln for the six existing test files that indirectly exercise these caches (PathLinks.test.tsx, ReviewWorkspace.test.tsx, ReviewWorkspace.refetchStale.test.tsx, RegroupSpine.test.tsx, DupesSpine.test.tsx, CompareSpine.test.tsx) shows none of them reset the cache between tests today.",
+    "domain": "web",
+    "exact_files": [
+      "web/src/components/common/PathLinks.tsx",
+      "web/src/utils/formatPath.ts",
+      "web/src/components/common/PathLinks.test.tsx",
+      "web/src/components/review/ReviewWorkspace.test.tsx",
+      "web/src/components/review/ReviewWorkspace.refetchStale.test.tsx",
+      "web/src/components/review/spine/RegroupSpine.test.tsx",
+      "web/src/components/review/spine/DupesSpine.test.tsx",
+      "web/src/components/review/spine/CompareSpine.test.tsx"
+    ],
+    "verified_anchors": [
+      {"claim": "cachedAliasesPromise is a module-scope let with no reset export", "grep_cmd": "grep -n \"cachedAliasesPromise\" web/src/components/common/PathLinks.tsx", "expect": "5 hits L102,105,106,112,116, all internal to loadPathAliases/usePathAliases, none exported"},
+      {"claim": "cachedVarsPromise is the parallel cache in formatPath.ts, same shape", "grep_cmd": "grep -n \"cachedVarsPromise\" web/src/utils/formatPath.ts", "expect": "5 hits L50,53,54,58,62"},
+      {"claim": "6 test files currently depend on (or could be affected by) these caches without resetting them", "grep_cmd": "grep -rln \"usePathAliases\\|usePathVars\\|PathLinks\\b\" web/src --include=\"*.test.tsx\"", "expect": "6 file hits"}
+    ],
+    "reuse": [],
+    "polarity": "additive",
+    "effort": "S",
+    "tier": "haiku",
+    "why_tier": "Small, mechanical: add one exported reset function per file plus a beforeEach call in up to 6 test files; no design ambiguity, pattern is identical to existing `let cached...Promise` code already in front of you.",
+    "review_critical": false,
+    "goal": "Export a test-only reset function from both PathLinks.tsx and formatPath.ts that sets the module-scope promise cache back to null, and call it from beforeEach (or afterEach) in every test file that renders a component depending on usePathAliases/usePathVars, so each test starts with a fresh config fetch instead of sharing one seeded alias/var set across the whole file.",
+    "background": [
+      "loadPathAliases() in PathLinks.tsx (lines 104-117) and loadPathVars() in formatPath.ts (lines 52-63) are structurally identical: both memoize a Promise in a module-level `let`, populated on first call and never cleared except on fetch failure (`.catch(() => { cached...Promise = null; ... })`).",
+      "Because the promise is module-scope, it survives across every test in the same test file (and across files if Vitest reuses the module instance within a worker) -- today this is harmless because every test in the affected files uses the same mocked getConfig() response (PathLinks.test.tsx:17-19 mocks getConfig to always resolve `{ root_dir: '/library/books/audiobooks' }`), but the TODO flags this as a landmine for a future test that needs different alias/var data per test case within one file."
+    ],
+    "steps": [
+      "1. In web/src/components/common/PathLinks.tsx, after the `usePathAliases` export (after line ~131 where the function closes), add: `/** Test-only: clears the module-scope config-fetch cache so the next usePathAliases()/loadPathAliases() call re-fetches. Call from beforeEach/afterEach in any test file that needs a fresh or per-test alias set. */\\nexport function __resetPathAliasesCacheForTests(): void {\\n  cachedAliasesPromise = null;\\n}`",
+      "2. In web/src/utils/formatPath.ts, after the `usePathVars` export (after line ~81), add the mirror: `export function __resetPathVarsCacheForTests(): void {\\n  cachedVarsPromise = null;\\n}` with an equivalent test-only doc comment.",
+      "3. In each of the 6 test files listed in exact_files, import the relevant reset function(s) (PathLinks.test.tsx and formatPath-adjacent tests import `__resetPathAliasesCacheForTests` from '../PathLinks' or the correct relative path; any file that also exercises usePathVars imports `__resetPathVarsCacheForTests` from '../../utils/formatPath') and call it inside the file's existing `beforeEach(() => { ... })` block (each of these files already has one, e.g. PathLinks.test.tsx:36) -- add the reset call as the first line of that block so it runs before any mock setup for that test.",
+      "4. Do not change any getConfig mock or test assertions in these files -- this step is purely additive isolation; behavior for every existing test should be unchanged since they all use the same mocked config value today (verify with the test run in acceptance)."
+    ],
+    "tests": [
+      "web/src/components/common/PathLinks.test.tsx -- no new test needed for the reset function itself (it's a 1-line test-only helper), but add one regression test 'usePathAliases re-fetches after __resetPathAliasesCacheForTests()' that: renders a consumer, waits for aliases to load, calls the reset export, changes the getConfig mock's resolved value, renders a second consumer, and asserts the second one reflects the new mocked value (proving the cache was actually cleared, not just resettable-in-theory)."
+    ],
+    "acceptance": [
+      "npm --prefix web run lint passes.",
+      "npm --prefix web test -- PathLinks passes including the new re-fetch-after-reset test.",
+      "npm --prefix web test (full run) shows the same pass/fail counts as before this change for ReviewWorkspace.test.tsx, ReviewWorkspace.refetchStale.test.tsx, RegroupSpine.test.tsx, DupesSpine.test.tsx, CompareSpine.test.tsx -- i.e. this is a no-op for existing assertions, proven by an unchanged test count/result."
+    ],
+    "edge_cases": [
+      "Calling the reset function while a fetch promise is still in flight (not yet resolved) should be safe -- setting the `let` to null just means the in-flight promise's resolution no longer gets cached; the in-flight consumer's `.then` still fires against its own promise reference. No special-casing needed."
+    ],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "npm --prefix web run lint && npm --prefix web test",
+    "notes": "Purely a test-isolation hardening task; ships independently of items #1/#2/#4 in this fragment."
+  },
+  {
+    "todo_line": 0,
+    "src_id": "2026-08-20-dual-path-settings-panel.md#4",
+    "title": "Decide how a persisted path_aliases value re-derives after a normalization-rule change",
+    "verdict": "needs_design",
+    "verdict_evidence": "The TODO item's own text is phrased as a decision to make ('Decide how path_aliases re-derives...'), not a spec to implement. Confirmed at code level: SeedPathAliases (internal/config/config.go:95) unconditionally returns the persisted aliases unchanged whenever `len(aliases) > 0`, with no version/hash stamp recorded alongside a seeded value, so there is currently no mechanism by which a later normalizeWindowsPrefix (internal/config/config.go:64) change could distinguish a stale pre-change value from a correct one -- exactly the gap the TODO describes.",
+    "domain": "internal/config",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "SeedPathAliases short-circuits on any non-empty persisted aliases, with no re-derivation path", "grep_cmd": "grep -n \"func SeedPathAliases\" internal/config/config.go", "expect": "1 hit L95"},
+      {"claim": "normalizeWindowsPrefix is the normalization function whose future changes this item worries about", "grep_cmd": "grep -n \"func normalizeWindowsPrefix\" internal/config/config.go", "expect": "1 hit L64"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "S",
+    "tier": "opus",
+    "why_tier": "N/A until scoped -- decision-only, not a coding task.",
+    "review_critical": false,
+    "goal": "N/A until the design question below is answered -- do not write code.",
+    "background": [
+      "This is explicitly a design/decision item per the TODO's own wording ('Decide how...'), and per the scout instructions is not covered by any of the 14 owner decisions already made for this session.",
+      "The TODO itself notes the problem is latent, not live: 'Harmless today (the feature has never been deployed, so no config_blob holds a pre-normalization value)' -- so there is no urgency to implement, only to record a decision before the first real deployment of path_aliases (which item #1 in this scope, the Settings panel, would trigger)."
+    ],
+    "steps": [
+      "Do not implement. Escalate to the owner: 'How should a persisted config_blob.path_aliases value be invalidated/re-derived when normalizeWindowsPrefix's rules change in the future? Options to choose among (or reject in favor of another): (a) stamp each seeded PathAlias (or the whole path_aliases blob) with a normalization-rule version and re-run SeedPathAliases whenever that version is behind current, discarding manually-edited aliases in the process unless a separate is_manually_edited flag protects them; (b) never auto-re-derive -- ValidatePathAliases instead gains a check that re-normalizing a stored Windows prefix is idempotent (normalizeWindowsPrefix(a.Windows) == a.Windows) and fails config load loudly if not, forcing a manual fix; (c) treat this as permanently out of scope since path_aliases is moving toward being user-editable via the new Settings panel (item #1 in this fragment), at which point staleness is the user's problem to notice and fix by hand, same as any other setting.' This decision should be made together with item #2's design question, since both concern whether path_aliases is purely-derived (favors options a/b) or user-owned (favors option c)."
+    ],
+    "tests": [],
+    "acceptance": [],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (docs/design decision, not code)",
+    "notes": "Bundle this decision request with item #2's escalation (2026-08-20-dual-path-settings-panel.md#2) -- both are really one question about path_aliases' long-term ownership model, and answering them separately risks contradictory answers."
+  },
+  {
+    "todo_line": 0,
+    "src_id": "2026-08-21-condition-based-op-resume.md#1",
+    "title": "Replace the fixed resume_policy enum with a condition-based resume evaluator",
+    "verdict": "needs_design",
+    "verdict_evidence": "The TODO's own 'Design note' explicitly frames this as requiring new architecture ('this is a real expansion, not a tweak... express it as one predicate among others') and lists multiple candidate conditions (elapsed time, root mtime/file-count drift, conflicting-op detection, config/op-def version drift) without specifying an evaluator interface, a predicate registration mechanism, or a config/data schema for op-def authors to declare a condition set -- none of which is covered by any of the 14 owner decisions listed for this scoping session. Confirmed at code level that today's mechanism is a single static field consumed by a 4-way switch: internal/operations/registry/types.go:170-173 defines the four ResumePolicy constants, and internal/operations/registry/resume.go:66 (`switch def.ResumePolicy`) is the sole dispatch point.",
+    "domain": "internal/operations/registry",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "ResumePolicy is currently a plain int enum with 4 values, no per-op condition data", "grep_cmd": "grep -n \"ResumeRestart \\|ResumeRequeue \\|ResumeDrop \\|ResumeAsk \" internal/operations/registry/types.go", "expect": "4 hits L170-173"},
+      {"claim": "resumeAfterStartup dispatches purely on the static enum value, with no access to environment state (root mtime, concurrent-op history, config version) at decision time beyond what's already in switch scope", "grep_cmd": "grep -n \"switch def.ResumePolicy\" internal/operations/registry/resume.go", "expect": "1 hit L66"},
+      {"claim": "library.scan (the TODO's own motivating example) is already ResumeRestart (checkpoint-based resume), not the ResumeRequeue/'from zero' policy the TODO's prose implies -- worth the owner double-checking the motivating incident against current code before scoping, since checkpointing for this op was shipped 2026-08-17", "grep_cmd": "grep -n \"ResumePolicy:   opsregistry.ResumeRestart\" internal/server/library_core_ops.go", "expect": "1 hit L106"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "L",
+    "tier": "opus",
+    "why_tier": "N/A until scoped -- decision-only, not a coding task. Once scoped, the evaluator core (types.go + resume.go) is small, but ResumePolicy is referenced by 100+ op-def files across internal/plugins and internal/server (grep -rln \"resume_policy\\|ResumePolicy\" --include=\"*.go\" . lists 130+ files), so any change to the field's type (not just its consumption) is a large mechanical migration on top of the design work.",
+    "review_critical": true,
+    "goal": "N/A until the design questions below are answered -- do not write code. This sits on the operation-resume path used by every maintenance/dedup/scan op in the registry, so an incorrect evaluator could resume ops that should have restarted (stale/corrupted partial state) or vice versa -- review_critical.",
+    "background": [
+      "internal/operations/registry/types.go:164-173: ResumePolicy is `type ResumePolicy int` with ResumeUnspecified/ResumeRestart/ResumeRequeue/ResumeDrop/ResumeAsk; RegisterOp rejects ResumeUnspecified at registration time (per the doc comment at L165).",
+      "internal/operations/registry/resume.go:33-83 (resumeAfterStartup) is the single call site that reads def.ResumePolicy and branches; it already has a special-case override ahead of the switch (reconcileScanDefID always dropped, L48-52), which is itself a precedent for 'a condition overriding the static policy' but implemented as a one-off hardcode rather than a general mechanism.",
+      "The TODO explicitly asks to keep the 4 static values working 'as degenerate always-true/always-false conditions so the migration is incremental' -- i.e. whatever evaluator interface is chosen must be able to express today's ResumeDrop as an unconditional false and today's (checkpoint-based) ResumeRestart as an unconditional true, so existing op-defs don't all need to be touched on day one.",
+      "Before scoping implementation, the owner should reconcile the TODO's motivating incident (2026-08-21: library.scan restarted from zero at 13,922/40,089 books) against the fact that library.scan's ResumePolicy is ResumeRestart with checkpoint support shipped 2026-08-17 (internal/server/library_core_ops.go:94-106 comment describes exactly this checkpoint mechanism) -- if checkpointing is working as designed, at most one scanChunkSize-sized chunk should have been lost, not the full 80 minutes of progress; this scout did not investigate why the full progress was lost (out of scope for a read-only scout pass) but the discrepancy is worth surfacing before committing to a redesign of the wrong layer."
+    ],
+    "steps": [
+      "Do not implement. Escalate to the owner with two questions: (1) 'What is the concrete evaluator interface for condition-based resume? E.g. a Go func type `type ResumeCondition func(row database.OperationV2Row, def OperationDef, env ResumeEnv) bool` registered as a list on OperationDef, replacing or supplementing the single ResumePolicy field -- and what goes into ResumeEnv (root mtime lookup? a query for concurrent/conflicting ops? op-def version comparison against what was checkpointed)? Each of the four example predicates needs its own data source defined before it can be briefed as a task.' (2) 'Before scoping this, please reconcile the 2026-08-21 library.scan incident against the fact that library.scan already has ResumePolicy=ResumeRestart with checkpoint support (shipped 2026-08-17, internal/server/library_core_ops.go:94-106) -- if checkpointing worked as designed, why was all 80 minutes of progress lost rather than at most one chunk? If the checkpoint path itself is broken, that may be the actual bug to fix, separate from (or prerequisite to) the general condition-based evaluator redesign.'"
+    ],
+    "tests": [],
+    "acceptance": [],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (design decision, not code)",
+    "notes": "High fan-out risk: 130+ files reference resume_policy/ResumePolicy (mostly just setting one of the 4 static values on an OperationDef literal), so once the evaluator design is settled, expect this to become a multi-wave mechanical migration candidate for parallel-sweep rather than a single task, IF the chosen design changes the OperationDef field's type/shape rather than adding a new optional field alongside it."
+  }
+]

@@ -1,0 +1,69 @@
+{
+  "todo_line": 4463,
+  "src_id": null,
+  "title": "Consolidate the August executive-summary roundup through 2026-08-19",
+  "verdict": "actionable",
+  "verdict_evidence": "docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md's body links only the 7 dated summaries from 2026-08-04 through 2026-08-09 (`grep -n '^\\*\\*\\[' docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md` returns exactly 7 lines, all dated Aug 4-9), while `find docs/executive-summaries -iname '2026-08-*'` lists 22 additional individual summaries dated 2026-08-10 through 2026-08-19 that are not yet linked, despite the roundup's own header claiming 'Period covered: 2026-08-01 through 2026-08-20' (last-edited 2026-08-20, version 1.9.0).",
+  "domain": "docs",
+  "exact_files": [
+    "docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "the roundup's linked write-ups stop at 2026-08-09",
+      "grep_cmd": "grep -n '^\\*\\*\\[' docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md",
+      "expect": "7 lines, dates Aug 4, 6, 6, 7, 8, 8, 9"
+    },
+    {
+      "claim": "22 individual summaries exist dated 2026-08-10 through 2026-08-19, unlinked",
+      "grep_cmd": "find docs/executive-summaries -iname '2026-08-1[0-9]-*executive-summary.md' | sort",
+      "expect": "22 files listed, none referenced in the roundup body"
+    },
+    {
+      "claim": "the roundup's own 'Individual write-ups this consolidates' line is stale (says seven, 2026-08-04 to 2026-08-09)",
+      "grep_cmd": "grep -n 'Individual write-ups this consolidates' docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md",
+      "expect": "1 hit at L10"
+    }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "L",
+  "tier": "sonnet",
+  "why_tier": "Requires reading and synthesizing ~22 individual executive summaries into the plain-language, non-jargon tone the roundup already establishes \u2014 a synthesis/writing task, not mechanical, so needs a model that can match the existing document's voice.",
+  "review_critical": false,
+  "goal": "Extend docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md to consolidate the 22 individual executive summaries dated 2026-08-10 through 2026-08-19 (matching the doc's own claimed 'Period covered' range), following the exact structure/tone of the existing 7 entries (short linked paragraph per write-up, grouped by theme where the existing doc groups them), and update the 'Individual write-ups this consolidates' line to reflect the new count and date range.",
+  "background": [
+    "The roundup doc is explicitly self-described as 'month in progress \u2014 updated as work lands' (line 8), so incremental consolidation passes are the intended workflow, not a one-time write.",
+    "The 22 unconsolidated summaries as of this scan: 2026-08-10-the-invisible-sheet, 2026-08-11-instructions-that-were-thrown-away, 2026-08-11-the-fix-that-only-moved-the-window, 2026-08-12-checking-our-own-homework, 2026-08-12-the-page-nobody-was-looking-at, 2026-08-12-the-second-page-that-was-never-there, 2026-08-13-deleted-but-not-gone, 2026-08-13-one-chapter-twenty-four-hours, 2026-08-13-the-580-megabytes-read-and-discarded, 2026-08-13-the-books-search-could-not-see, 2026-08-13-the-endpoints-that-answered-anyway, 2026-08-13-when-quotes-did-not-mean-quotes, 2026-08-14-the-ampersand-that-became-an-author, 2026-08-14-the-preview-button-that-was-not-a-preview, 2026-08-14-the-series-that-vanished-from-under-13322-books, 2026-08-14-thirteen-search-boxes-that-always-said-no, 2026-08-15-the-tag-that-was-never-written, 2026-08-15-the-tug-of-war-over-where-books-live, 2026-08-16-the-work-that-said-it-succeeded, 2026-08-17-the-books-that-would-not-download, 2026-08-19-the-repair-that-would-have-deleted-the-evidence, 2026-08-19-untangling-the-wiring.",
+    "By the time this ships, further individual summaries dated 2026-08-20 onward may also exist and should be swept in the same pass \u2014 re-run the `find` command in step 1 rather than trusting this list."
+  ],
+  "steps": [
+    "1. Re-run `find docs/executive-summaries -iname '2026-08-*executive-summary.md' | sort` to get the current full list (may include dates past 08-19 by the time this executes) and diff against the roundup's already-linked list to get the exact set to add.",
+    "2. Read each unlinked summary's opening 1-3 paragraphs (the plain-language 'what happened and why it mattered' framing, not the technical body) to extract the one-paragraph consolidation entry.",
+    "3. Append new sections/paragraphs to docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md following the existing pattern: `**[Title](relative-link.md)** (Aug N)` followed by 1-3 sentences in the doc's established voice. Group thematically if a natural grouping emerges (the existing doc already groups Aug 4/6/7 under one heading and Aug 6/8/9 under another \u2014 follow that pattern for the new entries rather than a flat chronological list).",
+    "4. Update the 'Individual write-ups this consolidates' line (currently line 10-11) to state the new total count and the new date range covered.",
+    "5. Bump the file's version header (currently 1.9.0) to 1.10.0 and update last-edited to today's date, per the file-header mandate.",
+    "6. Do NOT touch the 7 already-consolidated entries' content \u2014 this is a pure addition."
+  ],
+  "tests": [],
+  "acceptance": [
+    "`grep -c '^\\*\\*\\[' docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md` returns 29 or more (7 existing + at least 22 new).",
+    "Every filename returned by `find docs/executive-summaries -iname '2026-08-1[0-9]-*executive-summary.md'` appears as a relative link somewhere in the roundup body (`grep -F '<filename>' docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md` for each)."
+  ],
+  "edge_cases": [
+    "A summary whose filename date is technically in August but whose content describes a decision explicitly marked 'parked'/'not done' should still be summarized honestly as such, not glossed over as a completed fix \u2014 match each source doc's own stated status."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only'",
+  "notes": "Per project convention (CLAUDE.md Post-Task Hygiene), this kind of executive-summary maintenance pass is itself is the deliverable \u2014 no code changes accompany it.",
+  "id": "TASK-056",
+  "stable_key": "scope-08.json|4463|None|Consolidate the August executive-summary roundup through 202",
+  "ws": "docs",
+  "slug": "consolidate-the-august-executive-summary-roundup",
+  "scope_file": "scope-08.json",
+  "dropped_files": [],
+  "tier_label": "Sonnet-class",
+  "depends_on": [],
+  "wave": 1
+}

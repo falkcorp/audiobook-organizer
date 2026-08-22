@@ -1,0 +1,782 @@
+[
+ {
+  "id": "L157",
+  "todo_line": 157,
+  "title": "Classify the current 5,947 exact-pending candidates in dry-run to determine whether the source bug is still live or this is normal regrowth",
+  "anchors": [
+   {
+    "cmd": "grep -n 'maintenance.dedup-exact-triage' internal/plugins/dedup/breakdown_backfill.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "14://   - maintenance.dedup-exact-triage classifies every nil-breakdown row as\n239:\t\t\t\"maintenance.dedup-exact-triage can act on the whole backlog. Writes ONLY \" +",
+    "err": "",
+    "expect": "1+ hits describing it as an existing, callable op",
+    "claim": "the exact-triage op already exists and is referenced as invocable on the whole backlog"
+   }
+  ]
+ },
+ {
+  "id": "L1162",
+  "todo_line": 1162,
+  "title": "Run dedup.purge-stale with apply:true to clean up the 2,504 already-orphaned dedup candidates (code exists; awaiting owner go-ahead)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'func (de \\*Engine) PurgeStaleCandidates' internal/dedup/engine.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "3010:func (de *Engine) PurgeStaleCandidates(ctx context.Context) (int, error) {",
+    "err": "",
+    "expect": "1 hit ~L3010",
+    "claim": "PurgeStaleCandidates already exists and does exactly this cleanup"
+   },
+   {
+    "cmd": "grep -n 'Schedule' internal/plugins/dedup/purge_stale.go",
+    "rc": 1,
+    "nlines": 0,
+    "out": "",
+    "err": "",
+    "expect": "0 hits",
+    "claim": "dedup.purge-stale has no Schedule set on its OperationDef"
+   }
+  ]
+ },
+ {
+  "id": "L534",
+  "todo_line": 534,
+  "title": "Run maintenance.booksig-sidecar-migrate on production (add pending-prod-actions.md entry)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'ID:          \"maintenance.booksig-sidecar-migrate\"' internal/plugins/maintenance/booksig_sidecar_migrate.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "72:\t\tID:          \"maintenance.booksig-sidecar-migrate\",",
+    "err": "",
+    "expect": "1 hit L72",
+    "claim": "op maintenance.booksig-sidecar-migrate exists and is merged"
+   },
+   {
+    "cmd": "grep -n 'booksig-sidecar-migrate' docs/operations/pending-prod-actions.md",
+    "rc": 1,
+    "nlines": 0,
+    "out": "",
+    "err": "",
+    "expect": "0 hits",
+    "claim": "op is not yet listed in the prod-actions queue"
+   }
+  ]
+ },
+ {
+  "id": "L595",
+  "todo_line": 595,
+  "title": "Run maintenance.chapters-backfill against production (add pending-prod-actions.md entry)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'ID:          \"maintenance.chapters-backfill\"' internal/plugins/maintenance/chapters_backfill.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "176:\t\tID:          \"maintenance.chapters-backfill\",",
+    "err": "",
+    "expect": "1 hit L176",
+    "claim": "op maintenance.chapters-backfill exists, DRY RUN BY DEFAULT"
+   },
+   {
+    "cmd": "grep -n 'chapters-backfill' docs/operations/pending-prod-actions.md",
+    "rc": 1,
+    "nlines": 0,
+    "out": "",
+    "err": "",
+    "expect": "0 hits",
+    "claim": "not yet queued for production"
+   }
+  ]
+ },
+ {
+  "id": "L3362",
+  "todo_line": 3362,
+  "title": "Decide whether to force a search-index rebuild on prod now, or let it happen on next natural restart",
+  "anchors": [
+   {
+    "cmd": "sed -n '60,63p' internal/server/search_coverage.go",
+    "rc": 0,
+    "nlines": 4,
+    "out": "// against the SET of live book IDs, marks the missing ones dirty so\n// runSearchReconciler re-indexes them, and deletes stale documents whose\n// book is gone (hard-deleted or soft-deleted).\n//",
+    "err": "",
+    "expect": "'It is a no-op on a healthy index, so it is safe to run on every boot.'",
+    "claim": "the boot-time coverage repair already exists and is a no-op on a healthy index"
+   }
+  ]
+ },
+ {
+  "id": "L3391",
+  "todo_line": 3391,
+  "title": "Run the already-built ElectMissingPrimaries repair against production (sweep + repair for headless version groups)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'func ElectMissingPrimaries' internal/reconcile/elect_primaries.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "121:func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error) {",
+    "err": "",
+    "expect": "1 hit at L121",
+    "claim": "the repair function exists and is already concurrency-safe by group partitioning"
+   },
+   {
+    "cmd": "grep -n 'elect-missing-primaries\\|func (s \\*Server) electMissingPrimariesHandler' internal/server/server_lifecycle.go internal/server/reconcile.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "internal/server/server_lifecycle.go:1532:\t\t\tprotected.POST(\"/operations/elect-missing-primaries\", s.perm(auth.PermSettingsManage), s.electMissingPrimariesHandler)\ninternal/server/reconcile.go:193:func (s *Server) electMissingPrimariesHandler(c *gin.Context) {",
+    "err": "",
+    "expect": "route registration at server_lifecycle.go:1532; handler with `dryRun := c.DefaultQuery(\\\"dry_run\\\", \\\"true\\\") != \\\"false\\\"` at reconcile.go:193",
+    "claim": "the repair is wired to an HTTP endpoint, defaulting to dry-run"
+   }
+  ]
+ },
+ {
+  "id": "L3449",
+  "todo_line": 3449,
+  "title": "Re-measure per-cohort search-index coverage now that the true reconciler figures exist",
+  "anchors": [
+   {
+    "cmd": "grep -n 'slog.Warn(\"search index diverges' internal/server/search_coverage.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "134:\tslog.Warn(\"search index diverges from the library\",",
+    "err": "",
+    "expect": "1 hit, logging indexed/books/missing/stale counts",
+    "claim": "the reconciler this re-measurement depends on already ships the true-figure logging"
+   }
+  ]
+ },
+ {
+  "id": "L3563",
+  "todo_line": 3563,
+  "title": "Delete zero-book author row 51870 ('&#169;2013 by HarperCollinsPublishers')",
+  "anchors": [
+   {
+    "cmd": "grep -n 'func (h \\*Handler) DeleteAuthor' internal/server/handlers/entities/handler.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "579:func (h *Handler) DeleteAuthor(c *gin.Context) {\n716:func (h *Handler) DeleteAuthorAlias(c *gin.Context) {",
+    "err": "",
+    "expect": "1 hit, L579",
+    "claim": "the DeleteAuthor admin endpoint already exists and would correctly delete this row"
+   },
+   {
+    "cmd": "grep -n '51870' internal/dedup/author.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "157:// 46583 \"&#169\" and 51870 \"&#169;2013 by HarperCollinsPublishers\").",
+    "err": "",
+    "expect": "1 hit in IsDirtyAuthorName's doc comment",
+    "claim": "row 51870 is the motivating example cited by the shipped IsDirtyAuthorName fix, confirming its existence and root cause are already understood/fixed going forwa"
+   }
+  ]
+ },
+ {
+  "id": "L3607",
+  "todo_line": 3607,
+  "title": "Rename the merged 'Sylverster McCoy' author row to fix the shared misspelling",
+  "anchors": [
+   {
+    "cmd": "grep -n 'ID:.*author-conjunction-repair' internal/plugins/maintenance/author_conjunction_repair.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "96:\t\tID:          \"maintenance.author-conjunction-repair\",",
+    "err": "",
+    "expect": "1 hit ~L96",
+    "claim": "the author-conjunction-repair maintenance op (the prerequisite merge) already exists and has run"
+   },
+   {
+    "cmd": "grep -n 'author-conjunction-repair: rename' internal/plugins/maintenance/author_conjunction_repair.go",
+    "rc": 0,
+    "nlines": 3,
+    "out": "242:\t\t\tlog.Info(\"author-conjunction-repair: rename\",\n246:\t\t\tlog.Warn(\"author-conjunction-repair: rename failed\",\n250:\t\t\tlog.Info(\"author-conjunction-repair: rename\",",
+    "err": "",
+    "expect": ">=2 hits",
+    "claim": "a rename code path for merged authors already exists inside the repair op"
+   }
+  ]
+ },
+ {
+  "id": "L3635",
+  "todo_line": 3635,
+  "title": "E08 bulk-write-back full-library run \u2014 prerequisites already shipped, remaining work is the prod run itself",
+  "anchors": [
+   {
+    "cmd": "grep -n 'tags already match' internal/metafetch/service_writeback.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "799:\t\t\t\tslog.Debug(\"write-back file tags already match, skipping\", \"path\", bf.FilePath)\n916:\t\t\t\t\tcontinue // tags already match, nothing to write",
+    "err": "",
+    "expect": "3 hits: L799 multi-file, L854/L877 single-file/directory branches",
+    "claim": "a tag-diff skip already exists in the write-back path (multi-file branch)"
+   },
+   {
+    "cmd": "grep -n 'func FilterUnchangedTags\\|func filterTagsAgainst' internal/metafetch/*.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "internal/metafetch/service_writeback.go:284:func FilterUnchangedTags(filePath string, tagMap map[string]interface{}) map[string]interface{} {\ninternal/metafetch/service_writeback.go:302:func filterTagsAgainst(filePath string, current metadata.Metadata, tagMap map[string]interface{}) map[string]interface{} {",
+    "err": "",
+    "expect": ">=2 hits",
+    "claim": "FilterUnchangedTags / filterTagsAgainst implement the diff logic"
+   },
+   {
+    "cmd": "grep -n 'func writeBackWorkers' internal/server/metadata_ops.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "85:func writeBackWorkers() int {",
+    "err": "",
+    "expect": "1 hit, L85",
+    "claim": "runBulkWriteBack now uses a bounded worker pool, not a plain serial loop"
+   },
+   {
+    "cmd": "grep -n 'jobCh := make(chan string' internal/server/metadata_ops.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "868:\tjobCh := make(chan string, workers*32)",
+    "err": "",
+    "expect": "1 hit ~L868",
+    "claim": "the worker pool is fed via a job channel with N goroutines, not one-goroutine-per-book or a single serial loop"
+   }
+  ]
+ },
+ {
+  "id": "L3921",
+  "todo_line": 3921,
+  "title": "Backfill-repair legacy operation rows stuck at 'pending' from before the propagation fix shipped",
+  "anchors": [
+   {
+    "cmd": "grep -rln \"backfill.*legacy\\|legacy.*backfill\\|stuck.*pending\" internal/ --include=\"*.go\"",
+    "rc": 0,
+    "nlines": 5,
+    "out": "internal/database/migrations.go\ninternal/database/embedding_store.go\ninternal/scheduler/no_orphan_legacy_rows_test.go\ninternal/operations/registry/legacy_op_status_internal_test.go\ninternal/operations/registry/legacy_op_status.go",
+    "err": "",
+    "expect": "no hits relevant to this repair",
+    "claim": "No existing backfill for pre-fix stuck legacy op rows"
+   }
+  ]
+ },
+ {
+  "id": "L3960",
+  "todo_line": 3960,
+  "title": "Verify the dry-run default on production after deploy",
+  "anchors": [
+   {
+    "cmd": "grep -n \"DefaultParams any\" internal/server/maintenance_dispatcher.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "32:\t\tDefaultParams any    `json:\"default_params\"`",
+    "err": "",
+    "expect": "1 hit ~L32",
+    "claim": "GET /api/v1/maintenance/jobs publishes default_params including dry_run, matching the TODO's described probe surface"
+   }
+  ]
+ },
+ {
+  "id": "L4126",
+  "todo_line": 4126,
+  "title": "Record prod op-ID audit-trail verification as a pending operator action",
+  "anchors": [
+   {
+    "cmd": "grep -n \"SetRunContextDecorator\" internal/server/registry_wire.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "359:\t\ts.opRegistry.SetRunContextDecorator(opRunContextDecorator)",
+    "err": "",
+    "expect": "1 hit at L359",
+    "claim": "opRunContextDecorator is installed via SetRunContextDecorator"
+   },
+   {
+    "cmd": "grep -c \"op-ID\\|operation_changes\" docs/operations/pending-prod-actions.md",
+    "rc": 1,
+    "nlines": 1,
+    "out": "0",
+    "err": "",
+    "expect": "0",
+    "claim": "pending-prod-actions.md has no existing row for this verification"
+   }
+  ]
+ },
+ {
+  "id": "L4166",
+  "todo_line": 4166,
+  "title": "E07 duplicate-PID residue: 2 groups need an operator's manual pick (organizer-side only)",
+  "anchors": [
+   {
+    "cmd": "grep -n \"pidIntegrityHandler\\|pid-integrity\" internal/server/itl_pid.go internal/server/server_lifecycle.go",
+    "rc": 0,
+    "nlines": 5,
+    "out": "internal/server/itl_pid.go:6:// book_file iTunes-PID integrity endpoints. /pid-integrity is a read-only census\ninternal/server/itl_pid.go:24:// pidIntegrityHandler handles GET/POST /api/v1/itunes/pid-integrity. Always\ninternal/server/itl_pid.go:26:func (s *Server) pidIntegrityHandler(c *gin.Context) {\ninternal/server/itl_pid.go:30:\t\thttputil.RespondWithInternalError(c, fmt.Sprintf(\"pid-integrity c",
+    "err": "",
+    "expect": "hits confirming GET /api/v1/itunes/pid-integrity is wired",
+    "claim": "the pid-integrity census endpoint exists and is read-only"
+   },
+   {
+    "cmd": "grep -n \"FilesToClear\" internal/itunes/pid_integrity.go internal/itunes/pid_repair.go",
+    "rc": 0,
+    "nlines": 6,
+    "out": "internal/itunes/pid_integrity.go:82:\tFilesToClear  int `json:\"files_to_clear\"` // owner rows losing the PID (owners\u22121 per dup PID)\ninternal/itunes/pid_integrity.go:134:\t\treport.FilesToClear += len(owners) - 1\ninternal/itunes/pid_integrity.go:194:\t\t\"dupInITL\", report.DupInITL, \"filesToClear\", report.FilesToClear,\ninternal/itunes/pid_repair.go:76:\tFilesToClear    int `json:\"files_to_clear\"`\ninternal",
+    "err": "",
+    "expect": "1 hit each",
+    "claim": "the repair-op FilesToClear field exists in both the integrity and repair packages"
+   }
+  ]
+ },
+ {
+  "id": "L4569",
+  "todo_line": 4569,
+  "title": "Measure whether library.import/organize/transcode can exceed their 4h ResumeDrop ceiling on the 63k-book library",
+  "anchors": [
+   {
+    "cmd": "grep -n 'Timeout:\\|ResumePolicy:' internal/server/library_core_ops.go",
+    "rc": 0,
+    "nlines": 8,
+    "out": "85:\t\tTimeout: 24 * time.Hour,\n106:\t\tResumePolicy:   opsregistry.ResumeRestart,\n198:\t\tTimeout:         4 * time.Hour,\n199:\t\tResumePolicy:    opsregistry.ResumeDrop,\n254:\t\tTimeout:         4 * time.Hour,\n255:\t\tResumePolicy:    opsregistry.ResumeDrop,\n330:\t\tTimeout:         6 * time.Hour,\n331:\t\tResumePolicy:    opsregistry.ResumeDrop,",
+    "err": "",
+    "expect": "hits at L198-199 for import, L254-256 for organize, L331 area for transcode, all showing 4h/ResumeDrop",
+    "claim": "library.import still has Timeout=4h, ResumeDrop"
+   },
+   {
+    "cmd": "grep -n '24h, raised from 4h' internal/server/library_core_ops.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "76:\t\t// 24h, raised from 4h on 2026-08-16. The 4h ceiling was not a safety",
+    "err": "",
+    "expect": "1 hit at L76",
+    "claim": "library.scan alone was raised to 24h with ResumeRestart, and the comment explains why (measured, not assumed)"
+   }
+  ]
+ },
+ {
+  "id": "L4660",
+  "todo_line": 4660,
+  "title": "3 scheduled tasks enabled but inert \u2014 the maintenanceOrder wiring bug is already fixed; what remains is a production config decision",
+  "anchors": [
+   {
+    "cmd": "grep -n '\"library_organize\"\\|\"library_size_refresh\"\\|\"metadata_upgrade\"' internal/scheduler/scheduler.go",
+    "rc": 0,
+    "nlines": 3,
+    "out": "146:\t\t\"metadata_upgrade\",\n163:\t\t\"library_size_refresh\",\n172:\t\t\"library_organize\",",
+    "err": "",
+    "expect": "3 hits inside the maintenanceOrder slice, L146/163/172",
+    "claim": "all three tasks are already in maintenanceOrder (the wiring-gap root cause is fixed)"
+   },
+   {
+    "cmd": "grep -n 'LibraryOrganize:' internal/config/config.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "1780:\t\t\t\tLibraryOrganize:      viper.GetBool(\"maintenance.library_organize\"),\n2465:\t\t\t\tLibraryOrganize:    false,",
+    "err": "",
+    "expect": "hit at L2465 showing `LibraryOrganize: false` in the defaults block",
+    "claim": "library_organize's RunInMaintenanceWindow reads a config flag that defaults to false"
+   },
+   {
+    "cmd": "grep -n 'MetadataRefresh:' internal/config/config.go",
+    "rc": 0,
+    "nlines": 3,
+    "out": "1781:\t\t\t\tMetadataRefresh:      viper.GetBool(\"maintenance.metadata_refresh\"),\n1961:\t\t\t\tMetadataRefresh: ScheduledTaskConfig{\n2466:\t\t\t\tMetadataRefresh:    false,",
+    "err": "",
+    "expect": "hit at L2466 showing `MetadataRefresh: false`",
+    "claim": "metadata_upgrade's RunInMaintenanceWindow reads config.AppConfig.Maintenance.MetadataRefresh, which also defaults to false"
+   },
+   {
+    "cmd": "grep -n 'needs your decision, deliberately not changed' docs/handoffs/2026-08-16-overnight-silent-failure-fixes.md",
+    "rc": 1,
+    "nlines": 0,
+    "out": "",
+    "err": "",
+    "expect": "1 hit at L267-268",
+    "claim": "the handoff doc this TODO item cites already frames this as an explicit, deliberately-unmade owner decision"
+   }
+  ]
+ },
+ {
+  "id": "L4848",
+  "todo_line": 4848,
+  "title": "Confirm no new bogus directories post-fix \u2014 operational monitoring, not code",
+  "anchors": [
+   {
+    "cmd": "grep -n \"SanitizePathComponent(stem)\" internal/organizer/pathbuild.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "165:\tstem = SanitizePathComponent(stem)",
+    "err": "",
+    "expect": "1 hit ~L165",
+    "claim": "the builder guard exists at the cited fix commit"
+   },
+   {
+    "cmd": "grep -n \"c54721c7\" internal/organizer/pathbuild.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "141:\t// (c54721c7) the SHIPPED DEFAULT of segment_title_format was",
+    "err": "",
+    "expect": "1 hit ~L141",
+    "claim": "the guard's own comment documents the fix commit and date range of the historical damage"
+   },
+   {
+    "cmd": "grep -n \"TestBuildRelPath_SeparatorInFilePatternStaysOneComponent\" -A 20 internal/organizer/path_format_test.go",
+    "rc": 0,
+    "nlines": 43,
+    "out": "131:// TestBuildRelPath_SeparatorInFilePatternStaysOneComponent pins the OTHER way a\n132-// stray directory gets created, which scrubVar does not and cannot cover.\n133-//\n134-// scrubVar sanitizes variable VALUES before substitution. From 2026-03-03\n135-// (f29c3ce6) to 2026-08-15 (c54721c7) the separator arrived in the TEMPLATE\n136-// instead: the shipped default of segment_title_format was\n137-/",
+    "err": "",
+    "expect": "1 hit ~L163, uses SegmentTitleFormat: \\\"{title} - {track}/{total_tracks}\\\"",
+    "claim": "a regression test reproduces the exact original buggy default pattern"
+   },
+   {
+    "cmd": "grep -n \"TestBuildPath_TarkinReproducesAsOneFile\" internal/organizer/path_format_test.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "102:// TestBuildPath_TarkinReproducesAsOneFile reproduces the exact prod path that\n105:func TestBuildPath_TarkinReproducesAsOneFile(t *testing.T) {",
+    "err": "",
+    "expect": "1 hit ~L105",
+    "claim": "a second regression test reproduces the real prod data case"
+   }
+  ]
+ },
+ {
+  "id": "L5037",
+  "todo_line": 5037,
+  "title": "Investigate LLM host GPU cooling/fan-speed reporting before another full library.scan",
+  "anchors": [
+   {
+    "cmd": "grep -n 'belongs to the hardware, not this codebase' docs/plans/2026-08-17-split-scan-ai-phase.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "261:- **New, and it belongs to the hardware, not this codebase:** why does the card",
+    "err": "",
+    "expect": "1 hit, ~L263",
+    "claim": "the plan doc itself defers this to hardware, not code"
+   }
+  ]
+ },
+ {
+  "id": "L5987",
+  "todo_line": 5987,
+  "title": "Regenerate the stale webkit-darwin visual-regression golden (needs CI, not local)",
+  "anchors": [
+   {
+    "cmd": "ls web/tests/e2e/dynamic-ui-interactions.spec.ts-snapshots/scan-button-loading-webkit-darwin.png",
+    "rc": 0,
+    "nlines": 1,
+    "out": "web/tests/e2e/dynamic-ui-interactions.spec.ts-snapshots/scan-button-loading-webkit-darwin.png",
+    "err": "",
+    "expect": "file exists",
+    "claim": "the webkit-darwin golden file exists"
+   }
+  ]
+ },
+ {
+  "id": "L6133",
+  "todo_line": 6133,
+  "title": "Regenerate stale .api-token and verify Bleve search index completeness",
+  "anchors": [
+   {
+    "cmd": "ls -la .api-token",
+    "rc": 0,
+    "nlines": 1,
+    "out": "-rw-------@ 1 jdfalk  staff  47 Aug 11 21:00 .api-token",
+    "err": "",
+    "expect": "1 file, Aug 11 timestamp",
+    "claim": ".api-token file exists locally, dated 2026-08-11"
+   }
+  ]
+ },
+ {
+  "id": "L8399",
+  "todo_line": 8399,
+  "title": "Deploy a second faster-whisper HTTP worker on the spare CPU node and add it to WHISPER_ENDPOINTS",
+  "anchors": [
+   {
+    "cmd": "grep -n 'func ParseWhisperEndpoints' internal/config/config.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "1101:func ParseWhisperEndpoints(s string) []WhisperEndpoint {",
+    "err": "",
+    "expect": "1 hit ~L1101",
+    "claim": "the code path to add a second endpoint already exists and just needs a URL added to config"
+   }
+  ]
+ },
+ {
+  "id": "L9020",
+  "todo_line": 9020,
+  "title": "Re-run maintenance.regroup-shattered-ai after relink and re-measure the review queue",
+  "anchors": [
+   {
+    "cmd": "grep -n 'maintenance.regroup-shattered-ai' internal/plugins/maintenance/regroup_shattered_ai.go",
+    "rc": 0,
+    "nlines": 3,
+    "out": "6:// Package maintenance \u2014 op maintenance.regroup-shattered-ai (PR-B1).\n106:\t\tID:          \"maintenance.regroup-shattered-ai\",\n117:\t\tConcurrencyKey:  \"maintenance.regroup-shattered-ai\",",
+    "err": "",
+    "expect": "hits at lines 6, 106, 117",
+    "claim": "maintenance.regroup-shattered-ai is a registered op at HEAD"
+   }
+  ]
+ },
+ {
+  "id": "L10383",
+  "todo_line": 10383,
+  "title": "iTunes 2-way-sync remaining P0 measurements \u2014 run the already-built measurement infrastructure against real/prod data",
+  "anchors": [
+   {
+    "cmd": "grep -n 'func ' internal/itunes/cross_type.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "87:func ComputeCrossTypeCollisions(store PIDIntegrityStore, itlPath string) (*CrossTypeReport, error) {\n97:func computeCrossTypeCollisions(store PIDIntegrityStore, tracks []ITLTrack) (*CrossTypeReport, error) {",
+    "err": "",
+    "expect": "\u22651 hit",
+    "claim": "cross-type PID collision detection code exists"
+   },
+   {
+    "cmd": "grep -n 'ITL_PRESERVE_PROOF_PATH' internal/itunes/itl_preserve_proof_test.go",
+    "rc": 0,
+    "nlines": 7,
+    "out": "21://\tITL_PRESERVE_PROOF_PATH=/path/to/copy-of-iTunes\\ Library.itl \\\n122:\tpath := os.Getenv(\"ITL_PRESERVE_PROOF_PATH\")\n124:\t\tt.Skip(\"set ITL_PRESERVE_PROOF_PATH to a COPY of a real .itl to run the byte-proof\")\n262:\tpath := os.Getenv(\"ITL_PRESERVE_PROOF_PATH\")\n264:\t\tt.Skip(\"set ITL_PRESERVE_PROOF_PATH to a COPY of a real .itl to run the byte-proof\")\n365:\tpath := os.Getenv(\"ITL_PRESERVE_PROOF_PATH\")",
+    "err": "",
+    "expect": "1 hit ~L123",
+    "claim": "an env-gated real-.itl byte-preservation proof test exists, built for a relocate+remove combined run"
+   },
+   {
+    "cmd": "grep -n 'wantRelo, wantRemove = 300, 30' internal/itunes/itl_preserve_proof_test.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "146:\tconst wantRelo, wantRemove = 300, 30",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "the test explicitly samples ~300 relocates and ~30 removes in one run, matching the item's ask"
+   }
+  ]
+ },
+ {
+  "id": "L10509",
+  "todo_line": 10509,
+  "title": "Re-verify current prod state of review_apply_enabled and record it",
+  "anchors": [
+   {
+    "cmd": "grep -n \"ReviewApplyEnabled:.*false\" internal/config/config.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "2338:\t\t\tReviewApplyEnabled:      false, // OFF by default \u2014 review-only until explicitly enabled",
+    "err": "",
+    "expect": "1 hit ~L2338",
+    "claim": "ReviewApplyEnabled defaults false in code"
+   },
+   {
+    "cmd": "grep -n \"Flip \\`review_apply_enabled\\`\" docs/plans/DECISIONS-PENDING.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "21:| 8 | **Flip `review_apply_enabled` ON in prod** | enable globally / enable per-hold-type / keep OFF | Sandbox-first validation before any enable | Review-queue apply path doing real work (merged #1953, default OFF) | [`2026-07-13-review-queue-and-regroup.md`](2026-07-13-review-queue-and-regroup.md); [`../operations/pending-prod-actions.md`](../operations/pending-prod-actions.md) row 8 |",
+    "err": "",
+    "expect": "1 hit ~L21",
+    "claim": "DECISIONS-PENDING.md row 8 still lists this as an open decision with 'keep OFF' among the options, not marked resolved"
+   }
+  ]
+ },
+ {
+  "id": "L10572",
+  "todo_line": 10572,
+  "title": "Re-enqueue iTunes path-heal Layer-6 to reprocess residuals",
+  "anchors": [
+   {
+    "cmd": "grep -n \"iTunes heal Layer-6\" docs/operations/pending-prod-actions.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "28:| 4 | **iTunes heal Layer-6 re-trigger** | Re-run the iTunes path-heal op so Layer-6 (the last-resort matching layer) reprocesses the residuals (3,720 ambiguous / 5,349 not-found / 4,734 doubled-path) | re-enqueue the iTunes path-heal op after the residual pools shrink | operator-run | TODO #17, #49 |",
+    "err": "",
+    "expect": "1 hit ~L28",
+    "claim": "pending-prod-actions.md row 4 marks this operator-run and cites TODO #17"
+   },
+   {
+    "cmd": "grep -n \"itunesHealDef\" internal/plugins/maintenance/reconcile.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "74:// itunesHealDef registers the iTunes XML-driven path healing operation.\n78:func (p *Plugin) itunesHealDef() sdk.OperationDef {",
+    "err": "",
+    "expect": "1 hit ~L74",
+    "claim": "the itunes-heal op already exists and is registered"
+   }
+  ]
+ },
+ {
+  "id": "L10576",
+  "todo_line": 10576,
+  "title": "Re-enqueue duration-reextract apply for the ~721-book tail",
+  "anchors": [
+   {
+    "cmd": "grep -n \"Duration-reextract tail\" docs/operations/pending-prod-actions.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "27:| 3 | **Duration-reextract tail** | Re-enqueue the duration-reextract apply for the ~721-book tail that the v3 run left behind | duration-reextract op re-enqueue (see archived design [`2026-06-21-duration-reextract-v3-design.md`](../archive/2026-07-consolidation/specs/2026-06-21-duration-reextract-v3-design.md)); dry-run supported | operator-run | TODO #19 |",
+    "err": "",
+    "expect": "1 hit ~L27",
+    "claim": "pending-prod-actions.md row 3 marks this operator-run citing TODO #19"
+   },
+   {
+    "cmd": "grep -n \"maintenance.duration-reextract\" internal/plugins/maintenance/duration_reextract_test.go",
+    "rc": 0,
+    "nlines": 3,
+    "out": "102:\tif def.ID != \"maintenance.duration-reextract\" {\n103:\t\tt.Errorf(\"def ID = %q, want maintenance.duration-reextract\", def.ID)\n105:\tif def.ConcurrencyKey != \"maintenance.duration-reextract\" {",
+    "err": "",
+    "expect": "\u22651 hit",
+    "claim": "maintenance.duration-reextract op already exists and registered"
+   }
+  ]
+ },
+ {
+  "id": "L10586",
+  "todo_line": 10586,
+  "title": "Manually verify on prod: 14K false-positive purge visible + coverage % renders with real data",
+  "anchors": [
+   {
+    "cmd": "grep -n \"TODO #23\" docs/operations/pending-prod-actions.md",
+    "rc": 1,
+    "nlines": 0,
+    "out": "",
+    "err": "",
+    "expect": "0 hits",
+    "claim": "item 23 is not yet tracked in pending-prod-actions.md"
+   },
+   {
+    "cmd": "grep -n \"Legacy false-positive purge\" docs/archive/todo-2026-H1.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "1262:### M0 \u2014 Legacy false-positive purge \u2705 applied on production June 13",
+    "err": "",
+    "expect": "1 hit ~L1262",
+    "claim": "the purge this verifies actually ran on prod Jun 13, 12,322 rows"
+   }
+  ]
+ },
+ {
+  "id": "L10608",
+  "todo_line": 10608,
+  "title": "Run the SLOG-PROD-VERIFY live prod smoke test",
+  "anchors": [
+   {
+    "cmd": "grep -n \"SLOG-PROD-VERIFY\" docs/operations/pending-prod-actions.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "29:| 5 | **SLOG-PROD-VERIFY** | Live smoke test that the op-activity logging chain (start/progress/complete + activity tags) actually lands in prod journald/op-log | runbook: [`docs/operations/slog-prod-verify.md`](slog-prod-verify.md) | operator-run | TODO #28 |",
+    "err": "",
+    "expect": "1 hit ~L29",
+    "claim": "pending-prod-actions.md row 5 marks this operator-run citing TODO #28"
+   },
+   {
+    "cmd": "grep -n \"ListOperationActivity\" internal/server/wire_library_routes.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "40:\tprotected.GET(\"/operations/:id/activity\", s.perm(auth.PermLibraryView), activityH.ListOperationActivity)",
+    "err": "",
+    "expect": "1 hit ~L39",
+    "claim": "the endpoint this verifies is already wired"
+   }
+  ]
+ },
+ {
+  "id": "L10613",
+  "todo_line": 10613,
+  "title": "Re-verify current CodeQL open-alert state and finalize the bulk-dismissal rationale action",
+  "anchors": [
+   {
+    "cmd": "grep -n \"Every new alert now has a dismissal comment\" docs/security/audit-2026-05-03/sec-audit-11-closeout.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "29:- Every new alert now has a dismissal comment linking back to this closeout when practical. The comments name the sanitizing pattern (`SafeJoin`, `%s` logging, etc.), explain why the behavior is harmless or accepted, and include a link to `docs/security/audit-2026-05-03/raw/sec-audit-11-query-results.md` so reviewers can verify the supporting counts.",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "The closeout doc claims dismissals were applied on the CodeQL dashboard as of 2026-06-01"
+   },
+   {
+    "cmd": "grep -n \"SEC-AUDIT-11\" docs/archive/todo-2026-H1.md",
+    "rc": 0,
+    "nlines": 2,
+    "out": "876:operational/prod-verification items (CONS-10, PH-2, PD-3, I1/I6, SEC-AUDIT-11,\n2315:- [ ] **SEC-AUDIT-11** Final verification \u2014 Dismiss post-audit findings  <!-- 2026-07-01: \u23f3 closeout doc exists (sec-audit-11-closeout.md); actual CodeQL alert dismissal is a GitHub-console action. -->",
+    "err": "",
+    "expect": "1 hit ~L2315, dated 2026-07-01 comment says 'actual CodeQL alert dismissal is a GitHub-console action'",
+    "claim": "An earlier archive note (2026-07-01) still described the console action as pending"
+   }
+  ]
+ },
+ {
+  "id": "L10615",
+  "todo_line": 10615,
+  "title": "Run the PD-3 post-deploy verification checklist against a live deploy",
+  "anchors": [
+   {
+    "cmd": "grep -n \"PD-3 post-deploy checklist\" docs/operations/pending-prod-actions.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "30:| 6 | **PD-3 post-deploy checklist** | The post-deploy verification checklist exists but has never been filled in against a live deploy | checklist: [`docs/pd3-prod-verification.md`](../pd3-prod-verification.md) \u2014 run after next `make deploy` | operator-run | TODO #31 |",
+    "err": "",
+    "expect": "1 hit ~L30",
+    "claim": "pending-prod-actions.md row 6 marks this operator-run citing TODO #31"
+   }
+  ]
+ },
+ {
+  "id": "L10617",
+  "todo_line": 10617,
+  "title": "Run I1+I6 prod pprof verification (chromem-lazy effect + heap re-audit)",
+  "anchors": [
+   {
+    "cmd": "grep -n \"I1 + I6 prod pprof\" docs/operations/pending-prod-actions.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "31:| 7 | **I1 + I6 prod pprof** | Measurement-only: verify chromem-lazy memory effect and re-audit heap breakdown on prod | `go tool pprof` against the prod pprof endpoint; compare vs [`docs/perf-audit-2026-05-29-heap-breakdown.md`](../perf-audit-2026-05-29-heap-breakdown.md) | operator-run | TODO #32 |",
+    "err": "",
+    "expect": "1 hit ~L31",
+    "claim": "pending-prod-actions.md row 7 marks this operator-run citing TODO #32"
+   },
+   {
+    "cmd": "grep -n \"DEDUP_CHROMEM_LAZY\" docs/archive/todo-2026-H1.md",
+    "rc": 0,
+    "nlines": 4,
+    "out": "1537:  mirrors to chromem. Add `DEDUP_CHROMEM_LAZY=true` env var that\n1563:- [ ] **I1** [hold] Verify MAYDEPLOY-D1 (`DEDUP_CHROMEM_LAZY`) and D2  <!-- 2026-07-01: \u23f3 D1/D2 code shipped (DEDUP_CHROMEM_LAZY lifecycle.go:48); prod pprof verification remains. -->\n1638:- [x] **MAYDEPLOY-I1** \u2014 \u2705 **CLOSED 2026-07-16 as a DUPLICATE of I1** (same D1/`DEDUP_CHROMEM_LAZY` + D2 prod-pprof verification, tracke",
+    "err": "",
+    "expect": "1 hit ~L1563",
+    "claim": "DEDUP_CHROMEM_LAZY code is already shipped, only the prod measurement remains"
+   }
+  ]
+ },
+ {
+  "id": "L10730",
+  "todo_line": 10730,
+  "title": "iTunes heal Layer-6 re-trigger",
+  "anchors": [
+   {
+    "cmd": "grep -n 'iTunes heal Layer-6' docs/operations/pending-prod-actions.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "28:| 4 | **iTunes heal Layer-6 re-trigger** | Re-run the iTunes path-heal op so Layer-6 (the last-resort matching layer) reprocesses the residuals (3,720 ambiguous / 5,349 not-found / 4,734 doubled-path) | re-enqueue the iTunes path-heal op after the residual pools shrink | operator-run | TODO #17, #49 |",
+    "err": "",
+    "expect": "1 hit ~L28",
+    "claim": "already tracked in pending-prod-actions.md as operator-run"
+   }
+  ]
+ },
+ {
+  "id": "L10831",
+  "todo_line": 10831,
+  "title": "Sandbox purge wave: dedup-exact-triage apply + purge-stale + full-scan + measure",
+  "anchors": [
+   {
+    "cmd": "grep -n 'dedup-exact-triage' internal/plugins/maintenance/dedup_triage.go",
+    "rc": 0,
+    "nlines": 3,
+    "out": "287:// maintenance.dedup-exact-triage.\n301:\t\tID:              \"maintenance.dedup-exact-triage\",\n308:\t\tConcurrencyKey:  \"maintenance.dedup-exact-triage\",",
+    "err": "",
+    "expect": "\u22651 hit ~L301 (op ID registration)",
+    "claim": "the apply op already exists and is merged"
+   },
+   {
+    "cmd": "grep -n 'T04.*ALL DONE' TODO.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "10866:- [x] **T04** \u2014 \u2705 **prod deploy + dry-run + apply ALL DONE 2026-07-18.** Verified 2026-08-12",
+    "err": "",
+    "expect": "1 hit ~L10836",
+    "claim": "T04's equivalent prod run is already done, confirming this op is execution-ready"
+   }
+  ]
+ }
+]
