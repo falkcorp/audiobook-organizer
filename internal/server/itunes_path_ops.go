@@ -101,6 +101,17 @@ func (s *Server) RegisterITunesPathReconcileOp(reg *opsregistry.Registry) error 
 		Permissions:     []auth.Permission{auth.PermScanTrigger},
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
+			// The params struct is empty, but the decode stays: every op is
+			// required to REFUSE a malformed params blob rather than ignore it
+			// (TestOpParams_MalformedJSONIsRefused enforces this across the
+			// whole registry). Dropping the decode here made this op silently
+			// accept garbage.
+			var p itunesPathReconcileOpParams
+			if len(rawParams) > 0 {
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("itunes.path-reconcile: decode params: %w", err)
+				}
+			}
 			if s.itunesSvc == nil || s.itunesSvc.Paths == nil {
 				return fmt.Errorf("iTunes service not initialized")
 			}
