@@ -1,18 +1,18 @@
 // file: internal/aiscan/pipeline.go
-// version: 3.3.0
+// version: 4.0.0
 // guid: b8c4d0e2-5f6a-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-08-18
+// last-edited: 2026-08-22
 
 package aiscan
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
-
-	ulid "github.com/oklog/ulid/v2"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -21,16 +21,29 @@ import (
 
 // Store is the narrow slice of database.Store this service uses.
 // Store is what this package actually calls, measured by emptying the
-// interface and reading the compiler's enumeration: 7 methods. It was a
+// interface and reading the compiler's enumeration: 4 methods. It was a
 // pure pass-through of database.* embeds — 43 methods, none declared here.
+//
+// It was 7 until 2026-08-22. CreateOperation, UpdateOperationStatus and
+// UpdateOperationError went with the v1 operations row; they are NOT replaced
+// one-for-one. The registry now owns the row's existence, ProgressSink carries
+// progress, and RunScan's return value carries terminal status — so the
+// subsystem no longer co-authors its own operation record at all. That
+// co-authorship is why six scattered writes could drift into being write-only
+// without anyone noticing.
 type Store interface {
-	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
-	UpdateOperationStatus(id, status string, progress, total int, message string) error
-	UpdateOperationError(id, errorMessage string) error
 	GetAllAuthors() ([]database.Author, error)
 	GetAuthorByID(id int) (*database.Author, error)
 	GetAllAuthorBookCounts() (map[int]int, error)
 	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
+}
+
+// ProgressSink is the narrow slice of registry.Reporter the pipeline publishes
+// progress through. Declared here rather than importing the registry so this
+// package stays free of the operations layer: the server wires the real
+// Reporter in when it runs the op.
+type ProgressSink interface {
+	UpdateProgress(current, total int, message string) error
 }
 
 // PipelineManager coordinates the multi-pass AI author dedup pipeline.
@@ -41,6 +54,13 @@ type PipelineManager struct {
 	mu        sync.Mutex
 	// cancels tracks cancel functions for active scans, keyed by scan ID.
 	cancels map[int]context.CancelFunc
+	// sinks tracks the progress sink of the operation currently running each
+	// scan, keyed by scan ID. Absent when no op is attached.
+	sinks map[int]ProgressSink
+	// dones carries each attached scan's terminal outcome to the RunScan call
+	// waiting on it, keyed by scan ID. Buffered (size 1) so finishScan never
+	// blocks on a caller that has already given up.
+	dones map[int]chan error
 }
 
 // NewPipelineManager creates a new pipeline manager.
@@ -50,7 +70,53 @@ func NewPipelineManager(scanStore *database.AIScanStore, mainStore Store, parser
 		mainStore: mainStore,
 		parser:    parser,
 		cancels:   make(map[int]context.CancelFunc),
+		sinks:     make(map[int]ProgressSink),
+		dones:     make(map[int]chan error),
 	}
+}
+
+// sinkFor returns the progress sink attached to a scan, or nil when no
+// operation is running it (a scan advanced by PollBatchPhases across a restart
+// has no sink until its op resumes).
+func (pm *PipelineManager) sinkFor(scanID int) ProgressSink {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	return pm.sinks[scanID]
+}
+
+// report publishes progress if an operation is attached, and is a no-op if not.
+// Progress is advisory: a failure to publish must never fail the scan.
+func (pm *PipelineManager) report(scanID, current, total int, message string) {
+	if sink := pm.sinkFor(scanID); sink != nil {
+		if err := sink.UpdateProgress(current, total, message); err != nil {
+			slog.Warn("[AI Pipeline] progress report failed", "scanID", scanID, "err", err)
+		}
+	}
+}
+
+// finishScan delivers a scan's terminal outcome to the RunScan call waiting on
+// it and drops all per-scan state.
+//
+// Exactly one caller wins: the done channel is removed under the same lock that
+// found it, so the loser returns without sending. That guard is load-bearing —
+// groups_scan and full_scan run concurrently and failPhase has 18 call sites,
+// so a double finish is the normal case, not an edge case, and closing a
+// channel twice would panic the process.
+func (pm *PipelineManager) finishScan(scanID int, err error) {
+	pm.mu.Lock()
+	delete(pm.cancels, scanID)
+	delete(pm.sinks, scanID)
+	done, attached := pm.dones[scanID]
+	if attached {
+		delete(pm.dones, scanID)
+	}
+	pm.mu.Unlock()
+
+	if !attached {
+		return
+	}
+	done <- err
+	close(done)
 }
 
 // CancelScan cancels a running scan by its ID, including any in-flight batch jobs.
@@ -84,10 +150,6 @@ func (pm *PipelineManager) CancelScan(scanID int) error {
 
 // cleanupScan marks a scan and its in-progress phases as the given status, and removes the cancel func.
 func (pm *PipelineManager) cleanupScan(scanID int, status string) {
-	pm.mu.Lock()
-	delete(pm.cancels, scanID)
-	pm.mu.Unlock()
-
 	// Mark any in-progress phases as canceled/failed
 	phases, _ := pm.scanStore.GetPhases(scanID)
 	for _, p := range phases {
@@ -97,11 +159,11 @@ func (pm *PipelineManager) cleanupScan(scanID int, status string) {
 	}
 	_ = pm.scanStore.UpdateScanStatus(scanID, status)
 
-	// Update the operation record too
-	scan, _ := pm.scanStore.GetScan(scanID)
-	if scan != nil && scan.OperationID != "" {
-		_ = pm.mainStore.UpdateOperationStatus(scan.OperationID, status, 0, 0, "scan "+status)
-	}
+	// Releases the waiting RunScan and drops the cancel func. ErrScanCanceled
+	// rather than nil deliberately: CancelScan is reachable straight from
+	// POST /ai-scans/:id/cancel without the registry involved, and a nil return
+	// there would record the op as having COMPLETED a scan the operator stopped.
+	pm.finishScan(scanID, ErrScanCanceled)
 }
 
 // nextPhases determines which phases should start based on current state.
@@ -135,11 +197,28 @@ func (pm *PipelineManager) nextPhases(completedPhase, status string, phaseStates
 	return next
 }
 
-// StartScan creates a new scan, registers it as an operation, and kicks off Phase 1.
-func (pm *PipelineManager) StartScan(ctx context.Context, mode string) (*database.Scan, error) {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
+// ErrScanCanceled is the terminal outcome of a scan stopped by an operator.
+var ErrScanCanceled = errors.New("ai scan canceled")
 
+// ErrRealtimeNotResumable is the terminal outcome of a realtime scan whose
+// process died mid-flight. Unlike a batch scan — which OpenAI is still holding
+// and PollBatchPhases will still collect — a realtime scan's in-flight requests
+// died with the process, so there is nothing left to attach to.
+var ErrRealtimeNotResumable = errors.New("realtime ai scan interrupted and cannot be resumed")
+
+// heartbeatInterval is how often an attached scan republishes progress while
+// waiting. The registry watchdog cancels an op that reports nothing for
+// ProgressTimeout (default 5m); a submitted batch phase can legitimately sit
+// silent for hours, so the wait loop must keep reporting on its behalf.
+const heartbeatInterval = 60 * time.Second
+
+// CreateScan creates a scan and its phase records WITHOUT starting any work.
+//
+// Split out from the old StartScan so the HTTP handler can return the scan id
+// synchronously — DedupAIReviewTab.tsx:47-48 calls startAIScan() and then
+// immediately getAIScan(newScan.id), so the id cannot wait on an async op.
+// The caller enqueues an ai.author-scan operation whose Run calls RunScan.
+func (pm *PipelineManager) CreateScan(mode string) (*database.Scan, error) {
 	models := map[string]string{"groups": "gpt-5-mini", "full": "o4-mini"}
 
 	authors, err := pm.mainStore.GetAllAuthors()
@@ -152,19 +231,6 @@ func (pm *PipelineManager) StartScan(ctx context.Context, mode string) (*databas
 		return nil, fmt.Errorf("create scan: %w", err)
 	}
 
-	// Create an operation record so the scan appears in the operations list
-	opID := ulid.Make().String()
-	detail := fmt.Sprintf("AI scan #%d (%s mode, %d authors)", scan.ID, mode, len(authors))
-	if _, err := pm.mainStore.CreateOperation(opID, "ai-author-scan", &detail); err != nil {
-		slog.Warn("[AI Pipeline] Warning failed to create operation record", "err", err)
-	} else {
-		scan.OperationID = opID
-		// Re-save scan with operation ID
-		pm.scanStore.UpdateScanOperationID(scan.ID, opID)
-		_ = pm.mainStore.UpdateOperationStatus(opID, "running", 0, 100, "Starting AI scan pipeline...")
-	}
-
-	// Create phase records
 	if _, err := pm.scanStore.CreatePhase(scan.ID, "groups_scan", models["groups"]); err != nil {
 		return nil, fmt.Errorf("create groups phase: %w", err)
 	}
@@ -172,23 +238,146 @@ func (pm *PipelineManager) StartScan(ctx context.Context, mode string) (*databas
 		return nil, fmt.Errorf("create full phase: %w", err)
 	}
 
-	if err := pm.scanStore.UpdateScanStatus(scan.ID, "scanning"); err != nil {
-		return nil, fmt.Errorf("update scan status: %w", err)
-	}
-
-	// Create a cancellable background context for the goroutines
-	scanCtx, cancel := context.WithCancel(context.Background())
-	pm.cancels[scan.ID] = cancel
-
-	if mode == "batch" {
-		go pm.runGroupsScanBatch(scanCtx, scan.ID, authors)
-		go pm.runFullScanBatch(scanCtx, scan.ID, authors)
-	} else {
-		go pm.runGroupsScanRealtime(scanCtx, scan.ID, authors)
-		go pm.runFullScanRealtime(scanCtx, scan.ID, authors)
-	}
-
 	return scan, nil
+}
+
+// LinkOperation records which operation is running a scan.
+//
+// This field is the ONLY link between the two records, and CancelOperationV2
+// (handlers/operations_v2.go:289) matches an incoming operation id against it to
+// route a cancel through the pipeline. Before 2026-08-22 it held a v1 ULID that
+// was registered with nothing and appeared in no timeline, so that branch could
+// never match and the cancel silently did nothing. Storing the v2 op id here is
+// what makes it reachable.
+func (pm *PipelineManager) LinkOperation(scanID int, opID string) error {
+	return pm.scanStore.UpdateScanOperationID(scanID, opID)
+}
+
+// RunScan drives a scan created by CreateScan to a terminal state and blocks
+// until it gets there. It is the body of the ai.author-scan operation.
+//
+// It either LAUNCHES the phase goroutines or ATTACHES to work already in
+// flight, and decides which from the scan's PERSISTED phase state — never from
+// pm's in-process maps. That distinction is the whole point: the op declares
+// ResumePolicy=ResumeRestart, so on a restart Run is re-entered with the same
+// params, and a process-local guard cannot survive the very restart it exists
+// to handle. Deciding from memory would re-launch the phases and re-run a paid
+// whole-library LLM pass against OpenAI.
+func (pm *PipelineManager) RunScan(ctx context.Context, scanID int, sink ProgressSink) error {
+	scan, err := pm.scanStore.GetScan(scanID)
+	if err != nil {
+		return fmt.Errorf("get scan %d: %w", scanID, err)
+	}
+	if scan == nil {
+		return fmt.Errorf("scan %d not found", scanID)
+	}
+
+	phases, err := pm.scanStore.GetPhases(scanID)
+	if err != nil {
+		return fmt.Errorf("get phases for scan %d: %w", scanID, err)
+	}
+	started := false
+	for _, p := range phases {
+		if p.Status != "pending" {
+			started = true
+			break
+		}
+	}
+
+	// A realtime scan that already started has no external driver: its HTTP
+	// requests to OpenAI died with the process that issued them, so attaching
+	// would wait forever. Fail it rather than hang, and rather than silently
+	// re-running it — that would spend real money on a restart nobody asked for.
+	if started && scan.Mode != "batch" {
+		pm.cleanupScan(scanID, "failed")
+		return ErrRealtimeNotResumable
+	}
+
+	done := make(chan error, 1)
+	scanCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	pm.mu.Lock()
+	if _, running := pm.dones[scanID]; running {
+		pm.mu.Unlock()
+		return fmt.Errorf("scan %d is already attached to a running operation", scanID)
+	}
+	pm.dones[scanID] = done
+	pm.cancels[scanID] = cancel
+	pm.sinks[scanID] = sink
+	pm.mu.Unlock()
+
+	if started {
+		slog.Info("[AI Pipeline] re-attaching to in-flight batch scan", "scanID", scanID)
+		pm.report(scanID, 0, 100, "Re-attached to in-flight batch scan")
+	} else {
+		if err := pm.scanStore.UpdateScanStatus(scanID, "scanning"); err != nil {
+			pm.finishScan(scanID, nil)
+			return fmt.Errorf("update scan status: %w", err)
+		}
+		authors, err := pm.mainStore.GetAllAuthors()
+		if err != nil {
+			pm.finishScan(scanID, nil)
+			return fmt.Errorf("get authors: %w", err)
+		}
+		pm.report(scanID, 0, 100, "Starting AI scan pipeline...")
+		if scan.Mode == "batch" {
+			go pm.runGroupsScanBatch(scanCtx, scanID, authors)
+			go pm.runFullScanBatch(scanCtx, scanID, authors)
+		} else {
+			go pm.runGroupsScanRealtime(scanCtx, scanID, authors)
+			go pm.runFullScanRealtime(scanCtx, scanID, authors)
+		}
+	}
+
+	return pm.waitForScan(ctx, scanID, done)
+}
+
+// waitForScan blocks until the scan reaches a terminal state, the operation's
+// context is canceled, and heartbeats progress in the meantime so the registry
+// watchdog does not mistake a legitimately quiet batch wait for a stuck op.
+func (pm *PipelineManager) waitForScan(ctx context.Context, scanID int, done <-chan error) error {
+	ticker := time.NewTicker(heartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case err := <-done:
+			return err
+
+		case <-ctx.Done():
+			// Route through CancelScan, not a bare context cancel: a submitted
+			// batch is held by OpenAI and keeps costing money until the batch
+			// job itself is canceled, which only CancelScan does.
+			if cerr := pm.CancelScan(scanID); cerr != nil {
+				slog.Warn("[AI Pipeline] cancel on context done failed", "scanID", scanID, "err", cerr)
+			}
+			return ctx.Err()
+
+		case <-ticker.C:
+			phases, err := pm.scanStore.GetPhases(scanID)
+			if err != nil {
+				continue
+			}
+			complete := 0
+			for _, p := range phases {
+				if p.Status == "complete" {
+					complete++
+				}
+			}
+			pm.report(scanID, phaseProgressPct(complete), 100, "AI scan in progress")
+		}
+	}
+}
+
+// phaseProgressPct maps completed phase count to a percentage, capped below 100
+// so the bar never claims completion before the scan actually finishes.
+func phaseProgressPct(completed int) int {
+	pct := completed * 20
+	if pct > 90 {
+		pct = 90
+	}
+	return pct
 }
 
 // OnPhaseComplete is called when a phase finishes. Updates operation progress and triggers next phases.
@@ -207,16 +396,10 @@ func (pm *PipelineManager) OnPhaseComplete(ctx context.Context, scanID int, comp
 		}
 	}
 
-	// Update operation progress (rough: each phase ~20% of total pipeline)
-	scan, _ := pm.scanStore.GetScan(scanID)
-	if scan != nil && scan.OperationID != "" {
-		pct := completedCount * 20
-		if pct > 90 {
-			pct = 90
-		}
-		_ = pm.mainStore.UpdateOperationStatus(scan.OperationID, "running", pct, 100,
-			fmt.Sprintf("Phase %s complete", completedPhase))
-	}
+	// Report progress (rough: each phase ~20% of total pipeline). A no-op when
+	// no operation is attached.
+	pm.report(scanID, phaseProgressPct(completedCount), 100,
+		fmt.Sprintf("Phase %s complete", completedPhase))
 
 	next := pm.nextPhases(completedPhase, "complete", phaseStates)
 	for _, phaseType := range next {
@@ -241,17 +424,11 @@ func (pm *PipelineManager) failPhase(scanID int, phaseType string, err error) {
 		slog.Error("[AI Pipeline] Scan error updating scan status", "scanID", scanID, "updateErr", updateErr)
 	}
 
-	// Update operation record
-	scan, _ := pm.scanStore.GetScan(scanID)
-	if scan != nil && scan.OperationID != "" {
-		errMsg := err.Error()
-		_ = pm.mainStore.UpdateOperationError(scan.OperationID, errMsg)
-	}
-
-	// Clean up cancel func
-	pm.mu.Lock()
-	delete(pm.cancels, scanID)
-	pm.mu.Unlock()
+	// Carry the failure to the waiting operation. finishScan drops the cancel
+	// func, and its delete-under-mutex guard means only the FIRST failing phase
+	// decides the op's outcome — groups_scan and full_scan run concurrently, so
+	// a second failure arriving here is normal and must not double-send.
+	pm.finishScan(scanID, fmt.Errorf("phase %s: %w", phaseType, err))
 }
 
 // buildGroupsInput builds AuthorDedupInput from heuristic groups, replicating the logic from server.go.
@@ -743,12 +920,17 @@ func (pm *PipelineManager) runEnrichment(ctx context.Context, scanID int, source
 
 func (pm *PipelineManager) runCrossValidation(ctx context.Context, scanID int) {
 	slog.Info("[AI Pipeline] Scan starting cross-validation", "scanID", scanID)
+	// Each of these three bailouts used to `return` bare, which left the scan
+	// sitting at "scanning" forever and leaked its cancel func — so CancelScan
+	// still believed the scan was live. Routing them through failPhase marks the
+	// scan failed AND releases the waiting operation; a bare return here would
+	// now hang RunScan for the op's whole timeout.
 	if _, err := pm.scanStore.CreatePhase(scanID, "cross_validate", "local"); err != nil {
-		slog.Error("[AI Pipeline] Scan error creating cross_validate phase", "scanID", scanID, "err", err)
+		pm.failPhase(scanID, "cross_validate", fmt.Errorf("create cross_validate phase: %w", err))
 		return
 	}
 	if err := pm.scanStore.UpdatePhaseStatus(scanID, "cross_validate", "processing", ""); err != nil {
-		slog.Error("[AI Pipeline] Scan error updating cross_validate status", "scanID", scanID, "err", err)
+		pm.failPhase(scanID, "cross_validate", fmt.Errorf("mark cross_validate processing: %w", err))
 		return
 	}
 
@@ -768,24 +950,18 @@ func (pm *PipelineManager) runCrossValidation(ctx context.Context, scanID int) {
 
 	slog.Info("[AI Pipeline] Scan cross-validation complete — results", "scanID", scanID, "results_count", len(results))
 	if err := pm.scanStore.UpdatePhaseStatus(scanID, "cross_validate", "complete", ""); err != nil {
-		slog.Error("[AI Pipeline] Scan error updating cross_validate status", "scanID", scanID, "err", err)
+		pm.failPhase(scanID, "cross_validate", fmt.Errorf("mark cross_validate complete: %w", err))
 		return
 	}
 	if err := pm.scanStore.UpdateScanStatus(scanID, "complete"); err != nil {
 		slog.Error("[AI Pipeline] Scan error updating scan status", "scanID", scanID, "err", err)
 	}
 
-	// Update operation record
-	scan, _ := pm.scanStore.GetScan(scanID)
-	if scan != nil && scan.OperationID != "" {
-		_ = pm.mainStore.UpdateOperationStatus(scan.OperationID, "completed", 100, 100,
-			fmt.Sprintf("AI scan complete — %d results", len(results)))
-	}
+	pm.report(scanID, 100, 100, fmt.Sprintf("AI scan complete — %d results", len(results)))
 
-	// Clean up cancel func
-	pm.mu.Lock()
-	delete(pm.cancels, scanID)
-	pm.mu.Unlock()
+	// The scan's only success path. A nil outcome is what marks the operation
+	// completed; there is no separate "write completed status" call any more.
+	pm.finishScan(scanID, nil)
 }
 
 // loadBestSuggestions loads suggestions from the enriched phase if available, otherwise the original.

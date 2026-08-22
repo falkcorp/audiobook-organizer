@@ -5,8 +5,6 @@
 package handlersmocks
 
 import (
-	"context"
-
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	mock "github.com/stretchr/testify/mock"
 )
@@ -89,51 +87,102 @@ func (_c *MockAIPipeline_CancelScan_Call) RunAndReturn(run func(scanID int) erro
 	return _c
 }
 
-// StartScan provides a mock function for the type MockAIPipeline
-func (_mock *MockAIPipeline) StartScan(ctx context.Context, mode string) (*database.Scan, error) {
-	ret := _mock.Called(ctx, mode)
+// CreateScan provides a mock function for the type MockAIPipeline
+func (_mock *MockAIPipeline) CreateScan(mode string) (*database.Scan, error) {
+	ret := _mock.Called(mode)
 
 	if len(ret) == 0 {
-		panic("no return value specified for StartScan")
+		panic("no return value specified for CreateScan")
 	}
 
 	var r0 *database.Scan
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*database.Scan, error)); ok {
-		return returnFunc(ctx, mode)
+	if returnFunc, ok := ret.Get(0).(func(string) (*database.Scan, error)); ok {
+		return returnFunc(mode)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *database.Scan); ok {
-		r0 = returnFunc(ctx, mode)
+	if returnFunc, ok := ret.Get(0).(func(string) *database.Scan); ok {
+		r0 = returnFunc(mode)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*database.Scan)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, mode)
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(mode)
 	} else {
 		r1 = ret.Error(1)
 	}
 	return r0, r1
 }
 
-// MockAIPipeline_StartScan_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'StartScan'
-type MockAIPipeline_StartScan_Call struct {
+// MockAIPipeline_CreateScan_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CreateScan'
+type MockAIPipeline_CreateScan_Call struct {
 	*mock.Call
 }
 
-// StartScan is a helper method to define mock.On call
-//   - ctx context.Context
+// CreateScan is a helper method to define mock.On call
 //   - mode string
-func (_e *MockAIPipeline_Expecter) StartScan(ctx any, mode any) *MockAIPipeline_StartScan_Call {
-	return &MockAIPipeline_StartScan_Call{Call: _e.mock.On("StartScan", ctx, mode)}
+func (_e *MockAIPipeline_Expecter) CreateScan(mode any) *MockAIPipeline_CreateScan_Call {
+	return &MockAIPipeline_CreateScan_Call{Call: _e.mock.On("CreateScan", mode)}
 }
 
-func (_c *MockAIPipeline_StartScan_Call) Run(run func(ctx context.Context, mode string)) *MockAIPipeline_StartScan_Call {
+func (_c *MockAIPipeline_CreateScan_Call) Run(run func(mode string)) *MockAIPipeline_CreateScan_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
+		var arg0 string
 		if args[0] != nil {
-			arg0 = args[0].(context.Context)
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAIPipeline_CreateScan_Call) Return(scan *database.Scan, err error) *MockAIPipeline_CreateScan_Call {
+	_c.Call.Return(scan, err)
+	return _c
+}
+
+func (_c *MockAIPipeline_CreateScan_Call) RunAndReturn(run func(mode string) (*database.Scan, error)) *MockAIPipeline_CreateScan_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// LinkOperation provides a mock function for the type MockAIPipeline
+func (_mock *MockAIPipeline) LinkOperation(scanID int, opID string) error {
+	ret := _mock.Called(scanID, opID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for LinkOperation")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(int, string) error); ok {
+		r0 = returnFunc(scanID, opID)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockAIPipeline_LinkOperation_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'LinkOperation'
+type MockAIPipeline_LinkOperation_Call struct {
+	*mock.Call
+}
+
+// LinkOperation is a helper method to define mock.On call
+//   - scanID int
+//   - opID string
+func (_e *MockAIPipeline_Expecter) LinkOperation(scanID any, opID any) *MockAIPipeline_LinkOperation_Call {
+	return &MockAIPipeline_LinkOperation_Call{Call: _e.mock.On("LinkOperation", scanID, opID)}
+}
+
+func (_c *MockAIPipeline_LinkOperation_Call) Run(run func(scanID int, opID string)) *MockAIPipeline_LinkOperation_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 int
+		if args[0] != nil {
+			arg0 = args[0].(int)
 		}
 		var arg1 string
 		if args[1] != nil {
@@ -147,12 +196,12 @@ func (_c *MockAIPipeline_StartScan_Call) Run(run func(ctx context.Context, mode 
 	return _c
 }
 
-func (_c *MockAIPipeline_StartScan_Call) Return(scan *database.Scan, err error) *MockAIPipeline_StartScan_Call {
-	_c.Call.Return(scan, err)
+func (_c *MockAIPipeline_LinkOperation_Call) Return(err error) *MockAIPipeline_LinkOperation_Call {
+	_c.Call.Return(err)
 	return _c
 }
 
-func (_c *MockAIPipeline_StartScan_Call) RunAndReturn(run func(ctx context.Context, mode string) (*database.Scan, error)) *MockAIPipeline_StartScan_Call {
+func (_c *MockAIPipeline_LinkOperation_Call) RunAndReturn(run func(scanID int, opID string) error) *MockAIPipeline_LinkOperation_Call {
 	_c.Call.Return(run)
 	return _c
 }

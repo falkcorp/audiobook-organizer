@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
-// last-edited: 2026-08-19
+// last-edited: 2026-08-22
 
 // AIHandler hosts the AI HTTP endpoints extracted from the server package:
 // filename parsing, OpenAI / metadata-source connection tests, per-book AI
@@ -78,9 +78,16 @@ type AIScanStore interface {
 }
 
 // AIPipeline is the narrow interface AIHandler requires from the AI scan
-// pipeline manager. Only StartScan and CancelScan are used by the handlers.
+// pipeline manager.
+//
+// StartScan was split into CreateScan + LinkOperation on 2026-08-22 when the
+// scan became a v2 operation. The handler must still answer with the scan id
+// synchronously — DedupAIReviewTab.tsx:47-48 calls startAIScan() and then
+// immediately getAIScan(newScan.id) — so creating the scan cannot be deferred
+// into the op. RunScan (the work itself) is reached by the registry, not here.
 type AIPipeline interface {
-	StartScan(ctx context.Context, mode string) (*database.Scan, error)
+	CreateScan(mode string) (*database.Scan, error)
+	LinkOperation(scanID int, opID string) error
 	CancelScan(scanID int) error
 }
 
@@ -105,6 +112,13 @@ type aiReviewOpParams struct {
 	LegacyOpID  string                   `json:"legacy_op_id"`
 	Mode        string                   `json:"mode"`
 	DedupGroups []dedup.AuthorDedupGroup `json:"dedup_groups,omitempty"`
+}
+
+// aiAuthorScanOpParams mirrors server.aiAuthorScanParams. Unlike its siblings
+// above it carries no legacy_op_id: ai.author-scan never had a v1 row to bridge
+// back to once the scan became a v2 operation.
+type aiAuthorScanOpParams struct {
+	ScanID int `json:"scan_id"`
 }
 
 // AIMergeApplySuggestion is the per-item suggestion for the merge-apply op. It
@@ -382,9 +396,18 @@ func (h *AIHandler) ParseAudiobook(c *gin.Context) {
 }
 
 // StartScan kicks off a new multi-pass AI author dedup scan.
+//
+// Three steps, in this order: create the scan (so its id can be returned now),
+// enqueue the operation that will run it, then record the link between them.
+// The link is what lets CancelOperationV2 route a cancel from the operations
+// timeline back into the pipeline.
 func (h *AIHandler) StartScan(c *gin.Context) {
 	if h.pipeline == nil {
 		httputil.RespondWithInternalError(c, "AI scan pipeline not configured")
+		return
+	}
+	if h.registry == nil {
+		httputil.RespondWithInternalError(c, "operations registry not configured")
 		return
 	}
 	var req struct {
@@ -396,11 +419,30 @@ func (h *AIHandler) StartScan(c *gin.Context) {
 	if req.Mode != "batch" && req.Mode != "realtime" {
 		req.Mode = "realtime"
 	}
-	scan, err := h.pipeline.StartScan(c.Request.Context(), req.Mode)
+
+	scan, err := h.pipeline.CreateScan(req.Mode)
 	if err != nil {
-		httputil.InternalError(c, "failed to start AI scan", err)
+		httputil.InternalError(c, "failed to create AI scan", err)
 		return
 	}
+
+	opID, err := h.registry.EnqueueOp(c.Request.Context(), "ai.author-scan",
+		aiAuthorScanOpParams{ScanID: scan.ID})
+	if err != nil {
+		httputil.InternalError(c, "failed to enqueue AI scan operation", err)
+		return
+	}
+
+	// A failed link is logged, not fatal: the op is already queued and will run
+	// the scan regardless. What is lost is the cancel route and the timeline's
+	// ability to associate the two, which is worth a warning but not worth
+	// failing a request whose work is under way.
+	if err := h.pipeline.LinkOperation(scan.ID, opID); err != nil {
+		slog.Warn("AI scan started but could not be linked to its operation",
+			"scan_id", scan.ID, "op_id", opID, "error", err)
+	}
+	scan.OperationID = opID
+
 	httputil.RespondWithSuccess(c, 202, scan)
 }
 
