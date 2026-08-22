@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
-// last-edited: 2026-08-17
+// last-edited: 2026-08-22
 
 package registry
 
@@ -12,6 +12,7 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -546,6 +547,31 @@ func (r *dbReporter) Trigger(ctx context.Context, eventName string, payload any)
 // they no longer create one, they tag entries with the id of the operation that
 // actually exists.
 func (r *dbReporter) OpID() string { return r.opID }
+
+// SetResult implements ResultSetter, persisting v as this operation's final result
+// payload on its own v2 row.
+//
+// Marshals here rather than taking a pre-encoded string so the payload cannot be
+// stored as something that will not decode on the way out. Callers reach this via
+// ReporterSetResult, which fails loudly for reporters that do not implement it.
+//
+// The result lands on the v2 row itself (OperationV2Row.ResultData) — not the
+// separate op_result:<opID>:<bookID> keyspace, which holds per-book records and is
+// read with GetOperationResults. One op-level payload, one per-book collection; they
+// are different things and do not overlap.
+func (r *dbReporter) SetResult(v any) error {
+	if r.store == nil {
+		return fmt.Errorf("registry: reporter for op %s has no store", r.opID)
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("registry: marshal result for op %s: %w", r.opID, err)
+	}
+	if err := r.store.SetOperationV2Result(r.opID, string(data)); err != nil {
+		return fmt.Errorf("registry: store result for op %s: %w", r.opID, err)
+	}
+	return nil
+}
 
 // SetCurrentItem implements Reporter. Updates the registry's in-memory label
 // for this run and emits an op.current_item SSE event. Zero DB writes.

@@ -3293,6 +3293,63 @@ func (_c *MockOpsV2Store_RecordOpCompletion_Call) RunAndReturn(run func(sub data
 	return _c
 }
 
+// SetOperationV2Result provides a mock function for the type MockOpsV2Store
+func (_mock *MockOpsV2Store) SetOperationV2Result(id string, resultData string) error {
+	ret := _mock.Called(id, resultData)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetOperationV2Result")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, string) error); ok {
+		r0 = returnFunc(id, resultData)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockOpsV2Store_SetOperationV2Result_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetOperationV2Result'
+type MockOpsV2Store_SetOperationV2Result_Call struct {
+	*mock.Call
+}
+
+// SetOperationV2Result is a helper method to define mock.On call
+//   - id string
+//   - resultData string
+func (_e *MockOpsV2Store_Expecter) SetOperationV2Result(id any, resultData any) *MockOpsV2Store_SetOperationV2Result_Call {
+	return &MockOpsV2Store_SetOperationV2Result_Call{Call: _e.mock.On("SetOperationV2Result", id, resultData)}
+}
+
+func (_c *MockOpsV2Store_SetOperationV2Result_Call) Run(run func(id string, resultData string)) *MockOpsV2Store_SetOperationV2Result_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockOpsV2Store_SetOperationV2Result_Call) Return(err error) *MockOpsV2Store_SetOperationV2Result_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockOpsV2Store_SetOperationV2Result_Call) RunAndReturn(run func(id string, resultData string) error) *MockOpsV2Store_SetOperationV2Result_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // SetOperationV2StatusIfQueued provides a mock function for the type MockOpsV2Store
 func (_mock *MockOpsV2Store) SetOperationV2StatusIfQueued(id string, newStatus string) (bool, error) {
 	ret := _mock.Called(id, newStatus)
@@ -25671,6 +25728,63 @@ func (_c *MockStore_SetLastWrittenAt_Call) Return(err error) *MockStore_SetLastW
 }
 
 func (_c *MockStore_SetLastWrittenAt_Call) RunAndReturn(run func(id string, t time.Time) error) *MockStore_SetLastWrittenAt_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SetOperationV2Result provides a mock function for the type MockStore
+func (_mock *MockStore) SetOperationV2Result(id string, resultData string) error {
+	ret := _mock.Called(id, resultData)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetOperationV2Result")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, string) error); ok {
+		r0 = returnFunc(id, resultData)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_SetOperationV2Result_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetOperationV2Result'
+type MockStore_SetOperationV2Result_Call struct {
+	*mock.Call
+}
+
+// SetOperationV2Result is a helper method to define mock.On call
+//   - id string
+//   - resultData string
+func (_e *MockStore_Expecter) SetOperationV2Result(id any, resultData any) *MockStore_SetOperationV2Result_Call {
+	return &MockStore_SetOperationV2Result_Call{Call: _e.mock.On("SetOperationV2Result", id, resultData)}
+}
+
+func (_c *MockStore_SetOperationV2Result_Call) Run(run func(id string, resultData string)) *MockStore_SetOperationV2Result_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_SetOperationV2Result_Call) Return(err error) *MockStore_SetOperationV2Result_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_SetOperationV2Result_Call) RunAndReturn(run func(id string, resultData string) error) *MockStore_SetOperationV2Result_Call {
 	_c.Call.Return(run)
 	return _c
 }

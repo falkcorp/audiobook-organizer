@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v2.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-06-14
+// last-edited: 2026-08-22
 
 package database
 
@@ -130,6 +130,17 @@ type OpV2LifecycleStore interface {
 	UpdateOperationV2Params(id string, params []byte) error
 	// IncrementResumeCountV2 atomically increments resume_count for the given op.
 	IncrementResumeCountV2(id string) error
+	// SetOperationV2Result stores an operation's final result payload.
+	//
+	// This is a first-class v2 capability rather than an optional one discovered by
+	// type assertion (the pattern legacyOpStore uses): an implementation that
+	// silently lacked it would DROP results, and this method exists precisely to
+	// give v2 ops somewhere to put output that today only the v1 row can hold.
+	// Widening this interface makes the compiler name every fake that needs it.
+	//
+	// Returns an error when the row does not exist. Callers must not discard it —
+	// a swallowed "operation not found" is how a result goes missing with no signal.
+	SetOperationV2Result(id string, resultData string) error
 }
 
 // OpV2QueueStore covers queue and scheduling reads.
