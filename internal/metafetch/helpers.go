@@ -1,6 +1,7 @@
 // file: internal/metafetch/helpers.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
+// last-edited: 2026-08-21
 
 package metafetch
 
@@ -331,4 +332,84 @@ func intVal(p *int) any {
 		return nil
 	}
 	return *p
+}
+
+// dedupeBookFilesByPath collapses book_file rows that share the same cleaned
+// absolute path, keeping the best-evidenced row per path.
+//
+// This is DUPROW-1, the fix for the 2026-08-21 prod incident: book
+// 01KZR9GEH5ZQW9CV1EN130Y7C0 held 42 book_file rows for 21 distinct paths.
+// Every apply-pipeline load site fed the raw, duplicated row list straight
+// into its downstream logic, so every file's tags were written twice
+// ("wrote metadata back to" logged twice per path), the pathOrganizer
+// computed 42 target paths for 21 files ("file naming pattern does not
+// distinguish... files=42"), and the second rename pass for a given path
+// failed with "stat rename source ...: no such file or directory" because
+// the first pass had already moved the file out from under it. Calling this
+// once, immediately after every GetBookFiles load in the apply pipeline,
+// makes it impossible for one path to be processed twice in a single run.
+//
+// The keeper preference order below is copied by hand from the repo's
+// existing, data-loss-reviewed ranking in
+// internal/plugins/maintenance/dedupe_book_file_rows.go's rankKeeper: a
+// fingerprint costs a full-file decode and cannot be guessed back, so it
+// outranks everything; then a known duration; then a file hash; then the
+// lexicographically smallest ID, so a dry run and the run that follows it
+// pick the same survivor. rankKeeper is unexported in another package and
+// cannot be imported here — if either order changes, the other must change
+// with it.
+func dedupeBookFilesByPath(bookID string, files []database.BookFile) []database.BookFile {
+	if len(files) < 2 {
+		return files
+	}
+	// better reports whether cand should replace cur as the keeper for a path.
+	// SAME ORDER as maintenance.rankKeeper (see doc comment above).
+	better := func(cand, cur database.BookFile) bool {
+		cf, uf := len(cand.AcoustIDFingerprint) > 0, len(cur.AcoustIDFingerprint) > 0
+		if cf != uf {
+			return cf
+		}
+		cd, ud := cand.Duration > 0, cur.Duration > 0
+		if cd != ud {
+			return cd
+		}
+		ch, uh := strings.TrimSpace(cand.FileHash) != "", strings.TrimSpace(cur.FileHash) != ""
+		if ch != uh {
+			return ch
+		}
+		return cand.ID < cur.ID
+	}
+
+	idx := make(map[string]int, len(files))
+	out := make([]database.BookFile, 0, len(files))
+	for _, f := range files {
+		key := strings.TrimSpace(f.FilePath)
+		if key == "" {
+			// A pathless row is not a duplicate of anything; pass it through
+			// so this helper never changes which rows exist, only how many
+			// twins of a real path do. Downstream (internal/organizer/pipeline.go)
+			// already drops empty-path rows.
+			out = append(out, f)
+			continue
+		}
+		// Byte-exact comparison after Clean/TrimSpace — do NOT lowercase. The
+		// library lives on a case-sensitive NAS mount, so two case-different
+		// paths are two real files, not duplicates.
+		key = filepath.Clean(key)
+		if at, seen := idx[key]; seen {
+			if better(f, out[at]) {
+				out[at] = f
+			}
+			continue
+		}
+		idx[key] = len(out)
+		out = append(out, f)
+	}
+
+	if len(out) != len(files) {
+		slog.Warn("duplicate book_file rows collapsed",
+			"book_id", bookID, "rows", len(files), "distinct", len(out),
+			"collapsed", len(files)-len(out))
+	}
+	return out
 }

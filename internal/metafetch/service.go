@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.8.0
+// version: 5.9.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-08-19
+// last-edited: 2026-08-21
 
 package metafetch
 
@@ -525,6 +525,7 @@ func (mfs *Service) RunApplyPipelineRenameOnly(id string, book *database.Book) e
 	if err != nil {
 		return fmt.Errorf("list book files: %w", err)
 	}
+	bookFiles = dedupeBookFilesByPath(id, bookFiles)
 
 	// For single-file books with no book files, create a virtual entry from book.FilePath
 	if len(bookFiles) == 0 && book.FilePath != "" {

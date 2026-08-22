@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
-// last-edited: 2026-08-15
+// last-edited: 2026-08-21
 
 package metafetch
 
@@ -413,6 +413,7 @@ func (mfs *Service) generateSegmentTitles(bookID string, bookTitle string) error
 	if err != nil {
 		return fmt.Errorf("list book files: %w", err)
 	}
+	bookFiles = dedupeBookFilesByPath(bookID, bookFiles)
 	if len(bookFiles) == 0 {
 		return nil
 	}
@@ -481,6 +482,7 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book) error {
 	if err != nil {
 		return fmt.Errorf("list book files: %w", err)
 	}
+	bookFiles = dedupeBookFilesByPath(id, bookFiles)
 	if len(bookFiles) == 0 {
 		return nil
 	}
@@ -731,6 +733,7 @@ func (mfs *Service) writeBackForBook(id string, ov *writeBackOverrides, segmentF
 	if bfErr != nil {
 		bookFiles = nil
 	}
+	bookFiles = dedupeBookFilesByPath(book.ID, bookFiles)
 	// Filter to non-missing only
 	var activeFiles []database.BookFile
 	for _, bf := range bookFiles {
