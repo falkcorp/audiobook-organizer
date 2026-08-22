@@ -120,7 +120,7 @@ into one of the curated sections below, is a normal direct edit.
          (`wire_abs_routes.go:46-83`). Affects `/api/collections`, `/api/playlists`,
          `/api/authors/:id`, `/api/series/:id`, `/api/users`, `/api/podcasts`. Absorb
          treats 404 as "degrade gracefully"; a 301 into a foreign API is not that.
-      5. **N-5 — `/search` narrators emit `numBooks: 0`** (`browse.go:949`), which renders
+      5. ~~**N-5 — `/search` narrators emit `numBooks: 0`**~~ (`browse.go:949`), which renders
          "0 books" beside every narrator. The contract says omit the field; `/narrators`
          does, `/search` does not.
       6. ~~**N-6 — a stats read failure reports `total = 0`**~~ (`stats.go:73-79`),
@@ -1379,7 +1379,7 @@ step 4 propagates to the server package with no edit there.
       which silently routes fresh installs into local-LLM mode; (5)
       `Config.ChapterConsolidationThresholdMin` being omitted from
       `ResetToDefaults()`, so a factory reset silently disables chapter
-      consolidation instead of restoring the intended default of 10; (6)
+      consolidation instead of restoring the intended default of 10 — ✅ DONE 2026-08-22 (PR #2729, TASK-019); (6)
       whether to delete the fully inert `--enable-sqlite3-i-know-the-risks`
       flag now that the SQLite backend is gone; (7) whether to wire up or
       remove the two entirely-unenforced Settings-UI subsystems (Storage
@@ -2645,7 +2645,7 @@ Whatever is chosen, (1) is non-negotiable: a queue that drops data must say how 
   `publishedDecades` filter facet inherits it. Only visible on pre-CE material, so this is
   genuinely low priority, but it is the same class of bug and worth recording as such.
 
-- [ ] **`timeBase` is hardcoded `"1/1000"` at `internal/server/handlers/abs/mapper.go:645`**
+- [x] **`timeBase` is hardcoded `"1/1000"` at `internal/server/handlers/abs/mapper.go:645`**
   where the oracle carries ffprobe's real stream `1/14112000`. We do not capture stream
   `time_base` at import, so there is nothing to map from. Owner decision 2026-08-12: allow
   it with a documented permanent allowance rather than add an ingest field and backfill for
@@ -4821,9 +4821,9 @@ proposal's scope stays reviewable. Items marked ⚠ are agent-reported and not h
 - [ ] `internal/server/handlers/organize.go:57-62` — `type OrganizeStore = database.Store`
       justified by `organizer.SetStore` and `deluge.NotifyDelugeAfterOrganize`. At HEAD those
       take a 4-method `OrganizerStore` and an anonymous `interface{ database.BookVersionStore }`.
-- [ ] `internal/dedup/collectors_metadata.go:51` — "`database.EnsureSingletonBookTag` (which
+- [x] `internal/dedup/collectors_metadata.go:51` — "`database.EnsureSingletonBookTag` (which
       requires the full Store interface)." It uses **3**.
-- [ ] `internal/database/store.go:17` cites
+- [x] `internal/database/store.go:17` cites
       `docs/superpowers/specs/2026-04-17-store-interface-segregation-design.md`, which is not on
       main. Recoverable via `git show 29e256ac:<path>`. Either restore the doc or repoint the
       reference to `docs/archive/superpowers/plans/`.
@@ -4845,7 +4845,7 @@ proposal's scope stays reviewable. Items marked ⚠ are agent-reported and not h
 
 **Dead generated code (part of the audit's step 1, listed here for tracking)**
 
-- [ ] `internal/scanner/mocks` — 442 generated lines, **zero** importers, while
+- [x] `internal/scanner/mocks` — 442 generated lines, **zero** importers, while
       `internal/scanner`'s own tests hand-roll `fullMockScanner`
       (`scanner_coverage_test.go:655`) because importing the mocks package would cycle.
       Delete the `Scanner:` entry from `.mockery.yaml`; keep the hand-written double.
