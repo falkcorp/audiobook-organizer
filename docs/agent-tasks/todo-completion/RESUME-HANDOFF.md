@@ -1,15 +1,30 @@
-# Resume handoff — paused 2026-08-21 20:15 EDT at 97% weekly usage
+<!-- file: docs/agent-tasks/todo-completion/RESUME-HANDOFF.md -->
+<!-- version: 2.0.0 -->
+<!-- guid: 7c1f0f6e-2b7a-4f0e-9a6d-3d1b2c9e8a41 -->
+<!-- last-edited: 2026-08-22 -->
 
-Planning branch: plan/todo-master-plan, draft PR #2682. Scratchpad is mirrored at
-docs/agent-tasks/todo-completion/state/scratchpad/ (restore it to the session scratchpad, or run the tools from there).
+# Resume handoff — planning package (paused 2026-08-22 ~00:15 EDT by owner's 20-minute shutdown)
 
-## Resume steps (in order)
-1. Scouts DONE — copy scout/scope-18.json and scope-19.json into scout-all/ (step 3). Was: scope-18 COMPLETE (29 objects, all 24 items);
-   scope-19 COMPLETE (7 objects). Same SCOUT-INSTRUCTIONS.md.
-2. Resume verifiers: group 5 has 4/29 briefs (patches/handoff-verify-5.md); group 4 is COMPLETE (32/32);
-   groups 1-3 were paused earlier (patches/handoff-verify-{1,2,3}.md); group 6 (maintenance, dedup, itunes) NOT started.
-3. Copy scope-18/19 JSON into scout-all/, then: python3 gen_package.py scout-all dryrun && python3 apply_patches.py <scratchpad>
-   && python3 gen_package.py scout-all dryrun && python3 audit_briefs.py dryrun/docs/agent-tasks/todo-completion <repo> --json audit-dry.json
-   (task-ids.json keeps ids stable; apply_patches.py is idempotent via patches/applied.json).
-4. Sync dryrun/ into docs/agent-tasks/todo-completion/, commit, rebase branch onto main, mark PR #2682 ready.
-5. Execution: dispatch per BREAKDOWN waves, <=4-8 concurrent subagents, gates per brief (never make ci).
+Branch `plan/todo-master-plan`, draft PR #2682. Package state: **203 briefs, 958 re-verify greps, 0 audit failures**
+(checkpoint 7 = `3c27f841`). Scratchpad mirrored under `state/scratchpad/`; tools under `tools/`; scout JSON under `scout-json/`;
+verifier/judge output under `review/`.
+
+## Verification coverage
+- Opus verifier groups 7–10 (160 briefs) COMPLETE and applied (`review/verify-7..10.json`). Sonnet group 4 complete; groups 1–3/5 partial (superseded by 7–10 coverage).
+- Correctness / ops-rollback / simplicity judges applied (`state/scratchpad/judges/`). Two package-level findings remain unmatched by design ("ALL review-critical", "ALL-175").
+- Generator fixes landed for every systematic verifier finding: test files auto-join `exact_files`; idempotency quotes a presence check; same-line part deps resolve to earlier parts; cycle guard; Go gate never `make ci`.
+
+## 🔴 FAST-TRACK FIRST (owner is blocked on applying metadata in prod)
+Live prod incidents 2026-08-21 23:33–23:49, all root-caused, briefs in `scout-json/scope-20.json` (5 objects) and `state/scratchpad/scout/scope-21.json` (see `handoff-scope-21.md` for how far the scout got; scope text in `state/scratchpad/scopes/scope-21-duplicate-bookfile-rows.md`):
+1. **90030** apply pipeline must dedupe `book_file` rows by path — library copy `01KZR9GEH5ZQW9CV1EN130Y7C0` has 42 rows / 21 paths; pipeline wrote every tag twice and raced itself in the rename phase (`stat rename source … no such file`). Sonnet, small.
+2. **90033** `internal/operations/registry/registry.go:612-633` `EnqueueOp` ConcurrencyKey dedup returns the running op's id and DROPS the new params — approving more books during a batch apply applies nothing. Opus. Fix: dedupe only on byte-equal params or explicit def opt-in; otherwise queue (Gate 3 in dispatcher.go:107 already serializes runs).
+3. scope-20: `ReviewWorkspace.tsx:271` sends `batchFetchCandidates({})` → 400; review list shows empty state during a 35 s `limit=0` query; evidence panel "no recorded derivation" needs cause + re-search; `OperationActivityPanel.tsx:208-228` appends the same SSE line on every progress tick (`op` in deps; use the store's `sequence`).
+Order: scout scope-21 to completion if partial → fold (copy into scout-all, regen, audit) → dispatch 90030 + 90033 + scope-20 items as the first execution wave (own worktrees, PRs, CI green, admin-merge) → `make deploy` (prod restart — tell the owner first; never mid-scan).
+
+## Then: normal resume
+1. `cd state/scratchpad`-equivalent: tools are `tools/gen_package.py <scout-all> <out>`, `tools/apply_patches.py <scratchpad>`, `tools/audit_briefs.py <pkg> <repo> --json out`. `tools/task-ids.json` keeps ids stable; `review/applied.json` makes patch application idempotent.
+2. Rebase this branch onto main (based on 46628240; TODO.md line refs are BASELINE lines of that commit by design), mark PR #2682 ready.
+3. Execute per `BREAKDOWN-2026-08-21.md` waves: ≤4–8 concurrent subagents (iTerm2 dies at 16), Haiku/Sonnet per brief tier, Opus only where the brief says; review-critical PRs stay open for the owner; TODO.md close-out is one coordinator commit per wave; antagonistic passes on Opus.
+
+## Standing prod facts (verified 2026-08-21 23:05–23:40)
+`review_apply_enabled=true`, `auto_write_tags_on_apply=true`, `auto_rename_on_apply=true`, `write_back_metadata=false` (not the governing flag for apply); `scheduled.library_scan` every 360 min; prod binary built 2026-08-21 11:07 (`v0.219.1-rc.19-debug`), 2 code commits behind main, none apply-related. With tags written on apply, a later scan re-reads the applied values (no wipe) unless the tag write failed — canary with ffprobe.
