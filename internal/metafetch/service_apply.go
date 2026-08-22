@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-08-15
+// last-edited: 2026-08-21
 
 package metafetch
 
@@ -161,6 +161,16 @@ func (mfs *Service) ApplyMetadataToBook(book *database.Book, meta metadata.BookM
 	}
 }
 
+// displayOrNone renders a value for a human-readable activity summary. An empty
+// old value would otherwise leave a dangling arrow ("Applied narrator:  → Bob"),
+// which reads as a rendering bug rather than as "there was no previous value".
+func displayOrNone(s string) string {
+	if s == "" {
+		return "(none)"
+	}
+	return s
+}
+
 // RecordChangeHistory records metadata changes before they are applied.
 func (mfs *Service) RecordChangeHistory(book *database.Book, meta metadata.BookMetadata, sourceName string) {
 	now := time.Now()
@@ -213,6 +223,15 @@ func (mfs *Service) RecordChangeHistory(book *database.Book, meta metadata.BookM
 		}{yearField, yearOld, strconv.Itoa(meta.PublishYear)})
 	}
 
+	// Activity rows are read out of context in the unified activity feed, so the
+	// summary has to name the book itself; the BookID field only gives the UI a
+	// link target. Fall back to the ID when the title is empty so the line never
+	// starts with a bare ": Applied ...".
+	activityTitle := book.Title
+	if activityTitle == "" {
+		activityTitle = book.ID
+	}
+
 	for _, c := range changes {
 		if c.newVal == "" || c.newVal == c.oldVal {
 			continue
@@ -239,7 +258,7 @@ func (mfs *Service) RecordChangeHistory(book *database.Book, meta metadata.BookM
 				Level:   "info",
 				Source:  "background",
 				BookID:  book.ID,
-				Summary: fmt.Sprintf("Applied %s: %s → %s", c.field, truncateActivity(c.oldVal, 50), truncateActivity(c.newVal, 50)),
+				Summary: fmt.Sprintf("%s: Applied %s: %s → %s", activityTitle, c.field, displayOrNone(truncateActivity(c.oldVal, 50)), truncateActivity(c.newVal, 50)),
 				Details: map[string]any{"field": c.field, "old_value": c.oldVal, "new_value": c.newVal, "source": sourceName},
 			})
 		}
