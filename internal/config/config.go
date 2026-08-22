@@ -2325,21 +2325,21 @@ func ResetToDefaults() {
 			CoverArtModel:       "gpt-5-mini",
 
 			// Performance
-			ConcurrentScans:         max(runtime.NumCPU(), 4),
-			ScanProgressEvery:       20,
+			ConcurrentScans:                  max(runtime.NumCPU(), 4),
+			ScanProgressEvery:                20,
 			ChapterConsolidationThresholdMin: 10,
-			OperationTimeoutMinutes: 30,
-			MinBookSizeBytes:        5 * 1024 * 1024,
-			APIRateLimitPerMinute:   100,
-			AuthRateLimitPerMinute:  10,
-			JSONBodyLimitMB:         1,
-			UploadBodyLimitMB:       10,
-			EnableAuth:              true,
-			EnableRateLimit:         true,
-			ReviewApplyEnabled:      false, // OFF by default — review-only until explicitly enabled
-			BasicAuthEnabled:        false,
-			BasicAuthUsername:       "",
-			BasicAuthPassword:       "",
+			OperationTimeoutMinutes:          30,
+			MinBookSizeBytes:                 5 * 1024 * 1024,
+			APIRateLimitPerMinute:            100,
+			AuthRateLimitPerMinute:           10,
+			JSONBodyLimitMB:                  1,
+			UploadBodyLimitMB:                10,
+			EnableAuth:                       true,
+			EnableRateLimit:                  true,
+			ReviewApplyEnabled:               false, // OFF by default — review-only until explicitly enabled
+			BasicAuthEnabled:                 false,
+			BasicAuthUsername:                "",
+			BasicAuthPassword:                "",
 
 			// Memory management
 			MemoryLimitType:    "items",
