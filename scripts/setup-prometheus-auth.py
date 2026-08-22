@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/setup-prometheus-auth.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 4d90a2f6-13bc-4e58-9071-8c25e6b3f0a7
-# last-edited: 2026-08-02
+# last-edited: 2026-08-22
 
 """Point Prometheus at audiobook-organizer's now-authenticated /metrics.
 
@@ -67,6 +67,12 @@ METRICS_URL = "https://localhost:8484/metrics"
 PROM_API = "http://localhost:9090"
 JOB_NAME = "audiobook-organizer"
 
+# The two-space indent below is HARDCODED, not derived from the existing
+# prometheus.yml. That is why this script does not share the dead-indentation
+# bug in abo-prometheus-auth.sh v1.0.1 (patched on the server 2026-08-14): the
+# shell version captured a whitespace-only regex group and called .index('-')
+# on it, which raises ValueError on any real config whose jobs are list items.
+# Checked 2026-08-22 -- no need to re-open this.
 JOB_BLOCK = f"""
   # Added by scripts/setup-prometheus-auth.py.
   # /metrics requires a credential (pen-test MED-1 was closed by gating it), and
