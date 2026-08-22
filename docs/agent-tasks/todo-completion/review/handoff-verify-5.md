@@ -1,3 +1,8 @@
+<!-- file: docs/agent-tasks/todo-completion/review/handoff-verify-5.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 82c6a5ed-4d2f-43fe-8a62-d81b0b9700d1 -->
+<!-- last-edited: 2026-08-22 -->
+
 # Handoff — verify-5.json (group 5: server, ci-tooling, organize)
 
 Stopped early on coordinator usage-limit instruction. `verify-5.json` currently contains 4 confirmed entries (valid JSON array, written incrementally, each spot-checked with independent grep by the parent session before writing).

@@ -1,3 +1,8 @@
+<!-- file: docs/agent-tasks/todo-completion/review/handoff-verify-1.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: a8c5121e-1f47-4258-addd-5b10ef2038a1 -->
+<!-- last-edited: 2026-08-22 -->
+
 # Handoff — verify-1 (group 1: metadata, missing-file-lane)
 
 ## Paused by coordinator mid-batch. Resume instructions below.

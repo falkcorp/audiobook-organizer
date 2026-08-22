@@ -1,3 +1,8 @@
+<!-- file: docs/agent-tasks/todo-completion/tools/VERIFIER-INSTRUCTIONS.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 3ab62d25-91b0-4901-be38-3255b39a8109 -->
+<!-- last-edited: 2026-08-22 -->
+
 # Brief-verifier instructions (adversarial, read-only in the repo)
 
 You role-play a COLD, WEAK model (Haiku-class) that has been handed ONE task brief and nothing else, and must execute it. For every brief in your assigned workstream directories under /private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/<ws>/TASK-*.md, walk through it as that model would, against the real repo at /Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer (READ-ONLY: grep/read only, never edit, never build). Your job is to FAIL briefs — find where the weak model would guess, invent, touch the wrong file, over-suppress, break a sibling, or act on a prod-data path unsafely.

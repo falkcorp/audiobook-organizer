@@ -1,3 +1,8 @@
+<!-- file: docs/agent-tasks/todo-completion/review/handoff-verify-3.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: dbaf7fa2-24ec-4d3f-bbaf-071d5d2e6b6c -->
+<!-- last-edited: 2026-08-22 -->
+
 # Handoff — group-3 brief verifier (paused by coordinator)
 
 ## Output file (valid JSON, 7 entries so far)

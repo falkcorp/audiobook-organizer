@@ -1,3 +1,8 @@
+<!-- file: docs/agent-tasks/todo-completion/review/handoff-verify-4.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: a232313b-1c33-4902-a8de-5685f48bea4b -->
+<!-- last-edited: 2026-08-22 -->
+
 # Handoff — verify-4 (group 4: server-handlers, docs, scanner, search)
 
 Stopped on usage-limit STOP directive. `patches/verify-4.json` contains a complete,
