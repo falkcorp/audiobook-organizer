@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/play.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b06d4a13-5f28-4c71-9e0a-38f2c7d915e6
-// last-edited: 2026-08-02
+// last-edited: 2026-08-22
 
 package abs
 
@@ -350,6 +350,33 @@ func (h *Handler) SessionClose(c *gin.Context) {
 	id := h.applySessionUpdate(c)
 	if id != "" {
 		h.sessions.remove(id)
+	}
+}
+
+// SessionLocal handles POST /api/session/local, the single-session half of the
+// offline upload surface.
+//
+// 🔴 THIS ENDPOINT EXISTS SO IT CANNOT 404. §1.8.8 item 1: ShelfPlayer sends it after
+// every play/pause with maxAttempts:1, so a 404 immediately marks the whole connection
+// offline; §1.9.1 softens that to "still implement it, but a 404 is no longer fatal"
+// for the two clients we actually target. Either way the minimum bar is a 2xx with a
+// non-empty body, and that is deliberately ALL this does — the sibling
+// /api/session/local-all is the endpoint that actually applies progress.
+//
+// The auth check is present but, exactly as in applySessionUpdate, is not reported: a
+// caller that fails it still gets the same idempotent 200 rather than a status code
+// that would wedge a client which cannot recover from one.
+func (h *Handler) SessionLocal(c *gin.Context) {
+	// Answered before anything else can fail, so no error path can produce an empty
+	// 200 — fatal for these decoders (§1.8.6).
+	defer respondPlainOK(c)
+
+	// Mirrors applySessionUpdate's check verbatim (both conditions): an authenticated
+	// caller and an anonymous one are told apart here and nowhere else. Nothing is
+	// persisted on either branch today, so the branch exists to keep the shape
+	// identical to its sibling when local-all lands.
+	if user, ok := servermiddleware.CurrentUser(c); !ok || user == nil {
+		return
 	}
 }
 

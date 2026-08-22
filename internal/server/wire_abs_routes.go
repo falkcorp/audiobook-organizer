@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.17.1
+// version: 1.18.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-08-22
 
@@ -636,6 +636,13 @@ func absRouteList() []string {
 		"GET /api/items/:id/file/:ino/download",
 		"POST /api/session/:id/sync",
 		"POST /api/session/:id/close",
+		// Offline upload, single-session half (§1.8.8 item 1). A 2xx stub: it
+		// exists so ShelfPlayer's maxAttempts:1 probe cannot 404 the connection
+		// offline. Covered by the "/api/session/" entry in
+		// absReservedPathPrefixes — listed HERE because
+		// TestABSReservedPath_CoversEVERYRegisteredUnversionedRoute walks this
+		// list, so a route missing from it is a route the guard never checks.
+		"POST /api/session/local",
 		"GET /public/session/:id/track/:index (unauthenticated)",
 		// Phase 6 — progress mutation. Every one is covered by the "/api/me/"
 		// entry in absReservedPathPrefixes; they are listed here because
