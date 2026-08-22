@@ -1,7 +1,7 @@
 // file: web/src/components/common/PathLinks.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 57b9a402-8f25-433d-926e-9f65d70a364b
-// last-edited: 2026-08-21
+// last-edited: 2026-08-22
 
 // Renders a book's file location as the several forms a remote client can act
 // on: a clickable smb:// link where the client OS registers a handler, a
@@ -132,4 +132,20 @@ export function usePathAliases(): PathAlias[] {
     };
   }, []);
   return aliases;
+}
+
+/**
+ * Test-only: clears the module-scope config-fetch cache so the next
+ * usePathAliases()/loadPathAliases() call re-fetches. Call from
+ * beforeEach/afterEach in any test file that needs a fresh or per-test alias
+ * set -- without it, the first test in a file seeds the promise for every
+ * later test in that file (and for any file sharing the module instance in the
+ * same Vitest worker).
+ *
+ * Safe to call while a fetch is still in flight: nulling the `let` only means
+ * that promise's result stops being cached, and the in-flight consumer's
+ * `.then` still fires against its own promise reference.
+ */
+export function __resetPathAliasesCacheForTests(): void {
+  cachedAliasesPromise = null;
 }
