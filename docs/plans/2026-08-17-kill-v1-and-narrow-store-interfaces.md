@@ -1,13 +1,14 @@
 <!-- file: docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 3f2c9a41-8e77-4d0b-9a15-6c2b84ef1d37 -->
-<!-- last-edited: 2026-08-18 -->
+<!-- last-edited: 2026-08-22 -->
 
 # Killing the v1 maintenance stack, then narrowing the store interfaces
 
 **Status: IN PROGRESS.** Phase 1 step 1 landed (#2551). A separate interface-width
-sweep ran ahead of phase 2 and changed its premise — see the update below before
-following phases 2–3 as written.
+sweep ran ahead of phase 2 and changed its premise, and a parallel lane is retiring
+the v1 operations row itself — read BOTH updates below before following phases 2–3
+as written.
 
 ## Update 2026-08-18 — what the width sweep changed about this plan
 
@@ -34,6 +35,80 @@ next real step. Phase 3 should be re-measured before starting: the five survivor
 are documented in
 [`docs/audits/2026-08-18-interface-width-shapes.md`](../audits/2026-08-18-interface-width-shapes.md)
 §6, and none of them is a grouping problem.
+
+## Update 2026-08-22 — the v1-operations-row lane, and why it is not mechanical
+
+A parallel lane has been retiring the **v1 `operations` row** itself (distinct from
+this doc's maintenance-stack lane, though the two meet at `maintenance_dispatcher.go`).
+Merged: #2718, #2719, #2720 (aiscan→v2), #2721 (stranded-row backfill, applied —
+1,737 rows), #2722 (v2 result store, an unplanned prerequisite). Open: #2723 (itunes
+import/sync), #2724 (itunes path ops).
+
+**Census — count by structure, not by name.** 25 `.CreateOperation(` grep hits is
+**24 real call sites**; `legacy_op_status.go:151` is prose inside a doc comment. Of
+the 24: **21 twinned**, **3 genuinely unmigrated** (`handlers/diagnostics.go:319`,
+`handlers/organize.go:165`, `handlers/organize.go:224`) that need real migrations,
+not a sweep. **4 of 24 done.**
+
+### Program steps 5 and 6 are ONE change
+
+The activity writer keys off whatever id it is handed and needs no v1 row to exist.
+So "re-key activity to v2 ids" *is* "stop passing `LegacyOpID`", which is only
+possible once the row stops being created. They cannot be sequenced.
+
+### Three distinct migration shapes, not one
+
+The plan assumed "swap the id". Measured, each subsystem is one of:
+
+1. **Id swap + status read** (itunes import/sync). Handler returns an id; a status
+   endpoint reads the row. Clean 1:1 field mapping v1→v2.
+2. **Id swap + a contradicted resume policy** (itunes path ops) — see below.
+3. **Latest-of-type scan** (reconcile; `handleGetLatestMetadataFetch`). The reader
+   finds its subject by scanning `ListOperations`/`GetRecentOperations(5000)` for a
+   v1 **type string**. v2 has no def-filtered lister — only
+   `ListOperationsV2Since(since, limit)` — so each needs client-side filtering *and*
+   a window choice, plus an explicit call on existing rows (next section).
+
+### The transition-data question every subsystem must answer
+
+Cutting a reader over to v2 hides everything already recorded in v1. Decide per
+subsystem and state it in the PR: (a) read v2, fall back to v1; (b) v2-only, accept
+the loss; (c) backfill.
+
+itunes chose (b) **on evidence**: a structural enumeration of every non-test
+`ResultData` reader (field access — a `Result\b` grep cannot match `ResultData` and
+yields a phantom absence) found them to be `batch_poller.go`,
+`handlers/diagnostics.go` ×3, `reconcile.go`, and `handlers/operations/handler.go`
+— **none of them itunes**, which write no result payload at all.
+
+`handleGetLatestMetadataFetch` will **not** get (b) for free: its picker would show
+nothing until a new fetch ran.
+
+### Two live bugs found by doing this, neither predicted by the plan
+
+- **An interrupted iTunes path-repair preview resumed as a real apply** (#2724).
+  Two mechanisms governed the same restart and disagreed: the v2 def said
+  `ResumeDrop`, while `resumeLegacyOp` re-enqueued. The shim won — and it re-enqueued
+  with `nil` params, which `EnqueueOp` normalizes to `"{}"`, decoding to the zero
+  struct where `DryRun` is **false**. Maintenance jobs had already been fixed for this
+  exact class (`maintenance_dryrun_default_test.go`); iTunes was the untreated twin.
+  **Wherever a v1 shim re-enqueues a v2 op, check what it passes for params.**
+- **Two dead frontend code paths** (#2723): a poller that stopped only on
+  `completed`/`failed`, so cancel and every `interrupted_*` spun forever behind a live
+  Cancel button; and a mount-time check comparing against a v1 type string the v2-fed
+  store never emits — it exposes the def id's *tail* (`import`, not `itunes_import`).
+
+### Two constraints that bound the order of work
+
+**Stopping v1 row creation must precede dropping `LegacyOpID` wholesale.** Reversed,
+new rows get created and never updated — recreating precisely the stranded-row defect
+#2721 just repaired.
+
+**The `resumeLegacyOp` shim cannot be deleted when the last subsystem migrates.**
+~10k v1 rows remain in the table and the shim still sweeps them on every restart, so
+its branches must stay *correct for legacy rows* until the v1 table is dropped
+(decision: export, then drop). `legacyV1OpTypes` entries are likewise not dead the
+moment a subsystem migrates — only when the table goes.
 
 ## The finding that should shape this
 
