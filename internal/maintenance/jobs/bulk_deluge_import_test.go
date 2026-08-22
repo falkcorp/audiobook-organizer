@@ -68,6 +68,15 @@ func bdiFixture(t *testing.T) (root string, full *database.BookFile) {
 	config.AppConfig.RootDir = root
 	t.Cleanup(func() { config.AppConfig.RootDir = origRoot })
 
+	// Pin DelugeMoveEnabled off rather than inheriting it from whatever ran
+	// before: bdi_buildDelugeClient reads the global DelugeWebURL, so a
+	// prior test leaving that set would give the success path a live client,
+	// and this flag is the only thing standing between that and a real
+	// MoveStorage POST on a 5-minute timeout.
+	origMove := config.AppConfig.DelugeMoveEnabled
+	config.AppConfig.DelugeMoveEnabled = false
+	t.Cleanup(func() { config.AppConfig.DelugeMoveEnabled = origMove })
+
 	full = &database.BookFile{
 		ID:         "f1",
 		BookID:     "b1",
