@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-08-22
 
@@ -1291,7 +1291,7 @@ func (h *Handler) LibrarySearch(c *gin.Context) {
 	}
 	resp := searchResponse{
 		Authors: []any{}, Book: []searchBookHitDTO{}, Genres: []any{},
-		Narrators: []any{}, Series: []any{}, Tags: []any{},
+		Narrators: []narratorDTO{}, Series: []any{}, Tags: []any{},
 	}
 
 	query := strings.TrimSpace(c.Query("q"))
@@ -1336,7 +1336,12 @@ func (h *Handler) LibrarySearch(c *gin.Context) {
 	if narrators, err := h.library.ListNarrators(); err == nil {
 		for _, n := range narrators {
 			if strings.Contains(strings.ToLower(n.Name), lower) {
-				resp.Narrators = append(resp.Narrators, gin.H{"name": n.Name})
+				// §6.3: the client's Narrator.id is non-optional, and ONE element without
+				// it throws the whole list -- so /search must derive it exactly as the
+				// narrator list does. NumBooks stays nil and omitempty drops it.
+				resp.Narrators = append(resp.Narrators, narratorDTO{
+					ID: narratorID(n.Name), Name: n.Name,
+				})
 			}
 		}
 	}

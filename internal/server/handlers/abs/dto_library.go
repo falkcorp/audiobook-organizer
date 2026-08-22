@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/dto_library.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c471e9a0-5b83-4d16-92fe-08a7c35d1b6e
-// last-edited: 2026-08-02
+// last-edited: 2026-08-22
 
 package abs
 
@@ -483,12 +483,14 @@ type filterDataResponse struct {
 // searchResponse is /api/libraries/:id/search. Every key is a non-nil array: a null
 // there fails the decode, and the six keys are what ABS returns.
 type searchResponse struct {
-	Authors   []any              `json:"authors"`
-	Book      []searchBookHitDTO `json:"book"`
-	Genres    []any              `json:"genres"`
-	Narrators []any              `json:"narrators"`
-	Series    []any              `json:"series"`
-	Tags      []any              `json:"tags"`
+	Authors []any              `json:"authors"`
+	Book    []searchBookHitDTO `json:"book"`
+	Genres  []any              `json:"genres"`
+	// Narrators is typed, not []any, because an untyped slice is how this element
+	// drifted from narratorDTO and shipped without the non-optional id (§6.3).
+	Narrators []narratorDTO `json:"narrators"`
+	Series    []any         `json:"series"`
+	Tags      []any         `json:"tags"`
 }
 
 type searchBookHitDTO struct {
