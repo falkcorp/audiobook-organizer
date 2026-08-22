@@ -635,13 +635,13 @@ func (h *Handler) audioFile(v *itemView, i int) audioFileDTO {
 		// ABS indexes tracks from 1, not 0. AudioBooth uses this index as the track
 		// segment of /public/session/:id/track/:index, so an off-by-one here streams
 		// the wrong file.
-		Index:                i + 1,
-		Ino:                  f.SyncFileID,
-		Language:             fileLanguage(v),
-		ManuallyVerified:     false,
-		MetaTags:             h.metaTags(v, f),
-		Metadata:             h.fileMetadata(f),
-		MimeType:             mimeTypeForPath(f.File.FilePath),
+		Index:            i + 1,
+		Ino:              f.SyncFileID,
+		Language:         fileLanguage(v),
+		ManuallyVerified: false,
+		MetaTags:         h.metaTags(v, f),
+		Metadata:         h.fileMetadata(f),
+		MimeType:         mimeTypeForPath(f.File.FilePath),
 		// TimeBase is a fixed placeholder: real ABS reports ffprobe's actual stream
 		// time_base (e.g. 1/14112000), but this codebase does not capture time_base
 		// at import, and no known client divides by this value. Owner-approved
