@@ -237,5 +237,218 @@
     "depends_on_lines": [],
     "gate": "go build ./... && go vet ./... && go test ./internal/server/... -count=1",
     "notes": "Part 4 of 4 — final part. Combined with Parts 1-3, this closes out all 46 measured hand-built *Server call sites (23 files) except the deliberately-excluded fingerprint_rescan_test.go. After all 4 parts land, TODO-SRVTIMEOUT (internal/server test-package stall) has one fewer duplicated-fixture contributor, though the timeout problem itself is a separate, larger item not fully resolved by this migration alone."
+  },
+  {
+    "todo_line": 90011,
+    "src_id": "DEC-11",
+    "part": null,
+    "title": "Add a detection-only counter + structured log for generateTargetPath path collisions within one organize run",
+    "verdict": "actionable",
+    "verdict_evidence": "generateTargetPath/GenerateTargetPath are *Organizer METHODS (organizer.go:301,321), not free functions, so the decision's suggested grep `func generateTargetPath` returns 0 hits (it doesn't match a method receiver) while `grep -n \"func (o \\*Organizer) generateTargetPath\" internal/organizer/organizer.go` finds it at L321. No collision counter exists yet: `grep -rn \"prometheus.NewCounter\" internal/organizer` returns 0 hits.",
+    "domain": "internal/organizer",
+    "exact_files": [
+      "internal/metrics/metrics.go",
+      "internal/organizer/service.go",
+      "internal/organizer/target_path_collision_test.go"
+    ],
+    "verified_anchors": [
+      {"claim": "generateTargetPath is a method, not a free function — the decision's grep pattern needs a receiver", "grep_cmd": "grep -n \"func (o \\*Organizer) generateTargetPath\" internal/organizer/organizer.go", "expect": "1 hit at L321"},
+      {"claim": "GenerateTargetPath (exported passthrough) is what all batch/whole-run callers use", "grep_cmd": "grep -n \"func (o \\*Organizer) GenerateTargetPath\" internal/organizer/organizer.go", "expect": "1 hit at L301"},
+      {"claim": "organizeBooks is the whole-run batch driver, an 8-worker bounded pool iterating booksToOrganize", "grep_cmd": "grep -n \"func (orgSvc \\*Service) organizeBooks\\|numWorkers = 8\" internal/organizer/service.go", "expect": "2 hits: organizeBooks at L943, numWorkers=8 at L950"},
+      {"claim": "no prometheus counter exists in internal/organizer today", "grep_cmd": "grep -rn \"prometheus.NewCounter\" internal/organizer", "expect": "0 hits"},
+      {"claim": "itunesLocationUnmappable is the sibling 'detection-only counter, no behavior change' pattern to copy, including its Register() wiring", "grep_cmd": "grep -n \"itunesLocationUnmappable = prometheus.NewCounterVec\\|func Register()\" internal/metrics/metrics.go", "expect": "2 hits: itunesLocationUnmappable ~L109, Register() ~L168"}
+    ],
+    "reuse": [
+      {"name": "itunesLocationUnmappable + RecordITunesLocationUnmappable (CounterVec + helper pattern to copy)", "file": "internal/metrics/metrics.go", "verify_grep": "grep -n \"func RecordITunesLocationUnmappable\" internal/metrics/metrics.go"},
+      {"name": "organizeBooks' existing statsMu sync.Mutex pattern for cross-worker shared state", "file": "internal/organizer/service.go", "verify_grep": "grep -n \"var statsMu sync.Mutex\" internal/organizer/service.go"}
+    ],
+    "polarity": "additive",
+    "effort": "S",
+    "tier": "sonnet",
+    "why_tier": "Small, well-scoped, but touches the concurrent whole-library organize worker pool (8 workers), so the shared collision map needs correct locking — not a haiku-safe mechanical change, but far short of opus-level risk since it is detection-only with zero behavior change.",
+    "review_critical": false,
+    "goal": "Add a run-scoped collision counter to internal/organizer/service.go's organizeBooks (the 8-worker bounded pool driving every whole-library organize/rename run). After each worker computes newPath via OrganizeOneBook→ReOrganizeInPlace→GenerateTargetPath (service.go ~L1005), check a mutex-protected map[string]string (targetPath → first book ID that produced it, scoped to the lifetime of one organizeBooks call) for the SAME path already claimed by a DIFFERENT book.ID. On a hit, increment a new Prometheus counter (internal/metrics/metrics.go, mirroring the existing itunesLocationUnmappable detection-only pattern) and log a structured warning naming both book IDs and the shared path. No existing branch, return value, or file operation changes — the collision is purely observed and reported, exactly matching decision 11's DETECTION-ONLY / fix-deferred scope, and reusing the counter-naming convention already established by itunes_location_unmappable_total.",
+    "background": [
+      "generateTargetPath/GenerateTargetPath are *Organizer methods (organizer.go:301,321), not free functions — the collision can only be detected at the caller that invokes them repeatedly across many books in one run, since the functions themselves are per-book and stateless.",
+      "organizeBooks (service.go:943) is that caller: an 8-worker bounded pool (numWorkers=8, L950) iterating booksToOrganize, each worker computing newPath via OrganizeOneBook→ReOrganizeInPlace→GenerateTargetPath/GenerateTargetDirPath.",
+      "The package already has a proven pattern for exactly this shape of change — itunesLocationUnmappable (metrics.go ~L109) is a Namespace:'audiobook_organizer' CounterVec with a small-enum label, registered once in Register() (metrics.go:168), incremented via a one-line helper (RecordITunesLocationUnmappable, metrics.go:182), used purely for detection with no behavior change — the same shape decision 11 and decision 9 (PH-2b) both call for.",
+      "organizeBooks already has a cross-worker shared-state pattern to copy for the new map: statsMu sync.Mutex guarding the shared *Stats struct (service.go:947)."
+    ],
+    "steps": [
+      "1. In internal/metrics/metrics.go, add a new CounterVec near itunesLocationUnmappable (after L115): organizeTargetPathCollision = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: \"audiobook_organizer\", Name: \"organize_target_path_collision_total\", Help: \"Total times generateTargetPath produced a path already claimed by a DIFFERENT book within the same organize run (detection-only; the fix is deferred — see docs/plans/DECISIONS-PENDING.md row 11)\"}, []string{}) — no labels needed (a single counter is enough; do not label by path, unbounded cardinality).",
+      "2. Add it to the prometheus.MustRegister(...) call inside Register() (metrics.go:168-176).",
+      "3. Add a helper: func RecordOrganizeTargetPathCollision() { organizeTargetPathCollision.Inc() } next to RecordITunesLocationUnmappable (metrics.go ~L182).",
+      "4. In internal/organizer/service.go's organizeBooks (L943), declare a new shared, mutex-protected map right beside the existing `var statsMu sync.Mutex` (L947): `var pathMu sync.Mutex; claimedPaths := make(map[string]string, len(booksToOrganize))` (path → book ID).",
+      "5. Immediately after `newPath, err = orgSvc.OrganizeOneBook(workerOrg, &book, log)` (L1005) and only when `err == nil && newPath != \"\"`, add: lock pathMu, look up claimedPaths[newPath]; if present and != book.ID, call metrics.RecordOrganizeTargetPathCollision() and log.Warn(\"organize: target path collision — two different books would organize to the same path\", \"path\", newPath, \"book_id\", book.ID, \"other_book_id\", claimedPaths[newPath]); else set claimedPaths[newPath] = book.ID; unlock. This must run BEFORE the existing oldPath==newPath / alreadyInRoot branching below (L1025+) so detection happens regardless of which branch the book takes, but must NOT alter any of those branches' behavior.",
+      "6. Import \"github.com/falkcorp/audiobook-organizer/internal/metrics\" in service.go if not already imported (grep -n '\"github.com/falkcorp/audiobook-organizer/internal/metrics\"' internal/organizer/service.go first — add only if the grep returns 0 hits).",
+      "7. Bump version headers on internal/metrics/metrics.go and internal/organizer/service.go.",
+      "8. Add a changelog fragment (changelog.d/, no header) describing the new detection-only counter."
+    ],
+    "tests": [
+      "internal/organizer/target_path_collision_test.go (new): TestOrganizeBooks_LogsCollisionWhenTwoBooksShareATargetPath — construct two books whose FolderNamingPattern/FileNamingPattern inputs are engineered to generate the identical target path (e.g. same Title/Author after sanitization) but different Book IDs; run organizeBooks; assert (a) BOTH books still organize successfully (no behavior change — one does not get skipped or blocked), and (b) the collision counter's value increases by exactly 1 (read via prometheus testutil.ToFloat64, or by asserting the log line was emitted if metrics aren't easily read in-test — check internal/metrics/metrics_test.go for the existing pattern used to assert counter values first)."
+    ],
+    "acceptance": [
+      "go test ./internal/organizer/... ./internal/metrics/... -run TestOrganizeBooks_LogsCollisionWhenTwoBooksShareATargetPath -count=1 exits 0.",
+      "grep -n \"organize_target_path_collision_total\" internal/metrics/metrics.go returns >=2 hits (declaration + Register wiring).",
+      "go build ./... && go vet ./... exits 0."
+    ],
+    "edge_cases": [
+      "A book whose newPath equals its OWN oldPath (already correctly organized, the oldPath == newPath branch) must still be recorded as a claim in claimedPaths — otherwise a LATER book that collides with it would be missed.",
+      "err != nil or newPath == \"\" (failed organize) must NOT be recorded as a claim — an empty/failed path cannot collide with anything.",
+      "Concurrent workers computing the SAME newPath at the same instant must not both see 'not yet claimed' and both skip incrementing the counter — the check-then-set must happen under the same lock acquisition (no separate lock/unlock for check vs set)."
+    ],
+    "anti_over_suppression": "N/A — this is a detection-only counter with no filter/guard/skip behavior to over-suppress; the collision counter must never influence which books organize or how (verified by the happy-path assertion in the one test above: both colliding books still organize successfully).",
+    "depends_on_lines": [],
+    "gate": "go build ./... && go vet ./... && go test ./internal/organizer/... ./internal/metrics/... -count=1",
+    "notes": "Decision 11's own suggested grep ('func generateTargetPath') doesn't match because the real target is a method with a receiver — same class of stale-grep issue seen in DEC-6's 'func newTestServer'. The fix itself (deduping the collision) is explicitly deferred per the decision; this brief is detection-only."
+  },
+  {
+    "todo_line": 90013,
+    "src_id": "DEC-13",
+    "part": null,
+    "title": "Add a zero-size bucket to maintenance.missing-file-audit (the delta TASK-074 does not cover)",
+    "verdict": "actionable",
+    "verdict_evidence": "TASK-074 (docs/agent-tasks/todo-completion/maintenance/TASK-074-...) builds maintenance.unknown-author-audit, which is entirely about the 'Unknown Author' PLACEHOLDER baked into a book's organized FilePath — an unrelated defect to book_file rows missing on-disk bytes; grep -n 'book_file\\|bytes on disk' <TASK-074 file> returns 0 hits, confirming no overlap. The op that DOES already cover most of decision 13's ask is maintenance.missing-file-audit (internal/plugins/maintenance/missing_file_audit.go, registered at plugin.go:62): it is REPORT-ONLY (Capabilities: []sdk.Capability{sdk.CapLibraryRead} only — no CapLibraryWrite, missing_file_audit.go:279) and already buckets every book_file row into Missing/Present/Unreadable (missing_file_audit.go:397-417) plus, when Classify:true, further splits Missing rows into Recoverable ('sibling-present', via a derived-candidate stat at a nearby path, missing_file_audit.go:660-748) vs ShapeNoBytes vs NoShape. The one bucket decision 13 names that this op does NOT produce is 'zero-size' — a row whose path DOES exist on disk but the file is 0 bytes; the existing stat sweep (missing_file_audit.go:404-417) only branches on os.Stat error (nil/NotExist/other), never inspecting info.Size(), so a truncated/corrupt 0-byte file is currently counted as 'Present' indistinguishably from a healthy file.",
+    "domain": "internal/plugins/maintenance",
+    "exact_files": [
+      "internal/plugins/maintenance/missing_file_audit.go",
+      "internal/plugins/maintenance/missing_file_audit_test.go"
+    ],
+    "verified_anchors": [
+      {"claim": "TASK-074 is about the Unknown-Author placeholder, unrelated to book_file bytes", "grep_cmd": "grep -n \"book_file\\|bytes on disk\\|no bytes\" \"/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/maintenance/TASK-074-build-a-report-only-census-of-books-with-a-place.md\"", "expect": "0 hits"},
+      {"claim": "maintenance.missing-file-audit is REPORT-ONLY, CapLibraryRead only", "grep_cmd": "grep -n \"Capabilities: \\[\\]sdk.Capability{sdk.CapLibraryRead}\" internal/plugins/maintenance/missing_file_audit.go", "expect": "1 hit ~L279"},
+      {"claim": "it already buckets Present/Missing/Unreadable", "grep_cmd": "grep -n \"fileUnknown fileExistence\\|filePresent\\|fileMissing\\|fileUnreadable\" internal/plugins/maintenance/missing_file_audit.go", "expect": "hits ~L287-291"},
+      {"claim": "it already has a sibling-present style Classify pass (Recoverable/ShapeNoBytes/NoShape)", "grep_cmd": "grep -n \"type missingFileClassification struct\" internal/plugins/maintenance/missing_file_audit.go", "expect": "1 hit ~L606"},
+      {"claim": "it does NOT check file size — the stat result's Size() is never read", "grep_cmd": "grep -n \"\\.Size()\" internal/plugins/maintenance/missing_file_audit.go", "expect": "0 hits"},
+      {"claim": "it is already registered in plugin.go like its siblings — no new registration needed, this is an extension of the existing op", "grep_cmd": "grep -n \"missingFileAuditDef()\" internal/plugins/maintenance/plugin.go", "expect": "1 hit ~L62"}
+    ],
+    "reuse": [
+      {"name": "fileExistence enum + the os.Stat sweep in auditMissingFiles (extend, don't duplicate)", "file": "internal/plugins/maintenance/missing_file_audit.go", "verify_grep": "grep -n \"func auditMissingFiles\" internal/plugins/maintenance/missing_file_audit.go"},
+      {"name": "registry.RunItems bounded worker pool (missingFileStatConcurrency)", "file": "internal/plugins/maintenance/missing_file_audit.go", "verify_grep": "grep -n \"missingFileStatConcurrency\" internal/plugins/maintenance/missing_file_audit.go"}
+    ],
+    "polarity": "transform",
+    "effort": "S",
+    "tier": "sonnet",
+    "why_tier": "Small, additive extension to an already-well-tested report-only op; no prod-data mutation, no concurrency redesign (reuses the existing worker pool) — straightforward for Sonnet.",
+    "review_critical": false,
+    "goal": "Extend maintenance.missing-file-audit's stat sweep (auditMissingFiles, missing_file_audit.go:369-501) to distinguish a fourth outcome — 'present but zero bytes' — from today's undifferentiated filePresent. Add fileZeroSize to the fileExistence enum (L287-292), set it when os.Stat succeeds AND info.Size() == 0 (instead of filePresent), tally it into a new report.ZeroSize int field (separate from Present so a truncated/corrupt file is never silently counted as healthy), and surface it in both the log summary (runMissingFileAudit, L355-359) and missingFileReport.summary() (L248-257). This closes the one bucket decision 13 names that the existing op does not already produce; the other three buckets (path-missing, unreadable, sibling-present) are already covered by Missing/Unreadable/Classify and need no change.",
+    "background": [
+      "maintenance.missing-file-audit already satisfies 3 of decision 13's 4 example buckets: path-missing -> fileMissing/report.Missing, unreadable -> fileUnreadable/report.Unreadable, sibling-present -> the opt-in Classify pass's Recoverable bucket (a derived nearby-path stat, missing_file_audit.go:660-748).",
+      "The op's os.Stat call (missing_file_audit.go:404) currently discards the returned FileInfo on success — `case serr == nil: results[it.idx] = filePresent` — so a 0-byte file on disk is indistinguishable from a healthy one in the current report.",
+      "The op is REPORT-ONLY by explicit design (missing_file_audit.go:73-77's doc comment: 'the right repair is not yet decided... Measure first, then choose') — decision 13 explicitly forbids adding a mutation op, so this extension must stay read-only, matching the existing Capabilities: []sdk.Capability{sdk.CapLibraryRead}.",
+      "TASK-074 (a sibling brief in this task family) is unrelated — it audits the 'Unknown Author' placeholder baked into organized paths, not book_file byte presence."
+    ],
+    "steps": [
+      "1. In internal/plugins/maintenance/missing_file_audit.go, add fileZeroSize to the fileExistence enum (L287-292): const (fileUnknown fileExistence = iota; filePresent; fileZeroSize; fileMissing; fileUnreadable) — insert it after filePresent so existing MISSING/UNREADABLE ordinal comparisons (if any exist elsewhere) are unaffected; grep for any switch/comparison using the enum's raw int value first (grep -n \"fileExistence(\" internal/plugins/maintenance/*.go) to confirm none exist beyond this file.",
+      "2. In auditMissingFiles' stat sweep (L403-417), change the `case serr == nil:` branch to inspect the stat result: capture it as `info, serr := os.Stat(it.file.FilePath)`, then `case serr == nil: if info.Size() == 0 { results[it.idx] = fileZeroSize; zeroSize.Add(1) } else { results[it.idx] = filePresent; present.Add(1) }` — add a new `var zeroSize atomic.Int64` alongside the existing `missing, present, unreadable atomic.Int64` (L398).",
+      "3. Add `ZeroSize int` to missingFileReport (near L216-218, beside TotalRows/Missing/Present) and populate it from `int(zeroSize.Load())` where the report is built (L432-438).",
+      "4. Include a per-book/per-row sample for zero-size rows the same way Missing rows get one (L456-459's `if len(report.Sample) < sampleLimit` pattern) — add a separate `ZeroSizeSample []string` field so it does not get mixed into the missing-paths sample, and populate it in the per-book roll-up loop's switch (L452-465) with a new `case fileZeroSize:` arm.",
+      "5. Update missingFileReport.summary() (L248-257) to append ` zero_size=%d` to the base line.",
+      "6. Update runMissingFileAudit's final log.Info call (L355-359) to include \"zero_size\", report.ZeroSize and, if non-empty, a zero_size_sample field.",
+      "7. Bump the file's version header and last-edited date.",
+      "8. Add a changelog fragment (changelog.d/, no header)."
+    ],
+    "tests": [
+      "internal/plugins/maintenance/missing_file_audit_test.go: TestMissingFileAudit_SeparatesZeroSizeFromPresent — seed a fake filesystem/store with 3 book_file rows: one pointing at a real file with content (present, non-zero), one pointing at a real file truncated to 0 bytes (zero-size), one pointing at a nonexistent path (missing); assert report.Present==1, report.ZeroSize==1, report.Missing==1, and that ZeroSize is NOT counted in Present or Missing."
+    ],
+    "acceptance": [
+      "go test ./internal/plugins/maintenance/... -run TestMissingFileAudit -count=1 exits 0.",
+      "grep -n \"ZeroSize\" internal/plugins/maintenance/missing_file_audit.go returns >=3 hits (enum, struct field, tally site).",
+      "go build ./... && go vet ./... exits 0."
+    ],
+    "edge_cases": [
+      "A row with an empty FilePath (already skipped at L388's `if path == \"\" { continue }`) must remain skipped — it is a different defect (no path at all), not a zero-size file, and must not be miscounted into ZeroSize.",
+      "A zero-size file must NOT be folded into report.Missing or report.Unreadable — those are structurally distinct findings (path absent vs. I/O error vs. present-but-empty) and decision 13 explicitly asks for them as separate buckets.",
+      "The Classify pass (opt-in, track-slash shape) only ever runs over rows tallied as fileMissing (L481-497) — a zero-size row must NOT be fed into classifyMissingRows, since its bytes ARE present at the recorded path (just empty); conflating the two would misreport a truncated file as 'recoverable via a differently-named sibling'."
+    ],
+    "anti_over_suppression": "N/A — no filter/guard/skip is being added; this is purely a new report bucket alongside the existing ones. The anti-over-suppression concern is instead structural: TestMissingFileAudit_SeparatesZeroSizeFromPresent explicitly asserts a healthy present file still counts as Present (report.Present==1), proving the new zero-size check does not reclassify or hide genuinely-present rows.",
+    "depends_on_lines": [],
+    "gate": "go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1",
+    "notes": "Verdict is NOT stale_done: TASK-074 has zero overlap (different subsystem entirely — author-placeholder census, not byte presence). Overlap IS real but PARTIAL against maintenance.missing-file-audit, which already covers 3 of the 4 example buckets (path-missing, unreadable, sibling-present via its opt-in Classify pass) — this brief scopes ONLY the zero-size delta per the scout instructions' 'if it only partially overlaps, scope the delta only.' No new op registration needed (missing-file-audit is already registered at plugin.go:62); this extends the existing op in place."
+  },
+  {
+    "todo_line": 90010,
+    "src_id": "DEC-10",
+    "part": null,
+    "title": "Wire Round-2 confidence-bound clamping into a distinct apply_confidence path; keep the live display score raw",
+    "verdict": "actionable",
+    "verdict_evidence": "unified.ComposeScore's final Score already clamps to [0,100] (compose.go:79-82, tested by TestComposeScore_CapRespected at compose_test.go:169-189) — that literal reading of the decision is stale. The real, unimplemented gap is that ComposeScore never clamps each primary Signal's Confidence against cfg.Signals[kind].Min/MaxConfidence before composing — calibrate_composite.go's own header comment explicitly cites this as the open item, referencing 'docs/plans/DECISIONS-PENDING.md row 10' by name (grep -n \"DECISIONS-PENDING.md row 10\" internal/plugins/dedup/calibrate_composite.go -> 1 hit ~L38), and its private scoreWithClamp (L198-215) only simulates the clamp for calibration sweeps, never persists or applies it. calibrateCompositeParams (L122-133) has Apply (bands) but no apply_confidence field yet (grep -n \"json:\\\"apply\" internal/plugins/dedup/calibrate_composite.go -> 1 hit, apply only).",
+    "domain": "internal/dedup",
+    "exact_files": [
+      "internal/dedup/unified/compose.go",
+      "internal/dedup/unified/score.go",
+      "internal/dedup/unified/config.go",
+      "internal/models/dedup_score.go",
+      "internal/dedup/engine.go",
+      "internal/dedup/rescore.go",
+      "internal/dedup/auto_resolve.go",
+      "internal/plugins/dedup/calibrate_composite.go",
+      "internal/config/config.go",
+      "internal/server/registry_wire.go",
+      "internal/dedup/unified/compose_test.go",
+      "internal/dedup/auto_resolve_test.go",
+      "internal/plugins/dedup/calibrate_composite_test.go"
+    ],
+    "verified_anchors": [
+      {"claim": "ComposeScore's Score is already capped at 100", "grep_cmd": "grep -n \"score = 100.0\" internal/dedup/unified/compose.go", "expect": "1 hit ~L81"},
+      {"claim": "TestComposeScore_CapRespected already tests the cap", "grep_cmd": "grep -n \"TestComposeScore_CapRespected\" internal/dedup/unified/compose_test.go", "expect": "1 hit ~L169"},
+      {"claim": "calibrate_composite.go cites DECISIONS-PENDING.md row 10 as the open decision this closes", "grep_cmd": "grep -n \"DECISIONS-PENDING.md row 10\" internal/plugins/dedup/calibrate_composite.go", "expect": "1 hit ~L38"},
+      {"claim": "scoreWithClamp exists as the calibration-only simulation, not wired to persistence or live scoring", "grep_cmd": "grep -n \"func scoreWithClamp\" internal/plugins/dedup/calibrate_composite.go", "expect": "1 hit ~L198"},
+      {"claim": "config.DedupSignalConfig.Confidence is already a persistence surface, wired into unified.LoadScoreConfig via SetKindConfidenceOverrides", "grep_cmd": "grep -n \"SetKindConfidenceOverrides\" internal/server/registry_wire.go", "expect": "1 hit ~L177"},
+      {"claim": "the production auto-merge gate reads the stored Band, not a clamped variant", "grep_cmd": "grep -n \"c.Band != unified.BandCertain\" internal/dedup/auto_resolve.go", "expect": "1 hit ~L214"},
+      {"claim": "3 production call sites feed the live/display score+band from unclamped confidence", "grep_cmd": "grep -n \"unified.ComposeScore(\" internal/dedup/engine.go internal/dedup/rescore.go", "expect": "3 hits: engine.go:685, engine.go:2983, rescore.go:276"},
+      {"claim": "UnifiedDedupScore is a type alias for models.UnifiedDedupScore, where a new field would be added", "grep_cmd": "grep -n \"type UnifiedDedupScore = models.UnifiedDedupScore\" internal/dedup/unified/score.go", "expect": "1 hit ~L87"}
+    ],
+    "reuse": [
+      {"name": "applyBandThresholds (payload+config.NewUpdateService pattern to mirror for applyConfidenceBounds)", "file": "internal/plugins/dedup/calibrate_composite.go", "verify_grep": "grep -n \"func (p \\*Plugin) applyBandThresholds\" internal/plugins/dedup/calibrate_composite.go"},
+      {"name": "scoreWithClamp (confidence-clamp loop to extract into unified package rather than duplicate)", "file": "internal/plugins/dedup/calibrate_composite.go", "verify_grep": "grep -n \"func scoreWithClamp\" internal/plugins/dedup/calibrate_composite.go"},
+      {"name": "config.DedupSignalConfig.Confidence / DedupKindConfidence (persistence types, already exist)", "file": "internal/config/config.go", "verify_grep": "grep -n \"type DedupKindConfidence struct\" internal/config/config.go"}
+    ],
+    "polarity": "transform",
+    "effort": "L",
+    "tier": "opus",
+    "why_tier": "Touches the dedup auto-merge threshold gate (auto_resolve.go) and the live scoring call sites feeding it — a wrong clamp changes which pairs get auto-merged in production; the decision's own text calls for review_critical, and the architecture requires moving clamping logic across a package layering boundary (plugins/dedup -> dedup/unified) without duplicating it, since engine.go/rescore.go live in the lower internal/dedup layer and cannot import internal/plugins/dedup.",
+    "review_critical": true,
+    "goal": "Extract the confidence-clamping loop that calibrate_composite.go's private scoreWithClamp already implements (L198-215) into an EXPORTED internal/dedup/unified helper (e.g. unified.ClampSignalConfidence(signals, cfg) []Signal), usable both by calibrate_composite.go and by the live production scoring call sites (internal/dedup/engine.go:685,2983 and internal/dedup/rescore.go:276) without duplicating logic across the plugins/dedup -> dedup/unified layering boundary. Add an ApplyConfidence bool json:\"apply_confidence\" param to calibrateCompositeParams, independent of the existing Apply (bands-only) field, that persists Round-2's recommended per-kind confidence bounds via the same config.NewUpdateService path applyBandThresholds already uses (L648-670) — this is decision 10's 'route Round-2 apply decisions through a SEPARATE apply_confidence value'. The LIVE default unified.ComposeScore call sites must keep producing today's raw, unclamped display Score/Band exactly as now (decision 10's 'the raw composite must remain available'); a NEW additive field (e.g. ClampedBand) on models.UnifiedDedupScore carries the confidence-clamped verdict alongside it, computed at the same call sites using the new unified.ClampSignalConfidence helper. auto_resolve.go's production apply gate (autoResolveEligible, L211-214, currently `if c.Band != unified.BandCertain`) is the one consumer that should honor the clamped verdict once confidence overrides are actually configured for a kind, while falling back to today's raw c.Band behavior byte-for-byte when no overrides are configured (config.go:220-226 already documents that an absent override map is a no-op fallback to compiled-in defaults, which this brief leans on for the zero-config-unchanged guarantee).",
+    "background": [
+      "ComposeScore (internal/dedup/unified/compose.go:47) already clamps its final Score to [0,100] at L79-82 and this is already tested (compose_test.go:169-189) — that literal part of the decision text does not need new work.",
+      "calibrate_composite.go's own extensive header comment (L14-79 region, citing 'DECISIONS-PENDING.md row 10' at ~L38) explains the REAL gap: ComposeScore reads Signal.Confidence DIRECTLY and ignores cfg.Signals[kind].Min/MaxConfidence, so a config's per-kind confidence bounds have ZERO effect on live scoring; only this op's own private scoreWithClamp (L198-215) simulates the clamp, for calibration replay only.",
+      "config.DedupSignalConfig.Confidence map[string]DedupKindConfidence (config.go:241, DedupKindConfidence at L250-255) already exists as a persistence surface and is already wired into unified.LoadScoreConfig via unified.SetKindConfidenceOverrides + internal/server/registry_wire.go:177/164 (which also wires SetBandThresholds for bands) — so persistence infrastructure is not missing, only (a) a way to WRITE it from Round 2's apply path and (b) any LIVE scoring consumer of it are missing.",
+      "The production auto-merge threshold: internal/dedup/auto_resolve.go's autoResolveEligible (L211) gates Tier-1 auto-resolution on `c.Band != unified.BandCertain` (L214), reading the stored, unclamped Band from database.DedupCandidate.ScoreBreakdown — this is the 'apply decision' the decision text wants routed through a value distinct from the display score.",
+      "unified.UnifiedDedupScore (compose.go's return type) is a type alias for models.UnifiedDedupScore (internal/dedup/unified/score.go:87 -> struct at internal/models/dedup_score.go:44); PebbleDB stores it as JSON, so an additive field needs no formal schema migration — old rows simply read back the zero value for a new field."
+    ],
+    "steps": [
+      "1. In internal/dedup/unified (new file or added to compose.go), export ClampSignalConfidence(signals []Signal, cfg ScoreConfig) []Signal, reproducing scoreWithClamp's per-primary-signal clamp loop (calibrate_composite.go:198-213: for each primary-kind signal, clamp Confidence to cfg.Signals[kind].{MinConfidence,MaxConfidence} when a per-kind override exists in cfg.Signals; supporting signals and signals with no override pass through unchanged).",
+      "2. In internal/plugins/dedup/calibrate_composite.go, rewrite scoreWithClamp's body (L198-215) to call unified.ClampSignalConfidence + unified.ComposeScore instead of its own loop, deleting the duplicated logic. This is a pure refactor — confirm calibrate_composite_test.go's existing scoreWithClamp/scoreAll assertions still pass with byte-identical output.",
+      "3. Add ApplyConfidence bool `json:\"apply_confidence\"` to calibrateCompositeParams (L122-133), documented as independent of Apply (which persists bands only).",
+      "4. Add applyConfidenceBounds(suggestions []confSuggestion, log *slog.Logger) error on *Plugin, mirroring applyBandThresholds (L648-670): build a dedup.signals.confidence.<kind>.min_confidence/max_confidence payload from confSuggestions grouped by Kind+Bound (using each suggestion's To value), call config.NewUpdateService(p.store) the same way, log the previous bound values as the rollback record.",
+      "5. In runCalibrateComposite (~L620-641), after the existing band-apply block, add a parallel `if params.ApplyConfidence { ... }` block that calls applyConfidenceBounds when confSuggestions is non-empty (log and skip, without erroring, when the sweep produced none). OPEN SUB-DECISION for the executor + reviewer to resolve and justify explicitly in the PR: whether ApplyConfidence should require its own precision/recall floor on confSuggestions before writing, mirroring Round-1's allTargetsMet gate — today Round 2 has no such gate at all (purely advisory); do not silently invent a numeric threshold without stating the reasoning.",
+      "6. In internal/models/dedup_score.go, add an additive field to UnifiedDedupScore: `ClampedBand string \\`json:\"clamped_band,omitempty\"\\`` (old JSON blobs simply read back \"\" — no migration needed).",
+      "7. In internal/dedup/engine.go at both live composition sites (L685, L2983), after computing `composed := unified.ComposeScore(signals, ..., cfg, pair)` (UNCHANGED — this remains the raw/display value), also compute `clampedComposed := unified.ComposeScore(unified.ClampSignalConfidence(signals, cfg), suppressors, cfg, pair)` and set `composed.ClampedBand = clampedComposed.Band` before persisting.",
+      "8. Apply the same two-line addition at internal/dedup/rescore.go:276.",
+      "9. In internal/dedup/auto_resolve.go's autoResolveEligible (L211-214), change the CERTAIN-band gate to: when the current cfg has at least one non-default confidence override configured for a kind present in c.ScoreBreakdown.Signals, require c.ScoreBreakdown.ClampedBand == unified.BandCertain instead of (or in addition to) c.Band; when no overrides are configured, the check must remain byte-for-byte identical to today's `c.Band != unified.BandCertain` (lean on config.go:220-226's documented zero-value fallback semantics for the exact condition).",
+      "10. Bump version headers on every touched file.",
+      "11. Add a changelog fragment under changelog.d/ (no header) describing the new apply_confidence path and the additive ClampedBand field."
+    ],
+    "tests": [
+      "internal/dedup/unified/compose_test.go: TestClampSignalConfidence_ClampsOnlyPrimaryKindsWithinConfiguredBounds — asserts a primary signal's Confidence outside [Min,Max] is clamped, a supporting signal is untouched, and a kind with no cfg override passes through unchanged.",
+      "internal/plugins/dedup/calibrate_composite_test.go: TestCalibrateComposite_ApplyConfidencePersistsBoundsIndependentlyOfApply — set Apply=false, ApplyConfidence=true, assert UpdateConfig receives the confidence payload and band thresholds are NOT touched.",
+      "internal/dedup/auto_resolve_test.go: TestAutoResolveEligible_UnchangedWhenNoConfidenceOverridesConfigured (anti-over-suppression) — a pair that qualifies for CERTAIN auto-merge under today's baseline config must STILL qualify after this change, with zero confidence overrides configured (proves the default/display path is untouched).",
+      "internal/dedup/auto_resolve_test.go: TestAutoResolveEligible_RespectsClampedBandWhenConfidenceOverridesConfigured — a pair whose raw Band is CERTAIN but whose CLAMPED band drops below CERTAIN (because a configured Max/MinConfidence override tightens a primary signal) must be REJECTED for auto-merge once overrides are configured."
+    ],
+    "acceptance": [
+      "go test ./internal/dedup/... ./internal/plugins/dedup/... -run 'TestComposeScore|TestClampSignalConfidence|TestCalibrateComposite|TestAutoResolveEligible' -count=1 exits 0.",
+      "grep -n \"apply_confidence\" internal/plugins/dedup/calibrate_composite.go returns >=1 hit.",
+      "go build ./... && go vet ./... exits 0."
+    ],
+    "edge_cases": [
+      "A pair with NO stored ScoreBreakdown (legacy row, nil) must still be rejected the same way it is today (auto_resolve.go:216-218) — the clamped-band computation only ever runs on live-scored rows, never retrofitted onto legacy nil breakdowns.",
+      "A kind absent from cfg.Signals.Confidence must clamp to the SAME range ComposeScore already effectively uses today (DefaultScoreConfig's compiled-in bounds), so its clamped output equals its raw output — no accidental behavior change for unconfigured kinds.",
+      "Multiple confSuggestions for the SAME kind (both a min_confidence and max_confidence bound) must merge into one DedupKindConfidence entry per kind in the persisted payload, not two competing writes."
+    ],
+    "anti_over_suppression": "TestAutoResolveEligible_UnchangedWhenNoConfidenceOverridesConfigured — a known-good CERTAIN-band pair must still auto-merge with no confidence overrides configured (the default/no-op state).",
+    "depends_on_lines": [],
+    "gate": "go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/plugins/dedup/... -count=1",
+    "notes": "The decision text's literal '[0,100] clamp' is ALREADY implemented and tested in ComposeScore (compose.go:79-82) — that part is stale for the literal score-range interpretation. The real, unimplemented gap — confirmed by calibrate_composite.go's own extensive doc comment citing DECISIONS-PENDING.md row 10 — is that per-kind Signal.Confidence bounds (config.DedupSignalConfig.Confidence, already persistable) have ZERO effect on live scoring. This brief targets THAT gap. One implementation sub-decision (step 5's precision/recall gate for apply_confidence, and step 9's exact fallback condition) is deliberately left for the Opus executor + review_critical reviewer to pin down and justify in the PR, since the owner decision doc does not specify it and inventing a numeric gate here would not be evidence-based."
   }
 ]
