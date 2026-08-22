@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/__tests__/DedupEmbeddingTab.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 168ea495-1c5f-44bd-81b6-b01c7bc5d281
 // last-edited: 2026-08-21
 
@@ -107,7 +107,10 @@ describe('EmbeddingDedupTab book-sig coverage badge', () => {
 
     expect(await screen.findByText('Author cov-full-a')).toBeInTheDocument();
     expect(await screen.findByText('Author cov-full-b')).toBeInTheDocument();
-    expect(screen.queryByText(/partial fp/)).not.toBeInTheDocument();
+    // queryAllByText, not queryByText: the single-element query *throws* on two
+    // matches, which reports a regression as a lookup error rather than as
+    // "the badge rendered when it should not have".
+    expect(screen.queryAllByText(/partial fp/)).toHaveLength(0);
 
     unmount();
     vi.clearAllMocks();
@@ -121,6 +124,6 @@ describe('EmbeddingDedupTab book-sig coverage badge', () => {
 
     expect(await screen.findByText('Author cov-null-a')).toBeInTheDocument();
     expect(await screen.findByText('Author cov-null-b')).toBeInTheDocument();
-    expect(screen.queryByText(/partial fp/)).not.toBeInTheDocument();
+    expect(screen.queryAllByText(/partial fp/)).toHaveLength(0);
   });
 });
