@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: ead1df22-8c24-454c-957a-c6e50a46ddb5 -->
+<!-- guid: 3a9ad3a0-0e4c-40f1-955f-c8b48498cd0f -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — ci-tooling (todo-completion)
@@ -11,9 +11,9 @@
 |------|---------|-------|----------|--------|------|------|
 | TASK-006 | L46 | Add a scheduled detect-only backstop workflow for auto-revert.yml | P2 | M | Sonnet-class | 1 |
 | TASK-007 | L50 | Wire scripts/test_check_memory_leaks.py into a CI job (repo-guards) | P2 | S | Haiku-class | 1 |
-| TASK-008 | L921 | Bump the github-common reusable-workflow pins in at least two PRs, low-cons | P2 | M | Sonnet-class | 1 |
+| TASK-191 | L921 | Bump the github-common reusable-workflow pins in at least two PRs, low | P2 | M | Sonnet-class | 2 |
 | TASK-009 | L2568 | Teach the ABS fixture-capture harness to record request headers | P2 | S | Sonnet-class | 1 |
-| TASK-010 | SEC-CODEQL-BACKLOG | Add top-level `permissions:` blocks to the 3 workflows flagged by acti | P2 | S | Haiku-class | 2 |
+| TASK-010 | SEC-CODEQL-BACKLOG | Add top-level `permissions:` blocks to the 3 workflows flagged by acti | P2 | S | Haiku-class | 1 |
 | TASK-011 | SEC-8 | Pin SHA256 checksums for Dockerfile-fetched utfcpp/taglib tarballs | P2 | S | Haiku-class | 1 |
 | TASK-012 | L4312 | scripts/setup-prometheus-auth.py does NOT share the server-side shell  | P2 | S | Haiku-class | 1 |
 | TASK-013 | L4844 | Build a report-only scan for book rows that may have been spuriously c | P2 | M | Sonnet-class | 1 |
@@ -33,16 +33,16 @@
 ## Collision / wave note
 
 - `.github/workflows/ci.yml`: TASK-007, TASK-179 → serialize by wave (TASK-007=w1, TASK-179=w2)
-- `.github/workflows/hard-burndown.yml`: TASK-008, TASK-010 → serialize by wave (TASK-008=w1, TASK-010=w2)
-- `.github/workflows/nightly-burndown.yml`: TASK-008, TASK-010 → serialize by wave (TASK-008=w1, TASK-010=w2)
-- `.github/workflows/prerelease.yml`: TASK-008, TASK-099 → serialize by wave (TASK-008=w1, TASK-099=w2)
-- `.github/workflows/triage-poll.yml`: TASK-008, TASK-010 → serialize by wave (TASK-008=w1, TASK-010=w2)
+- `.github/workflows/hard-burndown.yml`: TASK-191, TASK-010 → serialize by wave (TASK-191=w2, TASK-010=w1)
+- `.github/workflows/nightly-burndown.yml`: TASK-191, TASK-010 → serialize by wave (TASK-191=w2, TASK-010=w1)
+- `.github/workflows/prerelease.yml`: TASK-191, TASK-099 → serialize by wave (TASK-191=w2, TASK-099=w1)
+- `.github/workflows/triage-poll.yml`: TASK-191, TASK-010 → serialize by wave (TASK-191=w2, TASK-010=w1)
 - `.gitignore`: TASK-014, TASK-015 → serialize by wave (TASK-014=w1, TASK-015=w2)
 
 | Wave | Tasks | Prereq | Parallel-safe because |
 |------|-------|--------|-----------------------|
-| 1 | TASK-006, TASK-007, TASK-008, TASK-009, TASK-011, TASK-012, TASK-013, TASK-014 | none | disjoint files within the wave (computed collision matrix) |
-| 2 | TASK-010, TASK-015 | wave 1 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
+| 1 | TASK-006, TASK-007, TASK-009, TASK-010, TASK-011, TASK-012, TASK-013, TASK-014 | none | disjoint files within the wave (computed collision matrix) |
+| 2 | TASK-191, TASK-015 | wave 1 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
 
 Waves are GLOBAL across the package: a wave-2 task here may be waiting on a wave-1 task in another workstream that shares a file (see `../BREAKDOWN-2026-08-21.md` collision table).
 

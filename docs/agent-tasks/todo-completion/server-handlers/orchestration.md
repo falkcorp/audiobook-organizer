@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: cffc74bd-8ff3-45a7-87ea-72571f8b5f7a -->
+<!-- guid: c66a80f9-eac9-4b5c-af65-2b219194a843 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — server-handlers workstream (todo-completion)
@@ -24,6 +24,7 @@ flowchart LR
     subgraph Wave2
       TASK144[TASK-144 n-5-search-narrators-must-om]
       TASK146[TASK-146 n-10-advertised-login-rate-l]
+      TASK213[TASK-213 replace-the-single-file-orga]
       TASK151[TASK-151 document-the-hardcoded-abs-t]
       TASK154[TASK-154 implement-post-api-session-l]
       TASK156[TASK-156 phase-7-socket-io-for-absorb]
@@ -31,6 +32,7 @@ flowchart LR
     end
     subgraph Wave3
       TASK147[TASK-147 align-abs-conformance-fixtur]
+      TASK212[TASK-212 add-get-api-libraries-librar]
     end
     subgraph Wave4
       TASK148[TASK-148 re-capture-the-series-abs-fi]
@@ -39,11 +41,15 @@ flowchart LR
     TASK143 --> TASK146
     TASK143 --> TASK147
     TASK144 --> TASK147
+    TASK144 --> TASK212
     TASK145 --> TASK147
     TASK146 --> TASK147
     TASK147 --> TASK148
     TASK149 --> TASK151
     TASK153 --> TASK154
+    TASK153 --> TASK212
+    TASK154 --> TASK212
+    TASK156 --> TASK212
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.

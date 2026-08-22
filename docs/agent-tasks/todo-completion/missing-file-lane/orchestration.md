@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: cc1b13ce-feea-4848-b000-f99c14365238 -->
+<!-- guid: 7b85d170-ca28-4b46-ab01-00a12121f25a -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — missing-file-lane workstream (todo-completion)
@@ -19,8 +19,11 @@ flowchart LR
       TASK093[TASK-093 audit-remaining-setupmockapi]
       TASK094[TASK-094 restore-version-group-count-]
       TASK097[TASK-097 remove-the-now-redundant-rea]
+      TASK199[TASK-199 render-library-sub-nav-items]
+      TASK099[TASK-099 fail-warn-ci-when-the-rc-ord]
       TASK100[TASK-100 validate-the-two-unvalidated]
       TASK101[TASK-101 pin-a-regression-test-the-re]
+      TASK200[TASK-200 build-the-tiered-per-file-in]
       TASK103[TASK-103 build-a-report-only-op-categ]
       TASK104[TASK-104 build-the-version-group-acou]
       TASK106[TASK-106 import-found-playlist-files-]
@@ -28,27 +31,34 @@ flowchart LR
       TASK108[TASK-108 add-the-review-rating-half-o]
       TASK109[TASK-109 parse-deluge-torrent-release]
       TASK111[TASK-111 build-the-pre-apply-snapshot]
+      TASK112[TASK-112 build-the-first-aid-orchestr]
       TASK113[TASK-113 missing-input-triggering-enq]
       TASK114[TASK-114 never-delete-re-associate-co]
     end
     subgraph Wave2
+      TASK198[TASK-198 diagnose-and-fix-scan-import]
       TASK095[TASK-095 instrument-sort-by-usage-to-]
       TASK096[TASK-096 require-every-mutating-opera]
-      TASK099[TASK-099 fail-warn-ci-when-the-rc-ord]
       TASK102[TASK-102 typescript-6-0-3-7-0-2-migra]
       TASK105[TASK-105 build-chapters-backfill-from]
       TASK110[TASK-110 audit-book-file-grouping-aga]
-      TASK112[TASK-112 build-the-first-aid-orchestr]
     end
     subgraph Wave3
       TASK098[TASK-098 echo-which-filters-the-serve]
+      TASK201[TASK-201 wire-per-file-intro-classifi]
+    end
+    subgraph Wave4
+      TASK202[TASK-202 wire-per-file-intro-classifi]
     end
     TASK095 --> TASK098
     TASK097 --> TASK102
+    TASK101 --> TASK201
     TASK106 --> TASK105
     TASK107 --> TASK105
     TASK109 --> TASK110
-    TASK113 --> TASK112
+    TASK200 --> TASK201
+    TASK200 --> TASK202
+    TASK201 --> TASK202
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -57,7 +67,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only' ; go build ./... && go vet ./... && go test ./internal/deluge/... -count=1 ; go build ./... && go vet ./... && go test ./internal/operations/registry/... -count=1 ; go build ./... && go vet ./... && go test ./internal/operations/registry/... ./internal/scheduler/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/playlist/... ./internal/scanner/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1 && npm --prefix web run lint && npm --prefix web test ; go build ./... && go vet ./... && go test ./internal/server/handlers/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/handlers/abs/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/handlers/audiobooks/... -count=1 ; npm --prefix web run lint && npm --prefix web test`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only' ; go build ./... && go vet ./... && go test ./internal/deluge/... -count=1 ; go build ./... && go vet ./... && go test ./internal/operations/registry/... -count=1 ; go build ./... && go vet ./... && go test ./internal/operations/registry/... ./internal/scheduler/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/playlist/... ./internal/scanner/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1 && npm --prefix web run lint && npm --prefix web test ; go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... ./internal/transcribe/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/handlers/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/handlers/abs/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/handlers/audiobooks/... -count=1 ; npm --prefix web run lint && npm --prefix web test`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

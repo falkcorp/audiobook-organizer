@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-145-n-6-log-metric-when-listening-stats-read-fails-c.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 72942ce8-3056-49f5-9a45-b8d9edfd6b67 -->
+<!-- guid: e00b5982-db64-4fd2-8efa-f531d538d596 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-145 — N-6: log + metric when listening-stats read fails (currently silent 0) (ABS-N6)

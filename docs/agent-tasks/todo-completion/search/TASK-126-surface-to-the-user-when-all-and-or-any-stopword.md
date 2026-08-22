@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/search/TASK-126-surface-to-the-user-when-all-and-or-any-stopword.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: d77865c8-96c0-44d4-8257-882c9457fe68 -->
+<!-- guid: a8bbd6b3-5203-4023-86b4-3f3fcad0926c -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-126 — Surface to the user when 'all'/'and' (or any stopword) is silently dropped from a search query (TODO.md L3369)

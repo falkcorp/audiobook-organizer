@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-141-add-regression-tests-for-the-2-untested-deluge-h.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 7f722ad0-f3c4-40c6-bc07-6236b48e7ef1 -->
+<!-- guid: 27683d63-1fdd-46f3-836e-ea0823cb38ec -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-141 — Add regression tests for the 2 untested deluge hydrate sites (TODO.md L10525)

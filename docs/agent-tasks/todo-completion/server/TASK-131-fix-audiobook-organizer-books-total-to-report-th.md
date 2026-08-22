@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-131-fix-audiobook-organizer-books-total-to-report-th.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 0fb342d4-a2d4-402e-8416-9ccd39e1a6c9 -->
+<!-- guid: e8b715e9-3d30-4646-8a17-f426b2a7393d -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-131 — Fix audiobook_organizer_books_total to report the true total, not just primary books (or rename it) (TODO.md L3443)

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/config/TASK-020-delete-the-fully-inert-enable-sqlite3-i-know-the.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e0bd12fa-13d9-4637-be10-e49b38fab826 -->
+<!-- guid: af7eea9a-3840-4012-bb51-c3243c6418f9 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-020 — Delete the fully inert --enable-sqlite3-i-know-the-risks flag and EnableSQLite config option (CFG-AUDIT)

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-106-import-found-playlist-files-m3u-m3u8-pls-cue-xsp.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 263e3e9a-07e9-492d-87ae-fb5ee4df7ec5 -->
+<!-- guid: c97757f7-d6b2-4cfe-85c6-9624565e6126 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-106 — Import found playlist files (.m3u/.m3u8/.pls/.cue/.xspf) during scan, resolving entries to book_file rows (TODO.md L8646)

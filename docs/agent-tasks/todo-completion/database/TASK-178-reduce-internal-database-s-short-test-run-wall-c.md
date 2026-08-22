@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-178-reduce-internal-database-s-short-test-run-wall-c.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 40949124-3458-495b-bc2f-c87443c3002a -->
+<!-- guid: a03c3955-fa5f-4166-9b81-469a9a565d5c -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-178 — Reduce internal/database's -short test-run wall-clock cost (currently 200-280s, most of the coverage gate's budget) (TODO.md L238)

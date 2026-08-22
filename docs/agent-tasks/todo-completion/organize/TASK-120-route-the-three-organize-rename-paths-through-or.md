@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/organize/TASK-120-route-the-three-organize-rename-paths-through-or.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 926287b9-bf01-4da4-a57e-a1bc016dfee2 -->
+<!-- guid: b9e9c468-7fd1-4cd3-82ea-e5a052f5f0f3 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-120 — Route the three organize/rename paths through organizer.MoveBookFile's verify-move-DB-update-rollback pattern (F5)

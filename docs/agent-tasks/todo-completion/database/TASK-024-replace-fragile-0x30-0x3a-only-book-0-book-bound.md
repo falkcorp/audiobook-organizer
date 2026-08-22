@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-024-replace-fragile-0x30-0x3a-only-book-0-book-bound.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f6e4da86-362d-4f63-ab9a-2390bbb82390 -->
+<!-- guid: 347c5ee6-6839-4ede-9d14-abe536b45051 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-024 — Replace fragile [0x30-0x3A]-only book:0..book:; bounds in the version-group backfill with a real prefix scan (VGBACKFILL-BOUNDS-FRAGILE)

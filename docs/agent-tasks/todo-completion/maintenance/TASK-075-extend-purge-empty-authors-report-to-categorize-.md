@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-075-extend-purge-empty-authors-report-to-categorize-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 700b8b7d-2e43-4cb8-97c1-3afff556c803 -->
+<!-- guid: ea309b5e-98ea-4866-97ed-0491bd0d21c9 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-075 — Extend purge-empty-authors' report to categorize the 822 zero-book-but-has-files authors (TODO.md L5275)

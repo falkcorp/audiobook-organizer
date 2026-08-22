@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 160bdd02-85c1-489e-9f00-35decbf50833 -->
+<!-- guid: e15d311e-6e42-4bbe-b398-b98fd31d6f8a -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — misc-go workstream (todo-completion)
@@ -20,10 +20,13 @@ flowchart LR
       TASK087[TASK-087 replace-serviceregistry-get-]
       TASK088[TASK-088 route-acoustid-lsh-backfill-]
     end
-    subgraph Wave5
+    subgraph Wave2
+      TASK197[TASK-197 audit-every-registry-runitem]
+    end
+    subgraph Wave6
       TASK186[TASK-186 measure-the-real-double-prim]
     end
-
+    TASK088 --> TASK197
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -32,7 +35,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/audiobooks/... ./internal/database/... ./internal/organizer/... ./internal/plugins/maintenance/... ./internal/reconcile/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/backup/... -count=1 ; go build ./... && go vet ./... && go test ./internal/fileops/... ./internal/metadata/... ./internal/server/handlers/... -count=1 ; go build ./... && go vet ./... && go test ./internal/metrics/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/mtls/... ./tools/cmd/merge-split-books/... ./tools/cmd/reconcile-paths/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/acoustid/... -count=1 ; go build ./... && go vet ./... && go test ./internal/serviceregistry/... -count=1 ; go build ./... && go vet ./... && go test ./internal/util/... -count=1`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/audiobooks/... ./internal/database/... ./internal/organizer/... ./internal/plugins/maintenance/... ./internal/reconcile/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/backup/... -count=1 ; go build ./... && go vet ./... && go test ./internal/fileops/... ./internal/metadata/... ./internal/server/handlers/... -count=1 ; go build ./... && go vet ./... && go test ./internal/metrics/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/mtls/... ./tools/cmd/merge-split-books/... ./tools/cmd/reconcile-paths/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/acoustid/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/acoustid/... ./internal/plugins/dedup/... ./internal/plugins/maintenance/... ./internal/plugins/metafetch/... -count=1 ; go build ./... && go vet ./... && go test ./internal/serviceregistry/... -count=1 ; go build ./... && go vet ./... && go test ./internal/util/... -count=1`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

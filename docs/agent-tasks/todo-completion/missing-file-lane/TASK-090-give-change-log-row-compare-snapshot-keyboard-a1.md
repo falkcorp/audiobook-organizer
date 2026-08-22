@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-090-give-change-log-row-compare-snapshot-keyboard-a1.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: d3952489-4ca9-4fab-a554-aa59003c4c56 -->
+<!-- guid: 72cbefe0-82ad-46f9-84fa-a8a2ff14884e -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-090 — Give Change Log row 'Compare snapshot' keyboard/a11y affordance (TODO.md L5722)

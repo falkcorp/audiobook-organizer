@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-088-route-acoustid-lsh-backfill-s-lshindexchecker-lo.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 1dc6cf2b-fb46-4466-994a-70aff714d4fb -->
+<!-- guid: 914685de-c0fb-4df1-a535-470a21f6c817 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-088 — Route acoustid lsh_backfill's lshIndexChecker lookup through database.AsCapability (TODO.md L4698)

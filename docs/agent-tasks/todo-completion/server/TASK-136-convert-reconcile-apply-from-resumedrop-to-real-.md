@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-136-convert-reconcile-apply-from-resumedrop-to-real-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 12621a2d-6811-462e-a571-9edfca0970d3 -->
+<!-- guid: b5205494-5c02-4147-a512-2a2815a0759b -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-136 — Convert reconcile.apply from ResumeDrop to real checkpoint/resume (TODO.md L4575)

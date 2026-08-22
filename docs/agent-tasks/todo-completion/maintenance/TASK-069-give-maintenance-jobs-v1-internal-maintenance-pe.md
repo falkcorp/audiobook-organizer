@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-069-give-maintenance-jobs-v1-internal-maintenance-pe.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e340615e-d196-4c53-802a-c2c2fbe3717b -->
+<!-- guid: 29370acb-3a33-4eb4-abe6-25e933f7ccfd -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-069 — Give maintenance jobs (v1, internal/maintenance) per-job store interfaces instead of the shared JobStore (TODO.md L1009)

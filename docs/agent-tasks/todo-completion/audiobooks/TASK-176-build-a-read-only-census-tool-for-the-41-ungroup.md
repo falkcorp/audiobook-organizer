@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-176-build-a-read-only-census-tool-for-the-41-ungroup.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 22f81b61-91a5-4c9e-911d-70367725e021 -->
+<!-- guid: bad65b5d-d0a3-42d8-8e3e-da6b78341f96 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-176 — Build a read-only census tool for the 41 ungrouped-but-explicitly-non-primary books (TODO.md L3354)

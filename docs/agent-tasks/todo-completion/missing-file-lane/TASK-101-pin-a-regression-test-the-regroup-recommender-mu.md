@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-101-pin-a-regression-test-the-regroup-recommender-mu.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e87bf32c-0400-4843-bc75-df34428f7a2a -->
+<!-- guid: 0f5556fb-7d23-411a-91ea-c42d0c2e6a2d -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-101 — Pin a regression test: the regroup recommender must not default to duplicate-of on equal-runtime alone, using the 3 real multidisc holds as fixtures (TODO.md L8245)

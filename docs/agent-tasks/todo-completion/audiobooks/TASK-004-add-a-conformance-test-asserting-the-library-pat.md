@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-004-add-a-conformance-test-asserting-the-library-pat.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: bfaad406-7c09-492e-8f3b-15c63bc3c224 -->
+<!-- guid: a9956260-2ba7-4f0a-b162-6a9d5eb923ab -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-004 — Add a conformance test asserting the library path and author path classify nil/true/false IsPrimaryVersion identically (TODO.md L3889)
 
-**Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · audiobooks subagent · **Why:** Requires understanding both call paths (library pushdown vs authorID branch + post-filter) well enough to build a fixture that actually exercises the divergent nil handling -- a naive fixture without a nil-flagged row would not catch the bug per the TODO's own warning. · **Depends on:** TASK-003 · **Wave:** 5 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · audiobooks subagent · **Why:** Requires understanding both call paths (library pushdown vs authorID branch + post-filter) well enough to build a fixture that actually exercises the divergent nil handling -- a naive fixture without a nil-flagged row would not catch the bug per the TODO's own warning. · **Depends on:** TASK-003 · **Wave:** 6 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 3889 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "Add a conformance test in the shape used by #2406/" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-06.json`.
 

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-163-find-the-mechanism-behind-the-intermittent-webki.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 89d31fb9-1406-49b7-8865-10146db5d575 -->
+<!-- guid: 12c9811a-34ff-43c0-9b99-0ff38b6952ba -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-163 — Find the mechanism behind the intermittent webkit-only flake in batch-operations.spec.ts:100 (selection persists across page navigation) (TODO.md L1744)

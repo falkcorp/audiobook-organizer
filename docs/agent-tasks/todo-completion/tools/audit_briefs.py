@@ -35,10 +35,10 @@ for path in sorted(glob.glob(os.path.join(PKG, "*", "TASK-*.md"))):
     zero = []
     for c, exp in cmds:
         exp = exp.split(" — ", 1)[0]
-        expect_zero = bool(re.search(r"\b(0|zero|no)\s*(hits?|matches?|results?)|absent|does not exist|not (yet )?(present|exist|implemented)|should (not|be empty)|expected: 0|— 0\b", exp, re.I))
+        expect_zero = not re.match(r"\s*(≥|>=|[1-9]\d*|one|two|three|\d+\+)\b", exp, re.I) and bool(re.search(r"\b(0|zero|no)\s*(hits?|matches?|results?)|absent|does not exist|not (yet )?(present|exist|implemented)|should (not|be empty)|expected: 0|— 0\b", exp, re.I))
         cc = c
         # strip trailing comment
-        cc = re.sub(r"\s+#.*$", "", cc)
+        cc = re.sub(r"\s{2,}#.*$", "", cc)   # only the brief's "   #" comment separator, never a '#123' inside a pattern
         if not re.match(r"^(grep|rg|ls|test|sed|git|find|cat|wc|go|python3|jq|gh|awk|head|tail|\!|\[)", cc):
             continue
         try:

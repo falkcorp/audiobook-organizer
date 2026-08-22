@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/organize/TASK-122-add-an-edition-suffix-folder-pattern-token.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 8d54dc14-e0d7-42eb-87ba-d9146486eca0 -->
+<!-- guid: b02afc05-175a-441d-aada-7c93b6f39e4b -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-122 — Add an {edition_suffix} folder-pattern token (TODO.md L5021)

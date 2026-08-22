@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-002-fix-the-3-way-disagreement-in-how-a-nil-isprimar.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b73611d8-4ca6-47c2-93eb-fc770bad6722 -->
+<!-- guid: a7515fad-2961-42ee-8175-12c9a421a3d1 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-002 — Fix the 3-way disagreement in how a nil IsPrimaryVersion is treated (matcher vs. pushdown vs. serialized field) (TODO.md L3348)
 
-**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · audiobooks subagent · **Why:** Root cause is fully located (3 exact call sites); the fix is a mechanical unification of nil semantics, but on a prod-data-adjacent listing/filtering path that needs careful regression testing across both the memdb-pushdown and post-filter query strategies. · **Depends on:** none · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · audiobooks subagent · **Why:** Root cause is fully located (3 exact call sites); the fix is a mechanical unification of nil semantics, but on a prod-data-adjacent listing/filtering path that needs careful regression testing across both the memdb-pushdown and post-filter query strategies. · **Depends on:** none · **Wave:** 4 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 3348 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**`is_primary_version` in the payload disagrees wi" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-04.json`.
 

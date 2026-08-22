@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/metadata/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: d15df63d-d2af-4c97-8dc7-bfca8a986d42 -->
+<!-- guid: f3481b29-312a-467d-bfbf-d7992d548fdf -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — metadata workstream (todo-completion)
@@ -15,6 +15,7 @@ flowchart LR
       TASK079[TASK-079 route-scoreoneresultwithbrea]
       TASK080[TASK-080 assess-the-2-critical-go-req]
       TASK081[TASK-081 prefix-metadata-apply-activi]
+      TASK196[TASK-196 build-an-async-fanned-out-ba]
     end
 
 ```
@@ -25,7 +26,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/covers/... ./internal/metadata/... -count=1 ; go build ./... && go vet ./... && go test ./internal/metafetch/... -count=1`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/covers/... ./internal/metadata/... -count=1 ; go build ./... && go vet ./... && go test ./internal/metafetch/... -count=1 ; go build ./... && go vet ./... && go test ./internal/metafetch/... ./internal/server/... -count=1 && npm --prefix web run lint && npm --prefix web test`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

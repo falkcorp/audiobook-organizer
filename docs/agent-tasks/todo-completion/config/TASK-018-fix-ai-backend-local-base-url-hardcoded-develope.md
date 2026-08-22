@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/config/TASK-018-fix-ai-backend-local-base-url-hardcoded-develope.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: c23944fb-4562-40bb-a8f4-2bd510a14735 -->
+<!-- guid: 88482b0e-beb9-4cd4-88ad-dd5e6f1774d3 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-018 — Fix ai_backend.local_base_url hardcoded developer LAN IP default (CFG-AUDIT)

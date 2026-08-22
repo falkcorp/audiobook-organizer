@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: ee15f1f3-b39f-4d99-aca7-bb4034889d32 -->
+<!-- guid: 8711b535-5aa1-4505-b038-03b378c76089 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — docs (todo-completion)
 
-12 tasks projected from the 2026-08-21 TODO-completion skeleton (`../skeleton.json`). Every fact here is a projection of that skeleton — edit the skeleton and regenerate, never this file.
+13 tasks projected from the 2026-08-21 TODO-completion skeleton (`../skeleton.json`). Every fact here is a projection of that skeleton — edit the skeleton and regenerate, never this file.
 
 | Task | TODO id | Title | Priority | Effort | Tier | Wave |
 |------|---------|-------|----------|--------|------|------|
@@ -17,6 +17,7 @@
 | TASK-054 | L497 | Re-verify docs/reference/abs-target-client-contract.md §11's 'safe to  | P2 | S | Sonnet-class | 1 |
 | TASK-055 | L1852 | Document the todo.d fragment race (assembled between filing and finish | P2 | S | Haiku-class | 1 |
 | TASK-056 | L4463 | Consolidate the August executive-summary roundup through 2026-08-19 | P2 | L | Sonnet-class | 1 |
+| TASK-194 | TODO-SEC-SYSTEMD | Harden the systemd unit: ProtectSystem=strict, ReadWritePaths, Capabil | P1 | M | Opus-class | 1 |
 | TASK-057 | ABS-SYNC-Phase8 | Phase 8 — write the ABS topology, runbook, and migration guide (Cloudf | P1 | M | Opus-class | 1 |
 | TASK-058 | L10635 | Update execution-manifest doc to reflect the now-settled human gates | P2 | S | Haiku-class | 1 |
 | TASK-059 | L10706 | Close out the 2026-05-01 re-audit block (TEST-2/DEP-1/DEAD-1/CTX-4/LOG | P2 | S | Haiku-class | 1 |
@@ -38,7 +39,7 @@
 
 | Wave | Tasks | Prereq | Parallel-safe because |
 |------|-------|--------|-----------------------|
-| 1 | TASK-182, TASK-183, TASK-051, TASK-052, TASK-053, TASK-054, TASK-055, TASK-056, TASK-057, TASK-058, TASK-059, TASK-060 | none | disjoint files within the wave (computed collision matrix) |
+| 1 | TASK-182, TASK-183, TASK-051, TASK-052, TASK-053, TASK-054, TASK-055, TASK-056, TASK-194, TASK-057, TASK-058, TASK-059, TASK-060 | none | disjoint files within the wave (computed collision matrix) |
 
 Waves are GLOBAL across the package: a wave-2 task here may be waiting on a wave-1 task in another workstream that shares a file (see `../BREAKDOWN-2026-08-21.md` collision table).
 

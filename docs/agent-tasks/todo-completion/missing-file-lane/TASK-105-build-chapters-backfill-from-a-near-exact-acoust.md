@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-105-build-chapters-backfill-from-a-near-exact-acoust.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 6523b04d-2777-42e1-a455-5dcf6f3d53d4 -->
+<!-- guid: 6d6f0d31-87b9-4e5e-bcbb-b931460b2cad -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-105 — Build chapters backfill from a near-exact-acoustic-match duplicate (or provider data, or a cue/playlist) (TODO.md L8611)

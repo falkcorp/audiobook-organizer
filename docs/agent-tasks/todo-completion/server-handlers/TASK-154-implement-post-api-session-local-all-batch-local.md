@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-154-implement-post-api-session-local-all-batch-local.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b66bc384-0fe7-4dba-9c5a-3a1c09c8f941 -->
+<!-- guid: 90ac7898-23f2-4063-b3af-0731bc2a1812 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-154 — Implement POST /api/session/local-all (batch local-session sync, accept both body shapes) (TODO.md L4507)

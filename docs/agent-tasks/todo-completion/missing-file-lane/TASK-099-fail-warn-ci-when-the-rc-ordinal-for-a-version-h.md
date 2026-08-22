@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-099-fail-warn-ci-when-the-rc-ordinal-for-a-version-h.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 21f6bc74-d7df-448a-b10e-a1b9c25b8b06 -->
+<!-- guid: ccb516e0-99fe-43d6-a338-8d3046dbf3e8 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-099 — Fail/warn CI when the RC ordinal for a version hits 10 (TODO.md L8044)
 
-**Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · missing-file-lane subagent · **Why:** one new step in an existing thin wrapper workflow, using a gh CLI pattern already used elsewhere in this repo's workflows · **Depends on:** none · **Wave:** 2
+**Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · missing-file-lane subagent · **Why:** one new step in an existing thin wrapper workflow, using a gh CLI pattern already used elsewhere in this repo's workflows · **Depends on:** none · **Wave:** 1
 
 Source: `TODO.md` line 8044 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**Never accumulate more than 10 RCs on a version —" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-12.json`.
 

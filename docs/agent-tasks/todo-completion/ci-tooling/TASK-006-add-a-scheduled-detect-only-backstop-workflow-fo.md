@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-006-add-a-scheduled-detect-only-backstop-workflow-fo.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 64acee66-0f3c-41d3-a5f9-76b33c0b4f81 -->
+<!-- guid: dc10dbc2-be5e-46df-bacb-f96e532bada0 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-006 — Add a scheduled detect-only backstop workflow for auto-revert.yml (TODO.md L46)

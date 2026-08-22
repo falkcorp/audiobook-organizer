@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-029-add-getbooksbyseriesidallversions-and-switch-ded.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 443150f0-f1c5-4521-822f-b3cb8a3220d8 -->
+<!-- guid: 115bf729-b18a-42bd-865d-8d25edbeec0f -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-029 — Add GetBooksBySeriesIDAllVersions and switch DedupSeries's merge loop to it before DeleteSeries (TODO.md L3966)

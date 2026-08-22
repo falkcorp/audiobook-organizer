@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-164-let-the-owner-combine-merge-duplicate-books-from.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f874f4b4-bceb-40b4-9983-a74571b29c31 -->
+<!-- guid: aba4dbd7-5034-4de1-ae78-b5018a1f3720 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-164 — Let the owner combine/merge duplicate books from the metadata chooser, before applying metadata — BLOCKED on two data-correctness bugs landing first (REVIEW-COMBINE-FIRST)

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-159-add-and-use-a-test-reset-hook-for-the-module-sco.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: fce441aa-a094-49e2-ae9d-7c910545d86d -->
+<!-- guid: f0a52412-4cff-4bb8-b13f-3ca69193b19c -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-159 — Add and use a test-reset hook for the module-scope path-alias/path-var promise caches (2026-08-20-dual-path-settings-panel.md#3)

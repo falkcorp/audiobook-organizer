@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/scanner/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: ac761b34-f512-4e67-a578-ededcbe2065e -->
+<!-- guid: e148a181-1c48-42d1-99c8-d4491af023b0 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — scanner workstream (todo-completion)

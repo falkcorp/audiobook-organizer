@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-072-new-maintenance-op-merge-an-operator-confirmed-l.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: fc17bb8d-076a-4d9b-b955-b5a7ecb8118f -->
+<!-- guid: d0485580-247b-4632-8724-cfdf55787cee -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-072 — New maintenance op: merge an operator-confirmed list of duplicate real-author rows (TODO.md L3795)

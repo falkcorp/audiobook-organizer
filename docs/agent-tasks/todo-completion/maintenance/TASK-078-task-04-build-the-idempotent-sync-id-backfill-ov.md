@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-078-task-04-build-the-idempotent-sync-id-backfill-ov.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 952444ef-4152-4246-ad5b-68406cce3dc7 -->
+<!-- guid: 041efd82-d216-4acd-90e0-a8aabfb899ea -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-078 — TASK-04: build the idempotent sync-ID backfill over the existing library (bounded worker pool required) (ABS-SYNC-TASK-04)

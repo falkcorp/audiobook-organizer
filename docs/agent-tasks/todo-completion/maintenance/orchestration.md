@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: fc406a7c-a7be-40d6-b15d-1a833dbca633 -->
+<!-- guid: f5690caa-91c2-438f-86f8-97ca9ccbe9da -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — maintenance workstream (todo-completion)
@@ -22,10 +22,13 @@ flowchart LR
       TASK076[TASK-076 author-narrator-swap-repair-]
       TASK077[TASK-077 narrow-the-3-remaining-maint]
       TASK078[TASK-078 task-04-build-the-idempotent]
+      TASK195[TASK-195 add-a-zero-size-bucket-to-ma]
     end
     subgraph Wave2
-      TASK067[TASK-067 extend-the-repoint-repair-to]
       TASK072[TASK-072 new-maintenance-op-merge-an-]
+    end
+    subgraph Wave3
+      TASK067[TASK-067 extend-the-repoint-repair-to]
     end
     subgraph Wave5
       TASK070[TASK-070 add-a-user-configurable-acti]

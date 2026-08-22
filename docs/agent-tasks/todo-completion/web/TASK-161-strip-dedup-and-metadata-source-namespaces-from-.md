@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-161-strip-dedup-and-metadata-source-namespaces-from-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 235433db-9184-4a29-9b41-936b2627f95f -->
+<!-- guid: 5cddf90c-ff71-4e41-a3db-8d0f011d6d5e -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-161 — Strip dedup:* and metadata:source:* namespaces from Browse by Tag widget (TODO.md L1350)

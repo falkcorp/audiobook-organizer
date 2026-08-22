@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: c10253f8-4e85-44d3-b04f-f0968d480a88 -->
+<!-- guid: 3a4fefbf-0817-4510-8800-54af215debd3 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — web workstream (todo-completion)

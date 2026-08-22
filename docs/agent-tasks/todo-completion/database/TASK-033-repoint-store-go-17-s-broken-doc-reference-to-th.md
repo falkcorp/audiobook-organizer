@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-033-repoint-store-go-17-s-broken-doc-reference-to-th.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 90152349-bf9c-4031-8dba-ba894e442b95 -->
+<!-- guid: e2635471-0b89-4d6f-a426-8c066d249709 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-033 — Repoint store.go:17's broken doc reference to the archived design spec (TODO.md L4721)

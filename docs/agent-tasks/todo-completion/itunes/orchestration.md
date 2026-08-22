@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: ba60b07a-8826-490b-974b-a5c2e89e6e8e -->
+<!-- guid: 1c425f8f-bd9a-4ad8-b853-95f6a2a46e1a -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — itunes workstream (todo-completion)
@@ -21,7 +21,7 @@ flowchart LR
       TASK061[TASK-061 import-the-224-materialized-]
       TASK063[TASK-063 internal-itunes-backfill-go-]
     end
-    subgraph Wave5
+    subgraph Wave6
       TASK065[TASK-065 p2-relocate-only-sync-cycle-]
     end
     TASK062 --> TASK063

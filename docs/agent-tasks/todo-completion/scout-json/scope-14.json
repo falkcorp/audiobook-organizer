@@ -226,7 +226,7 @@
   ],
   "polarity": "transform",
   "effort": "M",
-  "tier": "sonnet",
+  "tier": "opus",
   "why_tier": "concurrency-safety review needed: UpdateCandidateStatus/UpsertLabeledExample must be safe under concurrent per-candidate calls; not a mechanical edit",
   "review_critical": true,
   "goal": "Convert DismissDedupCluster's (internal/server/handlers/dedup/handler.go:1176) per-candidate loop from a sequential for-range into a bounded worker pool (errgroup.Group + SetLimit(runtime.NumCPU()) or similar), so a large cluster dismiss doesn't serialize N sequential UpdateCandidateStatus + refreshExampleBreakdown round-trips. Each candidate's dismiss+label-capture is independent (keyed by distinct candidate.ID / distinct book pairs), so workers can run in parallel without a shared-state lock beyond an atomic dismissed counter.",
@@ -259,7 +259,8 @@
   "gate": "make ci",
   "notes": "TODO.md item 7's own text hedges this as 'may need' \u2014 but the concurrency mandate in this repo's CLAUDE.md makes this a should-fix regardless of measured latency, since the shape (per-item DB round-trip in a for-range) is exactly what that policy targets.",
   "review_notes": [
-   "[ops-rollback.json] TASK-169 fans DismissDedupCluster's per-candidate work out over runtime.NumCPU() goroutines, and the per-candidate work calls EmbeddingStore.UpsertLabeledExample - one of the few EmbeddingStore methods that does NOT take the store's closeMu read lock, only a check-then-act atomic flag. The file's ow"
+   "[ops-rollback.json] TASK-169 fans DismissDedupCluster's per-candidate work out over runtime.NumCPU() goroutines, and the per-candidate work calls EmbeddingStore.UpsertLabeledExample - one of the few EmbeddingStore methods that does NOT take the store's closeMu read lock, only a check-then-act atomic flag. The file's ow",
+   "[verify-4.json] Skeleton's machine `tier` field says 'sonnet' but `tier_label` (what the rendered brief header and README both show) says 'Opus-class', for a REVIEW-CRITICAL prod-data-path task. Verified via: python3 -c \"import json; d=json.load(open('skeleton.json')); [print(t['id'], t['tier'], t['tier_label']) fo"
   ]
  },
  {

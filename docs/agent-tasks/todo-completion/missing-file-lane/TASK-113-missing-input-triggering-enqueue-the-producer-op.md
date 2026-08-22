@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-113-missing-input-triggering-enqueue-the-producer-op.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: ddc5e400-4b24-4990-acc3-f1f9d10de312 -->
+<!-- guid: eb516086-21c8-418c-adc7-02fb23f0dbfd -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-113 — Missing-input triggering: enqueue the producer op when a waiting_deps requirement's input has never run (TODO.md L8890)

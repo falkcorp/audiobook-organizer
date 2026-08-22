@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-009-teach-the-abs-fixture-capture-harness-to-record-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 6f3952fc-5b54-411a-adf3-d0ffdcf31ae9 -->
+<!-- guid: b49ef6d6-f483-4d5d-ad23-5aeae3e74359 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-009 — Teach the ABS fixture-capture harness to record request headers (TODO.md L2568)

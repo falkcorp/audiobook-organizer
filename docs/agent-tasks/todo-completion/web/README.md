@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 667f9715-bc08-4647-a500-10093f06562c -->
+<!-- guid: 0528282c-fda0-4469-8196-344217d942ef -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — web (todo-completion)
@@ -42,6 +42,7 @@
 
 ## Collision / wave note
 
+- `web/src/components/audiobooks/BulkMetadataSearchDialog.tsx`: TASK-196, TASK-165 → serialize by wave (TASK-196=w1, TASK-165=w8)
 - `web/src/components/bookdetail/BookDetailInfoTab.tsx`: TASK-166, TASK-167, TASK-168 → serialize by wave (TASK-166=w3, TASK-167=w4, TASK-168=w5)
 - `web/src/components/bookdetail/BookDetailVersionGroup.tsx`: TASK-094, TASK-169 → serialize by wave (TASK-094=w1, TASK-169=w6)
 - `web/src/components/dedup/DedupAcousticTab.tsx`: TASK-165, TASK-173 → serialize by wave (TASK-165=w8, TASK-173=w1)
@@ -50,6 +51,7 @@
 - `web/src/pages/ActivityLog.tsx`: TASK-070, TASK-174 → serialize by wave (TASK-070=w5, TASK-174=w1)
 - `web/src/pages/BookDetail.tsx`: TASK-037, TASK-100, TASK-165 → serialize by wave (TASK-037=w6, TASK-100=w1, TASK-165=w8)
 - `web/src/pages/Library.tsx`: TASK-092, TASK-161, TASK-164, TASK-165, TASK-166, TASK-167, TASK-168, TASK-169 → serialize by wave (TASK-092=w1, TASK-161=w2, TASK-164=w7, TASK-165=w8, TASK-166=w3, TASK-167=w4, TASK-168=w5, TASK-169=w6)
+- `web/src/pages/Settings.tsx`: TASK-198, TASK-158 → serialize by wave (TASK-198=w2, TASK-158=w1)
 
 | Wave | Tasks | Prereq | Parallel-safe because |
 |------|-------|--------|-----------------------|

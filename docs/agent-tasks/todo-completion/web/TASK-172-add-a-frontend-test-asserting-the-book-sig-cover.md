@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-172-add-a-frontend-test-asserting-the-book-sig-cover.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 44438d56-851a-4314-a65c-8a67defc5d20 -->
+<!-- guid: ca20ab27-078e-4058-8e2e-5fcc8c6af54e -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-172 — Add a frontend test asserting the book-sig coverage % badge renders (TODO.md L10586)
