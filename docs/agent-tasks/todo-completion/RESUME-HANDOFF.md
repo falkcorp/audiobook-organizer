@@ -4,7 +4,7 @@ Planning branch: plan/todo-master-plan, draft PR #2682. Scratchpad is mirrored a
 docs/agent-tasks/todo-completion/state/scratchpad/ (restore it to the session scratchpad, or run the tools from there).
 
 ## Resume steps (in order)
-1. Resume scouts: scope-18 has 8/24 objects (scout/handoff-scope-18.md lists the 16 remaining todo_lines);
+1. Scouts DONE — copy scout/scope-18.json and scope-19.json into scout-all/ (step 3). Was: scope-18 COMPLETE (29 objects, all 24 items);
    scope-19 COMPLETE (7 objects). Same SCOUT-INSTRUCTIONS.md.
 2. Resume verifiers: group 5 has 4/29 briefs (patches/handoff-verify-5.md); group 4 is COMPLETE (32/32);
    groups 1-3 were paused earlier (patches/handoff-verify-{1,2,3}.md); group 6 (maintenance, dedup, itunes) NOT started.
