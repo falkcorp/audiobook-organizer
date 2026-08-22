@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 62637af9-347f-4f38-b42b-d90ff3ab3654
-// last-edited: 2026-07-12
+// last-edited: 2026-08-22
 
 // Tests for the duplicates-domain handlers. The store / merge-service /
 // audiobook-service / metadata-fetch-service / operations-registry deps are
@@ -145,7 +145,31 @@ func doReq(t *testing.T, fn gin.HandlerFunc, method, url string, body any) *http
 	return w
 }
 
-func opMatcher() *database.Operation { return &database.Operation{ID: "op-1", Type: "x"} }
+// assertReturnsV2OpID checks that an async duplicates trigger responded with the
+// id EnqueueOp returned -- the v2 operation id -- and not the id of a legacy v1
+// operation row.
+//
+// This is the whole bug these endpoints had. The client polls the returned id
+// against GET /operations/v2/:id, which reads the v2 store and does not fall
+// back to the retired v1 table, so a v1 id 404s and the UI reports failure for
+// work that ran fine. The previous version of these tests asserted only the 202
+// and so could not see it: the mock returned "rid" from EnqueueOp and "op-1"
+// from CreateOperation, the handler sent "op-1", and the test passed.
+func assertReturnsV2OpID(t *testing.T, w *httptest.ResponseRecorder) {
+	t.Helper()
+	var body struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v (body %s)", err, w.Body.String())
+	}
+	if body.Data.ID != "rid" {
+		t.Fatalf("want the v2 op id %q from EnqueueOp, got %q -- body %s",
+			"rid", body.Data.ID, w.Body.String())
+	}
+}
 
 // --- ListDuplicateAudiobooks ---
 
@@ -184,12 +208,12 @@ func TestListBookDuplicateScanResults_EmptyNeedsRefresh(t *testing.T) {
 
 func TestScanBookDuplicates_Enqueues202(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().CreateOperation(mock.Anything, "book-dedup-scan", mock.Anything).Return(opMatcher(), nil)
 	d.reg.EXPECT().EnqueueOp(mock.Anything, "dedup.book-scan", mock.Anything).Return("rid", nil)
 	w := doReq(t, h.ScanBookDuplicates, http.MethodPost, "/audiobooks/duplicates/scan", nil)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
 	}
+	assertReturnsV2OpID(t, w)
 }
 
 func TestScanBookDuplicates_NoRegistry(t *testing.T) {
@@ -287,13 +311,13 @@ func TestDismissBookDuplicateGroup_OK(t *testing.T) {
 func TestMergeBooks_Enqueues202(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().GetBookByID("keep").Return(&database.Book{ID: "keep"}, nil)
-	d.store.EXPECT().CreateOperation(mock.Anything, "book-merge", mock.Anything).Return(opMatcher(), nil)
 	d.reg.EXPECT().EnqueueOp(mock.Anything, "dedup.book-merge", mock.Anything).Return("rid", nil)
 	w := doReq(t, h.MergeBooks, http.MethodPost, "/audiobooks/merge",
 		map[string]any{"keep_id": "keep", "merge_ids": []string{"m1"}})
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
 	}
+	assertReturnsV2OpID(t, w)
 }
 
 func TestMergeBooks_KeepNotFound(t *testing.T) {
@@ -320,12 +344,12 @@ func TestListDuplicateAuthors_EmptyNeedsRefresh(t *testing.T) {
 
 func TestRefreshDuplicateAuthors_Enqueues202(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().CreateOperation(mock.Anything, "author-dedup-scan", mock.Anything).Return(opMatcher(), nil)
 	d.reg.EXPECT().EnqueueOp(mock.Anything, "dedup.author-scan", mock.Anything).Return("rid", nil)
 	w := doReq(t, h.RefreshDuplicateAuthors, http.MethodPost, "/authors/duplicates/refresh", nil)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
 	}
+	assertReturnsV2OpID(t, w)
 }
 
 // --- ListSeriesDuplicates ---
@@ -342,12 +366,12 @@ func TestListSeriesDuplicates_EmptyNeedsRefresh(t *testing.T) {
 
 func TestRefreshSeriesDuplicates_Enqueues202(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().CreateOperation(mock.Anything, "series-dedup-scan", mock.Anything).Return(opMatcher(), nil)
 	d.reg.EXPECT().EnqueueOp(mock.Anything, "dedup.series-scan", mock.Anything).Return("rid", nil)
 	w := doReq(t, h.RefreshSeriesDuplicates, http.MethodPost, "/series/duplicates/refresh", nil)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
 	}
+	assertReturnsV2OpID(t, w)
 }
 
 // --- ValidateDedupEntry ---
@@ -385,12 +409,12 @@ func TestValidateDedupEntry_NoSources(t *testing.T) {
 
 func TestDeduplicateSeriesHandler_Enqueues202(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().CreateOperation(mock.Anything, "series-dedup", mock.Anything).Return(opMatcher(), nil)
 	d.reg.EXPECT().EnqueueOp(mock.Anything, "dedup.series-dedup", mock.Anything).Return("rid", nil)
 	w := doReq(t, h.DeduplicateSeriesHandler, http.MethodPost, "/series/deduplicate", nil)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
 	}
+	assertReturnsV2OpID(t, w)
 }
 
 // --- SeriesPrunePreview ---
@@ -411,12 +435,12 @@ func TestSeriesPrunePreview_OK(t *testing.T) {
 
 func TestSeriesPrune_Enqueues202(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().CreateOperation(mock.Anything, "series-prune", mock.Anything).Return(opMatcher(), nil)
 	d.reg.EXPECT().EnqueueOp(mock.Anything, "dedup.series-prune", mock.Anything).Return("rid", nil)
 	w := doReq(t, h.SeriesPrune, http.MethodPost, "/series/prune", nil)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
 	}
+	assertReturnsV2OpID(t, w)
 }
 
 // --- MergeSeriesGroup ---
@@ -424,13 +448,13 @@ func TestSeriesPrune_Enqueues202(t *testing.T) {
 func TestMergeSeriesGroup_Enqueues202(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().GetSeriesByID(7).Return(&database.Series{ID: 7}, nil)
-	d.store.EXPECT().CreateOperation(mock.Anything, "series-merge", mock.Anything).Return(opMatcher(), nil)
 	d.reg.EXPECT().EnqueueOp(mock.Anything, "dedup.series-merge", mock.Anything).Return("rid", nil)
 	w := doReq(t, h.MergeSeriesGroup, http.MethodPost, "/series/merge",
 		map[string]any{"keep_id": 7, "merge_ids": []int{8, 9}})
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
 	}
+	assertReturnsV2OpID(t, w)
 }
 
 func TestMergeSeriesGroup_KeepNotFound(t *testing.T) {
@@ -461,12 +485,12 @@ func TestSeriesNormalizePreview_OK(t *testing.T) {
 
 func TestSeriesNormalize_Enqueues202(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().CreateOperation(mock.Anything, "series-normalize", mock.Anything).Return(opMatcher(), nil)
 	d.reg.EXPECT().EnqueueOp(mock.Anything, "dedup.series-normalize", mock.Anything).Return("rid", nil)
 	w := doReq(t, h.SeriesNormalize, http.MethodPost, "/series/normalize", nil)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
 	}
+	assertReturnsV2OpID(t, w)
 }
 
 // errString is a tiny error helper so tests can return sentinel errors.

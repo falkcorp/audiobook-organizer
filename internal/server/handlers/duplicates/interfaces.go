@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/interfaces.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a04e0263-a6b1-42b9-9791-1b8b649004b5
-// last-edited: 2026-07-01
+// last-edited: 2026-08-22
 
 // Narrow dependency interfaces for the duplicates-domain HTTP handlers
 // (SQL-backed book/author/series duplicate detection, async merge / dismiss /
@@ -31,17 +31,20 @@ import (
 )
 
 // DuplicatesStore is the narrow database.Store subset the duplicates handlers
-// require. The concrete database.Store implementations satisfy it. scan / merge
-// / refresh / dedup / prune / normalize triggers create the legacy operation row
-// (CreateOperation); mergeBooks resolves the keep book (GetBookByID);
-// mergeSeriesGroup resolves the keep series (GetSeriesByID). Resolved lazily
-// through a provider closure (getStore) so a router-integration test that swaps
-// server.store post-wire is still observed (mirrors the dedup / system handler
-// getStore seam).
+// require. The concrete database.Store implementations satisfy it. mergeBooks
+// resolves the keep book (GetBookByID); mergeSeriesGroup resolves the keep
+// series (GetSeriesByID). Resolved lazily through a provider closure (getStore)
+// so a router-integration test that swaps server.store post-wire is still
+// observed (mirrors the dedup / system handler getStore seam).
+//
+// CreateOperation was dropped on 2026-08-22. The scan / merge / refresh / dedup
+// / prune / normalize triggers used to mint a v1 operation row here purely to
+// have something to return; they are v2-native now and the registry owns the
+// row, so the method is not merely unused by these handlers — it is unreachable
+// from them.
 type DuplicatesStore interface {
-	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error) // OperationStore
-	GetBookByID(id string) (*database.Book, error)                                      // BookStore
-	GetSeriesByID(id int) (*database.Series, error)                                     // SeriesStore
+	GetBookByID(id string) (*database.Book, error)  // BookStore
+	GetSeriesByID(id int) (*database.Series, error) // SeriesStore
 }
 
 // MergeService is the narrow *merge.Service subset used by
