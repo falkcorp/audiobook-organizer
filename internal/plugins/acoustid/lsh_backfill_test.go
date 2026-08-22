@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/lsh_backfill_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3d5e7f91-4c6b-5a0d-ac2e-8f9a1b3c5d7e
-// last-edited: 2026-07-06
+// last-edited: 2026-08-21
 
 package acoustid
 
@@ -56,6 +56,18 @@ type indexableMockStore struct {
 func (i *indexableMockStore) HasLSHIndex(id string) bool {
 	return i.indexed[id]
 }
+
+// unwrappingStore is a minimal StoreUnwrapper-implementing decorator around
+// pluginStore — it forwards every method to the wrapped store and only opts
+// into the database.AsCapability lookup via Unwrap(). Models a real
+// production decorator (e.g. the search-index store) sitting in front of
+// p.store.
+type unwrappingStore struct {
+	pluginStore
+	inner database.Store
+}
+
+func (u *unwrappingStore) Unwrap() database.Store { return u.inner }
 
 // --- tests ---------------------------------------------------------------
 
@@ -371,5 +383,65 @@ func TestLSHBackfill_RegistersWithPlugin(t *testing.T) {
 	}
 	if !hasRead || !hasWrite {
 		t.Errorf("capabilities missing read/write: %v", def.Capabilities)
+	}
+}
+
+// TestLSHBackfill_HasLSHIndexThroughDecorator verifies the fast-skip check
+// keeps working when p.store is a decorator wrapping the real capable store,
+// not just when the capability sits on the outermost value. Regression guard
+// for routing the lshIndexChecker lookup through database.AsCapability
+// instead of a bare type assertion — the bare assertion silently disables
+// the fast-skip (and re-writes every row) the moment p.store is wrapped.
+func TestLSHBackfill_HasLSHIndexThroughDecorator(t *testing.T) {
+	// runDecorated wires two eligible rows behind a decorator and reports how
+	// many of them got re-saved. GetBookFiles must be stubbed: the op hydrates
+	// the full row before updating, and without it every row dies at
+	// "hydrate: row not found" and the update count is 0 no matter what the
+	// fast-skip did.
+	runDecorated := func(t *testing.T, indexed map[string]bool) int {
+		t.Helper()
+		files := []database.BookFileCore{
+			{ID: "f1", BookID: "b1", AcoustIDFingerprintDurationSec: 1800},
+			{ID: "f2", BookID: "b2", AcoustIDFingerprintDurationSec: 1800},
+		}
+		updateCalls := 0
+		mock := &database.MockStore{
+			GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
+				return files, nil
+			},
+			GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
+				for _, f := range files {
+					if f.BookID == bookID {
+						return []database.BookFile{{ID: f.ID, BookID: f.BookID}}, nil
+					}
+				}
+				return nil, nil
+			},
+			UpdateBookFileFunc: func(string, *database.BookFile) error {
+				updateCalls++
+				return nil
+			},
+		}
+		inner := &indexableMockStore{MockStore: mock, indexed: indexed}
+		p := &Plugin{store: &unwrappingStore{pluginStore: inner, inner: inner}}
+		if err := p.runLSHBackfill(context.Background(), nil, &lshTestReporter{}); err != nil {
+			t.Fatalf("runLSHBackfill: %v", err)
+		}
+		return updateCalls
+	}
+
+	// Instrument check FIRST. "0 updates" is only evidence that the fast-skip
+	// fired if this same harness can produce updates at all; without this the
+	// assertion below passes against a hydrate failure, a filtered-out row, or
+	// a typo in the fixture. Do not delete it to "simplify" the test.
+	if got := runDecorated(t, map[string]bool{}); got != 2 {
+		t.Fatalf("instrument check: with nothing pre-indexed the harness must re-save both rows, got %d updates, want 2", got)
+	}
+
+	// The regression. Under a bare `p.store.(lshIndexChecker)` the decorator
+	// hides HasLSHIndex, the fast-skip silently disables itself, and both rows
+	// are re-written.
+	if got := runDecorated(t, map[string]bool{"f1": true, "f2": true}); got != 0 {
+		t.Fatalf("fast-skip through decorator did not activate: UpdateBookFile called %d times, want 0", got)
 	}
 }
