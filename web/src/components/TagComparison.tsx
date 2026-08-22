@@ -1,13 +1,13 @@
 // file: web/src/components/TagComparison.tsx
-// version: 1.5.2
+// version: 1.5.3
 // guid: cfed2692-76f6-47b0-bc84-cc2a4075e554
+// last-edited: 2026-08-22
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
   Chip,
-  Collapse,
   FormControl,
   IconButton,
   InputLabel,
@@ -72,7 +72,6 @@ export const TagComparison = ({
   const [tags, setTags] = useState<BookTags | null>(null);
   const [loading, setLoading] = useState(false);
   const [compareId, setCompareId] = useState<string>('');
-  const [expanded, setExpanded] = useState(true); // Always show table when tray is open
   const [hiddenTags, setHiddenTags] = useState<Set<string>>(new Set());
   const [colWidths, setColWidths] = useState<Record<number, number>>({});
   const resizingCol = useRef<number | null>(null);
@@ -106,7 +105,6 @@ export const TagComparison = ({
   // via the first useEffect since snapshotTimestamp changes loadTags' dependencies
   useEffect(() => {
     if (snapshotTimestamp) {
-      setExpanded(true);
       setCompareId('');
     }
   }, [snapshotTimestamp]);
@@ -273,8 +271,7 @@ export const TagComparison = ({
         })}
       </Stack>
 
-      <Collapse in={expanded}>
-        {/* Snapshot/comparison banner with dismiss */}
+      {/* Snapshot/comparison banner with dismiss */}
         {(snapshotComparisonActive || compareId) && (
           <Alert
             severity="info"
@@ -530,7 +527,6 @@ export const TagComparison = ({
             No tag data available.
           </Typography>
         )}
-      </Collapse>
     </Box>
   );
 };
