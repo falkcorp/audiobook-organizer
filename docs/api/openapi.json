@@ -10102,34 +10102,6 @@
         }
       }
     },
-    "/torrents": {
-      "get": {
-        "operationId": "handleDelugeListTorrents",
-        "summary": "Deluge List Torrents",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
     "/update/apply": {
       "post": {
         "operationId": "applyUpdate",
