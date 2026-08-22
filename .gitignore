@@ -1,7 +1,7 @@
 # file: .gitignore
-# version: 1.0.0
+# version: 1.0.1
 # guid: f7d7af3c-a1f1-4d89-87ef-4a8dc9faea8a
-# last-edited: 2026-06-28
+# last-edited: 2026-08-22
 
 # Local overrides
 Makefile.local
@@ -284,6 +284,10 @@ web/tests/e2e/playwright-report/**/*
 
 # Dedup benchmark output (large raw API responses)
 testdata/dedup-bench/
+
+# series_dedup.py generated cache files (do not commit)
+testdata/series_dump.json
+testdata/series_fix.json
 
 # mTLS bridge certificates and config
 .mtls/
