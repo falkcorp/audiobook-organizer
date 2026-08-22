@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/mapper.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7a2f58d1-0b64-4e93-8c1d-6f9047b5e2a3
-// last-edited: 2026-07-30
+// last-edited: 2026-08-22
 
 package abs
 
@@ -642,6 +642,11 @@ func (h *Handler) audioFile(v *itemView, i int) audioFileDTO {
 		MetaTags:             h.metaTags(v, f),
 		Metadata:             h.fileMetadata(f),
 		MimeType:             mimeTypeForPath(f.File.FilePath),
+		// TimeBase is a fixed placeholder: real ABS reports ffprobe's actual stream
+		// time_base (e.g. 1/14112000), but this codebase does not capture time_base
+		// at import, and no known client divides by this value. Owner-approved
+		// 2026-08-12 as a permanent allowance instead of adding an ingest field and
+		// backfill. Revisit only if a client is found to use timeBase.
 		TimeBase:             "1/1000",
 		TrackNumFromFilename: trackNumPtr(f.File.TrackNumber),
 		TrackNumFromMeta:     trackNumFromTags(f.File.RawTags),
