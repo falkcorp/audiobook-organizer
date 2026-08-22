@@ -1,7 +1,7 @@
 // file: internal/database/iface_auth.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8be16e9f-22a9-45ca-a13c-1cca96721f90
-// last-edited: 2026-08-18
+// last-edited: 2026-08-22
 
 package database
 
@@ -73,6 +73,7 @@ type SessionStore interface {
 	GetSession(id string) (*Session, error)
 	RevokeSession(id string) error
 	ListUserSessions(userID string) ([]Session, error)
+	DeleteExpiredABSSessions(now time.Time) (int, error)
 	DeleteExpiredSessions(now time.Time) (int, error)
 }
 

@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.23.0
+// version: 3.23.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-08-22
 
@@ -632,6 +632,11 @@ func (s *Server) Start(cfg ServerConfig) error {
 						sessionLog.Warn("failed to clean up expired sessions: %v", err)
 					} else if deleted > 0 {
 						sessionLog.Info("cleaned up %d expired/revoked sessions", deleted)
+					}
+					if deletedABS, err := s.Ops().DeleteExpiredABSSessions(time.Now()); err != nil {
+						sessionLog.Warn("failed to clean up expired ABS sessions: %v", err)
+					} else if deletedABS > 0 {
+						sessionLog.Info("cleaned up %d expired/revoked ABS sessions", deletedABS)
 					}
 				case <-shutdown:
 					return
