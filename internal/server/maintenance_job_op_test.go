@@ -71,7 +71,15 @@ func TestMaintenanceOpCarriesTheJobsOwnPolicy(t *testing.T) {
 			policy := job.Policy()
 			require.Equal(t, policy.ResumePolicy, def.ResumePolicy, "ResumePolicy")
 			require.Equal(t, policy.Timeout, def.Timeout, "Timeout")
-			require.Equal(t, policy.ConcurrencyKey, def.ConcurrencyKey, "ConcurrencyKey")
+			// ConcurrencyKey is the one field the def does NOT copy verbatim: an
+			// empty policy key is replaced by the job's own op ID so the job
+			// serializes against itself. See TestMaintenanceOpSerializesAgainstItself
+			// for that rule and why it exists.
+			wantKey := policy.ConcurrencyKey
+			if wantKey == "" {
+				wantKey = maintenanceOpID(job.ID())
+			}
+			require.Equal(t, wantKey, def.ConcurrencyKey, "ConcurrencyKey")
 			require.Equal(t, policy.Liveness, def.Liveness, "Liveness")
 			require.Equal(t, policy.Capabilities, def.Capabilities, "Capabilities")
 

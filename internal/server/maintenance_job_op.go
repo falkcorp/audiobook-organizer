@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_job_op.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 7f3a9c21-4b8e-4d56-a123-0e5f6c7d8e9f
-// last-edited: 2026-08-18
+// last-edited: 2026-08-22
 
 package server
 
@@ -83,6 +83,27 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 		required = auth.Permission(pa.Permission())
 	}
 
+	// Every maintenance job serializes against itself. Two enqueues of the same
+	// job queue and run one after the other instead of overlapping.
+	//
+	// Without a key none of the three serializing gates apply to this family:
+	// EnqueueOp's dedupe block and dispatcher Gate 3 are both guarded on
+	// `def.ConcurrencyKey != ""`, and Gate 3b needs a non-empty `Writes`, which no
+	// maintenance def declares. All 37 use DefaultPolicy(), which hardcodes an
+	// empty key, so a double-clicked "Run" has always started two CONCURRENT runs
+	// of the same job over the same rows -- both read-modify-writing whole rows,
+	// which is how the 2026-08-07 write-set incident lost fields.
+	//
+	// A job that declares its own key keeps it. That is the only way two DIFFERENT
+	// jobs can share a serialization domain (two jobs that both rewrite file paths,
+	// say); deriving unconditionally would make the field permanently dead. No job
+	// declares one today, so this branch is currently behaviour-identical to always
+	// deriving -- it exists so the declaration keeps meaning something.
+	concurrencyKey := policy.ConcurrencyKey
+	if concurrencyKey == "" {
+		concurrencyKey = maintenanceOpID(jobID)
+	}
+
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              maintenanceOpID(jobID),
 		Liveness:        policy.Liveness,
@@ -94,7 +115,7 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 		Isolate:         false,
 		Timeout:         policy.Timeout,
 		ResumePolicy:    policy.ResumePolicy,
-		ConcurrencyKey:  policy.ConcurrencyKey,
+		ConcurrencyKey:  concurrencyKey,
 		Permissions:     []auth.Permission{required},
 		Capabilities:    policy.Capabilities,
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
