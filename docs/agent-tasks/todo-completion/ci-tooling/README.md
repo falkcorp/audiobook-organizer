@@ -11,7 +11,7 @@
 |------|---------|-------|----------|--------|------|------|
 | TASK-006 | L46 | Add a scheduled detect-only backstop workflow for auto-revert.yml | P2 | M | Sonnet-class | 1 |
 | TASK-007 | L50 | Wire scripts/test_check_memory_leaks.py into a CI job (repo-guards) | P2 | S | Haiku-class | 1 |
-| TASK-008 | L921 | Bump the ghcommon reusable-workflow pins in at least two PRs, low-cons | P2 | M | Sonnet-class | 1 |
+| TASK-008 | L921 | Bump the github-common reusable-workflow pins in at least two PRs, low-cons | P2 | M | Sonnet-class | 1 |
 | TASK-009 | L2568 | Teach the ABS fixture-capture harness to record request headers | P2 | S | Sonnet-class | 1 |
 | TASK-010 | SEC-CODEQL-BACKLOG | Add top-level `permissions:` blocks to the 3 workflows flagged by acti | P2 | S | Haiku-class | 2 |
 | TASK-011 | SEC-8 | Pin SHA256 checksums for Dockerfile-fetched utfcpp/taglib tarballs | P2 | S | Haiku-class | 1 |

@@ -251,7 +251,7 @@
   {
     "todo_line": 928,
     "src_id": null,
-    "title": "(not a task) rationale note for the ghcommon pin-bump item, not an independent deliverable",
+    "title": "(not a task) rationale note for the github-common pin-bump item, not an independent deliverable",
     "verdict": "not_a_task",
     "verdict_evidence": "Baseline TODO.md lines 919-926 (git show 46628240:TODO.md | sed -n '895,935p') show todo_line 928 is a second checkbox directly beneath the real actionable item ('Decide whether to bump the eight, and do it in at least two PRs') -- its body is pure rationale ('Not done unattended on purpose... because verifying a release workflow requires actually cutting a release') explaining why that PRIOR item was left for a human, not a separate piece of work with its own deliverable.",
     "domain": "docs",

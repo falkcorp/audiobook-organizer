@@ -708,7 +708,7 @@
  "notes": "Scope for this item is exactly the one stale comment found; the TODO's broader ask ('audit existing... comments across the codebase... grep for justification comments near database.Store / database.BookStore and re-verify each claim') was performed as part of this investigation (see verified_anchors) and turned up only this one additional instance beyond the two CLAUDE.md already documents as fixed."
 },
 {
- "todo_line": 921, "src_id": null, "title": "Bump the ghcommon reusable-workflow pins in at least two PRs, low-consequence first",
+ "todo_line": 921, "src_id": null, "title": "Bump the github-common reusable-workflow pins in at least two PRs, low-consequence first",
  "verdict": "actionable",
  "verdict_evidence": "Confirmed the month-apart split the TODO describes: 7 of 8 workflow files pin falkcorp/github-common at SHA d0c3326b (comment '# main 2026-07-05'), while .github/workflows/ci.yml's reusable-ci-minimal.yml pins a different, newer SHA 828afb50 (comment '# main 2026-08-18 (adds go-lint + advisory super-linter jobs)'). grep -rn 'falkcorp/github-common/.github/workflows/' .github/workflows/*.yml confirms all 9 reference lines across 8 files.",
  "domain": "ci/scripts",

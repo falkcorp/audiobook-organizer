@@ -111,7 +111,7 @@ Execution mode: `/parallel-sweep` — trigger: 6 tasks (≥3 threshold) with dis
 |------|---------|-------|------|----------|------|
 | TASK-006 | L46 | Add a scheduled detect-only backstop workflow for auto-revert.yml | **Sonnet-class** | New standalone workflow file with real logic (find the CI run for main's tip, age-check it | 1 |
 | TASK-007 | L50 | Wire scripts/test_check_memory_leaks.py into a CI job (repo-guards) | **Haiku-class** | One-line addition to an existing CI step, no new logic — just add a second unittest discov | 1 |
-| TASK-008 | L921 | Bump the ghcommon reusable-workflow pins in at least two PRs, low-cons | **Sonnet-class** | mechanical version-pin bumps across 8 files but requires splitting into >=2 sequenced PRs  | 1 |
+| TASK-008 | L921 | Bump the github-common reusable-workflow pins in at least two PRs, low-cons | **Sonnet-class** | mechanical version-pin bumps across 8 files but requires splitting into >=2 sequenced PRs  | 1 |
 | TASK-009 | L2568 | Teach the ABS fixture-capture harness to record request headers | **Sonnet-class** | Small, self-contained script change with a clear existing pattern (KEPT_HEADERS) to extend | 1 |
 | TASK-010 | SEC-CODEQL-BACKLOG | Add top-level `permissions:` blocks to the 3 workflows flagged by acti | **Haiku-class** | Mechanical, 3 files, same fix pattern each time — add a minimal top-level permissions bloc | 2 |
 | TASK-011 | SEC-8 | Pin SHA256 checksums for Dockerfile-fetched utfcpp/taglib tarballs | **Haiku-class** | mechanical: download once, record the known-good sha256, add a verification step — no desi | 1 |

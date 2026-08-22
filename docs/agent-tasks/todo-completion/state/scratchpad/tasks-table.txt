@@ -12,7 +12,7 @@ TASK-006 | ci-tooling |w1 | sonnet | M |rc= 0 |dep= [] |L46 | Add a scheduled de
     files: .github/workflows/auto-revert-backstop.yml
 TASK-007 | ci-tooling |w1 | haiku | S |rc= 0 |dep= [] |L50 | Wire scripts/test_check_memory_leaks.py into a CI job (repo-guards)
     files: .github/workflows/ci.yml
-TASK-008 | ci-tooling |w1 | sonnet | M |rc= 0 |dep= [] |L921 | Bump the ghcommon reusable-workflow pins in at least two PRs, low-consequence first
+TASK-008 | ci-tooling |w1 | sonnet | M |rc= 0 |dep= [] |L921 | Bump the github-common reusable-workflow pins in at least two PRs, low-consequence first
     files: .github/workflows/frontend-ci.yml; .github/workflows/hard-burndown.yml; .github/workflows/nightly-burndown.yml; .github/workflows/nightly.yml; .github/workflows/prerelease.yml; .github/workflows/release-prod.yml; .github/workflows/security.yml; .github/workflows/triage-poll.yml
 TASK-009 | ci-tooling |w1 | sonnet | S |rc= 0 |dep= [] |L2568 | Teach the ABS fixture-capture harness to record request headers
     files: scripts/abs_capture_fixtures.py

@@ -25,7 +25,7 @@
       infrastructure used by every op. Progress labels for other ops now advance
       one item later than before — verify none of them assumed the old timing.
 
-## L928 (cb) section: ghcommon reusable-workflow pins are a month apart — decide, don't drif
+## L928 (cb) section: github-common reusable-workflow pins are a month apart — decide, don't drif
 - [ ] Not done unattended on purpose: this was left for a human on 2026-08-18
       rather than folded into the CI-wiring PR, because verifying a release
       workflow requires actually cutting a release.

@@ -1,9 +1,9 @@
-<!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-008-bump-the-ghcommon-reusable-workflow-pins-in-at-l.md -->
+<!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-008-bump-the-github-common-reusable-workflow-pins-in-at-l.md -->
 <!-- version: 1.0.0 -->
 <!-- guid: 625facea-abd0-48ad-89ed-db5e0290a7a7 -->
 <!-- last-edited: 2026-08-21 -->
 
-# TASK-008 — Bump the ghcommon reusable-workflow pins in at least two PRs, low-consequence first (TODO.md L921)
+# TASK-008 — Bump the github-common reusable-workflow pins in at least two PRs, low-consequence first (TODO.md L921)
 
 **Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · ci-tooling subagent · **Why:** mechanical version-pin bumps across 8 files but requires splitting into >=2 sequenced PRs with a nightly-run wait between the low- and high-consequence groups, which is process/sequencing work, not pure mechanics · **Depends on:** none · **Wave:** 1
 
@@ -15,8 +15,8 @@ Source: `TODO.md` line 921 as of commit 46628240 (later edits shift lines) — r
 # ⛔ START HERE — do not touch code before this block succeeds
 REPO=/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer   # adjust to your clone
 git -C "$REPO" fetch origin
-git -C "$REPO" worktree add "$REPO/.worktrees/ci-tooling-008-bump-the-ghcommon-reusable-workflow-pins-in-at-l" -b agent/ci-tooling-008-bump-the-ghcommon-reusable-workflow-pins-in-at-l origin/main
-cd "$REPO/.worktrees/ci-tooling-008-bump-the-ghcommon-reusable-workflow-pins-in-at-l"
+git -C "$REPO" worktree add "$REPO/.worktrees/ci-tooling-008-bump-the-github-common-reusable-workflow-pins-in-at-l" -b agent/ci-tooling-008-bump-the-github-common-reusable-workflow-pins-in-at-l origin/main
+cd "$REPO/.worktrees/ci-tooling-008-bump-the-github-common-reusable-workflow-pins-in-at-l"
 git rebase origin/main
 # Go task: do NOT run 'go work init .' — it breaks the build (ambiguous genproto imports)
 ```
@@ -85,7 +85,7 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 ## Commit message
 
 ```
-refactor(ci-tooling): Bump the ghcommon reusable-workflow pins in at least two PRs (TODO L921)
+refactor(ci-tooling): Bump the github-common reusable-workflow pins in at least two PRs (TODO L921)
 
 <why the change was needed; what it protects; what it deliberately does NOT change>
 

@@ -315,7 +315,7 @@ primary_domain_guess: (unresolved) | all_domains_guess: (unresolved)
       narrowed. Grep for justification comments near `database.Store` /
       `database.BookStore` and re-verify each claim against the current signatures.
 
-## ITEM L921 [tier B] section: ghcommon reusable-workflow pins are a month apart — decide, don't drif
+## ITEM L921 [tier B] section: github-common reusable-workflow pins are a month apart — decide, don't drif
 primary_domain_guess: (unresolved) | all_domains_guess: (unresolved)
 
 - [ ] Decide whether to bump the eight, and do it in **at least two PRs** —
