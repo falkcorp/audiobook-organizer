@@ -1,7 +1,7 @@
 // file: internal/operations/registry/types.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-08-16
+// last-edited: 2026-08-22
 
 // Package registry provides the UOS-02 in-memory OperationDef registry,
 // dispatcher, and in-process worker pool. See the spec at
@@ -67,6 +67,17 @@ type OperationDef struct {
 	// Concurrency. Required.
 	// ConcurrencyKey: ops with same non-empty key serialize; empty = no serialization.
 	ConcurrencyKey string
+
+	// DedupeQueuedRuns makes an enqueue reuse an already queued/running op for
+	// this def REGARDLESS of params. Default false: an enqueue only dedupes when
+	// its marshalled params are byte-identical to the active op's, so a request
+	// carrying a different selection queues a second run instead of being
+	// silently dropped (prod, 2026-08-21: approving more books while
+	// metadata.batch-apply-cached ran discarded the new book_ids and reported
+	// success). Cron-scheduled defs (Schedule != nil) already dedupe on def id
+	// alone without setting this — see EnqueueOp. Set this only for a def whose
+	// params legitimately vary between runs that must NOT both happen.
+	DedupeQueuedRuns bool
 
 	// MaxConcurrent is set on the Plugin, not the OperationDef (spec §1).
 	// Per-plugin caps are tracked in Registry.pluginMax via SetPluginMaxConcurrent.
