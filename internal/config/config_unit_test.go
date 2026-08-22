@@ -1,6 +1,6 @@
 // file: internal/config/config_unit_test.go
-// version: 1.11.0
-// last-edited: 2026-08-16
+// version: 1.11.1
+// last-edited: 2026-08-22
 
 package config
 
@@ -419,7 +419,7 @@ func TestInitConfigDefaults(t *testing.T) {
 	})
 
 	t.Run("API and auth defaults", func(t *testing.T) {
-		assert.Equal(t, 0, AppConfig.APIRateLimitPerMinute)
+		assert.Equal(t, 100, AppConfig.APIRateLimitPerMinute)
 		assert.Equal(t, 10, AppConfig.AuthRateLimitPerMinute)
 		assert.Equal(t, 1, AppConfig.JSONBodyLimitMB)
 		assert.Equal(t, 10, AppConfig.UploadBodyLimitMB)
