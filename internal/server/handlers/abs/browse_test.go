@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 8b3e10c4-6d97-4a52-bf08-2e4c95d7130a
 // last-edited: 2026-08-22
 
@@ -7,9 +7,11 @@ package abs_test
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -427,10 +429,16 @@ func TestSearch_EmptyQueryIsEmptyResultNotError(t *testing.T) {
 	}
 }
 
-// TestSearch_NarratorsOmitNumBooks verifies that narrator objects in search
-// results do not include a numBooks field — the field must be omitted entirely,
-// not present with a value of 0, per ABS contract.
-func TestSearch_NarratorsOmitNumBooks(t *testing.T) {
+// TestSearch_NarratorElementShape pins BOTH halves of §6.3 for the /search
+// narrator element: the non-optional id must be present and derived from the
+// name, and numBooks must be omitted rather than sent as 0.
+//
+// Both are asserted here on purpose. The search oracle fixture records
+// `narrators: []`, so conformance passes vacuously and pins nothing about the
+// element -- which is exactly how a missing required id survived. An earlier
+// version of this test checked only numBooks and therefore locked in the
+// incomplete shape as correct.
+func TestSearch_NarratorElementShape(t *testing.T) {
 	h, seed, tok := newBrowseHarness(t)
 	// Attach a narrator to a book so it appears in search results
 	seed.lib.attachNarrators(seed.singleID, "Samuel Butler")
@@ -449,11 +457,25 @@ func TestSearch_NarratorsOmitNumBooks(t *testing.T) {
 		t.Fatalf("expected at least one narrator in search results for 'samuel'")
 	}
 
-	// Verify that none of the narrator objects contain a numBooks field
 	for i, n := range narrators {
 		narrator := n.(map[string]any)
 		if _, ok := narrator["numBooks"]; ok {
 			t.Errorf("narrator[%d] must not contain 'numBooks' field, but it does: %v", i, narrator)
+		}
+		// §6.3: one element without an id throws the entire list client-side.
+		id, ok := narrator["id"].(string)
+		if !ok || id == "" {
+			t.Errorf("narrator[%d] must carry a non-empty id, got %v", i, narrator["id"])
+			continue
+		}
+		// Re-derived here rather than by calling the handler's helper, so the
+		// assertion is independent of the code under test: ABS's formula is
+		// encodeURIComponent(base64(name)) (§6.3).
+		name, _ := narrator["name"].(string)
+		want := url.QueryEscape(base64.StdEncoding.EncodeToString([]byte(name)))
+		if id != want {
+			t.Errorf("narrator[%d] id must be derived from the name: got %q want %q",
+				i, id, want)
 		}
 	}
 }
