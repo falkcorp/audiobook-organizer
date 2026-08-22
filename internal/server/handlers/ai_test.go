@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0e40aea8-a75e-4dc9-9521-11521efacaf8
-// last-edited: 2026-06-03
+// last-edited: 2026-08-22
 
 package handlers_test
 
@@ -70,7 +70,26 @@ func newAIHandler(
 		pipeline,
 		updater,
 		aiDedupCache(),
-		nil, // registry; tests that need it pass via the typed mock below
+		nil, // registry; see newAIHandlerWithRegistry
+		func(b *database.Book) any { return b },
+	)
+}
+
+// newAIHandlerWithRegistry is newAIHandler plus an operations registry. StartScan
+// needs one since the AI scan became a v2 operation: it creates the scan, then
+// enqueues ai.author-scan to run it.
+func newAIHandlerWithRegistry(
+	scanStore handlers.AIScanStore,
+	pipeline handlers.AIPipeline,
+	registry handlers.OperationsRegistry,
+) *handlers.AIHandler {
+	return handlers.NewAIHandler(
+		nil,
+		scanStore,
+		pipeline,
+		nil,
+		aiDedupCache(),
+		registry,
 		func(b *database.Book) any { return b },
 	)
 }
@@ -167,22 +186,88 @@ func TestAIHandler_StartScan_NoPipeline_500(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
-func TestAIHandler_StartScan_OK_202(t *testing.T) {
+func TestAIHandler_StartScan_NoRegistry_500(t *testing.T) {
 	pipe := handlersmocks.NewMockAIPipeline(t)
-	pipe.EXPECT().StartScan(mock.Anything, "realtime").Return(&database.Scan{ID: 7}, nil).Once()
-	h := newAIHandler(nil, nil, pipe, nil)
+	h := newAIHandlerWithRegistry(nil, pipe, nil)
 	c, w := newAICtx(http.MethodPost, "/ai/scans", `{"mode":"realtime"}`, nil)
 	h.StartScan(c)
-	assert.Equal(t, http.StatusAccepted, w.Code)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	// The scan must not be created when there is nothing to run it — otherwise
+	// an orphan scan row is left at "pending" forever. NewMockAIPipeline(t)
+	// asserts expectations on cleanup, and CreateScan has none.
 }
 
-func TestAIHandler_StartScan_PipelineError_500(t *testing.T) {
+// TestAIHandler_StartScan_OK_202 pins the whole ordering: create the scan (so
+// its id can be returned now), enqueue the op that runs it, then link the two.
+func TestAIHandler_StartScan_OK_202(t *testing.T) {
 	pipe := handlersmocks.NewMockAIPipeline(t)
-	pipe.EXPECT().StartScan(mock.Anything, "realtime").Return(nil, errors.New("boom")).Once()
-	h := newAIHandler(nil, nil, pipe, nil)
+	reg := handlersmocks.NewMockOperationsRegistry(t)
+
+	pipe.EXPECT().CreateScan("realtime").Return(&database.Scan{ID: 7}, nil).Once()
+	reg.EXPECT().EnqueueOp(mock.Anything, "ai.author-scan", mock.Anything).
+		Return("op-abc", nil).Once()
+	pipe.EXPECT().LinkOperation(7, "op-abc").Return(nil).Once()
+
+	h := newAIHandlerWithRegistry(nil, pipe, reg)
+	c, w := newAICtx(http.MethodPost, "/ai/scans", `{"mode":"realtime"}`, nil)
+	h.StartScan(c)
+
+	assert.Equal(t, http.StatusAccepted, w.Code)
+	// Positive control: the response must carry BOTH ids. Asserting only the
+	// status code would pass just as happily against a handler that enqueued
+	// nothing, since 202 is also what the old v1 path returned.
+	assert.Contains(t, w.Body.String(), `"operation_id":"op-abc"`)
+	assert.Contains(t, w.Body.String(), `"id":7`)
+}
+
+// TestAIHandler_StartScan_LinkFails_Still202 fixes the deliberate asymmetry: the
+// op is already queued and will run the scan, so a failed link degrades the
+// cancel route but must not fail a request whose work is under way.
+func TestAIHandler_StartScan_LinkFails_Still202(t *testing.T) {
+	pipe := handlersmocks.NewMockAIPipeline(t)
+	reg := handlersmocks.NewMockOperationsRegistry(t)
+
+	pipe.EXPECT().CreateScan("batch").Return(&database.Scan{ID: 9}, nil).Once()
+	reg.EXPECT().EnqueueOp(mock.Anything, "ai.author-scan", mock.Anything).
+		Return("op-xyz", nil).Once()
+	pipe.EXPECT().LinkOperation(9, "op-xyz").Return(errors.New("store down")).Once()
+
+	h := newAIHandlerWithRegistry(nil, pipe, reg)
+	c, w := newAICtx(http.MethodPost, "/ai/scans", `{"mode":"batch"}`, nil)
+	h.StartScan(c)
+
+	assert.Equal(t, http.StatusAccepted, w.Code)
+	assert.Contains(t, w.Body.String(), `"operation_id":"op-xyz"`)
+}
+
+func TestAIHandler_StartScan_CreateScanError_500(t *testing.T) {
+	pipe := handlersmocks.NewMockAIPipeline(t)
+	reg := handlersmocks.NewMockOperationsRegistry(t)
+	pipe.EXPECT().CreateScan("realtime").Return(nil, errors.New("boom")).Once()
+
+	h := newAIHandlerWithRegistry(nil, pipe, reg)
 	c, w := newAICtx(http.MethodPost, "/ai/scans", `{}`, nil) // bad body → defaults to realtime
 	h.StartScan(c)
+
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	// reg has no EnqueueOp expectation: a scan that could not be created must
+	// not enqueue an op that would then fail looking for it.
+}
+
+func TestAIHandler_StartScan_EnqueueError_500(t *testing.T) {
+	pipe := handlersmocks.NewMockAIPipeline(t)
+	reg := handlersmocks.NewMockOperationsRegistry(t)
+
+	pipe.EXPECT().CreateScan("realtime").Return(&database.Scan{ID: 11}, nil).Once()
+	reg.EXPECT().EnqueueOp(mock.Anything, "ai.author-scan", mock.Anything).
+		Return("", errors.New("queue full")).Once()
+
+	h := newAIHandlerWithRegistry(nil, pipe, reg)
+	c, w := newAICtx(http.MethodPost, "/ai/scans", `{"mode":"realtime"}`, nil)
+	h.StartScan(c)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	// No LinkOperation expectation: there is no op id worth linking to.
 }
 
 // ── ListScans ─────────────────────────────────────────────────────────────
