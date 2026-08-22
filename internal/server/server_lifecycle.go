@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.23.1
+// version: 3.24.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-08-22
 
@@ -628,16 +628,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 			for {
 				select {
 				case <-sessionCleanupTicker.C:
-					if deleted, err := s.Ops().DeleteExpiredSessions(time.Now()); err != nil {
-						sessionLog.Warn("failed to clean up expired sessions: %v", err)
-					} else if deleted > 0 {
-						sessionLog.Info("cleaned up %d expired/revoked sessions", deleted)
-					}
-					if deletedABS, err := s.Ops().DeleteExpiredABSSessions(time.Now()); err != nil {
-						sessionLog.Warn("failed to clean up expired ABS sessions: %v", err)
-					} else if deletedABS > 0 {
-						sessionLog.Info("cleaned up %d expired/revoked ABS sessions", deletedABS)
-					}
+					pruneExpiredSessions(s.Ops(), sessionLog, time.Now())
 				case <-shutdown:
 					return
 				}
@@ -1818,4 +1809,34 @@ type vgBackfiller interface{ BackfillVersionGroupIndex() error }
 // path. A guard that cannot reach the production call site does not guard it.
 func resolveVGBackfiller(s any) (vgBackfiller, bool) {
 	return database.AsCapability[vgBackfiller](s)
+}
+
+// expiredSessionPruner is the narrow slice of the ops store that the periodic
+// session cleanup actually needs. Declaring it here rather than taking the full
+// ServerOpsStore keeps the cleanup body reachable from a test with a two-method
+// fake instead of a whole store implementation.
+type expiredSessionPruner interface {
+	DeleteExpiredSessions(now time.Time) (int, error)
+	DeleteExpiredABSSessions(now time.Time) (int, error)
+}
+
+// pruneExpiredSessions deletes expired/revoked auth sessions and their ABS
+// counterparts, logging each outcome. A failure in either delete is logged and
+// does not prevent the other from running: the two stores are independent, and
+// skipping the ABS sweep because the auth sweep failed would let ABS sessions
+// accumulate indefinitely.
+//
+// Extracted from the session-cleanup ticker so the behaviour is testable without
+// driving a 10-minute ticker.
+func pruneExpiredSessions(ops expiredSessionPruner, sessionLog *logger.StandardLogger, now time.Time) {
+	if deleted, err := ops.DeleteExpiredSessions(now); err != nil {
+		sessionLog.Warn("failed to clean up expired sessions: %v", err)
+	} else if deleted > 0 {
+		sessionLog.Info("cleaned up %d expired/revoked sessions", deleted)
+	}
+	if deletedABS, err := ops.DeleteExpiredABSSessions(now); err != nil {
+		sessionLog.Warn("failed to clean up expired ABS sessions: %v", err)
+	} else if deletedABS > 0 {
+		sessionLog.Info("cleaned up %d expired/revoked ABS sessions", deletedABS)
+	}
 }
