@@ -1,5 +1,5 @@
 # file: .mockery.yaml
-# version: 1.25.0
+# version: 1.25.1
 # guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 # last-edited: 2026-08-22
 
@@ -29,12 +29,6 @@ packages:
       ProgressReporter:
         config:
           filename: mock_progress_reporter.go
-  github.com/falkcorp/audiobook-organizer/internal/scanner:
-    config:
-      dir: internal/scanner/mocks
-      filename: mock_scanner.go
-    interfaces:
-      Scanner:
   github.com/falkcorp/audiobook-organizer/internal/metadata:
     interfaces:
       MetadataExtractor:
