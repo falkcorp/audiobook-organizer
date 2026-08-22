@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
-// last-edited: 2026-08-12
+// last-edited: 2026-08-22
 
 package abs_test
 
@@ -513,6 +513,33 @@ func TestStatus_ShapeAndVersion(t *testing.T) {
 		t.Fatalf("authMethods must be an array, got %#v", body["authMethods"])
 	}
 	assertConformant(t, "get_status.json", body)
+}
+
+// TestStatus_RateLimitMatchesRealThrottle verifies that the rate limit values
+// advertised in serverSettings match the real throttle constants in absauth,
+// so clients that pace themselves according to the advertisement will not
+// be surprised by the real 429 threshold.
+func TestStatus_RateLimitMatchesRealThrottle(t *testing.T) {
+	h := newHarness(t, "jwt", nil)
+	h.seedPasswordUser(t, "u1", "oracle", "pw-pw-pw-pw")
+	response := h.login(t, "oracle", "pw-pw-pw-pw")
+	settings, ok := response["serverSettings"].(map[string]any)
+	if !ok {
+		t.Fatalf("serverSettings must be an object, got %T", response["serverSettings"])
+	}
+
+	advertised := int64(settings["rateLimitLoginRequests"].(float64))
+	if advertised != int64(absauth.MaxFailuresPerIP) {
+		t.Errorf("rateLimitLoginRequests: got %d, want %d (absauth.MaxFailuresPerIP)",
+			advertised, absauth.MaxFailuresPerIP)
+	}
+
+	window := int64(settings["rateLimitLoginWindow"].(float64))
+	expectedWindow := absauth.Window.Milliseconds()
+	if window != expectedWindow {
+		t.Errorf("rateLimitLoginWindow: got %d, want %d (absauth.Window.Milliseconds())",
+			window, expectedWindow)
+	}
 }
 
 // TestNoRouteIsNotHTML: every ABS route must be a real registered route, because the

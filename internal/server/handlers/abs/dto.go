@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/dto.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4a8f30c7-1b56-49e2-8d70-63c1e9b28a5f
-// last-edited: 2026-07-30
+// last-edited: 2026-08-22
 
 package abs
 
@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 )
 
 // The DTOs in this file are a TYPE CONTRACT, not a convenience. Both target clients
@@ -231,8 +232,8 @@ func (h *Handler) buildServerSettings() serverSettings {
 		PodcastEpisodeSchedule:          "0 * * * *",
 		// Advertised login limits. They describe our own throttle so a client can
 		// pace itself instead of discovering the limit by getting 429'd.
-		RateLimitLoginRequests: 10,
-		RateLimitLoginWindow:   600000,
+		RateLimitLoginRequests: absauth.MaxFailuresPerIP,
+		RateLimitLoginWindow:   absauth.Window.Milliseconds(),
 		ScannerCoverProvider:   "google",
 		SortingPrefixes:        []string{"the", "a"},
 		TimeFormat:             "HH:mm",
