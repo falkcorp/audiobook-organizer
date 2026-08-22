@@ -10739,10 +10739,21 @@ Companion docs:
 33. **REPO-SIZE-1 decision** ([plan](docs/plans/2026-07-10-repo-size-history-rewrite-plan.md),
     [package](docs/plans/2026-07-12-repo-size-targeted-purge-package.md)) —
     STOP-FOR-HUMAN; plan recommends Option (d) forward-only + GitHub Support gc.
-34. **Execution-manifest human gates**
+34. ~~**Execution-manifest human gates**~~
     ([manifest](docs/plans/2026-07-10-execution-manifest.md)) — the residual gated
     tasks: INIT-5 T2 spike sign-off, INIT-6 spec review, INIT-7 greenlight, INIT-8
-    review, REPO-SIZE-1.
+    review, REPO-SIZE-1. — ✅ DONE 2026-08-22 (PR #2715, TASK-058): all five gates
+    verified settled at HEAD against two independent checked-in artifacts
+    (`docs/plans/DECISIONS-PENDING.md`'s recorded-2026-08-21 AskUserQuestion table, and
+    `SCOUT-INSTRUCTIONS.md:10-14`), and the manifest updated to match.
+    **Two corrections the verification forced, both worth keeping:** INIT-7 is recorded
+    as *HOLD CONFIRMED*, **not** PARKED — the owner answered "KEEP ON HOLD", and the
+    scout package's `ON HOLD → "parked"` mapping is its own briefing convention, not the
+    owner's word. And INIT-6's PR #1935 is *merged*, but it was the plan doc "for owner
+    sign-off" — the STOP-FOR-HUMAN spec review itself was never held, so a bare "merged"
+    would have read as approved.
+    Follow-up filed separately: `DECISIONS-PENDING.md` still lists rows 1–5 in its **open**
+    table and still says #1935 "stays open", both wrong at HEAD.
 35. **Consultancy wave 4+ residuals** ([roadmap](docs/consultancy/00-ROADMAP.md)) —
     unverified; needs a close-out sweep against shipped work.
 36. ~~**Op-progress Prometheus metric (T12 follow-up)**~~ — ✅ DONE (PR #2014,
