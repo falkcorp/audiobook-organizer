@@ -1,7 +1,7 @@
 <!-- file: todo.d/README.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 4663309b-ed2d-45f1-a6d0-7d309c62481d -->
-<!-- last-edited: 2026-08-10 -->
+<!-- last-edited: 2026-08-22 -->
 
 # TODO fragments (`todo.d/`)
 
@@ -83,3 +83,32 @@ Run it yourself to preview:
 python3 scripts/assemble_todo.py --dry-run   # print the result, change nothing
 python3 scripts/assemble_todo.py --check     # exit 1 if fragments are pending
 ```
+
+## Finishing work that had a fragment
+
+A fragment can be **assembled between** the PR that files it and the PR that
+finishes it. The collect job runs daily, so a task filed in the morning can
+already be folded into `TODO.md` — and its fragment `git rm`ed — hours before
+the PR that does the work merges. That happened on 2026-08-10 with a 26-minute
+window: PR #2272 added the fragment at 04:25 EDT, the collect job consumed it
+at 04:51 EDT, and PR #2273 did the work at 05:12 EDT while "deleting" a file
+that was already gone. `TODO.md` was left carrying an unchecked entry for
+finished work, cleaned up by hand in #2274.
+
+**So before merging a PR that completes work which had a `todo.d` fragment:**
+`grep TODO.md` for the fragment's title or text, and check the entry off by
+hand if assembly got there first. Do not treat your own PR's deletion of the
+fragment as doing that for you — the collector always deletes fragments on
+fold-in, so a missing fragment looks identical whether the task was assembled
+or never existed.
+
+This is a rule, not a script, and it is worth knowing why before trying to
+automate it. "A PR that deletes a fragment must check off the matching entry"
+misses exactly the case above, because after a rebase the deletion is not in
+the PR's diff at all. "Flag any `- [ ]` entry whose fragment is missing"
+matches _every_ assembled entry, since assembly always deletes. Neither
+direction can tell whether the work actually happened, and that is not
+derivable from the files. The least-bad mechanical option is a check on the
+**PR body** — a PR that says it closes a `todo.d` fragment, or deletes one,
+must also touch `TODO.md` — and if it is ever added it should be written as a
+heuristic, because it structurally cannot be a guarantee.
