@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.5.0
+// version: 1.5.1
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
-// last-edited: 2026-08-20
+// last-edited: 2026-08-22
 //
 // The unified review workspace: one screen for dedup, metadata apply, and the
 // review queue.
@@ -268,7 +268,7 @@ export function ReviewWorkspace() {
             id: 'search-providers',
             label: 'Search providers…',
             scope: 'library',
-            run: startJob('Provider search', () => api.batchFetchCandidates({})),
+            run: startJob('Provider search', () => api.batchFetchCandidates({ selection: { filter: { only_unmatched: true } } })),
           },
           {
             id: 'bulk-search-selected',
