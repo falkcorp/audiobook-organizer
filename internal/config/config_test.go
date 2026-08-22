@@ -1,7 +1,7 @@
 // file: internal/config/config_test.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-20
+// last-edited: 2026-08-22
 
 package config
 
@@ -446,6 +446,11 @@ func TestResetToDefaults(t *testing.T) {
 	}
 	if AppConfig.DiskQuotaPercent != 80 {
 		t.Errorf("expected DiskQuotaPercent to be reset to 80, got %d", AppConfig.DiskQuotaPercent)
+	}
+
+	// Verify chapter consolidation defaults
+	if AppConfig.ChapterConsolidationThresholdMin != 10 {
+		t.Errorf("expected ChapterConsolidationThresholdMin to be reset to 10, got %d", AppConfig.ChapterConsolidationThresholdMin)
 	}
 
 	// Restore original values

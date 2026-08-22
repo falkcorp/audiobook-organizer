@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.83.1
+// version: 1.83.2
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-08-22
 
@@ -2327,6 +2327,7 @@ func ResetToDefaults() {
 			// Performance
 			ConcurrentScans:         max(runtime.NumCPU(), 4),
 			ScanProgressEvery:       20,
+			ChapterConsolidationThresholdMin: 10,
 			OperationTimeoutMinutes: 30,
 			MinBookSizeBytes:        5 * 1024 * 1024,
 			APIRateLimitPerMinute:   100,
