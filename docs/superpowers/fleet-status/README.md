@@ -1,3 +1,8 @@
+<!-- file: docs/superpowers/fleet-status/README.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: dbdb0be5-7ee7-4928-bc72-6147a5d78d5b -->
+<!-- last-edited: 2026-08-22 -->
+
 # Fleet Task Status
 
 Each file here tracks the status of one fleet task. Agents write to their own
