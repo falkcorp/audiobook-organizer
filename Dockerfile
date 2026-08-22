@@ -1,7 +1,7 @@
 # file: Dockerfile
-# version: 2.6.0
+# version: 2.6.1
 # guid: audiobook-organizer-dockerfile-production
-# last-edited: 2026-06-23
+# last-edited: 2026-08-22
 
 # Multi-stage production Dockerfile for audiobook-organizer
 # Builds React frontend, embeds it into a statically-linked Go binary with
@@ -36,9 +36,9 @@ RUN set -ex \
     && mkdir -p /tmp/taglib-build/install/lib /tmp/taglib-build/install/include \
     && cd /tmp/taglib-build \
     # utfcpp (header-only taglib dependency)
-    && curl -sL https://github.com/nemtrif/utfcpp/archive/refs/tags/v4.0.6.tar.gz | tar xz \
+    && curl -sL -o utfcpp.tar.gz https://github.com/nemtrif/utfcpp/archive/refs/tags/v4.0.6.tar.gz && echo "6920a6a5d6a04b9a89b2a89af7132f8acefd46e0c2a7b190350539e9213816c0  utfcpp.tar.gz" | sha256sum -c - && tar xzf utfcpp.tar.gz \
     # taglib (uses system zlib from apk)
-    && curl -sL https://github.com/taglib/taglib/releases/download/v2.0.2/taglib-2.0.2.tar.gz | tar xz \
+    && curl -sL -o taglib.tar.gz https://github.com/taglib/taglib/releases/download/v2.0.2/taglib-2.0.2.tar.gz && echo "0de288d7fe34ba133199fd8512f19cc1100196826eafcb67a33b224ec3a59737  taglib.tar.gz" | sha256sum -c - && tar xzf taglib.tar.gz \
     && mkdir -p build && cd build \
     && cmake ../taglib-2.0.2 \
          -DCMAKE_INSTALL_PREFIX=/tmp/taglib-build/install \
@@ -48,7 +48,8 @@ RUN set -ex \
          -DCMAKE_C_FLAGS="-fPIC" -DCMAKE_CXX_FLAGS="-fPIC" \
          >/dev/null 2>&1 \
     && make -j$(nproc) >/dev/null 2>&1 \
-    && make install >/dev/null 2>&1
+    && make install >/dev/null 2>&1 \
+    && rm -f /tmp/taglib-build/utfcpp.tar.gz /tmp/taglib-build/taglib.tar.gz
 
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify
