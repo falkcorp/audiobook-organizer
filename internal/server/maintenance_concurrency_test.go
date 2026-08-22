@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_concurrency_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 14d07753-3a82-4678-8982-e488eef8a7e3
 // last-edited: 2026-08-22
 
@@ -288,8 +288,16 @@ func newOpsFake(t *testing.T) *dbmocks.MockStore {
 	m.EXPECT().UpdateOperationV2Params(mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// The v1 legacy-status bridge, reached because maintenanceJobOpParams carries
-	// a LegacyOpID. It goes away with maintenance_dispatcher.go in the v1 kill
-	// (2026-08-17 plan, phase 1 step 3); until then the run path calls it.
+	// a LegacyOpID.
+	//
+	// This used to say the bridge "goes away with maintenance_dispatcher.go in
+	// the v1 kill". Measured 2026-08-22: it does not. maintenanceJobOpParams is
+	// constructed at three sites, and deleting the dispatcher removes only two of
+	// them — server_lifecycle.go:287 (resumeLegacyOp) stamps a LegacyOpID on the
+	// restart path with no involvement from the dispatcher at all. The field also
+	// still has live readers in maintenance_job_op.go:132,142-147, which key the
+	// activity log off it. So this expectation stays until activity tagging is
+	// re-keyed to the v2 op id, whatever happens to the dispatcher.
 	m.EXPECT().GetOperationByID(mock.Anything).Return(nil, nil).Maybe()
 	m.EXPECT().UpdateOperationStatus(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	m.EXPECT().AddToBatchBucket(mock.Anything, mock.Anything).Return(nil).Maybe()
