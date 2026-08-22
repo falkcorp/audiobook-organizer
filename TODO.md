@@ -4519,6 +4519,21 @@ book and is most likely to go looking for another by the same author.
       interfaces the handler already declares, then assert the wiring.
       Good candidate for the interface-splitting review.
 
+      **Measured 2026-08-22 (#2720) — it was worse than "unverified".** The branch
+      could not fire at all. `CancelOperationV2` matches an incoming **v2** op id
+      against `scan.OperationID`, but that field held a **v1** ULID minted by
+      `ulid.Make()` inside aiscan and registered with nothing. The two id spaces
+      never intersected in practice: the v1 row reached no timeline, so no UI could
+      offer its id, and the frontend's only AI-scan cancel is
+      `DedupAIReviewTab.tsx:209` → `api.cancelAIScan(scan.ID)`, which posts the
+      **scan** id to a different route and never touches `OperationID`.
+      The `ai.author-scan` migration stores the **v2** op id in that field, which
+      makes the branch reachable for the first time.
+      ⚠️ Still open, and deliberately: reachable is not verified. Nobody has
+      confirmed the ops-timeline cancel button issues `DELETE /operations/v2/:id`,
+      and the `WithAIScanCancellation` wiring is still unasserted — which is the
+      original point of this item.
+
 - [ ] **August executive-summary roundup is stale.** `2026-08-31-august-monthly-roundup-executive-summary.md`
       says it consolidates "the seven dated summaries ... from 2026-08-04 to 2026-08-09"
       and was last edited 2026-08-14, but the directory now holds individual summaries
@@ -4618,8 +4633,15 @@ book and is most likely to go looking for another by the same author.
       It is also dishonest for rows whose jobs actually completed — `failed` is
       not what happened. Retire it together with the supervised backfill in
       `todo.d/20260816-backfill-stuck-legacy-op-rows.md`, not before.
-      Note `internal/aiscan/pipeline.go` still writes the legacy table directly at
-      4 call sites, so "nothing writes it anymore" is not yet true.
+      ~~Note `internal/aiscan/pipeline.go` still writes the legacy table directly at
+      4 call sites, so "nothing writes it anymore" is not yet true.~~
+      **Resolved 2026-08-22 (#2720):** aiscan no longer writes the legacy table at
+      all. The count was also wrong — there were **6** write sites, not 4; lines
+      27-29 were the interface declaration, not writes. All six went with the
+      `ai.author-scan` migration, and the three v1 methods were removed from
+      `aiscan.Store` (7 methods → 4), so re-introducing a write is now a **compile
+      error** rather than something review has to catch. The stranded-row backfill
+      remains the only thing gating this retirement.
 
 - [x] **`CancelOperation` (legacy) had AI-scan handling `CancelOperationV2`
       lacked.** Ported first, route deleted second. The wiring that supplies the
