@@ -25,7 +25,7 @@
  "scope-02.json|872|1|Replace the size-equality heuristic in OrganizeBookDirectory": "TASK-119",
  "scope-02.json|872|2|Route the three organize/rename paths through organizer.Move": "TASK-120",
  "scope-02.json|903|None|Audit remaining 'we use the wide type because X requires it'": "TASK-041",
- "scope-02.json|921|None|Bump the ghcommon reusable-workflow pins in at least two PRs": "TASK-008",
+ "scope-02.json|921|None|Bump the github-common reusable-workflow pins in at least two PRs": "TASK-008",
  "scope-03.json|1247|None|Rename write_back_metadata config key to auto_write_tags_on_": "TASK-016",
  "scope-03.json|1317|1|Fix EnableRateLimit=false not actually disabling rate limiti": "TASK-128",
  "scope-03.json|1317|3|Fix APIRateLimitPerMinute default drift between fresh-instal": "TASK-017",

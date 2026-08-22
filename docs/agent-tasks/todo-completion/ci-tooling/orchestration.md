@@ -14,7 +14,7 @@ flowchart LR
     subgraph Wave1
       TASK006[TASK-006 add-a-scheduled-detect-only-]
       TASK007[TASK-007 wire-scripts-test-check-memo]
-      TASK008[TASK-008 bump-the-ghcommon-reusable-w]
+      TASK008[TASK-008 bump-the-github-common-reusable-w]
       TASK009[TASK-009 teach-the-abs-fixture-captur]
       TASK011[TASK-011 pin-sha256-checksums-for-doc]
       TASK012[TASK-012 scripts-setup-prometheus-aut]

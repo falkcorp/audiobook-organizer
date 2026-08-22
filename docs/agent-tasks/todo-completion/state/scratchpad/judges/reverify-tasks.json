@@ -284,13 +284,13 @@
  {
   "id": "TASK-009",
   "todo_line": 921,
-  "title": "Bump the ghcommon reusable-workflow pins in at least two PRs, low-consequence first",
+  "title": "Bump the github-common reusable-workflow pins in at least two PRs, low-consequence first",
   "anchors": [
    {
     "cmd": "grep -rn 'd0c3326b96557c8ea9117c1c196b628e5e028186' .github/workflows/*.yml",
     "rc": 0,
     "nlines": 8,
-    "out": ".github/workflows/frontend-ci.yml:54:    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@d0c3326b96557c8ea9117c1c196b628e5e028186 # main 2026-07-05 (fixes jdfalk/ghcommon -> falkcorp/github-common stale-ref 400 error)\n.github/workflows/hard-burndown.yml:27:    uses: falkcorp/github-common/.github/workflows/reusable-burndown.yml@d0c3326b96557c8ea9117c1c196b628e5e028186 # v1.11.2 + su",
+    "out": ".github/workflows/frontend-ci.yml:54:    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@d0c3326b96557c8ea9117c1c196b628e5e028186 # main 2026-07-05 (fixes falkcorp/github-common -> falkcorp/github-common stale-ref 400 error)\n.github/workflows/hard-burndown.yml:27:    uses: falkcorp/github-common/.github/workflows/reusable-burndown.yml@d0c3326b96557c8ea9117c1c196b628e5e028186 # v1.11.2 + su",
     "err": "",
     "expect": "7 hits across hard-burndown.yml, nightly-burndown.yml, triage-poll.yml, frontend-ci.yml, nightly.yml, security.yml, release-prod.yml, prerelease.yml",
     "claim": "7 workflow files pin the same 2026-07-05 SHA"
