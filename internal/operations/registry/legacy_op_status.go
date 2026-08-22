@@ -1,11 +1,12 @@
 // file: internal/operations/registry/legacy_op_status.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4a8c2f61-b703-49de-95e7-1c0d8b5a3e27
-// last-edited: 2026-08-16
+// last-edited: 2026-08-22
 
 package registry
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 
@@ -32,6 +33,82 @@ type legacyOpStore interface {
 // and the rest — without importing any of them.
 type legacyOpParams struct {
 	LegacyOpID string `json:"legacy_op_id"`
+}
+
+// legacyOpIDKey is the JSON key legacyOpParams above reads. Named once so the
+// dedupe comparison and the status bridge cannot drift apart.
+const legacyOpIDKey = "legacy_op_id"
+
+// sameParamsIgnoringLegacyID reports whether two marshalled param blobs describe
+// the same WORK, disregarding legacy_op_id.
+//
+// WHY THIS EXISTS. EnqueueOp dedupes an incoming request against active ops for
+// the same def by comparing params. Every enqueue site that bridges to a v1
+// operations row stamps that row's freshly-minted id into the params, so two
+// requests for identical work NEVER compared equal and the merge never fired for
+// any of them — maintenance, itunes, dedup, ai, metadata, entities, reconcile,
+// diagnostics and filesystem alike. Measured in #2717: hold legacy_op_id constant
+// and the merge fires; vary only it and the merge stops. It was the sole
+// discriminator.
+//
+// The id is per-request bookkeeping, not work identity: two requests for the same
+// job with the same parameters are the same work regardless of which v1 row each
+// is twinned with. So it is excluded from the comparison rather than removed from
+// the params — the stamp itself is load-bearing (propagateLegacyOpStatus below
+// needs it to move the v1 row off "pending", and maintenance jobs key their
+// activity-log entries off it).
+//
+// THIS DOES NOT WEAKEN THE BYTE-EQUALITY RULE at the call site. Params take the
+// key-wise path only when BOTH sides carry legacy_op_id; anything else falls
+// straight through to the exact comparison, unchanged. On that path every
+// REMAINING value is still compared byte-for-byte: a present-but-zero field
+// still differs from an absent one, and any difference in real parameters still
+// queues a second run. What stops mattering is key ORDER and inter-token
+// whitespace, which no caller varies — both sides are marshalled from the same
+// Go struct type.
+//
+// REQUIRING THE KEY ON BOTH SIDES IS DELIBERATE, not incidental. Merging a
+// request that has a v1 twin into one that does not would leave the loser's row
+// twinned to nothing with no way to find out: runMaintenanceJob identifies its
+// orphan by reading the WINNER's legacy_op_id, so a winner without one is
+// indistinguishable from "we started our own run" and the orphan survives at
+// "pending" — the exact stuck row this whole change exists to prevent. Demanding
+// the key on both sides makes that cleanup total. The cost is a redundant queued
+// run in a case no production caller currently produces, which is the safe
+// direction and the same one the byte-equality rule above already chose.
+func sameParamsIgnoringLegacyID(a, b []byte) bool {
+	if bytes.Equal(a, b) {
+		return true
+	}
+	am, aHas := paramsWithoutLegacyID(a)
+	bm, bHas := paramsWithoutLegacyID(b)
+	if !aHas || !bHas {
+		// Not a bridged-vs-bridged comparison — the exact rule stands untouched.
+		return false
+	}
+	if am == nil || bm == nil || len(am) != len(bm) {
+		return false
+	}
+	for k, av := range am {
+		bv, ok := bm[k]
+		if !ok || !bytes.Equal(av, bv) {
+			return false
+		}
+	}
+	return true
+}
+
+// paramsWithoutLegacyID decodes raw as a JSON object and returns it minus the
+// legacy_op_id key, along with whether that key was present. A blob that is not
+// a JSON object yields (nil, false).
+func paramsWithoutLegacyID(raw []byte) (map[string]json.RawMessage, bool) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil || m == nil {
+		return nil, false
+	}
+	_, had := m[legacyOpIDKey]
+	delete(m, legacyOpIDKey)
+	return m, had
 }
 
 // legacyStatusFor maps a v2 terminal status onto the v1 vocabulary.

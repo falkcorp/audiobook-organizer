@@ -10,11 +10,25 @@
       the exact bug #2688 fixed. Mutation-verified: with the key reverted, two enqueues overlap
       (`maxOverlap == 2`); with it, they run sequentially.
 
-- [ ] **Still open from this fragment:** `LegacyOpID` (below) continues to defeat `EnqueueOp`'s
-      byte-equality dedupe, because every request mints a fresh ULID. That is now the *only*
-      remaining blocker to same-params merge for this family, and it disappears with
-      `maintenance_dispatcher.go` in the v1 kill — so **re-measure after the v1 kill lands**
-      rather than building a consolidator for it.
+- [x] ~~**Still open from this fragment:** `LegacyOpID` continues to defeat `EnqueueOp`'s
+      byte-equality dedupe, because every request mints a fresh ULID.~~ — **fixed 2026-08-22
+      (measured in PR #2717, fixed in the PR that closed this).**
+
+      **The claim that it "disappears with `maintenance_dispatcher.go` in the v1 kill" was
+      wrong, and re-measuring is what caught it.** `maintenanceJobOpParams` is constructed at
+      three sites, and deleting the dispatcher removes only two — `server_lifecycle.go:287`
+      (`resumeLegacyOp`) stamps a fresh `LegacyOpID` on the **restart** path with no dispatcher
+      involvement, and `resumeInterruptedOperations` has no per-job dedupe, so
+      restart-after-double-click reproduced the bug regardless. Repo-wide the field has ~30
+      construction sites across nine subsystems; it is the v1↔v2 bridge seam, not a dispatcher
+      artifact. The dedupe fix was therefore **independent of the v1 kill**, not gated on it.
+
+      **The stamp was excluded from the comparison, not dropped.** Dropping it would have
+      regressed two things: `propagateLegacyOpStatus` reads it to move the v1 row off
+      `pending` (TODO.md records that bridge as measured working on 2026-08-16), and
+      `maintenance_job_op.go:132,142-147` keys the activity log off it — the latter guarded on
+      `p.LegacyOpID != ""`, so it would have failed **silently**. `Run` decodes from
+      `rawParams`, not the `SaveParams` snapshot, so "keep it at :180" would not have helped.
 
   **Where:** `internal/server/maintenance_job_op.go` — `registerMaintenanceJobOp` is the single
   factory for all 37 defs, so both fields are set in one place. `internal/maintenance/job.go:131`
