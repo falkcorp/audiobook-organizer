@@ -1,5 +1,5 @@
 // file: internal/server/server_ops_store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
 // last-edited: 2026-08-22
 
@@ -16,8 +16,10 @@ import (
 // Measured with go/packages at full type resolution (types.Info.Selections, so
 // the dominant `store := s.Ops(); store.X()` idiom is followed -- 271 of 315
 // uses are not immediately dotted and a grep cannot see them): the 216 call
-// sites in this package invoke exactly the 88 methods below, out of
-// database.Store's 398.
+// sites in this package invoked exactly 88 methods, out of database.Store's 398.
+// It is 89 now — runMaintenanceJob added DeleteOperationWithLogs to clean up a
+// v1 row whose enqueue merged into an already-active run. The 216 figure is the
+// original measurement and has not been re-taken.
 //
 // 🔑 WHY THIS IS NOT THE WHOLE STORY, and why storeForWiring still exists.
 // Narrowing this accessor does NOT narrow what the wiring sites can reach. Those
@@ -30,9 +32,11 @@ import (
 // maintenance.StoreProvider in #2612.
 //
 // Grouping is not decoration: `interfacebloat` caps an interface at 8 DECLARED
-// entries and the width ratchet's baseline has been 0 since #2603. 88 methods
-// therefore have to arrive as 19 leaves of <=8, composed into 6 mid-level
-// interfaces plus 2 direct leaves, giving this type exactly 8 entries.
+// entries and the width ratchet's baseline has been 0 since #2603. 89 methods
+// therefore have to arrive as 20 leaves of <=8, composed into 7 mid-level
+// interfaces — 6 of which are direct members here, alongside 2 direct leaves,
+// giving this type exactly 8 entries. serverOperationWriter is the 7th: it
+// became a composite rather than a leaf when its 9th method tripped the cap.
 type ServerOpsStore interface {
 	serverBookStore
 	serverEntityStore
@@ -193,21 +197,39 @@ type serverOperationReader interface {
 }
 
 // serverOperationWriter: Creates and advances v1 operation rows.
+//
+// Split into two leaves when DeleteOperationWithLogs made it the 9th method and
+// tripped the `interfacebloat` cap of 8. The name and its exact method set are
+// unchanged, so no consumer moved — the division is by lifetime: the row itself
+// versus the records that hang off one.
 type serverOperationWriter interface {
-	AddOperationLog(operationID string, level string, message string, details *string) error
+	serverOperationRowWriter
+	serverOperationDetailWriter
+}
+
+// serverOperationRowWriter: The v1 operation row's own lifecycle — create it,
+// advance its status, and (rarely) remove it again.
+type serverOperationRowWriter interface {
 	CreateOperation(id string, opType string, folderPath *string) (*database.Operation, error)
-	CreateOperationChange(change *database.OperationChange) error
-	CreateOperationResult(result *database.OperationResult) error
 	// DeleteOperationWithLogs removes a v1 row this server created and then found
 	// it did not need — see runMaintenanceJob, where an enqueue that merges into
 	// an already-active run leaves its freshly-created row twinned to nothing.
 	// Deleting it is what keeps that row from sitting at "pending" forever and
 	// being re-resumed on every restart.
 	DeleteOperationWithLogs(id string) error
-	SaveOperationParams(opID string, params []byte) error
 	UpdateOperationError(id string, errorMessage string) error
 	UpdateOperationResultData(id string, resultData string) error
 	UpdateOperationStatus(id string, status string, progress int, total int, message string) error
+}
+
+// serverOperationDetailWriter: Records attached to an operation — logs, per-entity
+// changes, per-book results, and the resumable params blob. All are keyed by an
+// operation id and outlive nothing that the row itself does not.
+type serverOperationDetailWriter interface {
+	AddOperationLog(operationID string, level string, message string, details *string) error
+	CreateOperationChange(change *database.OperationChange) error
+	CreateOperationResult(result *database.OperationResult) error
+	SaveOperationParams(opID string, params []byte) error
 }
 
 // serverOperationV2Store: The v2 registry row. Kept apart from the v1 pair so the
