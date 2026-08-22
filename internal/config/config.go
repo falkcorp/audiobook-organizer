@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.83.0
+// version: 1.83.1
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-08-21
+// last-edited: 2026-08-22
 
 package config
 
@@ -1284,7 +1284,7 @@ func InitConfig() {
 	viper.SetDefault("log_retention_days", 90)
 
 	// API security/runtime limits
-	viper.SetDefault("api_rate_limit_per_minute", 0)
+	viper.SetDefault("api_rate_limit_per_minute", 100)
 	viper.SetDefault("auth_rate_limit_per_minute", 10)
 	viper.SetDefault("json_body_limit_mb", 1)
 	viper.SetDefault("upload_body_limit_mb", 10)
