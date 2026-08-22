@@ -212,6 +212,50 @@ var ErrRealtimeNotResumable = errors.New("realtime ai scan interrupted and canno
 // silent for hours, so the wait loop must keep reporting on its behalf.
 const heartbeatInterval = 60 * time.Second
 
+// resumeAction is what RunScan should do with a scan, given the state its
+// phases were left in.
+type resumeAction int
+
+const (
+	// resumeLaunch: no phase has started. Launch the phase goroutines.
+	resumeLaunch resumeAction = iota
+	// resumeAttach: work is in flight and something outside this process will
+	// finish it. Wait, do not re-launch.
+	resumeAttach
+	// resumeImpossible: work started but nothing will ever finish it.
+	resumeImpossible
+)
+
+// decideResume is the launch-vs-attach decision, split out from RunScan so it
+// can be tested without a store — it is the part that must be right, because
+// getting it wrong either hangs an operation forever or re-runs a paid
+// whole-library LLM pass against OpenAI.
+//
+// It reads ONLY persisted phase state. The op declares ResumePolicy=ResumeRestart,
+// so Run is re-entered after a crash with nothing in memory to consult.
+//
+// The mode split is the crux. A batch scan's work is held by OpenAI and
+// PollBatchPhases (batch_poller.go:181) will collect it whenever it completes,
+// with or without this process — so re-attaching is correct. A realtime scan's
+// work was in-flight HTTP requests issued by the process that died, so nothing
+// will ever advance its phases; attaching would wait until the op's 24h timeout.
+func decideResume(mode string, phases []database.ScanPhase) resumeAction {
+	started := false
+	for _, p := range phases {
+		if p.Status != "pending" {
+			started = true
+			break
+		}
+	}
+	if !started {
+		return resumeLaunch
+	}
+	if mode == "batch" {
+		return resumeAttach
+	}
+	return resumeImpossible
+}
+
 // CreateScan creates a scan and its phase records WITHOUT starting any work.
 //
 // Split out from the old StartScan so the HTTP handler can return the scan id
@@ -276,22 +320,12 @@ func (pm *PipelineManager) RunScan(ctx context.Context, scanID int, sink Progres
 	if err != nil {
 		return fmt.Errorf("get phases for scan %d: %w", scanID, err)
 	}
-	started := false
-	for _, p := range phases {
-		if p.Status != "pending" {
-			started = true
-			break
-		}
-	}
-
-	// A realtime scan that already started has no external driver: its HTTP
-	// requests to OpenAI died with the process that issued them, so attaching
-	// would wait forever. Fail it rather than hang, and rather than silently
-	// re-running it — that would spend real money on a restart nobody asked for.
-	if started && scan.Mode != "batch" {
+	action := decideResume(scan.Mode, phases)
+	if action == resumeImpossible {
 		pm.cleanupScan(scanID, "failed")
 		return ErrRealtimeNotResumable
 	}
+	started := action == resumeAttach
 
 	done := make(chan error, 1)
 	scanCtx, cancel := context.WithCancel(ctx)
