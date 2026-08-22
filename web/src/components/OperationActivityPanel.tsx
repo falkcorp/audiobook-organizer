@@ -1,6 +1,7 @@
 // file: web/src/components/OperationActivityPanel.tsx
-// version: 1.3.3
+// version: 1.3.4
 // guid: f7a1e2c3-9b4d-4e5a-8c6f-1d3b5a7e9c0f
+// last-edited: 2026-08-22
 
 import { useCallback, useEffect, useState, useRef, useMemo } from 'react';
 import {
@@ -173,11 +174,18 @@ export function OperationActivityPanel({ operationId, limit }: OperationActivity
   );
   const latestLogEvent = useOperationsStore((state) => state.latestLogEvent);
 
+  const opRef = useRef(op);
+  const lastAppendedSequenceRef = useRef<number | null>(null);
+
   useEffect(() => {
     return () => {
       isUnmountedRef.current = true;
     };
   }, []);
+
+  useEffect(() => {
+    opRef.current = op;
+  }, [op]);
 
   const load = useCallback(async () => {
     if (isUnmountedRef.current) return;
@@ -210,7 +218,14 @@ export function OperationActivityPanel({ operationId, limit }: OperationActivity
   // full reload path; no timer should repaint the log while a user is reading.
   useEffect(() => {
     if (!latestLogEvent || latestLogEvent.op_id !== operationId) return;
+    // Guards against re-appending the same SSE event when this effect re-runs
+    // for an unrelated reason. `sequence` is a monotonic counter the store
+    // stamps on every real log event, so it is a reliable identity even across
+    // renders that hand back an equal-looking but structurally new event object.
+    if (lastAppendedSequenceRef.current === latestLogEvent.sequence) return;
+    lastAppendedSequenceRef.current = latestLogEvent.sequence;
     const cap = limit ?? 1000;
+    const currentOp = opRef.current;
     setEntries((prev) => {
       const next = [
         ...prev,
@@ -218,14 +233,14 @@ export function OperationActivityPanel({ operationId, limit }: OperationActivity
           timestamp: latestLogEvent.created_at,
           level: latestLogEvent.level,
           operation_id: latestLogEvent.op_id,
-          operation_type: op?.def_id ?? op?.type ?? '',
+          operation_type: currentOp?.def_id ?? currentOp?.type ?? '',
           message: latestLogEvent.message,
         },
       ];
       return next.length > cap ? next.slice(next.length - cap) : next;
     });
     setTotal((prev) => prev + 1);
-  }, [latestLogEvent, operationId, op]);
+  }, [latestLogEvent, operationId]);
 
   // Plain-text representation of the log for clipboard copy.
   const logsAsText = useMemo(() => {
