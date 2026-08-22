@@ -247,5 +247,175 @@
     "depends_on_lines": [],
     "gate": "go build ./... && go vet ./... && go test ./internal/plugins/... -count=1",
     "notes": "Large-blast-radius audit (31 files) that is mechanical per-file but not safely choppable into independent parallel worktrees, since a false negative in a shared operations-registry concern benefits from one reader keeping the full picture in their head across files. Recommend running as a single sonnet-tier pass rather than splitting into 31 sub-tasks. review_critical=false because progress-label text is UI/observability only, not a data-mutation path -- but note the edge-case above (bucket-C-adjacent data races on non-atomic shared counters) could surface a real concurrency bug worth a follow-up TODO if found."
+  },
+  {
+    "todo_line": 928,
+    "src_id": null,
+    "title": "(not a task) rationale note for the ghcommon pin-bump item, not an independent deliverable",
+    "verdict": "not_a_task",
+    "verdict_evidence": "Baseline TODO.md lines 919-926 (git show 46628240:TODO.md | sed -n '895,935p') show todo_line 928 is a second checkbox directly beneath the real actionable item ('Decide whether to bump the eight, and do it in at least two PRs') -- its body is pure rationale ('Not done unattended on purpose... because verifying a release workflow requires actually cutting a release') explaining why that PRIOR item was left for a human, not a separate piece of work with its own deliverable.",
+    "domain": "docs",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "todo_line 928's text is explanatory prose about the preceding checkbox item, not a distinct task", "grep_cmd": "git show 46628240:TODO.md | sed -n '916,929p'", "expect": "shows the 'Decide whether to bump the eight...' checkbox immediately above, then the 'Not done unattended on purpose...' checkbox this scope item covers"},
+      {"claim": "the underlying pin drift this note explains is still live at HEAD (context for the coordinator, not proof this item itself is work)", "grep_cmd": "grep -rn 'falkcorp/github-common/.github/workflows/.*@[a-f0-9]\\{40\\}' .github/workflows/*.yml", "expect": "9 hits: ci.yml pinned to 828afb50... (2026-08-18), the other 8 workflows still pinned to d0c3326b... (2026-07-19)"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "S",
+    "tier": "haiku",
+    "why_tier": "no code work at all; a haiku-tier pass just needs to recognize this as inventory-parser noise",
+    "review_critical": false,
+    "goal": "No goal -- this scope line is prose, not a deliverable. The actual actionable work it explains (bumping 8 workflow files' falkcorp/github-common pin from d0c3326b to 828afb50, in at least two PRs, low-risk workflows first) lives on the PRECEDING baseline TODO.md checkbox (immediately above line 928) and is NOT itself in this scope file under its own todo_line, so no new JSON item is fabricated for it here.",
+    "background": [
+      "The pin drift is real and unresolved at HEAD: ci.yml uses 828afb50d0d18c426c72a6ed1060123677bee674 (2026-08-18) while hard-burndown.yml, prerelease.yml, nightly-burndown.yml, nightly.yml, frontend-ci.yml, security.yml, release-prod.yml, and triage-poll.yml all still use d0c3326b96557c8ea9117c1c196b628e5e028186 (2026-07-19), 22 commits behind.",
+      "The reason given for not bumping release-prod.yml/prerelease.yml unattended is that verifying a reusable release workflow requires actually cutting a release -- this is background/rationale, not a task with file-level steps of its own."
+    ],
+    "steps": [],
+    "tests": [],
+    "acceptance": [],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (docs)",
+    "notes": "Flag to the coordinator: the ACTIONABLE item this note is attached to (bump the 8 stale falkcorp/github-common pins to 828afb50..., in >=2 PRs, low-risk workflows -- triage-poll, the burndowns -- before release/security ones) is real, unresolved, and low-effort, but it was not assigned its own todo_line in this scope file. If another scope's inventory captured that preceding checkbox under a different todo_line, this item and that one describe the same underlying drift; if no scope captured it, the coordinator may want to add it as a standalone follow-up (owner decisions above do not mention it, so it needs no design call -- it's a mechanical SHA bump plus a nightly-run wait)."
+  },
+  {
+    "todo_line": 3718,
+    "src_id": null,
+    "title": "Root-cause and fix: show_quarantined=true silently narrows the audiobook list to is_primary_version=true",
+    "verdict": "actionable",
+    "verdict_evidence": "The described symptom (toggling only show_quarantined, with no explicit is_primary_version param, changes whether nil-flag books are served) does not reproduce from a static read of the obvious candidate code: internal/audiobooks/service_query.go:73-78 (hasHeavyPostFilters/hasPostFilters do not reference ExcludeQuarantined at all -- grep -n 'ExcludeQuarantined' internal/audiobooks/service_query.go returns hits only in the pushdown call args, not in the hasPostFilters branch condition), and both internal/database/memdb_summaries.go:79-136 (GetBookSummaries) and :264-285 (CountBookSummaries) fall through to the unrestricted memIdxID scan when f.IsPrimaryVersion is nil regardless of ExcludeQuarantined's value. The divergence is real (measured on production 2026-08-14, cited in TODO.md, and explicitly deferred there: 'route to C1/C3, do NOT fix here') but its exact trigger point is NOT yet located by static reading alone and needs a reproducing test to bisect.",
+    "domain": "internal/audiobooks",
+    "exact_files": [
+      "internal/audiobooks/service_query.go",
+      "internal/audiobooks/service_filtering.go",
+      "internal/database/memdb_summaries.go",
+      "internal/server/audiobooks_helpers.go",
+      "internal/audiobooks/service_query_primary_quarantine_test.go"
+    ],
+    "verified_anchors": [
+      {"claim": "hasHeavyPostFilters/hasPostFilters (the switch that picks the light vs heavy pushdown path) do not key on ExcludeQuarantined -- both show_quarantined states take the identical code branch given no other filters", "grep_cmd": "grep -n 'hasHeavyPostFilters\\|hasPostFilters' internal/audiobooks/service_query.go", "expect": "declared at L77-78 as a function only of LibraryState/Tag/Tags/FieldFilters/PerUser/heavySorting/FingerprintingFilters/IsPrimaryVersion/sortPushdownable -- ExcludeQuarantined is not one of the inputs"},
+      {"claim": "the memdb list path (GetBookSummaries) selects the unrestricted ID index whenever IsPrimaryVersion is nil, independent of ExcludeQuarantined", "grep_cmd": "grep -n 'case f.IsPrimaryVersion != nil:' -A2 internal/database/memdb_summaries.go", "expect": "1 hit at L132-135 (GetBookSummaries): default branch (line 134-135) is 'iter, err = txn.Get(memTableBooks, memIdxID)' with no ExcludeQuarantined involvement in index selection"},
+      {"claim": "the memdb count path has the identical nil-IsPrimaryVersion default behavior", "grep_cmd": "grep -n 'case f.IsPrimaryVersion != nil:' -A2 internal/database/memdb_summaries.go", "expect": "2nd hit at L281-284 (CountBookSummaries), same default-to-memIdxID pattern"},
+      {"claim": "the bug was measured against production and explicitly deferred rather than fixed inline", "grep_cmd": "git show 46628240:TODO.md | sed -n '3703,3721p'", "expect": "shows 'Follow-up bugs found by the controls (route to C1/C3, do NOT fix here):' immediately above the show_quarantined bullet"}
+    ],
+    "reuse": [
+      {"name": "BookSummaryFilter (shared filter struct across memdb/Pebble)", "file": "internal/database/memdb_summaries.go", "verify_grep": "grep -n 'type BookSummaryFilter struct' internal/database/memdb_summaries.go"},
+      {"name": "existing production-measured-bug-as-test pattern (fixture-seeded oracle vs prod counts)", "file": "internal/server/handlers/abs/series_books_test.go", "verify_grep": "grep -n 'func absSeedTwoSeries' internal/server/handlers/abs/series_books_test.go"}
+    ],
+    "polarity": "transform",
+    "effort": "L",
+    "tier": "opus",
+    "why_tier": "the obvious candidate code paths were read in full and do NOT reproduce the reported divergence, so this needs careful bisection across multiple layers (service_query.go pushdown selection, buildBookSummaryFilter, the search/Bleve path, and the list-cache warmer in library_list_warmer.go which pre-populates cache entries keyed on IsPrimaryVersion=true) rather than a known fix applied mechanically",
+    "review_critical": false,
+    "goal": "Reproduce the reported divergence with a deterministic, fixture-seeded Go test (not a live prod query) that creates a small set of books spanning is_primary_version={true,false,nil} crossed with quarantined={true,false}, then calls the audiobook list/count path twice -- once with the default filters (ExcludeQuarantined=true, IsPrimaryVersion=nil) and once with ExcludeQuarantined=false, IsPrimaryVersion=nil (i.e. show_quarantined=true, no explicit primary filter) -- and asserts both calls return the SAME set of nil-flag and false-flag books (only differing in whether quarantined rows are included). Once the test fails and pinpoints the actual code path responsible (candidates already ruled out by static reading: the hasPostFilters branch selection and the memdb index-selection switch in both GetBookSummaries and CountBookSummaries -- the bug is NOT there), bisect outward to internal/server/library_list_warmer.go's cache pre-warming (it pre-populates svc.listCache with entries keyed IsPrimaryVersion=&primaryTrue for many limit/offset/sort combinations -- confirm the cache key in service_query.go:195-196 cannot collide between a warmed true-primary entry and an incoming nil-primary request) and to the Bleve search-index path if search-index-backed counts are involved, and fix whichever layer is actually responsible.",
+    "background": [
+      "Measured on production 2026-08-14: default query (no is_primary_version, no show_quarantined) returned 63,869 books; the SAME query with only show_quarantined=true added returned 41,319 = 41,317 (the known is_primary_version=true population) + 2 (the quarantined rows) -- i.e. adding show_quarantined=true, which can only WIDEN the set, instead silently narrowed it to primary-only and dropped the 22,552-book nil-flag population.",
+      "This is filed as the 'same family' as the known nil/false is_primary_version divergence tracked separately in project memory (project_is_primary_version_nil_divergence, marked STILL LIVE, #2449 masks but does not fix it) -- so this specific show_quarantined interaction may be a second symptom of that same underlying root cause rather than an independent bug.",
+      "internal/server/library_list_warmer.go pre-warms svc.listCache with ~15+ distinct filter combinations, all using IsPrimaryVersion: &primaryTrue (verified: grep -c 'IsPrimaryVersion: &primaryTrue' internal/server/library_list_warmer.go returns multiple hits) -- this is a plausible but NOT YET CONFIRMED culprit: if any warmed cache key can be reached by a request that did not explicitly ask for primary=true, the cache would silently serve the narrower warmed page. The cache key construction at service_query.go:195-196 needs to be checked against every warmer variant to rule this in or out."
+    ],
+    "steps": [
+      "Add a new test file internal/audiobooks/service_query_primary_quarantine_test.go. Seed a MemStore (or the existing test double used elsewhere in this package -- grep for the fixture-store constructor already used by other service_query_test.go-style tests in this package) with 4 books: one IsPrimaryVersion=true not quarantined, one IsPrimaryVersion=false not quarantined, one IsPrimaryVersion=nil not quarantined, one IsPrimaryVersion=nil quarantined.",
+      "Call svc.GetAudiobooksWithTotal(ctx, 0, 0, \"\", nil, nil, ListFilters{ExcludeQuarantined: true}) (simulating the default request) and assert it returns exactly the 3 non-quarantined books (true/false/nil primary all included, since IsPrimaryVersion is unset).",
+      "Call svc.GetAudiobooksWithTotal(ctx, 0, 0, \"\", nil, nil, ListFilters{ExcludeQuarantined: false}) (simulating show_quarantined=true) and assert it returns all 4 books. If it instead returns only the IsPrimaryVersion=true book (reproducing the reported bug), the test now fails deterministically and is the reproduction.",
+      "With the failing test in hand, add temporary slog.Debug or t.Logf tracing at each candidate decision point already identified as innocent by static reading (service_query.go's hasPostFilters computation, the pushdown branch selection, memdb_summaries.go's index-selection switch) to CONFIRM they are in fact taking the same branch in both calls -- do not assume the earlier static read was complete; verify it under the failing test.",
+      "If both calls confirm identical branch selection through memdb_summaries.go, extend the trace into internal/server/audiobooks_helpers.go's buildAudiobookListResponse (the safety-net quarantine re-filter at line ~69-77) and into whatever populates svc.listCache -- specifically check whether library_list_warmer.go's pre-warmed entries (IsPrimaryVersion=&primaryTrue) can be reached by a cache-key collision from the nil-IsPrimaryVersion request under test.",
+      "Once the actual divergent code path is found, apply the minimal correct fix at that location (do not paper over it by special-casing ExcludeQuarantined in a branch condition without understanding why the divergence occurred there) and confirm the new test (and the old default-request test) both pass.",
+      "Re-run the existing fixture-based tests in internal/audiobooks/... and internal/database/... to confirm no other pushdown/count test regresses."
+    ],
+    "tests": [
+      "internal/audiobooks/service_query_primary_quarantine_test.go TestGetAudiobooksWithTotal_ShowQuarantinedDoesNotNarrowByPrimary -- the reproduction test described in steps above; must fail before the fix and pass after.",
+      "internal/audiobooks/service_query_primary_quarantine_test.go TestCountAudiobooksFiltered_ShowQuarantinedDoesNotNarrowByPrimary -- same scenario against CountAudiobooksFiltered, since the reported prod numbers (63,869 vs 41,319) came from full page-through counts, not a single page.",
+      "Full package regression: go test ./internal/audiobooks/... ./internal/database/... -count=1"
+    ],
+    "acceptance": [
+      "go test ./internal/audiobooks/... -run TestGetAudiobooksWithTotal_ShowQuarantinedDoesNotNarrowByPrimary -count=1 -v passes",
+      "go test ./internal/audiobooks/... ./internal/database/... -count=1 passes with no new failures",
+      "the fix is accompanied by a comment at the actual root-cause location explaining the mechanism (cache-key collision, index-selection default, or whatever is found) so this does not require re-discovery next time"
+    ],
+    "edge_cases": [
+      "If the root cause turns out to be a listCache key collision from library_list_warmer.go's pre-warmed IsPrimaryVersion=true entries, the fix must not simply stop warming those entries (they exist for a real performance reason -- prod 'library spins forever' history cited at service_query.go:75) -- the cache KEY must be made collision-proof instead.",
+      "If IsPrimaryVersion=false (22,552, per todo_line 3729) turns out to currently be an empty population in prod (a possibility that item explicitly raises), the reproduction test's false-flag book must still be included in the fixture and asserted correctly, independent of what todo_line 3729's prod measurement finds -- the code-level correctness question and the prod-data-population question are separate."
+    ],
+    "anti_over_suppression": "TestGetAudiobooksWithTotal_ShowQuarantinedDoesNotNarrowByPrimary itself is the anti-suppression check: it specifically asserts the WIDER filter set (show_quarantined=true) never returns FEWER books than a narrower one on the same request shape",
+    "depends_on_lines": [],
+    "gate": "go build ./... && go vet ./... && go test ./internal/audiobooks/... ./internal/database/... -count=1",
+    "notes": "Companion to todo_line 3729, which asks a pure production-data question (is the false-flag population actually 0 in prod, or is the false-filter itself returning nils) -- that is prod_run, not code work, and does not block this item's reproduction-via-fixture approach. This item's root cause is NOT located despite reading service_query.go, service_filtering.go, and both memdb_summaries.go index-selection switches in full -- flagged opus-tier specifically because the obvious candidates were ruled out and a harder bisection is needed. review_critical=false: this is a read-path listing/count bug (wrong books/counts SHOWN), not a write path, but it does affect which books an operator believes exist, so treat any fix with normal review care even though it's not marked critical by the schema's write-path criterion."
+  },
+  {
+    "todo_line": 3729,
+    "src_id": null,
+    "title": "Measure in prod: is the is_primary_version=false population actually 0, or is the false-filter returning nil-flag rows?",
+    "verdict": "prod_run",
+    "verdict_evidence": "The item explicitly asks to 'Establish whether explicit-false books are currently 0 in prod' -- this is a request to run a query against the production data population, not a code change; per the scout instructions, a measurement on the server is verdict prod_run. Confirmed the relevant endpoint already exists and needs no new code to answer this: GET /api/v1/audiobooks?is_primary_version=false is already wired (grep -n 'IsPrimaryVersion:\\s*httputil.ParseQueryBoolPtr' internal/server/handlers/audiobooks/handler.go -> 1 hit, L515).",
+    "domain": "docs",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "the is_primary_version query param is already accepted and passed through to the filter with no default override", "grep_cmd": "grep -n 'IsPrimaryVersion:\\s*httputil.ParseQueryBoolPtr' internal/server/handlers/audiobooks/handler.go", "expect": "1 hit, L515"},
+      {"claim": "the code-level tri-state semantics (nil treated as effectively-true by the post-filter path) are already documented at the exact function this measurement would need to distrust or confirm", "grep_cmd": "grep -n 'eff := s.IsPrimaryVersion == nil' internal/audiobooks/service_filtering.go", "expect": "1 hit, L864"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "S",
+    "tier": "haiku",
+    "why_tier": "a single curl/API call against prod plus reading the returned count -- no code, no design judgment",
+    "review_critical": false,
+    "goal": "Run GET /api/v1/audiobooks?is_primary_version=false&limit=1 (or the equivalent count-only path) against production and read the reported total. If it reports 0, the explicit-false population genuinely does not exist yet (nothing has ever been marked false) and the 22,552 figure from is_primary_version=false in the earlier measurement (todo_line 3718's context) must have actually been serving nil-flag rows mislabeled as false-matches -- which would be a second, more serious instance of the nil/false divergence. If it reports a nonzero count close to 22,552, the false-filter is behaving as documented and the earlier ~765 figure remembered from a different code path was measuring something else (a different filter, a different point in time, or a different store backend) -- record which.",
+    "background": [
+      "The TODO item cites a specific discrepancy to resolve: 'memory says the census counted ~765 explicit-false in one path' vs the 22,552 seen via is_primary_version=false in this measurement -- these numbers must be reconciled against the SAME point in time, not treated as contradictory without checking whether they came from different endpoints or different snapshots.",
+      "internal/audiobooks/service_filtering.go:863-865 shows the documented tri-state semantics for the POST-filter path (used when the store falls back to unfiltered fetch): eff := s.IsPrimaryVersion == nil || *s.IsPrimaryVersion, i.e. nil is treated as effectively-primary=true. If the memdb PUSHDOWN path (memdb_summaries.go, case f.IsPrimaryVersion != nil: iter = txn.Get(memTableBooks, memIdxIsPrimaryVersion, *f.IsPrimaryVersion)) instead uses a raw stored index value that has no such nil-coercion, an explicit is_primary_version=false request would only match rows where the STORED value is exactly *false* (not nil) -- meaning if no book has ever had the field explicitly written to false, the query is a legitimate 0, not a bug."
+    ],
+    "steps": [],
+    "tests": [],
+    "acceptance": [
+      "the measurement is recorded (in docs/operations/pending-prod-actions.md or a handoff note) with the exact count returned by is_primary_version=false against prod at the time it was run, plus a note reconciling it against the ~765 figure from memory"
+    ],
+    "edge_cases": [
+      "if the count is genuinely 0, this is evidence (not proof) that no book has ever had IsPrimaryVersion explicitly set to a false pointer in prod -- worth cross-checking against whatever wrote the ~765 number originally before concluding the false-filter itself is broken"
+    ],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [3718],
+    "gate": "n/a (docs)",
+    "notes": "This measurement should be run using whatever fix or clarification comes out of todo_line 3718's investigation, since that item's bisection may itself explain the false-filter's exact index-selection behavior before this prod query is even needed. If 3718's investigation resolves this question definitively via code reading (e.g. confirms the memdb pushdown path for IsPrimaryVersion=false uses the raw index with no nil-coercion, making 0-in-prod an expected and correct answer), this prod_run item may become unnecessary -- do not run it blind without first checking 3718's findings."
+  },
+  {
+    "todo_line": 4064,
+    "src_id": null,
+    "title": "Run the author-conjunction-repair op for author 46627 with skip_author_ids cleared",
+    "verdict": "prod_run",
+    "verdict_evidence": "The repair machinery already exists and needs no code change: internal/plugins/maintenance/author_conjunction_repair.go registers operation ID 'maintenance.author-conjunction-repair' (grep -n 'ID:\\s*\"maintenance.author-conjunction-repair\"' internal/plugins/maintenance/author_conjunction_repair.go -> 1 hit, L96) and already accepts a SkipAuthorIDs []int json param (L78) that the prior run set to [46627] specifically to exclude this one row while the rest of the repair applied. The TODO item's own text confirms the code path is done ('Everything else already applied 2026-08-14... 30 merged, 15 renamed, 0 failures') and the only remaining action is re-invoking the same op with that one exclusion removed -- a parameter change to a production op call, not a code change.",
+    "domain": "docs",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "the op and its skip_author_ids param already exist and are live at HEAD", "grep_cmd": "grep -n 'SkipAuthorIDs\\|skip_author_ids' internal/plugins/maintenance/author_conjunction_repair.go", "expect": "3 hits: field declaration L78, doc string L105, log field L160"},
+      {"claim": "author 46627 is specifically named in the code's own comments as the reason the skip mechanism exists", "grep_cmd": "grep -n \"46627\" internal/plugins/maintenance/author_conjunction_repair.go internal/database/memdb_reads.go", "expect": "2 hits: author_conjunction_repair.go:68 ('46627 (\\\"& Nicholas Courtney\\\")...') and memdb_reads.go:521 (co-author credit note)"},
+      {"claim": "this prod action is not yet tracked in the standing pending-prod-actions log", "grep_cmd": "grep -n \"46627\" docs/operations/pending-prod-actions.md", "expect": "0 hits — not yet recorded there"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "S",
+    "tier": "haiku",
+    "why_tier": "re-invoking an existing, already-tested op via its existing HTTP endpoint with one parameter removed; no code to write",
+    "review_critical": true,
+    "goal": "Re-run the maintenance.author-conjunction-repair operation in production with SkipAuthorIDs empty (or explicitly excluding 46627 from the skip list), first as a dry_run=true pass to confirm exactly one additional merge/rename targets author 46627 as expected and nothing else changed since the 2026-08-14 run, then with dry_run=false to apply it. After applying, re-verify the book-link count the same way the original run did (145/145 previously) but this time confirm it via BOTH the memdb-backed API AND a direct Pebble-path read -- the TODO item flags that the original verification only checked the memdb-backed API, not Pebble directly.",
+    "background": [
+      "Everything else in this repair already applied on 2026-08-14 02:0x: 30 merged, 15 renamed, 0 failures, 145/145 book links verified -- but that verification went through the memdb-backed API only; the Pebble path was not independently re-read post-apply.",
+      "Author 46627 ('& Nicholas Courtney') is the only remaining stranded-ampersand row excluded via skip_author_ids from that run. Two other survivors (&#169 and &#169;2013 by HarperCollinsPublishers) are a SEPARATE HTML-entity defect, not in scope for this op or this TODO item.",
+      "internal/database/memdb_reads.go:521 documents that author 46627 specifically has co-author credits on non-primary versions that Pebble holds as two book links while memdb may reconcile differently -- this is presumably why it was skipped in the first pass and needs care, not a blind re-run."
+    ],
+    "steps": [],
+    "tests": [],
+    "acceptance": [
+      "dry_run=true response for the op with 46627 no longer skipped shows exactly the expected merge/rename for that one author and reports 0 unexpected additional changes",
+      "post-apply, GET the book-link count for author 46627 via both the memdb-backed API and a direct Pebble-path read (the TODO explicitly calls out that the prior run's 145/145 verification did not cross-check Pebble) and confirm they agree"
+    ],
+    "edge_cases": [
+      "if the dry_run reveals author 46627's merge is not as clean as the other 30 (e.g. the co-author-credit link structure noted in memdb_reads.go:521 causes an unexpected double-merge or a link left dangling), STOP and do not apply -- this is exactly why the original run excluded it rather than including it with the rest"
+    ],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (prod operation, no code change)",
+    "notes": "review_critical=true: this is a prod-data merge/rename operation on the author table via an existing but not-yet-exercised-on-this-row code path (author 46627 was deliberately excluded from the tested batch). Should be logged in docs/operations/pending-prod-actions.md before running, per the standing pattern used for other deploy-gated prod actions in this codebase (decision #14 in the scout brief establishes that pattern for a different item, but the same discipline applies here)."
   }
 ]
