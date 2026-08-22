@@ -1,3 +1,8 @@
+<!-- file: docs/superpowers/specs/2026-05-19-fingerprint-library-design.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: df0f0c38-33b2-4d04-8bc3-b242d1808d99 -->
+<!-- last-edited: 2026-08-22 -->
+
 # Fingerprint Library Design
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
