@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/play.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b06d4a13-5f28-4c71-9e0a-38f2c7d915e6
 // last-edited: 2026-08-22
 
@@ -371,10 +371,16 @@ func (h *Handler) SessionLocal(c *gin.Context) {
 	// 200 — fatal for these decoders (§1.8.6).
 	defer respondPlainOK(c)
 
-	// Mirrors applySessionUpdate's check verbatim (both conditions): an authenticated
-	// caller and an anonymous one are told apart here and nowhere else. Nothing is
-	// persisted on either branch today, so the branch exists to keep the shape
-	// identical to its sibling when local-all lands.
+	// ⚠️ THIS BRANCH HAS NO OBSERVABLE EFFECT TODAY, and that is deliberate rather
+	// than an oversight. respondPlainOK is deferred, so authenticated and anonymous
+	// callers get a byte-identical 200 "OK"; nothing is read from `user` because
+	// nothing is persisted yet. It is here to hold applySessionUpdate's exact shape
+	// — both conditions, including the nil guard — for when /api/session/local-all
+	// lands and this handler grows a body that genuinely needs the user id.
+	//
+	// Do NOT read it as auth ENFORCEMENT: there is none on this path, by design.
+	// Deleting it because a mutation test shows nothing change would be correct
+	// about the present and wrong about the next commit.
 	if user, ok := servermiddleware.CurrentUser(c); !ok || user == nil {
 		return
 	}
