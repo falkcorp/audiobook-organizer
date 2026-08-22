@@ -1,15 +1,17 @@
 // file: internal/server/handlers/abs/stats.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a71e5c04-3d68-4b29-85f0-c26d914b7e38
-// last-edited: 2026-08-02
+// last-edited: 2026-08-22
 
 package abs
 
 import (
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -70,10 +72,14 @@ func (h *Handler) ListeningStats(c *gin.Context) {
 	if h.userData != nil {
 		if seconds, err := h.userData.ListenedSeconds(user.ID); err == nil {
 			total = seconds
+		} else {
+			// A read failure reports 0 rather than 5xx. A 5xx trips the SAME
+			// connection-error indicator this endpoint exists to keep green, so failing
+			// here would swap one cosmetic bug for the identical one. Log and metric
+			// make the silent failure observable (ABS-N6).
+			slog.Warn("abs listening-stats read failed, reporting 0", "user_id", user.ID, "err", err)
+			metrics.IncABSListeningStatsReadFailures()
 		}
-		// A read failure reports 0 rather than 5xx. A 5xx trips the SAME
-		// connection-error indicator this endpoint exists to keep green, so failing
-		// here would swap one cosmetic bug for the identical one.
 	}
 
 	respondJSON(c, http.StatusOK, listeningStatsResponse{
