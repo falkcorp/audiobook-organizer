@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-08-19
+// last-edited: 2026-08-22
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -71,8 +71,13 @@ func (s *Server) RegisterBookDedupScanOp(reg *opsregistry.Registry) error {
 			}
 
 			// Create operation context for structured logging
+			// opID is the v2 run's own id. It keys structured logging, the
+			// activity log, and the OperationChange ledger rows this op writes.
+			// No v1 row is involved: the client polls this id against
+			// GET /operations/v2/:id.
+			opID := opsregistry.ReporterOpID(reporter)
 			op := &logging.OpContext{
-				ID:     p.LegacyOpID,
+				ID:     opID,
 				Type:   "dedup.book-scan",
 				Status: "pending",
 			}
@@ -100,9 +105,9 @@ func (s *Server) RegisterBookDedupScanOp(reg *opsregistry.Registry) error {
 			op.SetStatus("success")
 			logging.Info(ctx, "book duplicate scan complete", "groups", len(result.Groups), "duplicates", result.TotalDuplicates)
 
-			if s.activityWriter != nil && p.LegacyOpID != "" {
-				activity.FlushOperation(s.activityWriter, p.LegacyOpID)
-				activity.EmitInfo(s.activityWriter, p.LegacyOpID, "dedup.book-scan", "dedup",
+			if s.activityWriter != nil && opID != "" {
+				activity.FlushOperation(s.activityWriter, opID)
+				activity.EmitInfo(s.activityWriter, opID, "dedup.book-scan", "dedup",
 					fmt.Sprintf("Book duplicate scan found %d groups (%d duplicates)", len(result.Groups), result.TotalDuplicates),
 					activity.AlwaysShow)
 			}
@@ -138,8 +143,13 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 			}
 
 			// Create operation context for structured logging
+			// opID is the v2 run's own id. It keys structured logging, the
+			// activity log, and the OperationChange ledger rows this op writes.
+			// No v1 row is involved: the client polls this id against
+			// GET /operations/v2/:id.
+			opID := opsregistry.ReporterOpID(reporter)
 			op := &logging.OpContext{
-				ID:     p.LegacyOpID,
+				ID:     opID,
 				Type:   "dedup.book-merge",
 				Status: "pending",
 			}
@@ -184,9 +194,9 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 			op.SetStatus("success")
 			logging.Info(ctx, "book merge complete", "kept_id", p.KeepID, "merged_count", len(p.MergeIDs))
 
-			if s.activityWriter != nil && p.LegacyOpID != "" {
-				activity.FlushOperation(s.activityWriter, p.LegacyOpID)
-				activity.EmitInfo(s.activityWriter, p.LegacyOpID, "dedup.book-merge", "dedup",
+			if s.activityWriter != nil && opID != "" {
+				activity.FlushOperation(s.activityWriter, opID)
+				activity.EmitInfo(s.activityWriter, opID, "dedup.book-merge", "dedup",
 					fmt.Sprintf("Book merge completed: merged %d books into %s", len(p.MergeIDs), p.KeepID),
 					activity.AlwaysShow)
 			}
@@ -277,8 +287,13 @@ func (s *Server) RegisterAuthorDedupScanOp(reg *opsregistry.Registry) error {
 			}
 
 			// Create operation context for structured logging
+			// opID is the v2 run's own id. It keys structured logging, the
+			// activity log, and the OperationChange ledger rows this op writes.
+			// No v1 row is involved: the client polls this id against
+			// GET /operations/v2/:id.
+			opID := opsregistry.ReporterOpID(reporter)
 			op := &logging.OpContext{
-				ID:     p.LegacyOpID,
+				ID:     opID,
 				Type:   "dedup.author-scan",
 				Status: "pending",
 			}
@@ -338,9 +353,9 @@ func (s *Server) RegisterAuthorDedupScanOp(reg *opsregistry.Registry) error {
 			sp.Done(fmt.Sprintf("Found %d duplicate groups (after filtering reviewed)", len(groups)))
 			logging.Info(ctx, "author duplicate scan complete", "groups", len(groups))
 
-			if s.activityWriter != nil && p.LegacyOpID != "" {
-				activity.FlushOperation(s.activityWriter, p.LegacyOpID)
-				activity.EmitInfo(s.activityWriter, p.LegacyOpID, "dedup.author-scan", "dedup",
+			if s.activityWriter != nil && opID != "" {
+				activity.FlushOperation(s.activityWriter, opID)
+				activity.EmitInfo(s.activityWriter, opID, "dedup.author-scan", "dedup",
 					fmt.Sprintf("Author duplicate scan found %d groups", len(groups)),
 					activity.AlwaysShow)
 			}
@@ -376,8 +391,13 @@ func (s *Server) RegisterSeriesDedupScanOp(reg *opsregistry.Registry) error {
 			}
 
 			// Create operation context for structured logging
+			// opID is the v2 run's own id. It keys structured logging, the
+			// activity log, and the OperationChange ledger rows this op writes.
+			// No v1 row is involved: the client polls this id against
+			// GET /operations/v2/:id.
+			opID := opsregistry.ReporterOpID(reporter)
 			op := &logging.OpContext{
-				ID:     p.LegacyOpID,
+				ID:     opID,
 				Type:   "dedup.series-scan",
 				Status: "pending",
 			}
@@ -410,9 +430,9 @@ func (s *Server) RegisterSeriesDedupScanOp(reg *opsregistry.Registry) error {
 			op.SetStatus("success")
 			logging.Info(ctx, "series duplicate scan complete", "groups", len(result.Groups), "total_series", result.TotalSeries)
 
-			if s.activityWriter != nil && p.LegacyOpID != "" {
-				activity.FlushOperation(s.activityWriter, p.LegacyOpID)
-				activity.EmitInfo(s.activityWriter, p.LegacyOpID, "dedup.series-scan", "dedup",
+			if s.activityWriter != nil && opID != "" {
+				activity.FlushOperation(s.activityWriter, opID)
+				activity.EmitInfo(s.activityWriter, opID, "dedup.series-scan", "dedup",
 					fmt.Sprintf("Series duplicate scan found %d groups (of %d total series)", len(result.Groups), result.TotalSeries),
 					activity.AlwaysShow)
 			}
@@ -448,8 +468,13 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 			}
 
 			// Create operation context for structured logging
+			// opID is the v2 run's own id. It keys structured logging, the
+			// activity log, and the OperationChange ledger rows this op writes.
+			// No v1 row is involved: the client polls this id against
+			// GET /operations/v2/:id.
+			opID := opsregistry.ReporterOpID(reporter)
 			op := &logging.OpContext{
-				ID:     p.LegacyOpID,
+				ID:     opID,
 				Type:   "dedup.series-dedup",
 				Status: "pending",
 			}
@@ -470,9 +495,9 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 			op.SetStatus("success")
 			logging.Info(ctx, "series deduplication complete")
 
-			if s.activityWriter != nil && p.LegacyOpID != "" {
-				activity.FlushOperation(s.activityWriter, p.LegacyOpID)
-				activity.EmitInfo(s.activityWriter, p.LegacyOpID, "dedup.series-dedup", "dedup",
+			if s.activityWriter != nil && opID != "" {
+				activity.FlushOperation(s.activityWriter, opID)
+				activity.EmitInfo(s.activityWriter, opID, "dedup.series-dedup", "dedup",
 					"Series deduplication completed", activity.AlwaysShow)
 			}
 			return nil
@@ -509,8 +534,13 @@ func (s *Server) RegisterSeriesPruneOp(reg *opsregistry.Registry) error {
 			}
 
 			// Create operation context for structured logging
+			// opID is the v2 run's own id. It keys structured logging, the
+			// activity log, and the OperationChange ledger rows this op writes.
+			// No v1 row is involved: the client polls this id against
+			// GET /operations/v2/:id.
+			opID := opsregistry.ReporterOpID(reporter)
 			op := &logging.OpContext{
-				ID:     p.LegacyOpID,
+				ID:     opID,
 				Type:   "dedup.series-prune",
 				Status: "pending",
 			}
@@ -519,7 +549,7 @@ func (s *Server) RegisterSeriesPruneOp(reg *opsregistry.Registry) error {
 			progress := registryProgressAdapter{r: reporter}
 
 			logging.Info(ctx, "series prune starting")
-			runErr := s.executeSeriesPrune(ctx, store, progress, p.LegacyOpID)
+			runErr := s.executeSeriesPrune(ctx, store, progress, opID)
 
 			if runErr != nil {
 				op.SetStatus("failed")
@@ -529,13 +559,13 @@ func (s *Server) RegisterSeriesPruneOp(reg *opsregistry.Registry) error {
 				logging.Info(ctx, "series prune complete")
 			}
 
-			if s.activityWriter != nil && p.LegacyOpID != "" {
-				activity.FlushOperation(s.activityWriter, p.LegacyOpID)
+			if s.activityWriter != nil && opID != "" {
+				activity.FlushOperation(s.activityWriter, opID)
 				summary := "Series prune completed"
 				if runErr != nil {
 					summary = fmt.Sprintf("Series prune failed: %v", runErr)
 				}
-				activity.EmitInfo(s.activityWriter, p.LegacyOpID, "dedup.series-prune", "dedup", summary, activity.AlwaysShow)
+				activity.EmitInfo(s.activityWriter, opID, "dedup.series-prune", "dedup", summary, activity.AlwaysShow)
 			}
 			return runErr
 		},
@@ -569,8 +599,13 @@ func (s *Server) RegisterSeriesMergeOp(reg *opsregistry.Registry) error {
 			}
 
 			// Create operation context for structured logging
+			// opID is the v2 run's own id. It keys structured logging, the
+			// activity log, and the OperationChange ledger rows this op writes.
+			// No v1 row is involved: the client polls this id against
+			// GET /operations/v2/:id.
+			opID := opsregistry.ReporterOpID(reporter)
 			op := &logging.OpContext{
-				ID:     p.LegacyOpID,
+				ID:     opID,
 				Type:   "dedup.series-merge",
 				Status: "pending",
 			}
@@ -584,7 +619,7 @@ func (s *Server) RegisterSeriesMergeOp(reg *opsregistry.Registry) error {
 			}
 			logging.Info(ctx, "series merge starting", "keep_id", p.KeepID, "merge_count", len(p.MergeIDs))
 
-			_, err := dedup.MergeSeries(ctx, store, p.LegacyOpID, p.KeepID, p.MergeIDs, p.CustomName, progress)
+			_, err := dedup.MergeSeries(ctx, store, opID, p.KeepID, p.MergeIDs, p.CustomName, progress)
 			if err != nil {
 				op.SetStatus("failed")
 				logging.Error(ctx, "series merge failed", "err", err)
@@ -595,9 +630,9 @@ func (s *Server) RegisterSeriesMergeOp(reg *opsregistry.Registry) error {
 			op.SetStatus("success")
 			logging.Info(ctx, "series merge complete", "kept_id", p.KeepID, "merged_count", len(p.MergeIDs))
 
-			if s.activityWriter != nil && p.LegacyOpID != "" {
-				activity.FlushOperation(s.activityWriter, p.LegacyOpID)
-				activity.EmitInfo(s.activityWriter, p.LegacyOpID, "dedup.series-merge", "dedup",
+			if s.activityWriter != nil && opID != "" {
+				activity.FlushOperation(s.activityWriter, opID)
+				activity.EmitInfo(s.activityWriter, opID, "dedup.series-merge", "dedup",
 					fmt.Sprintf("Series merge completed: merged %d series into series %d", len(p.MergeIDs), p.KeepID),
 					activity.AlwaysShow)
 			}
@@ -635,15 +670,19 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 			}
 
 			// Create operation context for structured logging
+			// opID is the v2 run's own id. It keys structured logging, the
+			// activity log, and the OperationChange ledger rows this op writes.
+			// No v1 row is involved: the client polls this id against
+			// GET /operations/v2/:id.
+			opID := opsregistry.ReporterOpID(reporter)
 			op := &logging.OpContext{
-				ID:     p.LegacyOpID,
+				ID:     opID,
 				Type:   "dedup.series-normalize",
 				Status: "pending",
 			}
 			ctx = logging.WithOp(ctx, op)
 
 			progress := registryProgressAdapter{r: reporter}
-			opID := p.LegacyOpID
 
 			logging.Info(ctx, "series normalization starting")
 			_ = progress.Log("info", "Starting series name normalization...", nil)

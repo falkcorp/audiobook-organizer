@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-07-01
+// last-edited: 2026-08-22
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: book / author /
@@ -31,12 +31,12 @@ package duplicates
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/gin-gonic/gin"
-	ulid "github.com/oklog/ulid/v2"
 )
 
 // Handler hosts the duplicates-domain HTTP endpoints.
@@ -170,35 +170,58 @@ func (h *Handler) ListBookDuplicateScanResults(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"groups": []any{}, "group_count": 0, "duplicate_count": 0, "needs_refresh": true})
 }
 
-// launchLegacyOp creates a legacy DB operation record, enqueues defID with the
-// params returned by buildParams(legacyOpID), and responds 202 with the op.
-// Returns false if the registry is nil or any step fails (response already written).
-func (h *Handler) launchLegacyOp(c *gin.Context, defID, legacyType, detail string, buildParams func(legacyOpID string) any) bool {
+// dupOpResponse is the 202 body every async duplicates trigger returns.
+//
+// The id is the v2 operation id, and that is the whole point: the client polls
+// it via GET /operations/v2/:id, which reads the v2 store and has no fallback
+// to the retired v1 table. Handing back a v1 id here made every one of these
+// endpoints report failure for work that actually succeeded.
+//
+// The zero-valued progress fields are carried deliberately rather than omitted.
+// The web client types this response as its Operation interface, whose
+// progress/total/message are non-optional, and renders it immediately as the
+// initial state of the progress bar — before the first poll lands. Omitting
+// them would make the declared type a lie and blank the bar for one interval.
+type dupOpResponse struct {
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	Status    string `json:"status"`
+	Progress  int    `json:"progress"`
+	Total     int    `json:"total"`
+	Message   string `json:"message"`
+	CreatedAt string `json:"created_at"`
+	Detail    string `json:"detail,omitempty"`
+}
+
+// launchOp enqueues defID with params and responds 202 with the enqueued v2
+// operation. opType is the client-facing label for the operation; it is not a
+// registry key. Returns false if the registry is nil or the enqueue fails
+// (response already written).
+func (h *Handler) launchOp(c *gin.Context, defID, opType, detail string, params any) bool {
 	if h.opRegistry == nil {
 		httputil.RespondWithInternalError(c, "operation registry not initialized")
 		return false
 	}
-	store := h.store
-	legacyID := ulid.Make().String()
-	d := detail
-	op, err := store.CreateOperation(legacyID, legacyType, &d)
+	opID, err := h.opRegistry.EnqueueOp(c.Request.Context(), defID, params)
 	if err != nil {
-		httputil.InternalError(c, "failed to create operation", err)
-		return false
-	}
-	if _, err := h.opRegistry.EnqueueOp(c.Request.Context(), defID, buildParams(op.ID)); err != nil {
 		httputil.InternalError(c, "failed to enqueue operation", err)
 		return false
 	}
-	httputil.RespondWithSuccess(c, 202, op)
+	httputil.RespondWithSuccess(c, 202, dupOpResponse{
+		ID:        opID,
+		Type:      opType,
+		Status:    "pending",
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		Detail:    detail,
+	})
 	return true
 }
 
 // ScanBookDuplicates triggers an async scan for book duplicates using metadata
 // matching. POST /audiobooks/duplicates/scan.
 func (h *Handler) ScanBookDuplicates(c *gin.Context) {
-	h.launchLegacyOp(c, "dedup.book-scan", "book-dedup-scan", "book-dedup-scan",
-		func(id string) any { return bookDedupScanOpParams{LegacyOpID: id} })
+	h.launchOp(c, "dedup.book-scan", "book-dedup-scan", "book-dedup-scan",
+		bookDedupScanOpParams{})
 }
 
 // MergeBookDuplicatesAsVersions merges a group of duplicate books into a version
@@ -312,10 +335,8 @@ func (h *Handler) MergeBooks(c *gin.Context) {
 	}
 
 	detail := fmt.Sprintf("merge-books:keep=%s,merge=%d", req.KeepID, len(req.MergeIDs))
-	h.launchLegacyOp(c, "dedup.book-merge", "book-merge", detail,
-		func(id string) any {
-			return bookMergeOpParams{LegacyOpID: id, KeepID: req.KeepID, MergeIDs: req.MergeIDs, Detail: detail}
-		})
+	h.launchOp(c, "dedup.book-merge", "book-merge", detail,
+		bookMergeOpParams{KeepID: req.KeepID, MergeIDs: req.MergeIDs, Detail: detail})
 }
 
 // CombineBooks combines several single-file books into ONE multi-file book on the
@@ -391,8 +412,8 @@ func (h *Handler) ListDuplicateAuthors(c *gin.Context) {
 // RefreshDuplicateAuthors enqueues an async author-dedup scan.
 // POST /authors/duplicates/refresh.
 func (h *Handler) RefreshDuplicateAuthors(c *gin.Context) {
-	h.launchLegacyOp(c, "dedup.author-scan", "author-dedup-scan", "author-dedup-scan",
-		func(id string) any { return authorDedupScanOpParams{LegacyOpID: id} })
+	h.launchOp(c, "dedup.author-scan", "author-dedup-scan", "author-dedup-scan",
+		authorDedupScanOpParams{})
 }
 
 // ListSeriesDuplicates handles GET /series/duplicates.
@@ -411,8 +432,8 @@ func (h *Handler) ListSeriesDuplicates(c *gin.Context) {
 // RefreshSeriesDuplicates enqueues an async series-dedup scan.
 // POST /series/duplicates/refresh.
 func (h *Handler) RefreshSeriesDuplicates(c *gin.Context) {
-	h.launchLegacyOp(c, "dedup.series-scan", "series-dedup-scan", "series-dedup-scan",
-		func(id string) any { return seriesDedupScanOpParams{LegacyOpID: id} })
+	h.launchOp(c, "dedup.series-scan", "series-dedup-scan", "series-dedup-scan",
+		seriesDedupScanOpParams{})
 }
 
 // ValidateDedupEntry searches metadata sources (OpenLibrary, Audible, etc.) to
@@ -491,8 +512,8 @@ func (h *Handler) ValidateDedupEntry(c *gin.Context) {
 // DeduplicateSeriesHandler enqueues an async series-dedup operation.
 // POST /series/deduplicate.
 func (h *Handler) DeduplicateSeriesHandler(c *gin.Context) {
-	h.launchLegacyOp(c, "dedup.series-dedup", "series-dedup", "series-deduplicate",
-		func(id string) any { return seriesDedupOpParams{LegacyOpID: id, Detail: "series-deduplicate"} })
+	h.launchOp(c, "dedup.series-dedup", "series-dedup", "series-deduplicate",
+		seriesDedupOpParams{Detail: "series-deduplicate"})
 }
 
 // SeriesPrunePreview returns a dry-run preview of the series auto-prune.
@@ -515,8 +536,8 @@ func (h *Handler) SeriesPrunePreview(c *gin.Context) {
 
 // SeriesPrune enqueues an async series-prune operation. POST /series/prune.
 func (h *Handler) SeriesPrune(c *gin.Context) {
-	h.launchLegacyOp(c, "dedup.series-prune", "series-prune", "series-prune",
-		func(id string) any { return seriesPruneOpParams{LegacyOpID: id, Detail: "series-prune"} })
+	h.launchOp(c, "dedup.series-prune", "series-prune", "series-prune",
+		seriesPruneOpParams{Detail: "series-prune"})
 }
 
 // MergeSeriesGroup enqueues an async series-merge operation, reassigning all
@@ -545,10 +566,8 @@ func (h *Handler) MergeSeriesGroup(c *gin.Context) {
 	}
 
 	detail := fmt.Sprintf("merge-series:keep=%d,merge=%v", req.KeepID, req.MergeIDs)
-	h.launchLegacyOp(c, "dedup.series-merge", "series-merge", detail,
-		func(id string) any {
-			return seriesMergeOpParams{LegacyOpID: id, KeepID: req.KeepID, MergeIDs: req.MergeIDs, CustomName: req.CustomName, Detail: detail}
-		})
+	h.launchOp(c, "dedup.series-merge", "series-merge", detail,
+		seriesMergeOpParams{KeepID: req.KeepID, MergeIDs: req.MergeIDs, CustomName: req.CustomName, Detail: detail})
 }
 
 // SeriesNormalizePreview returns a dry-run preview of what the series
@@ -567,28 +586,8 @@ func (h *Handler) SeriesNormalizePreview(c *gin.Context) {
 // SeriesNormalize enqueues an async operation that renames/merges contaminated
 // series and re-organizes affected books in place. POST /series/normalize.
 func (h *Handler) SeriesNormalize(c *gin.Context) {
-	store := h.store
-	if store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
-		return
-	}
-	if h.opRegistry == nil {
-		httputil.RespondWithInternalError(c, "operation registry not initialized")
-		return
-	}
-
-	opID := ulid.Make().String()
-	detail := "series-normalize"
-	op, err := store.CreateOperation(opID, "series-normalize", &detail)
-	if err != nil {
-		httputil.InternalError(c, "failed to create operation", err)
-		return
-	}
-
-	if _, err := h.opRegistry.EnqueueOp(c.Request.Context(), "dedup.series-normalize", seriesNormalizeOpParams{LegacyOpID: op.ID}); err != nil {
-		httputil.InternalError(c, "failed to enqueue operation", err)
-		return
-	}
-
-	httputil.RespondWithSuccess(c, 202, op)
+	// This was a hand-inlined copy of launchOp's predecessor. With the legacy
+	// row gone there is nothing left that differed, so it delegates.
+	h.launchOp(c, "dedup.series-normalize", "series-normalize", "series-normalize",
+		seriesNormalizeOpParams{})
 }

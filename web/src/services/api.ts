@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.69.0
+// version: 2.70.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-08-21
+// last-edited: 2026-08-22
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -1595,7 +1595,13 @@ export async function mergeBooks(keepId: string, mergeIds: string[]): Promise<Op
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to merge books');
   }
-  return response.json();
+  // Unwrap `data`, like every sibling trigger. This returned the whole
+  // {data: ...} envelope, so `.id` on the result was undefined and the caller
+  // polled GET /operations/v2/undefined -- a merge that had already succeeded
+  // surfaced as "Failed to merge". response.json() is typed Promise<any>, so
+  // the declared Promise<Operation> return type never caught it.
+  const body = await response.json();
+  return body.data;
 }
 
 export interface CombineBooksResult {

@@ -1,51 +1,53 @@
 // file: internal/dedup/op_params.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
+// last-edited: 2026-08-22
 
 // Package dedup: op_params.go defines the JSON-unmarshal parameter structs for
 // each of the 8 async dedup OperationDef Run functions. They are kept here so
 // the extracted logic functions can reference them directly and so server-side
 // wrappers can unmarshal into the same types.
+//
+// None of these carry an operation id. Every dedup op is v2-native: the id it
+// logs, keys activity under, and stamps onto OperationChange ledger rows is the
+// v2 run's own id, read inside Run via opsregistry.ReporterOpID(reporter). The
+// `legacy_op_id` field these structs used to carry was minted by the HTTP
+// handler for a v1 operation row that no longer exists.
+//
+// Four of the eight are empty structs. That is deliberate and they still get
+// decoded: the registry contract requires every op to REFUSE malformed params,
+// so the json.Unmarshal in each Run body is load-bearing even when there is
+// nothing to unmarshal into. Do not delete those decodes.
 package dedup
 
 // BookDedupScanParams are the parameters for the "dedup.book-scan" operation.
-type BookDedupScanParams struct {
-	LegacyOpID string `json:"legacy_op_id"`
-}
+type BookDedupScanParams struct{}
 
 // BookMergeParams are the parameters for the "dedup.book-merge" operation.
 type BookMergeParams struct {
-	LegacyOpID string   `json:"legacy_op_id"`
-	KeepID     string   `json:"keep_id"`
-	MergeIDs   []string `json:"merge_ids"`
-	Detail     string   `json:"detail"`
+	KeepID   string   `json:"keep_id"`
+	MergeIDs []string `json:"merge_ids"`
+	Detail   string   `json:"detail"`
 }
 
 // AuthorDedupScanParams are the parameters for the "dedup.author-scan" operation.
-type AuthorDedupScanParams struct {
-	LegacyOpID string `json:"legacy_op_id"`
-}
+type AuthorDedupScanParams struct{}
 
 // SeriesDedupScanParams are the parameters for the "dedup.series-scan" operation.
-type SeriesDedupScanParams struct {
-	LegacyOpID string `json:"legacy_op_id"`
-}
+type SeriesDedupScanParams struct{}
 
 // SeriesDedupParams are the parameters for the "dedup.series-dedup" operation.
 type SeriesDedupParams struct {
-	LegacyOpID string `json:"legacy_op_id"`
-	Detail     string `json:"detail"`
+	Detail string `json:"detail"`
 }
 
 // SeriesPruneParams are the parameters for the "dedup.series-prune" operation.
 type SeriesPruneParams struct {
-	LegacyOpID string `json:"legacy_op_id"`
-	Detail     string `json:"detail"`
+	Detail string `json:"detail"`
 }
 
 // SeriesMergeParams are the parameters for the "dedup.series-merge" operation.
 type SeriesMergeParams struct {
-	LegacyOpID string `json:"legacy_op_id"`
 	KeepID     int    `json:"keep_id"`
 	MergeIDs   []int  `json:"merge_ids"`
 	CustomName string `json:"custom_name"`
@@ -53,6 +55,4 @@ type SeriesMergeParams struct {
 }
 
 // SeriesNormalizeParams are the parameters for the "dedup.series-normalize" operation.
-type SeriesNormalizeParams struct {
-	LegacyOpID string `json:"legacy_op_id"`
-}
+type SeriesNormalizeParams struct{}
