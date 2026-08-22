@@ -1,6 +1,7 @@
 // file: web/src/utils/operationPolling.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9d8c7b6a-5f4e-3d2c-1b0a-9e8d7c6b5a4f
+// last-edited: 2026-08-22
 
 import * as api from '../services/api';
 
@@ -74,6 +75,22 @@ export function pollOperation(
   };
 }
 
-function isTerminal(status: string): boolean {
-  return ['completed', 'failed', 'canceled'].includes(status);
+/**
+ * isTerminal reports whether an operations-v2 status is final, i.e. the op will
+ * never report progress again and a poller must stop.
+ *
+ * MATCH THE PREFIX, NOT A LIST. The backend mints a whole family of interrupted
+ * statuses — interrupted, interrupted_quiesced, interrupted_dropped,
+ * interrupted_restart — one per ResumePolicy. Its own v1 mirror function
+ * (internal/operations/registry/legacy_op_status.go) used to enumerate them,
+ * drifted behind the side that mints them, and left rows stuck at "pending"
+ * forever with nothing logged. A poller that enumerates has the same failure:
+ * it never stops, and the UI spins on an op that finished.
+ */
+export function isTerminal(status: string): boolean {
+  return (
+    ['completed', 'failed', 'canceled'].includes(status) ||
+    status === 'interrupted' ||
+    status.startsWith('interrupted_')
+  );
 }

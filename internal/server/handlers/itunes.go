@@ -1,7 +1,7 @@
 // file: internal/server/handlers/itunes.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d4e5f6a7-b8c9-0123-defa-123456789012
-// last-edited: 2026-06-16
+// last-edited: 2026-08-22
 
 package handlers
 
@@ -22,7 +22,6 @@ import (
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
-	"github.com/oklog/ulid/v2"
 )
 
 // ITunesValidateRequest represents a validation request for an iTunes library.
@@ -224,8 +223,10 @@ type ITunesStore interface {
 	GetAuthorByID(id int) (*database.Author, error)
 	SearchBooks(query string, limit, offset int) ([]database.Book, error)
 	ListBooksByITunesPID(limit, offset int) ([]database.Book, error)
-	GetOperationByID(id string) (*database.Operation, error)
-	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
+	// GetOperationV2 backs the import-status endpoints. iTunes ops are
+	// v2-native: the handler no longer creates a v1 operations row, so there
+	// is no CreateOperation/GetOperationByID here to reach one.
+	GetOperationV2(id string) (*database.OperationV2Row, error)
 	GetLibraryFingerprint(path string) (*database.LibraryFingerprintRecord, error)
 	MarkITunesSynced(bookIDs []string) (int64, error)
 }
@@ -371,13 +372,6 @@ func (h *ITunesHandler) Import(c *gin.Context) {
 		return
 	}
 
-	opID := ulid.Make().String()
-	op, err := h.store.CreateOperation(opID, "itunes_import", &cleanLibPath)
-	if err != nil {
-		httputil.InternalError(c, "failed to create operation", err)
-		return
-	}
-
 	svcMappings := make([]itunesservice.PathMapping, len(req.PathMappings))
 	for i, m := range req.PathMappings {
 		svcMappings[i] = itunesservice.PathMapping{From: m.From, To: m.To}
@@ -392,14 +386,15 @@ func (h *ITunesHandler) Import(c *gin.Context) {
 		PathMappings:     svcMappings,
 	}
 
-	params := itunesImportOpParams{LegacyOpID: op.ID, Request: svcReq}
-	if _, enqErr := h.registry.EnqueueOp(c.Request.Context(), "itunes.import", params); enqErr != nil {
+	params := itunesImportOpParams{Request: svcReq}
+	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), "itunes.import", params)
+	if enqErr != nil {
 		httputil.InternalError(c, "failed to enqueue operation", enqErr)
 		return
 	}
 
 	httputil.RespondWithSuccess(c, http.StatusAccepted, ITunesImportResponse{
-		OperationID: op.ID,
+		OperationID: opID,
 		Status:      "queued",
 		Message:     "iTunes import operation queued",
 	})
@@ -773,20 +768,20 @@ func (h *ITunesHandler) ImportStatus(c *gin.Context) {
 	}
 
 	opID := c.Param("id")
-	op, err := h.store.GetOperationByID(opID)
+	op, err := h.store.GetOperationV2(opID)
 	if err != nil || op == nil {
 		httputil.RespondWithNotFound(c, "operation", opID)
 		return
 	}
 
-	progress := calculatePercent(op.Progress, op.Total)
+	progress := calculatePercent(op.ProgressCurrent, op.ProgressTotal)
 	snapshot := h.importer.GetStatus(op.ID)
 
 	httputil.RespondWithOK(c, ITunesImportStatusResponse{
 		OperationID: op.ID,
 		Status:      op.Status,
 		Progress:    progress,
-		Message:     op.Message,
+		Message:     op.ProgressMessage,
 		TotalBooks:  snapshot.Total,
 		Processed:   snapshot.Processed,
 		Imported:    snapshot.Imported,
@@ -818,11 +813,11 @@ func (h *ITunesHandler) ImportStatusBulk(c *gin.Context) {
 
 	results := make(map[string]ITunesImportStatusResponse, len(req.IDs))
 	for _, opID := range req.IDs {
-		op, err := h.store.GetOperationByID(opID)
+		op, err := h.store.GetOperationV2(opID)
 		if err != nil || op == nil {
 			continue
 		}
-		progress := calculatePercent(op.Progress, op.Total)
+		progress := calculatePercent(op.ProgressCurrent, op.ProgressTotal)
 		snapshot := snapshots[opID]
 		if snapshot == nil {
 			snapshot = &itunesservice.ImportStatusSnapshot{}
@@ -831,7 +826,7 @@ func (h *ITunesHandler) ImportStatusBulk(c *gin.Context) {
 			OperationID: op.ID,
 			Status:      op.Status,
 			Progress:    progress,
-			Message:     op.Message,
+			Message:     op.ProgressMessage,
 			TotalBooks:  snapshot.Total,
 			Processed:   snapshot.Processed,
 			Imported:    snapshot.Imported,
@@ -949,13 +944,6 @@ func (h *ITunesHandler) Sync(c *gin.Context) {
 		}
 	}
 
-	opID := ulid.Make().String()
-	op, err := h.store.CreateOperation(opID, "itunes_sync", &libraryPath)
-	if err != nil {
-		httputil.InternalError(c, "failed to create operation", err)
-		return
-	}
-
 	pathMappings := req.PathMappings
 	if len(pathMappings) == 0 {
 		for _, m := range config.AppConfig.ITunes.PathMappings {
@@ -963,14 +951,15 @@ func (h *ITunesHandler) Sync(c *gin.Context) {
 		}
 	}
 
-	syncParams := itunesSyncOpParams{LegacyOpID: op.ID, LibraryPath: libraryPath, PathMappings: pathMappings}
-	if _, enqErr := h.registry.EnqueueOp(c.Request.Context(), "itunes.sync", syncParams); enqErr != nil {
+	syncParams := itunesSyncOpParams{LibraryPath: libraryPath, PathMappings: pathMappings}
+	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), "itunes.sync", syncParams)
+	if enqErr != nil {
 		httputil.InternalError(c, "failed to enqueue operation", enqErr)
 		return
 	}
 
 	httputil.RespondWithSuccess(c, http.StatusAccepted, ITunesSyncResponse{
-		OperationID: op.ID,
+		OperationID: opID,
 		Message:     "iTunes sync operation queued",
 	})
 }

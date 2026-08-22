@@ -252,8 +252,8 @@ func TestITunesHandler_ListBooks_NilStore_500(t *testing.T) {
 
 func TestITunesHandler_ImportStatus_Happy(t *testing.T) {
 	store := handlersmocks.NewMockITunesStore(t)
-	store.EXPECT().GetOperationByID("op1").Return(&database.Operation{
-		ID: "op1", Status: "running", Progress: 5, Total: 10, Message: "working",
+	store.EXPECT().GetOperationV2("op1").Return(&database.OperationV2Row{
+		ID: "op1", Status: "running", ProgressCurrent: 5, ProgressTotal: 10, ProgressMessage: "working",
 	}, nil)
 
 	imp := handlersmocks.NewMockITunesImporter(t)
@@ -271,7 +271,7 @@ func TestITunesHandler_ImportStatus_Happy(t *testing.T) {
 
 func TestITunesHandler_ImportStatus_NotFound(t *testing.T) {
 	store := handlersmocks.NewMockITunesStore(t)
-	store.EXPECT().GetOperationByID("missing").Return(nil, assert.AnError)
+	store.EXPECT().GetOperationV2("missing").Return(nil, assert.AnError)
 
 	imp := handlersmocks.NewMockITunesImporter(t)
 	h := handlers.NewITunesHandler(enabledSvc(t), imp, nil, store)
@@ -285,8 +285,8 @@ func TestITunesHandler_ImportStatus_NotFound(t *testing.T) {
 
 func TestITunesHandler_ImportStatusBulk_Happy(t *testing.T) {
 	store := handlersmocks.NewMockITunesStore(t)
-	store.EXPECT().GetOperationByID("op1").Return(&database.Operation{
-		ID: "op1", Status: "done", Progress: 10, Total: 10,
+	store.EXPECT().GetOperationV2("op1").Return(&database.OperationV2Row{
+		ID: "op1", Status: "completed", ProgressCurrent: 10, ProgressTotal: 10,
 	}, nil)
 
 	imp := handlersmocks.NewMockITunesImporter(t)
