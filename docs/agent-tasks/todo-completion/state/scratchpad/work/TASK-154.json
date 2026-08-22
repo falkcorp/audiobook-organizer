@@ -1,0 +1,110 @@
+{
+  "todo_line": 4507,
+  "src_id": null,
+  "title": "Implement POST /api/session/local-all (batch local-session sync, accept both body shapes)",
+  "part": 2,
+  "verdict": "actionable",
+  "verdict_evidence": "Same absence confirmed as part 1 (`grep -rn '\"/api/session/' internal/server/handlers/abs/handler.go` shows no local-all route). The design spec is unusually explicit here: docs/specs/2026-07-29-abs-sync-api-design.md:173 states '/api/session/local-all must return 200 and silently ignore unknown item IDs. A 4xx wedges the [offline replay queue permanently]', and :487-489 states the body shape differs by client (AudioBooth sends an object {sessions:[...], deviceInfo:{...}}; abs-shim sends a bare array) and both must be accepted.",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+    "internal/server/handlers/abs/handler.go",
+    "internal/server/handlers/abs/play.go"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "spec mandates 200-and-ignore-unknown-IDs for local-all",
+      "grep_cmd": "grep -n 'local-all.*must return 200' docs/specs/2026-07-29-abs-sync-api-design.md",
+      "expect": "1 hit around L173"
+    },
+    {
+      "claim": "spec mandates accepting both an object-with-sessions-key and a bare-array body",
+      "grep_cmd": "grep -n 'body shape differs by client' docs/specs/2026-07-29-abs-sync-api-design.md",
+      "expect": "1 hit around L487"
+    },
+    {
+      "claim": "an existing handler already implements the exact per-item pattern needed: bare array, resolveBookID + applyProgressUpdate, skip unknown, always 200",
+      "grep_cmd": "grep -n 'func (h \\*Handler) MediaProgressBatchUpdate' internal/server/handlers/abs/progress.go",
+      "expect": "1 hit at L157"
+    }
+  ],
+  "reuse": [
+    {
+      "name": "MediaProgressBatchUpdate's per-item loop shape (resolveBookID, applyProgressUpdate, skip-unknown, always respondPlainOK)",
+      "file": "internal/server/handlers/abs/progress.go",
+      "verify_grep": "grep -n 'func (h \\*Handler) MediaProgressBatchUpdate' internal/server/handlers/abs/progress.go"
+    },
+    {
+      "name": "h.resolveBookID(userID, raw) \u2014 resolves a client-sent id (libraryItemId or sync id) to an internal bookID",
+      "file": "internal/server/handlers/abs/progress.go",
+      "verify_grep": "grep -n 'func (h \\*Handler) resolveBookID' internal/server/handlers/abs/progress.go"
+    },
+    {
+      "name": "h.applyProgressUpdate(userID, bookID, req progressPatchRequest) error",
+      "file": "internal/server/handlers/abs/progress.go",
+      "verify_grep": "grep -n 'func (h \\*Handler) applyProgressUpdate' internal/server/handlers/abs/progress.go"
+    }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Needs a dual-shape JSON decode (object-with-sessions-key vs bare array) plus mapping ABS 'local session' fields onto the existing progressPatchRequest/applyProgressUpdate machinery \u2014 more judgment than a pure copy-paste of MediaProgressBatchUpdate.",
+  "review_critical": false,
+  "goal": "Add POST /api/session/local-all: accept a body that is EITHER a bare JSON array of local playback sessions OR an object shaped {\"sessions\": [...], \"deviceInfo\": {...}} (AudioBooth's shape), apply each session's progress via the existing resolveBookID + applyProgressUpdate pipeline (mirroring MediaProgressBatchUpdate's loop exactly), silently skip sessions naming an unknown item id, and always answer 200 \u2014 never a 4xx, per the spec's explicit warning that a 4xx here permanently wedges the client's offline replay queue.",
+  "background": [
+    "A 'local session' in the ABS local-sync API represents an offline listening session a client recorded while disconnected and is now uploading; structurally it carries the same currentTime/duration/timeListened fields as the live /sync body (internal/server/handlers/abs/play.go's syncRequest, lines 335-340) plus an item identifier and (for AudioBooth) deviceInfo.",
+    "MediaProgressBatchUpdate (internal/server/handlers/abs/progress.go:157-184) already implements the identical shape for a DIFFERENT route (PATCH /api/me/progress/batch/update): bare array body, per-item resolveBookID + applyProgressUpdate, skip on unknown id, single final respondPlainOK \u2014 this is the template to copy, not invent from scratch.",
+    "The two required body shapes are genuinely different at the JSON level (array vs. object-wrapping-an-array), so the handler needs to peek at the raw body and branch, or unmarshal into a struct with a custom UnmarshalJSON that accepts both \u2014 a custom UnmarshalJSON on a wrapper type is the cleaner approach and avoids double-parsing."
+  ],
+  "steps": [
+    "1. In internal/server/handlers/abs/play.go, define a `localSession` struct with the fields the spec requires per \u00a71.8.8 (item id, currentTime, duration, timeListened \u2014 reuse the same *float64 pointer-optional pattern as syncRequest at play.go:335-340, since absent-vs-zero matters here too).",
+    "2. Define a wrapper type, e.g. `localSessionBatch struct { Sessions []localSession }`, with a custom `UnmarshalJSON([]byte) error` that first tries decoding as a bare `[]localSession` (abs-shim's shape), and on failure tries decoding as `struct{ Sessions []localSession \\`json:\"sessions\"\\`; DeviceInfo map[string]any \\`json:\"deviceInfo\"\\` }` (AudioBooth's shape) \u2014 assign whichever succeeds into Sessions.",
+    "3. Add `func (h *Handler) SessionLocalAll(c *gin.Context)`: `defer respondPlainOK(c)`; get the user via servermiddleware.CurrentUser (return early, still via the deferred 200, on failure \u2014 matching applySessionUpdate's own auth-failure-is-still-200 convention, verify this is actually its convention before copying it); `c.ShouldBindJSON(&batch)` (ignore bind errors \u2014 an unparseable body should still 200 per the 'never wedge the client' rule, matching applySessionUpdate's `_ = c.ShouldBindJSON(&req)` pattern at play.go:375); loop each session, resolve its item id via h.resolveBookID(user.ID, session.ItemID), skip on !ok, else build a progressPatchRequest from the session fields and call h.applyProgressUpdate(user.ID, bookID, req) \u2014 log-and-continue on a per-item apply error rather than aborting the batch, mirroring MediaProgressBatchUpdate's spirit but NOT its early-return-on-error at progress.go:178-181 (that early return is wrong for THIS endpoint per the spec's explicit 'a 4xx wedges the replay queue' warning \u2014 do not copy that part).",
+    "4. Register `r.POST(\"/api/session/local-all\", auth, h.SessionLocalAll)` in internal/server/handlers/abs/handler.go's Register method, next to the new SessionLocal route from part 1.",
+    "5. Add the route to the documented list near internal/server/wire_abs_routes.go:636-637.",
+    "6. Bump version headers on all touched files."
+  ],
+  "tests": [
+    {
+      "file": "internal/server/handlers/abs/play_test.go",
+      "name": "TestSessionLocalAll_AcceptsBareArrayBody (new)",
+      "asserts": "a bare JSON array body (abs-shim shape) is accepted and applies progress for each resolvable item"
+    },
+    {
+      "file": "internal/server/handlers/abs/play_test.go",
+      "name": "TestSessionLocalAll_AcceptsObjectWithSessionsKey (new)",
+      "asserts": "an {\"sessions\":[...],\"deviceInfo\":{...}} body (AudioBooth shape) is accepted and applies progress identically to the bare-array case"
+    },
+    {
+      "file": "internal/server/handlers/abs/play_test.go",
+      "name": "TestSessionLocalAll_UnknownItemID_SkippedNot500 (new)",
+      "asserts": "a session naming an item id that does not resolve is silently skipped and the endpoint still returns 200, not a partial failure"
+    },
+    {
+      "file": "internal/server/handlers/abs/play_test.go",
+      "name": "TestSessionLocalAll_MalformedBody_StillReturns200 (anti-over-suppression, new)",
+      "asserts": "an unparseable/garbage body still returns 200 rather than 400, matching the spec's 'never wedge the offline replay queue' requirement \u2014 proves the handler does not accidentally reintroduce a 4xx path"
+    }
+  ],
+  "acceptance": [
+    "`go test ./internal/server/handlers/abs/... -run TestSessionLocalAll` passes for all four new tests.",
+    "Neither new route ever returns a 4xx or 5xx for any request body shape, verified by the malformed-body test."
+  ],
+  "edge_cases": [
+    "A session with a currentTime but no duration should still apply \u2014 do not require duration; only reject nothing (per the 'always accept, always 200' spec rule the endpoint never rejects at all).",
+    "An empty sessions array (either shape) should be a 200 no-op, not an error.",
+    "A session id that resolves via resolveBookID to a book the current user does not otherwise have progress for should create a new progress row (same as any other first-time applyProgressUpdate call), not be treated specially."
+  ],
+  "anti_over_suppression": "TestSessionLocalAll_MalformedBody_StillReturns200",
+  "depends_on_lines": [],
+  "gate": "go build ./... && go vet ./... && go test ./internal/server/handlers/abs/... -count=1",
+  "notes": "The spec (docs/specs/2026-07-29-abs-sync-api-design.md) is unusually thorough for this API family \u2014 read \u00a71.8 and \u00a71.9 in full before implementing, not just the excerpts cited here, since it documents several client-specific quirks (timestamp tie-breaking, forward-only guards) that apply to any progress-writing endpoint including this one.",
+  "id": "TASK-154",
+  "stable_key": "scope-08.json|4507|2|Implement POST /api/session/local-all (batch local-session s",
+  "ws": "server-handlers",
+  "slug": "implement-post-api-session-local-all-batch-local",
+  "scope_file": "scope-08.json",
+  "dropped_files": [],
+  "tier_label": "Sonnet-class",
+  "depends_on": [],
+  "wave": 2
+}

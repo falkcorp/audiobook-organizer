@@ -1,0 +1,69 @@
+{
+  "todo_line": 491,
+  "src_id": null,
+  "title": "Re-capture the series ABS fixture against a populated library (it currently contains zero series)",
+  "verdict": "actionable",
+  "verdict_evidence": "testdata/abs-fixtures/get_api_libraries_id_series.json's response.body.results array has length 0 at HEAD (confirmed by loading and inspecting the fixture JSON directly), matching the TODO's claim exactly and confirming this has NOT been fixed despite the related series-pagination code fix (item L484) having landed.",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+    "testdata/abs-fixtures/get_api_libraries_id_series.json"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "the fixture's results array is empty",
+      "grep_cmd": "python3 -c \"import json; d=json.load(open('testdata/abs-fixtures/get_api_libraries_id_series.json')); print(len(d['response']['body']['results']))\"",
+      "expect": "0"
+    }
+  ],
+  "reuse": [
+    {
+      "name": "whatever capture tooling/process produced the other 27 fixtures (find via a header/comment in one of the newer fixtures, or a docs/testdata README)",
+      "file": "testdata/abs-fixtures/",
+      "verify_grep": "find testdata/abs-fixtures -iname 'README*' -o -iname '*.md'"
+    }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Requires actually running a real capture (hitting a populated library's /api/libraries/:id/series endpoint against a live server, presumably real ABS or this server itself pointed at a populated library) and hand-curating the result into fixture format \u2014 not a pure code edit, needs an environment with real data.",
+  "review_critical": false,
+  "goal": "Re-capture get_api_libraries_id_series.json against a library that actually has series membership (unlike the current empty-library capture), so the fixture can genuinely serve as an oracle for the `books` field's contract (per item L127's fixture-alignment work, which this fixture is also relevant to) rather than proving nothing.",
+  "background": [
+    "The TODO notes the shape currently used in tests came from the upstream API reference doc instead of a real capture \u2014 same failure mode as the sessions fixture holding only 3 items against a page size of 10 (a related, not-in-this-scope fixture gap worth noting but not fixing here)."
+  ],
+  "steps": [
+    "1. Locate or stand up a populated ABS-compatible library (real audiobookshelf server, or this repo's own server with ABS_API_ENABLED=true pointed at a library with actual series data) to capture against.",
+    "2. Issue the real GET /api/libraries/:id/series request against it with a library known to have series membership.",
+    "3. Save the response into testdata/abs-fixtures/get_api_libraries_id_series.json in the same {request, response: {body, headers, status}} shape as the existing fixtures.",
+    "4. Re-run any test currently asserting against this fixture (search via `grep -rn get_api_libraries_id_series internal/server/handlers/abs/*_test.go`) and confirm it still passes (or now correctly fails if the current handler doesn't yet match the real `books` shape \u2014 that would be a genuine finding, not a fixture bug)."
+  ],
+  "tests": [
+    "Whatever existing test(s) load this fixture \u2014 confirmed passing (or a newly-surfaced real gap documented) after the re-capture."
+  ],
+  "acceptance": [
+    "`python3 -c \"import json; d=json.load(open('testdata/abs-fixtures/get_api_libraries_id_series.json')); assert len(d['response']['body']['results']) > 0\"` succeeds."
+  ],
+  "edge_cases": [
+    "If no real ABS server is available to capture against, this may need to be re-scoped as 'construct a realistic fixture by hand from the upstream API reference plus a manually-verified real single-series response from THIS server' rather than a true external-oracle capture \u2014 note which approach was actually used in the fixture's own accompanying documentation/comment."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+    127
+  ],
+  "gate": "git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only'",
+  "notes": "Directly feeds item L127's fixture-alignment work in this same scope \u2014 coordinate so the two are not done independently and inconsistently.",
+  "review_notes": [
+    "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,"
+  ],
+  "id": "TASK-148",
+  "stable_key": "scope-01.json|491|None|Re-capture the series ABS fixture against a populated librar",
+  "ws": "server-handlers",
+  "slug": "re-capture-the-series-abs-fixture-against-a-popu",
+  "scope_file": "scope-01.json",
+  "dropped_files": [],
+  "tier_label": "Sonnet-class",
+  "depends_on": [
+    "TASK-147"
+  ],
+  "wave": 4
+}

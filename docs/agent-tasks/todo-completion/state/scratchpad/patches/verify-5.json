@@ -1,0 +1,81 @@
+[
+  {
+    "task_id": "TASK-127",
+    "verdict": "pass",
+    "findings": [
+      {
+        "severity": "advisory",
+        "check": 6,
+        "problem": "Step 2 ('Remove or keep the existing enabled-only log line at ~L545 ... condense both into the single new line if the extra detail is easy to include there, otherwise leave both') leaves an either/or decision to executor judgment ('if easy'), so two reasonable weak models could produce different final code. No test pins line-545's fate, so not fatal, but should be tightened to a single deterministic instruction."
+      },
+      {
+        "severity": "advisory",
+        "check": 5,
+        "problem": "Idempotency already-done check runs `go test ... -run LogsStateEvenWhenDisabled -v` rather than a textual grep against source; correct polarity, still independently checkable, but deviates from the repo's usual grep-based already-done convention (e.g. `grep -n 'slog.Info(\"abs: Audiobookshelf-compatible surface\"' internal/server/wire_abs_routes.go`)."
+      }
+    ]
+  },
+  {
+    "task_id": "TASK-128",
+    "verdict": "fail",
+    "findings": [
+      {
+        "severity": "fatal",
+        "check": 2,
+        "problem": "Tests section tells the executor to find the test file via `grep -rl NewIPRateLimiter internal/server/*_test.go`. Independently re-verified: `grep -rl NewIPRateLimiter internal/server/*_test.go` exits 1 (zero hits) because the glob is non-recursive. The real match is `internal/server/middleware/ratelimit_test.go` (package middleware, one directory down) plus the production call site `internal/server/server_lifecycle.go`. That test file is a pure unit test of the low-level limiter with no reference to config.AppConfig/EnableRateLimit/setupRoutes, so it's also the wrong place to add the new config-wiring test; the brief names no correct location (e.g. internal/server/server_queue_test.go which already calls srv.setupRoutes())."
+      },
+      {
+        "severity": "fatal",
+        "check": 8,
+        "problem": "Idempotency/Rollback reuses the 'Re-verify these anchors' greps (`rpm := config.AppConfig.APIRateLimitPerMinute`, bare `EnableRateLimit`) as the already-done detector, but per the brief's own prescribed fix those lines are moved, not deleted/renamed — both greps still hit 1+ after the fix is applied. A re-run after an interrupted attempt cannot distinguish done from not-done using the stated commands."
+      },
+      {
+        "severity": "advisory",
+        "check": 6,
+        "problem": "Commit message subject is truncated: 'Fix EnableRateLimit=false not actually disabling rate limiti (CFG-AUDIT)' (missing 'ng'). A literal-following weak model commits the typo verbatim."
+      }
+    ]
+  },
+  {
+    "task_id": "TASK-129",
+    "verdict": "fail",
+    "findings": [
+      {
+        "severity": "fatal",
+        "check": 5,
+        "problem": "Idempotency/Rollback already-done detector points back at the 'Re-verify these anchors' greps (`func wipeActivity`, `WipeAllActivity()`), which hit identically before and after the fix since neither symbol is touched by this change. A cold executor cannot tell done from not-done in either direction using the stated commands."
+      },
+      {
+        "severity": "fatal",
+        "check": 4,
+        "problem": "Two acceptance checkboxes are not independently checkable by a cold session: the manual 'seed >2 activity rows, call the wipe endpoint with dry_run=true' bullet gives no command/route, and 'Edge cases above hold' has no grep/test-name to check against."
+      },
+      {
+        "severity": "advisory",
+        "check": 6,
+        "problem": "Step 2 offers two different API shapes ('CountActivity(ctx) (int64, error) (or per-tier CountActivityTier)') and tells the executor to investigate which is needed, inviting divergent implementations. Independently confirmed the ActivityStorer interface is actually split into 4 sub-interfaces (ActivityWriter/ActivityReader/ActivityRetention/ActivityLifecycle) with WipeAllActivity living in ActivityRetention (internal/database/activity_storer.go:26-31) and wipeActivity's buggy dry-run branch at internal/server/maintenance_fixups.go:411-413 (`svc.Query(ctx, database.ActivityFilter{Limit: 1})`); the brief never names the sub-interface split, inviting a flat addition that bypasses the established narrowing."
+      }
+    ]
+  },
+  {
+    "task_id": "TASK-130",
+    "verdict": "fail",
+    "findings": [
+      {
+        "severity": "fatal",
+        "check": 2,
+        "problem": "Step 4 sends the executor to internal/server/search_reconciler.go to find where the drop counter is incremented. Independently re-verified: `grep -rn searchIndexDropped internal/server/indexed_store.go internal/server/search_reconciler.go` shows the only `.Add(1)` call is at indexed_store.go:133; search_reconciler.go:75-86 only declares the var and its getter (SearchIndexDroppedCount). The brief misdirects half of step 4 to the wrong file."
+      },
+      {
+        "severity": "fatal",
+        "check": 6,
+        "problem": "The brief's proposed setter is contract-ambiguous: it tells the executor to wire the new Prometheus counter 'alongside the existing slog calls', but the only existing slog call near the increment (indexed_store.go:141) logs the cumulative `searchIndexDropped.Load()`, not a delta. A weak model plausibly re-adds the full running total to the Prometheus counter on every drop event instead of doing a per-event Inc(), producing quadratic growth instead of a 1:1 counter."
+      },
+      {
+        "severity": "fatal",
+        "check": 4,
+        "problem": "Acceptance criterion 'A local /metrics scrape after the change includes ...' has no command a cold/read-only session can run (requires a running, authenticated server) and the Idempotency/Rollback section reuses this same unrunnable criterion as its already-done detector."
+      }
+    ]
+  }
+]

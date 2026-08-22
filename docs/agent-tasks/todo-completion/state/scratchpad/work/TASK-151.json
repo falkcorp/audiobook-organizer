@@ -1,0 +1,55 @@
+{
+  "todo_line": 2589,
+  "src_id": null,
+  "title": "Document the hardcoded ABS timeBase as a permanent, owner-approved allowance",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/server/handlers/abs/mapper.go:645 sets `TimeBase: \"1/1000\"` unconditionally with no explanatory comment; owner decision 2026-08-12 already approved this as a documented permanent allowance rather than adding an ingest field, so the only remaining work is writing the comment down.",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+    "internal/server/handlers/abs/mapper.go"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "TimeBase is hardcoded with no explanatory comment today",
+      "grep_cmd": "sed -n '635,648p' internal/server/handlers/abs/mapper.go",
+      "expect": "TimeBase: \\\"1/1000\\\", with no preceding // comment block specific to it"
+    }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Single-line comment addition at a known anchor; no logic change, no design decision left to make (owner already decided).",
+  "review_critical": false,
+  "goal": "Add a comment immediately above `TimeBase: \"1/1000\",` at internal/server/handlers/abs/mapper.go:645 explaining that this is a deliberate, owner-approved permanent allowance (not a bug): the real ABS reports ffprobe's actual stream time_base (e.g. 1/14112000), but this codebase does not capture time_base at import, and no known client is known to divide by this value, so the field is set to a fixed placeholder rather than adding an ingest field + backfill for a value nothing consumes. Note that the allowance should be revisited only if a client is found to actually use timeBase.",
+  "background": [
+    "Owner decision 2026-08-12: allow the hardcoded value with a documented permanent allowance rather than add an ingest field and backfill."
+  ],
+  "steps": [
+    "1. Open internal/server/handlers/abs/mapper.go and locate line 645 (`TimeBase: \"1/1000\",` inside the fileView-to-DTO mapping function).",
+    "2. Insert a `//` comment block directly above the TimeBase field assignment (or above the containing composite literal's TimeBase line specifically) stating: this value is a fixed placeholder, real ABS reports ffprobe's stream time_base which this codebase does not capture at import, owner-approved 2026-08-12 as a permanent allowance since no known client divides by it, revisit only if that changes.",
+    "3. Bump the file's version header per the repo's file-header standard."
+  ],
+  "tests": [
+    "N/A \u2014 comment-only change; existing ABS conformance tests should continue to pass unchanged since no behavior changes."
+  ],
+  "acceptance": [
+    "grep -B3 'TimeBase:.*1/1000' internal/server/handlers/abs/mapper.go shows a comment block mentioning 'permanent allowance' or equivalent owner-decision language."
+  ],
+  "edge_cases": [
+    "N/A \u2014 documentation-only change."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "go build ./... && go vet ./... && go test ./internal/server/handlers/abs/... -count=1",
+  "notes": "Purely a documentation task; the owner decision already resolved the design question.",
+  "id": "TASK-151",
+  "stable_key": "scope-04.json|2589|None|Document the hardcoded ABS timeBase as a permanent, owner-ap",
+  "ws": "server-handlers",
+  "slug": "document-the-hardcoded-abs-timebase-as-a-permane",
+  "scope_file": "scope-04.json",
+  "dropped_files": [],
+  "tier_label": "Haiku-class",
+  "depends_on": [],
+  "wave": 2
+}

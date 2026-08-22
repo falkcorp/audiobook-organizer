@@ -1,0 +1,116 @@
+====================================================================================================
+TASK-096 Require every mutating operation to declare and enforce dry_run support at the registry
+ws missing-file-lane wave 1 tier opus rc True polarity additive effort L
+depends_on [] depends_on_lines []
+exact_files ['internal/operations/registry/registry.go', 'internal/operations/registry/types.go']
+GOAL: Add a `SupportsDryRun bool` (or equivalent shared `DryRunParams` embed convention) to OperationDef in internal/operations/registry/types.go; extend ValidateOpDef (internal/operations/registry/registry.go) to reject registration of any op declaring CapLibraryWrite without SupportsDryRun=true, so the gap is caught at server boot rather than discovered ad hoc while deciding whether to hit apply. Default TRUE for destructive ops per the item's stated preference, matching the two existing correctly-built examples (missing-file-repoint, intro_transcribe reparse path).
+STEPS:
+  - 1. In internal/operations/registry/types.go, add a field to OperationDef, e.g. `SupportsDryRun bool // required true when Capabilities includes CapLibraryWrite; see ValidateOpDef`.
+  - 2. In internal/operations/registry/registry.go's ValidateOpDef (the function extracted 2026-08-20, `grep -n 'func ValidateOpDef'`), add a check: if the def's Capabilities include CapLibraryWrite (or similar write capability) and SupportsDryRun is false, return a registration error.
+  - 3. Audit every existing OperationDef with a write capability (`grep -rln 'CapLibraryWrite' internal/plugins/`) and set SupportsDryRun: true on those that already implement a dry_run/apply param (most maintenance ops per the existing classify-then-branch pattern), flagging any found WITHOUT dry_run support as a follow-up per-op task rather than silently forcing them.
+  - 4. Optionally introduce a shared `DryRunParams` struct (e.g. `type DryRunParams struct { DryRun *bool \`json:"dry_run,omitempty"\` }`) that op param structs can embed, to standardize the field name/semantics (some ops use `apply` inverted, some use `dry_run` — pick one canonical name and document the other as deprecated per-op).
+ACCEPTANCE:
+  * go test ./internal/operations/registry/... passes
+  * go build ./... succeeds after every existing write-capable OperationDef sets SupportsDryRun appropriately
+EDGE: ["An op that mutates but is inherently idempotent/non-destructive (e.g., a cache warm) may reasonably not need dry_run — the check should key off CapLibraryWrite specifically, not 'any write', matching the item's own framing ('any op that mutates state')."]
+TESTS: ['internal/operations/registry/registry_test.go: TestValidateOpDef_RejectsWriteCapabilityWithoutDryRun — registering an OperationDef with CapLibraryWrite and SupportsDryRun:false must fail; the same def with SupportsDryRun:true must pass.', "A boot-time guard test (like the existing maintenance guard test mentioned in commit 4e19d467) asserting every currently-registered maintenance op with CapLibraryWrite has SupportsDryRun:true, so a future op can't silently regress."]
+GATE: make ci
+NOTES: This is a repo-wide contract change (large blast radius across every maintenance op) — per CLAUDE.md's Fix It Right rule, do the real registry-level enforcement rather than a narrower per-op-only fix, but expect this to be its own multi-PR effort given effort L / tier opus.
+====================================================================================================
+TASK-114 Never delete — re-associate: combine debris books into a template match by duration, then version-group
+ws missing-file-lane wave 1 tier opus rc True polarity additive effort L
+depends_on [] depends_on_lines []
+exact_files ['internal/plugins/maintenance/combine_by_template.go', 'internal/plugins/maintenance/combine_by_template_test.go']
+GOAL: Build the combine-by-template repair for redundant/debris book groups (the Successors class): (1) detect that a group's tracks map onto a better-assembled sibling book's track list; (2) combine the debris into ONE book using that sibling's track list as a TEMPLATE, matching debris files to template slots by DURATION rather than guessing boundaries from filenames; (3) version-group the result, primary = most complete book, ties broken by earliest ULID (reusing pickPrimary's convention); NEVER delete a book row — this op only re-associates/combines.
+STEPS:
+  - 1. Find or build the 'group's tracks map onto a better-assembled sibling' detector — likely reuses existing dedup/similarity scoring (search internal/plugins/dedup or wherever candidate grouping lives) to find, for a debris group, a candidate 'template' book with a clean, complete track list of similar total duration.
+  - 2. Build the template-matching function: given the template's ordered track durations and the debris group's file durations, assign each debris file to the template slot whose duration it matches within a tolerance; files with no matching slot (missing tracks) are reported as gaps, not silently dropped; multiple debris files matching one slot (internal redundancy) are reported as a collision needing a documented tie-break rule.
+  - 3. On apply=true only: combine the debris books' files into the template book, reusing whatever CombineBooks-style function regroup_apply.go's ApplyMultidisc/ApplyDuplicateOf already call — do not write a second combine implementation.
+  - 4. Version-group the result: primary = most complete book, ties broken by earliest ULID, reusing pickPrimary's exact convention (regroup_apply.go L391) rather than reimplementing tie-breaking.
+  - 5. NEVER call a row-delete function anywhere in this file — mirror missing_file_repoint.go's structural (not just documented) never-delete guarantee.
+  - 6. Write a full per-group report (every debris file's outcome: matched-slot / gap / collision) before any apply-mode write, mirroring missing_file_repoint.go's report-before-summary ordering.
+  - 7. Default apply=false; register the op.
+ACCEPTANCE:
+  * go test ./internal/plugins/maintenance/... -run CombineByTemplate passes all five cases.
+  * Running against a fixture modeling the Successors shape (11 rows/17 files, 12 of 13 tracks, 5 redundant) in dry-run produces a report with exactly one gap row and five collision-flagged files, zero writes.
+EDGE: ['A debris group with NO usable template candidate (no sibling book found) must report insufficient-evidence / no-candidate, not error out or skip silently.', 'A template book that is ITSELF later found to be debris (nested bad data) is out of scope for this op — document that assumption rather than trying to detect it here.']
+TESTS: ["TestCombineByTemplate_MatchesByDurationNotFilename — a debris file whose NAME suggests the wrong track but whose DURATION matches a different template slot is assigned by duration, proving filename guessing isn't happening.", 'TestCombineByTemplate_ReportsGapsForMissingTracks — a debris group covering only 12 of 13 template slots reports the 13th as a gap, does not silently proceed as if complete.', 'TestCombineByTemplate_ReportsRedundantFilesAsCollision — two debris files both matching one template slot are both reported, not silently deduped by picking one arbitrarily.', "TestCombineByTemplate_NeverDeletesARow — apply=true run against a fixture asserts the store's delete function is called zero times across the whole op, proving the never-delete guarantee structurally.", "TestCombineByTemplate_VersionGroupsWithEarliestULIDPrimary — the combined result's primary matches pickPrimary's own selection for the same ID set."]
+GATE: make ci
+NOTES: This is the umbrella 'never-delete-re-associate' track referenced by L8245 (3 real duplicate-shaped multidisc holds usable as future test fixtures, though those specifically default to 'separate', not this combine path), L8094 (the ~180 bracketed-number shattered-series books are input candidates for this exact mechanism once built), and L8890 part 2 (the First Aid roster's identical sub-bullet — do not build it twice, this is the canonical spec).
+====================================================================================================
+TASK-067 Extend the REPOINT repair to recover BookFile rows via Book.FilePath (the #2372 fallback shape), not just the padded-filename shape
+ws maintenance wave 2 tier sonnet rc True polarity additive effort M
+depends_on ['TASK-068'] depends_on_lines [670]
+exact_files ['internal/plugins/maintenance/missing_file_repoint.go']
+GOAL: Add a second candidate source to maintenance.missing-file-repoint: when a BookFile.FilePath does not resolve, in addition to the existing track-slash/padded-filename transform, also try the owning Book's Book.FilePath (via GetBookByID) as a repoint candidate when it resolves to a regular file and (subject to the existing RequireSizeMatch gate) matches the row's recorded FileSize. Never delete; apply=false stays the default; this only widens what counts as a recoverable row.
+STEPS:
+  - 1. Read missing_file_repoint.go fully (lines ~250-360) to see the exact candidateItem / Phase-1-stat / Phase-2-apply structure before editing.
+  - 2. Add a `bookFilePathFallback bool` field (default false) or simply always attempt it as a second-priority candidate: after the existing track-slash-derived candidate check finds `NoCandidateBytes`, before giving up on that row, call `p.deps.OpsStore().GetBookByID(file.BookID)` and check `book.FilePath` with the same os.Stat-regular-file check as chaptersBackfillResolves (chapters_backfill.go:229-232).
+  - 3. Gate the Book.FilePath candidate through the SAME RequireSizeMatch logic already in the file (missing_file_repoint.go:57-59) -- do not weaken the existing safety check for the new source.
+  - 4. Add a `recoveredViaBookPath atomic.Int64` counter to the run summary, mirroring chaptersBackfillCounters.recoveredViaBook, so a dry-run report distinguishes which source rescued each row.
+  - 5. Document in the file's header comment that this is now a two-source repair (track-slash transform AND owning-book fallback), citing the 16,130/86-of-88 measurement from chapters_backfill.go as the second population's justification.
+ACCEPTANCE:
+  * go test ./internal/plugins/maintenance/... -run TestMissingFileRepoint passes.
+  * A dry run over a synthetic fixture with both candidate shapes reports both recoveredViaBookPath and the existing padded-filename recovery count > 0.
+EDGE: ["Book.FilePath itself does not resolve either (the 26.4% 'fully broken' population, 16,265 books): row stays unrecovered, counted under the existing no-candidate-bytes reason -- do NOT touch these (owner decision #12: they stay parked/untouched).", 'Book.FilePath resolves but points at a DIRECTORY (multi-file book path used incorrectly): must be rejected the same way chaptersBackfillResolves rejects directories (IsRegular() check), never repointed onto a folder.', "Book.FilePath collides with another book's Book.FilePath (see L670, 6.8% of rows) -- do not extend this fallback further until that collision count is re-verified, per the TODO's own caution."]
+TESTS: ["internal/plugins/maintenance/missing_file_repoint_test.go: new test TestMissingFileRepoint_RecoversViaBookFilePath -- a BookFile row whose FilePath does not exist and has no track-slash-shape candidate, but whose owning Book.FilePath resolves to a regular file matching the row's FileSize, is reported as recoverable in dry-run and rewritten under apply=true.", "New test TestMissingFileRepoint_BookFilePathSizeMismatch_NotRecovered -- same setup but Book.FilePath's file size disagrees with the row's FileSize: NOT repointed (anti-over-suppression / safety-preserving test)."]
+GATE: make ci
+NOTES: Owner decision #12 ('build the REPOINT repair with apply=false default; owner runs apply; the 16,265 fully-broken books stay untouched/parked') is satisfied in SHAPE by the existing op but not in POPULATION -- this item is the gap between the op that exists and the specific recovery path the TODO and decision #12 were actually written about.
+====================================================================================================
+TASK-112 Build the First Aid orchestrator + frontend trigger button (dry-run by default, no schedule)
+ws missing-file-lane wave 2 tier opus rc True polarity additive effort L
+depends_on ['TASK-113'] depends_on_lines [8890]
+exact_files ['internal/plugins/maintenance/first_aid_orchestrator.go', 'internal/plugins/maintenance/first_aid_orchestrator_test.go', 'web/src/pages/SystemMaintenance.tsx']
+GOAL: Build the First Aid orchestrator per .claude/notes/2026-08-05-first-aid-architecture.md's locked design: sequence the already-built tier-1 (investigation) ops over all books, escalate flagged books to tier-2 (already-built probing ops), run tier-3 fixers, then RE-INVESTIGATE and repeat until nothing actionable remains (idempotent convergence, not a hardcoded fixed order) — plus a frontend button to trigger it, dry-run by default, with NO schedule.
+STEPS:
+  - 1. Read .claude/notes/2026-08-05-first-aid-architecture.md in full before writing any code.
+  - 2. Build a sequencer that runs the tier-1 ops (relink-unlinked-books, reconcile-scan, orphan-book-files-cleanup, dedupe-book-file-rows, purge-millisecond-durations, booksig-recovery-audit — all already exist) over the whole library.
+  - 3. Collect each op's flagged output and hand it to the corresponding tier-2 op (probe-directory-books already exists and covers part of tier 2; verify which of duration-reextract/file-integrity-check/malformed-m4b-remux still need building).
+  - 4. Hand tier-2's escalated verdicts to tier-3 fixers (duration-backfill, repair-junk-titles, title-repair, title-backfill, series-denumber, regroup-shattered-ai — all already exist).
+  - 5. After a fixer pass, RE-RUN tier-1 investigation on the affected set and loop until a pass finds nothing actionable (convergence), rather than hardcoding a fixed relink-then-regroup order.
+  - 6. Wire the 'missing-input triggering' behavior ONLY if the sibling item (part 4, same todo_line) is done first — otherwise fall back to the current waiting_deps parking behavior without enqueueing producers.
+  - 7. Add a frontend trigger button (follow the existing System > Maintenance panel's op-trigger UI convention) that calls the orchestrator with apply=false (dry-run) by default; do NOT add a cron Schedule to the op def.
+  - 8. Exclude the janitorial ops list verbatim from the sequence.
+ACCEPTANCE:
+  * go test ./internal/plugins/maintenance/... -run FirstAid passes all three cases.
+  * A dry run against a fixture library with one deliberately-broken book converges within a bounded number of iterations, logging each iteration's flagged count trending toward zero.
+EDGE: ["A book that OSCILLATES (a fixer's output gets re-flagged by investigation every pass) must trip a max-iteration safety cap and surface as a genuine unresolvable case, not loop forever."]
+TESTS: ['internal/plugins/maintenance/first_aid_orchestrator_test.go: TestFirstAid_ConvergesAfterFixerPass — a fixture where tier-1 flags a book, a fixer resolves it, and the re-investigation pass no longer flags it; the orchestrator terminates rather than looping forever.', "TestFirstAid_ExcludesJanitorialOps — anti-over-suppression: asserts none of the 14 explicitly-excluded op IDs ever appear in the orchestrator's sequence.", 'TestFirstAid_DryRunMakesNoWrites — default apply=false path calls zero tier-3 fixers in apply mode.']
+GATE: make ci && npm --prefix web run lint && npm --prefix web test
+NOTES: Owner design 2026-08-05, architecture LOCKED per the referenced note — do not redesign the tier boundaries, only implement the sequencer/orchestrator around the already-built ops.
+====================================================================================================
+TASK-043 Add a dry-run parameter to dedup.series-dedup
+ws dedup wave 1 tier sonnet rc True polarity additive effort S
+depends_on [] depends_on_lines []
+exact_files ['internal/dedup/series_dedup.go', 'internal/dedup/series_dedup_test.go', 'internal/server/duplicates_ops.go']
+GOAL: Add a DryRun bool parameter to DedupSeries (default true at the call site until explicitly opted out) so a preview run reports what WOULD merge without writing, matching the pattern already used by author_conjunction_repair.go and the sibling dedup ops in duplicates_ops.go.
+STEPS:
+  - 1. Change DedupSeries's signature in internal/dedup/series_dedup.go:266 to accept a `dryRun bool` parameter (or a small params struct if the package's other dedup entry points use one -- check dedup.MergeSeries's signature for the local convention).
+  - 2. In the merge loop (the branches around lines 344-366, 492-536, 565+ that call store.GetBooksBySeriesIDCore / store.DeleteSeries), gate every mutating call (book reassignment, DeleteSeries) behind `if !dryRun`.
+  - 3. When dryRun is true, still compute and report SeriesDedupResult.TotalMerged as the count that WOULD merge, so the preview is informative.
+  - 4. Update the call site in internal/server/duplicates_ops.go (the dedup.series-dedup op, around where DedupSeries is invoked -- grep for its call) to thread a DryRun param from the op's request body, defaulting to true.
+  - 5. Add a doc comment on DedupSeries noting the default and citing this TODO.
+ACCEPTANCE:
+  * go test ./internal/dedup/... -run TestDedupSeries -v exits 0.
+EDGE: ['dryRun=true with zero duplicate groups -- TotalMerged=0, no error.']
+TESTS: ['internal/dedup/series_dedup_test.go: TestDedupSeries_DryRunMakesNoChanges -- seed 2 duplicate series with books, call DedupSeries(ctx, store, progress, true), assert store still has both series rows and no books were reassigned.', 'TestDedupSeries_RealRunMerges -- same fixture, dryRun=false, assert the merge actually happens (existing coverage, if any, should already cover this).']
+GATE: make ci
+NOTES: Pair with part 2 of this same TODO line (switch to an all-versions series getter) before this op is wired to any production trigger -- both are prerequisites the TODO explicitly lists together.
+====================================================================================================
+TASK-048 Physically co-locate a Combine survivor's files under RootDir after CombineBooks
+ws dedup wave 4 tier sonnet rc True polarity additive effort M
+depends_on [] depends_on_lines []
+exact_files ['internal/merge/service.go']
+GOAL: After CombineBooks (internal/merge/service.go:336) reassigns all files to the survivor book in the DB, if (and only if) every one of the survivor's file paths is already under config.AppConfig.RootDir (using organizer.ensureUnderRoot or equivalent — do NOT move files that live in abooks/newbooks or any external staging dir), physically move them into one co-located folder by invoking the existing Organizer.OrganizeBook on the survivor. Leave files outside RootDir untouched, matching the TODO note 'user wants co-location only inside the library.'
+STEPS:
+  - In internal/merge/service.go's CombineBooks (~L336), after the existing file-reassignment loop and before returning CombineResult, fetch the survivor's current BookFiles and check each file's path against config.AppConfig.RootDir using organizer.ensureUnderRoot (or an equivalent all-under-root check) — if ANY file's path is NOT under RootDir, skip physical co-location entirely for this combine and return the DB-only result as today.
+  - If ALL of the survivor's files pass the RootDir check, obtain/construct an *organizer.Organizer (check how the Service struct already has access to config/organizer dependencies, or thread one in via the constructor) and call OrganizeBook(survivorBook) to move all its files into one target folder.
+  - Wire OrganizeBook's returned error into CombineResult — do not silently swallow a physical-move failure; the DB state (files already reassigned) must remain consistent even if the physical move partially fails, so log a clear warning and leave CombineResult indicating files were NOT moved rather than reporting success.
+  - Add a CombineResult field (e.g. FilesCoLocated bool) so callers/UI can tell whether physical co-location happened.
+ACCEPTANCE:
+  * `go test ./internal/merge/... -run TestCombineBooks_CoLocatesFilesUnderRootDir` passes.
+  * `go test ./internal/merge/... -run TestCombineBooks_SkipsCoLocationOutsideRootDir` passes.
+EDGE: ["Mixed set: some survivor files under RootDir, some not — per the TODO's 'inside RootDir only' framing, treat this as NOT eligible for co-location (require ALL files under root) rather than partially moving only some.", 'OrganizeBook failing partway through (e.g. disk full) must not leave the DB and filesystem inconsistent — the DB file-path records must reflect wherever the files actually ended up, not the DB-only pre-move paths.']
+TESTS: ["internal/merge/service_test.go (or a new co-location-specific test file): TestCombineBooks_CoLocatesFilesUnderRootDir — survivor files all under a temp RootDir, assert after Combine they're all in one folder.", 'TestCombineBooks_SkipsCoLocationOutsideRootDir — one file path outside RootDir (e.g. under a separate newbooks/abooks temp dir), assert Combine still succeeds (DB reassignment) but files are NOT physically moved and CombineResult reflects that.']
+GATE: make ci
+NOTES: review_critical because this touches CombineBooks, a prod-data merge/apply path with real file moves.

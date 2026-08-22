@@ -1,0 +1,75 @@
+{
+  "todo_line": 3369,
+  "src_id": null,
+  "title": "Surface to the user when 'all'/'and' (or any stopword) is silently dropped from a search query",
+  "verdict": "actionable",
+  "verdict_evidence": "dropStopwordOnlyConjuncts (internal/search/bleve_translator.go:166, called from L89) drops free-text conjuncts that analyze to nothing (stopwords like 'all'/'and'), and this is confirmed still the current, unchanged behavior at HEAD \u2014 no user-facing surfacing mechanism exists anywhere (grep for 'dropped'/'stopword'/'ignored'/'discard' across handler and web code returns nothing), unlike the related quoted-phrase bug at todo_line 3377 which HAS already been fixed.",
+  "domain": "internal/search",
+  "exact_files": [
+    "internal/search/bleve_translator.go",
+    "internal/server/handlers/search.go"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "the stopword-dropping function exists and behaves as described",
+      "grep_cmd": "grep -n 'func dropStopwordOnlyConjuncts' internal/search/bleve_translator.go",
+      "expect": "1 hit, with the function called at L89 from the conjunct-building path"
+    },
+    {
+      "claim": "nothing surfaces the drop to the user today",
+      "grep_cmd": "grep -rn 'stopword\\|dropped' internal/server/handlers/*.go web/src/pages/Library.tsx 2>/dev/null | grep -i 'ignored\\|discard\\|stopword'",
+      "expect": "0 hits"
+    }
+  ],
+  "reuse": [
+    {
+      "name": "dropStopwordOnlyConjuncts",
+      "file": "internal/search/bleve_translator.go",
+      "verify_grep": "grep -n 'func dropStopwordOnlyConjuncts' internal/search/bleve_translator.go"
+    }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Requires threading a new signal (which terms were dropped) from the translator through the search handler response and into the UI \u2014 a small new data channel, not just a logic tweak.",
+  "review_critical": false,
+  "goal": "Change dropStopwordOnlyConjuncts (or its caller at bleve_translator.go:89) to also return the list of dropped term strings, thread that list through to the search response DTO as e.g. `dropped_terms: [\"all\", \"and\"]`, and have the Library search UI show a small inline note ('some common words were ignored in your search: all, and') when the list is non-empty. Do NOT change the dropping behavior itself \u2014 it exists specifically to fix the 'shards of oblivion' all-stopword-query bug and must keep working exactly as-is for that case.",
+  "background": [
+    "Measured via TestReproAllJobsAndClasses: 'All Jobs and Classes' searches only 'Jobs AND Classes'; 'all jobs' searches only 'jobs' \u2014 confirmed still current at HEAD.",
+    "Independent of the index-coverage bug fixed on 2026-08-13 (todo_line 3423/3433/3384) and independent of the quoted-phrase bug already fixed for todo_line 3377 \u2014 needs its own, separate change."
+  ],
+  "steps": [
+    "1. In internal/search/bleve_translator.go, change dropStopwordOnlyConjuncts (line 166) to return `([]Node, []string)` \u2014 the kept nodes plus the values of the dropped FreeTextNodes \u2014 instead of just `[]Node`.",
+    "2. Update its call site at line 89 to collect the dropped-terms slice and propagate it up through whatever function builds the final Bleve query (likely the same function containing line 89).",
+    "3. Thread the dropped-terms list into the search response struct in internal/server/handlers/search.go (or wherever the search handler builds its JSON response) as a new `dropped_terms []string` (omitempty) field.",
+    "4. In the web Library search UI (grep -rn 'search' web/src/pages/Library.tsx for the search-results rendering block), read `dropped_terms` from the API response and render a small Alert/note when non-empty, listing the dropped words.",
+    "5. Add a test asserting the API response for 'All Jobs and Classes' includes dropped_terms: ['All', 'and'] (or however TestReproAllJobsAndClasses's fixture capitalizes them) alongside the narrowed results."
+  ],
+  "tests": [
+    "internal/search/bleve_translator_test.go: assert dropStopwordOnlyConjuncts returns both the kept nodes and the correct dropped-terms list for the 'All Jobs and Classes' case.",
+    "internal/server/handlers/search_test.go: assert the API response includes dropped_terms for a query containing stopwords, and omits/empties it for a query with none.",
+    "web/src/pages/Library.test.tsx: assert the UI note renders when dropped_terms is present.",
+    "Anti-over-suppression: TestReproAllJobsAndClasses itself (or an equivalent) must still show the query narrows to 'Jobs AND Classes' \u2014 the dropping behavior itself must not change, only its visibility."
+  ],
+  "acceptance": [
+    "make ci (Go) and npm --prefix web test both pass.",
+    "A manual search for 'all jobs' shows both the narrowed results AND a visible note that 'all' was ignored."
+  ],
+  "edge_cases": [
+    "An all-stopword query (the original 'shards of oblivion' case dropStopwordOnlyConjuncts protects) returns children unchanged (dropped==0 || len(kept)==0 short-circuit at L176) \u2014 in that case there ARE no dropped terms to surface for THIS conjunct, since the function deliberately keeps everything rather than dropping to empty; confirm the surfacing logic doesn't misreport in this specific branch.",
+    "OR-disjunction stopwords are deliberately left alone per the existing comment ('Conjunction only... OR is deliberately left alone') \u2014 do not surface a false 'dropped' note for terms that were never actually dropped from a disjunction."
+  ],
+  "anti_over_suppression": "TestReproAllJobsAndClasses (or equivalent) still passes, confirming the underlying stopword-drop behavior is unchanged.",
+  "depends_on_lines": [],
+  "gate": "go build ./... && go vet ./... && go test ./internal/search/... ./internal/server/handlers/... -count=1",
+  "notes": "Distinct from and unrelated to the (already-fixed) quoted-phrase bug at todo_line 3377 \u2014 do not conflate the two when scoping this fix.",
+  "id": "TASK-126",
+  "stable_key": "scope-04.json|3369|None|Surface to the user when 'all'/'and' (or any stopword) is si",
+  "ws": "search",
+  "slug": "surface-to-the-user-when-all-and-or-any-stopword",
+  "scope_file": "scope-04.json",
+  "dropped_files": [],
+  "tier_label": "Sonnet-class",
+  "depends_on": [],
+  "wave": 1
+}

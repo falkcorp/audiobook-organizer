@@ -1,0 +1,251 @@
+[
+  {
+    "todo_line": 280,
+    "src_id": null,
+    "title": "Guard TestServerStartGracefulShutdown's SIGTERM against future parallelism",
+    "verdict": "actionable",
+    "verdict_evidence": "syscall.Kill(os.Getpid(), syscall.SIGTERM) at internal/server/server_more_test.go:337 is verified live at HEAD: grep -n \"syscall.Kill(os.Getpid()\" internal/server/server_more_test.go -> \"337:\t_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)\". No t.Parallel() call exists in the file yet (grep -n \"t.Parallel()\" internal/server/server_more_test.go -> 0 hits), so the trap is latent, not triggered.",
+    "domain": "internal/server",
+    "exact_files": ["internal/server/server_more_test.go"],
+    "verified_anchors": [
+      {"claim": "TestServerStartGracefulShutdown sends a process-wide SIGTERM", "grep_cmd": "grep -n \"syscall.Kill(os.Getpid()\" internal/server/server_more_test.go", "expect": "1 hit, L337"},
+      {"claim": "no test in the file currently calls t.Parallel()", "grep_cmd": "grep -n \"t.Parallel()\" internal/server/server_more_test.go", "expect": "0 hits — the trap has not fired yet"},
+      {"claim": "the real SIGTERM handler is registered in Server.Start via signal.Notify", "grep_cmd": "grep -n \"signal.Notify(quit\" internal/server/server_lifecycle.go", "expect": "1 hit, L444"}
+    ],
+    "reuse": [],
+    "polarity": "additive",
+    "effort": "S",
+    "tier": "haiku",
+    "why_tier": "single-file comment/guard addition, no cross-package reasoning",
+    "review_critical": false,
+    "goal": "Make the process-wide-signal hazard in TestServerStartGracefulShutdown impossible to trip by accident: add a prominent guard comment directly above the syscall.Kill call in internal/server/server_more_test.go warning that this call raises SIGTERM against the ENTIRE test binary process (not a child), so no test in package `server` may ever be marked t.Parallel() while this test exists, and add a package-level doc comment (top of server_more_test.go or a new tiny doc block) stating the same constraint so a reviewer sees it before approving a t.Parallel() addition anywhere in the package.",
+    "background": [
+      "internal/server/server_more_test.go:337 calls syscall.Kill(os.Getpid(), syscall.SIGTERM) directly against the test binary's own PID to simulate an operator's shutdown signal.",
+      "internal/server/server_lifecycle.go:444 is where Server.Start registers the real signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM) handler that this test relies on.",
+      "Go by default runs tests in one package sequentially in the same OS process unless a test calls t.Parallel(); this file has no t.Parallel() call today (verified above), so the risk is latent."
+    ],
+    "steps": [
+      "Open internal/server/server_more_test.go.",
+      "Immediately above line 337 (`_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)`), add a comment block explaining: this signals the WHOLE test binary process, not a subprocess; if ANY test in package `server` (this file or a sibling _test.go file in the same package) is ever given t.Parallel(), it will receive this SIGTERM mid-run as an unexpected process-wide event, and its outcome becomes undefined depending on what it happens to be doing when the signal lands.",
+      "Add a second short comment directly on/above `func TestServerStartGracefulShutdown(t *testing.T) {` (line 309) stating: 'Do not add t.Parallel() to this test OR to any other test in package server -- see the comment on the syscall.Kill call below.'",
+      "Do not add any runtime enforcement (no custom test framework hook) -- this is a documentation-only fix per the TODO's own framing ('a trap for whoever adds parallelism'); a runtime check is out of scope for this item."
+    ],
+    "tests": [
+      "No new test needed; this is a comment-only change. Confirm the package still compiles and the existing test still passes: go test ./internal/server/... -run TestServerStartGracefulShutdown -count=1 -v"
+    ],
+    "acceptance": [
+      "grep -n 'SIGTERM' -B3 internal/server/server_more_test.go shows the new warning comment directly above the syscall.Kill call",
+      "go vet ./internal/server/... exits 0"
+    ],
+    "edge_cases": ["N/A -- comment-only change, no behavioral edge cases"],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "go build ./... && go vet ./... && go test ./internal/server/... -run TestServerStartGracefulShutdown -count=1",
+    "notes": "Paired with todo_line 283 (same test, the fixed 6s sleep) -- both touch server_more_test.go but are independent edits and can land in the same PR without conflicting logically, though they touch overlapping line ranges so should be done as one PR, not two parallel worktrees, to avoid a rebase collision. This is a documentation/comment fix per the TODO's own wording ('it is a trap... it works today'); no behavior change is implied or required."
+  },
+  {
+    "todo_line": 283,
+    "src_id": null,
+    "title": "Replace TestServerStartGracefulShutdown's fixed 6s sleep with a bounded readiness poll",
+    "verdict": "actionable",
+    "verdict_evidence": "time.Sleep(6 * time.Second) at internal/server/server_more_test.go:336 is live at HEAD: grep -n \"time.Sleep(6 \\* time.Second)\" internal/server/server_more_test.go -> \"336:\ttime.Sleep(6 * time.Second)\". The sleep exists purely so the SIGTERM on the next line (337) is not sent before Server.Start reaches signal.Notify at server_lifecycle.go:444; there is no existing readiness signal to poll on, verified by grep for a ready/started channel in server_lifecycle.go returning no match.",
+    "domain": "internal/server",
+    "exact_files": ["internal/server/server_more_test.go", "internal/server/server.go", "internal/server/server_lifecycle.go"],
+    "verified_anchors": [
+      {"claim": "the sleep precedes the SIGTERM send in the same test", "grep_cmd": "grep -n \"time.Sleep(6\\|syscall.Kill\" internal/server/server_more_test.go", "expect": "2 hits, L336 and L337"},
+      {"claim": "signal.Notify is registered well after HTTP startup in Server.Start, creating the race the sleep guards against", "grep_cmd": "grep -n \"configureAndStartHTTP\\|signal.Notify(quit\" internal/server/server_lifecycle.go", "expect": "configureAndStartHTTP at L415, signal.Notify at L444 -- Notify happens after HTTP is already serving"},
+      {"claim": "Server struct is defined in the same package as the test (package server), so a new unexported readiness field is directly visible to the test with no exported API change", "grep_cmd": "grep -n \"^package server\" internal/server/server.go internal/server/server_more_test.go", "expect": "both files declare package server"}
+    ],
+    "reuse": [
+      {"name": "assert.Eventually (testify)", "file": "internal/server/cache_warmers_bgwg_test.go", "verify_grep": "grep -n \"assert.Eventually\" internal/server/cache_warmers_bgwg_test.go"}
+    ],
+    "polarity": "transform",
+    "effort": "M",
+    "tier": "sonnet",
+    "why_tier": "requires touching Server struct + Start() + a test in the same package without breaking other tests that construct Server; needs the reader to understand goroutine/channel closing semantics correctly to avoid a new race",
+    "review_critical": false,
+    "goal": "Remove the unconditional 6-second wall-clock cost from TestServerStartGracefulShutdown by replacing the fixed sleep with a deterministic readiness signal: add an unexported `shutdownArmed chan struct{}` field to the Server struct (internal/server/server.go, near the other lifecycle fields around line 282's bgCtx/bgCancel/bgWG block), initialize it with `make(chan struct{})` in NewServer, and `close(s.shutdownArmed)` immediately after the `signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)` call in Server.Start (internal/server/server_lifecycle.go:444). In the test, replace `time.Sleep(6 * time.Second)` with a select that waits on `server.shutdownArmed` (with a short bounded timeout, e.g. 5s, as a safety net in case Start never reaches that line) before sending the SIGTERM.",
+    "background": [
+      "internal/server/server_lifecycle.go:444 registers signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM) inside Server.Start, after HTTP has already been started at line 415 (configureAndStartHTTP).",
+      "internal/server/server_more_test.go:332-337 starts Server.Start in a goroutine, sleeps 6s (assumed enough time for Start to reach signal.Notify), then sends SIGTERM to its own PID.",
+      "internal/server/server_more_test.go:309 shows the test's package is `server` (same as server.go/server_lifecycle.go), so a new unexported Server field needs no export or test-only accessor shim.",
+      "internal/server/cache_warmers_bgwg_test.go already uses testify's assert.Eventually as the package's established polling idiom, so this fix does not introduce a new dependency."
+    ],
+    "steps": [
+      "In internal/server/server.go, inside `type Server struct { ... }` (starts line 164), add a new field near the bgCtx/bgCancel/bgWG group (around line 282-284): `shutdownArmed chan struct{} // closed once Start has registered the OS signal handler; tests use this instead of a fixed sleep before sending a real signal`.",
+      "Find Server's constructor (`func NewServer(store database.Store) *Server` at internal/server/server.go:440) and initialize the new field: `shutdownArmed: make(chan struct{}),` in the struct literal, or `server.shutdownArmed = make(chan struct{})` right after `server` is constructed if it uses a multi-step build.",
+      "In internal/server/server_lifecycle.go, immediately after the `signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)` line (444), add `close(s.shutdownArmed)`.",
+      "In internal/server/server_more_test.go, replace the line `time.Sleep(6 * time.Second)` (336) with a bounded wait: `select { case <-server.shutdownArmed: case <-time.After(5 * time.Second): t.Fatal(\"server did not arm its shutdown signal handler in time\") }` -- keep the existing comment block above it (it documents the *subsequent* 60s shutdown budget and remains accurate) but delete/replace only the sleep line itself.",
+      "Grep for any other test in the same package that also constructs a Server via a path that bypasses NewServer (e.g. a raw `&Server{}` literal) and confirm it does not panic on a nil shutdownArmed channel being read; if any such test calls Start() (not just unit-tests individual handlers), it will need the same lazy-init guard -- add `if s.shutdownArmed == nil { s.shutdownArmed = make(chan struct{}) }` at the top of Start() as a defensive fallback so a Server built without NewServer does not nil-deref."
+    ],
+    "tests": [
+      "internal/server/server_more_test.go TestServerStartGracefulShutdown -- asserts the server starts, is signaled, and shuts down within the existing 60s budget; verify it now completes in well under 6s of artificial wait (the real bound becomes however long Start takes to reach signal.Notify, typically milliseconds).",
+      "Run the full package once to confirm no other test regresses: go test ./internal/server/... -count=1 -run TestServerStartGracefulShutdown -v, then the full package: go test ./internal/server/... -count=1"
+    ],
+    "acceptance": [
+      "grep -n 'shutdownArmed' internal/server/server.go internal/server/server_lifecycle.go internal/server/server_more_test.go shows the field declared, initialized, closed, and consumed",
+      "go test ./internal/server/... -run TestServerStartGracefulShutdown -count=1 -v passes and its wall-clock time (visible in `go test -v` per-test PASS line) is well under 6s instead of >6s",
+      "go build ./... && go vet ./... exit 0"
+    ],
+    "edge_cases": [
+      "Start() returning an error before reaching signal.Notify (e.g. opRegistrationGate fails, or container.Start fails): shutdownArmed is never closed, so the test's select falls through to the 5s timeout and fails loudly with a clear message instead of hanging silently -- this is the correct behavior, not a regression, since the old fixed-sleep test would also eventually time out via the existing 60s <-done budget.",
+      "A Server constructed without NewServer (bypassing the field initializer) and then Start() called directly: guarded by the defensive `if s.shutdownArmed == nil` fallback in Start() so it self-heals rather than nil-channel-blocking forever."
+    ],
+    "anti_over_suppression": "N/A -- this is a latency fix, not a filter/guard/skip addition",
+    "depends_on_lines": [280],
+    "gate": "go build ./... && go vet ./... && go test ./internal/server/... -count=1",
+    "notes": "Directly reduces internal/server package wall-clock time, relevant to todo_line 10104/10600-part-26 (TODO-SRVTIMEOUT, internal/server package running 434-480s against a 600s default timeout) -- this single test currently burns a guaranteed 6s of that budget for no correctness benefit. Should land in the same PR as todo_line 280's comment fix since both touch the same test function."
+  },
+  {
+    "todo_line": 476,
+    "src_id": null,
+    "title": "Add GET /api/libraries/:libraryId/series/:seriesId to the ABS surface",
+    "verdict": "actionable",
+    "verdict_evidence": "The route is not registered: grep -n \"libraryId/series\" internal/server/handlers/abs/handler.go internal/server/wire_abs_routes.go shows only the LIST route (`GET /api/libraries/:libraryId/series` at handler.go:465 and wire_abs_routes.go:619), no detail route with a second segment. `/api/libraries/` is already unconditionally reserved from the compat redirect (absReservedPathPrefixes, wire_abs_routes.go:68), so unlike the playlists precedent this needs zero routing-table changes, only a new handler + registration + doc-list entry.",
+    "domain": "internal/server/handlers/abs",
+    "exact_files": [
+      "internal/server/handlers/abs/browse.go",
+      "internal/server/handlers/abs/handler.go",
+      "internal/server/wire_abs_routes.go",
+      "internal/server/handlers/abs/series_detail_test.go"
+    ],
+    "verified_anchors": [
+      {"claim": "only the series LIST route is registered today, not a detail route", "grep_cmd": "grep -n \"libraries/:libraryId/series\" internal/server/handlers/abs/handler.go", "expect": "1 hit, L465: r.GET(\"/api/libraries/:libraryId/series\", auth, h.LibrarySeries)"},
+      {"claim": "/api/libraries/ is unconditionally reserved from the /api -> /api/v1 compat redirect, so no routing decision is needed to add a sub-path here", "grep_cmd": "grep -n \"\\\"/api/libraries/\\\"\" internal/server/wire_abs_routes.go", "expect": "1 hit, L68 inside absReservedPathPrefixes"},
+      {"claim": "the exact same detail-route-missing defect was already fixed once for playlists, establishing the precedent pattern this item follows", "grep_cmd": "grep -n \"GET /api/playlists/:id\" internal/server/wire_abs_routes.go", "expect": "2 hits (absRouteList doc entry L624 + absCollisionDetailRoutes L142), with a comment block above explaining playlists opened empty until this route was added"},
+      {"claim": "GetSeriesByIDs already exists on the library interface but is unused in browse.go, making it the natural fetch-one-series method to reuse instead of GetAllSeries+filter", "grep_cmd": "grep -n \"GetSeriesByIDs\" internal/server/handlers/abs/handler.go internal/server/handlers/abs/browse.go", "expect": "1 hit only, in handler.go:164 (interface declaration) -- 0 hits in browse.go confirms it is not yet called there"}
+    ],
+    "reuse": [
+      {"name": "h.knownLibrary(c)", "file": "internal/server/handlers/abs/browse.go", "verify_grep": "grep -n \"func (h \\*Handler) knownLibrary\" internal/server/handlers/abs/browse.go"},
+      {"name": "h.seriesBooksCached() / h.seriesPageBooks(...)", "file": "internal/server/handlers/abs/browse.go", "verify_grep": "grep -n \"func (h \\*Handler) seriesBooksCached\\|func (h \\*Handler) seriesPageBooks\" internal/server/handlers/abs/browse.go"},
+      {"name": "h.library.GetSeriesByIDs(ids []int)", "file": "internal/server/handlers/abs/handler.go", "verify_grep": "grep -n \"GetSeriesByIDs\" internal/server/handlers/abs/handler.go"},
+      {"name": "ignorePrefix / msEpoch helpers already used by LibrarySeries", "file": "internal/server/handlers/abs/browse.go", "verify_grep": "grep -n \"func ignorePrefix\\|func msEpoch\" internal/server/handlers/abs/browse.go internal/server/handlers/abs/*.go"}
+    ],
+    "polarity": "additive",
+    "effort": "M",
+    "tier": "sonnet",
+    "why_tier": "single-item variant of an existing well-documented handler (LibrarySeries) in the same file -- needs care reusing the right helpers and matching the exact per-series JSON shape but is not architecturally novel",
+    "review_critical": false,
+    "goal": "Implement GET /api/libraries/:libraryId/series/:seriesId on the ABS-compatible surface, matching the per-series object shape that LibrarySeries (internal/server/handlers/abs/browse.go:493) already emits inside its `results` array (id, name, nameIgnorePrefix, libraryId, addedAt, updatedAt, books, totalDuration, numBooks), but for exactly one series returned as a bare JSON object (not wrapped in the list's pageResponse{Results,Total,Limit,Page} envelope). Register the new handler in Handler.Register (internal/server/handlers/abs/handler.go, next to line 465's LibrarySeries registration) and add the route string to absRouteList() (internal/server/wire_abs_routes.go, next to line 619's series entry) so the startup log and TestUnimplementedABSNamespacesAre404NotRedirect-style route-inventory tests stay accurate. No entry is needed in absCollisionDetailRoutes/absAppAPICollisions since /api/libraries/ is already unconditionally reserved.",
+    "background": [
+      "LibrarySeries (browse.go:493) is the existing GET /api/libraries/:libraryId/series handler; it builds the same per-series gin.H shape this new handler needs to reuse for a single series, documented at browse.go:606-632.",
+      "The identical defect (a resource's LIST route existed but its DETAIL route did not, so opening one 301'd into the app API and rendered empty) was already fixed once for playlists -- see the comment block at wire_abs_routes.go:99-125 describing the exact symptom (\"opening a playlist... 301'd into /api/v1/playlists/:id and answered a shape the client cannot parse\") and its fix (GET /api/playlists/:id added to absCollisionDetailRoutes because /api/playlists/ has a live /api/v1 twin).",
+      "Series does NOT need the absCollisionDetailRoutes treatment playlists needed, because /api/libraries/ is already in absReservedPathPrefixes (wire_abs_routes.go:68) -- the TODO item itself calls this out: 'sits under the already-reserved /api/libraries/ prefix and therefore needs no routing decision at all'.",
+      "GetSeriesByIDs(ids []int) (map[int]*database.Series, error) is already declared on the ABS library interface (handler.go:164) and implemented by the fake test double (library_fake_test.go:373), but nothing in browse.go currently calls it -- LibrarySeries instead calls GetAllSeries() and works over the whole set. The detail handler should call GetSeriesByIDs([]int{id}) to avoid an O(all series) scan for a single lookup."
+    ],
+    "steps": [
+      "In internal/server/handlers/abs/browse.go, add a new method near LibrarySeries (after line 649, where LibrarySeries returns): `func (h *Handler) LibrarySeriesDetail(c *gin.Context) { ... }`.",
+      "Inside it: call `if !h.knownLibrary(c) { return }` first (same guard every sibling handler uses, e.g. browse.go:494).",
+      "Parse `seriesID, err := strconv.Atoi(c.Param(\"seriesId\"))`; on error call `respondError(c, http.StatusNotFound, \"series not found\")` and return (series IDs are always numeric internally; a malformed id is indistinguishable from unknown).",
+      "Call `byID, err := h.library.GetSeriesByIDs([]int{seriesID})`; on err call `respondError(c, http.StatusInternalServerError, \"could not load series\")` and return; if the map has no entry for seriesID, call `respondError(c, http.StatusNotFound, \"series not found\")` and return.",
+      "Fetch book counts and book lists exactly like LibrarySeries does but scoped to the one series: reuse `h.seriesBooksCached()` (browse.go:521) to get `bySeries map[int]seriesBooksBuilt`, then reuse `h.seriesPageBooks(c.Request.Context(), []database.Series{*byID[seriesID]}, bySeries)` (the same signature LibrarySeries calls at browse.go:597) to hydrate the one series' books into full LibraryItem objects.",
+      "Build and return the single-object response with the exact same field set LibrarySeries emits per series (browse.go:606-632: id as string via strconv.Itoa, name, nameIgnorePrefix via ignorePrefix(s.Name), libraryId via h.libraryID(), addedAt/updatedAt via msEpoch(h.now()), books, totalDuration, numBooks) using `respondJSON(c, http.StatusOK, gin.H{...})` -- NOT wrapped in pageResponse, since this is a single-resource route.",
+      "In internal/server/handlers/abs/handler.go, add the registration line directly after line 465 (`r.GET(\"/api/libraries/:libraryId/series\", auth, h.LibrarySeries)`): `r.GET(\"/api/libraries/:libraryId/series/:seriesId\", auth, h.LibrarySeriesDetail)`.",
+      "In internal/server/wire_abs_routes.go, add `\"GET /api/libraries/:libraryId/series/:seriesId\",` directly after line 619 (`\"GET /api/libraries/:libraryId/series\",`) inside absRouteList()."
+    ],
+    "tests": [
+      "internal/server/handlers/abs/series_detail_test.go (new file): TestLibrarySeriesDetail_ReturnsMatchingSeriesFields -- seed one series with 2 books via the same oracle-seed helpers series_books_test.go uses (absSeedTwoSeries pattern at series_books_test.go:29), GET /api/libraries/:id/series/:seriesId, assert the JSON object (not array) has id/name/books/numBooks/totalDuration matching what LibrarySeries returns for the same series in its results array (cross-check against the LIST route's entry for that id -- same style as TestLibrarySeries_BooksAreLibraryItems at series_books_test.go:211).",
+      "TestLibrarySeriesDetail_UnknownSeriesID404s -- GET a numeric id that does not exist, assert 404 with a body, not a redirect and not 200-with-empty.",
+      "TestLibrarySeriesDetail_NonNumericSeriesID404s -- GET /api/libraries/:id/series/not-a-number, assert 404 (not 500) -- this is the anti-over-suppression check: a malformed id must not be silently coerced to 0 or panic strconv.Atoi unchecked."
+    ],
+    "acceptance": [
+      "curl (or httptest) GET /api/libraries/1/series/<real-id> with a valid auth token returns 200 and a JSON object (not an array) with the same numBooks/totalDuration a corresponding LibrarySeries list entry shows for that id",
+      "go test ./internal/server/handlers/abs/... -run TestLibrarySeriesDetail -count=1 -v passes",
+      "grep -n 'LibrarySeriesDetail' internal/server/handlers/abs/handler.go shows exactly one registration line"
+    ],
+    "edge_cases": [
+      "seriesId path param present but not a valid integer: 404, not 500 (strconv.Atoi error path)",
+      "seriesId valid integer but library has no such series: 404 via the GetSeriesByIDs empty-map-entry check",
+      "series exists but has zero books: numBooks/totalDuration must be 0 and books must be [] (not null), matching the existing LibrarySeries convention at browse.go:603-605 (`if items == nil { items = []any{} }`)",
+      "unknown libraryId in the path: rejected by h.knownLibrary(c) before any series lookup runs, same as every other handler in this file"
+    ],
+    "anti_over_suppression": "TestLibrarySeriesDetail_NonNumericSeriesID404s",
+    "depends_on_lines": [],
+    "gate": "go build ./... && go vet ./... && go test ./internal/server/handlers/abs/... -count=1",
+    "notes": "Prefer GET /api/libraries/:libraryId/series/:seriesId over a bare /api/series/:id shim, per the TODO's own guidance and matching the upstream ABS API shape -- do not also add /api/series/:id in the same change, that would reopen the routing-decision question the TODO explicitly says to avoid. review_critical=false because this is a read-only ABS-compat GET with no write path."
+  },
+  {
+    "todo_line": 697,
+    "src_id": null,
+    "title": "Audit every registry.RunItems caller's custom Label closure for the post-fn re-render timing change",
+    "verdict": "actionable",
+    "verdict_evidence": "The timing change is real and verified: internal/operations/registry/run_items.go:233-245 shows SetCurrentItem(lbl(i, progTotal)) called BEFORE fn (L233) but UpdateProgress(..., lbl(i, progTotal)) re-rendering the label AFTER fn completes (L245), per the comment at L236-244 explaining why (labels close over running tallies that fn itself mutates). `git log` confirms the change: commit 9d2307a6 'fix(operations): report progress labels after the work, not before'. 31 files under internal/plugins define a custom Label: func(...) closure passed to RunItems (grep -rn \"Label:\\s*func\" internal/plugins | wc -l -> 38 call sites across 31 files), none of which have been individually re-verified against the new post-fn timing.",
+    "domain": "internal/plugins",
+    "exact_files": [
+      "internal/plugins/acoustid/reset_all.go",
+      "internal/plugins/acoustid/lsh_backfill.go",
+      "internal/plugins/acoustid/backfill.go",
+      "internal/plugins/metafetch/calibrate_scoring.go",
+      "internal/plugins/maintenance/extract_wav_clips.go",
+      "internal/plugins/maintenance/tag_backfill.go",
+      "internal/plugins/maintenance/metadata_cache_reap.go",
+      "internal/plugins/maintenance/probe_directory_books.go",
+      "internal/plugins/maintenance/missing_file_audit.go",
+      "internal/plugins/maintenance/booksig_sidecar_migrate.go",
+      "internal/plugins/maintenance/regroup_shattered_ai.go",
+      "internal/plugins/maintenance/relink_unlinked.go",
+      "internal/plugins/maintenance/intro_migrate_single_file.go",
+      "internal/plugins/maintenance/repair_junk_titles.go",
+      "internal/plugins/maintenance/chapters_backfill.go",
+      "internal/plugins/maintenance/missing_file_repair.go",
+      "internal/plugins/maintenance/purge_millisecond_durations.go",
+      "internal/plugins/maintenance/duration_backfill.go",
+      "internal/plugins/maintenance/auto_match_transcribed.go",
+      "internal/plugins/maintenance/missing_file_repoint.go",
+      "internal/plugins/maintenance/dedupe_book_file_rows.go",
+      "internal/plugins/maintenance/repair_transcribe_status.go",
+      "internal/plugins/maintenance/title_repair.go",
+      "internal/plugins/maintenance/intro_transcribe.go",
+      "internal/plugins/dedup/embed_scan.go",
+      "internal/plugins/dedup/rescore_labeled_examples.go",
+      "internal/plugins/dedup/breakdown_backfill.go",
+      "internal/plugins/dedup/lsh_index_build.go",
+      "internal/plugins/dedup/build_candidate_index.go",
+      "internal/plugins/dedup/mine_gold_labels.go",
+      "internal/plugins/dedup/quarantine_chapter_artifacts.go",
+      "internal/plugins/dedup/dataset_backfill.go"
+    ],
+    "verified_anchors": [
+      {"claim": "the label is now rendered after fn runs, not before", "grep_cmd": "grep -n \"Re-render the label AFTER fn\" internal/operations/registry/run_items.go", "expect": "1 hit, comment starting at L236"},
+      {"claim": "the fix landed as a dedicated commit", "grep_cmd": "git log --oneline -- internal/operations/registry/run_items.go | grep 9d2307a6", "expect": "1 hit: 9d2307a6 fix(operations): report progress labels after the work, not before"},
+      {"claim": "31 distinct plugin files pass a custom Label closure to RunItems and are therefore in scope for the audit", "grep_cmd": "grep -rl 'Label:\\s*func' internal/plugins | wc -l", "expect": "31"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "L",
+    "tier": "sonnet",
+    "why_tier": "breadth (31 files) with a narrow, mechanical check per file (does the Label closure read a counter/tally that fn itself mutates, and if so is post-fn rendering now correct or does it double-count) -- judgment-light but volume-heavy, not deep architecture work",
+    "review_critical": false,
+    "goal": "For each of the 31 files listed in exact_files, read the Label: func(i, total int) string closure passed to registry.RunItems and determine whether it reads any variable that the corresponding per-item work function (fn, the second argument to RunItems) mutates. Classify each into one of three buckets and record the result: (A) Label reads only the loop index/item/total -- unaffected by the timing change, no action; (B) Label reads a running tally that fn mutates (e.g. a counter of matched/skipped/failed items) -- the post-fn re-render is now MORE correct (shows the tally including this item), confirm no double-counting bug was introduced (e.g. the tally must be incremented exactly once per item, not once in the label closure itself); (C) Label was written assuming the OLD pre-fn timing in a way the new post-fn timing breaks (e.g. it intentionally described the item ABOUT to be processed, and now shows post-completion state that reads as wrong to an operator watching the op's live progress feed) -- these need either a Label rewrite or an explicit code comment documenting the accepted behavior change. Produce a short per-file note (as a code comment where a fix is needed, otherwise no change) and fix every bucket-C finding.",
+    "background": [
+      "internal/operations/registry/run_items.go:214-217 supplies a default Label when opt.Label is nil (`item %d/%d`), which is unaffected by this whole question since it reads no external mutable state.",
+      "internal/operations/registry/run_items.go:225 declares `var completed atomic.Int64` and runOne (L226-253) is the shared driver every RunItems caller goes through regardless of its own Label closure -- SetCurrentItem gets the pre-work label (L233), UpdateProgress gets the post-work label (L245).",
+      "The comment at run_items.go:240-242 cites a concrete prior symptom this fix corrected: chapters-backfill's Label showed 'persist=0' for ten of twelve lines on a run that actually persisted all twelve, because all N concurrent workers snapshotted their label string at dispatch time before any of them had incremented the tally fn was about to mutate."
+    ],
+    "steps": [
+      "For each file in exact_files, grep the file for `Label:\\s*func` to locate the closure, then read the full closure body (usually 3-15 lines) and the fn closure passed as RunItems' third argument in the same call.",
+      "Identify every free variable the Label closure reads (typically a counter declared just above the RunItems call, e.g. `var matched, skipped int` or an atomic counter).",
+      "For each such variable, find every place fn increments/writes it. If fn increments it and the Label closure only reads it (never writes), this is bucket B -- correct today, no fix needed, but leave the finding out of any follow-up note since it is not a defect.",
+      "If the Label closure itself increments the counter (rather than fn), or if the counter represents 'items processed so far, not including this one' as an intentional design (i.e. the label is meant to describe what is about to start, not what just finished), this is bucket C: rewrite the Label closure to compute the count it wants directly from `i`/`total`/an atomic snapshot taken at the top of Label itself, rather than relying on ambient mutable state whose write timing relative to Label's call is now different.",
+      "For any bucket-C fix, add a one-line comment above the Label closure noting 'label re-rendered AFTER the item's fn runs (registry.RunItems, see run_items.go) -- computed from X, not ambient state' so a future reader does not reintroduce the same assumption.",
+      "After auditing all 31 files, if zero bucket-C findings exist, still leave a short comment in this PR's description (or a docs/ note, not required in exact_files) stating the audit was performed and found no violations -- do not silently close the TODO with no evidence."
+    ],
+    "tests": [
+      "For every file where a bucket-C fix is made, locate or write a maintenance-op progress test asserting the label text at a known item index matches the expected post-fn value -- follow the existing pattern in whichever _test.go file already covers that op's RunItems call (e.g. grep for existing progress/label assertions in the op's own _test.go before adding a new one).",
+      "Run the full plugins test suite once all fixes land: go test ./internal/plugins/... -count=1"
+    ],
+    "acceptance": [
+      "grep -c 'Label:\\s*func' across the 31 files still returns the same 38 call sites (no closures accidentally deleted)",
+      "go build ./... && go vet ./... exit 0",
+      "go test ./internal/plugins/... -count=1 passes"
+    ],
+    "edge_cases": [
+      "A Label closure that reads a counter mutated by a DIFFERENT concurrent goroutine outside fn entirely (not one of RunItems' own workers) -- flag but do not attempt to fix under this item; note it as a separate finding, since that is a pre-existing concurrency question unrelated to the pre/post-fn timing change.",
+      "Sequential (Concurrency=1) ops are lower-risk than parallel ones: in sequential mode the old pre-fn and new post-fn timing only differ by exactly one item's worth of state, and a bucket-C misread is easier to eyeball; in parallel mode multiple workers can each be mid-fn, so a shared tally read from Label is inherently racy unless the tally itself is atomic -- treat any non-atomic shared counter read from within a parallel op's Label closure as bucket C regardless of what it displays, and note it as a second, independent latent data race worth flagging even if the displayed number happens to look plausible."
+    ],
+    "anti_over_suppression": "N/A -- this is a correctness audit, not a filter/guard/skip addition",
+    "depends_on_lines": [],
+    "gate": "go build ./... && go vet ./... && go test ./internal/plugins/... -count=1",
+    "notes": "Large-blast-radius audit (31 files) that is mechanical per-file but not safely choppable into independent parallel worktrees, since a false negative in a shared operations-registry concern benefits from one reader keeping the full picture in their head across files. Recommend running as a single sonnet-tier pass rather than splitting into 31 sub-tasks. review_critical=false because progress-label text is UI/observability only, not a data-mutation path -- but note the edge-case above (bucket-C-adjacent data races on non-atomic shared counters) could surface a real concurrency bug worth a follow-up TODO if found."
+  }
+]

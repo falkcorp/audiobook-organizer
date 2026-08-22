@@ -1,0 +1,64 @@
+{
+  "todo_line": 10358,
+  "src_id": "ABS-SYNC-Phase8",
+  "title": "Phase 8 \u2014 write the ABS topology, runbook, and migration guide (Cloudflare Access ordering, cover/image bypass, client compat matrix)",
+  "verdict": "actionable",
+  "verdict_evidence": "No such doc exists yet: `find docs -iname '*runbook*' -o -iname '*topology*'` combined with the existing ABS doc set (`find docs/specs docs/reference docs/handoffs -iname '*abs*'`) shows abs-sync-api-design.md, abs-target-client-contract.md, abs-client-network-audit.md, abs-implementation-status.md, abs-upstream-api-reference.md, and a handoff doc \u2014 none of which is a topology/runbook/migration guide.",
+  "domain": "docs",
+  "exact_files": [
+    "docs/reference/abs-sync-topology-runbook.md"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "no topology/runbook doc scoped to ABS-sync exists today (generic runbook/topology docs do exist elsewhere, e.g. docs/system/runbooks.md, but none is ABS-specific)",
+      "grep_cmd": "find docs \\( -iname '*runbook*' -o -iname '*topology*' \\) | grep -i abs",
+      "expect": "0 hits \u2014 no existing runbook/topology doc is ABS-scoped"
+    },
+    {
+      "claim": "the sibling reference docs this new doc should match in structure/location already exist",
+      "grep_cmd": "ls docs/reference/abs-target-client-contract.md docs/reference/abs-implementation-status.md",
+      "expect": "both files exist"
+    }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Pure documentation synthesis task pulling together several already-known operational facts (CF Access policy ordering, cover bypass, tunnel JWT, client matrix) into one runbook \u2014 no code, but requires care to get the security-critical ordering advice right",
+  "review_critical": true,
+  "goal": "Write docs/reference/abs-sync-topology-runbook.md covering: (1) the Cloudflare Access service-token requirement to sit in a DEDICATED Service Auth policy ordered FIRST (both AudioBooth and Absorb's issue trackers hit this as a footgun); (2) the cover/image bypass (\u00a71.9.5 of the client contract \u2014 grep docs/reference/abs-target-client-contract.md for the exact requirement); (3) tunnel-level JWT enforcement notes; (4) a client compatibility matrix (AudioBooth vs Absorb: websocket need, cover bypass need, etc.); (5) the two operational gotchas the item names explicitly: 'never trust an app's reachability checkmark' (Access returns HTTP 200 with HTML on failure, which looks like a JSON-decode error to the client) and 'AudioBooth's first-server-add cover bug is upstream, not ours.'",
+  "background": [
+    "docs/reference/abs-target-client-contract.md already documents the byte-level DTO contract (\u00a71.7-1.9) this runbook should cross-reference rather than duplicate.",
+    "docs/reference/abs-implementation-status.md already documents the served-route inventory and gap list this runbook should link to for 'what's implemented' rather than re-deriving it."
+  ],
+  "steps": [
+    "1. Read docs/reference/abs-target-client-contract.md \u00a71.9.5 (cover/image bypass) and \u00a71.7-1.8 (DTO contract) to extract the exact requirements to cite, not re-derive.",
+    "2. Read docs/reference/abs-client-network-audit.md (if it covers CF Access ordering already) to avoid duplicating content \u2014 link to it instead where it already covers a topic.",
+    "3. Write docs/reference/abs-sync-topology-runbook.md with sections: Topology (tunnel + CF Access + AO server), CF Access Service Auth Policy Ordering (the dedicated-policy-first requirement, with a worked example of the wrong vs right policy order), Cover/Image Bypass, Tunnel-level JWT Enforcement, Client Compatibility Matrix (a markdown table: feature x AudioBooth x Absorb), and Known Client-Side Gotchas (reachability-checkmark trap, AudioBooth first-server-add cover bug).",
+    "4. Add the required file header (docs use the Markdown header format per file-headers.md: file/version/guid/last-edited).",
+    "5. Link this new doc from docs/reference/abs-implementation-status.md or the ABS-SYNC section of TODO.md so it's discoverable."
+  ],
+  "tests": [
+    "N/A \u2014 documentation only"
+  ],
+  "acceptance": [
+    "docs/reference/abs-sync-topology-runbook.md exists with all 5 required sections",
+    "a markdown linter or `make ci`'s doc-lint step (if any) passes on the new file"
+  ],
+  "edge_cases": [
+    "The CF Access policy-ordering advice must be stated as an explicit DO/DON'T with a concrete example, since the item calls this out as 'the trap that bit users in both clients' issue trackers' \u2014 a vague description would not prevent the same mistake."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only'",
+  "notes": "Depends conceptually on TASK-11 (auth core) being complete for the JWT-enforcement section to describe the real implemented behavior rather than aspirational design \u2014 TASK-11 is confirmed stale_done (L10337) so this doc can describe the ACTUAL shipped auth flow.",
+  "id": "TASK-057",
+  "stable_key": "scope-13.json|10358|None|Phase 8 \u2014 write the ABS topology, runbook, and migration gui",
+  "ws": "docs",
+  "slug": "phase-8-write-the-abs-topology-runbook-and-migra",
+  "scope_file": "scope-13.json",
+  "dropped_files": [],
+  "tier_label": "Opus-class",
+  "depends_on": [],
+  "wave": 1
+}

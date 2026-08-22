@@ -1,0 +1,278 @@
+[
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/audiobooks/TASK-001-add-a-short-ttl-cache-to-the-search-branch-of-ge.md",
+  "task_id": "TASK-001",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 1980,
+  "part": null,
+  "title": "Add a short-TTL cache to the search branch of GetAudiobooksWithTotal (explicit first-cut, defer full dirty-set wiring)",
+  "fails": [
+   "zero-hit grep: grep -n 'all:.*limit.*offset' internal/audiobooks/service_query.go"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/ci-tooling/TASK-006-add-a-scheduled-detect-only-backstop-workflow-fo.md",
+  "task_id": "TASK-006",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 46,
+  "part": null,
+  "title": "Add a scheduled detect-only backstop workflow for auto-revert.yml",
+  "fails": [
+   "zero-hit grep: EXPECTED-ZERO-BUT-HIT: grep -n 'gh issue create\\|gh issue list' .github/workflows/auto-revert.yml"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/ci-tooling/TASK-013-build-a-report-only-scan-for-book-rows-that-may-.md",
+  "task_id": "TASK-013",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 4844,
+  "part": null,
+  "title": "Build a report-only scan for book rows that may have been spuriously created by the .tmp-rename bug",
+  "fails": [
+   "zero-hit grep: EXPECTED-ZERO-BUT-HIT: grep -rln \"purely numeric title\\|numeric_title\\|spurious.*book.*row\" --include=\"*.py\" --include=\"*.go\" scripts/ internal/"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/database/TASK-023-investigate-then-evict-dirty-flag-merged-away-bo.md",
+  "task_id": "TASK-023",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 1627,
+  "part": null,
+  "title": "Investigate then evict/dirty-flag merged-away book/file IDs from every read cache so losers stop appearing after a merge",
+  "fails": [
+   "zero-hit grep: grep -n 'func.*InvalidateLibraryStats' internal/database/memdb_sync.go"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/database/TASK-026-triage-the-remaining-misc-codeql-alerts-js-findi.md",
+  "task_id": "TASK-026",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 2595,
+  "part": 8,
+  "title": "Triage the remaining misc CodeQL alerts: JS findings, uncontrolled-allocation-size FP, and the drifted clear-text-logging FP",
+  "fails": [
+   "zero-hit grep: EXPECTED-ZERO-BUT-HIT: sed -n '145,155p' internal/database/memdb_summaries.go; grep -n 'lgtm\\|nosec\\|nolint' internal/database/memdb_summaries.go"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/database/TASK-031-lock-the-three-bare-globalstore-accesses-in-init.md",
+  "task_id": "TASK-031",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 4678,
+  "part": null,
+  "title": "Lock the three bare globalStore accesses in InitializeStore/CloseStore",
+  "fails": [
+   "zero-hit grep: EXPECTED-ZERO-BUT-HIT: grep -rn \"GetGlobalStore()\" --include=\"*.go\" . | grep -v _test.go | grep -v '//'"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/dedup/TASK-050-shattered-book-reassembly-match-fragment-file-se.md",
+  "task_id": "TASK-050",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 10750,
+  "part": 3,
+  "title": "Shattered-book reassembly: match fragment file-sets against the reference corpus via fpidx containment",
+  "fails": [
+   "zero-hit grep: grep -n 'func.*Lookup\\|func.*Query' internal/database/pebble_store_lsh.go internal/fingerprint/lsh.go"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/docs/TASK-057-phase-8-write-the-abs-topology-runbook-and-migra.md",
+  "task_id": "TASK-057",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 10358,
+  "part": null,
+  "title": "Phase 8 \u2014 write the ABS topology, runbook, and migration guide (Cloudflare Access ordering, cover/image bypass, client compat matrix)",
+  "fails": [
+   "zero-hit grep: EXPECTED-ZERO-BUT-HIT: find docs -iname '*runbook*' -o -iname '*topology*'"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/maintenance/TASK-068-build-a-report-only-counter-for-book-filepath-co.md",
+  "task_id": "TASK-068",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 670,
+  "part": null,
+  "title": "Build a REPORT-ONLY counter for Book.FilePath collisions (rows sharing the same path across different books)",
+  "fails": [
+   "zero-hit grep: EXPECTED-ZERO-BUT-HIT: grep -rln 'FilePath.*collision\\|collision.*FilePath\\|duplicate.*FilePath' --include=*.go ."
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/maintenance/TASK-069-give-maintenance-jobs-v1-internal-maintenance-pe.md",
+  "task_id": "TASK-069",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 1009,
+  "part": null,
+  "title": "Give maintenance jobs (v1, internal/maintenance) per-job store interfaces instead of the shared JobStore",
+  "fails": [
+   "zero-hit grep: grep -n 'maintenance.JobStore (187 methods / 12 interfaces) -> per-job interfaces' docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/maintenance/TASK-071-build-a-detection-only-report-of-other-title-fra.md",
+  "task_id": "TASK-071",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 3602,
+  "part": null,
+  "title": "Build a detection-only report of other title-fragment author rows (the 57 rows beginning with '-')",
+  "fails": [
+   "zero-hit grep: EXPECTED-ZERO-BUT-HIT: grep -rln 'title.fragment\\|titleFragment' internal/plugins/maintenance/*.go"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/maintenance/TASK-072-new-maintenance-op-merge-an-operator-confirmed-l.md",
+  "task_id": "TASK-072",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 3795,
+  "part": null,
+  "title": "New maintenance op: merge an operator-confirmed list of duplicate real-author rows",
+  "fails": [
+   "zero-hit grep: EXPECTED-ZERO-BUT-HIT: grep -rn \"author-duplicate\\|author-dedup\" internal/plugins/maintenance"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/missing-file-lane/TASK-090-give-change-log-row-compare-snapshot-keyboard-a1.md",
+  "task_id": "TASK-090",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 5722,
+  "part": null,
+  "title": "Give Change Log row 'Compare snapshot' keyboard/a11y affordance",
+  "fails": [
+   "zero-hit grep: grep -c 'role=\"button\"' web/src/components/ChangeLog.tsx"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/missing-file-lane/TASK-096-require-every-mutating-operation-to-declare-and-.md",
+  "task_id": "TASK-096",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 7435,
+  "part": null,
+  "title": "Require every mutating operation to declare and enforce dry_run support at the registry",
+  "fails": [
+   "zero-hit grep: grep -c 'DryRun' internal/operations/registry/types.go"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/missing-file-lane/TASK-106-import-found-playlist-files-m3u-m3u8-pls-cue-xsp.md",
+  "task_id": "TASK-106",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 8646,
+  "part": 2,
+  "title": "Import found playlist files (.m3u/.m3u8/.pls/.cue/.xspf) during scan, resolving entries to book_file rows",
+  "fails": [
+   "zero-hit grep: EXPECTED-ZERO-BUT-HIT: grep -rln 'ParseM3U\\|\\.m3u8\\|ParsePLS\\|ParseXSPF' internal --include='*.go'"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/missing-file-lane/TASK-108-add-the-review-rating-half-of-app-to-server-read.md",
+  "task_id": "TASK-108",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 8675,
+  "part": null,
+  "title": "Add the review/rating half of app-to-server reading-state sync (reading status half already exists)",
+  "fails": [
+   "zero-hit grep: EXPECTED-ZERO-BUT-HIT: grep -in 'rating\\|review' internal/server/handlers/abs/progress.go"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/missing-file-lane/TASK-113-missing-input-triggering-enqueue-the-producer-op.md",
+  "task_id": "TASK-113",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 8890,
+  "part": 4,
+  "title": "Missing-input triggering: enqueue the producer op when a waiting_deps requirement's input has never run",
+  "fails": [
+   "zero-hit grep: EXPECTED-ZERO-BUT-HIT: grep -n 'PromoteToQueued\\|func.*Enqueue' internal/operations/registry/deps_scheduler.go"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/missing-file-lane/TASK-114-never-delete-re-associate-combine-debris-books-i.md",
+  "task_id": "TASK-114",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 8943,
+  "part": null,
+  "title": "Never delete \u2014 re-associate: combine debris books into a template match by duration, then version-group",
+  "fails": [
+   "zero-hit grep: EXPECTED-ZERO-BUT-HIT: grep -rln 'Successors\\|combine.into.one\\|combine_by_template\\|CombineByTemplate' internal --include='*.go'"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/operations/TASK-118-delete-internal-operations-mocks-its-only-refere.md",
+  "task_id": "TASK-118",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 4743,
+  "part": null,
+  "title": "Delete internal/operations/mocks \u2014 its only referencer is dead, permanently-untagged, currently-broken test code",
+  "fails": [
+   "zero-hit grep: EXPECTED-ZERO-BUT-HIT: grep -n \"go:build mocks\" internal/server/server_import_file_mocks_test.go; grep -rn \"tags mocks\\|tags=mocks\\|build mocks\" Makefile .github/workflows/*.yml",
+   "zero-hit grep: go vet -tags mocks ./internal/server/..."
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/scanner/TASK-124-reuse-internal-ai-s-existing-typed-openai-error-.md",
+  "task_id": "TASK-124",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 4852,
+  "part": null,
+  "title": "Reuse internal/ai's existing typed OpenAI error classification in scanner.isPermanentAIFailure instead of re-parsing error text",
+  "fails": [
+   "zero-hit grep: EXPECTED-ZERO-BUT-HIT: find todo.d -iname \"*typed-ai-provider*\"; grep -n \"typed provider errors\" TODO.md"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/server-handlers/TASK-145-n-6-log-metric-when-listening-stats-read-fails-c.md",
+  "task_id": "TASK-145",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 53,
+  "part": 6,
+  "title": "N-6: log + metric when listening-stats read fails (currently silent 0)",
+  "fails": [
+   "zero-hit grep: grep -rln 'prometheus.NewCounterVec\\|promauto' internal/server 2>/dev/null | head -5"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/server/TASK-130-register-searchindexdroppedcount-and-a-dirty-bac.md",
+  "task_id": "TASK-130",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 3384,
+  "part": null,
+  "title": "Register SearchIndexDroppedCount (and a dirty-backlog gauge) as Prometheus metrics",
+  "fails": [
+   "zero-hit grep: EXPECTED-ZERO-BUT-HIT: grep -n 'func SearchIndexDroppedCount' internal/server/search_reconciler.go; grep -rn 'SearchIndexDropped' internal/metrics/*.go"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/server/TASK-141-add-regression-tests-for-the-2-untested-deluge-h.md",
+  "task_id": "TASK-141",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 10525,
+  "part": null,
+  "title": "Add regression tests for the 2 untested deluge hydrate sites",
+  "fails": [
+   "zero-hit grep: ls internal/maintenance/jobs/bulk_deluge_import_test.go"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/web/TASK-164-let-the-owner-combine-merge-duplicate-books-from.md",
+  "task_id": "TASK-164",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 2025,
+  "part": null,
+  "title": "Let the owner combine/merge duplicate books from the metadata chooser, before applying metadata \u2014 BLOCKED on two data-correctness bugs landing first",
+  "fails": [
+   "zero-hit grep: grep -n 'Merge as Versions' web/src/pages/Library.tsx"
+  ]
+ },
+ {
+  "brief": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/dryrun/docs/agent-tasks/todo-completion/web/TASK-169-link-version-group-id-to-a-filtered-library-view.md",
+  "task_id": "TASK-169",
+  "scout_json": "/private/tmp/claude-501/-Users-jdfalk-repos-github-com-jdfalk-audiobook-organizer/f21a92f9-ff10-4ce5-a715-d13a59db3783/scratchpad/scout-all/?",
+  "todo_line": 3168,
+  "part": null,
+  "title": "Link version_group_id to a filtered library view (now unblocked \u2014 the filter works as of commit b0ebccb0)",
+  "fails": [
+   "zero-hit grep: grep -n 'version_group_id\\|VersionGroupID' web/src/components/bookdetail/BookDetailVersionGroup.tsx"
+  ]
+ }
+]

@@ -1,0 +1,937 @@
+[
+ {
+  "brief": "docs/agent-tasks/todo-completion/audiobooks/TASK-001-add-a-short-ttl-cache-to-the-search-branch-of-ge.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/audiobooks/TASK-002-fix-the-3-way-disagreement-in-how-a-nil-isprimar.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/audiobooks/TASK-003-fix-the-author-path-post-filter-to-treat-nil-isp.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/audiobooks/TASK-004-add-a-conformance-test-asserting-the-library-pat.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/audiobooks/TASK-005-wire-onlyparsedtranscription-style-filtering-int.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/audiobooks/TASK-176-build-a-read-only-census-tool-for-the-41-ungroup.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/ci-tooling/TASK-006-add-a-scheduled-detect-only-backstop-workflow-fo.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/ci-tooling/TASK-007-wire-scripts-test-check-memory-leaks-py-into-a-c.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/ci-tooling/TASK-008-bump-the-ghcommon-reusable-workflow-pins-in-at-l.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/ci-tooling/TASK-009-teach-the-abs-fixture-capture-harness-to-record-.md",
+  "greps": 1,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/ci-tooling/TASK-010-add-top-level-permissions-blocks-to-the-3-workfl.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/ci-tooling/TASK-011-pin-sha256-checksums-for-dockerfile-fetched-utfc.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/ci-tooling/TASK-012-scripts-setup-prometheus-auth-py-does-not-share-.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/ci-tooling/TASK-013-build-a-report-only-scan-for-book-rows-that-may-.md",
+  "greps": 7,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/ci-tooling/TASK-014-remove-committed-mtls-bridge-build-artifact-and-.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/ci-tooling/TASK-015-stop-committing-series-dedup-py-s-generated-dump.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/config/TASK-016-rename-write-back-metadata-config-key-to-auto-wr.md",
+  "greps": 8,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/config/TASK-017-fix-apiratelimitperminute-default-drift-between-.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/config/TASK-018-fix-ai-backend-local-base-url-hardcoded-develope.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/config/TASK-019-fix-chapterconsolidationthresholdmin-omitted-fro.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/config/TASK-020-delete-the-fully-inert-enable-sqlite3-i-know-the.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/config/TASK-021-scan-and-fingerprint-the-assembled-source-downlo.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-023-investigate-then-evict-dirty-flag-merged-away-bo.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-024-replace-fragile-0x30-0x3a-only-book-0-book-bound.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-025-make-wipeallactivity-cancellable-currently-an-un.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-026-triage-the-remaining-misc-codeql-alerts-js-findi.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-027-build-a-diagnostic-reconciling-the-3-954-book-ga.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-028-guard-author-delete-paths-with-an-unfiltered-aut.md",
+  "greps": 12,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-029-add-getbooksbyseriesidallversions-and-switch-ded.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-030-add-a-compare-and-swap-on-collection-version-to-.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-031-lock-the-three-bare-globalstore-accesses-in-init.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-032-add-the-4-missing-compile-time-assertions-to-ifa.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-033-repoint-store-go-17-s-broken-doc-reference-to-th.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-034-add-func-override-fields-to-mockstore-s-86-hardw.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-035-add-deletenarrator-to-the-store-crud-building-bl.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-036-fix-deleteauthor-s-junction-cleanup-it-scans-the.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-037-omnibus-anthology-book-type-field-part-1-of-the-.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-038-filter-system-sourced-tags-out-of-the-browse-by-.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-039-add-transcribe-status-to-the-book-summary-list-p.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-177-add-a-per-test-deadline-context-withtimeout-to-i.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-178-reduce-internal-database-s-short-test-run-wall-c.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/database/TASK-179-database-store-40-build-the-ast-go-types-ci-gate.md",
+  "greps": 12,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/dedup/TASK-040-make-unmergeauto-reverse-external-id-reassignmen.md",
+  "greps": 7,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/dedup/TASK-041-audit-remaining-we-use-the-wide-type-because-x-r.md",
+  "greps": 7,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/dedup/TASK-042-forward-fix-demote-pre-existing-version-group-me.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/dedup/TASK-043-add-a-dry-run-parameter-to-dedup-series-dedup.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/dedup/TASK-044-apply-the-unfiltered-ref-count-guard-to-the-two-.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/dedup/TASK-045-build-a-dry-run-report-only-classifier-for-serie.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/dedup/TASK-046-route-merge-asexternalidreassigner-through-datab.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/dedup/TASK-047-narrow-collectduration-s-tagstore-param-from-ded.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/dedup/TASK-048-physically-co-locate-a-combine-survivor-s-files-.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/dedup/TASK-049-acoustic-confirm-signal-promote-near-dupe-title-.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/dedup/TASK-050-shattered-book-reassembly-match-fragment-file-se.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/dedup/TASK-180-measure-whether-dedup-duration-abridged-3-573-is.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/dedup/TASK-181-find-the-createbook-path-s-that-copy-a-dangling-.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/docs/TASK-051-delete-the-34-group-relative-duplicate-paths-fro.md",
+  "greps": 1,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/docs/TASK-052-triage-the-16-removed-post-maintenance-paths-in-.md",
+  "greps": 1,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/docs/TASK-053-delete-the-torrents-group-relative-fragment-from.md",
+  "greps": 1,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/docs/TASK-054-re-verify-docs-reference-abs-target-client-contr.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/docs/TASK-055-document-the-todo-d-fragment-race-assembled-betw.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/docs/TASK-056-consolidate-the-august-executive-summary-roundup.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/docs/TASK-057-phase-8-write-the-abs-topology-runbook-and-migra.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/docs/TASK-058-update-execution-manifest-doc-to-reflect-the-now.md",
+  "greps": 1,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/docs/TASK-059-close-out-the-2026-05-01-re-audit-block-test-2-d.md",
+  "greps": 7,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/docs/TASK-060-docs-truth-up-with-measured-sandbox-prod-dedup-n.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/docs/TASK-182-record-the-docs-system-vs-top-level-architecture.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/docs/TASK-183-write-file-header-for-the-35-current-live-docs-s.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/itunes/TASK-061-import-the-224-materialized-playlist-items-smart.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/itunes/TASK-062-internal-itunes-backfill-go-backfillexternalids-.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/itunes/TASK-063-internal-itunes-backfill-go-backfillitunestrackp.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/itunes/TASK-064-add-a-part-disc-chapter-track-filename-parser-so.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/itunes/TASK-065-p2-relocate-only-sync-cycle-the-composed-cycle-a.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/itunes/TASK-184-measure-itunes-xml-track-persistent-id-coverage-.md",
+  "greps": 7,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/itunes/TASK-185-report-the-itunes-listened-in-progress-status-pi.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/maintenance/TASK-066-wire-a-durable-freshness-stamp-for-maintenance-c.md",
+  "greps": 9,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/maintenance/TASK-067-extend-the-repoint-repair-to-recover-bookfile-ro.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/maintenance/TASK-068-build-a-report-only-counter-for-book-filepath-co.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/maintenance/TASK-069-give-maintenance-jobs-v1-internal-maintenance-pe.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/maintenance/TASK-070-add-a-user-configurable-activity-log-retention-w.md",
+  "greps": 7,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/maintenance/TASK-071-build-a-detection-only-report-of-other-title-fra.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/maintenance/TASK-072-new-maintenance-op-merge-an-operator-confirmed-l.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/maintenance/TASK-073-read-through-audit-of-the-8-ctxopid-consumer-cal.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/maintenance/TASK-074-build-a-report-only-census-of-books-with-a-place.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/maintenance/TASK-075-extend-purge-empty-authors-report-to-categorize-.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/maintenance/TASK-076-author-narrator-swap-repair-routed-through-the-r.md",
+  "greps": 8,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/maintenance/TASK-077-narrow-the-3-remaining-maintenance-jobs-callees-.md",
+  "greps": 10,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/maintenance/TASK-078-task-04-build-the-idempotent-sync-id-backfill-ov.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/metadata/TASK-079-route-scoreoneresultwithbreakdown-s-base-0-path-.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/metadata/TASK-080-assess-the-2-critical-go-request-forgery-ssrf-co.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/metadata/TASK-081-prefix-metadata-apply-activity-summaries-with-th.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/misc-go/TASK-082-fix-the-go-zipslip-finding-on-the-backup-restore.md",
+  "greps": 1,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/misc-go/TASK-083-fix-or-verify-the-4-still-open-go-path-injection.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/misc-go/TASK-084-add-codeql-specific-lgtm-suppressions-for-the-3-.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/misc-go/TASK-085-add-search-index-metrics-docs-total-dirty-backlo.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/misc-go/TASK-086-collapse-internal-whitespace-in-util-normalizeau.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/misc-go/TASK-087-replace-serviceregistry-get-t-s-panicking-string.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/misc-go/TASK-088-route-acoustid-lsh-backfill-s-lshindexchecker-lo.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/misc-go/TASK-186-measure-the-real-double-primary-rate-library-wid.md",
+  "greps": 7,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-089-log-a-warning-when-getallseriesbookcounts-itself.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-090-give-change-log-row-compare-snapshot-keyboard-a1.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-091-remove-dead-expanded-state-in-tagcomparison.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-092-delete-the-unreachable-bulk-fetch-metadata-dialo.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-093-audit-remaining-setupmockapi-startswith-catch-al.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-094-restore-version-group-count-and-current-version-.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-095-instrument-sort-by-usage-to-inform-the-enabled-s.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-096-require-every-mutating-operation-to-declare-and-.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-097-remove-the-now-redundant-react-is-override-from-.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-098-echo-which-filters-the-server-actually-applied-i.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-099-fail-warn-ci-when-the-rc-ordinal-for-a-version-h.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-100-validate-the-two-unvalidated-client-side-navigat.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-101-pin-a-regression-test-the-regroup-recommender-mu.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-102-typescript-6-0-3-7-0-2-migration-the-one-remaini.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-103-build-a-report-only-op-categorizing-the-transcri.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-104-build-the-version-group-acoustic-audit-op-tier-2.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-105-build-chapters-backfill-from-a-near-exact-acoust.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-106-import-found-playlist-files-m3u-m3u8-pls-cue-xsp.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-107-export-a-playlist-back-to-m3u.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-108-add-the-review-rating-half-of-app-to-server-read.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-109-parse-deluge-torrent-release-names-into-structur.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-110-audit-book-file-grouping-against-deluge-torrent-.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-111-build-the-pre-apply-snapshot-tool-for-the-138-pe.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-112-build-the-first-aid-orchestrator-frontend-trigge.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-113-missing-input-triggering-enqueue-the-producer-op.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-114-never-delete-re-associate-combine-debris-books-i.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/operations/TASK-115-distinguish-nothing-to-cancel-from-cancelled-in-.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/operations/TASK-116-forward-iscanceled-through-reporterlogger-to-the.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/operations/TASK-117-give-prodschedulerstore-an-unwrap-so-capability-.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/operations/TASK-118-delete-internal-operations-mocks-its-only-refere.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/organize/TASK-119-replace-the-size-equality-heuristic-in-organizeb.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/organize/TASK-120-route-the-three-organize-rename-paths-through-or.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/organize/TASK-121-make-resolveorganizedfilepath-s-plan-on-faith-fa.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/organize/TASK-122-add-an-edition-suffix-folder-pattern-token.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/scanner/TASK-123-delete-the-unused-internal-scanner-mocks-generat.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/scanner/TASK-124-reuse-internal-ai-s-existing-typed-openai-error-.md",
+  "greps": 9,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/search/TASK-125-index-track-names-on-bookdocument-so-smart-playl.md",
+  "greps": 8,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/search/TASK-126-surface-to-the-user-when-all-and-or-any-stopword.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-142-expose-unmergeauto-through-an-admin-undo-merge-e.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-143-n-3-stop-advertising-delete-update-permissions-t.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-144-n-5-search-narrators-must-omit-numbooks-not-emit.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-145-n-6-log-metric-when-listening-stats-read-fails-c.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-146-n-10-advertised-login-rate-limit-10-10min-does-n.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-147-align-abs-conformance-fixtures-with-the-oracle-s.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-148-re-capture-the-series-abs-fixture-against-a-popu.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-149-detect-multi-file-books-whose-synthesized-chapte.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-150-audit-apply-shaped-endpoints-for-missing-tag-fil.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-151-document-the-hardcoded-abs-timebase-as-a-permane.md",
+  "greps": 1,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-152-bound-the-itunes-search-handler-s-unbounded-sear.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-153-implement-post-api-session-local-2xx-stub.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-154-implement-post-api-session-local-all-batch-local.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-155-move-tasks-and-maintenance-window-off-the-legacy.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-156-phase-7-socket-io-for-absorb-deprioritized-by-th.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-157-parallelize-the-per-candidate-synchronous-label-.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-127-log-abs-api-enabled-s-actual-boot-time-value-unc.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-128-fix-enableratelimit-false-not-actually-disabling.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-129-fix-wipeactivity-dry-run-count-saturating-at-2.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-130-register-searchindexdroppedcount-and-a-dirty-bac.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-131-fix-audiobook-organizer-books-total-to-report-th.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-132-fix-indexedstore-updatebook-to-enqueue-a-bleve-d.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-133-regression-test-soft-deleting-an-indexed-book-mu.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-134-add-a-wiring-level-test-proving-the-server-actua.md",
+  "greps": 7,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-135-convert-metadata-batch-apply-cached-from-resumed.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-136-convert-reconcile-apply-from-resumedrop-to-real-.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-137-fix-testorganizeservice-performorganize-nobookst.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-138-exempt-the-abs-router-group-from-the-global-basi.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-139-prune-expired-abs-sess-records-on-the-existing-s.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-140-retire-the-unsafe-cleanup-merged-go-handler-as-a.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server/TASK-141-add-regression-tests-for-the-2-untested-deluge-h.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-158-add-a-settings-panel-section-to-edit-path-aliase.md",
+  "greps": 10,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-159-add-and-use-a-test-reset-hook-for-the-module-sco.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-160-move-openai-api-key-validation-server-side-curre.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-161-strip-dedup-and-metadata-source-namespaces-from-.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-162-reformat-metadata-tags-in-browse-by-tag-strip-pr.md",
+  "greps": 1,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-163-find-the-mechanism-behind-the-intermittent-webki.md",
+  "greps": 1,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-164-let-the-owner-combine-merge-duplicate-books-from.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-165-review-the-17-apifetch-callers-catch-handlers-fo.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-166-make-the-book-detail-page-s-author-field-s-link-.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-167-make-the-book-detail-page-s-series-field-link-to.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-168-make-narrator-publisher-genre-and-release-year-f.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-169-link-version-group-id-to-a-filtered-library-view.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-170-retarget-dedup-operations-spec-ts-and-dedup-spec.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-171-retarget-diagnostics-spec-ts-ai-submit-and-expor.md",
+  "greps": 4,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-172-add-a-frontend-test-asserting-the-book-sig-cover.md",
+  "greps": 1,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-173-add-resizable-sortable-columns-to-the-acoustic-d.md",
+  "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-174-add-resizable-sortable-columns-to-the-activity-l.md",
+  "greps": 3,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-175-add-resizable-sortable-columns-to-the-split-book.md",
+  "greps": 2,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-188-harden-muimenu-against-the-documented-react-sets.md",
+  "greps": 6,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-189-play-the-first-2-minutes-of-part-1-s-audio-direc.md",
+  "greps": 8,
+  "fails": []
+ }
+]

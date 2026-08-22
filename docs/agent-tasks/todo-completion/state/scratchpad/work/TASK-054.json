@@ -1,0 +1,66 @@
+{
+  "todo_line": 497,
+  "src_id": null,
+  "title": "Re-verify docs/reference/abs-target-client-contract.md \u00a711's 'safe to stub' list \u2014 playlists AND collections are now both falsified",
+  "verdict": "actionable",
+  "verdict_evidence": "docs/reference/abs-target-client-contract.md:488-505's \u00a711 'Safe to stub' list still names 'playlists, collections, series detail, authors' (line ~505) as safe to stub, but the doc's own last-edited date (line 4) is still 2026-08-11 \u2014 UNCHANGED since the audit \u2014 while at HEAD: playlists got real data 2026-08-13 (wire_abs_routes.go comment), collections shipped as a full feature 2026-08-16 (item L468 in this scope), and series pagination was fixed 2026-08-13 (item L484 in this scope) \u2014 three of the four listed 'safe to stub' entries are now demonstrably wrong.",
+  "domain": "docs",
+  "exact_files": [
+    "docs/reference/abs-target-client-contract.md"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "the doc still lists playlists, collections, series detail, authors as safe to stub",
+      "grep_cmd": "grep -n 'Safe to stub' -A 1 docs/reference/abs-target-client-contract.md",
+      "expect": "1 hit listing all 4 names"
+    },
+    {
+      "claim": "the doc has not been edited since the 2026-08-11 audit, despite the playlists/collections/series fixes landing 2026-08-13/2026-08-16",
+      "grep_cmd": "grep -n 'last-edited' docs/reference/abs-target-client-contract.md",
+      "expect": "2026-08-11"
+    }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Requires re-checking each \u00a711 entry (not just the 3 already known-stale) against real app/client behavior per the TODO's own instruction ('re-check every other entry in that list against real app behaviour rather than against the corpus') \u2014 a genuine verification pass, not a mechanical text edit, even though the edit itself is small.",
+  "review_critical": false,
+  "goal": "Update \u00a711 of docs/reference/abs-target-client-contract.md to remove playlists and collections from 'safe to stub' (both are now real, fully-implemented features per items L468 and the playlists fix), re-verify 'series detail' and 'authors' against actual current behavior (not just the fixture corpus, which the TODO notes proves absence-of-evidence rather than evidence-of-absence), and re-check every OTHER entry in the full \u00a711 list the same way.",
+  "background": [
+    "The TODO's root insight generalizes beyond playlists: 'The \u00a711 list rests on the same fixture corpus that contains zero playlist requests \u2014 absence there bounds what the fixtures prove, never what the client does.' The same reasoning applies to collections (also fixed since) and potentially other \u00a711 entries never audited against real app behavior.",
+    "This doc entry being stale is now proven THREE ways independently in this same scope (L468 for collections, L484 for series, and the wire_abs_routes.go playlists comment) \u2014 strong convergent evidence this doc genuinely needs the full re-check the TODO asks for, not just a spot patch."
+  ],
+  "steps": [
+    "1. Read the full \u00a711 list in docs/reference/abs-target-client-contract.md (lines ~488-545).",
+    "2. Remove 'playlists' and 'collections' from the 'safe to stub' line, citing the fixes (playlists: 2026-08-13, wire_abs_routes.go; collections: 2026-08-16, handlers/abs/collections.go).",
+    "3. For 'series detail' and 'authors' (the two remaining entries) and every other \u00a711 claim, re-verify against real registered routes/handlers (not the fixture corpus) whether each is still genuinely unimplemented \u2014 use the same method as this scope's L468/L484 investigations (grep for a real handler/store, not fixture presence).",
+    "4. Update the doc's last-edited date and version header per this repo's mandatory file-header convention.",
+    "5. Add a short doc note explaining WHY this drifted (fixtures proving absence-of-evidence, not evidence-of-absence) so future audits don't repeat the same trap \u2014 cross-reference the TODO's own framing."
+  ],
+  "tests": [
+    "N/A \u2014 docs only, but step 3's verification should cite real grep evidence for each remaining \u00a711 entry in the doc's own text or an accompanying commit message, not just be asserted."
+  ],
+  "acceptance": [
+    "docs/reference/abs-target-client-contract.md's \u00a711 no longer lists playlists or collections as safe to stub, and every remaining entry has been re-verified against real routes/handlers rather than left as an artifact of the fixture corpus."
+  ],
+  "edge_cases": [
+    "'series detail' specifically may still be genuinely stubbed even though the series LIST was fixed (L484) \u2014 list-level pagination and detail-route implementation are different pieces of work; verify detail specifically, don't assume the list fix covers it."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+    468,
+    484
+  ],
+  "gate": "git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only'",
+  "notes": "Depends on L468 and L484's findings in this same scope for two of the four corrections; the other two (series detail, authors) need fresh verification not yet done by this scout.",
+  "id": "TASK-054",
+  "stable_key": "scope-01.json|497|None|Re-verify docs/reference/abs-target-client-contract.md \u00a711's",
+  "ws": "docs",
+  "slug": "re-verify-docs-reference-abs-target-client-contr",
+  "scope_file": "scope-01.json",
+  "dropped_files": [],
+  "tier_label": "Sonnet-class",
+  "depends_on": [],
+  "wave": 1
+}

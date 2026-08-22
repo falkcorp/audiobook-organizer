@@ -1,0 +1,95 @@
+{
+  "todo_line": 17,
+  "src_id": "MERGE-UNDO",
+  "part": 3,
+  "title": "Expose UnmergeAuto through an admin undo-merge endpoint (list + invoke)",
+  "verdict": "actionable",
+  "verdict_evidence": "No route or handler calls UnmergeAuto anywhere outside tests: `grep -rn UnmergeAuto internal/server` returns only a comment (handler.go:1405) and a test-file comment (handler_test.go:1059); ListAutoMergeJournalEntries (internal/database/dedup_automerge_journal.go:105) is documented as 'Intended for a follow-on admin undo merge listing; not used by the auto-resolve op itself' and has zero non-test callers.",
+  "domain": "internal/server/handlers/dedup",
+  "exact_files": [
+    "internal/server/handlers/dedup/handler.go",
+    "internal/server/handlers/dedup/interfaces.go",
+    "internal/server/wire_dedup_routes.go"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "UnmergeAuto has no production caller",
+      "grep_cmd": "grep -rn \"UnmergeAuto\" internal/server internal/plugins",
+      "expect": "only a comment hit at handler.go:1405, no functional call site"
+    },
+    {
+      "claim": "ListAutoMergeJournalEntries exists and is documented as unused, built for this follow-on",
+      "grep_cmd": "grep -n \"ListAutoMergeJournalEntries\" internal/database/dedup_automerge_journal.go",
+      "expect": "1 hit ~L105, doc comment says 'Intended for a follow-on admin undo merge listing'"
+    },
+    {
+      "claim": "MergeJournaled's interface is already exported to the dedup handler package for mocking",
+      "grep_cmd": "grep -n \"MergeJournaled\" internal/server/handlers/dedup/interfaces.go",
+      "expect": "1 hit in the DedupEngine interface"
+    }
+  ],
+  "reuse": [
+    {
+      "name": "DedupEngine interface (h.dedupEngine)",
+      "file": "internal/server/handlers/dedup/interfaces.go",
+      "verify_grep": "grep -n \"type DedupEngine interface\" internal/server/handlers/dedup/interfaces.go"
+    },
+    {
+      "name": "httputil.RespondWithOK / RespondWithBadRequest / RespondWithNotFound",
+      "file": "internal/server/handlers/dedup/handler.go",
+      "verify_grep": "grep -n \"httputil.RespondWith\" internal/server/handlers/dedup/handler.go"
+    }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Mostly mechanical handler + route wiring following the existing handler.go conventions (auth, error responses, event publishing), but touches a prod merge/undo surface so needs care on authz and idempotency, not pure boilerplate.",
+  "review_critical": true,
+  "goal": "Add two admin-only endpoints: GET /api/v1/dedup/merges (list recent AutoMergeJournalEntry rows via ListAutoMergeJournalEntries, newest first, capped) and POST /api/v1/dedup/merges/:key/undo (calls Engine.UnmergeAuto(key) \u2014 the fully-reversing version from part 2 once that lands \u2014 and returns 200 on success, 404 if the journal key does not exist, 409 if already reverted).",
+  "background": [
+    "handler.go:1414's MergeJournaled call logs journalKey via slog.Info but never returns it in the HTTP response body (result set at handler.go:1478 has no journal_key field) \u2014 the undo flow currently has no way for an operator to discover a journal key except reading server logs.",
+    "DedupEngine interface (internal/server/handlers/dedup/interfaces.go:76-83) already exports MergeJournaled for mocking; UnmergeAuto and a listing method need the same treatment to be reachable/mockable from the handler package.",
+    "This repo's dedup routes are registered in internal/server/wire_dedup_routes.go (confirm exact filename via `grep -rln \"RegisterDedupRoutes\\|dedup.*router.GET\" internal/server/*.go` before editing, since the file may be named differently)."
+  ],
+  "steps": [
+    "1. Confirm the actual dedup route-registration file: run `grep -rln \"DismissDedupCandidate\\|MergeDedupCandidate\" internal/server/*.go` to find where dedup handler methods are wired to gin routes (do not assume the filename).",
+    "2. internal/server/handlers/dedup/interfaces.go: add `UnmergeAuto(journalKey string) error` and `ListAutoMergeJournalEntries(limit int) ([]database.AutoMergeJournalEntry, error)` to the DedupEngine interface (or a narrower sub-interface if the file follows a narrowing convention \u2014 check for an existing pattern before widening DedupEngine).",
+    "3. internal/server/handlers/dedup/handler.go: add `ListMergeJournal(c *gin.Context)` (GET) parsing an optional `?limit=` query param, calling h.dedupEngine.ListAutoMergeJournalEntries, and `UndoMerge(c *gin.Context)` (POST) taking `:key` as a URL param (note: journal keys contain a colon, e.g. `dedup:automerge:...` \u2014 confirm the key is safely embeddable as a single gin URL param or needs to be a body field instead; PREFER a JSON body `{\"journal_key\": \"...\"}` on the POST to avoid colon-in-path routing issues) that calls h.dedupEngine.UnmergeAuto(key) and returns 200 `{\"status\": \"unmerged\"}`, or 404 if the entry doesn't exist (UnmergeAuto currently returns a plain fmt.Errorf for that case \u2014 check whether a sentinel/typed error is needed to distinguish 404 from 500; if not, add one as part of this task rather than string-matching, unlike the pre-existing MAYDEPLOY-B2 workaround at handler.go:1426).",
+    "4. Register both routes in the dedup route-registration file found in step 1, gated behind whatever auth middleware the other dedup mutation routes (merge/dismiss) already use.",
+    "5. In handler.go's existing MergeDedupCandidate response (~line 1483, `httputil.RespondWithOK(c, gin.H{\"status\": \"merged\", \"result\": result, \"keep_id\": keepID})`), add `\"journal_key\": journalKey` to the response body so a client/operator can discover the undo key without reading logs."
+  ],
+  "tests": [
+    "internal/server/handlers/dedup/handler_test.go: TestUndoMerge_Success \u2014 mock DedupEngine.UnmergeAuto to succeed, POST the endpoint, assert 200.",
+    "internal/server/handlers/dedup/handler_test.go: TestUndoMerge_UnknownKey_404 \u2014 mock UnmergeAuto to return the 'no journal entry' error, assert 404 not 500.",
+    "internal/server/handlers/dedup/handler_test.go: TestListMergeJournal_ReturnsEntries \u2014 mock ListAutoMergeJournalEntries, assert response shape.",
+    "internal/server/handlers/dedup/handler_test.go: TestMergeDedupCandidate_ResponseIncludesJournalKey \u2014 assert the existing merge endpoint's JSON body now has a non-empty journal_key field."
+  ],
+  "acceptance": [
+    "`go test ./internal/server/handlers/dedup/... -run Undo -v` passes.",
+    "`grep -n \"UndoMerge\\|ListMergeJournal\" internal/server/handlers/dedup/handler.go` returns both new handler funcs."
+  ],
+  "edge_cases": [
+    "Empty journal (no merges yet): ListMergeJournal returns an empty array, not null/error.",
+    "limit=0 or missing: default to a sane cap (e.g. 50) \u2014 ListAutoMergeJournalEntries(0) currently means UNLIMITED per its doc comment, so the handler must supply a real default rather than passing through a raw 0.",
+    "Undo called on a Tier-1 auto-merge journal entry vs a review-lane one: both share the same AutoMergeJournalEntry shape, so no special-casing should be needed \u2014 verify with a test using both origins."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "go build ./... && go vet ./... && go test ./internal/server/... ./internal/server/handlers/dedup/... -count=1",
+  "notes": "Should land AFTER part 2 (full external-ID + write-back reversal) so the exposed endpoint does not advertise a bigger guarantee ('undo this merge') than UnmergeAuto currently delivers (book-record-only). If shipped before part 2, the endpoint doc/response must say explicitly that external-ID and iTunes state are NOT reverted yet.",
+  "review_notes": [
+    "[correctness.json] An admin-invokable undo endpoint is shipped before the undo actually undoes, with no dependency edge. TASK-152 (wave 1, sonnet, review_critical) adds POST /api/v1/dedup/merges/:key/undo calling Engine.UnmergeAuto. TASK-042 (wave 2, opus, review_critical) is what makes UnmergeAuto reverse external-ID",
+    "[ops-rollback.json] The admin 'undo merge' endpoint ships 12 waves BEFORE the code that makes the undo actually reverse anything beyond the book record, and there is no depends_on edge between them. An operator who hits POST /api/v1/dedup/merges/:key/undo in wave 1 gets a 200 'unmerged' while the loser's external-ID ma",
+    "[ops-rollback.json] Double-undo is unguarded and the endpoint's own contract cannot be implemented. TASK-154's goal promises '409 if already reverted', but no reverted marker exists anywhere: TASK-044 only says 'consider marking a journal entry reverted after first successful undo', in an edge_cases bullet, and its ste",
+    "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ],
+  "id": "TASK-142",
+  "stable_key": "scope-01.json|17|3|Expose UnmergeAuto through an admin undo-merge endpoint (lis",
+  "ws": "server-handlers",
+  "slug": "expose-unmergeauto-through-an-admin-undo-merge-e",
+  "scope_file": "scope-01.json",
+  "dropped_files": [],
+  "tier_label": "Opus-class",
+  "depends_on": [],
+  "wave": 1
+}

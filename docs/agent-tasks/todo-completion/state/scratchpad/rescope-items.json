@@ -1,0 +1,807 @@
+[
+ {
+  "todo_line": 101,
+  "part": 4,
+  "src_id": null,
+  "title": "Classify docs/system/** (9 files) and docs/architecture/** (4-9 files) against top-level architecture docs",
+  "verdict": "actionable",
+  "verdict_evidence": "NEEDS SCOPING: scout returned no exact_files \u2014 cannot enter the collision matrix. docs/system contains 9 files and docs/architecture contains 4 files at HEAD (`ls docs/system | wc -l` -> 9, `ls docs/architecture | wc -l` -> 4) \u2014 the TODO's audit-time count for docs/architecture was 9, so 5 have already moved/merged/archived since the audit, meaning this classification is PARTIALLY stale and needs a fresh count/pass rather than being closeable outright.",
+  "domain": "docs",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "docs/system has 9 entries today",
+    "grep_cmd": "ls docs/system | wc -l",
+    "expect": "9"
+   },
+   {
+    "claim": "docs/architecture has only 4 entries today, down from the audit's 9",
+    "grep_cmd": "ls docs/architecture | wc -l",
+    "expect": "4"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Reading ~13 short docs and judging duplication against top-level architecture docs is a comprehension task, not mechanical \u2014 worth a real read, but bounded in size.",
+  "review_critical": false,
+  "goal": "Re-run the classification (docs/architecture already shrank from 9 to 4 files since the audit, so some of this work may already be done) to settle whether docs/system/** and the remaining docs/architecture/** duplicate the top-level architecture docs, and archive/merge whichever are redundant.",
+  "background": [
+   "The count drift (architecture: 9\u21924) is itself useful evidence \u2014 SOME consolidation already happened; the remaining 4 files plus the still-unexamined 9 docs/system files are what's left to classify."
+  ],
+  "steps": [
+   "1. `ls docs/system docs/architecture` and read each file's first ~20 lines for its stated purpose.",
+   "2. Compare each against the top-level architecture doc(s) (find via `find docs -maxdepth 1 -iname '*architecture*'`) for content overlap.",
+   "3. For each duplicate, archive the narrower one and add a pointer comment; for each genuinely distinct doc, leave it and note why in the inventory doc."
+  ],
+  "tests": [
+   "N/A \u2014 docs only."
+  ],
+  "acceptance": [
+   "docs/audits/2026-08-11-docs-inventory.md (or a follow-up note) records a keep/archive decision for every file in both directories."
+  ],
+  "edge_cases": [
+   "A doc in docs/system describing a subsystem's internals (not architecture) may look like a duplicate by title alone but not be one by content \u2014 read, don't just grep titles."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "_scope": "scope-01.json",
+  "_section": "CI / automation"
+ },
+ {
+  "todo_line": 101,
+  "part": 6,
+  "src_id": null,
+  "title": "Write file-header for the ~34 current live docs still missing one",
+  "verdict": "actionable",
+  "verdict_evidence": "NEEDS SCOPING: scout returned no exact_files \u2014 cannot enter the collision matrix. `find docs -maxdepth 3 -iname '*.md' -not -path '*/archive/*' | xargs grep -L \"^<!-- file:\" | wc -l` returns 34 live (non-archived) Markdown files with no file-header comment at HEAD, confirming the TODO's claim that current files (as opposed to the 76 already-archived fleet files) still need headers per this repo's MANDATORY file-header rule.",
+  "domain": "docs",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "34 live docs lack the required header",
+    "grep_cmd": "find docs -maxdepth 3 -iname '*.md' -not -path '*/archive/*' | xargs grep -L '^<!-- file:' | wc -l",
+    "expect": "34 (re-verify at execution time since this drifts)"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "haiku",
+  "why_tier": "Purely mechanical: prepend the standard 4-line header block per CLAUDE.md's format to each of ~34 files, no content judgment needed beyond picking today's date and a fresh guid.",
+  "review_critical": false,
+  "goal": "Add the mandatory <!-- file/version/guid/last-edited --> header block to every live (non-archived) doc under docs/ currently missing one.",
+  "background": [
+   "Per this repo's CLAUDE.md: 'Every file you create or modify must have its version header updated' \u2014 this is the same rule, applied retroactively to files that predate strict enforcement. todo.d/ and changelog.d/ fragments are explicitly EXEMPT (per CLAUDE.md's fragment-system section) \u2014 do not add headers there if any turn up in the 34."
+  ],
+  "steps": [
+   "1. Re-run `find docs -maxdepth 3 -iname '*.md' -not -path '*/archive/*' | xargs grep -L '^<!-- file:'` to get the current exact list (may have shifted from 34).",
+   "2. EXCLUDE any path under todo.d/ or changelog.d/ from the list if present (they are header-exempt).",
+   "3. For each remaining file, prepend: `<!-- file: <repo-relative-path> -->` / `<!-- version: 1.0.0 -->` / `<!-- guid: <fresh-uuid4> -->` / `<!-- last-edited: <today> -->` \u2014 generate each guid with `python3 -c \"import uuid; print(uuid.uuid4())\"` or `uuidgen`, one per file (never reuse one across files).",
+   "4. Do this in small batches with a real diff review, not a single blind sed pass across all 34 \u2014 some files may already have a DIFFERENT header format (e.g. YAML frontmatter) that should not get a second, conflicting header prepended; check first with a quick head -5 per file."
+  ],
+  "tests": [
+   "A repo-wide header-lint check likely already exists (see ci.yml's todo-header-lint job, though that is TODO-fragment-specific) \u2014 confirm whether a general docs-header lint exists via `grep -rn 'file-header' .github/workflows/*.yml` and re-run it locally if so."
+  ],
+  "acceptance": [
+   "`find docs -maxdepth 3 -iname '*.md' -not -path '*/archive/*' | xargs grep -L '^<!-- file:' | wc -l` returns 0 (or only intentionally-exempt paths)."
+  ],
+  "edge_cases": [
+   "A doc with YAML frontmatter as its header convention instead of HTML comments: do not double-header it \u2014 either it's already compliant in a different accepted style, or it needs conversion; check CLAUDE.md's file-headers.md standard for the definitive rule before batch-editing."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "n/a (docs)",
+  "_scope": "scope-01.json",
+  "_section": "CI / automation"
+ },
+ {
+  "todo_line": 232,
+  "src_id": null,
+  "title": "Once a stuck test is named, find the unbounded wait (sync.WaitGroup.Wait / channel receive / Lock() with no deadline) in internal/database tests/helpers",
+  "verdict": "actionable",
+  "verdict_evidence": "NEEDS SCOPING: scout returned no exact_files \u2014 cannot enter the collision matrix. This is real, well-scoped engineering work once a specific stuck test is identified from a goroutine dump (item L229) \u2014 but as of this scope's investigation no such dump exists yet in the repo (no docs/ file or issue referencing a captured goroutine dump was found), so the concrete file:line target cannot be named until L229's capture happens; the SEARCH PATTERN itself, however, is fully specifiable now.",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "no captured goroutine dump artifact currently exists in the repo to point at",
+    "grep_cmd": "grep -rln 'goroutine dump\\|goroutine profile' docs/ 2>/dev/null",
+    "expect": "0 hits, or only this TODO's own text \u2014 confirming the dump has not yet been captured/committed anywhere"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Once a specific goroutine dump names the stuck test, tracing an unbounded wait to its root cause needs real debugging judgment (is it a genuine deadlock, a slow real I/O call, or a test fixture issue), not mechanical grepping \u2014 but the SEARCH itself (candidate unbounded waits) can be pre-scoped now to speed up whoever does the diagnosis.",
+  "review_critical": false,
+  "goal": "Once item L229 produces a real goroutine dump naming the stuck test, use it to find the specific unbounded wait (WaitGroup.Wait, unbuffered/blocking channel receive, or mutex Lock() with no surrounding context/timeout) inside internal/database's test helpers that causes the ~200-280s -short-run stall, and fix it (bound the wait with a context deadline or timeout).",
+  "background": [
+   "As a pre-scoping aid (not a substitute for the real dump): `grep -rn '\\.Wait()\\|<-.*chan\\|\\.Lock()' internal/database/*_test.go internal/database/dbtest/*.go` will enumerate CANDIDATE unbounded waits in the target package ahead of time, but the actual root cause must be confirmed against the real goroutine dump's stack trace, not guessed from this list alone \u2014 grepping for the pattern finds many benign waits and this repo's own memory explicitly warns against trusting a naming/pattern grep as a census of the real problem."
+  ],
+  "steps": [
+   "1. Wait for / obtain the goroutine dump captured per item L229's instruction from the next occurrence of the stuck-test CI failure (or from the ORIGINAL occurrence's Actions log if it is still retrievable via `gh run view --log` before its retention window expires).",
+   "2. From the dump, identify the specific goroutine(s) blocked and their stack trace, which names the exact file:line of the unbounded wait.",
+   "3. Fix that specific wait with a context deadline (t.Context() with timeout, or context.WithTimeout wrapping the blocking call) so it fails fast and names itself rather than consuming the whole package's test budget."
+  ],
+  "tests": [
+   "A regression test asserting the specific fixed wait now has a bounded timeout \u2014 exact test name depends on which helper is found in step 2, cannot be named yet."
+  ],
+  "acceptance": [
+   "The previously-stuck test now fails fast (seconds, not 200-280s) with a clear timeout error naming itself when the underlying condition it was waiting on is not met, verified with `go test ./internal/database/... -short -timeout 60s -v` showing no 200s+ single-test stalls."
+  ],
+  "edge_cases": [
+   "The unbounded wait may be intentional in production code paths (only the TEST's use of it is unbounded) \u2014 fix only the test-side invocation with a timeout, do not weaken a production synchronization primitive to add one."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   229
+  ],
+  "gate": "make ci",
+  "notes": "Blocked on L229's artifact existing \u2014 cannot be executed with full precision today. The pre-scoping grep above is a starting point for whoever picks this up next, not a substitute for the real diagnosis.",
+  "_scope": "scope-01.json",
+  "_section": "Tasks"
+ },
+ {
+  "todo_line": 235,
+  "src_id": null,
+  "title": "Add a per-test deadline (t.Context()/context.WithTimeout) so a hang fails fast and names itself",
+  "verdict": "actionable",
+  "verdict_evidence": "NEEDS SCOPING: scout returned no exact_files \u2014 cannot enter the collision matrix. This is a general test-infrastructure improvement independent of finding the SPECIFIC L232 root cause \u2014 Go 1.24+ (this repo's go.mod, per CLAUDE.md, targets 1.24.0/1.25/1.26 features) supports `t.Context()` which is automatically cancelled on test timeout; adding this pattern to internal/database's slower/blocking-prone test helpers is actionable today without waiting on a goroutine dump.",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the repo's Go version supports t.Context() (Go 1.24+)",
+    "grep_cmd": "grep -n '^go ' go.mod",
+    "expect": "go 1.24.0 or higher"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Requires judgment about WHICH tests/helpers in internal/database are the blocking-prone ones worth instrumenting (not a blind sweep across the whole package, which could mask genuine slow-but-legitimate tests with a too-tight timeout) \u2014 needs a look at the package's test helper structure first.",
+  "review_critical": false,
+  "goal": "Add per-test or per-helper timeouts (via t.Context() passed into blocking calls, or context.WithTimeout wrapping WaitGroup/channel waits) to internal/database's test helpers so an unbounded wait fails in seconds naming the specific test, rather than consuming the whole package's -short budget and reporting only the package name on timeout.",
+  "background": [
+   "This is explicitly framed in the TODO as independent, lower-effort mitigation ('Consider...') distinct from L232's root-cause fix \u2014 it makes the NEXT occurrence of ANY unbounded wait (not just the one L232 targets) fail fast and self-diagnosing, which is valuable even before L232's specific root cause is found."
+  ],
+  "steps": [
+   "1. Identify internal/database's shared test-setup/teardown helpers (likely in internal/database/dbtest/ per earlier findings in this scope) that perform waits, locks, or spin up background goroutines per test.",
+   "2. Wrap the riskiest ones (WaitGroup.Wait, channel receive, Lock() calls found via the L232 pre-scoping grep) with `ctx := t.Context()` (auto-cancelled at the test's own timeout) or an explicit `context.WithTimeout(t.Context(), <bound>)` shorter than the package's overall -short budget, so an individual test's hang surfaces with THAT test's name rather than blowing the whole package's time allotment.",
+   "3. Pick a bound generously above legitimate slow-path duration (avoid flaking genuinely-slow-but-correct tests) \u2014 if unsure of a safe value, start with something like 30s per blocking call and adjust based on CI history."
+  ],
+  "tests": [
+   "A synthetic test proving the pattern works: TestHelperX_TimesOutRatherThanHangs \u2014 deliberately trigger the never-satisfied wait condition in a controlled way (e.g. a channel that is never written to) and assert the test fails within the bound, not after the full package timeout."
+  ],
+  "acceptance": [
+   "`go test ./internal/database/... -short -v` \u2014 a deliberately-broken wait (temporarily reintroduced for verification, then reverted) fails within the new bound rather than stalling the whole package."
+  ],
+  "edge_cases": [
+   "Overly tight timeouts on legitimately slow (but correct) integration-style tests in internal/database could introduce NEW flakiness \u2014 pick bounds conservatively and validate against real CI run durations before tightening further."
+  ],
+  "anti_over_suppression": "The bound must be generous enough that a genuinely slow-but-passing test does not start failing under normal CI load \u2014 validate against actual historical run times (see L238's cost-reduction angle) before picking a number, and treat any newly-introduced timeout-flake as a signal the bound was set too tight, not that the test itself is broken.",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Independent of L232/L238 \u2014 can be done in parallel/first, since it improves diagnosability for ANY future stall, not just the specific one still awaiting its goroutine dump.",
+  "_scope": "scope-01.json",
+  "_section": "Tasks"
+ },
+ {
+  "todo_line": 238,
+  "src_id": null,
+  "title": "Reduce internal/database's -short test-run wall-clock cost (currently 200-280s, most of the coverage gate's budget)",
+  "verdict": "actionable",
+  "verdict_evidence": "NEEDS SCOPING: scout returned no exact_files \u2014 cannot enter the collision matrix. This is a general test-performance item ('Reduce the wait-bound cost while there') distinct from the stuck-test investigation (L229/L232) \u2014 it targets the NORMAL (non-hung) run duration of internal/database's -short suite, which the TODO states is 200-280s and 'most of the coverage gate's budget on its own', independently actionable via standard Go test-perf techniques (parallelization, reducing redundant setup, profiling for the actual hot path) without needing the goroutine dump L232 depends on.",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [],
+  "reuse": [
+   {
+    "name": "existing coverage-gate Makefile target this run time counts against",
+    "file": "Makefile",
+    "verify_grep": "grep -n 'coverage-check-short\\|coverage-gate' Makefile"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Requires profiling (go test -short -v with timing, or `go test -short -json` timing analysis) to find the actual hot spots before optimizing \u2014 not a blind rewrite; genuine performance-analysis judgment.",
+  "review_critical": false,
+  "goal": "Profile internal/database's -short test suite to find what actually consumes the bulk of its 200-280s wall-clock time (shared expensive setup run per-test instead of per-package, serialized tests that could run with t.Parallel(), or genuinely slow I/O in a helper), and cut it meaningfully, since this consumes most of the make ci coverage gate's overall time budget.",
+  "background": [
+   "Cutting this cost benefits every future CI run, not just the specific stuck-test scenario \u2014 worth doing independently of whether L232's root cause is ever found, since a 200-280s single-package run is expensive regardless of whether it occasionally also hangs."
+  ],
+  "steps": [
+   "1. Run `go test ./internal/database/... -short -v -json > /tmp/db_test_timing.json` and parse per-test durations (e.g. with `go tool test2json` output or a small script) to rank the slowest individual tests.",
+   "2. For the top offenders, check whether they share expensive per-test setup (e.g. a full Pebble DB open/close per test instead of a shared fixture with per-test namespacing) that could be hoisted to TestMain or a shared package-level fixture.",
+   "3. Check whether independent tests are unnecessarily serialized (missing `t.Parallel()`) where parallelization would be safe (no shared mutable global state) \u2014 internal/database tests using a real Pebble store per test are prime candidates if they don't already share one DB instance across parallel subtests with distinct key prefixes.",
+   "4. Apply the highest-leverage fix(es) found and re-measure."
+  ],
+  "tests": [
+   "No new test needed \u2014 success is measured by the suite's own wall-clock time, not new assertions; ensure no existing test's correctness assumptions are broken by any added parallelism (check for shared mutable package-level state introduced by t.Parallel())."
+  ],
+  "acceptance": [
+   "`time go test ./internal/database/... -short` shows a measurably lower wall-clock time than the 200-280s baseline, with the specific before/after numbers recorded in the PR description."
+  ],
+  "edge_cases": [
+   "Adding t.Parallel() to tests that share an underlying Pebble DB instance without proper key-space isolation could introduce flaky cross-test interference \u2014 verify isolation before parallelizing, don't just add t.Parallel() everywhere."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Independent of L229/L232 \u2014 this is pure performance work on the (usually) non-hung path.",
+  "_scope": "scope-01.json",
+  "_section": "Tasks"
+ },
+ {
+  "todo_line": 969,
+  "src_id": null,
+  "title": "database.Store (40) -- make it unreachable (Phase 2 items 2+3 of the kill-v1-and-narrow plan), not smaller",
+  "verdict": "actionable",
+  "verdict_evidence": "NEEDS SCOPING: scout returned no exact_files \u2014 cannot enter the collision matrix. Phase 2 item 3 ('split iface_misc.go') is already done differently than planned: iface_misc.go no longer exists (find internal/database -iname 'iface_misc*' -> 0 hits); Store's 40 sub-interfaces were REGROUPED into 6 unexported domain composites (catalogStore, mediaStore, accountStore, enrichmentStore, operationsStore, platformStore) inside store.go itself, with the file's own comment stating 'This is a REGROUPING, not a narrowing: Store's method set is byte-identical and no consumer moved.' Phase 2 item 2 ('a build gate on database.Store in new files... must be AST/go-types, not grep') is NOT done: no such gate exists (find . -iname '*store_width*' -o -iname '*interfacebloat*' finds only the golangci-lint declared-entries check, nothing checking database.Store as a parameter type), and 91 files still reference database.Store directly.",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "iface_misc.go no longer exists -- already split (differently than the plan literally described)",
+    "grep_cmd": "find internal/database -iname 'iface_misc*'",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "Store is now a 6-entry regrouping of the original 40, explicitly NOT a narrowing",
+    "grep_cmd": "grep -n 'This is a REGROUPING, not a narrowing' internal/database/store.go",
+    "expect": "1 hit"
+   },
+   {
+    "claim": "91 files still reference database.Store directly -- reachability is unchanged",
+    "grep_cmd": "grep -rln 'database.Store\\b' --include=*.go . | grep -v _test | grep -v vendor | grep -v .worktrees | wc -l",
+    "expect": "91"
+   },
+   {
+    "claim": "no AST/go-types-based width gate exists yet",
+    "grep_cmd": "find . -iname '*store_width*' -o -iname '*interfacebloat*'",
+    "expect": "only .golangci.yml (the declared-entries linter, not a reachability gate)"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md Phase 2 items 2-3 (the design already written, item 3 partially superseded)",
+    "file": "docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md",
+    "verify_grep": "grep -n 'A build gate on .database.Store. in new files' docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md"
+   },
+   {
+    "name": "the width-ratchet pattern already used for interfacebloat's baseline (#2548) as a precedent for a similar ratchet mechanism",
+    "file": ".golangci.yml",
+    "verify_grep": "grep -n 'interfacebloat' .golangci.yml"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "L",
+  "tier": "opus",
+  "why_tier": "requires an AST/go-types-based static check (grep undercounts by 15% per the plan doc's own measurement) integrated into CI, plus a grandfather list for the 91 existing legitimate uses -- real tooling work, not a mechanical edit",
+  "review_critical": false,
+  "goal": "Build the CI gate Phase 2 item 2 describes: an AST/go-types-based check (not grep, since the plan doc measured grep undercounting database.Store references by 15% -- 11 seen vs 87 real) that fails a PR introducing a NEW file/function parameter typed as the full database.Store, while grandfathering the 91 existing legitimate uses. This makes the wide type unreachable-by-default going forward, which is the actual Phase 2 goal the regrouping (already done) did not achieve.",
+  "background": [
+   "docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md Phase 2 (lines 107-124): 'Not \"shrink BookStore\". Instead, remove the paths by which a new file can acquire 398 methods without deciding to.' Item 2: 'A build gate on database.Store in new files. Must be AST/go-types, not grep.'",
+   "store.go:14-40's own comment on the regrouping explicitly frames it as satisfying the interfacebloat LINTER's declared-entries count, not as achieving the reachability goal: 'a flat list of 40 was the last finding in the whole repo and held the width baseline at 1... This is a REGROUPING, not a narrowing.'",
+   "The 91-file baseline (grep -rln 'database.Store\\b' ...) is the number a new gate would need to grandfather at introduction time."
+  ],
+  "steps": [
+   "1. Write a Go tool (likely under scripts/ or a new cmd/, similar in spirit to the existing scripts/verify_interface_split.py referenced in store.go:24) using go/packages + go/types to walk the module, find every func/method parameter, struct field, and var declared with type database.Store (resolved, not textual), and diff against a checked-in baseline list of allowed files.",
+   "2. Seed the baseline list from the current 91-file grep result (cross-checked with the AST tool's own output, since the plan doc warns grep undercounts by 15%).",
+   "3. Wire the tool into .github/workflows/ci.yml (or a new lightweight job) so it fails a PR that adds database.Store to a file NOT in the baseline list, with an actionable error message pointing at this design doc.",
+   "4. Provide an explicit, reviewed escape hatch (e.g. a comment marker or a second baseline-update PR) for the rare case a new wide use is genuinely justified, mirroring the interfacebloat nolint-with-reason convention CLAUDE.md already establishes."
+  ],
+  "tests": [
+   "Unit test for the AST tool itself: a small fixture module with one file using database.Store as a parameter type is correctly flagged when NOT in the baseline, and correctly passed when it IS.",
+   "CI integration test: a synthetic PR-diff fixture (or a dry-run mode) proving the gate fires in the workflow, not just in a local unit test."
+  ],
+  "acceptance": [
+   "The new tool run against current HEAD reports exactly the 91-file baseline (or the AST-corrected true count, expected higher than 91 per the plan doc's 15%-undercount warning) with zero unexpected new hits.",
+   "A synthetic test file added with a database.Store parameter and NOT added to the baseline causes the CI job to fail."
+  ],
+  "edge_cases": [
+   "database.MockStore (399 methods, 108 files) is explicitly NOT in scope per the plan doc ('What phase 2 does NOT do: delete database.MockStore... it survives until its last direct reference goes') -- the gate must target database.Store specifically, not MockStore or any test-only type.",
+   "A file inside internal/database itself declaring Store-typed values (the type's own home package) should likely be exempt entirely, not counted against the baseline."
+  ],
+  "anti_over_suppression": "The synthetic-new-file-not-in-baseline test above is the anti-over-suppression case: proves the gate actually fires rather than being permissive-by-default.",
+  "depends_on_lines": [],
+  "gate": "make ci (once the new gate is wired into CI, it becomes part of this)",
+  "notes": "This is real, unstarted work despite the interfacebloat linter score having already been fixed by the store.go regrouping -- do not let a green interfacebloat run be mistaken for this item being done; they measure different things (declared entries vs. reachability), exactly as store.go's own comment warns.",
+  "_scope": "scope-02.json",
+  "_section": "Interface width: the five the sweep did not reach"
+ },
+ {
+  "todo_line": 1350,
+  "src_id": null,
+  "title": "Measure whether dedup:duration-abridged (3,573) is over-firing before touching its display",
+  "part": 3,
+  "verdict": "actionable",
+  "verdict_evidence": "NEEDS SCOPING: scout returned no exact_files \u2014 cannot enter the collision matrix. Confirmed the tag is written by internal/dedup/collectors_metadata.go:261-264 (and internal/dedup/engine.go:1385-1390) whenever a candidate pair's duration differs by more than the abridged-detection threshold; the owner's intuition ('not sure on the abridged... I don't think it's as high as you think it is') is an unverified claim about the detector's real-world firing rate, separate from the display-cleanup work in parts 1-2, and the item text explicitly says this needs a data measurement, not a display fix.",
+  "domain": "internal/dedup",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the abridged tag is applied by a duration-ratio check in collectors_metadata.go",
+    "grep_cmd": "grep -n 'dedup:duration-abridged' internal/dedup/collectors_metadata.go",
+    "expect": "hits at L134, L261, L264 (doc comment + two EnsureSingletonBookTag calls)"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Requires reading the abridged-detection condition, sampling real tagged pairs, and manually judging whether the duration difference genuinely indicates an abridged edition \u2014 needs judgment, not just a mechanical count.",
+  "review_critical": false,
+  "goal": "Produce a report-only measurement (a maintenance REPORT op or a one-off script, per owner decision #9's 'report ops actionable' precedent) that: (1) counts how many books currently carry dedup:duration-abridged, (2) samples N of them and manually/heuristically checks whether their paired book really looks like an abridged/unabridged pair (e.g. by comparing titles for '(Abridged)'/'(Unabridged)' markers, or by checking the actual duration ratio against the threshold), and (3) reports a false-positive rate. Do NOT hide or delete the tag as part of this task \u2014 that decision comes after the measurement, per the owner's explicit instruction.",
+  "background": [
+   "internal/dedup/collectors_metadata.go:132-135 doc comment: 'dedup:duration-match tag applied to BOTH books when duration within \u00b12%... dedup:duration-abridged tag applied to BOTH books when duration differs [more than some threshold]' \u2014 read the exact threshold value near L261 before writing the measurement.",
+   "internal/titleutil/strip.go and internal/plugins/metafetch/calibrate_scoring.go:315 already have an '(Un)?abridged' title regex that could be reused as an independent cross-check signal (does the title actually say Abridged/Unabridged) against the duration-based tag."
+  ],
+  "steps": [
+   "1. Read internal/dedup/collectors_metadata.go around L240-266 to find the exact duration-ratio threshold that triggers dedup:duration-abridged (distinct from the \u00b12% duration-match threshold).",
+   "2. Write a read-only report (either a small maintenance plugin REPORT op following the pattern of an existing report-only op \u2014 grep for one via `grep -rln 'CapLibraryRead' internal/plugins/maintenance/*.go | xargs grep -l 'report' -i` \u2014 or a standalone script under scripts/) that: queries every book pair currently tagged dedup:duration-abridged, computes their actual duration ratio, and cross-checks both books' titles against the existing `(?i)\\s*\\((un)?abridged\\)\\s*$` regex from internal/plugins/metafetch/calibrate_scoring.go:315.",
+   "3. Report three numbers: total tagged count (should be ~3,573 if unchanged since 2026-08-10), how many of a sampled subset (e.g. 200) have a title-based Abridged/Unabridged marker confirming the tag, and how many do not (candidate false positives).",
+   "4. Do not change the tagger or the display based on this report alone \u2014 hand the numbers back for the owner's over/under-firing decision."
+  ],
+  "tests": [
+   "If implemented as a maintenance op: a unit test with synthetic book pairs at known duration ratios asserting the report correctly buckets them as confirmed/unconfirmed."
+  ],
+  "acceptance": [
+   "The report, run against the current library, outputs a total count and a sampled confirmation rate with specific book IDs/titles for manual spot-check."
+  ],
+  "edge_cases": [
+   "A book pair may have been re-tagged or merged since 2026-08-10 (see MERGE-CACHE-EVICT / VG-DOUBLE-PRIMARY items in this same scope, L1627/L2373) \u2014 the count may already differ from the originally observed 3,573; report the CURRENT count, don't assume it matches."
+  ],
+  "anti_over_suppression": "N/A \u2014 this is a measurement task, not a filter/guard.",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "Explicitly separate from the display-cleanup parts (1, 2) per the owner's own instruction: 'Do not fix it by hiding the tag \u2014 measure whether the abridged detection is correct first.'",
+  "_scope": "scope-03.json",
+  "_section": "Config"
+ },
+ {
+  "todo_line": 1517,
+  "src_id": "ITUNES-SMARTCRIT-PARSE",
+  "title": "Measure iTunes XML track Persistent ID coverage against the local DB before promising a Playlist-Items snapshot import",
+  "part": 1,
+  "verdict": "actionable",
+  "verdict_evidence": "NEEDS SCOPING: scout returned no exact_files \u2014 cannot enter the collision matrix. The item explicitly flags this as the ungated prerequisite: 'NOT MEASURED, and it gates option 1: what fraction of the XML's track persistent IDs actually exist in our DB. Measure that before promising 224 importable playlists.' Confirmed the resolution path exists and is indexed: `BookFile.ITunesPersistentID` with `GetBookByITunesPersistentID` (referenced directly by the item text; verify the accessor exists).",
+  "domain": "internal/itunes",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "a persistent-ID lookup accessor exists to check coverage against",
+    "grep_cmd": "grep -rn 'GetBookByITunesPersistentID\\|ITunesPersistentID' --include=\"*.go\" internal/database internal/itunes | grep -v _test.go | head -5",
+    "expect": "\u22651 hit confirming the field/accessor exist"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "GetBookByITunesPersistentID (existing PID lookup)",
+    "file": "internal/database",
+    "verify_grep": "grep -rn 'func.*GetBookByITunesPersistentID' internal/database/*.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "A bounded, mechanical measurement script/report against an existing accessor \u2014 small and low-risk, but needs correct XML parsing of Tracks/Persistent ID which is fiddly.",
+  "review_critical": false,
+  "goal": "Write a read-only report (script or maintenance REPORT op) that parses the owner's iTunes Library.xml Tracks section, extracts every track's Persistent ID, and for each checks whether `GetBookByITunesPersistentID` resolves it to a book in the local DB. Report: total XML track PIDs, count/percent resolved, and specifically the resolution rate restricted to tracks referenced by the 224 Playlist-Items-bearing smart playlists (since that subset is what gates the snapshot-import decision in part 2).",
+  "background": [
+   "internal/itunes/xml_library.go already parses the XML format for other purposes \u2014 reuse its Tracks-section parsing rather than writing a new XML reader.",
+   "The 224/292 vs 66/292 vs 2/292 split (materialized Playlist Items vs criteria-only vs neither) is already established by the item text; this measurement only needs to run against the 224 (+their track refs) subset to be decision-useful, though reporting the whole-library rate is also useful context."
+  ],
+  "steps": [
+   "1. Locate the existing XML Tracks parser: `grep -n 'Tracks\\|Persistent ID' internal/itunes/xml_library.go`.",
+   "2. Locate the existing smart-playlist / Playlist-Items parsing path used by MigrateSmartPlaylists (internal/itunes/service/playlist_sync.go:112) to identify which playlists are the 224 'materialized items' ones and which track IDs they reference.",
+   "3. For each referenced track, resolve its Persistent ID against the DB via GetBookByITunesPersistentID (or the equivalent BookFile-level accessor if the ID is per-file rather than per-book \u2014 check both).",
+   "4. Emit a report: {total_xml_tracks, total_referenced_by_224_playlists, resolved_count, resolved_percent, top N unresolved examples with their titles for spot-check}.",
+   "5. Run it against a real copy of the owner's iTunes Library.xml (or the sanitized/fixture version already used for this investigation, if one exists \u2014 check `find . -iname '*itunes*library*xml*' -not -path '*/node_modules/*'`)."
+  ],
+  "tests": [
+   "Unit test with a small synthetic XML fixture containing a mix of resolvable and unresolvable Persistent IDs, asserting the report's counts are exact."
+  ],
+  "acceptance": [
+   "The report runs to completion and prints a resolution percentage with example unresolved PIDs for manual sanity check."
+  ],
+  "edge_cases": [
+   "A Persistent ID may resolve to a book_file rather than directly to a book \u2014 confirm which granularity GetBookByITunesPersistentID actually indexes before assuming book-level resolution is sufficient."
+  ],
+  "anti_over_suppression": "N/A \u2014 measurement task.",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "This gates part 2 (the actual snapshot import) \u2014 do not build part 2 until this measurement shows acceptable coverage, per the item's own explicit instruction.",
+  "_scope": "scope-03.json",
+  "_section": "Config"
+ },
+ {
+  "todo_line": 1727,
+  "src_id": null,
+  "title": "Investigate why React silently drops a setState issued from setTimeout on a mounted class component inside a portal",
+  "verdict": "actionable",
+  "verdict_evidence": "NEEDS SCOPING: scout returned no exact_files \u2014 cannot enter the collision matrix. This is framed as an open research question with several hypotheses already ruled out by the item text (duplicate React copies, StrictMode, flushSync/startTransition/unstable_batchedUpdates, uncaught exceptions, unmounting) and one untested leading hypothesis (production-build React 18 concurrent-root update issued mid-render). Confirmed the mitigation currently shipped is narrower than the root cause: web/src/theme.ts's MuiMenu override still uses `transitionDuration: { enter: 225, exit: 0 }` (same pattern that failed 10/10 for Drawer on MUI v6 before `slotProps.transition.exit: false` was needed there), so any component still using the exit:0 pattern remains exposed to the same undiagnosed mechanism.",
+  "domain": "web (frontend)",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "MuiMenu currently ships the same exit:0 mitigation pattern that failed for Drawer",
+    "grep_cmd": "grep -n 'MuiMenu' -A 5 web/src/theme.ts",
+    "expect": "1 hit showing `MuiMenu: { styleOverrides/defaultProps: { transitionDuration: { enter: 225, exit: 0 } } }` around L347-349"
+   },
+   {
+    "claim": "the Drawer fix that DID work used a different mechanism (exit: false, not exit: 0)",
+    "grep_cmd": "grep -n \"exit: false\" web/src/theme.ts",
+    "expect": "\u22651 hit, at the Drawer's slotProps.transition config (~L285), distinct from MuiMenu's exit:0"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "L",
+  "tier": "opus",
+  "why_tier": "Deep React-internals root-cause investigation with several hypotheses already exhausted and no clear next experiment specified \u2014 needs strong reasoning to design a new repro/instrumentation approach, not mechanical execution.",
+  "review_critical": false,
+  "goal": "Determine the actual mechanism by which a setState from a setTimeout inside a mounted class component inside a portal gets silently dropped in a production build, so that every component still relying on the narrower exit:0 mitigation (currently just MuiMenu, per theme.ts) can be evaluated for the same risk that hit Drawer, rather than waiting for each one to fail 10/10 independently.",
+  "background": [
+   "Already ruled out per the item: duplicate React copies (single react@18.3.1, deduped), StrictMode (dev-only), flushSync/startTransition/unstable_batchedUpdates (absent from web/src), uncaught exceptions (none observed), unmounting (componentWillUnmount never runs, isMounted stays true).",
+   "Leading untested hypothesis: a production-build React 18 concurrent-root update issued while the root is mid-render, for which the dev-only warning that would normally name this problem does not fire in production.",
+   "The Drawer incident (2026-08-10) was fixed with `slotProps.transition.exit: false`, not `exit: 0` \u2014 exit:0 measured 20/20 pass on Drawer before later failing 10/10 on MUI v6, meaning exit:0 is not a reliable fix, just a probability-narrower. MuiMenu currently rides exit:0 only."
+  ],
+  "steps": [
+   "1. Reproduce a minimal case: a class component rendered via a portal (React Portal / MUI Modal root) with a setTimeout-issued setState, running against the PRODUCTION build (not vite dev server) \u2014 since StrictMode/dev warnings are explicitly ruled out as not applicable, the repro must use `npm run build` output, not `npm run dev`.",
+   "2. Instrument with React DevTools Profiler (or manual console logging around the class component's setState call and render/commit lifecycle) to determine: does the setState call itself fire (confirm the timer callback executes), does React schedule an update (check via a wrapping requestIdleCallback/scheduler hook if accessible), and does a render/commit actually occur for that fiber.",
+   "3. Specifically test the leading hypothesis: force the timing so the setTimeout fires while the concurrent root is mid-render of an unrelated update (e.g. trigger a large list re-render concurrently), and see if the drop reproduces reliably under that specific condition versus not reproducing when isolated.",
+   "4. If reproduced, minimize to the smallest possible repro component and either (a) file/document it as a known React concurrent-mode interaction with a workaround, or (b) identify a code-level fix specific to this codebase's usage pattern.",
+   "5. Regardless of root-cause outcome, audit web/src/theme.ts for every component still using `exit: 0` (currently MuiMenu only, confirmed) and evaluate whether it needs the same `slotProps.transition.exit: false` treatment that fixed Drawer, since exit:0 is now known to be an incomplete mitigation rather than a fix."
+  ],
+  "tests": [
+   "A regression e2e or unit test that reproduces the drop reliably (if step 1-3 succeed) \u2014 without a reliable repro, this cannot be regression-tested, and the deliverable becomes a documented finding + a decision on whether to preemptively harden MuiMenu."
+  ],
+  "acceptance": [
+   "A documented root-cause finding (even if the ultimate answer is 'confirmed unreproducible after N attempts under conditions X, Y, Z') exists, plus an explicit decision on whether MuiMenu's exit:0 needs upgrading to the exit:false pattern."
+  ],
+  "edge_cases": [
+   "If the mechanism turns out to be React-version-specific (fixed in a later React 18.x patch or React 19), the fix may be an upgrade rather than a code workaround \u2014 check the currently pinned React version and its changelog for concurrent-root setState-drop fixes before assuming a local code fix is needed."
+  ],
+  "anti_over_suppression": "N/A \u2014 this is root-cause research, not a filter/guard.",
+  "depends_on_lines": [],
+  "gate": "npm --prefix web run lint && npm --prefix web test",
+  "notes": "High uncertainty of convergence \u2014 flag to the coordinator as an investigation spike with a capped time budget rather than a guaranteed-deliverable ticket. The MuiMenu exit:0 audit in step 5 is the concrete, low-risk fallback deliverable even if the root-cause investigation does not converge.",
+  "_scope": "scope-03.json",
+  "_section": "Config"
+ },
+ {
+  "todo_line": 2181,
+  "src_id": "PLAYBACK-IMPORT",
+  "title": "Investigate and report whether listened/in-progress status import from iTunes is an unwired pipeline before changing anything",
+  "verdict": "actionable",
+  "verdict_evidence": "NEEDS SCOPING: scout returned no exact_files \u2014 cannot enter the collision matrix. The item explicitly frames this as investigate-and-report-first, matching the same 'unwired pipeline' shape as L1767 in this scope \u2014 except L1767 part 1 turned out to be already-wired on further investigation, showing this pattern is genuinely mixed: some 2026-08-11 'unwired' claims have since been fixed, others haven't. This one has not been checked beyond confirming the two named files exist. It genuinely needs the four listed questions answered before any code changes, and is explicitly gated on Wave 5 of the silent-failure sweep landing first for the repair half (not the investigation half).",
+  "domain": "internal/readstatus",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "internal/readstatus package exists with the cited defect at the cited function",
+    "grep_cmd": "grep -n 'func.*RecomputeUserBookState' internal/readstatus/readstatus.go",
+    "expect": "1 hit at L62"
+   },
+   {
+    "claim": "internal/itunes/service/position_sync.go exists as the cited iTunes-side write path",
+    "grep_cmd": "test -f internal/itunes/service/position_sync.go && echo exists",
+    "expect": "exists"
+   }
+  ],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "A 4-question investigation across import parsing, write path, file-embedded metadata, and API/UI surfacing \u2014 needs to trace real code paths across 3+ packages, but each question is independently answerable by grep/read, not open research.",
+  "review_critical": false,
+  "goal": "Answer, with grep-verified evidence, each of the item's 4 questions: (1) does the iTunes importer read play-count/Played/bookmark-position fields from the ITL/XML at all, and if so where do they land; (2) is there a write path from those parsed values onto book/book_file rows, and is internal/readstatus/ or internal/itunes/service/position_sync.go actually invoked on IMPORT (not just on the separate 2-way-sync path); (3) does the audio file itself carry progress (embedded chapter/position metadata, .m4b bookmarks), and is it read on scan; (4) does the API expose listened/progress to the UI, and does the UI render it. Report findings; do NOT implement any repair or backfill in this task \u2014 that is explicitly gated on Wave 5 of the silent-failure sweep (a separate, already-tracked defect where a failed read is indistinguishable from 'no prior state' and could overwrite real playback position) landing first.",
+  "background": [
+   "internal/readstatus/readstatus.go:144 (per the item) discards existing state and rebuilds fresh on a read error \u2014 a related but distinct defect from this investigation's scope, already documented by the item as a caution, not something to fix here.",
+   "internal/database/pebble_store_playback.go:107 (per the item) leaks a stale status index entry allowing a book to appear under two statuses at once \u2014 likewise a related but distinct defect noted as context, not in scope to fix here.",
+   "Silent-failure Wave 5 (project memory: 'Silent-failure sweep \u2014 Wave 0 (errcheck) undone, 926 issues, gate RED') covers internal/itunes/service/position_sync.go lines 85/118 specifically \u2014 this item explicitly says 'Wave 5 lands first' before any backfill of progress data through that path, since a failed read there is currently indistinguishable from 'no prior state' and could silently overwrite the user's real playback position."
+  ],
+  "steps": [
+   "1. Read the iTunes import path (grep for where ITL/XML Played/PlayCount/bookmark fields, if any, are parsed \u2014 check internal/itunes/xml_library.go and the ITL binary parser files internal/itunes/itl_be.go / itl_le.go for field names like 'PlayCount', 'PlayDate', 'Bookmark', 'Loved' or similar) and report whether these fields are extracted at all, and if so, into what struct field.",
+   "2. Trace whether any extracted value from step 1 is ever written to a book or book_file row \u2014 grep for callers of internal/readstatus's write functions (RecomputeUserBookState, SetManualStatus, confirmed present at readstatus.go:62,155) from the iTunes import path specifically, distinct from the 2-way-sync path (internal/itunes/service/position_sync.go).",
+   "3. Check whether internal/itunes/service/position_sync.go is invoked on IMPORT (i.e. as part of the initial library read/migration) versus only on the separate ongoing 2-way-sync flow \u2014 these may be two different trigger points with different current wiring status.",
+   "4. Check whether the audio files themselves carry progress metadata (.m4b bookmark atoms, embedded chapter position) and whether the scanner (internal/scanner/) reads any such field during a normal library scan.",
+   "5. Check whether GetAudiobooks/the book API response includes a listened/progress field, and whether the frontend (grep web/src for 'progress'/'listened'/'PlayedSeconds' or similar) renders it anywhere \u2014 a value stored but never surfaced looks identical to one never stored, per the item's own framing, so this distinction matters for the report.",
+   "6. Write up the findings as a short report answering all 4 questions with grep-verified evidence, explicitly stating which of 'never parsed', 'parsed but never written', 'written but never surfaced', or 'fully wired but broken' applies. Do NOT write repair/backfill code in this task."
+  ],
+  "tests": [],
+  "acceptance": [
+   "A report exists answering all 4 questions with specific file:line citations for each claim, distinguishing 'not implemented' from 'implemented but unwired' from 'wired but buggy' for each of the 4 stages (parse/write/file-embed/API-surface)."
+  ],
+  "edge_cases": [
+   "If the investigation finds the pipeline IS already substantially wired (as happened with L1767's import half in this same scope), report that explicitly rather than assuming the original 2026-08-11 'unwired pipeline' hypothesis still holds \u2014 verify at HEAD, don't trust the item's framing as still-current."
+  ],
+  "anti_over_suppression": "N/A \u2014 investigation task.",
+  "depends_on_lines": [],
+  "gate": "n/a (investigation; make ci only if code changes result from a follow-up)",
+  "notes": "Any REPAIR of progress data (as opposed to this investigation) must wait for silent-failure Wave 5 to land first, per the item's own explicit warning that the current position_sync.go read-failure-vs-no-prior-state ambiguity could destroy real user data if backfilled against.",
+  "_scope": "scope-03.json",
+  "_section": "Config"
+ },
+ {
+  "todo_line": 2238,
+  "src_id": "REVIEW-PREVIEW",
+  "title": "Play the first ~2 minutes of part 1's audio directly from the metadata chooser",
+  "verdict": "actionable",
+  "verdict_evidence": "NEEDS SCOPING: scout returned no exact_files \u2014 cannot enter the collision matrix. The item explicitly says nothing has been designed for this ('Documentation check done 2026-08-11: nothing designed... never specced'), gives a clear, bounded scope (2-minute bounded audio preview of part 1 specifically, not the row's attached file), and flags one concrete pre-check to do before building: whether a range-request audio endpoint already exists for the existing player (if so, this is UI-only work). No owner decision from the 2026-08-21 list blocks this \u2014 it's a straightforward additive feature with explicit constraints already given.",
+  "domain": "web (frontend)",
+  "exact_files": [],
+  "verified_anchors": [],
+  "reuse": [],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Bounded scope, clear requirements, but touches both a potential new/existing bounded-range audio endpoint and frontend player wiring inside an existing chooser component \u2014 real feature work, not trivial.",
+  "review_critical": false,
+  "goal": "Add a 'preview' control to the metadata chooser that streams the first ~2 minutes of audio from part 1 of the book (not whichever file happens to be attached to the chooser's row for a multi-part book), using a bounded, range-request-capable server endpoint so the response is never an unbounded full-file read.",
+  "background": [
+   "The chooser row shows a single file even for a 40-part book \u2014 'first 2 minutes' must mean part 1 specifically, or the preview is actively misleading; this requires resolving which file in a multi-file book is 'part 1' before streaming, not just streaming whatever the row references.",
+   "The item explicitly warns: do not stream the whole file \u2014 an unbounded request-scoped read on this server is exactly the shape that OOM-killed production on 2026-08-11 (see project memory on server OOM incidents from that date)."
+  ],
+  "steps": [
+   "1. Check whether a range-request audio endpoint already exists for the existing full-book player: `grep -rn 'Range\\|Accept-Ranges\\|http.ServeContent' internal/server/handlers --include=*.go` and `grep -rln 'audio' internal/server/handlers/*.go`. If one exists, determine whether it can be reused as-is (point it at part 1's file, let the client's `<audio>` element issue its own Range requests, and just cap what the CLIENT requests to ~2 minutes via a fetch with an explicit byte-range guess, OR add a server-side hard cap) \u2014 if a suitable endpoint exists, this task is UI-only per the item's own note.",
+   "2. If no such endpoint exists, add one: given a book ID (or book_file ID) and an offset, serve up to ~2 minutes of audio using `http.ServeContent` (which handles Range requests and partial responses natively) with an explicit maximum-bytes cap independent of what the client requests, so a malformed/huge Range header cannot force an unbounded read.",
+   "3. Determine 'part 1' for a multi-file book: find the existing part/track ordering logic used elsewhere (e.g. wherever files are ordered for the full-book player or for organize naming) and reuse it \u2014 do not write new ordering logic; grep for an existing 'track number'/'part number' sort used by the current player.",
+   "4. Add a preview button/control to the metadata-chooser component (find it via `grep -rln 'MetadataChooser\\|metadata.*chooser' web/src/components -i`) that, on click, plays the first ~2 minutes via the endpoint from steps 1-2, targeting part 1's file specifically per step 3."
+  ],
+  "tests": [
+   "Backend: request more than the 2-minute cap via a large Range header, assert the response is still capped at the server-enforced maximum, not the client-requested range.",
+   "Backend: a multi-file book's preview request resolves to part 1's file, not the row's attached file, when they differ \u2014 needs a fixture with a book row pointing at a non-part-1 file to prove this.",
+   "Frontend: preview control renders in the chooser and triggers a request scoped to part 1's file ID."
+  ],
+  "acceptance": [
+   "Manual: on a 40-part book in the chooser, click preview and confirm audio plays from the START of part 1, not from whichever file the row happens to reference, and that a large/malicious Range request cannot pull more than the capped duration server-side."
+  ],
+  "edge_cases": [
+   "A book with zero files or a corrupted/unreadable part-1 file should show a clear 'preview unavailable' state, not a silent failure or a crash."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci && npm --prefix web run lint && npm --prefix web test",
+  "notes": "The unbounded-read-caused-OOM caution is load-bearing \u2014 the server-side cap must be enforced independent of client-supplied Range headers, not merely a client-side convention that a malicious or buggy request could bypass.",
+  "_scope": "scope-03.json",
+  "_section": "Config"
+ },
+ {
+  "todo_line": 2373,
+  "src_id": "VG-DOUBLE-PRIMARY",
+  "title": "Measure the real double-primary rate library-wide, then build a backfill repair op (never delete, REPOINT/demote only)",
+  "part": 2,
+  "verdict": "actionable",
+  "verdict_evidence": "NEEDS SCOPING: scout returned no exact_files \u2014 cannot enter the collision matrix. The item explicitly states the sampled 10/15 rate is 'not a library-wide rate, it is a sample of one offset window' and instructs 'measure the real count before sizing the repair.' Per the owner's standing rule (never delete files/rows in any repair \u2014 REPOINT/demote), this backfill must only ever flip IsPrimaryVersion flags, never delete rows, matching the same repair philosophy as the missing-file repair (report-only/repoint) elsewhere in this codebase's conventions.",
+  "domain": "internal/database",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "the existing GetBooksByVersionGroup query path this backfill needs to enumerate groups by",
+    "grep_cmd": "grep -rn 'func.*GetBooksByVersionGroup' internal/database/*.go",
+    "expect": "\u22651 hit"
+   },
+   {
+    "claim": "an existing one-time backfill pattern to model the new op on (same file family as L1945 in this scope)",
+    "grep_cmd": "grep -n 'BackfillVersionGroupIndex' internal/database/pebble_store_versiongroup_backfill.go",
+    "expect": "1 hit confirming the existing backfill convention (sentinel-gated, chunked, idempotent) to reuse"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "the sentinel-gated, chunked backfill pattern from BackfillVersionGroupIndex (same file family, same design conventions)",
+    "file": "internal/database/pebble_store_versiongroup_backfill.go",
+    "verify_grep": "grep -n 'versionGroupBackfillChunk\\|versionGroupBackfillKey' internal/database/pebble_store_versiongroup_backfill.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Report + repair op following an existing well-documented backfill convention in the same package \u2014 moderate size, low novelty once the forward fix (part 1) establishes the correct primary-election rule to apply retroactively.",
+  "review_critical": true,
+  "goal": "First, measure the library-wide rate of version groups with more than one is_primary_version=true member (not just the 15-sample offset-500 window already observed). Then build a maintenance repair op, dry-run-gated by default (apply=false default per owner decision #12's REPOINT precedent in this scope's decision list), that demotes every extra primary in an over-elected group down to exactly one winner \u2014 using the SAME best-candidate selection rule as part 1's forward fix (BookIsBetter or equivalent) for consistency \u2014 and NEVER deletes any book row.",
+  "background": [
+   "The item explicitly separates this from the forward fix: 'Needs both halves: 1. Forward fix... 2. Backfill \u2014 the existing double-primary rows do not self-heal. Needs a maintenance repair op.'",
+   "internal/database/pebble_store_versiongroup_backfill.go (see L1945 in this scope) is the established convention for a one-time correctness backfill in this codebase: sentinel-gated, chunked writes, idempotent, heavily logged \u2014 follow this shape rather than inventing a new one.",
+   "Owner standing rule across this whole scope: never delete rows in a repair; only REPOINT/demote flags. This backfill's ENTIRE effect must be flipping IsPrimaryVersion from true to false on losers \u2014 it must never call DeleteBook."
+  ],
+  "steps": [
+   "1. Write the measurement first (report-only): scan every version group (via whatever index enumerates distinct VersionGroupID values, or iterate `book:versiongroup:<gid>:<id>` secondary-index keys per internal/database/pebble_store_versiongroup_backfill.go's key format) and count how many groups have >1 member with IsPrimaryVersion=true. Report the total groups affected and total excess-primary rows, library-wide \u2014 not a sample.",
+   "2. Once the real scope is known, build the actual repair as a maintenance op (or extend an existing version-group-related maintenance op if one exists \u2014 grep `internal/plugins/maintenance/*.go` for anything version-group-related first) with dry_run defaulting to true.",
+   "3. For each over-elected group, apply the SAME winner-selection rule as part 1's forward fix (reuse the same helper/logic rather than reimplementing it \u2014 extract a shared function if part 1 doesn't already produce one) to pick exactly one primary; write IsPrimaryVersion=false to every other member via UpdateBook (never DeleteBook).",
+   "4. Report exact before/after counts per run, and re-read the DB after a non-dry-run apply to verify the fix landed (per the standing convention used elsewhere in this scope, e.g. L1517's 'verify by re-reading the DB rather than trusting return values').",
+   "5. Add an invariant check (reusing part 1's invariant test logic if written as a reusable assertion) that can be run post-repair to confirm zero groups remain with >1 primary."
+  ],
+  "tests": [
+   "A test seeding several version groups with double/triple primaries and asserting the repair (dry-run and real) correctly identifies and fixes each, leaving exactly one primary per group and zero deleted rows.",
+   "Idempotency test: running the repair twice in a row produces no further changes on the second run."
+  ],
+  "acceptance": [
+   "The measurement report shows the real library-wide count (superseding the '10 of 15 at one offset' figure).",
+   "A dry-run against real data reports the exact number of groups/rows it would fix.",
+   "A non-dry-run apply, followed by the invariant check from step 5, shows zero groups with >1 primary.",
+   "`grep -n 'DeleteBook' <the new repair file>` returns 0 hits \u2014 confirms the never-delete constraint."
+  ],
+  "edge_cases": [
+   "A version group where ALL members are currently non-primary (an orphan group with zero primaries) is a DIFFERENT defect shape than this item covers \u2014 the item explicitly notes 15 sampled non-primary books all sat in groups WITH an elected primary, so no orphan-group defect was found in that sample; do not silently 'fix' zero-primary groups as part of this same op without flagging it as a distinct case, since the fix (elect one) differs from this item's fix (demote extras).",
+   "A group's true winner per BookIsBetter may differ from whichever one happened to be more-recently-created (which the item notes is the observed pattern in the two examples) \u2014 don't assume 'keep the newest' is correct, apply the real selection rule."
+  ],
+  "anti_over_suppression": "The repair must be dry-run by default and require explicit apply=true from an operator, per this scope's standing REPOINT/never-auto-apply convention \u2014 this is the safeguard against silently mutating primary elections at scale on a first run.",
+  "depends_on_lines": [
+   2373
+  ],
+  "gate": "make ci",
+  "notes": "review_critical=true, and marked prod_run-adjacent: per this scope's owner decision #14 pattern ('every PROD RUN goes to docs/operations/pending-prod-actions.md as prod_run \u2014 never auto-run'), the actual execution of this repair against the owner's live library should be logged there once built, even though building the op itself is actionable engineering work. depends_on_lines=[2373] refers to this same TODO line's part 1 (the forward fix) landing first, since the backfill should reuse its winner-selection logic.",
+  "_scope": "scope-03.json",
+  "_section": "Config"
+ },
+ {
+  "todo_line": 2431,
+  "src_id": "UI-LOCKUP-2",
+  "title": "Determine whether the persistent UI lockup is backend (slow/unbounded requests) or frontend (rendering/virtualization), with evidence, before writing any fix",
+  "verdict": "actionable",
+  "verdict_evidence": "NEEDS SCOPING: scout returned no exact_files \u2014 cannot enter the collision matrix. The item explicitly demands this exact investigation sequence ('State which of the two it is, with evidence, before writing any fix') and gives concrete already-measured backend evidence from the same night (36s for a 1-row request, 2m10s for a personalized-library endpoint, 4 OOM kills in 90 minutes, a 568s memdb warmup, 30 goroutines pinning 30GB from abandoned activity-log scans) that already strongly suggests a backend cause distinct from the DOM-volume hypothesis the previous round closed against \u2014 but the item still requires re-confirming this specific incident wasn't purely a warmup-window artifact before concluding.",
+  "domain": "internal/server",
+  "exact_files": [],
+  "verified_anchors": [],
+  "reuse": [
+   {
+    "name": "L1980 SEARCH-CACHE and L1970 WipeAllActivity-cancellation work in this scope (both plausible contributors to 'requests never return')",
+    "file": "internal/audiobooks/service_query.go",
+    "verify_grep": "grep -n 'searchWithBleve' internal/audiobooks/service_query.go"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "A structured reproduce-and-classify investigation (DevTools Network open, correlate with server logs/restart windows) with a clear decision tree already given by the item \u2014 bounded, but requires live reproduction against a running instance, not pure static analysis.",
+  "review_critical": false,
+  "goal": "Reproduce the reported lockup with browser DevTools Network open and classify it: are the slow-to-render views waiting on PENDING network requests (backend-bound), or are requests returning promptly while the page itself janks (frontend-bound)? If backend: identify the specific slow/unbounded endpoint(s) among the already-known-unbounded candidates in this codebase (the activity-log query ignoring client disconnect, described in this same night's findings, is a leading candidate \u2014 cross-reference L1970 in this scope, which is the tracked fix for exactly that). If frontend: profile whether virtualization is actually active on the specific list that janks, or only on a previously-fixed one. Separately, check whether the lockup correlates with the ~10-minute post-restart memdb-warmup window, since that would point at startup sequencing rather than either a backend request-handling bug or a frontend rendering bug.",
+  "background": [
+   "Already measured on prod the same night (2026-08-11): GET /api/v1/audiobooks?library_state=imported&limit=1 took 36 seconds for one row; GET /api/libraries/{id}/personalized took 2m10s; the server was OOM-killed 4 times in 90 minutes; memdb warmup takes 568s during which 'library list warm-up: memdb not ready after 5 min, skipping' fires because warmup outlives its own waiter, so the list cache never warms; 30 abandoned-activity-log-query goroutines were found pinning 30GB with zero clients connected.",
+   "The previous round of this same UI-lockup investigation was closed against a DOM-volume/virtualization hypothesis \u2014 this item explicitly asks to state whether that hypothesis still holds or was wrong/no-longer-binding, rather than silently assuming virtualization work is still the right lever."
+  ],
+  "steps": [
+   "1. Reproduce the reported freeze with browser DevTools Network tab open, on both a freshly-restarted server (within the ~10min warmup window) and a warmed-up one, to separate startup-sequencing from a steady-state bug.",
+   "2. Record whether the janking view's requests are PENDING (not yet returned) at the time the page appears frozen, vs. returning quickly while the render itself stalls \u2014 this single observation is the item's primary decision fork.",
+   "3. If backend-bound: identify which endpoint(s) are slow, and check whether they match already-known-unbounded patterns in this codebase \u2014 specifically the activity-log query's client-disconnect-ignoring behavior (the item names this explicitly; cross-reference internal/server/maintenance_fixups.go and the activity Query path, and note whether L1970/L1957 in this same scope's fixes would address it).",
+   "4. If frontend-bound: use the React DevTools Profiler (or the browser Performance panel) to confirm whether virtualization (react-window or similar) is actually mounted and active on the SPECIFIC list component that janks in this reproduction, versus only on whichever list was fixed in a previous round \u2014 a regression where a NEW unvirtualized list was added since the last fix is a plausible explanation worth explicitly ruling in or out.",
+   "5. Check correlation with server restart/warmup timing: if the freeze reliably occurs only within ~10 minutes of a server restart, state this explicitly as the primary finding (startup sequencing) rather than as a footnote, since it would redirect the fix toward warmup-sequencing work rather than either frontend or steady-state backend work.",
+   "6. Write up the finding explicitly stating which of the three (backend steady-state, frontend rendering, warmup-window sequencing) is the binding constraint, with the DevTools/Profiler evidence, before any fix is written."
+  ],
+  "tests": [],
+  "acceptance": [
+   "A report exists stating, with DevTools/Profiler evidence, which of the three candidate causes (backend request latency, frontend rendering/virtualization gap, restart-warmup sequencing) is the actual binding constraint for the reproduced freeze."
+  ],
+  "edge_cases": [
+   "The three causes are not mutually exclusive \u2014 the report must not force a single answer if evidence points at more than one (e.g. a request that's slow BECAUSE the server is still in its warmup window is arguably both backend-bound and warmup-sequencing at once); state the actual causal chain rather than picking one category to satisfy the decision-tree framing."
+  ],
+  "anti_over_suppression": "N/A \u2014 investigation task.",
+  "depends_on_lines": [],
+  "gate": "n/a (investigation; make ci only if code changes result from a follow-up)",
+  "notes": "Cross-reference this scope's own L1970 (WipeAllActivity cancellation) and L1980 (SEARCH-CACHE) items \u2014 both are plausible contributors to 'a request that never returns looks exactly like a frozen UI', and their fixes may partially or fully explain/resolve what this investigation finds, worth checking whether they've landed before concluding this needs an independent fix.",
+  "_scope": "scope-03.json",
+  "_section": "Config"
+ },
+ {
+  "todo_line": 3354,
+  "src_id": null,
+  "title": "Investigate why 41 ungrouped books are hidden by the primary-version filter despite having no version_group_id",
+  "verdict": "actionable",
+  "verdict_evidence": "NEEDS SCOPING: scout returned no exact_files \u2014 cannot enter the collision matrix. This is the unexplained remainder after todo_line 3340's 765-book total splits into 724 (root-caused and fixed, see todo_line 3344) + 41 (explicitly 'unexplained' per the item's own text). Given the nil-is-primary logic at service_filtering.go:864 and the nil-is-NOT-primary logic at service_query.go:346/532 (see todo_line 3348), a book with NO version_group_id being HIDDEN despite the nil-tolerant path existing implies its IsPrimaryVersion field is explicitly `false` (not nil) \u2014 an explicit false on an ungrouped book is itself the anomaly worth explaining, since nothing in the version-group election logic should ever set IsPrimaryVersion=false on a book with no group.",
+  "domain": "internal/audiobooks",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "nil IsPrimaryVersion is NOT what would hide a book under the post-filter path",
+    "grep_cmd": "sed -n '862,866p' internal/audiobooks/service_filtering.go",
+    "expect": "nil is treated as primary (visible) at this call site \u2014 so a hidden, ungrouped book's field must be explicitly false, not nil, to explain why it's hidden here specifically"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Small, targeted diagnostic query against production/store data \u2014 no design decision needed, just running a query and reading the result, but requires careful query construction to isolate exactly the anomalous 41.",
+  "review_critical": false,
+  "goal": "Write a small diagnostic (a one-off Go program under tools/cmd/, or a REPORT-only maintenance op per the owner's PH-2b-style preference for report-only ops) that queries the store for books where VersionGroupID is nil/empty AND IsPrimaryVersion is explicitly false (not nil) \u2014 this is the anomalous population, distinct from the already-explained 724 no-primary-group books. For each match, record which writer last touched the row (via internal/ledger if the row's provenance is tracked, or via UpdatedAt/CreatedAt correlated against known import/dedup/merge job runs) to find what set IsPrimaryVersion=false without ever assigning a version_group_id.",
+  "background": [
+   "This 41-book population is explicitly called out as 'unexplained' and distinct from the 724-book iTunes-importer bug (todo_line 3344/3340), which always assigns SOME version_group_id (just fails to elect a primary within it) \u2014 these 41 have NO group at all, a different code path entirely."
+  ],
+  "steps": [
+   "1. Write a small diagnostic query (tools/cmd/ or a REPORT-only maintenance op, per the repair-op conventions already used by internal/reconcile) filtering for VersionGroupID == nil AND IsPrimaryVersion != nil && *IsPrimaryVersion == false.",
+   "2. Run it against a snapshot/copy of the store data (never write) to get the actual list of book IDs (expect ~41, confirming or correcting the sampled figure).",
+   "3. For each match, check the provenance ledger (see internal/ledger, referenced in recent commit 8f6d0d99 'make the provenance chain tamper-evident and exportable') or CreatedAt/UpdatedAt timestamps for a correlated writer/job.",
+   "4. Write findings to a docs/audits/ or todo.d fragment describing the root cause, once found, as a candidate for a targeted fix distinct from the ElectMissingPrimaries repair (which only helps books that DO have a version group)."
+  ],
+  "tests": [
+   "N/A for the diagnostic itself (read-only report). If a writer bug is found, its fix needs a regression test mirroring the pattern in internal/itunes/service/importer_primary_version_test.go."
+  ],
+  "acceptance": [
+   "The diagnostic report names all books matching the anomaly's exact criteria and, ideally, a common writer/job correlated with their CreatedAt/UpdatedAt."
+  ],
+  "edge_cases": [
+   "If the diagnostic finds MORE than 41 (or a different set) than the original sample suggested, treat the original 41 as a sampled/superseded figure (same caution as todo_line 3449's 'treat sampled percentages as superseded') rather than assuming the new count is wrong."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [
+   3340
+  ],
+  "gate": "n/a (docs) for the diagnostic; make ci (Go) if a fix follows",
+  "notes": "Small, concrete sample per the item's own text \u2014 this is explicitly a follow-on investigation, not yet a known fix.",
+  "_scope": "scope-04.json",
+  "_section": "Search / version-group census corrections (2026-08-13)"
+ },
+ {
+  "todo_line": 4222,
+  "src_id": null,
+  "title": "Find the CreateBook path(s) that copy a dangling SeriesID onto newly-created per-chapter book rows",
+  "verdict": "actionable",
+  "verdict_evidence": "NEEDS SCOPING: scout returned no exact_files \u2014 cannot enter the collision matrix. The item's own three named prime suspects do NOT copy SeriesID onto new rows at HEAD: grep -n \"SeriesID\" internal/dedup/split_book_detector.go shows it only READS b.SeriesID for comparison (no CreateBook call in the file); grep -n \"SeriesID\\|CreateBook\" internal/plugins/maintenance/regroup_shattered_ai.go and internal/plugins/maintenance/itunes_regroup.go show itunes_regroup.go's one CreateBook call (L261) sets only Title, not SeriesID \u2014 so the investigation is still genuinely open and the named suspects should be ruled out, not re-investigated.",
+  "domain": "internal/dedup",
+  "exact_files": [],
+  "verified_anchors": [
+   {
+    "claim": "split_book_detector.go only reads SeriesID for grouping comparison, never writes/creates a book with it",
+    "grep_cmd": "grep -n \"SeriesID\" internal/dedup/split_book_detector.go",
+    "expect": "hits at L31 (comment), L85 (struct field), L137, L372, L378 \u2014 all reads, no CreateBook in this file"
+   },
+   {
+    "claim": "regroup_shattered_ai.go has zero SeriesID references",
+    "grep_cmd": "grep -n \"SeriesID\" internal/plugins/maintenance/regroup_shattered_ai.go",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "itunes_regroup.go's single CreateBook call sets only Title",
+    "grep_cmd": "grep -n \"CreateBook\" internal/plugins/maintenance/itunes_regroup.go",
+    "expect": "1 hit at L261: store.CreateBook(&database.Book{Title: a.Title})"
+   },
+   {
+    "claim": "resolveSeriesID always creates-if-absent and syncs before returning, ruling out a plain scan as the source",
+    "grep_cmd": "grep -n \"func.*resolveSeriesID\" internal/scanner/scanner.go",
+    "expect": "1 hit ~L2487"
+   }
+  ],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "L",
+  "tier": "opus",
+  "why_tier": "genuine root-cause investigation with no confirmed anchor yet \u2014 requires either production activity-log forensics beyond what a repo scout can do, or a wider code search across every CreateBook call site in scanner/dedup/itunes packages",
+  "review_critical": true,
+  "goal": "Trace which code path created the 5,367 per-chapter books on 2026-08-11 (all within one minute, titled like 'Chapter 06', starting from book 01KZSX7TW6BZXJX11F8K6Y0DSZ) and identify where it copies an existing (already-dangling) book's SeriesID onto the new row rather than resolving a fresh series ID via resolveSeriesID.",
+  "background": [
+   "The RESOLVED section of this TODO item already proved the mechanism is propagation (copying an existing dangling reference), not minting (resolveSeriesID always creates-if-absent under pebble.Sync) \u2014 so the remaining work is purely 'which CreateBook call site copies SeriesID from a sibling/parent row'.",
+   "This scout ruled out the three prime suspects the TODO item names (split_book_detector.go, regroup_shattered_ai.go, itunes_regroup.go) via direct grep \u2014 none of them copies SeriesID onto a newly created book at HEAD. The real source is still unidentified.",
+   "Other candidate CreateBook call sites in files touching per-chapter/split logic (not yet checked in depth): internal/plugins/dedup/split_book_scan.go, internal/plugins/maintenance/fs_regroup_xml.go (only calls CreateBookFile, not CreateBook \u2014 ruled out), internal/itunes/service/fs_regroup_shape.go (0 SeriesID/CreateBook hits \u2014 ruled out), internal/scanner/scanner.go:2864 (`dst.SeriesID = scanned.SeriesID` \u2014 this assigns FROM an already-resolved scanned.SeriesID onto an existing dst row during a re-scan merge, not book creation from a copied ID; worth checking whether 'scanned' can itself carry a stale-but-plausible SeriesID under some merge-during-warmup race, but not yet confirmed)."
+  ],
+  "steps": [
+   "grep -rn \"CreateBook(\" internal/scanner internal/dedup internal/plugins internal/itunes --include=*.go | grep -v _test.go to get the full candidate list beyond the 3 already ruled out.",
+   "For each remaining candidate, check whether the &database.Book{...} literal or a subsequently-set field copies SeriesID from an existing/sibling Book struct rather than leaving it nil or calling resolveSeriesID.",
+   "Cross-reference book 01KZSX7TW6BZXJX11F8K6Y0DSZ and its 2026-08-11 22:36 siblings against the operations list for that exact minute (the TODO already ruled out 41 named ops for the whole day/next day \u2014 narrow to the single minute) to see if ANY op (even one not on the ruled-out list, e.g. a scan itself, which the TODO notes was suspiciously ABSENT from the operations list that day) was running.",
+   "Once the actual copy site is found, fix it to either call resolveSeriesID fresh for the new row or explicitly drop SeriesID when the source reference is unverified, per the standing rule 'never mint or propagate a dangling reference'."
+  ],
+  "tests": [
+   "Once the source is found: a regression test in that package asserting a newly-created book never carries a SeriesID that doesn't resolve to an existing series row."
+  ],
+  "acceptance": [
+   "The 6,893-count phantom-series-reference query (however it's currently run \u2014 check internal/database or a maintenance report op for it) shows 0 NEW phantom IDs appearing after the fix, re-verified against a fresh scan/regroup run in a sandbox."
+  ],
+  "edge_cases": [
+   "A book intentionally created with SeriesID=nil (no series) must not be mistaken for the bug \u2014 only a non-nil SeriesID pointing at a NONEXISTENT series row is the defect."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "make ci",
+  "notes": "review_critical=true: this is squarely on the prod-data path (series integrity, book creation). Given effort/uncertainty, this may be better run as a dedicated investigation session (like the 2026-08-11 forensics already partially done in the TODO item itself) rather than a blind haiku/sonnet code-edit task.",
+  "_scope": "scope-07.json",
+  "_section": "Series table integrity \u2014 follow-ups from the 2026-08-14 prune repair"
+ }
+]

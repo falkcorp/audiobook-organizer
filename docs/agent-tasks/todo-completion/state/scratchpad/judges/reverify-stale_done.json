@@ -1,0 +1,3361 @@
+[
+ {
+  "id": "L17",
+  "todo_line": 17,
+  "title": "Journal every review-lane merge (already fixed \u2014 check the box)",
+  "anchors": [
+   {
+    "cmd": "grep -n \"MergeJournaled\" internal/server/handlers/dedup/handler.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "1414:\t\tmergeResult, journalKey, mergeErr := h.dedupEngine.MergeJournaled(",
+    "err": "",
+    "expect": "hit at handler.go:1414 calling h.dedupEngine.MergeJournaled(...)",
+    "claim": "MergeJournaled exists and is called from the review-lane merge endpoint"
+   },
+   {
+    "cmd": "grep -n \"de.MergeJournaled\" internal/dedup/auto_resolve.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "299:\tresult, _, err := de.MergeJournaled(c.ID, c.EntityAID, c.EntityBID, \"\", tag)",
+    "err": "",
+    "expect": "1 hit ~L299",
+    "claim": "MergeJournaled is also the auto-resolve Tier-1 path's merge call"
+   }
+  ]
+ },
+ {
+  "id": "L53",
+  "todo_line": 53,
+  "title": "N-1: /socket.io/ 404 fix (already shipped \u2014 check the box)",
+  "anchors": [
+   {
+    "cmd": "grep -n \"socket.io\" internal/server/spa_fallback.go",
+    "rc": 0,
+    "nlines": 5,
+    "out": "39:// The same failure recurred for socket.io, which is why it is listed below.\n43://\tGET /socket.io/?EIO=4&transport=polling\n45:// We do not implement socket.io. The honest answer is 404, which lets the client\n57:\t\"/socket.io/\", // Engine.IO transport probe; unimplemented, must not look implemented\n64:var nonSPAExact = []string{\"/auth\", \"/socket.io\"}",
+    "err": "",
+    "expect": "2+ hits, in nonSPAPrefixes and nonSPAExact",
+    "claim": "/socket.io/ is in nonSPAPrefixes"
+   }
+  ]
+ },
+ {
+  "id": "L53",
+  "todo_line": 53,
+  "title": "N-2: value-comparison conformance gate (already shipped \u2014 check the box)",
+  "anchors": [
+   {
+    "cmd": "grep -n \"CompareValues\" internal/server/handlers/abs/abs_test.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "460:// CompareValues was off until 2026-08-12, which made this a shape check: a handler\n474:\tfindings := f.CompareBody(got, conformance.Options{IgnoreExtra: true, CompareValues: true})",
+    "err": "",
+    "expect": "hit at L474 inside CompareBody options, plus comment at L460",
+    "claim": "assertConformant sets CompareValues: true"
+   },
+   {
+    "cmd": "grep -n \"CompareValues\" internal/server/handlers/abs/library_fake_test.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "1153:\tfindings := f.CompareBody(got, conformance.Options{IgnoreExtra: true, CompareValues: true})",
+    "err": "",
+    "expect": "1 hit ~L1153",
+    "claim": "assertConformantExcept (the allowance-based variant) also sets CompareValues: true"
+   }
+  ]
+ },
+ {
+  "id": "L53",
+  "todo_line": 53,
+  "title": "N-4: unimplemented /api/* namespaces 301 vs 404 (already resolved by the redirect/collision redesign \u2014 check the box)",
+  "anchors": [
+   {
+    "cmd": "grep -n \"api/podcasts\" internal/server/wire_abs_routes.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "262:\t\"/api/podcasts\",",
+    "err": "",
+    "expect": "1 hit in absReservedPaths/absUnimplementedNamespaces area with a comment explaining the move",
+    "claim": "podcasts moved out of the redirect-collision list to the 404 path"
+   },
+   {
+    "cmd": "grep -n \"TestUnimplementedABSNamespacesAre404NotRedirect\" internal/server/wire_abs_routes_test.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "209:func TestUnimplementedABSNamespacesAre404NotRedirect(t *testing.T) {",
+    "err": "",
+    "expect": "1 hit, test body at L209-235 iterates absUnimplementedNamespaces",
+    "claim": "a regression test derives its assertions from the live namespace list, not a hardcoded copy"
+   },
+   {
+    "cmd": "grep -n \"absAppAPICollisions = \\[\\]string\" -A 20 internal/server/wire_abs_routes.go",
+    "rc": 0,
+    "nlines": 21,
+    "out": "270:var absAppAPICollisions = []string{\n271-\t\"/api/authors\",\n272-\t\"/api/series\",\n273-\t\"/api/playlists\",\n274-\t// Added 2026-08-12, a second instance of the same defect: #2332 404'd this too and\n275-\t// #2333 did not catch it, because its twin is registered through a RouterGroup\n276-\t// (`protected.Group(\"/users\")`, wire_library_routes.go:88) and the grep used only\n277-\t// matched direct registratio",
+    "err": "",
+    "expect": "comment block explaining each entry's real twin",
+    "claim": "authors/series/users/playlists/collections are DELIBERATELY redirected (real app-API twins), not an oversight"
+   }
+  ]
+ },
+ {
+  "id": "L53",
+  "todo_line": 53,
+  "title": "N-7: golden fixtures never loaded by any test (appears resolved \u2014 verify then check the box)",
+  "anchors": [
+   {
+    "cmd": "comm -23 <(ls testdata/abs-fixtures/*.json | xargs -n1 basename | sort) <(grep -rohE '\\\"[a-z_]+\\\\.json\\\"' internal/server/handlers/abs/*_test.go | tr -d '\\\"' | sort -u)",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "empty output (no orphans)"
+   }
+  ]
+ },
+ {
+  "id": "L53",
+  "todo_line": 53,
+  "title": "N-8: absRouteList() route-coverage guard now includes all registered routes (already fixed \u2014 check the box)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'N-8' internal/server/wire_abs_routes.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "603:\t\t// \"every registered route\" claim false \u2014 the N-8 audit finding, confirmed",
+    "err": "",
+    "expect": "1 hit inside absRouteList's doc comment, dated 2026-08-14",
+    "claim": "the N-8 gap is named and fixed in-code with a dated comment"
+   }
+  ]
+ },
+ {
+  "id": "L101",
+  "todo_line": 101,
+  "title": "Resolve the dedup prod-drain TODO.md-vs-docs contradiction (check stale boxes)",
+  "anchors": [
+   {
+    "cmd": "grep -n '9,074\\|1,311\\|7,891' docs/operations/pending-prod-actions.md",
+    "rc": 0,
+    "nlines": 2,
+    "out": "25:| ~~1~~ \u2705 **PH-2 exact-triage (DONE 2026-07-18)** | Run the triage op that classifies the exact-pending dedup backlog into its four populations, then review the population report before any purge | def-id `maintenance.dedup-exact-triage` (read-only classify) \u2192 review report \u2192 PH-2b per-population purge wave (**never blanket-purge**) | operator-run (triage) \u2192 human-decision (PH-2b purge) | **DON",
+    "err": "",
+    "expect": "hits confirming DONE ON PROD 2026-07-18",
+    "claim": "pending-prod-actions.md records the drain as DONE with hard numbers"
+   },
+   {
+    "cmd": "grep -n '9,074\\|1,311\\|7,891' docs/dedup/STATUS.md",
+    "rc": 0,
+    "nlines": 11,
+    "out": "15:- **15,269** pending dedup candidates total; **9,074** exact-layer pending.\n62:(baseline identical to prod: **9,074 exact-pending / 10,319 total-pending**):\n66:| baseline | 9,074 | 10,319 | 1,351 |\n67:| after title-repair + breakdown-backfill | 9,074 | 10,319 | 1,351 |\n68:| **after triage purge-apply** (classified purgeable=**7,891**, keep=278, review=2,150 \u2192 dismissed 7,891) | **1,183** | 2,42",
+    "err": "",
+    "expect": "hits confirming the same drain, same numbers",
+    "claim": "dedup/STATUS.md agrees with the same numbers"
+   }
+  ]
+ },
+ {
+  "id": "L101",
+  "todo_line": 101,
+  "title": "Union-merge docs/openapi.yaml into docs/api/openapi.json (already done \u2014 check the box)",
+  "anchors": [
+   {
+    "cmd": "find docs -iname openapi.yaml",
+    "rc": 0,
+    "nlines": 1,
+    "out": "docs/archive/openapi.yaml",
+    "err": "",
+    "expect": "exactly 1 hit: docs/archive/openapi.yaml",
+    "claim": "docs/openapi.yaml is gone from its live location and now lives under archive/"
+   }
+  ]
+ },
+ {
+  "id": "L101",
+  "todo_line": 101,
+  "title": "Make run-sweep.sh fail loudly on an unparseable workstream package (already fixed \u2014 check the box)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'ERROR: no TASK-.*.md files' docs/agent-tasks/run-sweep.sh",
+    "rc": 0,
+    "nlines": 1,
+    "out": "65:    echo \"ERROR: no TASK-*.md files in workstream '$WORKSTREAM' \u2014 nothing to drive.\"",
+    "err": "",
+    "expect": "1 hit ~L65",
+    "claim": "the zero-TASK-files case now errors loudly instead of silently proceeding"
+   }
+  ]
+ },
+ {
+  "id": "L397",
+  "todo_line": 397,
+  "title": "Give the 2026-06-22 security sweep a status column (already done \u2014 check the box, then decide on retirement)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'Status column' docs/audits/2026-06-22-repo-optimization-security-sweep.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "57:## Status column \u2014 every finding verified against HEAD `f9dd8701` (2026-08-14)",
+    "err": "",
+    "expect": "1 hit ~L57, with FIXED/PARTIAL/OPEN/UNVERIFIED/OBSOLETE counts summing to 41",
+    "claim": "the status-column section exists with the exact verification date and counts"
+   }
+  ]
+ },
+ {
+  "id": "L468",
+  "todo_line": 468,
+  "title": "Collections now exist as a real feature \u2014 this TODO item's premise is false at HEAD (check the box)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'type CollectionStore interface' -A 8 internal/database/iface_catalog.go",
+    "rc": 0,
+    "nlines": 9,
+    "out": "24:type CollectionStore interface {\n25-\tCreateCollection(col *Collection) (*Collection, error)\n26-\tGetCollection(id string) (*Collection, error)\n27-\tGetCollectionByName(name string) (*Collection, error)\n28-\tListCollections(collectionType string, limit, offset int) ([]Collection, int, error)\n29-\tUpdateCollection(col *Collection) error\n30-\tDeleteCollection(id string) error\n31-}\n32-",
+    "err": "",
+    "expect": "1 hit, interface with 6 methods",
+    "claim": "CollectionStore interface exists with a full CRUD contract"
+   },
+   {
+    "cmd": "grep -n 'CollectionStore.*=.*PebbleStore' internal/database/iface_assert.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "31:\t_ CollectionStore     = (*PebbleStore)(nil)",
+    "err": "",
+    "expect": "1 hit ~L31",
+    "claim": "PebbleStore implements it, compile-time asserted"
+   },
+   {
+    "cmd": "ls internal/server/handlers/abs/collections.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "internal/server/handlers/abs/collections.go",
+    "err": "",
+    "expect": "file exists",
+    "claim": "the ABS-surface collections handler exists"
+   },
+   {
+    "cmd": "grep -n 'api/collections' internal/server/wire_abs_routes.go",
+    "rc": 0,
+    "nlines": 17,
+    "out": "54:\t// NOTE: /api/collections is deliberately NOT here. It has a live /api/v1 twin, so\n71:\t// NOTE: \"/api/collections/\" was here for exactly one commit, 2026-08-16, and the\n132:// (/api/collections/:id/book/:bookId), so the rule is now a literal gin-style pattern\n148:\t// stay absent: GET /api/collections (ABS lists per-library), PUT\n149:\t// /api/collections/:id (ABS uses PATCH), POST /api/collecti",
+    "err": "",
+    "expect": "6+ hits across absCollisionDetailRoutes",
+    "claim": "ABS collection routes are registered with method-aware, flag-gated detail routes"
+   }
+  ]
+ },
+ {
+  "id": "L484",
+  "todo_line": 484,
+  "title": "Series list now honors limit and page \u2014 this TODO item's premise is false at HEAD (check the box)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'queryInt(c, \"limit\"\\|queryInt(c, \"page\"' internal/server/handlers/abs/browse.go",
+    "rc": 0,
+    "nlines": 4,
+    "out": "562:\tlimit := queryInt(c, \"limit\", 0)\n563:\tpage := queryInt(c, \"page\", 0)\n1109:\tlimit := queryInt(c, \"limit\", total)\n1110:\tpage := queryInt(c, \"page\", 0)",
+    "err": "",
+    "expect": "hits inside LibrarySeries (~L562-563)",
+    "claim": "LibrarySeries now reads and applies limit/page"
+   },
+   {
+    "cmd": "grep -n '14,625 series' internal/server/handlers/abs/browse.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "511:\t// 14,625 series and totalDuration == 0 on 14,625 of 14,625, while numBooks was\n551:\t// 2026-08-13: limit=100 and limit=500 both returned all 14,625 series, and the",
+    "err": "",
+    "expect": "1+ hits in the fix's doc comment",
+    "claim": "the fix is dated 2026-08-13 with an explicit before/after measurement"
+   }
+  ]
+ },
+ {
+  "id": "L806",
+  "todo_line": 806,
+  "title": "filterFieldQueryParams already derived from the canonical filter-field list -- decision made and shipped",
+  "anchors": [
+   {
+    "cmd": "grep -n 'filterFieldQueryParams = buildFilterFieldQueryParams' internal/server/handlers/audiobooks/handler.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "279:var filterFieldQueryParams = buildFilterFieldQueryParams()",
+    "err": "",
+    "expect": "1 hit L279",
+    "claim": "filterFieldQueryParams is derived from KnownFilterFields(), not a hand-maintained literal set"
+   },
+   {
+    "cmd": "grep -n '\"year\", \"created_at\", \"updated_at\", \"marked_for_deletion\"' internal/audiobooks/service_filtering.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "655:\t\"year\", \"created_at\", \"updated_at\", \"marked_for_deletion\",",
+    "err": "",
+    "expect": "1 hit L655",
+    "claim": "the 14 named fields are all present in the canonical list KnownFilterFields derives from"
+   },
+   {
+    "cmd": "grep -n 'func TestFilterFieldQueryParams_CoversTheFieldsThatDrifted' internal/server/handlers/audiobooks/bare_filter_param_test.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "125:func TestFilterFieldQueryParams_CoversTheFieldsThatDrifted(t *testing.T) {",
+    "err": "",
+    "expect": "1 hit L125",
+    "claim": "a regression test pins this derivation against future drift"
+   },
+   {
+    "cmd": "grep -n 'var bareParamAllowList' internal/server/handlers/audiobooks/handler.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "257:var bareParamAllowList = map[string]struct{}{",
+    "err": "",
+    "expect": "1 hit L257",
+    "claim": "only an explicit, small allow-list (library_state, fingerprint_status) is excluded, matching the TODO's own caution about library_state"
+   }
+  ]
+ },
+ {
+  "id": "L847",
+  "todo_line": 847,
+  "title": "ApplyMetadataFileIO already returns error and batch_apply_one.go already observes it -- fixed",
+  "anchors": [
+   {
+    "cmd": "grep -n 'func (mfs \\*Service) ApplyMetadataFileIO' internal/metafetch/service_files.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "98:func (mfs *Service) ApplyMetadataFileIO(id string) error {",
+    "err": "",
+    "expect": "1 hit L98, signature ends in `error`",
+    "claim": "ApplyMetadataFileIO now returns error"
+   },
+   {
+    "cmd": "grep -n 'Until 2026-08-16 it returned nothing' internal/metafetch/service_files.go",
+    "rc": 1,
+    "nlines": 0,
+    "out": "",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "the fix is dated and self-documented in the function's doc comment"
+   },
+   {
+    "cmd": "grep -n 'ApplyMetadataFileIO(id string) error' internal/server/batch_apply_one.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "29:\tApplyMetadataFileIO(id string) error",
+    "err": "",
+    "expect": "1 hit L29",
+    "claim": "the two interfaces the TODO named now both declare the error return"
+   },
+   {
+    "cmd": "grep -n 'WriteBackFailed: true, Err: fileErr' internal/server/batch_apply_one.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "139:\t\treturn applyOutcome{Applied: true, WriteBackFailed: true, Err: fileErr}",
+    "err": "",
+    "expect": "1 hit L139",
+    "claim": "batch_apply_one.go observes the error and flags WriteBackFailed instead of unconditionally reporting success"
+   }
+  ]
+ },
+ {
+  "id": "L860",
+  "todo_line": 860,
+  "title": "OrganizeBookDirectory already rejects an empty organize at its own chokepoint -- fixed",
+  "anchors": [
+   {
+    "cmd": "grep -n 'if len(pathMap) == 0' internal/organizer/organizer.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "813:\tif len(pathMap) == 0 {",
+    "err": "",
+    "expect": "1 hit L813",
+    "claim": "OrganizeBookDirectory now refuses an empty pathMap with an error instead of returning a directory + nil error"
+   },
+   {
+    "cmd": "git log --oneline --grep='reject an empty organize inside OrganizeBookDirectory'",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "1 hit, commit 37badbcd"
+   },
+   {
+    "cmd": "grep -n 'func TestOrganizeBookDirectory_AllFilesMissing_IsAnError' internal/organizer/organizer_regression_test.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "60:func TestOrganizeBookDirectory_AllFilesMissing_IsAnError(t *testing.T) {",
+    "err": "",
+    "expect": "1 hit L60",
+    "claim": "a regression test proves the not-flagged-Missing case (the exact gap F6 describes) is now covered"
+   }
+  ]
+ },
+ {
+  "id": "L888",
+  "todo_line": 888,
+  "title": "audiobookStore was already narrowed to 8 entries WITHOUT splitting the service -- the item's 'irreducible without a split' premise is stale",
+  "anchors": [
+   {
+    "cmd": "grep -n 'type audiobookStore interface' internal/audiobooks/service.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "139:type audiobookStore interface {",
+    "err": "",
+    "expect": "1 hit L139, body shows 8 embeds",
+    "claim": "audiobookStore is 8 entries today, embedding authorSeriesStore by name"
+   },
+   {
+    "cmd": "grep -n 'Correction: .audiobookStore. did not need the service split' docs/audits/2026-08-18-interface-width-shapes.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "265:### Correction: `audiobookStore` did not need the service split",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "the audit doc explicitly retracts the service-split-is-required premise"
+   },
+   {
+    "cmd": "grep -n 'empty-interface compiler probe' internal/audiobooks/service.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "33:// method was enumerated with an empty-interface compiler probe run under",
+    "err": "",
+    "expect": "1 hit in the header comment above audiobookStore",
+    "claim": "the width was measured via the same empty-interface compiler probe methodology the TODO's own numbers came from"
+   }
+  ]
+ },
+ {
+  "id": "L970",
+  "todo_line": 970,
+  "title": "itunes/service.Store already narrowed to 7 entries -- the #2552-first blocker described in the TODO has already been resolved",
+  "anchors": [
+   {
+    "cmd": "awk '/^type Store interface/,/^}/' internal/itunes/service/store.go | grep -cE '^\\t[A-Za-z]'",
+    "rc": 0,
+    "nlines": 1,
+    "out": "7",
+    "err": "",
+    "expect": "7",
+    "claim": "itunes/service.Store composes 7 entries today, not 17 declared"
+   },
+   {
+    "cmd": "grep -n 'What changed for .itunes/service.Store.' docs/audits/2026-08-18-interface-width-shapes.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "307:### What changed for `itunes/service.Store`",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "the audit doc documents this as the completed re-probe/narrowing, citing the mechanism (#2552-style leaf narrowing first)"
+   },
+   {
+    "cmd": "grep -n 'which is how the result came in at 7 entries' docs/audits/2026-08-18-interface-width-shapes.md",
+    "rc": 1,
+    "nlines": 0,
+    "out": "",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "the audit doc's line stating the final entry count and its cause"
+   }
+  ]
+ },
+ {
+  "id": "L975",
+  "todo_line": 975,
+  "title": "audiobookStore/audiobookUpdateStore (11 each) is stale: audiobookUpdateStore was deleted, audiobookStore is now 8 entries",
+  "anchors": [
+   {
+    "cmd": "grep -rn 'type audiobookUpdateStore' --include=*.go .",
+    "rc": 1,
+    "nlines": 0,
+    "out": "",
+    "err": "",
+    "expect": "0 hits",
+    "claim": "audiobookUpdateStore was deleted, not split"
+   },
+   {
+    "cmd": "grep -n 'audiobookUpdateStore (11) -- .deleted, not split.' docs/audits/2026-08-18-interface-width-shapes.md",
+    "rc": 1,
+    "nlines": 0,
+    "out": "",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "the audit doc records the deletion explicitly"
+   },
+   {
+    "cmd": "grep -n 'type audiobookStore interface' internal/audiobooks/service.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "139:type audiobookStore interface {",
+    "err": "",
+    "expect": "1 hit L139",
+    "claim": "audiobookStore is 8 entries today (same anchor as L888)"
+   }
+  ]
+ },
+ {
+  "id": "L984",
+  "todo_line": 984,
+  "title": "positionSyncStore, pathRepairerStore, and the readstatus anonymous composite are all already narrowed -- fixed",
+  "anchors": [
+   {
+    "cmd": "grep -n 'type Store interface' internal/readstatus/readstatus.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "51:type Store interface {",
+    "err": "",
+    "expect": "1 hit L51",
+    "claim": "readstatus.Store is a named 4-method interface, not an anonymous composite"
+   },
+   {
+    "cmd": "grep -n 'func RecomputeUserBookState(store Store' internal/readstatus/readstatus.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "62:func RecomputeUserBookState(store Store, userID, bookID string) (*database.UserBookState, error) {",
+    "err": "",
+    "expect": "1 hit L62",
+    "claim": "RecomputeUserBookState/SetManualStatus take this named Store, not an inline anonymous interface"
+   },
+   {
+    "cmd": "grep -n 'Previously database.BookStore + BookFileStore + UserPositionStore, 86' internal/itunes/service/position_sync.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "43:// Previously database.BookStore + BookFileStore + UserPositionStore, 86",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "positionSyncStore's doc comment confirms it was already narrowed from 86 transitive methods"
+   },
+   {
+    "cmd": "grep -n 'Previously database.BookStore + BookFileStore + OperationStore' internal/itunes/service/path_repair.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "88:// Previously database.BookStore + BookFileStore + OperationStore +",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "pathRepairerStore's doc comment confirms it was already narrowed from 121 transitive methods"
+   }
+  ]
+ },
+ {
+  "id": "L1000",
+  "todo_line": 1000,
+  "title": "itunesservice.Store re-probe already happened -- 7 entries, and the 8 loose import-pipeline methods were resolved into their own importerStore",
+  "anchors": [
+   {
+    "cmd": "grep -n 'importerStore' internal/itunes/service/store.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "38:\timporterStore",
+    "err": "",
+    "expect": ">=1 hit",
+    "claim": "importerStore exists as its own entry in the Store composition"
+   },
+   {
+    "cmd": "grep -n 'which is what made .importerStore. a real surface' docs/audits/2026-08-18-interface-width-shapes.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "318:**one file**, `importer.go`, which is what made `importerStore` a real surface",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "the audit doc's re-probe result names importer.go as where the 24 calls landed, motivating importerStore"
+   }
+  ]
+ },
+ {
+  "id": "L1063",
+  "todo_line": 1063,
+  "title": "Audit every config option name for scope lies / asymmetric pairs / dead options",
+  "anchors": [
+   {
+    "cmd": "wc -l docs/audits/2026-08-20-config-option-audit.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "4281 docs/audits/2026-08-20-config-option-audit.md",
+    "err": "",
+    "expect": "4281 docs/audits/2026-08-20-config-option-audit.md",
+    "claim": "the audit doc exists and is the deliverable this item describes"
+   }
+  ]
+ },
+ {
+  "id": "L1767",
+  "todo_line": 1767,
+  "title": "Wire the iTunes smart-playlist IMPORT (MigrateSmartPlaylists) into a callable op \u2014 ALREADY DONE",
+  "anchors": [
+   {
+    "cmd": "grep -n 'importer.MigrateSmartPlaylists' internal/plugins/maintenance/itunes_playlist_import.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "190:\tprobe := importer.MigrateSmartPlaylists(lib, itunesservice.PlaylistImportOptions{\n220:\t\tres = importer.MigrateSmartPlaylists(lib, itunesservice.PlaylistImportOptions{",
+    "err": "",
+    "expect": "2 hits, L190 and L220",
+    "claim": "the op file exists and calls MigrateSmartPlaylists"
+   },
+   {
+    "cmd": "grep -n 'itunesPlaylistImportDef' internal/plugins/maintenance/plugin.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "49:\t\tp.itunesPlaylistImportDef(),",
+    "err": "",
+    "expect": "1 hit at L49",
+    "claim": "the op is registered in the plugin's operation list"
+   },
+   {
+    "cmd": "grep -n 'maintenance.itunes-playlist-import\\|DryRun: true' internal/plugins/maintenance/itunes_playlist_import.go",
+    "rc": 0,
+    "nlines": 3,
+    "out": "78:\t\tID:              \"maintenance.itunes-playlist-import\",\n85:\t\tConcurrencyKey:  \"maintenance.itunes-playlist-import\",\n96:\tparams := itunesPlaylistImportParams{DryRun: true} // safe default",
+    "err": "",
+    "expect": "hits confirming ID:\"maintenance.itunes-playlist-import\" and `params := itunesPlaylistImportParams{DryRun: true}`",
+    "claim": "the op ID and dry-run-by-default safety are present"
+   }
+  ]
+ },
+ {
+  "id": "L2077",
+  "todo_line": 2077,
+  "title": "Per-worktree e2e port derivation + served-bundle identity assertion + bind-failure non-zero exit \u2014 ALREADY DONE",
+  "anchors": [
+   {
+    "cmd": "grep -n 'E2E_PORT' web/tests/e2e/playwright.config.ts",
+    "rc": 0,
+    "nlines": 4,
+    "out": "7:import { E2E_PORT, E2E_TMP_PREFIX } from './e2e-env';\n63:    baseURL: `http://127.0.0.1:${E2E_PORT}`,\n145:    command: `bash -c 'export GOEXPERIMENT=jsonv2 && cd ${__dirname}/../../.. && cd web && npm run build && cd .. && go build -tags embed_frontend -o audiobook-organizer . && rm -rf ${E2E_TMP_PREFIX}-db && mkdir -p ${E2E_TMP_PREFIX}-db ${E2E_TMP_PREFIX}-books && ./audiobook-organizer serve -",
+    "err": "",
+    "expect": "\u22652 hits: import from ./e2e-env, and usage in baseURL/webServer",
+    "claim": "port is now derived per-worktree via a dedicated module, not hardcoded"
+   },
+   {
+    "cmd": "grep -n 'H113' web/tests/e2e/global-setup.ts",
+    "rc": 0,
+    "nlines": 2,
+    "out": "16:// Derived per worktree (H113) \u2014 two agents in different worktrees can no\n111:    // Freshness passed \u2014 now IDENTITY (H113). A sibling worktree's server that",
+    "err": "",
+    "expect": "\u22652 hits, including 'Derived per worktree (H113)' and 'now IDENTITY (H113)'",
+    "claim": "global-setup.ts implements the identity (not just freshness) check named H113"
+   },
+   {
+    "cmd": "grep -n 'index.html' web/tests/e2e/global-setup.ts",
+    "rc": 0,
+    "nlines": 5,
+    "out": "92:    ['frontend bundle', join(REPO_ROOT, 'web/dist/index.html')],\n199: * freshness). Compares the hashed asset filenames in the served index.html\n200: * against the local web/dist/index.html. Only called for reused servers \u2014\n206:    local = readFileSync(join(REPO_ROOT, 'web/dist/index.html'), 'utf8');\n212:    const res = await fetch(`http://127.0.0.1:${PORT}/index.html`);",
+    "err": "",
+    "expect": "hits confirming both the served and local web/dist/index.html are read and compared",
+    "claim": "the identity check compares hashed asset filenames as the item's fix-shape #2 specifies"
+   },
+   {
+    "cmd": "git log --oneline -1 -- web/tests/e2e/global-setup.ts",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "4568d4c1 'fix(e2e): per-worktree port + bundle identity + bind-failure exit (H113)'"
+   }
+  ]
+ },
+ {
+  "id": "L2219",
+  "todo_line": 2219,
+  "title": "Fix check-memory-leaks.py pairing addEventListener/removeEventListener by brace-depth instead of handler identity \u2014 ALREADY DONE",
+  "anchors": [
+   {
+    "cmd": "grep -n 'apiFetch.ts\\|Identity pairing' scripts/check-memory-leaks.py",
+    "rc": 0,
+    "nlines": 2,
+    "out": "138:           the 2026-08-11 false positive on apiFetch.ts had the add nested two\n174:                # Identity pairing: same event AND same handler, anywhere in",
+    "err": "",
+    "expect": "hits in check_untracked_listeners's docstring/body naming the exact false positive",
+    "claim": "the identity-pairing fix and its docstring citing the exact apiFetch.ts incident exist"
+   },
+   {
+    "cmd": "grep -n 'def test_named_handler_add_nested_two_levels_below_remove' scripts/test_check_memory_leaks.py",
+    "rc": 0,
+    "nlines": 1,
+    "out": "32:    def test_named_handler_add_nested_two_levels_below_remove(self):",
+    "err": "",
+    "expect": "1 hit at L32",
+    "claim": "the exact regression fixture requested by the item exists"
+   },
+   {
+    "cmd": "git log --oneline -1 -- scripts/check-memory-leaks.py",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "750f5df1 'fix(scripts): pair leak-scanner listeners by handler identity, not brace depth'"
+   }
+  ]
+ },
+ {
+  "id": "L2329",
+  "todo_line": 2329,
+  "title": "Fix GET /audiobooks/soft-deleted total count fetch-and-len() saturating at 10,000 \u2014 ALREADY DONE",
+  "anchors": [
+   {
+    "cmd": "grep -n 'CountSoftDeletedBooks\\|fetch-of-10,000-and-len' internal/server/handlers/audiobooks/handler.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "618:\t// Exact total for pagination. This replaced a fetch-of-10,000-and-len()\n621:\ttotal, err := h.audiobookService.CountSoftDeletedBooks(c.Request.Context(), olderThanDays)",
+    "err": "",
+    "expect": "2 hits: the call site and the comment naming the fixed defect",
+    "claim": "handler now calls the real count method with the exact defect-naming comment"
+   },
+   {
+    "cmd": "grep -n 'func.*CountSoftDeletedBooks' internal/database/soft_deleted_count.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "44:func (m *MemStore) CountSoftDeletedBooks(olderThan *time.Time) (int, error) {\n66:func (p *PebbleStore) CountSoftDeletedBooks(olderThan *time.Time) (int, error) {",
+    "err": "",
+    "expect": "2 hits: MemStore at L44, PebbleStore at L66",
+    "claim": "CountSoftDeletedBooks is implemented for both store backends without materializing full book structs"
+   },
+   {
+    "cmd": "grep -n 'TestCountSoftDeletedBooks_MemDBAndPebbleAgree' internal/database/book_visibility_conformance_test.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "430:// TestCountSoftDeletedBooks_MemDBAndPebbleAgree pins the counting capability\n434:func TestCountSoftDeletedBooks_MemDBAndPebbleAgree(t *testing.T) {",
+    "err": "",
+    "expect": "1 hit at L434",
+    "claim": "a conformance test asserts both backends agree"
+   },
+   {
+    "cmd": "grep -n 'CountSoftDeletedBooks(c.Request.Context' internal/server/handlers/audiobooks/handler.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "621:\ttotal, err := h.audiobookService.CountSoftDeletedBooks(c.Request.Context(), olderThanDays)",
+    "err": "",
+    "expect": "1 hit; the surrounding `if err != nil { httputil.InternalError(...) }` block confirms propagation",
+    "claim": "the count error is now propagated, not discarded"
+   }
+  ]
+ },
+ {
+  "id": "L3344",
+  "todo_line": 3344,
+  "title": "(already found and fixed) The writer creating vg- groups without a primary was the iTunes importer",
+  "anchors": [
+   {
+    "cmd": "git show -s --format=%B dd0cf6450a47492598c629331bba356ff8ffe242",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "full message describing the itunes importer minting a fresh vg group per new book and marking it non-primary"
+   },
+   {
+    "cmd": "git show --stat dd0cf6450a47492598c629331bba356ff8ffe242",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "internal/itunes/service/importer.go (14 changed lines) and internal/itunes/service/importer_primary_version_test.go (90 new lines) both listed"
+   }
+  ]
+ },
+ {
+  "id": "L3356",
+  "todo_line": 3356,
+  "title": "(already fixed) version_group_id filter is no longer silently ignored",
+  "anchors": [
+   {
+    "cmd": "grep -n '\"version_group_id\"' internal/audiobooks/service_filtering.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "528:\tcase \"version_group_id\":\n654:\t\"version_group_id\",",
+    "err": "",
+    "expect": "hits at L529 and L654",
+    "claim": "version_group_id is now in the canonical filter-field list"
+   },
+   {
+    "cmd": "git merge-base --is-ancestor b0ebccb0df0af717f8db4847f01d616b5acd72da 8f6d0d99 && echo ancestor",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "'ancestor' printed"
+   },
+   {
+    "cmd": "grep -n 'func TestVersionGroupIDFilter_MatchesMembersOnly' internal/audiobooks/filter_field_conformance_test.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "140:func TestVersionGroupIDFilter_MatchesMembersOnly(t *testing.T) {",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "a dedicated conformance test pins the fixed matcher semantics"
+   }
+  ]
+ },
+ {
+  "id": "L3377",
+  "todo_line": 3377,
+  "title": "(already fixed) Quoted phrases now correctly produce a MatchPhraseQuery",
+  "anchors": [
+   {
+    "cmd": "sed -n '224,251p' internal/search/query_parser.go",
+    "rc": 0,
+    "nlines": 28,
+    "out": "func (p *parser) parseFieldOrToken() (Node, error) {\n\t// A bare quoted phrase: \"all jobs\".\n\t//\n\t// This must be handled BEFORE the bare-token scan below, which stops at\n\t// whitespace and would therefore split `\"All Jobs\"` into two tokens,\n\t// `\"All` and `Jobs\"`, with the quote characters still attached. The\n\t// English analyser then discards those quotes as punctuation, so the\n\t// query behaved e",
+    "err": "",
+    "expect": "'if p.peek() == \\\"\\\\\\\"\\\" { phrase, err := p.parseQuoted() ... return &FreeTextNode{Value: phrase, Quoted: true}, nil }' preceded by a comment describing the fixed bug",
+    "claim": "the parser now handles a bare quoted phrase before the bare-token scan, with Quoted:true set"
+   },
+   {
+    "cmd": "git merge-base --is-ancestor 5b1a65b9 8f6d0d99 && echo ancestor",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "'ancestor' printed"
+   }
+  ]
+ },
+ {
+  "id": "L3423",
+  "todo_line": 3423,
+  "title": "(already fixed) The coverage gate now compares SETS of IDs, not counts, and logs both indexed=/books= numbers",
+  "anchors": [
+   {
+    "cmd": "sed -n '64,72p' internal/server/search_coverage.go",
+    "rc": 0,
+    "nlines": 9,
+    "out": "// It is a no-op on a healthy index, so it is safe to run on every boot.\n//\n// This replaced a count comparison (len(ids) <= DocCount() \u2192 \"OK\"), which a\n// polluted index passes forever: on production 2026-08-14 the index held\n// 67,824 docs against 63,871 live books \u2014 3,953 soft-deleted books indexed\n// by the 08-13 backfill, whose enumeration used the then-leaky trash-\n// including ListBookIDs \u2014",
+    "err": "",
+    "expect": "comment: 'This replaced a count comparison (len(ids) <= DocCount() -> \\\"OK\\\")... 67,824 docs against 63,871 live books'",
+    "claim": "the file explicitly documents replacing a count comparison with a set comparison, citing the exact failure mode this item describes"
+   },
+   {
+    "cmd": "grep -n 'missing\\|stale\\|indexed\\[id\\]\\|live\\[id\\]' internal/server/search_coverage.go",
+    "rc": 0,
+    "nlines": 22,
+    "out": "19:// 2026-04 were 97% searchable (38 found / 1 missing) while books created\n20:// 2026-08 were 2% (1 found / 50 missing) \u2014 a step function, not a uniform\n23:// actually matched were in the missing cohort, and the five survivors\n60:// against the SET of live book IDs, marks the missing ones dirty so\n61:// runSearchReconciler re-indexes them, and deletes stale documents whose\n71:// the top. Padding",
+    "err": "",
+    "expect": "multiple hits implementing set membership tests, not count comparisons",
+    "claim": "the code builds and diffs ID sets, not just counts"
+   },
+   {
+    "cmd": "grep -n 'slog.Info(\"search index coverage OK\"' internal/server/search_coverage.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "130:\t\tslog.Info(\"search index coverage OK\", \"indexed\", len(docIDs), \"books\", len(ids))",
+    "err": "",
+    "expect": "1 hit logging both indexed and books counts",
+    "claim": "both counts are logged on every boot, healthy or not"
+   }
+  ]
+ },
+ {
+  "id": "L3469",
+  "todo_line": 3469,
+  "title": "Fuzzy-query case-sensitivity fix (already shipped)",
+  "anchors": [
+   {
+    "cmd": "grep -n \"bleve.NewFuzzyQuery(patternTerm\" internal/search/bleve_translator.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "253:\t\tfq := bleve.NewFuzzyQuery(patternTerm(n.Value))\n351:\t\treturn bleve.NewFuzzyQuery(patternTerm(n.Value))",
+    "err": "",
+    "expect": "2 hits, L253 and L351",
+    "claim": "fielded fuzzy query lowercases its term via patternTerm()"
+   }
+  ]
+ },
+ {
+  "id": "L3502",
+  "todo_line": 3502,
+  "title": "Activity summaries render slog attrs instead of dropping them (already shipped)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'cover art saved to' internal/activity/writer.go",
+    "rc": 0,
+    "nlines": 3,
+    "out": "276:\t// rows reading \"cover art saved to\" (to WHERE?) and \"ISBN enrichment\n298:// \"cover art saved to\" + path=/lib/x.jpg reads correctly as\n299:// \"cover art saved to /lib/x.jpg\", where \"cover art saved to path=/lib/x.jpg\"",
+    "err": "",
+    "expect": "1 hit, in the trailingPrepositions doc comment ~L298",
+    "claim": "RenderSummary renders a trailing-preposition message plus its first attr as the sentence's object, citing 'cover art saved to' as the motivating example"
+   },
+   {
+    "cmd": "grep -n 'ISBN enrichment found' internal/activity/writer.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "358://\tISBN enrichment found\" isbn=\"9780553293357\" title=\"Foundation",
+    "err": "",
+    "expect": "1 hit in the doc comment ~L358",
+    "claim": "scanSlogAttrs fixes the stray-quote bug, citing the exact 'ISBN enrichment found' example from the TODO"
+   },
+   {
+    "cmd": "grep -n 'Summary:.*RenderSummary' internal/activity/writer.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "140:\t\tSummary:     RenderSummary(parsed),",
+    "err": "",
+    "expect": "1 hit ~L140",
+    "claim": "sendEntry uses RenderSummary to build the Summary field"
+   },
+   {
+    "cmd": "grep -n 'cover art saved to\\|ISBN enrichment succeeded for' internal/metafetch/service_apply.go internal/metafetch/service_fetch.go",
+    "rc": 0,
+    "nlines": 3,
+    "out": "internal/metafetch/service_apply.go:723:\tslog.Info(\"cover art saved to\", \"path\", coverPath, \"id\", bookID)\ninternal/metafetch/service_fetch.go:37:\t\t\tslog.Info(\"ISBN enrichment succeeded for\", \"id\", bid)\ninternal/metafetch/service_fetch.go:292:\t\t\t\t\tslog.Info(\"cover art saved to\", \"path\", coverPath)",
+    "err": "",
+    "expect": "3 hits: service_apply.go:723, service_fetch.go:37, service_fetch.go:292",
+    "claim": "metafetch's two flagged slog.Info calls still exist at HEAD (line numbers shifted from the 2026-08-14 report but the calls remain) and both route through the fi"
+   }
+  ]
+ },
+ {
+  "id": "L3566",
+  "todo_line": 3566,
+  "title": "Root cause of the lost entity semicolon \u2014 found and fixed (already shipped)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'htmlEntityRe' internal/metadata/folder_parser.go",
+    "rc": 0,
+    "nlines": 4,
+    "out": "388:// htmlEntityRe matches an HTML entity (\"&#169;\", \"&amp;\") so its terminating\n392:var htmlEntityRe = regexp.MustCompile(`&#?[a-zA-Z0-9]+;`)\n397:\t// Protect HTML-entity semicolons (see htmlEntityRe) with a sentinel that\n400:\ts = htmlEntityRe.ReplaceAllStringFunc(s, func(m string) string {",
+    "err": "",
+    "expect": "2 hits: var definition ~L392, use inside splitMultipleAuthors ~L400",
+    "claim": "htmlEntityRe protects entity semicolons before the author-separator split"
+   },
+   {
+    "cmd": "grep -n '46583' internal/metadata/folder_parser.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "391:// \"&#169\" author row (id 46583) \u2014 the entity's \";\" is not a separator.",
+    "err": "",
+    "expect": "1 hit in htmlEntityRe's doc comment",
+    "claim": "the fix's doc comment names row 46583 as the exact bug it resolves"
+   }
+  ]
+ },
+ {
+  "id": "L3571",
+  "todo_line": 3571,
+  "title": "Decide whether to HTML-unescape author names \u2014 resolved: reject, don't unescape (already shipped)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'HasPrefix(name, \"\u00a9\") || strings.HasPrefix(name, \"&#\")' internal/dedup/author.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "163:\tif strings.HasPrefix(name, \"\u00a9\") || strings.HasPrefix(name, \"&#\") {",
+    "err": "",
+    "expect": "1 hit ~L163",
+    "claim": "IsDirtyAuthorName rejects entity-prefixed names outright instead of unescaping them"
+   },
+   {
+    "cmd": "grep -rn 'html.UnescapeString' internal/",
+    "rc": 1,
+    "nlines": 0,
+    "out": "",
+    "err": "",
+    "expect": "0 hits",
+    "claim": "no html.UnescapeString call exists anywhere in the ingest path, confirming the 'unescape' branch was not taken"
+   },
+   {
+    "cmd": "grep -n 'dedup.IsDirtyAuthorName' internal/importer/service.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "202:\t\tif dedup.IsDirtyAuthorName(normalizedArtist) {",
+    "err": "",
+    "expect": "1 hit, L202",
+    "claim": "the importer gates author creation on IsDirtyAuthorName"
+   }
+  ]
+ },
+ {
+  "id": "L3576",
+  "todo_line": 3576,
+  "title": "isDirtyAuthorName creation-time rejection rule (already shipped as IsDirtyAuthorName)",
+  "anchors": [
+   {
+    "cmd": "grep -n -A15 'func IsDirtyAuthorName' internal/dedup/author.go",
+    "rc": 0,
+    "nlines": 16,
+    "out": "158:func IsDirtyAuthorName(name string) bool {\n159-\tname = strings.TrimSpace(name)\n160-\tif strings.Contains(name, \" - \") {\n161-\t\treturn true\n162-\t}\n163-\tif strings.HasPrefix(name, \"\u00a9\") || strings.HasPrefix(name, \"&#\") {\n164-\t\treturn true\n165-\t}\n166-\tif leadingYearRe.MatchString(name) {\n167-\t\treturn true\n168-\t}\n169-\n170-\tlower := strings.ToLower(name)\n171-\tpublisherSuffixes := []string{\"production\"",
+    "err": "",
+    "expect": "1 hit, L158, body checks HasPrefix '\u00a9'/'&#' and leadingYearRe",
+    "claim": "IsDirtyAuthorName implements the leading (c)/&#/4-digit-year rule proposed by this item"
+   },
+   {
+    "cmd": "grep -n 'leadingYearRe = regexp' internal/dedup/author.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "193:var leadingYearRe = regexp.MustCompile(`^\\d{4}\\b`)",
+    "err": "",
+    "expect": "1 hit, L193, pattern ^\\\\d{4}\\\\b",
+    "claim": "leadingYearRe matches a 4-digit year opening the name"
+   },
+   {
+    "cmd": "grep -n 'dedup.IsDirtyAuthorName' internal/importer/service.go internal/dedup/author.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "internal/importer/service.go:202:\t\tif dedup.IsDirtyAuthorName(normalizedArtist) {",
+    "err": "",
+    "expect": ">=4 hits across both files (definition + 3 call sites)",
+    "claim": "the rule is wired into the importer's author-creation path, not just defined"
+   }
+  ]
+ },
+ {
+  "id": "L3595",
+  "todo_line": 3595,
+  "title": "Comma-branch person-vs-title shape check (already shipped as looksLikePersonName)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'looksLikePersonName(normalized)' internal/dedup/author.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "289:\t\t\tif !looksLikePersonName(normalized) {",
+    "err": "",
+    "expect": "1 hit ~L289",
+    "claim": "the comma branch now shape-checks every part via looksLikePersonName instead of a bare space check"
+   },
+   {
+    "cmd": "grep -n 'func looksLikePersonName' internal/dedup/author.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "210:func looksLikePersonName(part string) bool {",
+    "err": "",
+    "expect": "1 hit, L210",
+    "claim": "looksLikePersonName exists and implements the 2-4 word / no-leading-lowercase / no-trailing-paren shape test"
+   },
+   {
+    "cmd": "grep -n 'C414' internal/dedup/author.go",
+    "rc": 0,
+    "nlines": 5,
+    "out": "195:// looksLikePersonName is the comma-branch gate (C414): 2\u20134 words, does not\n246:\t// refuse every split rather than guessing at its clauses (C414).\n270:\t// C414: \"contains a space\" alone let TITLE clauses through \u2014 a comma-split\n341:\t\t\t\t\t// Same person-shape gate as the comma branch (C414):\n380:\t// gate just refused (C414).",
+    "err": "",
+    "expect": ">=2 hits",
+    "claim": "the fix's own comment cites this defect and its example rows verbatim"
+   }
+  ]
+ },
+ {
+  "id": "L3598",
+  "todo_line": 3598,
+  "title": "Require person-shape before accepting a comma split (already shipped as looksLikePersonName)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'len(fields) < 2 || len(fields) > 4' internal/dedup/author.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "212:\tif len(fields) < 2 || len(fields) > 4 {",
+    "err": "",
+    "expect": "1 hit ~L212",
+    "claim": "word-count bound is 2-4"
+   },
+   {
+    "cmd": "grep -n 'HasSuffix(strings.TrimSpace(part), \")\")' internal/dedup/author.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "231:\tif strings.HasSuffix(strings.TrimSpace(part), \")\") {",
+    "err": "",
+    "expect": "1 hit ~L231",
+    "claim": "trailing parenthetical is rejected, matching the '(DBY)' example in this item"
+   },
+   {
+    "cmd": "grep -n 'nameParticles' internal/dedup/author.go",
+    "rc": 0,
+    "nlines": 3,
+    "out": "201:// nameParticles are lowercase words that legitimately appear inside personal\n203:var nameParticles = map[string]bool{\n224:\t\tif len(r) > 0 && unicode.IsLower(r[0]) && !nameParticles[strings.ToLower(w)] {",
+    "err": "",
+    "expect": ">=2 hits (map def + use)",
+    "claim": "interior lowercase words are rejected unless they are legitimate name particles (de/van/von/etc)"
+   }
+  ]
+ },
+ {
+  "id": "L3682",
+  "todo_line": 3682,
+  "title": "Backfill explicit true onto the 5,702 nil is_primary_version rows (already done, verified on prod)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'C111 went 5702/41/0' docs/handoffs/2026-08-15-opus-orchestrator-handoff.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "133:(C111 went 5702/41/0 \u2192 applied \u2192 0/0/0; E01 went 26,027 \u2192 0; E02 went",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "the backfill was applied and verified with a re-dry-run showing 0 remaining"
+   },
+   {
+    "cmd": "grep -n 'C111' docs/handoffs/2026-08-14-task-board.md",
+    "rc": 0,
+    "nlines": 2,
+    "out": "52:| C111 | nil `is_primary_version` semantics (D-2) | \u2705 **CLOSED ON PROD** \u2014 job merged #2449; dry-run matched the census EXACTLY (5,702 + 41 + 0 grouped-nils), apply wrote 5,743 with 0 errors, re-dry-run 0/0/0. C314's 41 fixed in the same pass |\n55:| C310\u2013C314 | Version-group integrity | \u2b1c C310 gates; C314's exact 41-book population identified by the C111 census |",
+    "err": "",
+    "expect": "1 hit, L52, '\u2705 CLOSED ON PROD'",
+    "claim": "the task board independently confirms the same closure with the exact same numbers"
+   }
+  ]
+ },
+ {
+  "id": "L3685",
+  "todo_line": 3685,
+  "title": "Fix the 41 ungrouped-false is_primary_version rows to true (already done, in the same C111 pass)",
+  "anchors": [
+   {
+    "cmd": "grep -n \"C314's 41 fixed\" docs/handoffs/2026-08-14-task-board.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "52:| C111 | nil `is_primary_version` semantics (D-2) | \u2705 **CLOSED ON PROD** \u2014 job merged #2449; dry-run matched the census EXACTLY (5,702 + 41 + 0 grouped-nils), apply wrote 5,743 with 0 errors, re-dry-run 0/0/0. C314's 41 fixed in the same pass |",
+    "err": "",
+    "expect": "1 hit, L52",
+    "claim": "the 41-row C314 population was fixed in the same C111 apply pass"
+   }
+  ]
+ },
+ {
+  "id": "L3686",
+  "todo_line": 3686,
+  "title": "Re-run the C111 census as post-fix verification (already done, confirmed exactly two populations)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'C111 went 5702/41/0' docs/handoffs/2026-08-15-opus-orchestrator-handoff.md",
+    "rc": 0,
+    "nlines": 1,
+    "out": "133:(C111 went 5702/41/0 \u2192 applied \u2192 0/0/0; E01 went 26,027 \u2192 0; E02 went",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "the post-apply re-dry-run census result is documented as 0/0/0"
+   }
+  ]
+ },
+ {
+  "id": "L3910",
+  "todo_line": 3910,
+  "title": "MEASURE SearchBooks(q, 0, 0) limit-0 semantics (already resolved at HEAD)",
+  "anchors": [
+   {
+    "cmd": "grep -n \"limit == 0 means\" internal/database/pebble_store.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "2928:\t\t\t// limit == 0 means \"no limit\" (return all matches).",
+    "err": "",
+    "expect": "1 hit ~L2928",
+    "claim": "SearchBooks treats limit=0 as unlimited, not zero"
+   },
+   {
+    "cmd": "grep -n \"TestSearchBooksUnlimited\" internal/database/pebble_store_test.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "626:// TestSearchBooksUnlimited verifies that limit=0 returns all matching results\n628:func TestSearchBooksUnlimited(t *testing.T) {",
+    "err": "",
+    "expect": "1 hit L628",
+    "claim": "A named PERF-4 regression test already exists and passes"
+   }
+  ]
+ },
+ {
+  "id": "L3921",
+  "todo_line": 3921,
+  "title": "Propagate v2 op terminal status onto its paired legacy operation row (already shipped)",
+  "anchors": [
+   {
+    "cmd": "grep -n \"func (r \\*Registry) propagateLegacyOpStatus\" internal/operations/registry/legacy_op_status.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "91:func (r *Registry) propagateLegacyOpStatus(opID, v2Status string) {",
+    "err": "",
+    "expect": "1 hit L91",
+    "claim": "propagateLegacyOpStatus exists and mirrors v2 terminal status onto the legacy row"
+   },
+   {
+    "cmd": "grep -n \"This runs from publishOpTerminal\" internal/operations/registry/legacy_op_status.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "86:// This runs from publishOpTerminal, which every terminal path already funnels",
+    "err": "",
+    "expect": "1 hit ~L86",
+    "claim": "It is wired to run on every terminal transition, per its own doc comment"
+   }
+  ]
+ },
+ {
+  "id": "L3948",
+  "todo_line": 3948,
+  "title": "opstate:<id>/opstate:<id>:params retention sweep (already shipped in retention-and-hygiene)",
+  "anchors": [
+   {
+    "cmd": "grep -n \"func deleteStaleOperationState\" internal/maintenance/jobs/retention_and_hygiene.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "288:func deleteStaleOperationState(ctx context.Context, store retentionOpStateStore, dryRun bool) (int, error) {",
+    "err": "",
+    "expect": "1 hit L288",
+    "claim": "deleteStaleOperationState exists and sweeps both opstate:<id> and opstate:<id>:params"
+   },
+   {
+    "cmd": "grep -n \"Only 2 of the 34 maintenance jobs\" internal/maintenance/jobs/retention_and_hygiene.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "109:\t// owning operation is finished or gone. Only 2 of the 34 maintenance jobs",
+    "err": "",
+    "expect": "1 hit ~L109",
+    "claim": "It is called from retention-and-hygiene's Run, with a comment citing the same '2 of 34 jobs call ClearState' fact"
+   },
+   {
+    "cmd": "grep -n \"opstate:%s:params\" internal/database/pebble_store_operations.go",
+    "rc": 0,
+    "nlines": 3,
+    "out": "345:\tkey := []byte(fmt.Sprintf(\"opstate:%s:params\", opID))\n350:\tkey := []byte(fmt.Sprintf(\"opstate:%s:params\", opID))\n368:\tif err := batch.Delete([]byte(fmt.Sprintf(\"opstate:%s:params\", opID)), nil); err != nil {",
+    "err": "",
+    "expect": ">=2 hits",
+    "claim": "DeleteOperationState deletes both keys in one batch"
+   }
+  ]
+ },
+ {
+  "id": "L3976",
+  "todo_line": 3976,
+  "title": "Make the maintenance-job resume fallback observable via a metric (already shipped)",
+  "anchors": [
+   {
+    "cmd": "grep -n \"metrics.RecordMaintenanceResumeParamsFallback\" internal/server/server_lifecycle.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "293:\t\t\t\t\tmetrics.RecordMaintenanceResumeParamsFallback(jobID, \"load_error\")\n302:\t\t\t\t\tmetrics.RecordMaintenanceResumeParamsFallback(jobID, \"no_saved_params\")",
+    "err": "",
+    "expect": "2 hits, L293 and L302",
+    "claim": "The fallback path calls a dedicated metric, not just a log line"
+   },
+   {
+    "cmd": "grep -n \"maintenance_resume_params_fallback_total\" internal/metrics/metrics.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "162:\t\tName:      \"maintenance_resume_params_fallback_total\",",
+    "err": "",
+    "expect": "1 hit L162",
+    "claim": "The metric is a real registered Prometheus counter"
+   }
+  ]
+ },
+ {
+  "id": "L3982",
+  "todo_line": 3982,
+  "title": "Metadata matcher: shift-click range selection (already shipped)",
+  "anchors": [
+   {
+    "cmd": "grep -n \"applyFieldClick\" web/src/components/audiobooks/fieldRangeSelect.ts",
+    "rc": 0,
+    "nlines": 2,
+    "out": "7: * applyFieldClick implements file-manager selection semantics for the\n14:export function applyFieldClick(",
+    "err": "",
+    "expect": ">=1 hit, function definition",
+    "claim": "A shared file-manager-style range-select helper exists and is tested"
+   },
+   {
+    "cmd": "grep -n \"fieldAnchorRef\" web/src/components/audiobooks/BulkMetadataSearchDialog.tsx",
+    "rc": 0,
+    "nlines": 3,
+    "out": "135:  const fieldAnchorRef = useRef<string | null>(null);\n389:      const r = applyFieldClick(prev, field, shiftKey, fieldAnchorRef.current, visibleFields);\n390:      fieldAnchorRef.current = r.anchor;",
+    "err": "",
+    "expect": ">=1 hit",
+    "claim": "It is wired into the matcher dialog with an anchor ref for shift-click"
+   },
+   {
+    "cmd": "grep -n \"describe('applyFieldClick'\" web/src/components/audiobooks/fieldRangeSelect.test.ts",
+    "rc": 0,
+    "nlines": 1,
+    "out": "11:describe('applyFieldClick', () => {",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "It has its own dedicated test file"
+   }
+  ]
+ },
+ {
+  "id": "L3988",
+  "todo_line": 3988,
+  "title": "Metadata matcher: hide-multiples control for multi-match groups (already shipped as 'Hide multi-book matches')",
+  "anchors": [
+   {
+    "cmd": "grep -n \"hideMultiBook\" web/src/components/review/lanes/useMetadataLane.ts",
+    "rc": 0,
+    "nlines": 10,
+    "out": "80:  hideMultiBook: true,\n249:  hideMultiBook: boolean;\n266:    hideMultiBook: strict && STRICT_PRESET.hideMultiBook,\n467:      hideMultiBook: on ? STRICT_PRESET.hideMultiBook : false,\n538:    if (!filters.hideMultiBook) return new Set<string>();\n552:  }, [filters.hideMultiBook, preGroupFiltered, ungroupedIds]);\n556:      filters.hideMultiBook\n559:    [filters.hideMultiBook, preGroupFiltered, mult",
+    "err": "",
+    "expect": ">=8 hits",
+    "claim": "hideMultiBook filter exists with the described 'hide multi-match, remove from bulk apply' behavior"
+   },
+   {
+    "cmd": "grep -n \"Hide multi-book matches\" web/src/components/review/QueueRail.tsx",
+    "rc": 0,
+    "nlines": 1,
+    "out": "78:    label: 'Hide multi-book matches',",
+    "err": "",
+    "expect": "1 hit ~L78",
+    "claim": "Surfaced as a labeled UI toggle"
+   },
+   {
+    "cmd": "grep -n \"saveStrictPreset\\|loadStrictPreset\" web/src/components/review/lanes/useMetadataLane.ts",
+    "rc": 0,
+    "nlines": 5,
+    "out": "102:export function loadStrictPreset(): boolean {\n107:export function saveStrictPreset(on: boolean): void {\n257:  const strict = loadStrictPreset();\n353:  const [strictPreset, setStrictPresetState] = useState(loadStrictPreset);\n463:    saveStrictPreset(on);",
+    "err": "",
+    "expect": ">=2 hits",
+    "claim": "Persisted via localStorage as part of the Strict-review preset"
+   }
+  ]
+ },
+ {
+  "id": "L3995",
+  "todo_line": 3995,
+  "title": "Metadata matcher: honest session-timeout message + refresh-and-report on batch apply (already shipped)",
+  "anchors": [
+   {
+    "cmd": "grep -n \"isAuthRedirectError(err)\" web/src/components/review/lanes/useMetadataLane.ts",
+    "rc": 0,
+    "nlines": 1,
+    "out": "673:      if (isAuthRedirectError(err)) {",
+    "err": "",
+    "expect": "1 hit L673",
+    "claim": "handleApplyError detects the auth-redirect case and reports it accurately instead of claiming nothing happened"
+   },
+   {
+    "cmd": "grep -n \"Any books already applied were kept\" web/src/components/review/lanes/useMetadataLane.ts",
+    "rc": 0,
+    "nlines": 1,
+    "out": "675:          'Session expired \u2014 sign in again. Any books already applied were kept; the list has been refreshed.',",
+    "err": "",
+    "expect": "1 hit ~L675",
+    "claim": "It refreshes server state rather than reverting rows to pending on a guess"
+   }
+  ]
+ },
+ {
+  "id": "L4007",
+  "todo_line": 4007,
+  "title": "Metadata matcher: dispatch multi-file write-to-files as a background operation (already shipped)",
+  "anchors": [
+   {
+    "cmd": "grep -n \"batchApplyFromCache\" web/src/components/review/lanes/useMetadataLane.ts",
+    "rc": 0,
+    "nlines": 1,
+    "out": "689:      const dispatch = await api.batchApplyFromCache(requestedIds, writeBack);",
+    "err": "",
+    "expect": "1 hit L689",
+    "claim": "Batch apply dispatches via a v2 op and returns immediately, UI polls for progress"
+   },
+   {
+    "cmd": "grep -n \"metadata.batch-apply-cached\" internal/server/batch_apply_op.go",
+    "rc": 0,
+    "nlines": 5,
+    "out": "6:// batch_apply_op registers the \"metadata.batch-apply-cached\" v2 OperationDef.\n35:// batchApplyOpParams is the JSON params for the metadata.batch-apply-cached op.\n44:// RegisterBatchApplyFromCacheOp registers the \"metadata.batch-apply-cached\" op.\n61:\t\tID:              \"metadata.batch-apply-cached\",\n71:\t\tConcurrencyKey:  \"metadata.batch-apply-cached\",",
+    "err": "",
+    "expect": "1 hit L61",
+    "claim": "The v2 op backing it exists server-side"
+   },
+   {
+    "cmd": "grep -n \"pool.Submit(bookID\" internal/server/handlers/metadata/handler.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "622:\t\tpool.Submit(bookID, func() {",
+    "err": "",
+    "expect": "1 hit L622",
+    "claim": "The single-book apply-metadata endpoint already backgrounds its file I/O regardless of file count"
+   }
+  ]
+ },
+ {
+  "id": "L4107",
+  "todo_line": 4107,
+  "title": "Offset-pagination walkers: all 7 already collapsed to a single limit-0 call",
+  "anchors": [
+   {
+    "cmd": "grep -n \"GetAllBooksCore(0, 0)\" internal/quarantine/service.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "232:\tbooks, err := qs.store.GetAllBooksCore(0, 0)",
+    "err": "",
+    "expect": "1 hit at L232",
+    "claim": "quarantine/service.go AutoQuarantineFailedScans uses one limit-0 call"
+   },
+   {
+    "cmd": "grep -n \"GetAllBooksCore(0, 0)\" internal/plugins/maintenance/repair_junk_titles.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "75:\tall, err := store.GetAllBooksCore(0, 0)",
+    "err": "",
+    "expect": "1 hit at L75",
+    "claim": "repair_junk_titles.go uses one limit-0 call"
+   },
+   {
+    "cmd": "grep -n \"GetAllBooksCore(0, 0)\" internal/plugins/maintenance/title_backfill.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "82:\tbooks, err := store.GetAllBooksCore(0, 0)",
+    "err": "",
+    "expect": "1 hit at L82",
+    "claim": "title_backfill.go uses one limit-0 call"
+   },
+   {
+    "cmd": "grep -n \"GetAllBooksCore(0, 0)\" internal/plugins/maintenance/title_repair.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "196:\tbooks, err := store.GetAllBooksCore(0, 0)",
+    "err": "",
+    "expect": "1 hit at L196",
+    "claim": "title_repair.go uses one limit-0 call"
+   },
+   {
+    "cmd": "grep -n \"GetAllBooksCore(0, 0)\" internal/plugins/maintenance/duration_backfill.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "91:\tallBooks, err := store.GetAllBooksCore(0, 0)",
+    "err": "",
+    "expect": "1 hit at L91",
+    "claim": "duration_backfill.go uses one limit-0 call"
+   },
+   {
+    "cmd": "grep -n \"GetAllBooksCore(0, 0)\" internal/database/pebble_store.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "1477:\tpage, err := p.GetAllBooksCore(0, 0)\n1611:\tpage, err := p.GetAllBooksCore(0, 0)",
+    "err": "",
+    "expect": "2 hits, one at L1477 (GetFolderDuplicatesCore) one at L1611 (GetDuplicateBooksByMetadataCore)",
+    "claim": "GetFolderDuplicatesCore (folder-dup pager) uses one limit-0 call with the reconcile #2443 comment"
+   }
+  ]
+ },
+ {
+  "id": "L4117",
+  "todo_line": 4117,
+  "title": "CI flake repro already built and the write-loss bug already fixed",
+  "anchors": [
+   {
+    "cmd": "grep -n \"warmup\" internal/database/memdb_pending.go",
+    "rc": 0,
+    "nlines": 20,
+    "out": "13:// Pending-write buffer for the async memdb warmup window.\n28:// the HTTP server starts serving (and writing) while warmup is still scanning \u2014\n48:// While warmup is in flight, memSync records each write-through instead of\n65:// memPendingOpCap bounds how many write-throughs may be buffered during warmup.\n73:// warmup, which is a bulk import racing startup rather than normal traffic.\n84:\t// memP",
+    "err": "",
+    "expect": "several hits describing the buffer-and-replay mechanism",
+    "claim": "memdb_pending.go buffers write-throughs during warmup instead of dropping them"
+   },
+   {
+    "cmd": "grep -n \"^func Test\" internal/database/memdb_warmup_writeloss_test.go",
+    "rc": 0,
+    "nlines": 5,
+    "out": "73:func TestWarmupWriteLoss_CreateDuringWarmupIsVisible(t *testing.T) {\n149:func TestWarmupWriteLoss_DeleteDuringWarmupLeavesNoPhantom(t *testing.T) {\n223:func TestWarmupWriteLoss_ConcurrentWritesAllVisible(t *testing.T) {\n286:func TestWarmupWriteLoss_BufferOverflowDegradesLoudly(t *testing.T) {\n356:func TestWarmupWriteLoss_ResetDuringWarmupIsNotUndone(t *testing.T) {",
+    "err": "",
+    "expect": "5 hits",
+    "claim": "5 regression tests for the exact race exist"
+   },
+   {
+    "cmd": "git log -1 --format=%B 587b2fd0",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "commit body mentions 'lost write', 'iterator', 'memPtr.Store', 'buffer and replay'"
+   }
+  ]
+ },
+ {
+  "id": "L4144",
+  "todo_line": 4144,
+  "title": "Author-placeholder rename gate already shipped \u2014 verify only",
+  "anchors": [
+   {
+    "cmd": "grep -n \"authorUnresolved := !org.HasResolvedAuthor\" internal/organizer/preview.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "135:\tauthorUnresolved := !org.HasResolvedAuthor(book)",
+    "err": "",
+    "expect": "1 hit ~L133",
+    "claim": "PreviewService gates rename/copy behind HasResolvedAuthor"
+   },
+   {
+    "cmd": "grep -n \"skippedUnresolvedAuthor\" internal/organizer/service.go",
+    "rc": 0,
+    "nlines": 4,
+    "out": "625:\tskippedUnresolvedAuthor := 0\n709:\t\t\tskippedUnresolvedAuthor++\n714:\tif skippedUnresolvedAuthor > 0 {\n715:\t\tlog.Info(\"Organize: Deferred %d book(s) with unresolved author \u2014 run metadata fetch, then organize renames them properly\", skippedUnresolvedAuthor)",
+    "err": "",
+    "expect": "hits at L625 (init), L709 (increment), L714-715 (log)",
+    "claim": "PerformOrganize's bulk loop defers books with unresolved author instead of renaming them"
+   },
+   {
+    "cmd": "grep -n \"func (o \\*Organizer) HasResolvedAuthor\" internal/organizer/organizer.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "402:func (o *Organizer) HasResolvedAuthor(book *database.Book) bool {",
+    "err": "",
+    "expect": "1 hit at L402",
+    "claim": "HasResolvedAuthor is the exported gate function"
+   },
+   {
+    "cmd": "git log --oneline -1 106f4c75",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "fix(organizer): defer rename/copy while the author is unresolved"
+   }
+  ]
+ },
+ {
+  "id": "L4186",
+  "todo_line": 4186,
+  "title": "Bleve stale-doc reconcile pass already shipped",
+  "anchors": [
+   {
+    "cmd": "grep -n \"func (s \\*Server) reconcileSearchIndexCoverage\" internal/server/search_coverage.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "74:func (s *Server) reconcileSearchIndexCoverage() {",
+    "err": "",
+    "expect": "1 hit at L74",
+    "claim": "reconcileSearchIndexCoverage deletes stale (soft-deleted/gone) docs via a set comparison, not the old count gate"
+   },
+   {
+    "cmd": "grep -n \"3,953\" internal/server/search_coverage.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "68:// 67,824 docs against 63,871 live books \u2014 3,953 soft-deleted books indexed",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "the fix's comment names the same 3,953 figure this TODO item cites"
+   },
+   {
+    "cmd": "grep -n \"s.searchIndex.DeleteBook(id)\" internal/server/search_coverage.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "168:\t\tif err := s.searchIndex.DeleteBook(id); err != nil {",
+    "err": "",
+    "expect": "1 hit ~L168",
+    "claim": "stale docs are actually deleted via searchIndex.DeleteBook, not just logged"
+   }
+  ]
+ },
+ {
+  "id": "L4192",
+  "todo_line": 4192,
+  "title": "Bogus-value control test for the stale-doc reconcile already shipped",
+  "anchors": [
+   {
+    "cmd": "grep -n \"func TestSearchCoverage_StaleDocsAreDeleted\" internal/server/search_coverage_test.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "185:func TestSearchCoverage_StaleDocsAreDeleted(t *testing.T) {",
+    "err": "",
+    "expect": "1 hit at L185",
+    "claim": "the test exists and does a before/after title search on trashed content"
+   },
+   {
+    "cmd": "grep -n \"title:trashed\\|title:vanished\" internal/server/search_coverage_test.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "221:\tfor _, probe := range []string{\"title:trashed\", \"title:vanished\"} {",
+    "err": "",
+    "expect": ">=2 hits",
+    "claim": "it probes with a title search after reconcile and asserts 0 hits for the ghost docs"
+   },
+   {
+    "cmd": "grep -n \"title:charisma\" internal/server/search_coverage_test.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "75:\t\"cov-03\": \"title:charisma\",\n231:\thits, _, err := idx.Search(\"title:charisma\", 0, 5)",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "it also asserts the live book's search still works (known-good twin)"
+   }
+  ]
+ },
+ {
+  "id": "L4212",
+  "todo_line": 4212,
+  "title": "FE-2/FE-3/FE-4 stale-deps findings all already fixed",
+  "anchors": [
+   {
+    "cmd": "grep -n \"pageSize,\" web/src/pages/ActivityLog.tsx",
+    "rc": 0,
+    "nlines": 4,
+    "out": "240:  const [pageSize, setPageSize] = useState(25);\n485:            limit: pageSize,\n486:            offset: (p - 1) * pageSize,\n540:      pageSize,",
+    "err": "",
+    "expect": "1 hit inside the deps array ~L540",
+    "claim": "FE-2: pageSize is in loadFeed's useCallback deps"
+   },
+   {
+    "cmd": "grep -n \"\\[page, rowsPerPage\\]\" web/src/components/dedup/DedupAcousticTab.tsx",
+    "rc": 0,
+    "nlines": 1,
+    "out": "610:  }, [page, rowsPerPage]);",
+    "err": "",
+    "expect": "1 hit at L610",
+    "claim": "FE-3: rowsPerPage is in the fetch effect's deps, in the relocated component"
+   },
+   {
+    "cmd": "grep -n \"BOOKDETAIL-RACE\" web/src/pages/BookDetail.tsx",
+    "rc": 0,
+    "nlines": 2,
+    "out": "153:  // (BOOKDETAIL-RACE: navigating book A -> book B quickly, or A's response\n219:  // (BOOKDETAIL-RACE).",
+    "err": "",
+    "expect": ">=1 hit",
+    "claim": "FE-4: BookDetail.tsx's id-keyed load effect guards every setState with a cancelled/isStale flag"
+   },
+   {
+    "cmd": "git log -1 --format=%ci -- web/src/pages/BookDetail.tsx",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "2026-08-20"
+   }
+  ]
+ },
+ {
+  "id": "L4281",
+  "todo_line": 4281,
+  "title": "BulkDeleteSeries and single-delete series guard already fixed to use the unfiltered ref-count",
+  "anchors": [
+   {
+    "cmd": "grep -n \"seriesRefCounts(h.store)\" internal/server/handlers/entities/handler.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "1003:\trefCounts, err := seriesRefCounts(h.store)\n1037:\trefCounts, err := seriesRefCounts(h.store)",
+    "err": "",
+    "expect": "2 hits",
+    "claim": "both delete paths call the shared unfiltered-count helper"
+   },
+   {
+    "cmd": "grep -n \"GetAllSeriesBookRefCounts\\|refusing to delete\" internal/server/handlers/entities/series_refcount.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "37:\t\t\t\"refusing to delete from a filtered count, which silently strands \"+\n40:\treturn refCounter.GetAllSeriesBookRefCounts()",
+    "err": "",
+    "expect": "hits confirming both",
+    "claim": "the helper wraps GetAllSeriesBookRefCounts and fails closed"
+   },
+   {
+    "cmd": "git log -1 --format=%ci -- internal/server/handlers/entities/series_refcount.go",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "2026-08-14"
+   }
+  ]
+ },
+ {
+  "id": "L4295",
+  "todo_line": 4295,
+  "title": "WithOpID wiring already fixed and tested \u2014 op IDs now actually reach ctxOpID",
+  "anchors": [
+   {
+    "cmd": "grep -n \"maintenanceplugin.WithOpID\" internal/server/op_run_context.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "42:\treturn maintenanceplugin.WithOpID(logger.WithOperation(ctx, opID), opID)",
+    "err": "",
+    "expect": "1 hit at L41",
+    "claim": "opRunContextDecorator calls WithOpID"
+   },
+   {
+    "cmd": "grep -n \"SetRunContextDecorator(opRunContextDecorator)\" internal/server/registry_wire.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "359:\t\ts.opRegistry.SetRunContextDecorator(opRunContextDecorator)",
+    "err": "",
+    "expect": "1 hit at L359",
+    "claim": "it is actually installed as the registry's run-context decorator"
+   },
+   {
+    "cmd": "grep -n \"^func Test\" internal/server/op_run_context_test.go",
+    "rc": 0,
+    "nlines": 3,
+    "out": "32:func TestOpRunContextDecorator_CarriesOpIDForMaintenanceOps(t *testing.T) {\n56:func TestOpRunContextDecorator_PreservesLoggerDecoration(t *testing.T) {\n69:func TestOpRunContextDecorator_UndecoratedContextHasNoOpID(t *testing.T) {",
+    "err": "",
+    "expect": "3 hits",
+    "claim": "3 unit tests cover this wiring"
+   }
+  ]
+ },
+ {
+  "id": "L4356",
+  "todo_line": 4356,
+  "title": "Decide whether the library list should filter on version_group_id",
+  "anchors": [
+   {
+    "cmd": "grep -n 'case \"version_group_id\"' internal/audiobooks/service_filtering.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "528:\tcase \"version_group_id\":",
+    "err": "",
+    "expect": "1 hit at L528",
+    "claim": "bookFieldValue has a version_group_id case"
+   },
+   {
+    "cmd": "grep -n 'version_group_id' internal/audiobooks/service_filtering.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "528:\tcase \"version_group_id\":\n654:\t\"version_group_id\",",
+    "err": "",
+    "expect": "hits including L654 (the allFilterFieldNames slice)",
+    "claim": "allFilterFieldNames lists version_group_id"
+   },
+   {
+    "cmd": "grep -n 'TestVersionGroupIDFilter_MatchesMembersOnly' internal/audiobooks/filter_field_conformance_test.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "136:// TestVersionGroupIDFilter_MatchesMembersOnly pins C110: version_group_id is a\n140:func TestVersionGroupIDFilter_MatchesMembersOnly(t *testing.T) {",
+    "err": "",
+    "expect": "1 hit at L138",
+    "claim": "a conformance test pins the C110 fix"
+   }
+  ]
+ },
+ {
+  "id": "L4360",
+  "todo_line": 4360,
+  "title": "Add version_group_id as a real filter field (the 'yes' branch)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'version_group_id' internal/audiobooks/filter_field_conformance_test.go",
+    "rc": 0,
+    "nlines": 7,
+    "out": "127:\tfor _, implemented := range []string{\"title\", \"year\", \"duration\", \"marked_for_deletion\", \"isbn13\", \"version_group_id\"} {\n136:// TestVersionGroupIDFilter_MatchesMembersOnly pins C110: version_group_id is a\n138:// filters form rejected it as unknown \u2014 production measured ?version_group_id=X\n147:\trequire.True(t, fieldMatchesValue(member, \"version_group_id\", vg))\n148:\trequire.False(t, fieldMatche",
+    "err": "",
+    "expect": "hit at L127 inside the implemented-names list",
+    "claim": "TestFilterFieldNames_MatchTheMatcher includes version_group_id in its implemented-names table"
+   },
+   {
+    "cmd": "grep -n 'buildFilterFieldQueryParams' internal/server/handlers/audiobooks/handler.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "279:var filterFieldQueryParams = buildFilterFieldQueryParams()\n281:func buildFilterFieldQueryParams() map[string]struct{} {",
+    "err": "",
+    "expect": "1 hit at L279/281",
+    "claim": "the bare-param guard is derived, not hand-maintained, so version_group_id is automatically covered"
+   }
+  ]
+ },
+ {
+  "id": "L4417",
+  "todo_line": 4417,
+  "title": "ABS series list emits a non-ABS books[] shape (already fixed)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'h.minifiedItem' internal/server/handlers/abs/browse.go",
+    "rc": 0,
+    "nlines": 5,
+    "out": "346:\t\tresp.Results = append(resp.Results, h.minifiedItem(&views[i]))\n413:\t\titem := h.minifiedItem(&views[i])\n430:\t\trecentlyAdded = append(recentlyAdded, h.minifiedItem(&views[i]))\n697:\t\tbyID[views[i].Book.ID] = h.minifiedItem(&views[i])\n1541:\t\tresp.Results = append(resp.Results, h.minifiedItem(&views[i]))",
+    "err": "",
+    "expect": "hit at L697 inside seriesPageBooks",
+    "claim": "seriesPageBooks reuses the playlists route's minifiedItem serializer"
+   },
+   {
+    "cmd": "grep -n 'func TestLibrarySeries_BooksAreLibraryItems' internal/server/handlers/abs/series_books_test.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "211:func TestLibrarySeries_BooksAreLibraryItems(t *testing.T) {",
+    "err": "",
+    "expect": "1 hit at L211",
+    "claim": "a test asserts every served series book decodes as a full ABS LibraryItem"
+   },
+   {
+    "cmd": "grep -n 'func TestLibrarySeries_NumBooksMatchesTheBooksServed' internal/server/handlers/abs/series_books_test.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "239:func TestLibrarySeries_NumBooksMatchesTheBooksServed(t *testing.T) {",
+    "err": "",
+    "expect": "1 hit at L239",
+    "claim": "a test asserts numBooks equals the served books array length"
+   }
+  ]
+ },
+ {
+  "id": "L4685",
+  "todo_line": 4685,
+  "title": "wire_abs_routes.go contributor-warm store race \u2014 already fixed",
+  "anchors": [
+   {
+    "cmd": "grep -n \"func spawnContributorWarm\" internal/server/wire_abs_routes.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "720:func spawnContributorWarm(store any, warm func(context.Context)) {",
+    "err": "",
+    "expect": "1 hit ~L720, signature `func spawnContributorWarm(store any, warm func(context.Context))`",
+    "claim": "spawnContributorWarm takes the store as a parameter, not a closure capture"
+   },
+   {
+    "cmd": "grep -n \"func resolveWarmupWaiter\" internal/server/wire_abs_routes.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "750:func resolveWarmupWaiter(s any) (warmupWaiter, bool) {",
+    "err": "",
+    "expect": "1 hit; comment at :741 says reverting to a bare assertion 'turns that test red'",
+    "claim": "resolveWarmupWaiter resolves through the decorator chain, not a bare assertion"
+   },
+   {
+    "cmd": "git log --oneline --all --grep=\"contributor-warm store a parameter\"",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "1 hit: f9f6e991"
+   },
+   {
+    "cmd": "grep -n \"spawnContributorWarm(s.Ops()\" internal/server/wire_abs_routes.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "497:\tspawnContributorWarm(s.Ops(), handler.WarmContributors)",
+    "err": "",
+    "expect": "1 hit ~L497",
+    "claim": "call site now passes s.Ops() synchronously as an argument, not inside the goroutine"
+   }
+  ]
+ },
+ {
+  "id": "L4714",
+  "todo_line": 4714,
+  "title": "importer.Store already narrowed off database.Store",
+  "anchors": [
+   {
+    "cmd": "grep -n \"^type Store\" internal/importer/service.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "64:type Store interface {",
+    "err": "",
+    "expect": "1 hit ~L64: `type Store interface {`",
+    "claim": "importer.Store is a real interface, not `= database.Store`"
+   },
+   {
+    "cmd": "grep -n \"#2582\" internal/importer/service.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "34:// will re-narrow this.\" That pass happened in #2582; this is the re-narrowing",
+    "err": "",
+    "expect": "1 hit ~L32",
+    "claim": "the file's own comment documents the re-narrowing and cites #2582"
+   },
+   {
+    "cmd": "grep -n \"func CreateIngestVersion\" internal/versions/ingest.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "46:func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*database.BookVersion, error) {",
+    "err": "",
+    "expect": "1 hit ~L46: `func CreateIngestVersion(store IngestStore, ...)`",
+    "claim": "versions.CreateIngestVersion takes a narrow IngestStore, not database.Store"
+   }
+  ]
+ },
+ {
+  "id": "L4716",
+  "todo_line": 4716,
+  "title": "handlers.OrganizeStore already narrowed off database.Store",
+  "anchors": [
+   {
+    "cmd": "grep -n \"^type OrganizeStore interface\" internal/server/handlers/organize.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "67:type OrganizeStore interface {",
+    "err": "",
+    "expect": "1 hit ~L64",
+    "claim": "OrganizeStore is a real interface, not an alias to database.Store"
+   },
+   {
+    "cmd": "grep -n \"was \\`= database.Store\\`\" internal/server/handlers/organize.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "61:// It was `= database.Store`, an alias to all 398 methods, justified by a comment",
+    "err": "",
+    "expect": "1 hit ~L60",
+    "claim": "the file documents the exact narrowing and why the old justification was stale"
+   }
+  ]
+ },
+ {
+  "id": "L4832",
+  "todo_line": 4832,
+  "title": "Stranded .tmp-rename recovery tool \u2014 already built",
+  "anchors": [
+   {
+    "cmd": "wc -l scripts/repair_stranded_tracks.py",
+    "rc": 0,
+    "nlines": 1,
+    "out": "372 scripts/repair_stranded_tracks.py",
+    "err": "",
+    "expect": "372",
+    "claim": "the tool exists and its size"
+   },
+   {
+    "cmd": "grep -n \"default is a dry run\\|action=\\\"store_true\\\"\" scripts/repair_stranded_tracks.py",
+    "rc": 0,
+    "nlines": 2,
+    "out": "323:    ap.add_argument(\"--apply\", action=\"store_true\",\n324:                    help=\"actually move files (default is a dry run)\")",
+    "err": "",
+    "expect": "\u22651 hit ~L323-324",
+    "claim": "dry-run is the default, --apply required to move anything"
+   },
+   {
+    "cmd": "git log --oneline --all --grep=\"recover audio stranded\\|detect stranded tracks structurally\"",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "2 hits: f494551d, b2e29bb0"
+   },
+   {
+    "cmd": "grep -n \"Nothing is ever deleted and nothing is ever overwritten\" scripts/repair_stranded_tracks.py",
+    "rc": 0,
+    "nlines": 1,
+    "out": "27:    * Nothing is ever deleted and nothing is ever overwritten. A target that",
+    "err": "",
+    "expect": "1 hit in the module docstring",
+    "claim": "nothing is ever deleted or overwritten"
+   }
+  ]
+ },
+ {
+  "id": "L4840",
+  "todo_line": 4840,
+  "title": "SHA-256 + ffmpeg audio-MD5 comparison fallback \u2014 already implemented",
+  "anchors": [
+   {
+    "cmd": "grep -n \"^def sha256\" scripts/repair_stranded_tracks.py",
+    "rc": 0,
+    "nlines": 1,
+    "out": "87:def sha256(path: str, chunk: int = 1 << 20) -> str:",
+    "err": "",
+    "expect": "1 hit ~L87",
+    "claim": "sha256 helper exists"
+   },
+   {
+    "cmd": "grep -n \"audio_md5\\|ffmpeg\" scripts/repair_stranded_tracks.py",
+    "rc": 0,
+    "nlines": 3,
+    "out": "98:def audio_md5(path: str) -> str | None:\n108:            [\"ffmpeg\", \"-v\", \"error\", \"-i\", path, \"-map\", \"0:a\", \"-f\", \"md5\", \"-\"],\n254:    src_a, dst_a = audio_md5(act.src), audio_md5(act.dst)",
+    "err": "",
+    "expect": "\u22652 hits; command includes -v error -i path -map 0:a -f md5 -",
+    "claim": "ffmpeg audio-md5 fallback exists with the exact command form the item specifies"
+   },
+   {
+    "cmd": "grep -n \"def resolve_conflict\" -A 10 scripts/repair_stranded_tracks.py",
+    "rc": 0,
+    "nlines": 11,
+    "out": "240:def resolve_conflict(act: Action) -> Action:\n241-    \"\"\"Compare a stranded file against the file already occupying its target.\"\"\"\n242-    try:\n243-        s_size, d_size = os.path.getsize(act.src), os.path.getsize(act.dst)\n244-    except OSError as e:\n245-        act.status, act.detail = \"error\", f\"stat failed: {e}\"\n246-        return act\n247-\n248-    if s_size == d_size and sha256(act.src) ==",
+    "err": "",
+    "expect": "1 hit ~L240, body compares sha256(act.src) == sha256(act.dst)",
+    "claim": "resolve_conflict uses sha256 for the primary comparison"
+   }
+  ]
+ },
+ {
+  "id": "L4894",
+  "todo_line": 4894,
+  "title": "Classify missing book_file rows by shape before repair (already built)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'p.missingFileRepointDef()' internal/plugins/maintenance/plugin.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "64:\t\tp.missingFileRepointDef(),",
+    "err": "",
+    "expect": "1 hit, L64",
+    "claim": "missing-file-repoint is registered on the maintenance plugin"
+   },
+   {
+    "cmd": "grep -n 'Apply must be explicitly true to write' internal/plugins/maintenance/missing_file_repoint.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "51:\t// Apply must be explicitly true to write. Default false = report only.",
+    "err": "",
+    "expect": "1 hit, L51",
+    "claim": "repoint apply defaults to false (report-only)"
+   },
+   {
+    "cmd": "grep -n 'Classify bool' internal/plugins/maintenance/missing_file_audit.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "111:\tClassify bool `json:\"classify\"`",
+    "err": "",
+    "expect": "1 hit, L111",
+    "claim": "audit op has a Classify param that runs the shape pass over every missing row"
+   },
+   {
+    "cmd": "grep -n 'Deletion was REMOVED from this op on 2026-08-19' internal/plugins/maintenance/missing_file_repair.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "119:\t// \ud83d\udd34 Deletion was REMOVED from this op on 2026-08-19. Rejecting apply loudly",
+    "err": "",
+    "expect": "1 hit, L119",
+    "claim": "missing-file-repair's delete path was removed 2026-08-19, so the op that used to wave recoverable rows through a delete no longer deletes at all"
+   }
+  ]
+ },
+ {
+  "id": "L4903",
+  "todo_line": 4903,
+  "title": "missing-file-repair max_deletes cap concern is now moot \u2014 delete path removed",
+  "anchors": [
+   {
+    "cmd": "grep -n 'apply.*true.*is no longer supported' internal/plugins/maintenance/missing_file_repair.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "126:\t\t\t\"{\\\"apply\\\": true} is no longer supported: this operation never deletes. \" +",
+    "err": "",
+    "expect": "1 hit, ~L126",
+    "claim": "missing-file-repair rejects apply=true outright (no delete capability exists to be capped)"
+   },
+   {
+    "cmd": "grep -n 'CappedAt' internal/plugins/maintenance/missing_file_repoint.go",
+    "rc": 0,
+    "nlines": 4,
+    "out": "100:\tCappedAt         int  `json:\"capped_at,omitempty\"`\n217:\tif plan.CappedAt > 0 {\n219:\t\t\t\"cap\", plan.CappedAt, \"repointable\", plan.Repointable)\n413:\t\tplan.CappedAt = maxRewrites",
+    "err": "",
+    "expect": ">=3 hits (L100, L217/218, L413/414)",
+    "claim": "missing-file-repoint's plan struct carries an explicit CappedAt so a capped run cannot masquerade as complete"
+   }
+  ]
+ },
+ {
+  "id": "L4924",
+  "todo_line": 4924,
+  "title": "Register HEAD for /api/items/:id/file/:ino/download (already done)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'r.HEAD(\"/api/items/:id/file/:ino/download\"' internal/server/handlers/abs/handler.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "533:\tr.HEAD(\"/api/items/:id/file/:ino/download\", auth, h.ItemFileDownload)",
+    "err": "",
+    "expect": "1 hit, L533",
+    "claim": "HEAD is registered for /api/items/:id/file/:ino/download"
+   },
+   {
+    "cmd": "grep -n 'r.GET(\"/api/items/:id/file/:ino/download\"' internal/server/handlers/abs/handler.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "510:\tr.GET(\"/api/items/:id/file/:ino/download\", auth, h.ItemFileDownload)",
+    "err": "",
+    "expect": "1 hit, L510",
+    "claim": "GET is registered for the same route, handled by the same function"
+   },
+   {
+    "cmd": "grep -n 'r.HEAD(\"/api/items/:id/file/:ino\"' internal/server/handlers/abs/handler.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "532:\tr.HEAD(\"/api/items/:id/file/:ino\", auth, h.ItemFile)",
+    "err": "",
+    "expect": "1 hit, L532",
+    "claim": "HEAD is also registered for the sibling non-download route /api/items/:id/file/:ino"
+   }
+  ]
+ },
+ {
+  "id": "L4960",
+  "todo_line": 4960,
+  "title": "Two of the six named mocks are already fixed \u2014 check off partially / note remaining root-cause caveat",
+  "anchors": [
+   {
+    "cmd": "grep -n \"operations/v2/\\*\" web/tests/e2e/dynamic-ui-interactions.spec.ts",
+    "rc": 0,
+    "nlines": 1,
+    "out": "49:  await page.route('**/api/v1/operations/v2/*', async (route) => {",
+    "err": "",
+    "expect": "1 hit, L49",
+    "claim": "dynamic-ui-interactions.spec.ts already mocks operations/v2/*"
+   },
+   {
+    "cmd": "grep -n \"operations/v2/op-transcode-1\" web/tests/e2e/transcode-and-counting.spec.ts",
+    "rc": 0,
+    "nlines": 1,
+    "out": "97:  await page.route('**/api/v1/operations/v2/op-transcode-1*', async (route) => {",
+    "err": "",
+    "expect": "1 hit, L97",
+    "claim": "transcode-and-counting.spec.ts already mocks operations/v2/op-transcode-1"
+   }
+  ]
+ },
+ {
+  "id": "L5054",
+  "todo_line": 5054,
+  "title": "make ci staticcheck gate is clean at HEAD (already fixed)",
+  "anchors": [
+   {
+    "cmd": "staticcheck ./... ; echo EXIT:$?",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "EXIT:0, no findings printed"
+   },
+   {
+    "cmd": "grep -n 'if updatedBook == nil' internal/metafetch/service_apply.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "632:\tif updatedBook == nil {",
+    "err": "",
+    "expect": "1 hit, L632, preceding L646 and L675",
+    "claim": "the SA5011 nil-deref site now has a guard before both flagged use sites"
+   },
+   {
+    "cmd": "grep -n 'operationV2ToLegacy WAS HERE AND HAS BEEN DELETED' internal/server/handlers/operations/handler.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "112:// operationV2ToLegacy WAS HERE AND HAS BEEN DELETED (2026-08-19).",
+    "err": "",
+    "expect": "1 hit, L112",
+    "claim": "operationV2ToLegacy (one of the 6 named U1000s) was deleted"
+   },
+   {
+    "cmd": "grep -n 'dlIntPtr\\|dlInt64Ptr' internal/database/dataloss_preserve_invariant_test.go",
+    "rc": 1,
+    "nlines": 0,
+    "out": "",
+    "err": "",
+    "expect": "0 hits",
+    "claim": "dlIntPtr/dlInt64Ptr (another named U1000 pair) no longer exist"
+   }
+  ]
+ },
+ {
+  "id": "L5197",
+  "todo_line": 5197,
+  "title": "OperationDef.Permissions enforcement (already built and tested)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'for _, p := range def.Permissions' internal/server/handlers/operations_v2.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "354:\t\t\tfor _, p := range def.Permissions {",
+    "err": "",
+    "expect": "1 hit, ~L354",
+    "claim": "TriggerOperationV2 enforces def.Permissions with an AND over auth.Can"
+   },
+   {
+    "cmd": "grep -n 'TestTriggerOperationV2_EditorCannotRunAMaintenanceOp' internal/server/handlers/operations_v2_permissions_test.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "52:func TestTriggerOperationV2_EditorCannotRunAMaintenanceOp(t *testing.T) {",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "a dedicated test file pins the editor-cannot-run-maintenance-op regression"
+   },
+   {
+    "cmd": "grep -n 'PermissionAware' internal/server/maintenance_job_op.go",
+    "rc": 0,
+    "nlines": 4,
+    "out": "51:// Permissions come from the job's own PermissionAware implementation where it has\n59:// PermissionAware -- was reachable only by settings.manage despite asking for\n77:\t// A job that implements PermissionAware and returns a non-empty permission\n82:\tif pa, ok := job.(maintenance.PermissionAware); ok && pa.Permission() != \"\" {",
+    "err": "",
+    "expect": ">=1 hit",
+    "claim": "bulkFetchMetadataJob's PermissionAware value is threaded into its v1 OperationDef"
+   }
+  ]
+ },
+ {
+  "id": "L5424",
+  "todo_line": 5424,
+  "title": "The '65 outside maintenance' baseline is stale \u2014 re-measure before scoping further narrowing work",
+  "anchors": [
+   {
+    "cmd": "grep -n 'database\\.Store' internal/server/metadata_stores.go internal/server/handlers/organize.go",
+    "rc": 0,
+    "nlines": 3,
+    "out": "internal/server/metadata_stores.go:15:// database.Store -- 398 methods -- until 2026-08-19.\ninternal/server/handlers/organize.go:61:// It was `= database.Store`, an alias to all 398 methods, justified by a comment\ninternal/server/handlers/organize.go:63:// require the full database.Store interface, so a narrower subset would not",
+    "err": "",
+    "expect": "hits are comments describing a completed narrowing, dated 2026-08-19",
+    "claim": "internal/server files reference database.Store only in past-tense/comment form, no live wide func-params found in the largest files checked"
+   },
+   {
+    "cmd": "grep -n 'was database\\.Store\\|previously database\\.Store\\|Each took database\\.Store' internal/dedup/*.go internal/versions/*.go internal/reconcile/*.go internal/plugins/acoustid/*.go internal/metafetch/*.go",
+    "rc": 0,
+    "nlines": 5,
+    "out": "internal/dedup/store.go:19:// constraints, exhaustive (no \"too many errors\" marker). It was database.Store\ninternal/reconcile/store.go:15:// forwarding constraint. It was database.Store -- 398 methods -- until\ninternal/metafetch/service.go:122:// It was previously database.Store -- 398 methods. The probe could not report\ninternal/metafetch/service.go:682:// empty-interface compiler probe: four met",
+    "err": "",
+    "expect": ">=6 hits, all past-tense narrowing-completed comments",
+    "claim": "internal/dedup, internal/versions, internal/reconcile, internal/plugins/acoustid, internal/metafetch all show the identical past-tense pattern"
+   }
+  ]
+ },
+ {
+  "id": "L5449",
+  "todo_line": 5449,
+  "title": "Run the missing-file-audit classify pass in prod and record numbers",
+  "anchors": [
+   {
+    "cmd": "grep -n \"Measured on 2026-08-20\" internal/plugins/maintenance/missing_file_repoint.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "17:// Measured on 2026-08-20: 71,954 of 532,296 book_file rows point at a path that does",
+    "err": "",
+    "expect": "1 hit ~L17",
+    "claim": "missing_file_repoint.go records the classify pass's population numbers from a 2026-08-20 prod run"
+   },
+   {
+    "cmd": "grep -n \"Classify bool\" internal/plugins/maintenance/missing_file_audit.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "111:\tClassify bool `json:\"classify\"`",
+    "err": "",
+    "expect": "1 hit ~L111",
+    "claim": "missing_file_audit.go exposes a Classify bool param on the op"
+   }
+  ]
+ },
+ {
+  "id": "L5454",
+  "todo_line": 5454,
+  "title": "Build the missing-file REPOINT repair (never delete, apply=false default)",
+  "anchors": [
+   {
+    "cmd": "grep -n \"ID:          \\\"maintenance.missing-file-repoint\\\"\" internal/plugins/maintenance/missing_file_repoint.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "132:\t\tID:          \"maintenance.missing-file-repoint\",",
+    "err": "",
+    "expect": "1 hit ~L132",
+    "claim": "the repoint op is registered under maintenance.missing-file-repoint"
+   },
+   {
+    "cmd": "grep -n \"Apply must be explicitly true to write\" internal/plugins/maintenance/missing_file_repoint.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "51:\t// Apply must be explicitly true to write. Default false = report only.",
+    "err": "",
+    "expect": "1 hit ~L51",
+    "claim": "Apply defaults false (report-only) matching decision 12"
+   },
+   {
+    "cmd": "grep -n \"THIS OP NEVER DELETES A ROW\" internal/plugins/maintenance/missing_file_repoint.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "9:// \ud83d\udd34 THIS OP NEVER DELETES A ROW. It only rewrites FilePath. That is the whole",
+    "err": "",
+    "expect": "1 hit ~L9",
+    "claim": "the op never deletes, only rewrites FilePath"
+   }
+  ]
+ },
+ {
+  "id": "L5461",
+  "todo_line": 5461,
+  "title": "Missing-file audit Phase 1a (census identity signals) \u2014 verify it landed",
+  "anchors": [
+   {
+    "cmd": "gh pr list --state all --search \"census identity signals\" --limit 5",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "row: 2539  ...  feat/persist-missing-file-verdict  MERGED"
+   },
+   {
+    "cmd": "git merge-base --is-ancestor b14ae3c8 HEAD && echo YES",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "YES"
+   }
+  ]
+ },
+ {
+  "id": "L5494",
+  "todo_line": 5494,
+  "title": "ABS LibrarySeries: books/totalDuration hardcoded empty \u2014 already fixed",
+  "anchors": [
+   {
+    "cmd": "grep -n '\"books\":            items' internal/server/handlers/abs/browse.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "613:\t\t\t\"books\":            items,",
+    "err": "",
+    "expect": "1 hit ~L613",
+    "claim": "browse.go's LibrarySeries DTO no longer hardcodes books empty"
+   },
+   {
+    "cmd": "grep -n \"books AND totalDuration WERE HARDCODED EMPTY\" internal/server/handlers/abs/browse.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "509:\t// \ud83d\udd34 books AND totalDuration WERE HARDCODED EMPTY, on every series, forever.",
+    "err": "",
+    "expect": "1 hit ~L509",
+    "claim": "a fix comment documents the prior bug and the 2026-08-13 fix"
+   }
+  ]
+ },
+ {
+  "id": "L5494",
+  "todo_line": 5494,
+  "title": "ABS collections: stub \u2014 already replaced with real CRUD",
+  "anchors": [
+   {
+    "cmd": "grep -n 'collections\", auth, h.LibraryCollections' internal/server/handlers/abs/handler.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "466:\tr.GET(\"/api/libraries/:libraryId/collections\", auth, h.LibraryCollections)",
+    "err": "",
+    "expect": "1 hit ~L466",
+    "claim": "the collections route no longer points at EmptyPage"
+   },
+   {
+    "cmd": "grep -n 'type CollectionStore interface' internal/server/handlers/abs/collections.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "69:type CollectionStore interface {",
+    "err": "",
+    "expect": "1 hit ~L69",
+    "claim": "a real CollectionStore and CRUD handlers exist in internal/server/handlers/abs/collections.go"
+   },
+   {
+    "cmd": "ls internal/server/handlers/abs/collections_test.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "internal/server/handlers/abs/collections_test.go",
+    "err": "",
+    "expect": "file exists",
+    "claim": "collections have their own test file"
+   }
+  ]
+ },
+ {
+  "id": "L5494",
+  "todo_line": 5494,
+  "title": "ABS playlists: confirmed shipped, no stub remains",
+  "anchors": [
+   {
+    "cmd": "grep -n 'api/playlists/:id\", auth, h.PlaylistDetail' internal/server/handlers/abs/handler.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "488:\tr.GET(\"/api/playlists/:id\", auth, h.PlaylistDetail)",
+    "err": "",
+    "expect": "1 hit ~L488",
+    "claim": "playlist routes are wired to real handlers, not EmptyPage"
+   }
+  ]
+ },
+ {
+  "id": "L5904",
+  "todo_line": 5904,
+  "title": "Library sort UI (Sort by / Order) \u2014 already restored",
+  "anchors": [
+   {
+    "cmd": "grep -n 'onSortChange && sortOptions' web/src/components/audiobooks/SearchBar.tsx",
+    "rc": 0,
+    "nlines": 1,
+    "out": "302:        {onSortChange && sortOptions && sortOptions.length > 0 && (",
+    "err": "",
+    "expect": "1 hit ~L302",
+    "claim": "SearchBar has an onSortChange prop and renders sort controls when provided"
+   },
+   {
+    "cmd": "grep -n '_handleSortChange' web/src/components/library/LibraryBookGrid.tsx",
+    "rc": 1,
+    "nlines": 0,
+    "out": "",
+    "err": "",
+    "expect": "0 hits",
+    "claim": "no underscore-prefixed dead handler remains"
+   },
+   {
+    "cmd": "grep -n 'handleColumnSortChange' web/src/components/library/LibraryBookGrid.tsx",
+    "rc": 0,
+    "nlines": 4,
+    "out": "106:  handleColumnSortChange: (key: string, order: 'asc' | 'desc') => void;\n177:  handleColumnSortChange,\n287:          onSortChange={handleColumnSortChange}\n440:            onSortChange={handleColumnSortChange}",
+    "err": "",
+    "expect": ">=3 hits (declared and passed twice)",
+    "claim": "the live handler is wired through FilterPanel into SearchBar"
+   }
+  ]
+ },
+ {
+  "id": "L5987",
+  "todo_line": 5987,
+  "title": "Visual-regression goldens for linux \u2014 already committed",
+  "anchors": [
+   {
+    "cmd": "ls web/tests/e2e/dynamic-ui-interactions.spec.ts-snapshots/",
+    "rc": 0,
+    "nlines": 4,
+    "out": "scan-button-loading-chromium-darwin.png\nscan-button-loading-chromium-linux.png\nscan-button-loading-webkit-darwin.png\nscan-button-loading-webkit-linux.png",
+    "err": "",
+    "expect": "4 files: scan-button-loading-{chromium,webkit}-{darwin,linux}.png",
+    "claim": "linux goldens for both browsers are committed"
+   }
+  ]
+ },
+ {
+  "id": "L6241",
+  "todo_line": 6241,
+  "title": "Version-to-version navigation from Book Detail \u2014 already restored via 'View Details'",
+  "anchors": [
+   {
+    "cmd": "grep -n 'navigate(\\`/library/\\${version.id}\\`)' web/src/components/bookdetail/BookDetailVersionGroup.tsx",
+    "rc": 0,
+    "nlines": 1,
+    "out": "383:                      navigate(`/library/${version.id}`);",
+    "err": "",
+    "expect": "1 hit ~L383",
+    "claim": "a View Details button navigates to another version's book detail page"
+   }
+  ]
+ },
+ {
+  "id": "L6258",
+  "todo_line": 6258,
+  "title": "Library card overflow menu button accessible name \u2014 already fixed",
+  "anchors": [
+   {
+    "cmd": "grep -n 'aria-label=\"Book actions\"' web/src/components/audiobooks/AudiobookCard.tsx",
+    "rc": 0,
+    "nlines": 1,
+    "out": "227:          aria-label=\"Book actions\"",
+    "err": "",
+    "expect": "1 hit ~L227",
+    "claim": "the overflow button has an aria-label"
+   }
+  ]
+ },
+ {
+  "id": "L6484",
+  "todo_line": 6484,
+  "title": "version-management.spec.ts rewrite for relocated 'Manage Versions' entry point \u2014 already done",
+  "anchors": [
+   {
+    "cmd": "grep -n \"'Book actions'\" web/tests/e2e/version-management.spec.ts",
+    "rc": 0,
+    "nlines": 1,
+    "out": "45:  await card.getByRole('button', { name: 'Book actions' }).click();",
+    "err": "",
+    "expect": "1 hit ~L45",
+    "claim": "the spec opens the card overflow menu via the Book actions button"
+   },
+   {
+    "cmd": "grep -n \"getByRole('menuitem', { name: 'Manage Versions' })\" web/tests/e2e/version-management.spec.ts",
+    "rc": 0,
+    "nlines": 1,
+    "out": "46:  await page.getByRole('menuitem', { name: 'Manage Versions' }).click();",
+    "err": "",
+    "expect": "1 hit ~L46",
+    "claim": "the spec then clicks the Manage Versions MENUITEM (not a button)"
+   }
+  ]
+ },
+ {
+  "id": "L6988",
+  "todo_line": 6988,
+  "title": "e2e mock envelope (body.data) systemic fix \u2014 already shipped",
+  "anchors": [
+   {
+    "cmd": "grep -n 'const jsonResponse = (body: unknown' web/tests/e2e/utils/test-helpers.ts",
+    "rc": 0,
+    "nlines": 1,
+    "out": "455:    const jsonResponse = (body: unknown, status = 200) => {",
+    "err": "",
+    "expect": "1 hit ~L455",
+    "claim": "jsonResponse auto-wraps a { data: body } envelope by default"
+   },
+   {
+    "cmd": "grep -n 'Two deliberate exclusions' web/tests/e2e/utils/test-helpers.ts",
+    "rc": 0,
+    "nlines": 1,
+    "out": "449:     * Two deliberate exclusions:",
+    "err": "",
+    "expect": "1 hit ~L449",
+    "claim": "arrays and already-enveloped bodies are excluded, matching the item's stated opt-out requirement"
+   }
+  ]
+ },
+ {
+  "id": "L7254",
+  "todo_line": 7254,
+  "title": "e2e coverage for the unified Dedup/review surface \u2014 already added",
+  "anchors": [
+   {
+    "cmd": "grep -n \"the dupes lane of /review\" web/tests/e2e/review-dupes-lane.spec.ts",
+    "rc": 0,
+    "nlines": 2,
+    "out": "6:// End-to-end coverage for the dupes lane of /review.\n192:test.describe('the dupes lane of /review', () => {",
+    "err": "",
+    "expect": "1 hit ~L192",
+    "claim": "a dedicated spec covers the unified/review dupes lane"
+   },
+   {
+    "cmd": "grep -n 'band-chip-CERTAIN' web/tests/e2e/review-dupes-lane.spec.ts",
+    "rc": 0,
+    "nlines": 3,
+    "out": "205:    await expect(page.locator('[data-testid=\"band-chip-CERTAIN\"]')).toBeVisible();\n219:    await expect(page.locator('[data-testid=\"band-chip-CERTAIN\"]')).toBeVisible();\n222:    await page.locator('[data-testid=\"band-chip-CERTAIN\"]').click();",
+    "err": "",
+    "expect": ">=1 hit",
+    "claim": "band filtering is covered"
+   },
+   {
+    "cmd": "grep -n 'UnifiedDedupTab wrapped these' web/tests/e2e/review-dupes-lane.spec.ts",
+    "rc": 0,
+    "nlines": 1,
+    "out": "202:    // The band filter, asserted through its chips. UnifiedDedupTab wrapped these",
+    "err": "",
+    "expect": "1 hit ~L203",
+    "claim": "the comment explicitly frames this as the UnifiedDedupTab's successor"
+   }
+  ]
+ },
+ {
+  "id": "L7549",
+  "todo_line": 7549,
+  "title": "MUI upgrade Step 1 (5.14 -> 6.x) \u2014 already superseded, project is on MUI 9",
+  "anchors": [
+   {
+    "cmd": "grep -n '\"@mui/material\"' web/package.json",
+    "rc": 0,
+    "nlines": 1,
+    "out": "28:    \"@mui/material\": \"^9.3.1\",",
+    "err": "",
+    "expect": "1 hit, value ^9.3.1",
+    "claim": "MUI is already at 9.3.1, not 5.14 or 6.x"
+   },
+   {
+    "cmd": "grep -n 'Until MUI 9' web/src/components/audiobooks/AudiobookCard.tsx",
+    "rc": 0,
+    "nlines": 1,
+    "out": "222:          // Named for assistive tech AND for tests. Until MUI 9 this button had",
+    "err": "",
+    "expect": "1 hit ~L221",
+    "claim": "a separate file's comment independently confirms the project is already on MUI 9"
+   }
+  ]
+ },
+ {
+  "id": "L7573",
+  "todo_line": 7573,
+  "title": "Check off TODO-MUI-2 \u2014 MUI v6\u2192v7 + Grid codemod already done",
+  "anchors": [
+   {
+    "cmd": "grep -n '\"@mui/material\"' web/package.json",
+    "rc": 0,
+    "nlines": 1,
+    "out": "28:    \"@mui/material\": \"^9.3.1\",",
+    "err": "",
+    "expect": "1 hit: \"@mui/material\": \"^9.3.1\"",
+    "claim": "@mui/material is pinned to ^9.3.1 in web/package.json"
+   },
+   {
+    "cmd": "grep -rn '<Grid item' web/src | wc -l",
+    "rc": 0,
+    "nlines": 1,
+    "out": "0",
+    "err": "",
+    "expect": "0",
+    "claim": "no legacy <Grid item usages remain in web/src"
+   },
+   {
+    "cmd": "grep -rn 'GridLegacy' web/src | wc -l",
+    "rc": 0,
+    "nlines": 1,
+    "out": "0",
+    "err": "",
+    "expect": "0",
+    "claim": "no GridLegacy fallback usages exist"
+   }
+  ]
+ },
+ {
+  "id": "L7603",
+  "todo_line": 7603,
+  "title": "Check off the React 19 upgrade portion of TODO-MUI-3",
+  "anchors": [
+   {
+    "cmd": "grep -n '\"react\":\\|\"react-dom\":' web/package.json",
+    "rc": 0,
+    "nlines": 2,
+    "out": "30:    \"react\": \"^19.2.8\",\n31:    \"react-dom\": \"^19.2.8\",",
+    "err": "",
+    "expect": "2 hits, both ^19.2.8",
+    "claim": "react and react-dom are pinned to ^19.2.8"
+   },
+   {
+    "cmd": "grep -rn 'test-utils' web/src | wc -l",
+    "rc": 0,
+    "nlines": 1,
+    "out": "0",
+    "err": "",
+    "expect": "0",
+    "claim": "no react-dom/test-utils act() usages remain"
+   },
+   {
+    "cmd": "grep -rn 'defaultProps' web/src --include='*.tsx' --include='*.ts'",
+    "rc": 0,
+    "nlines": 55,
+    "out": "web/src/components/audiobooks/SearchBar.test.tsx:10:function defaultProps(overrides: Partial<Parameters<typeof SearchBar>[0]> = {}) {\nweb/src/components/audiobooks/SearchBar.test.tsx:28:      renderWithProviders(<SearchBar {...defaultProps()} />);\nweb/src/components/audiobooks/SearchBar.test.tsx:33:      renderWithProviders(<SearchBar {...defaultProps({ placeholder: 'Find books...' })} />);\nweb/sr",
+    "err": "",
+    "expect": "hits concentrated in web/src/theme.ts (MuiDrawer/etc. component overrides) and web/src/components/audiobooks/SearchBar.test.tsx's local defaultProps() helper function",
+    "claim": "the 55 'defaultProps' hits are MUI theme config / an unrelated test helper name, not React defaultProps"
+   }
+  ]
+ },
+ {
+  "id": "L7626",
+  "todo_line": 7626,
+  "title": "Check off TODO-MUI-4 \u2014 MUI v7\u2192v9 already done",
+  "anchors": [
+   {
+    "cmd": "grep -n '\"@mui/material\"\\|\"@mui/icons-material\"' web/package.json",
+    "rc": 0,
+    "nlines": 2,
+    "out": "27:    \"@mui/icons-material\": \"^9.3.1\",\n28:    \"@mui/material\": \"^9.3.1\",",
+    "err": "",
+    "expect": "2 hits, both ^9.3.1",
+    "claim": "@mui/material and @mui/icons-material are pinned to ^9.3.1"
+   },
+   {
+    "cmd": "grep -rnE '<(Box|Stack|Typography|Grid|Link)[^>]*\\s(mt|mb|ml|mr|mx|my|m|pt|pb|pl|pr|px|py|p|gap|bgcolor|display)=\\{' web/src --include='*.tsx' | grep -v 'sx=' | wc -l",
+    "rc": 0,
+    "nlines": 1,
+    "out": "0",
+    "err": "",
+    "expect": "0",
+    "claim": "no direct system-props usages remain outside sx= on Box/Stack/Typography/Grid/Link"
+   },
+   {
+    "cmd": "grep -rn 'InputProps=' web/src --include='*.tsx' | wc -l; grep -rn 'componentsProps=' web/src --include='*.tsx' | wc -l",
+    "rc": 0,
+    "nlines": 2,
+    "out": "0\n       0",
+    "err": "",
+    "expect": "0 for each",
+    "claim": "no InputProps=/componentsProps= leftovers remain"
+   },
+   {
+    "cmd": "grep -rn 'GridLegacy' web/src | wc -l; grep -rnE '<Grid[^>]*direction=\"column' web/src | wc -l",
+    "rc": 0,
+    "nlines": 2,
+    "out": "0\n       0",
+    "err": "",
+    "expect": "0 for each",
+    "claim": "no GridLegacy or Grid direction=\"column\" usages remain"
+   }
+  ]
+ },
+ {
+  "id": "L7937",
+  "todo_line": 7937,
+  "title": "Check off the Library empty-state fix \u2014 already shipped and hardened at HEAD",
+  "anchors": [
+   {
+    "cmd": "grep -n 'if (loadError) return' web/src/components/library/libraryContentState.ts",
+    "rc": 0,
+    "nlines": 1,
+    "out": "42:  if (loadError) return 'reconnecting';",
+    "err": "",
+    "expect": "1 hit, returns 'reconnecting'",
+    "claim": "libraryContentState treats a load error as 'reconnecting', not 'empty'"
+   },
+   {
+    "cmd": "grep -n 'loadError\\|isRetrying' web/src/components/library/LibraryBookGrid.tsx",
+    "rc": 0,
+    "nlines": 7,
+    "out": "63:  loadError?: Error | null;\n65:  isRetrying?: boolean;\n137:  loadError,\n138:  isRetrying,\n205:    {libraryContentState({ bookCount: audiobooks.length, loading, loadError, searchQuery }) ===\n211:          {isRetrying\n216:    ) : libraryContentState({ bookCount: audiobooks.length, loading, loadError, searchQuery }) ===",
+    "err": "",
+    "expect": "\u22654 hits including prop declarations at ~L57-61",
+    "claim": "LibraryBookGrid takes loadError/isRetrying props, not just a bare loading boolean"
+   }
+  ]
+ },
+ {
+  "id": "L8236",
+  "todo_line": 8236,
+  "title": "Check off DeleteBookFilesForBook's stale-memdb-rows bug \u2014 already fixed and tested",
+  "anchors": [
+   {
+    "cmd": "grep -n 'MarkQuickQueryDirty\\|DeleteBookFilesFromMemDB' internal/database/pebble_store_bookfiles.go",
+    "rc": 0,
+    "nlines": 9,
+    "out": "276:\ts.MarkQuickQueryDirty(\"no_fingerprints\", \"create_book_file\")\n387:\ts.MarkQuickQueryDirty(\"no_fingerprints\", \"update_book_file\")\n866:\ts.MarkQuickQueryDirty(\"no_fingerprints\", \"delete_book_file\")\n911:\ts.MarkQuickQueryDirty(\"no_fingerprints\", \"delete_book_files_for_book\")\n916:\ts.DeleteBookFilesFromMemDB(fileIDs)\n1085:\ts.MarkQuickQueryDirty(\"no_fingerprints\", \"delete_book_files_by_ids\")\n1086:\ts.De",
+    "err": "",
+    "expect": "hits at ~L911 and ~L916, both inside DeleteBookFilesForBook",
+    "claim": "DeleteBookFilesForBook calls MarkQuickQueryDirty and DeleteBookFilesFromMemDB"
+   },
+   {
+    "cmd": "grep -n 'func TestDeleteBookFilesForBook_RemovesMemdbRows' internal/database/delete_book_files_for_book_memdb_test.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "20:func TestDeleteBookFilesForBook_RemovesMemdbRows(t *testing.T) {",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "a regression test pins the fix via the memdb read path (not the Pebble path, which passes with or without the fix)"
+   }
+  ]
+ },
+ {
+  "id": "L8399",
+  "todo_line": 8399,
+  "title": "Multi-endpoint Whisper fan-out code already exists (WHISPER_ENDPOINTS pool)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'func poolEndpoints' internal/transcribe/batch.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "176:func poolEndpoints(cfgEndpoints []config.WhisperEndpoint, singleURL string) []Endpoint {",
+    "err": "",
+    "expect": "1 hit ~L176",
+    "claim": "poolEndpoints merges config.WhisperEndpoints (a list) with the legacy single WhisperRemoteURL"
+   },
+   {
+    "cmd": "grep -n 'WhisperEndpoints \\[\\]config.WhisperEndpoint\\|ParseWhisperEndpoints' internal/config/config.go",
+    "rc": 0,
+    "nlines": 4,
+    "out": "1097:// ParseWhisperEndpoints decodes the WHISPER_ENDPOINTS JSON array string.\n1101:func ParseWhisperEndpoints(s string) []WhisperEndpoint {\n1149:\t\tc.WhisperEndpoints = ParseWhisperEndpoints(viper.GetString(\"whisper_endpoints\"))\n1728:\t\t\tWhisperEndpoints:        ParseWhisperEndpoints(viper.GetString(\"whisper_endpoints\")),",
+    "err": "",
+    "expect": "\u22652 hits",
+    "claim": "config.WhisperEndpoints is a []WhisperEndpoint parsed from a JSON env var"
+   },
+   {
+    "cmd": "grep -n 'func transcribePool' internal/transcribe/dispatcher.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "106:func transcribePool(ctx context.Context, endpoints []Endpoint, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {",
+    "err": "",
+    "expect": "1 hit ~L106",
+    "claim": "transcribePool actually dispatches jobs across the endpoint pool"
+   }
+  ]
+ },
+ {
+  "id": "L8583",
+  "todo_line": 8583,
+  "title": "Check off chapters-served-to-clients verification \u2014 already investigated during chapters_backfill.go's build",
+  "anchors": [
+   {
+    "cmd": "grep -n 'numChapters == numAudioFiles' internal/plugins/maintenance/chapters_backfill.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "26://\t500 ABS items sampled  \u2192 numChapters == numAudioFiles in 500/500",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "chapters_backfill.go documents exactly this measurement"
+   },
+   {
+    "cmd": "grep -n 'SynthesizeChapters' internal/plugins/maintenance/chapters_backfill.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "17:// are persisted, handlers/abs/mapper.go:243 calls audioutil.SynthesizeChapters",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "the fallback synthesis path that produces the misleading 1-chapter result is cited by file:line"
+   }
+  ]
+ },
+ {
+  "id": "L8646",
+  "todo_line": 8646,
+  "title": "Static + dynamic (smart) playlists, CRUD, reorder, and ABS-surface exposure already exist",
+  "anchors": [
+   {
+    "cmd": "grep -n 'type UserPlaylist struct' -A 15 internal/database/store.go",
+    "rc": 0,
+    "nlines": 16,
+    "out": "454:type UserPlaylist struct {\n455-\tID          string `json:\"id\"` // ULID\n456-\tName        string `json:\"name\"`\n457-\tDescription string `json:\"description,omitempty\"`\n458-\t// Type discriminator: \"static\" or \"smart\"\n459-\tType string `json:\"type\"`\n460-\t// Static playlists: ordered book ID list.\n461-\tBookIDs []string `json:\"book_ids,omitempty\"`\n462-\t// Smart playlists: DSL query string, sort + limit",
+    "err": "",
+    "expect": "shows Type, BookIDs, Query, SortJSON, Limit, MaterializedBookIDs fields",
+    "claim": "UserPlaylist models both static and smart types with a query DSL"
+   },
+   {
+    "cmd": "grep -n 'func (h \\*PlaylistHandler) ReorderPlaylist' internal/server/handlers/playlists.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "396:func (h *PlaylistHandler) ReorderPlaylist(c *gin.Context) {",
+    "err": "",
+    "expect": "1 hit ~L396",
+    "claim": "ReorderPlaylist handler exists"
+   },
+   {
+    "cmd": "grep -n 'func (h \\*Handler) LibraryPlaylists' internal/server/handlers/abs/playlists.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "83:func (h *Handler) LibraryPlaylists(c *gin.Context) {",
+    "err": "",
+    "expect": "1 hit ~L83",
+    "claim": "ABS playlist list route is wired and maps to the upstream shape"
+   }
+  ]
+ },
+ {
+  "id": "L8890",
+  "todo_line": 8890,
+  "title": "Tier-2 duration probe for the 1,019 directory-shaped books \u2014 already built",
+  "anchors": [
+   {
+    "cmd": "grep -n 'TIER 2 OF FIRST AID' internal/plugins/maintenance/probe_directory_books.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "8:// TIER 2 OF FIRST AID: re-decide, with measured evidence, the directory-shaped",
+    "err": "",
+    "expect": "1 hit ~L8",
+    "claim": "probe_directory_books.go implements tier-2 of First Aid for exactly this population"
+   },
+   {
+    "cmd": "grep -n 'SAME CLASSIFIER, NOT A SECOND ONE' internal/plugins/maintenance/probe_directory_books.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "27:// SAME CLASSIFIER, NOT A SECOND ONE. Detection reuses classifyUnlinked from",
+    "err": "",
+    "expect": "1 hit",
+    "claim": "it reuses the SAME classifier as tier 1, per its own header comment"
+   }
+  ]
+ },
+ {
+  "id": "L9000",
+  "todo_line": 9000,
+  "title": "Check off the 1,019-directory-books apply-gate \u2014 already built",
+  "anchors": [
+   {
+    "cmd": "grep -n 'Apply bool' internal/plugins/maintenance/probe_directory_books.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "77:\tApply bool `json:\"apply\"`",
+    "err": "",
+    "expect": "1 hit ~L77",
+    "claim": "probeDirParams.Apply gates every write, default false"
+   },
+   {
+    "cmd": "grep -n 'params.Apply' internal/plugins/maintenance/probe_directory_books.go",
+    "rc": 0,
+    "nlines": 4,
+    "out": "168:\tif !params.Apply {\n310:\tif params.Apply {\n344:\t\tApplied:  params.Apply,\n355:\t\tDryRun:       !params.Apply,",
+    "err": "",
+    "expect": "\u22652 hits, including the write-gating branch and the plan.Applied/DryRun report fields",
+    "claim": "the write path is conditioned on params.Apply"
+   }
+  ]
+ },
+ {
+  "id": "L9259",
+  "todo_line": 9259,
+  "title": "Corrected book aggregates invisible until memdb refresh \u2014 buffer/replay fix already covers the delete path",
+  "anchors": [
+   {
+    "cmd": "grep -n 'existingDuration == wantDuration && existingFileSize == wantFileSize' internal/database/pebble_store_book_aggregates.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "132:\tif existingDuration == wantDuration && existingFileSize == wantFileSize {",
+    "err": "",
+    "expect": "1 hit ~L132",
+    "claim": "RecomputeBookAggregates still early-returns without UpdateBook when values are unchanged (the originally-blamed suspect)"
+   },
+   {
+    "cmd": "grep -n 'TotalFileCount = len(files)' internal/server/audiobooks_helpers.go internal/server/handlers/audiobooks/handler.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "internal/server/audiobooks_helpers.go:95:\t\tenriched[i].TotalFileCount = len(files)\ninternal/server/handlers/audiobooks/handler.go:482:\t\t\tenriched[i].TotalFileCount = len(files)",
+    "err": "",
+    "expect": "2 hits",
+    "claim": "total_file_count is derived at read time from memdb, not a stored field RecomputeBookAggregates could stale"
+   },
+   {
+    "cmd": "grep -n 'DeleteBookFilesFromMemDB(resolvedIDs)' internal/database/pebble_store_bookfiles.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "1086:\ts.DeleteBookFilesFromMemDB(resolvedIDs)",
+    "err": "",
+    "expect": "1 hit ~L1073",
+    "claim": "DeleteBookFilesByIDs (the op's real batched delete path) removes rows from memdb via DeleteBookFilesFromMemDB"
+   },
+   {
+    "cmd": "grep -n 'p.memSync(\"DeleteBookFiles\"' internal/database/memdb_sync.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "261:\tp.memSync(\"DeleteBookFiles\", func(txn memTxn) error {",
+    "err": "",
+    "expect": "1 hit ~L261",
+    "claim": "DeleteBookFilesFromMemDB funnels through memSync, which buffers during warmup instead of dropping"
+   },
+   {
+    "cmd": "grep -n 'last-edited' internal/database/memdb_pending.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "4:// last-edited: 2026-08-06",
+    "err": "",
+    "expect": "1 hit, 2026-08-06",
+    "claim": "the buffer-and-replay fix for the exact warmup-drop window exists and predates the 2026-08-10 trace"
+   }
+  ]
+ },
+ {
+  "id": "L10313",
+  "todo_line": 10313,
+  "title": "TASK-12 identity-gap closure \u2014 all three paths are already hooked at HEAD",
+  "anchors": [
+   {
+    "cmd": "grep -n 'merge.FollowMergeWithStore(store, keepID' internal/dedup/book_dedup.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "456:\t\tmerge.FollowMergeWithStore(store, keepID, []string{mergeID})",
+    "err": "",
+    "expect": "1 hit ~L456",
+    "claim": "dedup.MergeBooks (the hard-delete path) now calls merge.FollowMergeWithStore before the delete"
+   },
+   {
+    "cmd": "grep -n 'FollowMerge(ms.db, ms.syncFollower, survivor.ID' internal/merge/service.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "425:\t\tFollowMerge(ms.db, ms.syncFollower, survivor.ID, []string{id})",
+    "err": "",
+    "expect": "1 hit ~L425",
+    "claim": "CombineBooks calls FollowMerge before its hard delete"
+   },
+   {
+    "cmd": "grep -n 'merge.FollowBookIDChange(getStore(), supersededID, newBookID)' internal/scanner/scanner.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "2494:\tmerge.FollowBookIDChange(getStore(), supersededID, newBookID)",
+    "err": "",
+    "expect": "1 hit ~L2494",
+    "claim": "the untagged-move scanner path calls merge.FollowBookIDChange at its version-link call site"
+   },
+   {
+    "cmd": "grep -n '^func Test' internal/merge/sync_identity_survival_test.go",
+    "rc": 0,
+    "nlines": 7,
+    "out": "64:func TestSyncIdentitySurvives_Rename(t *testing.T) {\n105:func TestSyncIdentitySurvives_MoveTagged(t *testing.T) {\n156:func TestSyncIdentitySurvives_Retag(t *testing.T) {\n215:func TestSyncIdentitySurvives_FileReplace_SameID(t *testing.T) {\n257:func TestSyncIdentitySurvives_FileReplace_Primitive(t *testing.T) {\n310:func TestSyncIdentitySurvives_RedirectChain_PathologicalCycle(t *testing.T) {\n368:",
+    "err": "",
+    "expect": "7 hits",
+    "claim": "a dedicated identity-survival test suite exists covering rename/move-tagged/retag/file-replace/redirect-chain/composed-lifecycle"
+   },
+   {
+    "cmd": "grep -n 'mergeSerializeMu' internal/merge/serialize.go",
+    "rc": 0,
+    "nlines": 4,
+    "out": "10:// mergeSerializeMu serializes EVERY merge-family read-modify-write across the\n37:var mergeSerializeMu sync.Mutex\n45:func LockMergeRMW() { mergeSerializeMu.Lock() }\n48:func UnlockMergeRMW() { mergeSerializeMu.Unlock() }",
+    "err": "",
+    "expect": "\u22651 hit",
+    "claim": "mergeSerializeMu already provides the single critical section TASK-12 asked to reuse"
+   }
+  ]
+ },
+ {
+  "id": "L10329",
+  "todo_line": 10329,
+  "title": "ABS-SYNC wave 2 (TASK-03 merge-follow, TASK-07 chapter scan hook, TASK-09 bookmarks) \u2014 all shipped",
+  "anchors": [
+   {
+    "cmd": "grep -n 'func PersistChaptersForBook' internal/scanner/process_file.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "205:func PersistChaptersForBook(ctx context.Context, bookFilePath string, scanLog logger.Logger) error {",
+    "err": "",
+    "expect": "1 hit ~L205",
+    "claim": "PersistChaptersForBook is implemented"
+   },
+   {
+    "cmd": "grep -n 'PersistChaptersForBook(ctx' internal/scanner/scanner.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "954:\t\t\t\t\tif err := PersistChaptersForBook(ctx, dirPath, scanLog); err != nil {\n1138:\t\t\t\tif err := PersistChaptersForBook(ctx, books[idx].FilePath, scanLog); err != nil {",
+    "err": "",
+    "expect": "2 hits ~L954, L1138",
+    "claim": "PersistChaptersForBook is called from two scan call sites"
+   },
+   {
+    "cmd": "grep -n 'sync-identity merge-follow' internal/merge/sync_follow.go",
+    "rc": 0,
+    "nlines": 5,
+    "out": "84:\t\tslog.Error(\"sync-identity merge-follow: could not mint winner syncID; losers NOT redirected\",\n94:\t\t\tslog.Error(\"sync-identity merge-follow: redirect NOT recorded; a client holding the loser's id will not resolve\",\n98:\t\t\tslog.Error(\"sync-identity merge-follow: progress NOT merged onto winner\",\n113:\t\tslog.Warn(\"sync-identity merge-follow: store does not implement SyncIdentityStore; this merge w",
+    "err": "",
+    "expect": "\u22651 hit",
+    "claim": "merge-follow hook exists in internal/merge"
+   }
+  ]
+ },
+ {
+  "id": "L10333",
+  "todo_line": 10333,
+  "title": "TASK-05: ID-survival suite \u2014 already built, covers all required scenarios",
+  "anchors": [
+   {
+    "cmd": "grep -n '^func Test' internal/merge/sync_identity_survival_test.go",
+    "rc": 0,
+    "nlines": 7,
+    "out": "64:func TestSyncIdentitySurvives_Rename(t *testing.T) {\n105:func TestSyncIdentitySurvives_MoveTagged(t *testing.T) {\n156:func TestSyncIdentitySurvives_Retag(t *testing.T) {\n215:func TestSyncIdentitySurvives_FileReplace_SameID(t *testing.T) {\n257:func TestSyncIdentitySurvives_FileReplace_Primitive(t *testing.T) {\n310:func TestSyncIdentitySurvives_RedirectChain_PathologicalCycle(t *testing.T) {\n368:",
+    "err": "",
+    "expect": "7 hits",
+    "claim": "the survival suite covers rename/move-tagged/retag/file-replace(x2)/redirect-chain/composed-lifecycle"
+   },
+   {
+    "cmd": "grep -n 'TestSaveBookToDatabase_UntaggedMove_CarriesSyncIdentity' internal/scanner/sync_identity_move_test.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "43:// TestSaveBookToDatabase_UntaggedMove_CarriesSyncIdentity: an untagged file is\n49:func TestSaveBookToDatabase_UntaggedMove_CarriesSyncIdentity(t *testing.T) {",
+    "err": "",
+    "expect": "\u22651 hit",
+    "claim": "untagged-move is covered separately, end-to-end, at the real production entry point"
+   }
+  ]
+ },
+ {
+  "id": "L10337",
+  "todo_line": 10337,
+  "title": "TASK-11 auth core (both credential modes) \u2014 already built, including the no-fail-open guard",
+  "anchors": [
+   {
+    "cmd": "grep -n 'func (r \\*ABSIdentityResolver) Resolve' internal/server/middleware/absauth.go",
+    "rc": 0,
+    "nlines": 4,
+    "out": "171:func (r *ABSIdentityResolver) ResolveCFAssertion(c *gin.Context) (*ABSIdentity, *ABSAuthError) {\n238:func (r *ABSIdentityResolver) ResolveBearer(c *gin.Context) (*ABSIdentity, *ABSAuthError) {\n305:func (r *ABSIdentityResolver) ResolveAPIKey(c *gin.Context) (*ABSIdentity, *ABSAuthError) {\n351:func (r *ABSIdentityResolver) Resolve(c *gin.Context) (*ABSIdentity, *ABSAuthError) {",
+    "err": "",
+    "expect": "1 hit ~L351",
+    "claim": "ABSIdentityResolver implements CF-assertion, bearer, and API-key resolution plus a unified Resolve() entry point"
+   },
+   {
+    "cmd": "grep -n 'ABSRequireAuth is the ABS group' internal/server/middleware/absauth.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "465:// ABSRequireAuth is the ABS group's authentication middleware. It never falls",
+    "err": "",
+    "expect": "1 hit ~L465",
+    "claim": "ABSRequireAuth documents and enforces no fail-open behavior"
+   },
+   {
+    "cmd": "grep -rn 'argon2' internal/server/absauth/password.go",
+    "rc": 0,
+    "nlines": 11,
+    "out": "internal/server/absauth/password.go:15:\t\"golang.org/x/crypto/argon2\"\ninternal/server/absauth/password.go:22:\tAlgoArgon2id = \"argon2id\"\ninternal/server/absauth/password.go:33:// argon2id parameters. m=64 MiB / t=3 / p=2 is the OWASP-recommended baseline and\ninternal/server/absauth/password.go:42:\targonVersion        = argon2.Version\ninternal/server/absauth/password.go:45:// HashPassword hashes a ne",
+    "err": "",
+    "expect": "\u22651 hit",
+    "claim": "argon2id password hashing exists for the ABS auth path"
+   },
+   {
+    "cmd": "grep -n 'design spec \u00a73.3' internal/database/pebble_store_abssession.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "17:// ABS-compatible auth sessions (design spec \u00a73.3).\n38:// client device, per design spec \u00a73.3.",
+    "err": "",
+    "expect": "1 hit ~L16",
+    "claim": "ABS-compatible DB-backed sessions exist per design spec \u00a73.3"
+   }
+  ]
+ },
+ {
+  "id": "L10344",
+  "todo_line": 10344,
+  "title": "Phase 3 DTO mapping + library browse \u2014 client contract already implemented and code-commented against the same spec sections",
+  "anchors": [
+   {
+    "cmd": "grep -n 'PublishedYear.*\\*string\\|yearString renders publishedYear' internal/server/handlers/abs/dto_library.go internal/server/handlers/abs/mapper.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "internal/server/handlers/abs/dto_library.go:118:\tPublishedYear     *string        `json:\"publishedYear\"`\ninternal/server/handlers/abs/mapper.go:447:// yearString renders publishedYear as a STRING or null \u2014 never a number.",
+    "err": "",
+    "expect": "\u22652 hits",
+    "claim": "publishedYear is rendered as a nullable string, never a number"
+   },
+   {
+    "cmd": "grep -n 'UserDefaultLibraryID string' internal/server/handlers/abs/dto.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "171:\tUserDefaultLibraryID string          `json:\"userDefaultLibraryId\"`",
+    "err": "",
+    "expect": "1 hit ~L171",
+    "claim": "userDefaultLibraryId is a non-null string field on the login/auth DTO"
+   },
+   {
+    "cmd": "grep -n 'AudioTracks.*omitempty' internal/server/handlers/abs/dto_play.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "14://\tAudioTracks \u2014 `omitempty` on a NIL-able slice, and that combination is the whole\n28:\tAudioTracks   []audioTrackDTO        `json:\"audioTracks,omitempty\"`",
+    "err": "",
+    "expect": "1 hit ~L28",
+    "claim": "audioTracks is omitted (not emitted as []) when empty"
+   },
+   {
+    "cmd": "grep -n 'never paginated' internal/server/handlers/abs/dto.go internal/server/handlers/abs/progress.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "internal/server/handlers/abs/dto.go:25://  2. `mediaProgress` is the COMPLETE list, never paginated, never null (\u00a71.8.1).",
+    "err": "",
+    "expect": "2 hits",
+    "claim": "mediaProgress is documented and implemented as the complete, never-paginated list"
+   }
+  ]
+ },
+ {
+  "id": "L10350",
+  "todo_line": 10350,
+  "title": "Phase 5b playback routes \u2014 all three routes registered and implemented using the merged httputil Range helper",
+  "anchors": [
+   {
+    "cmd": "grep -n 'items/:id/play\\|items/:id/file/:ino\\|public/session/:id/track/:index' internal/server/handlers/abs/handler.go",
+    "rc": 0,
+    "nlines": 6,
+    "out": "508:\tr.POST(\"/api/items/:id/play\", auth, h.Play)\n509:\tr.GET(\"/api/items/:id/file/:ino\", auth, h.ItemFile)\n510:\tr.GET(\"/api/items/:id/file/:ino/download\", auth, h.ItemFileDownload)\n532:\tr.HEAD(\"/api/items/:id/file/:ino\", auth, h.ItemFile)\n533:\tr.HEAD(\"/api/items/:id/file/:ino/download\", auth, h.ItemFileDownload)\n542:\tr.GET(\"/public/session/:id/track/:index\", h.PublicSessionTrack)",
+    "err": "",
+    "expect": "5 hits total across L508-510, L532-533, L542",
+    "claim": "all three Phase 5b routes are registered on the ABS handler"
+   },
+   {
+    "cmd": "grep -n 'func (h \\*Handler) ItemFile' internal/server/handlers/abs/stream.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "65:func (h *Handler) ItemFile(c *gin.Context) {\n73:func (h *Handler) ItemFileDownload(c *gin.Context) {",
+    "err": "",
+    "expect": "1 hit ~L65",
+    "claim": "ItemFile (the file/:ino handler) is implemented"
+   }
+  ]
+ },
+ {
+  "id": "L10418",
+  "todo_line": 10418,
+  "title": "P2 BLOCKER \u2014 location-form guard rejecting the whole AO library \u2014 already fixed via AllowedWritebackRoot scoping (owner's preferred option 1)",
+  "anchors": [
+   {
+    "cmd": "grep -n 'allowedRoot := normalizeStagingPath(cfg.AllowedWritebackRoot)' internal/itunes/itl_safety_contract.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "566:\tallowedRoot := normalizeStagingPath(cfg.AllowedWritebackRoot)",
+    "err": "",
+    "expect": "1 hit ~L562",
+    "claim": "guardLocationForm scopes the staging-marker check to cfg.AllowedWritebackRoot"
+   },
+   {
+    "cmd": "grep -n 'stagingMarkerIsLeak(pair.val, allowedRoot)' internal/itunes/itl_safety_contract.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "584:\t\t\t\tstagingMarkerIsLeak(pair.val, allowedRoot) {",
+    "err": "",
+    "expect": "1 hit ~L577",
+    "claim": "the violation check uses stagingMarkerIsLeak(val, allowedRoot) rather than a blanket reject"
+   },
+   {
+    "cmd": "grep -n 'F7:' internal/itunes/itl_safety_contract.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "563:\t// F7: when writing the AO library (which legitimately lives under its own",
+    "err": "",
+    "expect": "\u22651 hit ~L561",
+    "claim": "AllowedWritebackRoot is documented as the F7 fix, citing the exact spec section the item cites"
+   }
+  ]
+ },
+ {
+  "id": "L10500",
+  "todo_line": 10500,
+  "title": "Verify dedup-exact-triage apply path already ships (T03-BUILD)",
+  "anchors": [
+   {
+    "cmd": "grep -n \"Apply bool\" internal/plugins/maintenance/dedup_triage.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "294:\tApply bool `json:\"apply\"`",
+    "err": "",
+    "expect": "1 hit ~L294",
+    "claim": "Apply bool json:\"apply\" field exists on triage params"
+   },
+   {
+    "cmd": "grep -n \"UpdateCandidateStatus\" internal/plugins/maintenance/dedup_triage.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "94:\t// actually dismissed via UpdateCandidateStatus. Only populated when the op\n290:\t// via UpdateCandidateStatus(id, \"dismissed\"). Default false \u2014 the",
+    "err": "",
+    "expect": "\u22651 hit",
+    "claim": "apply=true path calls UpdateCandidateStatus to dismiss purgeable candidates"
+   }
+  ]
+ },
+ {
+  "id": "L10538",
+  "todo_line": 10538,
+  "title": "Verify LLM/embeddings backend-mode toggle is already fully shipped",
+  "anchors": [
+   {
+    "cmd": "grep -n \"AIBackendModeDisabled\\|AIBackendModeOpenAI\\|AIBackendModeLocal\\|AIBackendModeOpenAIFallbackLocal\" internal/config/config.go",
+    "rc": 0,
+    "nlines": 15,
+    "out": "495://   - AIBackendModeDisabled: no client is constructed.\n496://   - AIBackendModeOpenAI: the real OpenAI cloud API (requires OpenAIAPIKey).\n497://   - AIBackendModeLocal: a local OpenAI-compatible endpoint (e.g. Ollama) at\n499://   - AIBackendModeOpenAIFallbackLocal: primary OpenAI with a local fallback.\n504:\tAIBackendModeDisabled            = \"disabled\"\n505:\tAIBackendModeOpenAI              = ",
+    "err": "",
+    "expect": "\u22654 hits ~L504-507",
+    "claim": "4-mode enum + AIBackendConfig struct exist"
+   },
+   {
+    "cmd": "grep -n \"disabled\\|openai\\|openai-fallback-local\" web/src/components/settings/AIBackendsSection.tsx",
+    "rc": 0,
+    "nlines": 9,
+    "out": "32:  { value: 'disabled', label: 'Disabled' },\n33:  { value: 'openai', label: 'OpenAI' },\n35:  { value: 'openai-fallback-local', label: 'OpenAI (fallback to local)' },\n39:  return mode === 'local' || mode === 'openai-fallback-local';\n113:            value={config.embedding_mode || 'disabled'}\n135:            value={config.llm_mode || 'disabled'}\n202:            disabled={testing}\n287:          <Bu",
+    "err": "",
+    "expect": "\u22654 hits ~L32-35",
+    "claim": "FE selector has all 4 options"
+   },
+   {
+    "cmd": "grep -n \"pulling\\|pullTarget\" web/src/components/settings/AIBackendsSection.tsx",
+    "rc": 0,
+    "nlines": 10,
+    "out": "46:  const [pullTarget, setPullTarget] = useState<{ model: string; label: string } | null>(null);\n47:  const [pulling, setPulling] = useState(false);\n66:    if (!pullTarget) return;\n70:      await api.pullAIBackendModel(pullTarget.model);\n274:      <Dialog open={!!pullTarget} onClose={() => (pulling ? undefined : setPullTarget(null))}>\n278:            {pullTarget ? `${pullTarget.label} not pulled ",
+    "err": "",
+    "expect": "\u22652 hits",
+    "claim": "Model-download/pull prompt UI exists"
+   }
+  ]
+ },
+ {
+  "id": "L10610",
+  "todo_line": 10610,
+  "title": "Close out SLOG-W13 \u2014 sweep already merged, residual is legitimately out of scope",
+  "anchors": [
+   {
+    "cmd": "git log --oneline --all --grep=\"SLOG-W13\"",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "\u22655 hits"
+   }
+  ]
+ },
+ {
+  "id": "L10660",
+  "todo_line": 10660,
+  "title": "Add resizable/sortable columns to iTunes write-back preview table",
+  "anchors": [
+   {
+    "cmd": "grep -n 'sortable: true' web/src/components/settings/WriteBackPreviewTable.tsx",
+    "rc": 0,
+    "nlines": 7,
+    "out": "79:    sortable: true,\n88:    sortable: true,\n97:    sortable: true,\n106:    sortable: true,\n115:    sortable: true,\n124:    sortable: true,\n133:    sortable: true,",
+    "err": "",
+    "expect": "7 hits",
+    "claim": "WriteBackPreviewTable already uses ConfigurableTable with sortable columns"
+   },
+   {
+    "cmd": "grep -n 'click-to-sort and drag-to-resize' web/src/components/settings/WriteBackPreviewTable.tsx",
+    "rc": 0,
+    "nlines": 1,
+    "out": "31: * status, with click-to-sort and drag-to-resize headers. Column widths",
+    "err": "",
+    "expect": "1 hit ~L31",
+    "claim": "component doc comment confirms resize+sort UX shipped"
+   }
+  ]
+ },
+ {
+  "id": "L10670",
+  "todo_line": 10670,
+  "title": "Store ISP sweep \u2014 narrow the 8 handlers/*/interfaces.go + internal/server/interfaces.go DI seams",
+  "anchors": [
+   {
+    "cmd": "grep -ln 'is the narrow database.Store subset' internal/server/handlers/*/interfaces.go",
+    "rc": 0,
+    "nlines": 5,
+    "out": "internal/server/handlers/audiobooks/interfaces.go\ninternal/server/handlers/dedup/interfaces.go\ninternal/server/handlers/duplicates/interfaces.go\ninternal/server/handlers/entities/interfaces.go\ninternal/server/handlers/system/interfaces.go",
+    "err": "",
+    "expect": "6+ hits (dedup, entities, audiobooks, duplicates, system; operations/metadata phrase it slightly differently but also compose narrow sub-interfaces)",
+    "claim": "all 7 handler subpackages have a narrow *Store interface"
+   },
+   {
+    "cmd": "grep -n 'database\\.Store' internal/server/handlers/organize.go internal/server/handlers/oauth_login.go internal/server/handlers/ai.go internal/server/handlers/diagnostics.go internal/server/handlers/versions.go internal/server/handlers/itunes.go",
+    "rc": 0,
+    "nlines": 8,
+    "out": "internal/server/handlers/organize.go:61:// It was `= database.Store`, an alias to all 398 methods, justified by a comment\ninternal/server/handlers/organize.go:63:// require the full database.Store interface, so a narrower subset would not\ninternal/server/handlers/oauth_login.go:277:// database.Store -- 398 methods -- until 2026-08-19.\ninternal/server/handlers/ai.go:132:// database.Store (398 metho",
+    "err": "",
+    "expect": "all hits are inside // comments, none are a type declaration",
+    "claim": "remaining database.Store mentions in handlers/*.go are historical comments, not live params"
+   },
+   {
+    "cmd": "git log --oneline --all -- internal/server/interfaces.go",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "0 hits"
+   }
+  ]
+ },
+ {
+  "id": "L10710",
+  "todo_line": 10710,
+  "title": "WaitForWarmup hazard \u2014 already fixed, not just documented",
+  "anchors": [
+   {
+    "cmd": "grep -n 'func (p \\*PebbleStore) WaitForWarmup' internal/database/pebble_store.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "174:func (p *PebbleStore) WaitForWarmup() {",
+    "err": "",
+    "expect": "1 hit ~L174",
+    "claim": "WaitForWarmup helper exists on PebbleStore"
+   },
+   {
+    "cmd": "grep -rln 'WaitForWarmup()' --include=*_test.go .",
+    "rc": 0,
+    "nlines": 98,
+    "out": "./internal/database/pebble_store_test.go\n./internal/database/listing_order_conformance_test.go\n./internal/database/update_bookfile_normalizes_test.go\n./internal/database/series_getter_conformance_test.go\n./internal/database/pebble_ops_v2_closed_test.go\n./internal/database/author_getter_conformance_test.go\n./internal/database/pebble_books_index_keys_test.go\n./internal/database/pebble_store_folder_d",
+    "err": "",
+    "expect": ">30 files",
+    "claim": "helper is called pervasively across create-then-read tests"
+   }
+  ]
+ },
+ {
+  "id": "L10712",
+  "todo_line": 10712,
+  "title": "GFO-4 graceful-file-ops sub-op phase tracking \u2014 already shipped",
+  "anchors": [
+   {
+    "cmd": "grep -n 'PhaseRename\\|PhaseTags\\|PhaseITunes' internal/organizer/checkpoint.go",
+    "rc": 0,
+    "nlines": 4,
+    "out": "35:\tPhaseRename       = \"rename\"\n36:\tPhaseTags         = \"tags\"\n37:\tPhaseITunes       = \"itunes\"\n57:\tfor _, phase := range []string{PhaseRename, PhaseTags, PhaseITunes} {",
+    "err": "",
+    "expect": "\u22653 hits",
+    "claim": "checkpoint phase constants + helpers exist"
+   },
+   {
+    "cmd": "grep -n 'func Test' internal/organizer/checkpoint_test.go",
+    "rc": 0,
+    "nlines": 3,
+    "out": "14:func TestCheckpoint_SetAndHas(t *testing.T) {\n38:func TestCheckpoint_ClearAll(t *testing.T) {\n58:func TestCheckpoint_Idempotent(t *testing.T) {",
+    "err": "",
+    "expect": "\u22653 hits",
+    "claim": "checkpoints are tested"
+   },
+   {
+    "cmd": "grep -n 'hasCheckpoint\\|setCheckpoint\\|clearCheckpoints' internal/metafetch/service_writeback.go",
+    "rc": 0,
+    "nlines": 7,
+    "out": "499:\tif config.AppConfig.AutoRenameOnApply && !hasCheckpoint(mfs.db, id, phaseRename) {\n588:\t\tsetCheckpoint(mfs.db, id, phaseRename)\n604:\tif config.AppConfig.AutoWriteTagsOnApply && !hasCheckpoint(mfs.db, id, phaseTags) {\n611:\t\t\tsetCheckpoint(mfs.db, id, phaseTags)\n619:\tif mfs.writeBackBatcher != nil && !hasCheckpoint(mfs.db, id, phaseITunes) {\n621:\t\tsetCheckpoint(mfs.db, id, phaseITunes)\n625:\tcle",
+    "err": "",
+    "expect": "\u22654 hits",
+    "claim": "apply pipeline actually gates on checkpoints and clears them on completion"
+   }
+  ]
+ },
+ {
+  "id": "L10714",
+  "todo_line": 10714,
+  "title": "Performance items #1/#2/#6 (2026-04-14 set) \u2014 already resolved",
+  "anchors": [
+   {
+    "cmd": "grep -n 'PERF-2\\|PERF-6' docs/archive/todo-2026-H1.md",
+    "rc": 0,
+    "nlines": 3,
+    "out": "2490:- [x] **PERF-2** \u2014 Batch upserts in `createBookFilesForBook`: N per-segment `UpsertBookFile` calls replaced with one `BatchUpsertBookFiles` call (shipped PR #1583). N\u21921 DB writes per book on first scan.\n2491:- [x] **PERF-6** \u2014 Search index backfill cursor: added `GetAllBooksFrom(afterID, limit)` to `BookReader` interface + PebbleStore (O(1) LowerBound seek). Rewrote `server_search.go` backfil",
+    "err": "",
+    "expect": "2 hits, both prefixed '- [x]' with PR # citations",
+    "claim": "PERF-2 and PERF-6 marked done with PR refs"
+   },
+   {
+    "cmd": "git log --oneline --all --grep='future-proof remaining whole-library ops against fixed-limit truncation'",
+    "status": "SKIPPED_UNSAFE",
+    "expect": "1 hit, commit 19e129d4"
+   }
+  ]
+ },
+ {
+  "id": "L10750",
+  "todo_line": 10750,
+  "title": "Scan and fingerprint the assembled-source download root as a read-only reference corpus",
+  "anchors": [
+   {
+    "cmd": "grep -n 'RootDir ' internal/config/config.go",
+    "rc": 0,
+    "nlines": 2,
+    "out": "623:\tRootDir       string      `json:\"root_dir\"`\n1998:\t\tif c.OpenLibraryDumpDir == \"\" && c.RootDir != \"\" {",
+    "err": "",
+    "expect": "1 struct-field hit ~L623",
+    "claim": "only one scan root exists in config today"
+   },
+   {
+    "cmd": "grep -rln fpidx internal/database internal/fingerprint internal/plugins/acoustid",
+    "rc": 0,
+    "nlines": 7,
+    "out": "internal/database/memdb_strip.go\ninternal/database/pebble_store.go\ninternal/database/pebble_store_lsh_api_test.go\ninternal/database/pebble_store_bookfiles.go\ninternal/database/pebble_store_lsh.go\ninternal/fingerprint/lsh.go\ninternal/plugins/acoustid/lsh_backfill.go",
+    "err": "",
+    "expect": "\u22653 files",
+    "claim": "fpidx LSH index already exists and is the target index for this reference corpus"
+   }
+  ]
+ },
+ {
+  "id": "L235",
+  "todo_line": 235,
+  "title": "Add a per-test deadline (context.WithTimeout) to internal/database's riskiest unbounded-wait test helpers",
+  "anchors": [
+   {
+    "cmd": "grep -n '^go ' go.mod",
+    "rc": 0,
+    "nlines": 1,
+    "out": "3:go 1.26.0",
+    "err": "",
+    "expect": "go 1.24.0 (per CLAUDE.md this should be bumped to 1.25/1.26; either way t.Context() is available)",
+    "claim": "go.mod targets a Go version supporting t.Context() (1.24+)"
+   },
+   {
+    "cmd": "grep -rn 't.Context()' internal/database/*.go | wc -l",
+    "rc": 0,
+    "nlines": 1,
+    "out": "0",
+    "err": "",
+    "expect": "0",
+    "claim": "no test in internal/database currently uses t.Context()"
+   },
+   {
+    "cmd": "grep -rl '\\.Wait()\\|<-.*chan\\|\\.Lock()' internal/database/*_test.go internal/database/dbtest/*.go | sort | wc -l",
+    "rc": 0,
+    "nlines": 1,
+    "out": "12",
+    "err": "",
+    "expect": "12",
+    "claim": "exactly 12 test files contain the unbounded-wait pattern"
+   },
+   {
+    "cmd": "grep -n '\\.Wait()' internal/database/dataloss_concurrency_test.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "109:\twg.Wait()",
+    "err": "",
+    "expect": "1 hit ~L109",
+    "claim": "one concrete example -- dataloss_concurrency_test.go has a bare wg.Wait() with no timeout"
+   },
+   {
+    "cmd": "grep -n 'a bare wg.Wait() produced NO test failure' internal/database/embedding_store_chaos_test.go",
+    "rc": 0,
+    "nlines": 1,
+    "out": "38:// commitPipeline.prepare), a bare wg.Wait() produced NO test failure \u2014 it hung",
+    "err": "",
+    "expect": "1 hit ~L38",
+    "claim": "embedding_store_chaos_test.go's own comment documents a bare wg.Wait() having hung before with no test failure"
+   }
+  ]
+ }
+]

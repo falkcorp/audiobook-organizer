@@ -1,0 +1,54 @@
+{
+  "todo_line": 296,
+  "part": 2,
+  "src_id": null,
+  "title": "Triage the 16 removed POST /maintenance/* paths in openapi.json \u2014 delete, or document as ops-API equivalents",
+  "verdict": "actionable",
+  "verdict_evidence": "The TODO explicitly separates these from the safe-to-delete group above: 'the maintenance ones should be checked against whether an ops-API equivalent should be documented instead' \u2014 these are genuine functionality (now dispatched through the registry ops API as maintenance.dedup-books etc.) rather than pure duplicates, so blind deletion would silently un-document real capability.",
+  "domain": "docs",
+  "exact_files": [
+    "docs/api/openapi.json"
+  ],
+  "verified_anchors": [],
+  "reuse": [],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Each of the 16 needs an individual judgment call (delete vs. redocument as its registry-op equivalent) plus writing new OpenAPI entries for the ops-API dispatch pattern if that's the chosen path \u2014 more design-adjacent than part 1's pure deletion.",
+  "review_critical": false,
+  "goal": "For each of the 16 POST /maintenance/* paths still in openapi.json (backfill-book-files, cleanup-backups, cleanup-empty-folders, cleanup-organize-mess, cleanup-series, dedup-books, enrich-book-files, fix-author-narrator-swap, fix-book-file-paths, fix-library-states, fix-read-by-narrator, fix-version-groups, generate-itl-tests, recompute-itunes-paths, refetch-missing-authors \u2014 15 named plus /maintenance/wipe which is confirmed to still be a real POST route and should be LEFT ALONE), confirm it has no real route (per the TODO, only /maintenance/wipe survived as an actual POST), then either delete the stale entry or replace it with documentation of its registry-ops-API equivalent (e.g. POST /api/v1/operations/maintenance.dedup-books or whatever this repo's actual ops-dispatch endpoint shape is).",
+  "background": [
+    "Find the real ops-API dispatch route shape first: `grep -rn 'operations.*POST\\|ops.*router.POST' internal/server/*.go` to see the actual endpoint pattern these operations are invoked through today, so the redocumented spec entries (if that path is chosen) are accurate rather than invented."
+  ],
+  "steps": [
+    "1. Confirm /maintenance/wipe is the only surviving real POST /maintenance/* route via the real router table (reuse part 1's route-dump approach) and leave its openapi.json entry untouched.",
+    "2. For each of the other 15, verify via the real route table that no route exists at that exact path.",
+    "3. For each confirmed-gone path: EITHER delete the entry from openapi.json, OR (preferred, since these represent real ongoing capability) replace it with an accurate documentation of how to invoke the same operation today via the registry ops API \u2014 confirm the real dispatch endpoint shape from the grep in Background before writing new spec entries.",
+    "4. Get owner input on which of the two (delete vs. redocument) is preferred overall, since it applies uniformly across all 15 \u2014 this is a small policy call worth surfacing rather than guessing silently."
+  ],
+  "tests": [
+    "Same JSON-validity check as part 1."
+  ],
+  "acceptance": [
+    "Each of the 15 non-wipe maintenance paths is either removed or replaced with an accurate ops-API-equivalent doc entry, and /maintenance/wipe's entry is unchanged."
+  ],
+  "edge_cases": [
+    "If the real ops-API dispatch endpoint is generic (e.g. a single POST /api/v1/operations/:opID for ALL registry ops, not 15 separate paths), redocumenting as 15 separate OpenAPI paths would be WRONG \u2014 in that case a single generic entry with an enum of valid opID values is the more accurate representation; confirm the real shape before choosing."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only'",
+  "notes": "This needs a quick owner check-in on delete-vs-redocument policy before executing at scale, even though each individual path's 'is it gone' fact is independently verifiable.",
+  "review_notes": [
+    "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three"
+  ],
+  "id": "TASK-052",
+  "stable_key": "scope-01.json|296|2|Triage the 16 removed POST /maintenance/* paths in openapi.j",
+  "ws": "docs",
+  "slug": "triage-the-16-removed-post-maintenance-paths-in-",
+  "scope_file": "scope-01.json",
+  "dropped_files": [],
+  "tier_label": "Sonnet-class",
+  "depends_on": [],
+  "wave": 1
+}

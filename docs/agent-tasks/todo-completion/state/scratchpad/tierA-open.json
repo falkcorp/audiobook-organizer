@@ -1,0 +1,146 @@
+[
+ [
+  280,
+  280,
+  "`syscall.Kill(os.Getpid(), syscall.SIGTERM)` signals the **entire test binary**,",
+  "open"
+ ],
+ [
+  283,
+  283,
+  "The unconditional `time.Sleep(6 * time.Second)` before the signal is pure wall-c",
+  "open"
+ ],
+ [
+  476,
+  476,
+  "**Series DETAIL is still not served.** `/api/series/:id` 301s into the app API, ",
+  "open"
+ ],
+ [
+  697,
+  697,
+  "`registry.RunItems` label re-render (fixed 2026-08-13) changed shared",
+  "open"
+ ],
+ [
+  928,
+  928,
+  "Not done unattended on purpose: this was left for a human on 2026-08-18",
+  "open"
+ ],
+ [
+  3718,
+  3719,
+  "**`show_quarantined=true` SHRINKS the list.** A flag that can only",
+  "open"
+ ],
+ [
+  3729,
+  3730,
+  "`is_primary_version=false` answers 22,552 \u2014 exactly the known",
+  "open"
+ ],
+ [
+  4064,
+  4065,
+  "**After this deploys**, drop `skip_author_ids: [46627]` from the repair",
+  "open"
+ ],
+ [
+  4081,
+  4082,
+  "**CORRECTION to `20260814-matcher-writeback-background-job.md`: the",
+  "open"
+ ],
+ [
+  6394,
+  6402,
+  "**`scan-import-organize.spec.ts` (7 failures) \u2014 Settings tab deep-link",
+  "open"
+ ],
+ [
+  10077,
+  10097,
+  "**TODO-SEC-BIND** The service binds every interface",
+  "open"
+ ],
+ [
+  10088,
+  10108,
+  "**TODO-SEC-JWT** Rotate `ABS_JWT_SECRET` \u2014 it was pasted in plaintext into",
+  "open"
+ ],
+ [
+  10094,
+  10114,
+  "**TODO-SEC-SYSTEMD** The unit has `User=audiobook`, `NoNewPrivileges`,",
+  "open"
+ ],
+ [
+  10600,
+  10075,
+  "**TODO-SSO-EDGE** Neither native-app auth mode is actually configured at",
+  "open"
+ ],
+ [
+  10447,
+  10467,
+  "**iTunes book_file PID uniqueness \u2014 apply the backfill repair (gated).** Forward",
+  "open"
+ ],
+ [
+  10512,
+  6095,
+  "**Replace library sorting with server-side Go sorting.** Owner decision 2026-08-",
+  "open"
+ ],
+ [
+  7819,
+  7827,
+  "**Fix the Library \"In Progress\" nav item \u2014 the selection highlight never",
+  "open"
+ ],
+ [
+  10622,
+  3735,
+  "**CA12 wave 2: model `logging.Sanitize`/`SanitizeErr`/`logger.sanitizeLogLine`",
+  "open"
+ ],
+ [
+  10104,
+  10124,
+  "**TODO-SRVTIMEOUT** Split or speed up the `internal/server` test package \u2014",
+  "open"
+ ],
+ [
+  2125,
+  2126,
+  "**ORGANIZE-4TH-COPY** `internal/server/handlers/filesystem.go:286` is a",
+  "open"
+ ],
+ [
+  2467,
+  2468,
+  "**Repair books applied from the Metadata Review screen before the tag-write fix.",
+  "open"
+ ],
+ [
+  8316,
+  8327,
+  "**Per-file intro transcription as the primary book-identity signal** \u2014 owner",
+  "open"
+ ],
+ [
+  2267,
+  2268,
+  "**ROWCOUNT-REVERIFY** Re-measure every production table row count once the",
+  "open"
+ ],
+ [
+  7209,
+  7217,
+  "**The library \"Sort by\" control no longer exists \u2014 4 e2e tests target a",
+  "open"
+ ]
+]

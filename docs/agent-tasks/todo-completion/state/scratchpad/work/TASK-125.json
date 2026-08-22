@@ -1,0 +1,105 @@
+{
+  "todo_line": 618,
+  "src_id": null,
+  "title": "Index track names on BookDocument so smart playlists can match them",
+  "verdict": "actionable",
+  "verdict_evidence": "BookDocument (internal/search/document.go:19) has no track-name field: grep -n 'TrackNames' internal/search/document.go -> 0 hits. Confirmed missing end-to-end: grep -n 'Title\\|Author\\|Narrator\\|Series\\|Publisher\\|Description\\|FilePath' internal/search/document.go lists only book-level analyzed fields (document.go:22-29).",
+  "domain": "internal/search",
+  "exact_files": [
+    "internal/search/bleve_index.go",
+    "internal/search/document.go",
+    "internal/search/index_builder.go"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "BookDocument has no TrackNames field",
+      "grep_cmd": "grep -n 'TrackNames' internal/search/document.go",
+      "expect": "0 hits"
+    },
+    {
+      "claim": "bookIndexMapping registers each analyzed text field individually",
+      "grep_cmd": "grep -n 'book.AddFieldMappingsAt' internal/search/bleve_index.go",
+      "expect": ">=15 hits"
+    },
+    {
+      "claim": "indexBuilderStore is the narrow 4-method probe-derived interface BookToDoc uses",
+      "grep_cmd": "grep -n 'type indexBuilderStore interface' internal/search/index_builder.go",
+      "expect": "1 hit L23"
+    },
+    {
+      "claim": "GetBookFiles(bookID) exists on the database and returns Title+FilePath per file",
+      "grep_cmd": "grep -n 'GetBookFiles(bookID string) (\\[\\]BookFile, error)' internal/database/iface_bookfile.go",
+      "expect": "1 hit L20"
+    },
+    {
+      "claim": "bookMappingVersion gates whether the on-disk index is rebuilt",
+      "grep_cmd": "grep -n 'const bookMappingVersion' internal/search/bleve_index.go",
+      "expect": "1 hit L94, currently \"2\""
+    }
+  ],
+  "reuse": [
+    {
+      "name": "textAnalyzed() field-mapping helper",
+      "file": "internal/search/bleve_index.go",
+      "verify_grep": "grep -n 'textAnalyzed := func' internal/search/bleve_index.go"
+    },
+    {
+      "name": "keyword field-mapping helper (for exact multi-value match, alternative to analyzed text)",
+      "file": "internal/search/bleve_index.go",
+      "verify_grep": "grep -n 'keyword := func' internal/search/bleve_index.go"
+    },
+    {
+      "name": "database.BookFile.Title / .FilePath fields",
+      "file": "internal/database/store.go",
+      "verify_grep": "grep -n 'Title *string' internal/database/store.go"
+    }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "touches the index schema (mapping-version bump forces a full library reindex on next restart), a probe-derived narrow interface, and query-time field weighting -- needs care to keep interfacebloat-style narrowness",
+  "review_critical": false,
+  "goal": "Add a `TrackNames []string` field to BookDocument, register it as an analyzed multi-value text field in bookIndexMapping, populate it in BookToDoc from each book's BookFile.Title (falling back to the file's base name when Title is empty, mirroring loadChapters' own Title/Filename fallback in mapper.go:258-260), and bump bookMappingVersion so every deployed index is rebuilt to pick it up -- so a smart playlist / free-text search for a track name like 'Job' matches the book that contains it.",
+  "background": [
+    "document.go:19-29: BookDocument today carries only book-level fields (title, author, narrator, series, publisher, description, file_path); no per-track data.",
+    "index_builder.go:23-28 indexBuilderStore has exactly 4 methods (GetBookByID, GetAuthorByID, GetSeriesByID, GetBookTags) -- adding GetBookFiles(bookID) is a 5th narrow addition, still well under interfacebloat limits.",
+    "mapper.go:256-264 already has the exact Title-vs-Filename fallback logic to mirror when building track names.",
+    "bleve_index.go:94 bookMappingVersion=\"2\" is the mechanism that forces Open() to delete and recreate the on-disk index (bleve_index.go:105-138) when the mapping changes; NOT bumping it means the new field is silently invisible on already-deployed indexes."
+  ],
+  "steps": [
+    "1. internal/search/document.go: add `TrackNames []string json:\"track_names,omitempty\"` to BookDocument, near the existing Tags []string field (document.go:33-35), with a doc comment describing it as analyzed multi-value text (one entry per BookFile.Title, or filepath.Base(FilePath) when Title is empty).",
+    "2. internal/search/bleve_index.go: inside bookIndexMapping(), add `trackNames := textAnalyzed()` and `book.AddFieldMappingsAt(\"track_names\", trackNames)` near the existing tags/keyword registrations (bleve_index.go ~505-510). Add \"track_names\" to textFieldBoosts (bleve_index.go:427-433) with a modest boost (e.g. 1.0, same as publisher) so it participates in free-text search without dominating title matches.",
+    "3. internal/search/bleve_index.go: bump `const bookMappingVersion = \"2\"` to `\"3\"` (line 94).",
+    "4. internal/search/index_builder.go: add `GetBookFiles(bookID string) ([]database.BookFile, error)` to indexBuilderStore (index_builder.go:23-28).",
+    "5. internal/search/index_builder.go: inside BookToDoc, after the existing field population, call `store.GetBookFiles(book.ID)` and build `doc.TrackNames` as one entry per file: `f.Title` if non-empty else `filepath.Base(f.FilePath)`. Add `\"path/filepath\"` to imports. Treat a GetBookFiles error as best-effort (log/skip), matching the file's existing 'silently skipped' doc comment (index_builder.go:82).",
+    "6. Verify every caller of indexBuilderStore / BookToDoc's Store argument (server_search.go:87, server_search.go:115, search_coverage_test.go) is *database.PebbleStore or database.Store, which already implement GetBookFiles -- confirm with `grep -n 'GetBookFiles' internal/database/pebble_store_bookfiles.go`."
+  ],
+  "tests": [
+    "internal/search/index_builder_test.go (or new): TestBookToDoc_PopulatesTrackNames -- a book with 2 BookFiles (one with Title set, one with empty Title) yields doc.TrackNames with the Title for the first and filepath.Base for the second.",
+    "internal/search/bleve_index_test.go (or new): TestSearch_MatchesOnTrackName -- index a book whose title/author/narrator do NOT contain 'Job' but one BookFile.Title == 'Job'; a free-text search for 'job' must return that book.",
+    "internal/search/mapping_version_test.go: existing test pattern (readMappingMarker) should be exercised to confirm a v2 on-disk index gets recreated when bookMappingVersion becomes \"3\"."
+  ],
+  "acceptance": [
+    "go test ./internal/search/... passes.",
+    "grep -n 'TrackNames' internal/search/document.go returns 1 hit.",
+    "grep -n 'bookMappingVersion = \"3\"' internal/search/bleve_index.go returns 1 hit."
+  ],
+  "edge_cases": [
+    "Book with zero BookFile rows (ebook-only or fully missing files): TrackNames stays nil/empty, no panic.",
+    "GetBookFiles error (deleted book mid-index-build): BookToDoc must not fail the whole document build -- log and continue with TrackNames unset, matching the file's existing best-effort policy.",
+    "A single-file book whose one file's Title equals the book Title exactly: acceptable duplication in the index, not a bug -- do not de-dup against doc.Title."
+  ],
+  "anti_over_suppression": "N/A -- this is additive indexing, not a filter/guard.",
+  "depends_on_lines": [],
+  "gate": "go build ./... && go vet ./... && go test ./internal/search/... -count=1",
+  "notes": "Bumping bookMappingVersion forces every deployed index to rebuild on next restart (bleve_index.go:122-125 logs a warning and the reconciler drains the dirty set) -- call this out explicitly in the PR description since it is a one-time cost on the production instance, not a bug.",
+  "id": "TASK-125",
+  "stable_key": "scope-02.json|618|None|Index track names on BookDocument so smart playlists can mat",
+  "ws": "search",
+  "slug": "index-track-names-on-bookdocument-so-smart-playl",
+  "scope_file": "scope-02.json",
+  "dropped_files": [],
+  "tier_label": "Sonnet-class",
+  "depends_on": [],
+  "wave": 1
+}

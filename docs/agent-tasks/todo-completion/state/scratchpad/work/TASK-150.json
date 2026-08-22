@@ -1,0 +1,91 @@
+{
+  "todo_line": 2481,
+  "src_id": null,
+  "title": "Audit apply-shaped endpoints for missing tag/file-I/O writeback",
+  "verdict": "actionable",
+  "verdict_evidence": "BatchApplyFromCache (metadata_cache.go:448) and applyAudiobookMetadataImpl (metadata/handler.go:577) are the two known apply paths; grep -n 'func.*[Aa]pply' internal/server/handlers/*.go finds 5 more untouched candidates: ApplyRename (organize.go:157), ApplyScanResults (ai.go:484), ApplyAuthorReview (ai.go:697), ApplySuggestions (diagnostics.go:472), RegisterApplyHandler (review/handler.go:137).",
+  "domain": "internal/server/handlers",
+  "exact_files": [
+    "docs/audits/2026-08-21-apply-endpoint-fileio-audit.md",
+    "internal/server/handlers/ai.go",
+    "internal/server/handlers/diagnostics.go",
+    "internal/server/handlers/metadata/handler.go",
+    "internal/server/handlers/metadata_cache.go",
+    "internal/server/handlers/organize.go",
+    "internal/server/handlers/review/handler.go"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "ApplyRename handler exists",
+      "grep_cmd": "grep -n 'func (h \\*OrganizeHandler) ApplyRename' internal/server/handlers/organize.go",
+      "expect": "1 hit at L157"
+    },
+    {
+      "claim": "ApplyScanResults and ApplyAuthorReview handlers exist",
+      "grep_cmd": "grep -n 'func (h \\*AIHandler) Apply' internal/server/handlers/ai.go",
+      "expect": "2 hits at L484 and L697"
+    },
+    {
+      "claim": "ApplySuggestions handler exists",
+      "grep_cmd": "grep -n 'func (h \\*DiagnosticsHandler) ApplySuggestions' internal/server/handlers/diagnostics.go",
+      "expect": "1 hit at L472"
+    },
+    {
+      "claim": "review package has a pluggable apply-handler registry",
+      "grep_cmd": "grep -n 'RegisterApplyHandler' internal/server/handlers/review/handler.go",
+      "expect": "1 hit at L137"
+    }
+  ],
+  "reuse": [
+    {
+      "name": "runBulkWriteBack (library.bulk-write-back op)",
+      "file": "internal/server/metadata_ops.go",
+      "verify_grep": "grep -n 'runBulkWriteBack' internal/server/metadata_ops.go"
+    }
+  ],
+  "polarity": "additive",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "Multi-file investigation across handler packages requiring judgment about which paths mutate on-disk-relevant state; no novel design.",
+  "review_critical": true,
+  "goal": "For each apply-shaped endpoint in exact_files, read its handler body and determine whether it (a) never touches on-disk tags/cover art, (b) already schedules a tag/cover writeback, or (c) mutates book metadata in the DB with no file writeback \u2014 the exact defect BatchApplyFromCache had before fix/review-apply-writes-tags. Record one subsection per endpoint in a new docs/audits/2026-08-21-apply-endpoint-fileio-audit.md with verdict + grep citation. Only propose a shared 'apply + schedule file I/O' helper if a case-(c) endpoint is actually found.",
+  "background": [
+    "BatchApplyFromCache updated the DB without writing tags/cover art; fixed in fix/review-apply-writes-tags.",
+    "No shared apply+writeback helper exists: grep -rn 'WriteTags|writeTagsAndCover|scheduleFileWriteback' internal/server shows scattered call sites in batch_apply_one.go, batch_apply_op.go, movement_atom_cleanup.go, handlers/metadata_cache.go, handlers/metadata/handler.go."
+  ],
+  "steps": [
+    "1. Read organize.go:157 ApplyRename end-to-end; note whether it calls a tag/cover writeback function.",
+    "2. Read ai.go:484 ApplyScanResults and ai.go:697 ApplyAuthorReview; same check.",
+    "3. Read diagnostics.go:472 ApplySuggestions; same check.",
+    "4. Read review/handler.go:137 RegisterApplyHandler and grep -rn 'RegisterApplyHandler(' internal/server to find every registered ApplyFunc; check each.",
+    "5. Write one subsection per endpoint to docs/audits/2026-08-21-apply-endpoint-fileio-audit.md: name, file:line, verdict, one-sentence reasoning.",
+    "6. If a DEFECT FOUND case turns up, add a changelog.d fragment and a separate todo.d follow-up fragment scoped to fixing only that endpoint \u2014 do not fix it inline here."
+  ],
+  "tests": [
+    "N/A for the audit itself. Any follow-up fix must add a regression test mirroring the tag-write assertion pattern in internal/server/handlers/metadata_cache_test.go."
+  ],
+  "acceptance": [
+    "docs/audits/2026-08-21-apply-endpoint-fileio-audit.md exists with >=5 '## ' subsections, one per audited endpoint."
+  ],
+  "edge_cases": [
+    "An endpoint that never touches book metadata should be marked 'not applicable', not skipped silently.",
+    "review/handler.go's registry must be expanded to every registered ApplyFunc, not just the registry function itself."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "go build ./... && go vet ./... && go test ./internal/server/handlers/... ./internal/server/handlers/metadata/... ./internal/server/handlers/review/... -count=1",
+  "notes": "Owner phrasing is 'Consider the same file-I/O audit' \u2014 the audit document is the deliverable; a shared helper is speculative and out of scope unless the audit finds a live second defect.",
+  "review_notes": [
+    "[simplicity-scope.json] Two different deliverables in one task: TASK-150 both writes an audit document (docs/audits/2026-08-21-apply-endpoint-fileio-audit.md) and edits six production handlers (ai.go, diagnostics.go, metadata/handler.go, metadata_cache.go, organize.go, review/handler.go) to add missing tag/file-I/O writeba",
+    "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ],
+  "id": "TASK-150",
+  "stable_key": "scope-04.json|2481|None|Audit apply-shaped endpoints for missing tag/file-I/O writeb",
+  "ws": "server-handlers",
+  "slug": "audit-apply-shaped-endpoints-for-missing-tag-fil",
+  "scope_file": "scope-04.json",
+  "dropped_files": [],
+  "tier_label": "Opus-class",
+  "depends_on": [],
+  "wave": 1
+}

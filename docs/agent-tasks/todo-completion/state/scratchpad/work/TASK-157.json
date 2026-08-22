@@ -1,0 +1,77 @@
+{
+  "todo_line": 10521,
+  "src_id": null,
+  "title": "Parallelize the per-candidate synchronous label/breakdown refresh in DismissDedupCluster",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/server/handlers/dedup/handler.go:1206 DismissDedupCluster runs a plain 'for _, cand := range candidates' loop calling es.UpdateCandidateStatus + h.recordHumanLabel (which synchronously calls h.refreshExampleBreakdown at label_capture.go:92) per candidate with no worker pool, matching the CLAUDE.md concurrency mandate's flagged shape.",
+  "domain": "internal/server/handlers/dedup",
+  "exact_files": [
+    "internal/server/handlers/dedup/handler.go",
+    "internal/server/handlers/dedup/label_capture.go"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "DismissDedupCluster loops candidates synchronously calling UpdateCandidateStatus + recordHumanLabel per pair",
+      "grep_cmd": "grep -n \"for _, cand := range candidates\" internal/server/handlers/dedup/handler.go",
+      "expect": "1 hit ~L1206"
+    },
+    {
+      "claim": "recordHumanLabel synchronously calls refreshExampleBreakdown before the label upsert",
+      "grep_cmd": "grep -n \"h.refreshExampleBreakdown\" internal/server/handlers/dedup/label_capture.go",
+      "expect": "1 hit ~L92"
+    }
+  ],
+  "reuse": [
+    {
+      "name": "errgroup.Group + SetLimit bounded worker pool pattern used elsewhere per CLAUDE.md concurrency mandate",
+      "file": "internal/plugins/acoustid/backfill.go",
+      "verify_grep": "grep -n \"RunItems\" internal/plugins/acoustid/backfill.go"
+    }
+  ],
+  "polarity": "transform",
+  "effort": "M",
+  "tier": "sonnet",
+  "why_tier": "concurrency-safety review needed: UpdateCandidateStatus/UpsertLabeledExample must be safe under concurrent per-candidate calls; not a mechanical edit",
+  "review_critical": true,
+  "goal": "Convert DismissDedupCluster's (internal/server/handlers/dedup/handler.go:1176) per-candidate loop from a sequential for-range into a bounded worker pool (errgroup.Group + SetLimit(runtime.NumCPU()) or similar), so a large cluster dismiss doesn't serialize N sequential UpdateCandidateStatus + refreshExampleBreakdown round-trips. Each candidate's dismiss+label-capture is independent (keyed by distinct candidate.ID / distinct book pairs), so workers can run in parallel without a shared-state lock beyond an atomic dismissed counter.",
+  "background": [
+    "Loop body per candidate: es.UpdateCandidateStatus(cand.ID, \"dismissed\") then h.recordHumanLabel(...) which itself calls h.refreshExampleBreakdown(ctx, ex) synchronously before es.UpsertLabeledExample \u2014 two DB round-trips per candidate, done sequentially today.",
+    "RemoveFromDedupCluster (same file, following function) has an analogous per-candidate loop and should get the same treatment for consistency.",
+    "CLAUDE.md's concurrency mandate explicitly requires a bounded worker pool for any loop doing per-item DB read/write work at this shape."
+  ],
+  "steps": [
+    "In internal/server/handlers/dedup/handler.go, locate DismissDedupCluster's loop (~L1206-1224).",
+    "Replace the sequential for-range with an errgroup.Group (import \"golang.org/x/sync/errgroup\") with g.SetLimit(runtime.NumCPU()); for each candidate spawn g.Go(func() error { ... }) doing the same UpdateCandidateStatus + recordHumanLabel work, using an atomic int64 (sync/atomic) for the dismissed counter instead of a plain int++.",
+    "Verify h (the Handler) and es (the shared embedding store) are safe for concurrent calls to UpdateCandidateStatus/UpsertLabeledExample \u2014 grep for other concurrent callers of these methods elsewhere in the codebase as a precedent check.",
+    "Apply the same pattern to RemoveFromDedupCluster's analogous loop in the same file.",
+    "Preserve the existing slog.Info per-candidate log line (best-effort, non-fatal on error) inside each goroutine."
+  ],
+  "tests": [
+    "internal/server/handlers/dedup/handler_test.go: extend TestDismissDedupCluster with a case that dismisses a cluster of \u226550 synthetic candidates and asserts the final dismissed count matches, to catch a race in the counter or a dropped goroutine result.",
+    "Run with `go test -race ./internal/server/handlers/dedup/...` to catch any data race introduced by the parallelization."
+  ],
+  "acceptance": [
+    "`go test -race ./internal/server/handlers/dedup/...` passes.",
+    "grep -n \"errgroup\" internal/server/handlers/dedup/handler.go shows the new import and usage."
+  ],
+  "edge_cases": [
+    "Zero candidates in the cluster: loop/errgroup must handle nil/empty slice without spawning zero goroutines incorrectly.",
+    "A candidate whose UpdateCandidateStatus fails should not abort the whole batch \u2014 do NOT use errgroup's error propagation to cancel siblings (mirror today's 'continue' semantics, not fail-fast)."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "go build ./... && go vet ./... && go test ./internal/server/handlers/dedup/... -count=1",
+  "notes": "TODO.md item 7's own text hedges this as 'may need' \u2014 but the concurrency mandate in this repo's CLAUDE.md makes this a should-fix regardless of measured latency, since the shape (per-item DB round-trip in a for-range) is exactly what that policy targets.",
+  "review_notes": [
+    "[ops-rollback.json] TASK-169 fans DismissDedupCluster's per-candidate work out over runtime.NumCPU() goroutines, and the per-candidate work calls EmbeddingStore.UpsertLabeledExample - one of the few EmbeddingStore methods that does NOT take the store's closeMu read lock, only a check-then-act atomic flag. The file's ow"
+  ],
+  "id": "TASK-157",
+  "stable_key": "scope-14.json|10521|None|Parallelize the per-candidate synchronous label/breakdown re",
+  "ws": "server-handlers",
+  "slug": "parallelize-the-per-candidate-synchronous-label-",
+  "scope_file": "scope-14.json",
+  "dropped_files": [],
+  "tier_label": "Opus-class",
+  "depends_on": [],
+  "wave": 2
+}

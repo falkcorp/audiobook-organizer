@@ -1,0 +1,76 @@
+{
+  "todo_line": 4739,
+  "src_id": null,
+  "title": "Delete the unused internal/scanner/mocks generated package",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/scanner/mocks/ contains 442 generated lines (mock_scanner.go: 380, mock_scanner_coverage_test.go: 62) with zero importers anywhere in the repo (`grep -rln \"scanner/mocks\" --include=\"*.go\" .` returns nothing outside the directory itself), while internal/scanner's own tests hand-roll `fullMockScanner` (scanner_coverage_test.go:655-667) specifically to avoid an import cycle. .mockery.yaml:32-36 still has the `Scanner:` entry generating this dead package.",
+  "domain": "internal/scanner",
+  "exact_files": [
+    ".mockery.yaml",
+    "internal/scanner/mocks/mock_scanner.go",
+    "internal/scanner/mocks/mock_scanner_coverage_test.go"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "dir contents and line counts",
+      "grep_cmd": "wc -l internal/scanner/mocks/*.go",
+      "expect": "380 mock_scanner.go, 62 mock_scanner_coverage_test.go, 442 total"
+    },
+    {
+      "claim": "zero importers repo-wide",
+      "grep_cmd": "grep -rln \"scanner/mocks\" --include=\"*.go\" .",
+      "expect": "0 hits"
+    },
+    {
+      "claim": ".mockery.yaml still generates it",
+      "grep_cmd": "grep -n \"Scanner:\" .mockery.yaml",
+      "expect": "1 hit ~L37, under the internal/scanner config block (dir: internal/scanner/mocks)"
+    },
+    {
+      "claim": "internal/scanner tests use a hand-rolled double instead, to dodge an import cycle",
+      "grep_cmd": "grep -n \"fullMockScanner\" internal/scanner/scanner_coverage_test.go",
+      "expect": "\u22653 hits ~L642,655,659"
+    }
+  ],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Delete a directory and one YAML entry; no logic to reason about.",
+  "review_critical": false,
+  "goal": "Delete internal/scanner/mocks/ entirely and remove its .mockery.yaml entry, since it has no importers and the package's own tests already use a hand-written double for the same interface.",
+  "background": [
+    "The mockery config's `internal/scanner:` block (.mockery.yaml ~L32-37) has only the Scanner interface; removing the Scanner: line empties that block, so the whole `github.com/falkcorp/audiobook-organizer/internal/scanner:` top-level key should be removed too if Scanner is its only interface (verify no sibling interfaces are listed under it before deleting the whole block, not just the Scanner: line)."
+  ],
+  "steps": [
+    "Confirm no other interface is configured under the `internal/scanner:` mockery block: `grep -n \"internal/scanner:\" -A 6 .mockery.yaml` and check only `Scanner:` appears under `interfaces:`.",
+    "Delete internal/scanner/mocks/ (both files): `git rm -r internal/scanner/mocks/`.",
+    "In .mockery.yaml, remove the `github.com/falkcorp/audiobook-organizer/internal/scanner:` block (config + interfaces: Scanner:) in full.",
+    "Run `go build ./... && go vet ./...` to confirm nothing else was silently depending on the package (matches the zero-importer grep, so this should be a no-op).",
+    "Bump .mockery.yaml's version header if it carries one (check first: `head -5 .mockery.yaml`); if the file has no header convention, skip."
+  ],
+  "tests": [
+    "No new test needed. Existing internal/scanner tests using fullMockScanner (scanner_coverage_test.go) must keep passing unmodified \u2014 they never depended on the deleted package."
+  ],
+  "acceptance": [
+    "test -d internal/scanner/mocks returns non-zero (directory gone).",
+    "go build ./... exits 0.",
+    "grep -n \"internal/scanner:\" .mockery.yaml returns 0 hits."
+  ],
+  "edge_cases": [
+    "If a future mockery regeneration run (`mockery` CLI via Makefile target, check `grep -n mockery Makefile`) is invoked without regenerating this entry removed, confirm no Makefile target hard-codes internal/scanner/mocks/ as an expected output path that would now error on a missing dir."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "go build ./... && go vet ./... && go test ./internal/scanner/mocks/... -count=1",
+  "notes": "Pairs naturally with the sibling L4743 item (internal/operations/mocks) as one small cleanup PR, but keep them as two commits since the operations/mocks item has a wrinkle (see that item's notes) this one does not.",
+  "id": "TASK-123",
+  "stable_key": "scope-09.json|4739|None|Delete the unused internal/scanner/mocks generated package",
+  "ws": "scanner",
+  "slug": "delete-the-unused-internal-scanner-mocks-generat",
+  "scope_file": "scope-09.json",
+  "dropped_files": [],
+  "tier_label": "Haiku-class",
+  "depends_on": [],
+  "wave": 2
+}

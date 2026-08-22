@@ -1,0 +1,163 @@
+[
+  {
+    "task_id": "TASK-001",
+    "verdict": "fail",
+    "findings": [
+      {
+        "severity": "fatal",
+        "check": 2,
+        "problem": "Reuse section's verification grep `grep -n 'all:.*limit.*offset' internal/audiobooks/service_query.go` returns 0 hits at HEAD even though the cited cache-key convention is real (service_query.go:194-195: `svc.libGen.Key(\"all:\", fmt.Sprintf(\"%d:%d:p=%s:sb=%s:asc=%v:noq=%v\", limit, offset, ...))` — 'limit'/'offset' are the fmt args on the NEXT line, not literal text next to 'all:'). A cold model following the brief's own rule ('a zero-hit grep means STOP and report') would halt on a claim that is actually true.",
+        "fix": null
+      },
+      {
+        "severity": "fatal",
+        "check": 6,
+        "problem": "The existing non-search cache (which the brief tells the model to mirror) is NOT a plain TTL/LRU cache — its key is built through `svc.libGen.Key(...)` (service_query.go:191-194), a generation counter that advances on every create/update/delete, giving correctness-grade invalidation for free. The brief never mentions svc.libGen and instead has the model build a bespoke 30-60s TTL cache for the search branch, which is strictly weaker (up to 45s of staleness after a merge/delete) than the pattern it explicitly says to mirror. Two reasonable implementers diverge here: one copies the literal step-by-step (plain TTL) and one notices the real non-search pattern uses libGen.Key and gets immediate invalidation. Given this is flagged review_critical specifically because a stale cache would repeat the 'I merged these and still see two copies' prod bug, the brief should have the model incorporate svc.libGen.Key() (or equivalent generation scoping) into the search cache key, not just a TTL.",
+        "fix": {
+          "steps": [
+            "Build the cache key from ALL of: the raw search query string, limit, offset, f.UserID (only when hasPerUser), sort field/direction, and every ListFilters field participating in post-filtering (LibraryState, Tag/Tags, FieldFilters, IsPrimaryVersion, fingerprint status/coverage bounds).",
+            "Route the key through svc.libGen.Key(...) exactly as the non-search branch does at service_query.go:191-194, so the search cache is invalidated immediately on any book create/update/delete/merge, not only after the TTL elapses.",
+            "Add a cache check at the top of the search branch BEFORE calling searchWithBleve: if a fresh (within TTL) entry exists for the composed generation-scoped key, return it directly.",
+            "Add a cache write after searchWithBleve and post-filtering/pagination complete, storing the FINAL post-filtered/paginated result keyed by the same generation-scoped key, with an explicit 45s TTL layered on top of the generation scoping (belt-and-suspenders for staleness within a single generation, e.g. slow-changing external metadata).",
+            "Document at the write site that generation-scoping (not just TTL) is what actually protects against the merge/delete staleness class; the TTL is a secondary bound.",
+            "When the truncated-window warning (~L135-138) fires, do NOT cache that result."
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "task_id": "TASK-002",
+    "verdict": "fail",
+    "findings": [
+      {
+        "severity": "fatal",
+        "check": 4,
+        "problem": "Acceptance checkbox #2 ('A production-shaped fixture reproducing the 5,731-book case ... shows agreement between the filter result and the serialized field after the fix') names no test function, grep, or command — unlike checkbox #3 (anti-over-suppression), which names the exact test. A cold model cannot mechanically verify this checkbox is satisfied.",
+        "fix": {
+          "acceptance": [
+            "[ ] `go test ./internal/audiobooks/...` passes including the new cache/nil-semantics tests.",
+            "[ ] `go test ./internal/audiobooks/... -run TestIsPrimaryVersion_NilAgreesAcrossFilterAndSerialization -v` exits 0 (new test: book with IsPrimaryVersion=nil and no version_group_id is included by is_primary_version=true AND its serialized field reads true).",
+            "[ ] Anti-over-suppression test: `service_query_test.go case: IsPrimaryVersion=false explicitly is still excluded by is_primary_version=true.` — a known-good input still passes with the new guard active.",
+            "[ ] Edge cases above hold.",
+            "[ ] Gate green: `make ci (Go)` exits 0; `go vet`/lint clean.",
+            "[ ] File headers bumped on every changed file.",
+            "[ ] Changelog fragment present: `test -f changelog.d/20260821_audiobooks_002.md`."
+          ]
+        }
+      },
+      {
+        "severity": "fatal",
+        "check": 6,
+        "problem": "Direct contradiction between two sections on how to interpret a zero-hit grep on the SAME command. Background/Re-verify section: 'a zero-hit grep means STOP and report' for `grep -n 'bPrimary := b.IsPrimaryVersion != nil && \\*b.IsPrimaryVersion' internal/audiobooks/service_query.go`. Idempotency section: 're-run the re-verify greps above [and if zero-hit / already at new form] the move is already done — run acceptance instead.' Two reasonable cold models diverge: one halts and reports BLOCKED, the other silently treats it as done. This is not hypothetical here — see TASK-003 finding: TASK-003 (wave 3) changes this exact line and will hit exactly this zero-hit case after TASK-002 (wave 1) lands.",
+        "fix": {
+          "idempotency": "If `grep -n 'bPrimary := b.IsPrimaryVersion == nil || \\*b.IsPrimaryVersion' internal/audiobooks/service_query.go` returns 2 hits (L346, L531) AND `grep -n 'IsPrimaryVersion:.*effPrimary\\|IsPrimaryVersion:\\s*&eff' internal/audiobooks/service_filtering.go` returns 1 hit, this task is already fully applied — run acceptance instead of re-applying. Otherwise, if the OLD pattern (`!= nil &&`) is absent but the NEW pattern is only PARTIALLY present, treat as a partial/blocked state and report, do not assume done."
+        }
+      }
+    ]
+  },
+  {
+    "task_id": "TASK-003",
+    "verdict": "fail",
+    "findings": [
+      {
+        "severity": "fatal",
+        "check": 2,
+        "problem": "TASK-003's entire code change (internal/audiobooks/service_query.go:346, `bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion` -> `== nil || *b.IsPrimaryVersion`) is IDENTICAL to a subset of what TASK-002 (wave 1, same collision-matrix file) already does at the SAME line 346 (TASK-002 fixes both L346 and L531). TASK-003 is scheduled wave 3, after TASK-002 (wave 1) has merged and after all wave-1/2 siblings rebase. By the time TASK-003 executes, line 346 will already read the NEW form, so TASK-003's own re-verify grep (`grep -n \"bPrimary := b.IsPrimaryVersion\" internal/audiobooks/service_query.go` expecting '1 hit L346' of the OLD form) will find a hit but with WRONG (already-fixed) content -- the cited OLD-form symbol will not exist at HEAD for this task's actual execution point. 'Depends on: none' is wrong; it should depend on TASK-002, and the task itself is functionally redundant/subsumed once TASK-002 lands.",
+        "fix": {
+          "depends_on_lines": ["TASK-002"],
+          "steps": [
+            "Before any edit, run `grep -n \"bPrimary := b.IsPrimaryVersion\" internal/audiobooks/service_query.go`.",
+            "If it shows `== nil || *b.IsPrimaryVersion` at L346 (i.e. TASK-002 already landed this exact change), this task is a no-op for the code change -- do NOT re-edit the line. Skip to the comment-only step.",
+            "If it still shows `!= nil && *b.IsPrimaryVersion` at L346, apply the change: `bPrimary := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion`.",
+            "In either case, add the explanatory comment above line 346: '// nil counts as primary, matching pebble_store.go's filter and the memdb index default (memdb_schema.go Default: true) -- see TODO.md is_primary_version investigation.' if not already present.",
+            "Bump the file's version header and last-edited date.",
+            "Add the changelog fragment and TODO.md close-out as before."
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "task_id": "TASK-004",
+    "verdict": "fail",
+    "findings": [
+      {
+        "severity": "fatal",
+        "check": 2,
+        "problem": "Step 3/4's example call and the Tests section both use `ptrBool(false)`, but no such symbol exists anywhere in internal/audiobooks. The real package-local helper is `boolPtr` (internal/audiobooks/helpers.go:33: `func boolPtr(b bool) *bool { return &b }`). Verified: `grep -rn 'func ptrBool' internal/` = 0 hits; `grep -rn 'func boolPtr' internal/audiobooks/helpers.go` = 1 hit. A cold model would either invent a duplicate `ptrBool` helper (name collision risk with `ptrBool_mem` in a different package) or fail to compile.",
+        "fix": {
+          "steps": [
+            "Create internal/audiobooks/service_query_isprimary_conformance_test.go using the same test-store setup helper other service_query_*_test.go files in this package use (check service_query_heavyfilter_sort_test.go for the setup pattern).",
+            "Seed one Author and three Books all linked to it: bookNil (IsPrimaryVersion left nil), bookTrue (IsPrimaryVersion=boolPtr(true)), bookFalse (IsPrimaryVersion=boolPtr(false)).",
+            "Call svc.GetAudiobooksWithTotal(ctx, 50, 0, \"\", nil, nil, ListFilters{IsPrimaryVersion: boolPtr(false)}) (library path, no authorID) and record which of the 3 books come back.",
+            "Call svc.GetAudiobooksWithTotal(ctx, 50, 0, \"\", &authorID, nil, ListFilters{IsPrimaryVersion: boolPtr(false)}) (author path) and record which of the 3 books come back.",
+            "Assert the two result sets are identical for is_primary_version=false, is_primary_version=true, and no filter.",
+            "Name the test TestIsPrimaryVersion_LibraryAndAuthorPathsAgree."
+          ]
+        }
+      },
+      {
+        "severity": "advisory",
+        "check": 2,
+        "problem": "Edge-case section cites 'mirrors the existing dedup logic in getBooksByAuthorID' -- no function named getBooksByAuthorID (lowercase, no Core suffix) exists in internal/audiobooks; the actual store-interface method is GetBooksByAuthorIDCore (service.go:88), and it is a simple store call, not documented dedup logic. Low impact since this is background color, not a hard step, but a cold model may search for the wrong symbol and waste time or fabricate dedup logic that doesn't need writing.",
+        "fix": null
+      }
+    ]
+  },
+  {
+    "task_id": "TASK-005",
+    "verdict": "fail",
+    "findings": [
+      {
+        "severity": "fatal",
+        "check": 6,
+        "problem": "Steps 4 and 5 tell the model to add the OnlyParsedTranscription predicate INSIDE blocks that are gated by booleans the steps never instruct it to update, so the new filter would silently be skipped whenever it is the ONLY active list filter. Verified: (a) service_filtering.go:994 `hasFPFilters := f.FingerprintStatus != \"\" || f.CoveragePercentMin != nil || f.CoveragePercentMax != nil`; the predicate closure this function builds is only constructed `if len(remainingFF) > 0 || hasPerUser || hasFPFilters` (line 995) -- with only `only_parsed_transcription=true` set, this whole `if` is false and no predicate runs. (b) service_query.go:71 `hasFingerprintingFilters := f.FingerprintStatus != \"\" || f.CoveragePercentMin != nil || f.CoveragePercentMax != nil`, which feeds `hasHeavyPostFilters` (line 77) and `hasPostFilters` (line 78) -- the entire heavy materialize-and-filter-in-Go path (where step 5's predicate would live) is skipped when hasPostFilters is false, which is the common case for a bare `?only_parsed_transcription=true` request with no sort/other filters. Net effect: the endpoint would accept the param and silently return the FULL unfiltered list. The brief's own Tests item 1 (seed 2 books, GET ?only_parsed_transcription=true, assert only the parsed one returned) would catch this at test time IF actually run as a real end-to-end/integration call through GetAudiobooksWithTotal, but the step-by-step gives no hint to update the gates, so a cold model following steps literally produces code that fails its own acceptance test with no guidance on why.",
+        "fix": {
+          "steps": [
+            "Add `OnlyParsedTranscription bool` to `ListFilters` in internal/audiobooks/service_types.go:78-96 (near FingerprintStatus).",
+            "In internal/server/handlers/audiobooks/handler.go, parse `only_parsed_transcription` via `httputil.ParseQueryBoolPtr` or the plain-bool helper used for `show_quarantined` at L595 (note: ListFilters.OnlyParsedTranscription is a plain bool, so parse as `c.Query(\"only_parsed_transcription\") == \"true\"`, matching the show_quarantined pattern, not the *bool pattern used for IsPrimaryVersion) into the `filters := audiobookspkg.ListFilters{...}` literal at ~L513-523.",
+            "Add `\"only_parsed_transcription\": {}` to `bareParamAllowList` (L256-259) with a one-line comment explaining why.",
+            "In internal/audiobooks/service_filtering.go buildBookSummaryFilterWithLookupCount (~L994-1039): change line 994's `hasFPFilters := f.FingerprintStatus != \"\" || f.CoveragePercentMin != nil || f.CoveragePercentMax != nil` to also include `|| f.OnlyParsedTranscription`, THEN add the predicate: if `f.OnlyParsedTranscription && (b.TranscribedTitle == nil || strings.TrimSpace(*b.TranscribedTitle) == \"\")`, exclude the book -- copy the exact predicate from metadata_ops.go:524-527 verbatim.",
+            "In internal/audiobooks/service_query.go: change line 71's `hasFingerprintingFilters := f.FingerprintStatus != \"\" || f.CoveragePercentMin != nil || f.CoveragePercentMax != nil` to also include `|| f.OnlyParsedTranscription`, THEN add the same predicate in the fingerprinting-filters application block (~L400-415) as the sibling of the FingerprintStatus check.",
+            "Bump file-header versions on all 4 touched files."
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "task_id": "TASK-016",
+    "verdict": "fail",
+    "findings": [
+      {
+        "severity": "fatal",
+        "check": 2,
+        "problem": "Step 4 tells the model to 'KEEP the `case \"write_back_metadata\": c.WriteBackMetadata = b` case (renamed field) as-is' in internal/config/persistence.go. But step 1 renames the struct field itself (`WriteBackMetadata bool` -> `AutoWriteTagsOnFetch bool`), so after step 1 the identifier `c.WriteBackMetadata` no longer exists on the Config struct and this literal snippet is a compile error. Verified: config.go:649 is the ONLY struct-field declaration (`WriteBackMetadata bool \\`json:\"write_back_metadata\"\\``) and persistence.go:1084-1086 currently reads `case \"write_back_metadata\": c.WriteBackMetadata = b`. The case LABEL string 'write_back_metadata' should stay (it's the persisted key), but the assignment target must become `c.AutoWriteTagsOnFetch = b` -- the brief's own snippet is internally inconsistent with its step 1.",
+        "fix": {
+          "steps": [
+            "In internal/config/config.go:649, rename the field to `AutoWriteTagsOnFetch bool` and its json tag to `json:\"auto_write_tags_on_fetch\"`.",
+            "In internal/config/config.go:1213, change `viper.SetDefault(\"write_back_metadata\", false)` to `viper.SetDefault(\"auto_write_tags_on_fetch\", false)`.",
+            "In internal/config/config.go around L1660, replace `WriteBackMetadata: viper.GetBool(\"write_back_metadata\")` with a call to a new small helper, e.g. `AutoWriteTagsOnFetch: boolWithDeprecatedAlias(\"auto_write_tags_on_fetch\", \"write_back_metadata\", false)`, defined near the load site as: if `viper.IsSet(newKey)` return `viper.GetBool(newKey)`; else if `viper.IsSet(oldKey)` log WARN once and return `viper.GetBool(oldKey)`; else return the default. A struct-literal field position cannot hold an if/else, so this MUST be a function call, not inline logic.",
+            "In internal/config/persistence.go:1084-1086, KEEP the case LABEL `case \"write_back_metadata\":` (the persisted key string does not change) but change the assignment target to the RENAMED field: `case \"write_back_metadata\": if b, err := strconv.ParseBool(value); err == nil { c.AutoWriteTagsOnFetch = b }`. ADD a new `case \"auto_write_tags_on_fetch\": if b, err := strconv.ParseBool(value); err == nil { c.AutoWriteTagsOnFetch = b } }` for newly-saved rows.",
+            "In internal/metafetch/service_fetch.go:309, change `config.AppConfig.WriteBackMetadata` to `config.AppConfig.AutoWriteTagsOnFetch`.",
+            "In internal/config/config_unit_test.go:654, rename the test row's key string to `auto_write_tags_on_fetch` and its accessor to `AppConfig.AutoWriteTagsOnFetch`.",
+            "Add a new unit test proving the alias: set only `write_back_metadata=true` via viper (simulating prod's persisted snapshot), load config, assert `AppConfig.AutoWriteTagsOnFetch == true` and that the WARN log fired once.",
+            "Grep once more for stragglers before finishing: `grep -rn 'WriteBackMetadata\\|write_back_metadata' --include='*.go' .` -- every remaining `c.WriteBackMetadata`/`WriteBackMetadata:` hit outside a string literal or comment is a compile error waiting to happen."
+          ]
+        }
+      },
+      {
+        "severity": "advisory",
+        "check": 6,
+        "problem": "Step 3 says to put the alias-aware read 'in a small local helper... or inline if the surrounding code already uses helpers for other renamed keys' and tells the model to grep for a precedent first (`grep -n 'deprecated' internal/config/config.go`). That grep returns only unrelated comments (Goodreads API key deprecation notes), so there is no existing renamed-key-alias helper to mirror in this codebase -- the 'or inline' branch is not actually available syntactically since the read happens inside a struct literal's field-value position (a Go struct literal cannot contain an if/else). The brief should say a helper function is REQUIRED, not optional, to avoid two implementers diverging (one writes a helper, another tries an inline IIFE or gives up and moves the whole struct literal apart).",
+        "fix": null
+      }
+    ]
+  },
+  {
+    "task_id": "TASK-017",
+    "verdict": "pass",
+    "findings": []
+  }
+]

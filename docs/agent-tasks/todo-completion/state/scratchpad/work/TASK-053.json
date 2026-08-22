@@ -1,0 +1,52 @@
+{
+  "todo_line": 296,
+  "part": 3,
+  "src_id": null,
+  "title": "Delete the /torrents group-relative fragment from openapi.json",
+  "verdict": "actionable",
+  "verdict_evidence": "GET /torrents is documented by the TODO as a group-relative fragment of the Deluge integration group (i.e. the real route is prefixed, e.g. /deluge/torrents or similar) \u2014 same class of bug as part 1's group-relative duplicates, called out separately only because it belongs to a different integration group than the auth/itunes/ai examples.",
+  "domain": "docs",
+  "exact_files": [
+    "docs/api/openapi.json"
+  ],
+  "verified_anchors": [],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Single-path deletion, same mechanical pattern as part 1.",
+  "review_critical": false,
+  "goal": "Confirm GET /torrents has no direct registered route (only its prefixed Deluge-group twin does) via the real route table, then delete the bare entry from docs/api/openapi.json.",
+  "background": [
+    "Could be folded into part 1's batch execution since it's the identical bug class \u2014 kept as a separate JSON object here only because the source TODO called it out as its own numbered group (group 3 of 3)."
+  ],
+  "steps": [
+    "1. Confirm via the real route table (reuse part 1's dump) that /torrents has no direct route, only a Deluge-group-prefixed twin.",
+    "2. Delete the /torrents entry from docs/api/openapi.json."
+  ],
+  "tests": [
+    "Same JSON-validity check as part 1."
+  ],
+  "acceptance": [
+    "/torrents is absent from docs/api/openapi.json's paths object."
+  ],
+  "edge_cases": [
+    "N/A"
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only'",
+  "notes": "Trivially batchable with part 1's execution \u2014 separated here only to mirror the source TODO's own grouping.",
+  "review_notes": [
+    "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three"
+  ],
+  "id": "TASK-053",
+  "stable_key": "scope-01.json|296|3|Delete the /torrents group-relative fragment from openapi.js",
+  "ws": "docs",
+  "slug": "delete-the-torrents-group-relative-fragment-from",
+  "scope_file": "scope-01.json",
+  "dropped_files": [],
+  "tier_label": "Haiku-class",
+  "depends_on": [],
+  "wave": 1
+}

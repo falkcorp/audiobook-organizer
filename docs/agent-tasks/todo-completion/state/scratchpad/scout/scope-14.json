@@ -1,0 +1,992 @@
+[
+  {
+    "todo_line": 10500,
+    "src_id": "PH-2b",
+    "title": "Verify dedup-exact-triage apply path already ships (T03-BUILD)",
+    "verdict": "stale_done",
+    "verdict_evidence": "internal/plugins/maintenance/dedup_triage.go:294 already defines Apply bool json:\"apply\" and :332/:360 implement UpdateCandidateStatus(id,'dismissed') dismissal of purgeable classes, apply defaulting false; grep -n \"Apply bool\" internal/plugins/maintenance/dedup_triage.go",
+    "domain": "internal/plugins/maintenance",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "Apply bool json:\"apply\" field exists on triage params", "grep_cmd": "grep -n \"Apply bool\" internal/plugins/maintenance/dedup_triage.go", "expect": "1 hit ~L294"},
+      {"claim": "apply=true path calls UpdateCandidateStatus to dismiss purgeable candidates", "grep_cmd": "grep -n \"UpdateCandidateStatus\" internal/plugins/maintenance/dedup_triage.go", "expect": "\u22651 hit"}
+    ],
+    "reuse": [],
+    "polarity": "additive",
+    "effort": "S",
+    "tier": "haiku",
+    "why_tier": "just checking a TODO.md box, no code change",
+    "review_critical": false,
+    "goal": "TODO.md item 2 (PH-2b apply path) describes work already merged and live at HEAD. Check the TODO.md box and cite the PR/commit that shipped it, per docs/dedup/STATUS.md:122 ('dedup-exact-triage {\"apply\":true} dismisses title-leak/stub, PR #2008').",
+    "background": [
+      "internal/plugins/maintenance/dedup_triage.go:294 defines Apply bool json:\"apply\" (default false).",
+      "dedup_triage.go:332 logs 'apply=true \u2014 purgeable candidates will be dismissed' and :360 summarizes dismissed count.",
+      "docs/dedup/STATUS.md:122 confirms PR #2008 shipped this and it already ran on prod."
+    ],
+    "steps": [
+      "Open TODO.md at line 10500 (item 2, PH-2b).",
+      "Mark it done per the file's existing convention for closed items (see item 20's ~~...~~ DONE pattern at TODO.md:10577).",
+      "Cite PR #2008 and internal/plugins/maintenance/dedup_triage.go:294 as the shipped evidence.",
+      "Do not touch dedup_triage.go itself \u2014 no code change needed."
+    ],
+    "tests": ["N/A \u2014 doc-only change."],
+    "acceptance": ["grep -n 'PH-2b' TODO.md shows the item marked done/struck-through with a citation to PR #2008."],
+    "edge_cases": ["N/A"],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (docs)",
+    "notes": "TODO.md housekeeping only; checking off an existing item is a normal direct edit (not a todo.d fragment) per CLAUDE.md's fragment-system rule."
+  },
+  {
+    "todo_line": 10507,
+    "src_id": "REVIEW-band",
+    "title": "Design the REVIEW-band candidate producer for the review queue",
+    "verdict": "needs_design",
+    "verdict_evidence": "docs/dedup/STATUS.md:127-128 lists 'a REVIEW-band producer... are the fast-follows (TODO #3, #11, #12)' with no further design detail anywhere; grep -rn 'REVIEW-band' docs/ internal/ returns only that one STATUS.md mention",
+    "domain": "internal/dedup",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "No REVIEW-band producer design or code exists beyond a one-line mention", "grep_cmd": "grep -rn \"REVIEW-band\" docs/ internal/", "expect": "1 hit, docs/dedup/STATUS.md:128"}
+    ],
+    "reuse": [],
+    "polarity": "additive",
+    "effort": "M",
+    "tier": "opus",
+    "why_tier": "needs a human design decision before any brief can be written",
+    "review_critical": false,
+    "goal": "Cannot be briefed: the ~1,311 remaining exact-pending review-band backlog needs a producer that surfaces review-worthy candidates into the review queue, but there is no design doc specifying its scoring thresholds, source signals, or how it differs from the existing dedup.exact-triage classifier. Exact open question: what signal(s)/thresholds define 'review-band' as distinct from the existing genuine/stub/fragment/title_leak/unknown classes in internal/plugins/maintenance/dedup_triage.go, and should it feed the same review_store.go queue used by regroup.multidisc/version-group?",
+    "background": [
+      "docs/dedup/STATUS.md:126-128 names this as an open fast-follow (TODO #3) with no owner decision covering it in the 14-item decision list.",
+      "internal/plugins/maintenance/dedup_triage.go already classifies pending candidates into 5 populations but only acts on purgeable ones; review-band routing is unbuilt."
+    ],
+    "steps": ["STOP \u2014 do not write code. Bring the open question above to the owner/DECISIONS-PENDING.md before briefing."],
+    "tests": [],
+    "acceptance": ["docs/plans/DECISIONS-PENDING.md gains a row for the REVIEW-band producer question, OR the owner answers it directly."],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (docs)",
+    "notes": "Same design gap blocks item 11 (AI-enrichment tier) and item 12 (cover recovery) \u2014 all three are named together in STATUS.md as undesigned fast-follows."
+  },
+  {
+    "todo_line": 10509,
+    "src_id": "DEC-8",
+    "title": "Re-verify current prod state of review_apply_enabled and record it",
+    "verdict": "prod_run",
+    "verdict_evidence": "Owner decision 8: verify prod state and record only, no flip. Config default is false (internal/config/config.go:2338) but prod was independently verified TRUE on 2026-08-17 via GET /api/v1/config per project memory project_review_apply_switch_off.md \u2014 now 4 days stale as of 2026-08-21 and needs reconfirmation.",
+    "domain": "docs/plans",
+    "exact_files": ["docs/plans/DECISIONS-PENDING.md", "docs/dedup/STATUS.md"],
+    "verified_anchors": [
+      {"claim": "ReviewApplyEnabled defaults false in code", "grep_cmd": "grep -n \"ReviewApplyEnabled:.*false\" internal/config/config.go", "expect": "1 hit ~L2338"},
+      {"claim": "DECISIONS-PENDING.md row 8 still lists this as an open decision with 'keep OFF' among the options, not marked resolved", "grep_cmd": "grep -n \"Flip \\`review_apply_enabled\\`\" docs/plans/DECISIONS-PENDING.md", "expect": "1 hit ~L21"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "S",
+    "tier": "sonnet",
+    "why_tier": "requires live prod API access (bearer token) plus careful doc reconciliation \u2014 not mechanical",
+    "review_critical": true,
+    "goal": "Owner decision 8: verify prod state and record it only, never flip programmatically. This session's own agent memory recorded on 2026-08-17 that GET /api/v1/config on prod <the server> returned review_apply_enabled=true \u2014 i.e. the switch is ALREADY ON, contradicting TODO.md item 4's framing ('gated human decision... default OFF') and DECISIONS-PENDING.md row 8's still-open 'enable globally / enable per-hold-type / keep OFF' options. Re-run the same GET /api/v1/config check now to confirm it is still ON, then update DECISIONS-PENDING.md row 8 and TODO.md item 4 to state the verified current value instead of presenting it as a pending flip.",
+    "background": [
+      "internal/config/config.go:2338 \u2014 code default is false ('OFF by default').",
+      "internal/server/wire_handlers.go:626 wires reviewH := reviewhandler.New(s.storeForWiring(), func() bool { return config.AppConfig.ReviewApplyEnabled }).",
+      "docs/plans/DECISIONS-PENDING.md row 8 still frames this as unresolved ('Sandbox-first validation before any enable').",
+      "Prior verification (2026-08-17, this session's own memory) found prod's live /api/v1/config returned review_apply_enabled=true, meaning someone already flipped it via env var/config file/CLI flag outside the repo's tracked defaults."
+    ],
+    "steps": [
+      "Using the long-lived API key (per project memory reference_longlived_api_key.md pattern), GET https://<prod-host>/api/v1/config with the bearer token and read the review_apply_enabled field.",
+      "Record the exact value and timestamp in docs/plans/DECISIONS-PENDING.md row 8 (append a dated verification note, do not delete the row).",
+      "Also append the same verified value + date to docs/dedup/STATUS.md's PR #1953 bullet.",
+      "Do NOT change any config, env var, or systemd drop-in on prod \u2014 read-only verification only, per owner decision 8."
+    ],
+    "tests": ["N/A \u2014 operational verification, not a code change."],
+    "acceptance": ["A dated note in docs/plans/DECISIONS-PENDING.md row 8 states the exact current review_apply_enabled value as observed via a real GET /api/v1/config call."],
+    "edge_cases": [
+      "If the endpoint requires a permission the bootstrap key lacks, escalate rather than guessing.",
+      "If the value differs from the 2026-08-17 finding (i.e. someone flipped it back OFF), record that explicitly \u2014 do not assume it is still ON."
+    ],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (docs/ops)",
+    "notes": "HIGH VALUE FINDING: prior agent memory indicates this switch may already be flipped ON in prod, silently contradicting the TODO/DECISIONS-PENDING framing that treats it as a pending decision. Flag to the owner explicitly \u2014 review-queue approvals may have been mutating the library since before 2026-08-17 without documentation catching up."
+  },
+  {
+    "todo_line": 10511,
+    "src_id": "C8",
+    "title": "Confirm external blockers cleared before dispatching C8 auto-file-issues (dedup.autofile-notdup-issues)",
+    "verdict": "needs_design",
+    "verdict_evidence": "docs/agent-tasks/ux-small-items/TASK-05-c8-autofile-notdup-issues.md states 'Do not start on your own judgment' pending (a) INIT-1's mining-rule fix + gold-label re-mine merged AND applied on prod, and (b) explicit human confirmation of dispatch; zero implementation exists at HEAD (grep -rln 'CreateIssue\\|issues\\.Create\\|gh issue create' internal/plugins/dedup/ \u2192 0 hits)",
+    "domain": "internal/plugins/dedup",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "No dedup.autofile-notdup-issues op exists yet", "grep_cmd": "grep -rln \"autofile-notdup-issues\" internal/plugins/dedup/", "expect": "0 hits"}
+    ],
+    "reuse": [
+      {"name": "dedup.cleanup-orphan-author-embeddings op shape to mirror", "file": "internal/plugins/dedup/cleanup_orphan_author_embeddings.go", "verify_grep": "grep -n \"func init\" internal/plugins/dedup/cleanup_orphan_author_embeddings.go"}
+    ],
+    "polarity": "additive",
+    "effort": "M",
+    "tier": "opus",
+    "why_tier": "outward-acting (files real GitHub issues), safety-critical gating logic, explicit human-confirmation requirement",
+    "review_critical": true,
+    "goal": "This is not briefable without answering: has INIT-1's mining-rule fix + gold-label re-mine (the fix for the 2026-07-08 contaminated not_dup labels) actually merged AND been applied on prod, and has a human explicitly confirmed dispatch of this specific outward-acting task? The existing TASK-05 brief is otherwise fully self-contained (threshold=5, cluster key = (LabelReason, SignatureRelation, FolderRelation)) and can be handed to a Sonnet-class agent verbatim once both gates are confirmed clear.",
+    "background": [
+      "TASK-05 brief already pins concrete parameters (threshold default 5, cluster key tuple) so no further design work is needed once gated \u2014 this is a dispatch-readiness question, not a spec gap.",
+      "Zero implementation exists at HEAD.",
+      "TODO.md item 5 itself says '(H1:1332; INIT-10 T5) \u2014 deferred.'"
+    ],
+    "steps": [
+      "STOP \u2014 confirm with the owner whether (a) INIT-1's mining-rule fix + gold-label re-mine has merged and been applied on prod, and (b) they explicitly authorize dispatch of this outward-acting (creates real GitHub issues) op.",
+      "If both are confirmed, hand docs/agent-tasks/ux-small-items/TASK-05-c8-autofile-notdup-issues.md to a Sonnet-class agent verbatim \u2014 it is already a complete, self-contained brief."
+    ],
+    "tests": [],
+    "acceptance": ["Owner has explicitly answered the two gating questions in writing (chat, DECISIONS-PENDING.md, or similar)."],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (blocked on human gate)",
+    "notes": "TASK-05 is unusually complete as a brief already \u2014 the blocker is purely the two external gates, not missing design."
+  },
+  {
+    "todo_line": 10521,
+    "src_id": null,
+    "title": "Parallelize the per-candidate synchronous label/breakdown refresh in DismissDedupCluster",
+    "verdict": "actionable",
+    "verdict_evidence": "internal/server/handlers/dedup/handler.go:1206 DismissDedupCluster runs a plain 'for _, cand := range candidates' loop calling es.UpdateCandidateStatus + h.recordHumanLabel (which synchronously calls h.refreshExampleBreakdown at label_capture.go:92) per candidate with no worker pool, matching the CLAUDE.md concurrency mandate's flagged shape.",
+    "domain": "internal/server/handlers/dedup",
+    "exact_files": ["internal/server/handlers/dedup/handler.go", "internal/server/handlers/dedup/label_capture.go"],
+    "verified_anchors": [
+      {"claim": "DismissDedupCluster loops candidates synchronously calling UpdateCandidateStatus + recordHumanLabel per pair", "grep_cmd": "grep -n \"for _, cand := range candidates\" internal/server/handlers/dedup/handler.go", "expect": "1 hit ~L1206"},
+      {"claim": "recordHumanLabel synchronously calls refreshExampleBreakdown before the label upsert", "grep_cmd": "grep -n \"h.refreshExampleBreakdown\" internal/server/handlers/dedup/label_capture.go", "expect": "1 hit ~L92"}
+    ],
+    "reuse": [
+      {"name": "errgroup.Group + SetLimit bounded worker pool pattern used elsewhere per CLAUDE.md concurrency mandate", "file": "internal/plugins/acoustid/backfill.go", "verify_grep": "grep -n \"RunItems\" internal/plugins/acoustid/backfill.go"}
+    ],
+    "polarity": "transform",
+    "effort": "M",
+    "tier": "sonnet",
+    "why_tier": "concurrency-safety review needed: UpdateCandidateStatus/UpsertLabeledExample must be safe under concurrent per-candidate calls; not a mechanical edit",
+    "review_critical": true,
+    "goal": "Convert DismissDedupCluster's (internal/server/handlers/dedup/handler.go:1176) per-candidate loop from a sequential for-range into a bounded worker pool (errgroup.Group + SetLimit(runtime.NumCPU()) or similar), so a large cluster dismiss doesn't serialize N sequential UpdateCandidateStatus + refreshExampleBreakdown round-trips. Each candidate's dismiss+label-capture is independent (keyed by distinct candidate.ID / distinct book pairs), so workers can run in parallel without a shared-state lock beyond an atomic dismissed counter.",
+    "background": [
+      "Loop body per candidate: es.UpdateCandidateStatus(cand.ID, \"dismissed\") then h.recordHumanLabel(...) which itself calls h.refreshExampleBreakdown(ctx, ex) synchronously before es.UpsertLabeledExample \u2014 two DB round-trips per candidate, done sequentially today.",
+      "RemoveFromDedupCluster (same file, following function) has an analogous per-candidate loop and should get the same treatment for consistency.",
+      "CLAUDE.md's concurrency mandate explicitly requires a bounded worker pool for any loop doing per-item DB read/write work at this shape."
+    ],
+    "steps": [
+      "In internal/server/handlers/dedup/handler.go, locate DismissDedupCluster's loop (~L1206-1224).",
+      "Replace the sequential for-range with an errgroup.Group (import \"golang.org/x/sync/errgroup\") with g.SetLimit(runtime.NumCPU()); for each candidate spawn g.Go(func() error { ... }) doing the same UpdateCandidateStatus + recordHumanLabel work, using an atomic int64 (sync/atomic) for the dismissed counter instead of a plain int++.",
+      "Verify h (the Handler) and es (the shared embedding store) are safe for concurrent calls to UpdateCandidateStatus/UpsertLabeledExample \u2014 grep for other concurrent callers of these methods elsewhere in the codebase as a precedent check.",
+      "Apply the same pattern to RemoveFromDedupCluster's analogous loop in the same file.",
+      "Preserve the existing slog.Info per-candidate log line (best-effort, non-fatal on error) inside each goroutine."
+    ],
+    "tests": [
+      "internal/server/handlers/dedup/handler_test.go: extend TestDismissDedupCluster with a case that dismisses a cluster of \u226550 synthetic candidates and asserts the final dismissed count matches, to catch a race in the counter or a dropped goroutine result.",
+      "Run with `go test -race ./internal/server/handlers/dedup/...` to catch any data race introduced by the parallelization."
+    ],
+    "acceptance": [
+      "`go test -race ./internal/server/handlers/dedup/...` passes.",
+      "grep -n \"errgroup\" internal/server/handlers/dedup/handler.go shows the new import and usage."
+    ],
+    "edge_cases": [
+      "Zero candidates in the cluster: loop/errgroup must handle nil/empty slice without spawning zero goroutines incorrectly.",
+      "A candidate whose UpdateCandidateStatus fails should not abort the whole batch \u2014 do NOT use errgroup's error propagation to cancel siblings (mirror today's 'continue' semantics, not fail-fast)."
+    ],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "make ci",
+    "notes": "TODO.md item 7's own text hedges this as 'may need' \u2014 but the concurrency mandate in this repo's CLAUDE.md makes this a should-fix regardless of measured latency, since the shape (per-item DB round-trip in a for-range) is exactly what that policy targets."
+  },
+  {
+    "todo_line": 10523,
+    "src_id": null,
+    "title": "Omnibus/anthology book_type field \u2014 Part 1 of the omnibus-detection-and-dedup spec",
+    "verdict": "actionable",
+    "verdict_evidence": "docs/superpowers/specs/2026-05-31-omnibus-detection-and-dedup.md is a complete, unimplemented spec (last-edited 2026-05-31, v1.0.0); grep -rn 'book_type' internal/database/bookcore.go internal/database/migrations.go returns 0 hits, confirming Part 1 (the book_type column) is unbuilt.",
+    "domain": "internal/database",
+    "exact_files": ["internal/database/migrations.go", "internal/database/bookcore.go", "internal/database/store.go", "internal/server/handlers/audiobooks/handler.go", "web/src/pages/BookDetail.tsx", "web/src/services/api.ts"],
+    "verified_anchors": [
+      {"claim": "book_type is not yet a Book field or DB column anywhere", "grep_cmd": "grep -rn \"book_type\\|BookType\" internal/database/bookcore.go internal/database/migrations.go", "expect": "0 hits"}
+    ],
+    "reuse": [
+      {"name": "existing migration numbering/pattern to copy", "file": "internal/database/migrations.go", "verify_grep": "grep -n \"Description:\" internal/database/migrations.go | tail -5"}
+    ],
+    "polarity": "additive",
+    "effort": "L",
+    "tier": "opus",
+    "why_tier": "schema migration + cross-layer (DB/API/FE) field threading on a prod-data path; needs careful review",
+    "review_critical": true,
+    "goal": "Implement Part 1 of docs/superpowers/specs/2026-05-31-omnibus-detection-and-dedup.md ONLY: add a book_type column (enum: standard/omnibus/anthology/single_file, default 'standard') to the books table via a new migration, expose it on GET/PATCH /api/v1/audiobooks/:id, and add a dropdown editor in the book detail panel plus an 'Omnibuses' quick-filter preset on the Library page. Parts 2 (omnibus\u2194individual detection algorithm) and 3 (relationship representation without destroying metadata) are explicitly OUT of scope for this item \u2014 they remain design-stage per the spec and are not briefed here.",
+    "background": [
+      "Spec section 'Part 1: book_type Field' (docs/superpowers/specs/2026-05-31-omnibus-detection-and-dedup.md, ~lines 13-30) fully specifies the migration, enum values, and API/UI surface.",
+      "No existing code references book_type anywhere in the repo."
+    ],
+    "steps": [
+      "Add a new migration in internal/database/migrations.go following the existing numbered-migration pattern (find the next number via `grep -n \"Description:\" internal/database/migrations.go | tail -5`) adding `book_type TEXT NOT NULL DEFAULT 'standard'` to the books table.",
+      "Add `BookType string \\`json:\"book_type\"\\`` to the database.Book struct in internal/database/bookcore.go, defaulting to \"standard\" wherever a new Book is constructed.",
+      "Thread BookType through CreateBook/UpdateBook/UpsertBook write paths in internal/database/pebble_store.go (mirror how an existing simple string field like Language is handled as a template).",
+      "Expose book_type as a settable field on PATCH /api/v1/audiobooks/:id in internal/server/handlers/audiobooks/handler.go (mirror the existing metadata-field PATCH handling).",
+      "Add a book_type dropdown (Standard / Omnibus / Anthology / Single file) to the book detail panel in the web frontend, mirroring the existing pattern for an editable metadata field like Language or Genre.",
+      "Add an 'Omnibuses' quick-filter preset to the Library page filter UI, following the existing quick-filter-preset pattern (find how another cached-count quick filter is implemented and mirror it)."
+    ],
+    "tests": [
+      "internal/database migration test: assert a fresh DB has book_type='standard' on a new book and the migration is idempotent on re-run.",
+      "internal/server/handlers/audiobooks handler test: PATCH book_type to 'omnibus' and assert GET reflects it.",
+      "web/src frontend test: dropdown renders all 4 enum values and calls onChange with the selected value."
+    ],
+    "acceptance": [
+      "`grep -n \"book_type\" internal/database/bookcore.go` shows the new field.",
+      "A PATCH /api/v1/audiobooks/:id with {\"book_type\":\"omnibus\"} followed by GET returns book_type=\"omnibus\"."
+    ],
+    "edge_cases": [
+      "Existing books with no book_type set must read back as 'standard', not empty string or null.",
+      "An invalid enum value in a PATCH request must be rejected with a 400, not silently stored."
+    ],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "make ci",
+    "notes": "Deliberately scoped to Part 1 only. Parts 2/3 of the spec (detection + non-destructive relationship representation) are large, undesigned-in-detail follow-ons \u2014 do not let a Haiku/Sonnet agent try to build the whole spec in one PR."
+  },
+  {
+    "todo_line": 10525,
+    "src_id": null,
+    "title": "Add regression tests for the 2 untested deluge hydrate sites",
+    "verdict": "actionable",
+    "verdict_evidence": "3 deluge hydrate sites exist: internal/plugins/deluge/centralization.go:145 (tested, centralization_test.go:72 uses GetBookFileByIDFunc), internal/server/deluge_discovery.go:167 inside handleDiscoveryImport (no test references GetBookFileByID in deluge_discovery_test.go), internal/maintenance/jobs/bulk_deluge_import.go:96 (no _test.go file exists for this package at all)",
+    "domain": "internal/server",
+    "exact_files": ["internal/server/deluge_discovery_test.go", "internal/maintenance/jobs/bulk_deluge_import_test.go"],
+    "verified_anchors": [
+      {"claim": "deluge_discovery_test.go never mocks GetBookFileByID", "grep_cmd": "grep -n \"GetBookFileByID\" internal/server/deluge_discovery_test.go", "expect": "0 hits"},
+      {"claim": "bulk_deluge_import.go has no companion test file", "grep_cmd": "ls internal/maintenance/jobs/bulk_deluge_import_test.go", "expect": "No such file or directory"},
+      {"claim": "centralization.go's hydrate site IS already tested (control, not part of this item)", "grep_cmd": "grep -n \"GetBookFileByIDFunc\" internal/plugins/deluge/centralization_test.go", "expect": "1 hit ~L72"}
+    ],
+    "reuse": [
+      {"name": "MockStore.GetBookFileByIDFunc pattern already used for the tested 3rd site", "file": "internal/plugins/deluge/centralization_test.go", "verify_grep": "grep -n \"GetBookFileByIDFunc\" internal/plugins/deluge/centralization_test.go"}
+    ],
+    "polarity": "additive",
+    "effort": "S",
+    "tier": "haiku",
+    "why_tier": "mechanical: mirror an existing, adjacent test pattern for 2 more call sites",
+    "review_critical": false,
+    "goal": "Add a regression test for each of the 2 untested hydrate-then-import call sites so a hydrate failure (GetBookFileByID returning an error or nil) is exercised: (1) internal/server/deluge_discovery.go's handleDiscoveryImport (line ~167), and (2) internal/maintenance/jobs/bulk_deluge_import.go's bulkDelugeImportJob.Run (line ~96). Each test should assert the failure path records an error result and does not proceed to ImportToLibrary.",
+    "background": [
+      "handleDiscoveryImport (internal/server/deluge_discovery.go:115) iterates pending files and hydrates each with store.GetBookFileByID(f.BookID, f.ID) before calling delugeclient.ImportToLibrary; on hydrate error it appends a result with Error set and increments failed, per the comment at deluge_discovery.go:161-165.",
+      "bulkDelugeImportJob.Run (internal/maintenance/jobs/bulk_deluge_import.go:43) has the identical hydrate-then-import shape at lines 96-102.",
+      "internal/plugins/deluge/centralization_test.go:72 already demonstrates the mocking pattern (MockStore.GetBookFileByIDFunc returning an error) for the 3rd, already-tested site \u2014 mirror it exactly."
+    ],
+    "steps": [
+      "In internal/server/deluge_discovery_test.go, add TestHandleDiscoveryImport_HydrateFailure: construct a MockStore whose GetBookFileByIDFunc returns (nil, error) for a pending file, call handleDiscoveryImport via its route/handler, and assert the response's failed count is 1 and the per-file result carries the error message (not silently dropped).",
+      "Create internal/maintenance/jobs/bulk_deluge_import_test.go (new file, needs a version header per CLAUDE.md file-header rules) with TestBulkDelugeImportJob_HydrateFailure: construct a JobStore mock whose GetBookFileByID returns nil/error for one pending file, run bulkDelugeImportJob.Run in dry-run=false mode, and assert the job logs/records the hydrate failure via reporter.Log or equivalent and does not call ImportToLibrary for that file.",
+      "For both new tests, also add a companion happy-path test if none exists exercising a successful hydrate (GetBookFileByID returns a full row) to avoid a false-negative-only test suite."
+    ],
+    "tests": [
+      "internal/server/deluge_discovery_test.go: TestHandleDiscoveryImport_HydrateFailure \u2014 asserts failed=1 when hydrate errors.",
+      "internal/maintenance/jobs/bulk_deluge_import_test.go: TestBulkDelugeImportJob_HydrateFailure \u2014 asserts the job does not call ImportToLibrary when hydrate fails."
+    ],
+    "acceptance": [
+      "`go test ./internal/server/... -run TestHandleDiscoveryImport_HydrateFailure` passes.",
+      "`go test ./internal/maintenance/jobs/... -run TestBulkDelugeImportJob_HydrateFailure` passes."
+    ],
+    "edge_cases": ["hydrateErr nil but full == nil (book file not found without an error) must also hit the failure path per the existing `if hydrateErr != nil || full == nil` check \u2014 test both nil-error and non-nil-error variants."],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "make ci",
+    "notes": "TODO item calls this 'optional' \u2014 low priority, small effort, safe for a Haiku-tier agent."
+  },
+  {
+    "todo_line": 10526,
+    "src_id": null,
+    "title": "Filter system-sourced tags out of the Browse-by-Tag cloud",
+    "verdict": "actionable",
+    "verdict_evidence": "internal/audiobooks/service_tags.go:16-20 ListAllUserTags (despite its name) calls svc.store.ListAllTags() unfiltered, and internal/database/pebble_store_tags.go:222 ListAllTags scans the tag_idx: index which has no source distinction, so system-sourced tags like 'metadata:source:audible' leak into the /tags endpoint that feeds web/src/components/library/TagCloud.tsx's availableTags prop",
+    "domain": "internal/database",
+    "exact_files": ["internal/database/pebble_store_tags.go", "internal/database/iface_tags.go", "internal/audiobooks/service_tags.go", "internal/database/mock_store.go"],
+    "verified_anchors": [
+      {"claim": "ListAllUserTags just forwards to store.ListAllTags with no source filter", "grep_cmd": "grep -n \"func (svc \\*AudiobookService) ListAllUserTags\" -A5 internal/audiobooks/service_tags.go", "expect": "1 hit ~L16, body is 'return svc.store.ListAllTags()'"},
+      {"claim": "ListAllTags's tag_idx: index carries no source, so cannot distinguish system vs user tags today", "grep_cmd": "grep -n \"tag_idx:\" internal/database/pebble_store_tags.go", "expect": "\u22651 hit ~L223"},
+      {"claim": "System tags use colon namespaces like metadata:source:<name>", "grep_cmd": "grep -n \"metadata:source:\" internal/database/tag_helpers.go", "expect": "1 hit ~L21"},
+      {"claim": "book_tag: primary records DO carry a Source field ('user' vs 'system')", "grep_cmd": "grep -n \"Source:\" internal/database/pebble_store_tags.go", "expect": "\u22651 hit ~L44"}
+    ],
+    "reuse": [
+      {"name": "BookTag.Source field + book_tag: primary key prefix scan, already used by GetBookTagsDetailed", "file": "internal/database/pebble_store_tags.go", "verify_grep": "grep -n \"func (p \\*PebbleStore) GetBookTagsDetailed\" internal/database/pebble_store_tags.go"}
+    ],
+    "polarity": "transform",
+    "effort": "M",
+    "tier": "sonnet",
+    "why_tier": "requires a new source-aware aggregation over the book_tag: keyspace (not just tag_idx:), touching the Store interface",
+    "review_critical": false,
+    "goal": "Make the /tags endpoint (and hence TagCloud.tsx's Browse-by-Tag UI) exclude system-sourced tags. Add a source-aware tag listing: a new PebbleStore method that scans the book_tag:<bookID>:<tag> primary-key prefix (which carries BookTag.Source) instead of the source-blind tag_idx: index, aggregating counts only for Source=='user' (treating legacy empty Source as 'user', matching the existing convention at pebble_store_tags.go:160-162). This is source-of-truth-correct rather than a maintained system-namespace-prefix denylist.",
+    "background": [
+      "service_tags.go ListAllUserTags is misleadingly named \u2014 it does NOT filter by user source today, it returns every tag.",
+      "TagCloud.tsx renders whatever availableTags it's given, sourced (via web/src/hooks/useLibraryFilters.ts and web/src/services/api.ts's listAllUserTags()) from GET /tags \u2192 ListAllUserTags handler \u2192 this same unfiltered store call.",
+      "FilterSidebar.tsx also consumes the same availableTags prop, so a store-level fix also cleans that view \u2014 confirm with the coordinator whether FilterSidebar's filter dropdown should ALSO exclude system tags, or whether a component-level filter in TagCloud.tsx alone is preferred to keep FilterSidebar's advanced/power-user filtering unrestricted."
+    ],
+    "steps": [
+      "Add a new PebbleStore method e.g. `ListAllUserSourcedTags() ([]TagWithCount, error)` in internal/database/pebble_store_tags.go that iterates the `book_tag:` prefix (not `tag_idx:`), unmarshals each BookTag, skips entries where Source not in {'', 'user'}, and aggregates per-tag counts (mirror the counting/sort logic already in ListAllTags at pebble_store_tags.go:222-253).",
+      "Add the method to the relevant Store interface (internal/database/iface_tags.go) and to internal/database/mock_store.go's MockStore (with a ...Func field following the existing ListAllTagsFunc pattern at mock_store.go:2343).",
+      "Update internal/audiobooks/service_tags.go's ListAllUserTags to call the new store method instead of store.ListAllTags().",
+      "Regenerate internal/database/mocks/mock_store.go (mockery-generated) for the new interface method \u2014 check the Makefile for the mock-generation target rather than hand-editing.",
+      "Run `make ci` and fix any interface-conformance compile errors in other Store implementations."
+    ],
+    "tests": [
+      "internal/database/pebble_store_tags_test.go (or a new _test.go beside it): TestListAllUserSourcedTags_ExcludesSystemTags \u2014 write one user tag and one tag with Source='system' on the same book, assert only the user tag appears in the result with count 1.",
+      "internal/database/pebble_store_tags_test.go: TestListAllUserSourcedTags_LegacyEmptySourceTreatedAsUser \u2014 a BookTag with Source=='' (pre-migration legacy row) must still be included, matching the existing convention.",
+      "internal/audiobooks/service_tags_test.go: assert ListAllUserTags calls the new store method (via a mock) rather than the old ListAllTags."
+    ],
+    "acceptance": [
+      "`go test ./internal/database/... -run TestListAllUserSourcedTags` passes.",
+      "A manual check: create a book with tag 'metadata:source:audible' via AddBookTagWithSource(id, tag, \"system\") and a user tag 'my-favorite' via the normal user-tag path; GET /tags must list only 'my-favorite'."
+    ],
+    "edge_cases": [
+      "A tag applied by BOTH a user and the system on different books (same tag string, different Source per book) \u2014 count should reflect only the user-sourced occurrences, not the system ones, even for the same tag text.",
+      "Empty library (no tags at all) must return an empty slice, not an error."
+    ],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "make ci",
+    "notes": "Confirm with the coordinator whether FilterSidebar.tsx's tag filter dropdown should also switch to the new user-only endpoint, or intentionally keep showing system tags there for power users \u2014 the TODO item only names the 'Browse-by-Tag cloud' (TagCloud.tsx) explicitly."
+  },
+  {
+    "todo_line": 10531,
+    "src_id": null,
+    "title": "Design the AI-enrichment tier for the ambiguous regroup pile",
+    "verdict": "needs_design",
+    "verdict_evidence": "docs/dedup/STATUS.md:127-128 names 'AI-enrichment tier' as an undesigned fast-follow (TODO #11) alongside REVIEW-band and cover recovery, additionally blocked on local Ollama capacity per TODO.md item 11's own text; no spec, op, or code exists (grep -rn 'AI-enrichment' docs/ internal/ returns only that one mention)",
+    "domain": "internal/dedup",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "No AI-enrichment tier design or code exists beyond the STATUS.md mention", "grep_cmd": "grep -rn \"AI-enrichment\" docs/ internal/", "expect": "1 hit, docs/dedup/STATUS.md:128"}
+    ],
+    "reuse": [],
+    "polarity": "additive",
+    "effort": "M",
+    "tier": "opus",
+    "why_tier": "undesigned feature needing a human decision on scope and blocked on infra capacity (local Ollama)",
+    "review_critical": false,
+    "goal": "Cannot be briefed: no design exists for what 'AI-enrichment tier' means concretely (which LLM call, what input/output, which pipeline stage). Additionally the item is explicitly blocked on local Ollama capacity. Exact open question: what does the AI-enrichment tier actually do to the 'ambiguous regroup pile' \u2014 score candidates, generate a human-readable explanation, or something else \u2014 and is local Ollama GPU capacity (see MEMORY.md's 'GPU thermal block LIFTED' note) now sufficient to unblock it?",
+    "background": [
+      "Same STATUS.md line groups this with items 3 and 12 as undesigned fast-follows.",
+      "Project memory (project_llm_host_gpu_thermal_throttle.md) indicates the prior GPU thermal block on the Windows GPU box was lifted, which may partially unblock the 'local Ollama capacity' blocker mentioned in the TODO text \u2014 worth flagging to the owner as newly-relevant context, not a resolved answer."
+    ],
+    "steps": ["STOP \u2014 bring the open question to the owner before briefing any code work."],
+    "tests": [],
+    "acceptance": ["Owner has answered what the AI-enrichment tier concretely does and confirmed Ollama capacity is or isn't sufficient."],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [10507, 10533],
+    "gate": "n/a (docs)",
+    "notes": "The GPU thermal block being lifted (per project memory) may be relevant new information for the owner's Ollama-capacity blocker \u2014 surface it, don't assume it resolves the blocker."
+  },
+  {
+    "todo_line": 10533,
+    "src_id": null,
+    "title": "Design cover-recovery fast-follow",
+    "verdict": "needs_design",
+    "verdict_evidence": "docs/dedup/STATUS.md:127-128 names 'cover recovery' as an undesigned fast-follow (TODO #12); no cover-fetch/cover-recovery op or spec exists (grep -rln 'CoverFetch\\|CoverBackfill\\|CoverRecovery' internal/plugins/ returns 0 hits)",
+    "domain": "internal/plugins",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "No cover-fetch/recovery op exists anywhere in the plugin tree", "grep_cmd": "grep -rln \"CoverFetch\\|CoverBackfill\\|CoverRecovery\" internal/plugins/", "expect": "0 hits"}
+    ],
+    "reuse": [],
+    "polarity": "additive",
+    "effort": "M",
+    "tier": "opus",
+    "why_tier": "undesigned feature, unclear what 'recovery' means (re-fetch missing covers? repair corrupt embedded covers? both?)",
+    "review_critical": false,
+    "goal": "Cannot be briefed: 'cover recovery fast-follow' has no spec beyond a one-line mention. Exact open question: does 'recovery' mean (a) fetching missing covers from a metadata source for books that never got one, (b) repairing/re-embedding a corrupt or wrong cover already on disk, or (c) both \u2014 and which metadata source(s) should it query?",
+    "background": [
+      "Grouped with items 3 and 11 in docs/dedup/STATUS.md as an undesigned fast-follow.",
+      "No existing internal/plugins code implements cover fetch/backfill at all."
+    ],
+    "steps": ["STOP \u2014 bring the open question to the owner before briefing."],
+    "tests": [],
+    "acceptance": ["Owner has answered what 'cover recovery' concretely means and which metadata source(s) to use."],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [10507, 10531],
+    "gate": "n/a (docs)",
+    "notes": "N/A"
+  },
+  {
+    "todo_line": 10534,
+    "src_id": "INIT-8",
+    "title": "Community audiobook fingerprint index (INIT-8) \u2014 parked",
+    "verdict": "parked",
+    "verdict_evidence": "Owner decision 4: 'INIT-8 community fingerprint index: PARKED \u2192 verdict parked'. TODO.md item 13 text matches exactly ('Community audiobook fingerprint index (INIT-8)').",
+    "domain": "docs",
+    "exact_files": [],
+    "verified_anchors": [],
+    "reuse": [],
+    "polarity": "additive",
+    "effort": "L",
+    "tier": "opus",
+    "why_tier": "n/a \u2014 parked",
+    "review_critical": false,
+    "goal": "n/a \u2014 excluded by owner decision 4. Do not brief.",
+    "background": ["Spec exists at docs/specs/2026-07-10-community-fingerprint-index-design.md but requires a STOP-FOR-HUMAN brainstorm/review session per the TODO text itself, and the owner has separately parked the whole initiative."],
+    "steps": [],
+    "tests": [],
+    "acceptance": [],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a",
+    "notes": "Parked by owner decision 4."
+  },
+  {
+    "todo_line": 10537,
+    "src_id": null,
+    "title": "Design the description-fetch campaign for ~29,083 books without descriptions",
+    "verdict": "needs_design",
+    "verdict_evidence": "grep -rln 'DescriptionFetch\\|description.fetch.campaign' internal/ docs/ returns 0 hits \u2014 no metafetch op, spec, or backend campaign infrastructure exists for a bulk description-fetch",
+    "domain": "internal/plugins/metafetch",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "No description-fetch campaign code or spec exists", "grep_cmd": "grep -rln \"DescriptionFetch\\|description.fetch.campaign\" internal/ docs/", "expect": "0 hits"}
+    ],
+    "reuse": [],
+    "polarity": "additive",
+    "effort": "L",
+    "tier": "opus",
+    "why_tier": "large-scale (29K book) metadata-fetch operation touching external APIs; needs rate-limit/source/apply-gating design before briefing",
+    "review_critical": true,
+    "goal": "Cannot be briefed: no design exists for how a bulk description-fetch campaign over ~29,083 books should source descriptions (which metadata provider(s)), what rate limits apply, whether it writes directly or goes through the review queue, and whether it should be dry-run-by-default like other bulk metadata ops. Exact open question: which metadata source(s) should be queried for descriptions, what's the apply/dry-run default, and does this reuse the existing internal/plugins/metafetch bulk-fetch machinery or need a new op?",
+    "background": [
+      "No existing op in internal/plugins/metafetch specifically targets missing descriptions as a standalone campaign.",
+      "This is a prod-data-scale bulk external-API operation (29K books) and per CLAUDE.md's concurrency mandate would need a bounded worker pool respecting the target API's rate limits once designed."
+    ],
+    "steps": ["STOP \u2014 bring the open design question to the owner before briefing."],
+    "tests": [],
+    "acceptance": ["Owner has specified the metadata source(s), apply/dry-run default, and whether it's a new op or extends an existing metafetch op."],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (docs)",
+    "notes": "The 29,083 figure has no cited measurement source found in this scope's search \u2014 worth asking the owner where that count came from / whether it's still current, since several other items in this scan turned out to have stale counts."
+  },
+  {
+    "todo_line": 10538,
+    "src_id": null,
+    "title": "Verify LLM/embeddings backend-mode toggle is already fully shipped",
+    "verdict": "stale_done",
+    "verdict_evidence": "internal/config/config.go:502-508 defines the 4-mode enum (disabled/openai/local/openai-fallback-local) and AIBackendConfig; web/src/components/settings/AIBackendsSection.tsx:32-35 implements the FE selector with all 4 options plus a model-pull/download prompt UI (~lines 260-293)",
+    "domain": "internal/config",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "4-mode enum + AIBackendConfig struct exist", "grep_cmd": "grep -n \"AIBackendModeDisabled\\|AIBackendModeOpenAI\\|AIBackendModeLocal\\|AIBackendModeOpenAIFallbackLocal\" internal/config/config.go", "expect": "\u22654 hits ~L504-507"},
+      {"claim": "FE selector has all 4 options", "grep_cmd": "grep -n \"disabled\\|openai\\|openai-fallback-local\" web/src/components/settings/AIBackendsSection.tsx", "expect": "\u22654 hits ~L32-35"},
+      {"claim": "Model-download/pull prompt UI exists", "grep_cmd": "grep -n \"pulling\\|pullTarget\" web/src/components/settings/AIBackendsSection.tsx", "expect": "\u22652 hits"}
+    ],
+    "reuse": [],
+    "polarity": "additive",
+    "effort": "S",
+    "tier": "haiku",
+    "why_tier": "just checking the TODO box, no code change",
+    "review_critical": false,
+    "goal": "TODO item 15's own text says 'status unverified \u2014 check before building.' This scout verified: the config enum, FE selector (AIBackendsSection.tsx), and model-download prompt are all fully shipped at HEAD. Check the TODO.md box rather than briefing new work.",
+    "background": [
+      "internal/config/config.go:502-585 implements the full mode enum plus EffectiveEmbeddingMode/EffectiveLLMMode resolution with legacy-field fallback and a documented 2026-08-16 incident fix (defaulting to local over OpenAI to avoid an accidental paid-API whole-library scan).",
+      "web/src/components/settings/AIBackendsSection.tsx implements the 4-option selector, local endpoint config fields, a reachability/model-pull status panel, and a pull-target dialog."
+    ],
+    "steps": [
+      "Check TODO.md item 15's box, citing internal/config/config.go:502 and web/src/components/settings/AIBackendsSection.tsx as the shipped evidence.",
+      "No code change needed."
+    ],
+    "tests": ["N/A \u2014 doc-only change."],
+    "acceptance": ["grep -n 'LLM/embeddings backend-mode toggle' TODO.md shows the item marked done."],
+    "edge_cases": ["N/A"],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (docs)",
+    "notes": "N/A"
+  },
+  {
+    "todo_line": 10572,
+    "src_id": null,
+    "title": "Re-enqueue iTunes path-heal Layer-6 to reprocess residuals",
+    "verdict": "prod_run",
+    "verdict_evidence": "docs/operations/pending-prod-actions.md row 4 lists this as 'operator-run', citing 'TODO #17, #49' \u2014 re-run the maintenance.itunes-heal op after the residual pools shrink; no code deliverable, the op already exists and is registered (internal/plugins/maintenance/reconcile.go:74).",
+    "domain": "docs/operations",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "pending-prod-actions.md row 4 marks this operator-run and cites TODO #17", "grep_cmd": "grep -n \"iTunes heal Layer-6\" docs/operations/pending-prod-actions.md", "expect": "1 hit ~L28"},
+      {"claim": "the itunes-heal op already exists and is registered", "grep_cmd": "grep -n \"itunesHealDef\" internal/plugins/maintenance/reconcile.go", "expect": "1 hit ~L74"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "S",
+    "tier": "sonnet",
+    "why_tier": "n/a \u2014 operational run, not code",
+    "review_critical": true,
+    "goal": "No code deliverable. Re-run the existing maintenance.itunes-heal op on prod (per docs/operations/pending-prod-actions.md row 4) so Layer-6 (Whisper-transcription-based disambiguation, per docs/system/incidents.md:70) can reprocess the 3,720 ambiguous / 5,349 not-found / 4,734 doubled-path residuals left by the first run.",
+    "background": [
+      "First run per docs/system/incidents.md:70 (PR #1625): 2,274 healed, 3,720 ambiguous, 5,349 not found, 0 errors.",
+      "The doubled-path figure (4,734) may be stale/inaccurate \u2014 docs/design/2026-08-20-dual-path-display.md:190 casts doubt on whether that count was verified accurate; flag this to the operator before re-running."
+    ],
+    "steps": [
+      "Operator: trigger maintenance.itunes-heal via the ops UI or API on prod.",
+      "Confirm Layer 6 (PID/transcription-based) is enabled and has transcription data available (per the 'transcribe-book-intros' bulk run referenced in docs/archive/todo-2026-H1.md's June 26 status).",
+      "Record the before/after residual counts in docs/operations/pending-prod-actions.md row 4 and docs/system/incidents.md as appropriate."
+    ],
+    "tests": ["N/A \u2014 operational run."],
+    "acceptance": ["A dated note recording the new ambiguous/not-found/doubled-path counts after the re-run."],
+    "edge_cases": ["Do not run while any other scan/apply is running concurrently, per the standing 'never apply metadata while a scan runs' rule."],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (ops)",
+    "notes": "docs/design/2026-08-20-dual-path-display.md casts some doubt on the accuracy of the 4,734 doubled-path figure \u2014 worth re-measuring before/instead of blindly re-running."
+  },
+  {
+    "todo_line": 10574,
+    "src_id": "AP-1b",
+    "title": "Physically co-locate a Combine survivor's files under RootDir after CombineBooks",
+    "verdict": "actionable",
+    "verdict_evidence": "internal/merge/service.go:332 doc comment confirms CombineBooks is 'DB-only: files stay where they are on disk... Run organize afterward to physically co-locate if desired' \u2014 the automatic co-location described by AP-1b is not implemented; docs/archive/todo-2026-H1.md:983 confirms status '\ud83d\udd35 designed, not started'.",
+    "domain": "internal/merge",
+    "exact_files": ["internal/merge/service.go"],
+    "verified_anchors": [
+      {"claim": "CombineBooks is DB-only today and doesn't move files", "grep_cmd": "grep -n \"DB-only: files stay where they are\" internal/merge/service.go", "expect": "1 hit ~L330"},
+      {"claim": "ensureUnderRoot helper already exists to gate root-relative moves", "grep_cmd": "grep -n \"func ensureUnderRoot\" internal/organizer/organizer.go", "expect": "1 hit ~L573"},
+      {"claim": "Organizer.OrganizeBook is the existing physical-move entrypoint to reuse", "grep_cmd": "grep -n \"func (o \\*Organizer) OrganizeBook\" internal/organizer/organizer.go", "expect": "1 hit ~L171"}
+    ],
+    "reuse": [
+      {"name": "organizer.Organizer.OrganizeBook \u2014 physical file-move/co-location logic", "file": "internal/organizer/organizer.go", "verify_grep": "grep -n \"func (o \\*Organizer) OrganizeBook\" internal/organizer/organizer.go"},
+      {"name": "organizer.ensureUnderRoot \u2014 the exact RootDir-only gate AP-1b needs", "file": "internal/organizer/organizer.go", "verify_grep": "grep -n \"func ensureUnderRoot\" internal/organizer/organizer.go"}
+    ],
+    "polarity": "additive",
+    "effort": "M",
+    "tier": "sonnet",
+    "why_tier": "touches the file-move/organize path on a prod-data operation (Combine); needs careful review of the RootDir-only gate",
+    "review_critical": true,
+    "goal": "After CombineBooks (internal/merge/service.go:336) reassigns all files to the survivor book in the DB, if (and only if) every one of the survivor's file paths is already under config.AppConfig.RootDir (using organizer.ensureUnderRoot or equivalent \u2014 do NOT move files that live in abooks/newbooks or any external staging dir), physically move them into one co-located folder by invoking the existing Organizer.OrganizeBook on the survivor. Leave files outside RootDir untouched, matching the TODO note 'user wants co-location only inside the library.'",
+    "background": [
+      "CombineBooks' doc comment (service.go:328-332) already anticipates this: 'Run organize afterward to physically co-locate if desired' \u2014 this item automates that instead of requiring a manual follow-up organize run.",
+      "organizer.ensureUnderRoot(fullPath, rootDir) at organizer.go:573 is the exact existing helper for checking a path is under RootDir.",
+      "Organizer.OrganizeBook(book) at organizer.go:171 is the existing single-book physical-move entrypoint."
+    ],
+    "steps": [
+      "In internal/merge/service.go's CombineBooks (~L336), after the existing file-reassignment loop and before returning CombineResult, fetch the survivor's current BookFiles and check each file's path against config.AppConfig.RootDir using organizer.ensureUnderRoot (or an equivalent all-under-root check) \u2014 if ANY file's path is NOT under RootDir, skip physical co-location entirely for this combine and return the DB-only result as today.",
+      "If ALL of the survivor's files pass the RootDir check, obtain/construct an *organizer.Organizer (check how the Service struct already has access to config/organizer dependencies, or thread one in via the constructor) and call OrganizeBook(survivorBook) to move all its files into one target folder.",
+      "Wire OrganizeBook's returned error into CombineResult \u2014 do not silently swallow a physical-move failure; the DB state (files already reassigned) must remain consistent even if the physical move partially fails, so log a clear warning and leave CombineResult indicating files were NOT moved rather than reporting success.",
+      "Add a CombineResult field (e.g. FilesCoLocated bool) so callers/UI can tell whether physical co-location happened."
+    ],
+    "tests": [
+      "internal/merge/service_test.go (or a new co-location-specific test file): TestCombineBooks_CoLocatesFilesUnderRootDir \u2014 survivor files all under a temp RootDir, assert after Combine they're all in one folder.",
+      "TestCombineBooks_SkipsCoLocationOutsideRootDir \u2014 one file path outside RootDir (e.g. under a separate newbooks/abooks temp dir), assert Combine still succeeds (DB reassignment) but files are NOT physically moved and CombineResult reflects that."
+    ],
+    "acceptance": [
+      "`go test ./internal/merge/... -run TestCombineBooks_CoLocatesFilesUnderRootDir` passes.",
+      "`go test ./internal/merge/... -run TestCombineBooks_SkipsCoLocationOutsideRootDir` passes."
+    ],
+    "edge_cases": [
+      "Mixed set: some survivor files under RootDir, some not \u2014 per the TODO's 'inside RootDir only' framing, treat this as NOT eligible for co-location (require ALL files under root) rather than partially moving only some.",
+      "OrganizeBook failing partway through (e.g. disk full) must not leave the DB and filesystem inconsistent \u2014 the DB file-path records must reflect wherever the files actually ended up, not the DB-only pre-move paths."
+    ],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "make ci",
+    "notes": "review_critical because this touches CombineBooks, a prod-data merge/apply path with real file moves."
+  },
+  {
+    "todo_line": 10576,
+    "src_id": "AP-3",
+    "title": "Re-enqueue duration-reextract apply for the ~721-book tail",
+    "verdict": "prod_run",
+    "verdict_evidence": "docs/operations/pending-prod-actions.md row 3 explicitly lists 'Duration-reextract tail' as operator-run, citing TODO #19; internal/plugins/maintenance/duration_reextract.go and its op-def already exist and are fully tested (internal/plugins/maintenance/duration_reextract_test.go), so the code is done and only the re-enqueue apply run remains.",
+    "domain": "docs/operations",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "pending-prod-actions.md row 3 marks this operator-run citing TODO #19", "grep_cmd": "grep -n \"Duration-reextract tail\" docs/operations/pending-prod-actions.md", "expect": "1 hit ~L27"},
+      {"claim": "maintenance.duration-reextract op already exists and registered", "grep_cmd": "grep -n \"maintenance.duration-reextract\" internal/plugins/maintenance/duration_reextract_test.go", "expect": "\u22651 hit"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "S",
+    "tier": "sonnet",
+    "why_tier": "n/a \u2014 operational run, not code",
+    "review_critical": true,
+    "goal": "No code deliverable. Re-enqueue the already-shipped maintenance.duration-reextract op (dry-run supported) against the ~721-book tail the v3 run left behind, per docs/operations/pending-prod-actions.md row 3 and the archived design doc docs/archive/2026-07-consolidation/specs/2026-06-21-duration-reextract-v3-design.md.",
+    "background": [
+      "duration_reextract.go's op def is fully shipped and tested (internal/plugins/maintenance/duration_reextract_test.go covers registration, dry-run, nil-params default, empty library).",
+      "The ~721-book figure comes from the v3 run's tail per the archived design doc."
+    ],
+    "steps": [
+      "Operator: dry-run maintenance.duration-reextract first to confirm the current tail count still matches ~721.",
+      "If confirmed, re-run with apply=true.",
+      "Record before/after counts in docs/operations/pending-prod-actions.md row 3."
+    ],
+    "tests": ["N/A \u2014 operational run."],
+    "acceptance": ["A dated note recording the post-run duration-reextract tail count (expect it to shrink toward 0)."],
+    "edge_cases": ["Do not run while a scan is in progress, per the standing rule that a running scan clobbers applied metadata."],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (ops)",
+    "notes": "N/A"
+  },
+  {
+    "todo_line": 10582,
+    "src_id": "CONS-18",
+    "title": "Decide whether to proceed with CONS-18 Part 2 (file-tag duration write-back)",
+    "verdict": "needs_design",
+    "verdict_evidence": "docs/archive/todo-2026-H1.md:1067 records the owner's own prior scoping: 'Scoping found it is non-trivial + low-payoff... Build after the dedup re-scope settles' \u2014 explicit deferred-pending-a-later-decision item, not currently briefable without confirming the dedup re-scope has settled.",
+    "domain": "internal/fileops",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "CONS-18 Part 2 was explicitly scoped as non-trivial/low-payoff and deferred pending dedup re-scope settling", "grep_cmd": "grep -n \"non-trivial + low-payoff\" docs/archive/todo-2026-H1.md", "expect": "1 hit ~L1067"},
+      {"claim": "Part 1 (DB-side gate) is already shipped and should NOT be re-touched", "grep_cmd": "grep -n \"Part 1 (DB-side gate) DONE\" docs/archive/todo-2026-H1.md", "expect": "1 hit ~L1067"}
+    ],
+    "reuse": [
+      {"name": "database.DurationLooksLikeMillis \u2014 the shared heuristic Part 1 already ships, must not be duplicated", "file": "internal/database/duration_sanity.go", "verify_grep": "grep -n \"func DurationLooksLikeMillis\" internal/database/duration_sanity.go"}
+    ],
+    "polarity": "additive",
+    "effort": "L",
+    "tier": "opus",
+    "why_tier": "cross-cutting file-tag write-back (MP3-only LENGTH/TLEN frame, config-gated, isProtectedPath-guarded) plus a pending settle-first gate",
+    "review_critical": true,
+    "goal": "Cannot yet be briefed as a straightforward build: the owner already scoped Part 2 (writing a duration tag to the primary audio file) as non-trivial and low-payoff (per-file duration must be threaded through BuildFullTagMap which is currently book-level; only MP3 has a real LENGTH/TLEN frame \u2014 MP4/M4B store duration in the container, not a tag; FilterUnchangedTags needs a new LENGTH case; players read the VBR/container header, not TLEN anyway) and explicitly deferred it until 'the dedup re-scope settles.' Exact open question: has the dedup re-scope (see the many dedup-lane items elsewhere in this scan) settled enough to greenlight this low-payoff work, or should it stay deferred/be formally closed as not-worth-doing given the 'players read the container header, not TLEN' caveat that undercuts its value?",
+    "background": [
+      "Part 1 (DB-side gate) is fully shipped: database.DurationLooksLikeMillis + normalizeBookFileDuration wired into CreateBookFile/UpsertBookFile/BatchUpsertBookFiles (internal/database/duration_sanity.go, internal/database/pebble_store_bookfiles.go) \u2014 do not re-build or duplicate this.",
+      "Spec exists at docs/superpowers/specs/2026-06-19-import-duration-normalization-design.md but per the archive note, Part 2 specifically was found low-value during scoping.",
+      "internal/fileops/write_tags_safe.go is the existing safe tag-write chokepoint that would need the new LENGTH/TLEN case if this proceeds."
+    ],
+    "steps": ["STOP \u2014 bring the open question (has the dedup re-scope settled; is this still worth building given the 'players don't read TLEN' caveat) to the owner before briefing."],
+    "tests": [],
+    "acceptance": ["Owner has confirmed either: (a) proceed with the config-gated MP3-only LENGTH/TLEN write-back as scoped in the archive note, or (b) formally close this as not-worth-doing."],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (docs)",
+    "notes": "The owner's own scoping note already casts doubt on this item's value ('players read the VBR/container header not TLEN') \u2014 worth surfacing as a candidate to close as won't-do rather than build, pending confirmation."
+  },
+  {
+    "todo_line": 10586,
+    "part": 1,
+    "src_id": null,
+    "title": "Add a frontend test asserting the book-sig coverage % badge renders",
+    "verdict": "actionable",
+    "verdict_evidence": "web/src/components/dedup/DedupEmbeddingTab.tsx:783-788 already renders a 'partial fp N%' Chip when book_sig_coverage_pct < 100, but no test file under web/src/components/dedup exercises this rendering path",
+    "domain": "web",
+    "exact_files": ["web/src/components/dedup/DedupEmbeddingTab.test.tsx"],
+    "verified_anchors": [
+      {"claim": "The coverage badge render code exists", "grep_cmd": "grep -n \"book_sig_coverage_pct\" web/src/components/dedup/DedupEmbeddingTab.tsx", "expect": "\u22651 hit ~L783"}
+    ],
+    "reuse": [],
+    "polarity": "additive",
+    "effort": "S",
+    "tier": "haiku",
+    "why_tier": "mechanical: one component render test with two data variants",
+    "review_critical": false,
+    "goal": "Add/extend web/src/components/dedup/DedupEmbeddingTab.test.tsx with a test that renders the component with a book whose book_sig_coverage_pct is e.g. 62, and asserts a 'partial fp 62%' chip/label is present in the DOM; and a companion test with book_sig_coverage_pct == 100 (or null) asserting the badge is absent.",
+    "background": ["The render logic is a conditional: `book.book_sig_coverage_pct != null && book.book_sig_coverage_pct < 100` renders a Tooltip+Chip labeled `partial fp ${pct}%` (DedupEmbeddingTab.tsx:783-788)."],
+    "steps": [
+      "Locate or create web/src/components/dedup/DedupEmbeddingTab.test.tsx following this repo's existing Vitest + Testing Library conventions (check a sibling test file in the same directory for the render-with-props pattern).",
+      "Add TestBookSigCoverage_RendersPartialBadge: render DedupEmbeddingTab with a candidate book having book_sig_coverage_pct=62, assert getByText(/partial fp 62%/) is present.",
+      "Add TestBookSigCoverage_HidesBadgeAtFullCoverage: render with book_sig_coverage_pct=100 (and separately with null/undefined), assert the partial-fp text is NOT present."
+    ],
+    "tests": ["web/src/components/dedup/DedupEmbeddingTab.test.tsx: the two tests described above."],
+    "acceptance": ["`npm --prefix web run test -- DedupEmbeddingTab` passes with both new tests green."],
+    "edge_cases": [
+      "book_sig_coverage_pct exactly 100 must NOT show the badge (boundary condition per the `< 100` check).",
+      "book_sig_coverage_pct undefined/null must not throw or show the badge."
+    ],
+    "anti_over_suppression": "TestBookSigCoverage_HidesBadgeAtFullCoverage is the anti-suppression companion to the partial-badge test \u2014 proves the badge doesn't always render.",
+    "depends_on_lines": [],
+    "gate": "npm --prefix web run lint && npm --prefix web test",
+    "notes": "Part 1 of 2 for TODO item 23; Part 2 is the live-prod verification, filed separately as prod_run."
+  },
+  {
+    "todo_line": 10586,
+    "part": 2,
+    "src_id": null,
+    "title": "Manually verify on prod: 14K false-positive purge visible + coverage % renders with real data",
+    "verdict": "prod_run",
+    "verdict_evidence": "The [hold] verification TODO item asks to confirm production dedup UI behavior against real data (the Jun 13 purge of 12,322 rows per docs/archive/todo-2026-H1.md:1262/1431) \u2014 this is a live-data UI check, not yet listed in docs/operations/pending-prod-actions.md (grep -n 'TODO #23' docs/operations/pending-prod-actions.md returns 0 hits)",
+    "domain": "docs/operations",
+    "exact_files": ["docs/operations/pending-prod-actions.md"],
+    "verified_anchors": [
+      {"claim": "item 23 is not yet tracked in pending-prod-actions.md", "grep_cmd": "grep -n \"TODO #23\" docs/operations/pending-prod-actions.md", "expect": "0 hits"},
+      {"claim": "the purge this verifies actually ran on prod Jun 13, 12,322 rows", "grep_cmd": "grep -n \"Legacy false-positive purge\" docs/archive/todo-2026-H1.md", "expect": "1 hit ~L1262"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "S",
+    "tier": "sonnet",
+    "why_tier": "n/a \u2014 operational UI verification against live prod data, not code",
+    "review_critical": false,
+    "goal": "No code deliverable for this half. On prod, open the dedup UI and confirm: (1) the 14K legacy false-positive 100%-match candidates purged on 2026-06-13 no longer appear as pending candidates, and (2) the book-sig coverage % badge (verified to render correctly in Part 1's unit test) actually shows real, sensible values for partially-fingerprinted books in the live dataset.",
+    "background": [
+      "docs/archive/todo-2026-H1.md:1262 'Legacy false-positive purge \u2705 applied on production June 13' and :1431 records the purge (12,322 rows) with only UI re-verification remaining as of 2026-07-01.",
+      "This item currently has no tracking row in docs/operations/pending-prod-actions.md and should be added there for consistency with the other operator-run items in this scope."
+    ],
+    "steps": [
+      "Add a new row to docs/operations/pending-prod-actions.md citing TODO #23, describing both checks.",
+      "Operator: open the prod dedup UI's pending-candidates view and spot-check that no 100%-match false-positive pairs from the pre-purge era remain visible.",
+      "Operator: open the embedding/acoustic tab for several partially-fingerprinted books and confirm the coverage % badge shows plausible values."
+    ],
+    "tests": ["N/A \u2014 operational verification."],
+    "acceptance": ["A dated note in docs/dedup/STATUS.md or pending-prod-actions.md confirming both checks passed."],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [10586],
+    "gate": "n/a (ops)",
+    "notes": "Filed as part 2 of TODO item 23; part 1 (the unit test) is a separate actionable item."
+  },
+  {
+    "todo_line": 10591,
+    "src_id": "INIT-6",
+    "title": "Workflow system WF-0/2/3/4/5 (INIT-6) \u2014 parked",
+    "verdict": "parked",
+    "verdict_evidence": "Owner decision 3: 'INIT-6 workflow-system spec (WF-2..5, PR #1935): PARKED \u2192 parked'. TODO.md item 24 text matches ('Workflow system WF-0/2/3/4/5 (INIT-6)').",
+    "domain": "docs",
+    "exact_files": [],
+    "verified_anchors": [],
+    "reuse": [],
+    "polarity": "additive",
+    "effort": "L",
+    "tier": "opus",
+    "why_tier": "n/a \u2014 parked",
+    "review_critical": false,
+    "goal": "n/a \u2014 excluded by owner decision 3. Do not brief, despite the referenced implementation plan (docs/plans/2026-07-13-workflow-system-implementation-plan.md) recommending 'build WF-2, defer WF-3/4/5' \u2014 the owner's decision 3 overrides that recommendation and parks the whole initiative.",
+    "background": [],
+    "steps": [],
+    "tests": [],
+    "acceptance": [],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a",
+    "notes": "Flag to the coordinator: the referenced implementation plan disagrees with the owner decision (plan says build WF-2; decision 3 says park all of WF-2..5). Owner decision wins per SCOUT-INSTRUCTIONS, but this conflict is worth a one-line callout to the owner in case decision 3 was made without seeing the plan's WF-2 recommendation."
+  },
+  {
+    "todo_line": 10598,
+    "src_id": "PD-1",
+    "title": "Choose between the two subprocess-isolation RPC design options before briefing",
+    "verdict": "needs_design",
+    "verdict_evidence": "docs/specs/subprocess-isolation-rpc.md is a Draft-status spec (Owner: TBD) explicitly presenting 'Design \u2014 Two viable options' with no decision recorded, and confirms Isolate:false is currently set on the affected ops (grep -rn 'Isolate:.*false' internal/plugins/ finds \u226510 hits across acoustid/itunes/deluge/maintenance plugins)",
+    "domain": "internal/registry",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "Spec status is Draft with owner TBD, presenting two unchosen design options", "grep_cmd": "grep -n \"Status:.*Draft\\|Owner:.*TBD\\|Two viable options\" docs/specs/subprocess-isolation-rpc.md", "expect": "\u22652 hits"},
+      {"claim": "Isolate:false is live on multiple ops today, matching the spec's stated current state", "grep_cmd": "grep -rn \"Isolate:.*false\" internal/plugins/", "expect": "\u226510 hits"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "L",
+    "tier": "opus",
+    "why_tier": "architecture-level decision (parent-mediated RPC vs. the spec's alternative) on a subsystem that already caused two failed rollbacks (#1172, #1181)",
+    "review_critical": true,
+    "goal": "Cannot be briefed: docs/specs/subprocess-isolation-rpc.md itself is unresolved \u2014 it lays out 'Design \u2014 Two viable options' for reintroducing subprocess isolation under PebbleDB's single-writer constraint but does not pick one, and has no assigned Owner. This has already burned two failed production rollbacks (PR #1172, #1181, both reverted) from attempting child-mode PebbleDB access without this design settled. Exact open question: read the spec's 'Design \u2014 Two viable options' section and have the owner pick option A or B (or reject both and keep Isolate:false permanently) before any implementation work is briefed.",
+    "background": [
+      "Multiple ops currently run with Isolate:false (internal/plugins/acoustid/scan.go:28, fingerprint_rescan.go:59, itunes/sync.go:27, acoustid/duration_backfill.go:38, deluge/path_update.go:33, deluge/centralization.go:35, itunes/import.go:24, itunes/path_repair.go:23, itunes/position_sync.go:26, maintenance/integrity_check.go:35 \u2014 the spec's '7 affected ops' count may be stale, this scout found 10 grep hits).",
+      "The spec explicitly states this cannot work as currently designed because PebbleDB enforces single-writer semantics and a child re-exec's pebble.Open(dir) fails with 'resource temporarily unavailable'."
+    ],
+    "steps": ["STOP \u2014 do not write code. Read docs/specs/subprocess-isolation-rpc.md's full 'Design \u2014 Two viable options' section and bring it to the owner for a pick between the two options (or an explicit 'keep Isolate:false' decision)."],
+    "tests": [],
+    "acceptance": ["The spec gains an assigned Owner and a chosen option (or an explicit reject-both decision), recorded in docs/plans/DECISIONS-PENDING.md."],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (docs)",
+    "notes": "grep found 10 Isolate:false hits, not the spec's stated 7 \u2014 worth flagging to the owner that the spec's affected-ops count may be stale and should be recounted as part of any design pass."
+  },
+  {
+    "todo_line": 10603,
+    "src_id": "INIT-7",
+    "title": "Responses-API migration AI-RESP-A/B/E/F (INIT-7) \u2014 parked",
+    "verdict": "parked",
+    "verdict_evidence": "Owner decision 5: 'INIT-7 Responses-API migration (AI-RESP-*): ON HOLD \u2192 parked'. TODO.md item 27 text matches exactly ('Responses-API migration AI-RESP-A/B/E/F (INIT-7)... [hold, do-not-start-without-greenlight]').",
+    "domain": "docs",
+    "exact_files": [],
+    "verified_anchors": [],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "L",
+    "tier": "opus",
+    "why_tier": "n/a \u2014 parked",
+    "review_critical": false,
+    "goal": "n/a \u2014 excluded by owner decision 5. Do not brief.",
+    "background": ["TODO.md item 27 itself already carries a [hold, do-not-start-without-greenlight] marker, and notes AI-RESP-C/D are separately closed (not part of this parked set)."],
+    "steps": [],
+    "tests": [],
+    "acceptance": [],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a",
+    "notes": "Parked by owner decision 5."
+  },
+  {
+    "todo_line": 10608,
+    "src_id": "SLOG-PROD-VERIFY",
+    "title": "Run the SLOG-PROD-VERIFY live prod smoke test",
+    "verdict": "prod_run",
+    "verdict_evidence": "docs/operations/pending-prod-actions.md row 5 lists this as operator-run citing TODO #28, with a runbook at docs/operations/slog-prod-verify.md; the runbook itself (last-edited 2026-08-20) confirms it is a live prod smoke test with concrete commands, not a code task.",
+    "domain": "docs/operations",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "pending-prod-actions.md row 5 marks this operator-run citing TODO #28", "grep_cmd": "grep -n \"SLOG-PROD-VERIFY\" docs/operations/pending-prod-actions.md", "expect": "1 hit ~L29"},
+      {"claim": "the endpoint this verifies is already wired", "grep_cmd": "grep -n \"ListOperationActivity\" internal/server/wire_library_routes.go", "expect": "1 hit ~L39"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "S",
+    "tier": "sonnet",
+    "why_tier": "n/a \u2014 operational smoke test, not code (the endpoint under test is already wired)",
+    "review_critical": false,
+    "goal": "No code deliverable. Follow docs/operations/slog-prod-verify.md's runbook end-to-end on prod: trigger a metadata-fetch (or read-only equivalent) operation, confirm op:<op_id> appears in journalctl, and confirm GET /api/v1/operations/:id/activity returns matching rows.",
+    "background": [
+      "GET /api/v1/operations/:id/activity handler ListOperationActivity is already wired at internal/server/wire_library_routes.go:39 (previously verified by docs/agent-tasks/ux-small-items/TASK-08-slog-prod-verify.md).",
+      "Requires production API credentials scoped for PermLibraryEditMetadata + PermOpsRead/PermOpsList, and access to prod journalctl."
+    ],
+    "steps": [
+      "Follow docs/operations/slog-prod-verify.md's Requirements and verification steps exactly.",
+      "On success, check TODO.md item 28's box with a dated evidence note (opID + row count) per the pattern in docs/agent-tasks/ux-small-items/TASK-08-slog-prod-verify.md:61."
+    ],
+    "tests": ["N/A \u2014 operational verification."],
+    "acceptance": ["TODO.md SLOG-PROD-VERIFY line shows [x] with a dated evidence note citing a real opID and /activity row count."],
+    "edge_cases": ["Use a read-only/low-risk operation (e.g. a scan-duration-mismatch job) to avoid any prod mutation risk during the smoke test, per the TASK-08 brief's own guidance."],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (ops)",
+    "notes": "A near-identical prior task (TASK-08) already documents this exact runbook and even the exact TODO.md checkoff wording to use \u2014 close to done, just needs someone to actually execute it against current prod."
+  },
+  {
+    "todo_line": 10610,
+    "src_id": "SLOG-W13",
+    "title": "Close out SLOG-W13 \u2014 sweep already merged, residual is legitimately out of scope",
+    "verdict": "stale_done",
+    "verdict_evidence": "git log shows the SLOG-W13 sweep already merged across multiple commits (3503ece9, f593e29f, bf97794d, 0267a3f2, 7f5c28f1); TODO item 29's own text concedes the ~1,346 remaining raw calls are 'enumerated out-of-scope (no-ctx funcs, lifecycle, background)' \u2014 i.e. deliberately not targeted by the sweep, not a gap in it.",
+    "domain": "internal/logging",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "SLOG-W13 sweep commits are merged on this branch", "grep_cmd": "git log --oneline --all --grep=\"SLOG-W13\"", "expect": "\u22655 hits"}
+    ],
+    "reuse": [],
+    "polarity": "additive",
+    "effort": "S",
+    "tier": "haiku",
+    "why_tier": "just checking the TODO box + appending a scope note, no code change",
+    "review_critical": false,
+    "goal": "Check TODO.md item 29's box and append the residual scope note it already asks for ('candidate to CLOSE with a scope note') rather than briefing further code work \u2014 the sweep itself is done; the remaining ~1,346 raw slog calls are outside its own declared in-scope test (code inside op-context flows reachable below logging.WithOp) per docs/agent-tasks/ux-small-items/TASK-07-slog-w13-sweep.md:32.",
+    "background": [
+      "TASK-07-slog-w13-sweep.md:32 states the in/out-of-scope test precisely: 'priority = code inside op-context flows... code outside ops (startup, background goroutines) can STAY raw slog.'",
+      "5 SLOG-W13-tagged commits are already on main, per `git log --oneline --all | grep -i slog-w13`."
+    ],
+    "steps": [
+      "Check TODO.md item 29's box.",
+      "Append the residual count breakdown (no-ctx funcs / lifecycle / background) with today's date, per the TASK-07 brief's own closing-note pattern (TASK-07-slog-w13-sweep.md:54)."
+    ],
+    "tests": ["N/A \u2014 doc-only change."],
+    "acceptance": ["grep -n 'SLOG-W13' TODO.md shows the item [x] with a dated residual-count note."],
+    "edge_cases": ["N/A"],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (docs)",
+    "notes": "N/A"
+  },
+  {
+    "todo_line": 10613,
+    "src_id": "SEC-AUDIT-11",
+    "title": "Re-verify current CodeQL open-alert state and finalize the bulk-dismissal rationale action",
+    "verdict": "prod_run",
+    "verdict_evidence": "docs/security/audit-2026-05-03/sec-audit-11-closeout.md (last-edited 2026-06-01) narrates the CodeQL dashboard dismissals as already applied, but this is a GitHub-console/API action outside the repo's own code \u2014 per TODO item 30's framing ('GitHub-console action') and an earlier archive note (2026-07-01) that still described the console action as pending, this needs a fresh live re-verification, not a code change.",
+    "domain": "docs/security",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "The closeout doc claims dismissals were applied on the CodeQL dashboard as of 2026-06-01", "grep_cmd": "grep -n \"Every new alert now has a dismissal comment\" docs/security/audit-2026-05-03/sec-audit-11-closeout.md", "expect": "1 hit"},
+      {"claim": "An earlier archive note (2026-07-01) still described the console action as pending", "grep_cmd": "grep -n \"SEC-AUDIT-11\" docs/archive/todo-2026-H1.md", "expect": "1 hit ~L2315, dated 2026-07-01 comment says 'actual CodeQL alert dismissal is a GitHub-console action'"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "S",
+    "tier": "sonnet",
+    "why_tier": "n/a \u2014 GitHub-console/API verification, not code",
+    "review_critical": false,
+    "goal": "No code deliverable. There is a discrepancy between the 2026-06-01 closeout doc (claims dismissals already applied) and a 2026-07-01 archive note (still describes the console action as pending) \u2014 re-run `gh api repos/jdfalk/audiobook-organizer/code-scanning/alerts?state=open&per_page=100 --paginate` to get the current live open-alert count, compare it against the closeout doc's 492-alert baseline, and either confirm the rationale comments are genuinely present on the GitHub dashboard or apply them now via the closeout doc's own documented `gh api -X PATCH` pattern.",
+    "background": [
+      "docs/security/audit-2026-05-03/sec-audit-11-closeout.md fully documents the intended dismissal rationale text per category (path-injection, log-injection, other) and claims completion.",
+      "docs/archive/superpowers/fleet-done/tasks/012-sec-11-final-verification.md gives the exact gh api commands to re-pull and verify counts."
+    ],
+    "steps": [
+      "Run `gh api \"repos/jdfalk/audiobook-organizer/code-scanning/alerts?state=open&per_page=100\" --paginate | jq '[.[] | select(.state==\"open\")] | length'` and compare to the closeout doc's 492 baseline.",
+      "Spot-check a sample of open alerts via the GitHub UI/API to confirm they carry the documented accepted-risk/false-positive dismissal comments referenced in the closeout doc.",
+      "If any lack the rationale comment, apply it via `gh api -X PATCH .../code-scanning/alerts/<N> --field state=dismissed --field dismissed_reason=... --field dismissed_comment=...` per the closeout doc's own template.",
+      "Record the fresh verification date and count in the closeout doc."
+    ],
+    "tests": ["N/A \u2014 operational verification."],
+    "acceptance": ["TODO.md item 30 checked off with a dated note citing the fresh alert count and confirmation that rationale comments are live on GitHub."],
+    "edge_cases": ["If the open-alert count has grown significantly since 2026-06-01 (new code since then), that's a signal this needs re-scoping, not just a re-dismissal pass \u2014 flag to the owner rather than blindly dismissing new alerts."],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (ops)",
+    "notes": "There's a real discrepancy between the closeout doc's completion claim and the archive's still-pending note \u2014 worth flagging explicitly rather than assuming either is current."
+  },
+  {
+    "todo_line": 10615,
+    "src_id": "PD-3",
+    "title": "Run the PD-3 post-deploy verification checklist against a live deploy",
+    "verdict": "prod_run",
+    "verdict_evidence": "docs/operations/pending-prod-actions.md row 6 lists this as operator-run citing TODO #31, and docs/pd3-prod-verification.md's own scope table + 4 verification-step sections confirm it is a manual UI/prod checklist with zero code deliverable.",
+    "domain": "docs/operations",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "pending-prod-actions.md row 6 marks this operator-run citing TODO #31", "grep_cmd": "grep -n \"PD-3 post-deploy checklist\" docs/operations/pending-prod-actions.md", "expect": "1 hit ~L30"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "S",
+    "tier": "sonnet",
+    "why_tier": "n/a \u2014 manual UI verification against live prod, not code",
+    "review_critical": false,
+    "goal": "No code deliverable. After the next `make deploy`, run through docs/pd3-prod-verification.md's 4-item checklist (fingerprint rescan from UI, operation-log Copy+Refresh+pause-on-hover, RSS \u226440GB post-I2-I5, chromem NewDB hydration not regressing dedup recall) against the live prod deploy and record results in the same file.",
+    "background": ["The checklist document exists and is fully written (4 scoped items with step-by-step verification instructions) but has never been executed/filled in per TODO item 31's own text."],
+    "steps": [
+      "Operator: after the next make deploy, follow docs/pd3-prod-verification.md's 4 verification-step sections in order.",
+      "Record pass/fail + observed values for each of the 4 scope items directly in the checklist file (append a dated Results section)."
+    ],
+    "tests": ["N/A \u2014 operational verification."],
+    "acceptance": ["docs/pd3-prod-verification.md has a dated Results section with pass/fail for all 4 items."],
+    "edge_cases": ["If RSS exceeds the 40GB target, this becomes a new bug/regression to file, not just a checklist failure \u2014 flag it explicitly."],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (ops)",
+    "notes": "N/A"
+  },
+  {
+    "todo_line": 10617,
+    "src_id": "I1+I6",
+    "title": "Run I1+I6 prod pprof verification (chromem-lazy effect + heap re-audit)",
+    "verdict": "prod_run",
+    "verdict_evidence": "docs/operations/pending-prod-actions.md row 7 explicitly lists 'I1 + I6 prod pprof' as operator-run citing TODO #32, described as 'Measurement-only: verify chromem-lazy memory effect and re-audit heap breakdown on prod' via go tool pprof against the prod pprof endpoint, compared to docs/perf-audit-2026-05-29-heap-breakdown.md \u2014 no code deliverable, DEDUP_CHROMEM_LAZY is already shipped.",
+    "domain": "docs/operations",
+    "exact_files": [],
+    "verified_anchors": [
+      {"claim": "pending-prod-actions.md row 7 marks this operator-run citing TODO #32", "grep_cmd": "grep -n \"I1 + I6 prod pprof\" docs/operations/pending-prod-actions.md", "expect": "1 hit ~L31"},
+      {"claim": "DEDUP_CHROMEM_LAZY code is already shipped, only the prod measurement remains", "grep_cmd": "grep -n \"DEDUP_CHROMEM_LAZY\" docs/archive/todo-2026-H1.md", "expect": "1 hit ~L1563"}
+    ],
+    "reuse": [],
+    "polarity": "transform",
+    "effort": "S",
+    "tier": "sonnet",
+    "why_tier": "n/a \u2014 pprof measurement against live prod, not code",
+    "review_critical": false,
+    "goal": "No code deliverable. Run `go tool pprof` against the prod pprof endpoint to (1) verify DEDUP_CHROMEM_LAZY's memory effect, and (2) re-audit the heap breakdown, comparing results against docs/perf-audit-2026-05-29-heap-breakdown.md's prior baseline.",
+    "background": [
+      "DEDUP_CHROMEM_LAZY (D1) and D2 code already shipped per docs/archive/todo-2026-H1.md:1563 (lifecycle.go:48); only the prod pprof verification remains.",
+      "I6 is a duplicate-tracked heap-audit-rerun, closed as a dupe of I1 per docs/archive/todo-2026-H1.md:1638/1643 \u2014 track under I1/I6 combined as this scope's item already does."
+    ],
+    "steps": [
+      "Operator: connect to prod's pprof endpoint (check internal/server for how it's exposed/gated, likely behind auth) and capture a heap profile.",
+      "Compare against docs/perf-audit-2026-05-29-heap-breakdown.md's baseline breakdown.",
+      "Record the chromem-lazy memory delta and updated heap breakdown in a new dated doc or an update to the existing perf-audit doc."
+    ],
+    "tests": ["N/A \u2014 operational measurement."],
+    "acceptance": ["A new dated heap-breakdown doc (or an update to docs/perf-audit-2026-05-29-heap-breakdown.md) records the post-chromem-lazy measurement."],
+    "edge_cases": [],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "n/a (ops)",
+    "notes": "N/A"
+  }
+]

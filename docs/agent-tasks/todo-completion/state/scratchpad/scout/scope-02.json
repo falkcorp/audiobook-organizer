@@ -1,0 +1,991 @@
+[
+{
+ "todo_line": 534, "src_id": null, "title": "Run maintenance.booksig-sidecar-migrate on production (add pending-prod-actions.md entry)",
+ "verdict": "prod_run",
+ "verdict_evidence": "Op is merged and dry-run gated: grep -n 'ID: *\"maintenance.booksig-sidecar-migrate\"' internal/plugins/maintenance/booksig_sidecar_migrate.go -> 1 hit L72. No code deliverable remains -- this is an irreversible production data migration the TODO itself says 'needs an owner decision, not a scheduled run'. Not yet tracked in docs/operations/pending-prod-actions.md: grep -n 'booksig-sidecar-migrate' docs/operations/pending-prod-actions.md -> 0 hits.",
+ "domain": "docs",
+ "exact_files": ["docs/operations/pending-prod-actions.md"],
+ "verified_anchors": [
+   {"claim": "op maintenance.booksig-sidecar-migrate exists and is merged", "grep_cmd": "grep -n 'ID:          \"maintenance.booksig-sidecar-migrate\"' internal/plugins/maintenance/booksig_sidecar_migrate.go", "expect": "1 hit L72"},
+   {"claim": "op is not yet listed in the prod-actions queue", "grep_cmd": "grep -n 'booksig-sidecar-migrate' docs/operations/pending-prod-actions.md", "expect": "0 hits"}
+ ],
+ "reuse": [{"name": "pending-prod-actions.md table format", "file": "docs/operations/pending-prod-actions.md", "verify_grep": "grep -n '| # | Action |' docs/operations/pending-prod-actions.md"}],
+ "polarity": "additive",
+ "effort": "S", "tier": "haiku", "why_tier": "pure doc edit: add one table row with the 6-step procedure already fully specified in TODO.md L534-L65",
+ "review_critical": true,
+ "goal": "Add a human-decision row to docs/operations/pending-prod-actions.md for maintenance.booksig-sidecar-migrate, transcribing the 6-step ordered procedure (dry run -> instrument cross-check against ~580MB/~27,000 candidates -> canary apply limit:100 -> full apply expecting >1 pass -> verify phase_mb[books] actually drops from 729 -> re-run dry-run expecting ~0 candidates) and the rollback note (fallback-first reads, pre-migration book_ver: snapshots retain the inline copy) from the TODO item verbatim, so an operator can execute it without re-reading TODO.md.",
+ "background": [
+   "internal/plugins/maintenance/booksig_sidecar_migrate.go:22 header: 'maintenance.booksig-sidecar-migrate finishes the job PR #2387 started.'",
+   "internal/plugins/maintenance/booksig_sidecar_migrate.go:109 uses p.deps.OpsStore(), consistent with every other maintenance op.",
+   "docs/operations/pending-prod-actions.md already has the exact table shape and a 'human-decision' gating class for irreversible ops (row 1/2 examples)."
+ ],
+ "steps": [
+   "1. Open docs/operations/pending-prod-actions.md.",
+   "2. Add a new row to the table (after the last numbered row) with: Action='booksig-sidecar-migrate rollout', What/why='Move the inline book_sig_v1 signature (~580MB/startup) into its book_sig:<id> sidecar; irreversible row rewrite, not lossy (book_ver: snapshots retain the inline copy)', Op/command shape='def-id maintenance.booksig-sidecar-migrate; dry run -> instrument cross-check (~580MB/~27,000 candidates) -> canary {dryRun:false,limit:100} verified via GetBookByID pairing -> full apply {dryRun:false} (expect >1 pass) -> verify phase_mb[books] drops from 729 -> re-run dry-run expecting ~0 candidates', Gating='human-decision (irreversible row rewrite)', Source='TODO.md L534'.",
+   "3. Bump the file's version header and last-edited date per file-headers.md."
+ ],
+ "tests": ["n/a -- documentation only, no test to run"],
+ "acceptance": ["grep -n 'booksig-sidecar-migrate' docs/operations/pending-prod-actions.md returns >=1 hit after the edit"],
+ "edge_cases": ["None -- this is a transcription task, not a design decision."],
+ "anti_over_suppression": "N/A",
+ "depends_on_lines": [],
+ "gate": "n/a (docs)",
+ "notes": "Not covered by owner decision #14's named list (E08/ABS/chapters-backfill) but the same 'never auto-run, log to pending-prod-actions.md' policy self-evidently applies -- it is the standing rule stated at the top of decision #14, not scoped to only those three ops."
+},
+{
+ "todo_line": 595, "src_id": null, "title": "Run maintenance.chapters-backfill against production (add pending-prod-actions.md entry)",
+ "verdict": "prod_run",
+ "verdict_evidence": "Op exists, dry-run by default, never run on prod. grep -n 'ID: *\"maintenance.chapters-backfill\"' internal/plugins/maintenance/chapters_backfill.go -> 1 hit L176. Explicitly covered by owner decision #14: 'chapters backfill E02: BUILD the code [already done]; every PROD RUN goes to docs/operations/pending-prod-actions.md as prod_run'. Not yet listed: grep -n 'chapters-backfill' docs/operations/pending-prod-actions.md -> 0 hits.",
+ "domain": "docs",
+ "exact_files": ["docs/operations/pending-prod-actions.md"],
+ "verified_anchors": [
+   {"claim": "op maintenance.chapters-backfill exists, DRY RUN BY DEFAULT", "grep_cmd": "grep -n 'ID:          \"maintenance.chapters-backfill\"' internal/plugins/maintenance/chapters_backfill.go", "expect": "1 hit L176"},
+   {"claim": "not yet queued for production", "grep_cmd": "grep -n 'chapters-backfill' docs/operations/pending-prod-actions.md", "expect": "0 hits"}
+ ],
+ "reuse": [{"name": "pending-prod-actions.md table format", "file": "docs/operations/pending-prod-actions.md", "verify_grep": "grep -n '| # | Action |' docs/operations/pending-prod-actions.md"}],
+ "polarity": "additive",
+ "effort": "S", "tier": "haiku", "why_tier": "pure doc edit transcribing the 3-step sequence already given in TODO.md L595-L79",
+ "review_critical": true,
+ "goal": "Add a row to docs/operations/pending-prod-actions.md documenting the 3-step chapters-backfill rollout: (1) dry run over the static playlist 'job (chapter-backfill test cohort)' id 01KZXMN8F8ZEXVQQPZ2SF74T0A (77 books, 58 single-file) via {bookIds:[...]}; (2) apply over that cohort and verify against the ffprobe oracle (Deadly Jobs=231 chapters, The Icarus Job=28, The Colchis Job=20, two markerless files stay at synthesized single chapter); (3) whole-library apply, expecting ~14,600 single-file candidates, about half with markers.",
+ "background": [
+   "internal/plugins/maintenance/chapters_backfill.go:62-63: 'DRY RUN BY DEFAULT, matching probe_directory_books.go: nothing is written unless the caller passes {\"apply\": true}.'",
+   "chapters_backfill.go:23-29 documents the production measurement (500 ABS items, 213 single-file >10,000s all reporting exactly 1 chapter) that motivates the op."
+ ],
+ "steps": [
+   "1. Open docs/operations/pending-prod-actions.md.",
+   "2. Add a row: Action='chapters-backfill rollout', What/why='Extract embedded chapter markers for single-file books predating 2026-07-30 so ABS stops synthesizing one chapter for the whole container', Op/command shape='def-id maintenance.chapters-backfill; (1) dry run over playlist 01KZXMN8F8ZEXVQQPZ2SF74T0A via {bookIds:[...]}; (2) apply over that cohort, verify Deadly Jobs=231 / The Icarus Job=28 / The Colchis Job=20 chapters via ffprobe oracle, and the two markerless files stay single-chapter; (3) whole-library apply (~14,600 candidates)', Gating='operator-run (idempotent, ResumeRestart, 24h timeout)', Source='TODO.md L595'.",
+   "3. Bump the file's version header and last-edited date."
+ ],
+ "tests": ["n/a -- documentation only"],
+ "acceptance": ["grep -n 'chapters-backfill' docs/operations/pending-prod-actions.md returns >=1 hit"],
+ "edge_cases": ["None."],
+ "anti_over_suppression": "N/A",
+ "depends_on_lines": [606],
+ "gate": "n/a (docs)",
+ "notes": "Depends on L606 (freshness stamp) only if a Schedule is later added to this op -- the op's own header (chapters_backfill.go:40-52) says explicitly to wire the freshness stamp FIRST before ever scheduling it. The one-off manual runs described here do not require L606."
+},
+{
+ "todo_line": 606, "src_id": null, "title": "Wire a durable freshness stamp for maintenance.chapters-backfill before it is ever scheduled",
+ "verdict": "actionable",
+ "verdict_evidence": "internal/operations/freshness/freshness.go provides Stamp/StampBatch/ClearStamps (freshness.go:97,102,119) but has zero non-test callers: grep -rln 'freshness.Stamp\\|freshness.ClearStamps' --include=*.go . | grep -v _test -> 0 hits. chapters_backfill.go:46-47 itself documents the gap: 'the only durable marker available is internal/operations/freshness, which today has ZERO non-test callers and would need a new ServerDeps accessor plus server wiring to reach an op.'",
+ "domain": "internal/plugins/maintenance",
+ "exact_files": [
+   "internal/plugins/maintenance/deps.go",
+   "internal/server/server_maintenance_deps.go",
+   "internal/plugins/maintenance/chapters_backfill.go"
+ ],
+ "verified_anchors": [
+   {"claim": "freshness.Stamp/ClearStamps exist with zero non-test callers", "grep_cmd": "grep -rln \"freshness.Stamp\\|freshness.ClearStamps\" --include=*.go . | grep -v _test", "expect": "0 hits"},
+   {"claim": "StoreProvider is the accessor-composition pattern to extend", "grep_cmd": "grep -n 'type StoreProvider interface' internal/plugins/maintenance/deps.go", "expect": "1 hit"},
+   {"claim": "ServerDeps composes StoreProvider among 14 interfaces", "grep_cmd": "grep -n 'StoreProvider' internal/plugins/maintenance/deps.go", "expect": ">=2 hits"},
+   {"claim": "server implements the accessor pattern via s.store-backed methods", "grep_cmd": "grep -n 'func (s \\*Server) FileProvenanceStore' internal/server/server_maintenance_deps.go", "expect": "1 hit ~L67"},
+   {"claim": "PebbleStore exposes the raw *pebble.DB handle needed to construct NewPebbleFreshness", "grep_cmd": "grep -n 'func (p \\*PebbleStore) DB() \\*pebble.DB' internal/database/pebble_store.go", "expect": "1 hit L426"},
+   {"claim": "the regression test pinning current re-probe behaviour", "grep_cmd": "grep -n 'func TestChaptersBackfill_NoMarkers_WritesNothingAndReprobes' internal/plugins/maintenance/chapters_backfill_test.go", "expect": "1 hit L258"}
+ ],
+ "reuse": [
+   {"name": "freshness.NewPebbleFreshness / OpFreshness interface", "file": "internal/operations/freshness/freshness.go", "verify_grep": "grep -n 'func NewPebbleFreshness' internal/operations/freshness/freshness.go"},
+   {"name": "StoreProvider accessor pattern (OpsStore/ReconcileStore/PlaylistStore/MetadataCacheStore/FileProvenanceStore)", "file": "internal/plugins/maintenance/deps.go", "verify_grep": "grep -n 'type StoreProvider interface' internal/plugins/maintenance/deps.go"},
+   {"name": "FileProvenanceStore nil-on-not-implemented accessor pattern to mirror", "file": "internal/server/server_maintenance_deps.go", "verify_grep": "grep -n 'func (s \\*Server) FileProvenanceStore' internal/server/server_maintenance_deps.go"}
+ ],
+ "polarity": "additive",
+ "effort": "M", "tier": "sonnet", "why_tier": "touches 3 files across 2 packages (plugin interface, server wiring, op logic) and must not break the ServerDeps compile-time assertion; needs care around where the *pebble.DB handle is available at server construction time",
+ "review_critical": false,
+ "goal": "Add a FreshnessStamper accessor to maintenance.StoreProvider (returning freshness.OpFreshness), implement it on *server.Server backed by a freshness.NewPebbleFreshness constructed once from s.store's *pebble.DB handle, and call Stamp/ShouldProcess from runChaptersBackfill so a 'probed, found none' result is durably distinguishable from 'never examined' -- this is a PREREQUISITE for ever adding a Schedule to this op, not a change to the op's current manual-trigger behavior.",
+ "background": [
+   "chapters_backfill.go:40-52 (header comment) states the bug precisely: SaveChaptersForBook deletes its key on an empty slice (pebble_store_chapters.go:63), so 'no markers found' and 'never examined' are byte-identical, and every manual run re-ffprobes ~half of single-file containers.",
+   "TestChaptersBackfill_NoMarkers_WritesNothingAndReprobes (chapters_backfill_test.go:258) pins the CURRENT (buggy-for-scheduling) behaviour and is expected to need updating once the stamp lands.",
+   "StoreProvider's five existing accessors (deps.go: OpsStore, ReconcileStore, PlaylistStore, MetadataCacheStore, FileProvenanceStore) are each implemented on *server.Server in server_maintenance_deps.go by returning s.store, or (for FileProvenanceStore) via a database.AsCapability-style type assertion returning nil when unimplemented.",
+   "database.PebbleStore.DB() (pebble_store.go:426) returns the raw *pebble.DB handle freshness.NewPebbleFreshness needs."
+ ],
+ "steps": [
+   "1. In internal/database/tag_helpers.go-style narrow-interface fashion, add `type FreshnessStamper interface { Freshness() freshness.OpFreshness }` inside internal/plugins/maintenance/deps.go (import github.com/falkcorp/audiobook-organizer/internal/operations/freshness), grouped near StoreProvider.",
+   "2. Add `Freshness() freshness.OpFreshness` as a new method on StoreProvider (or embed the new interface into ServerDeps directly next to StoreProvider -- either is consistent with the existing 14-interface composition style at deps.go's ServerDeps block).",
+   "3. In internal/server/server_maintenance_deps.go, add `func (s *Server) Freshness() freshness.OpFreshness { return s.freshness }` where s.freshness is a new *freshness.PebbleFreshness field on *Server, constructed once during server init as `freshness.NewPebbleFreshness(pebbleStore.DB())` -- find the server struct/constructor (grep 'type Server struct' in internal/server/server.go) and the point where s.store is assigned a *database.PebbleStore, and construct s.freshness there, guarding for store implementations that are not *database.PebbleStore (nil freshness, same pattern as FileProvenanceStore).",
+   "4. In internal/plugins/maintenance/chapters_backfill.go's runChaptersBackfill, before the per-book RunItems closure, fetch `fresh := p.deps.Freshness()`. Inside the closure, when a probe finds < minPersistableChapters (no markers), call `if fresh != nil { _ = fresh.Stamp(\"chapters-backfill\", id) }` after incrementing c.noChapters, instead of silently returning.",
+   "5. Add a ShouldProcess check near the top of the per-book closure: `if fresh != nil && !fresh.ShouldProcess(\"chapters-backfill\", id, freshnessMaxAge, false) { c.skipHasStored.Add(1); return nil }` where freshnessMaxAge is a new const (e.g. 30*24*time.Hour) -- this only matters once/if Schedule is set; for a manual dry/apply run force=true should be threaded from params so an explicit re-run still re-probes everything (add `Force bool json:\"force\"` to chaptersBackfillParams).",
+   "6. Update TestChaptersBackfill_NoMarkers_WritesNothingAndReprobes (chapters_backfill_test.go:258) to reflect the new behaviour: a fresh stamp now exists after a no-markers probe, and re-probing without force must SKIP via ShouldProcess -- add a companion test proving force=true still re-probes."
+ ],
+ "tests": [
+   "internal/plugins/maintenance/chapters_backfill_test.go: update TestChaptersBackfill_NoMarkers_WritesNothingAndReprobes to assert a freshness stamp is written for a no-markers book and NOT re-probed on a second run without force.",
+   "New test TestChaptersBackfill_Force_ReprobesDespiteFreshStamp: seed a fresh stamp, run with params.Force=true, assert the book WAS re-probed (this is the anti-over-suppression test)."
+ ],
+ "acceptance": [
+   "go build ./... succeeds with the new Freshness() method on ServerDeps and *Server.",
+   "go test ./internal/plugins/maintenance/... -run TestChaptersBackfill passes.",
+   "grep -n 'freshness.Stamp\\|freshness.ShouldProcess' internal/plugins/maintenance/chapters_backfill.go returns >=2 hits after the change."
+ ],
+ "edge_cases": [
+   "s.store is not a *database.PebbleStore (e.g. a test double / memdb store): Freshness() must return nil, and callers must nil-check exactly like FileProvenanceStore does -- never panic.",
+   "A book stamped 'no markers' later gains embedded markers via a file replace: the ShouldProcess maxAge window (not force) is what re-examines it eventually; document this trade-off in a comment the way the op's header already documents the re-probe cost."
+ ],
+ "anti_over_suppression": "TestChaptersBackfill_Force_ReprobesDespiteFreshStamp -- proves a fresh stamp does not permanently suppress re-probing when the caller explicitly asks.",
+ "depends_on_lines": [],
+ "gate": "make ci",
+ "notes": "This is explicitly a PREREQUISITE, not a request to add Schedule to the op -- chapters_backfill.go:49-52 says schedule-adding is a separate, larger decision ('If this op is ever given a Schedule, wire the freshness stamp FIRST'). Do not add sdk.Schedule in this change."
+},
+{
+ "todo_line": 618, "src_id": null, "title": "Index track names on BookDocument so smart playlists can match them",
+ "verdict": "actionable",
+ "verdict_evidence": "BookDocument (internal/search/document.go:19) has no track-name field: grep -n 'TrackNames' internal/search/document.go -> 0 hits. Confirmed missing end-to-end: grep -n 'Title\\|Author\\|Narrator\\|Series\\|Publisher\\|Description\\|FilePath' internal/search/document.go lists only book-level analyzed fields (document.go:22-29).",
+ "domain": "internal/search",
+ "exact_files": [
+   "internal/search/document.go",
+   "internal/search/bleve_index.go",
+   "internal/search/index_builder.go"
+ ],
+ "verified_anchors": [
+   {"claim": "BookDocument has no TrackNames field", "grep_cmd": "grep -n 'TrackNames' internal/search/document.go", "expect": "0 hits"},
+   {"claim": "bookIndexMapping registers each analyzed text field individually", "grep_cmd": "grep -n 'book.AddFieldMappingsAt' internal/search/bleve_index.go", "expect": ">=15 hits"},
+   {"claim": "indexBuilderStore is the narrow 4-method probe-derived interface BookToDoc uses", "grep_cmd": "grep -n 'type indexBuilderStore interface' internal/search/index_builder.go", "expect": "1 hit L23"},
+   {"claim": "GetBookFiles(bookID) exists on the database and returns Title+FilePath per file", "grep_cmd": "grep -n 'GetBookFiles(bookID string) (\\[\\]BookFile, error)' internal/database/iface_bookfile.go", "expect": "1 hit L20"},
+   {"claim": "bookMappingVersion gates whether the on-disk index is rebuilt", "grep_cmd": "grep -n 'const bookMappingVersion' internal/search/bleve_index.go", "expect": "1 hit L94, currently \"2\""}
+ ],
+ "reuse": [
+   {"name": "textAnalyzed() field-mapping helper", "file": "internal/search/bleve_index.go", "verify_grep": "grep -n 'textAnalyzed := func' internal/search/bleve_index.go"},
+   {"name": "keyword field-mapping helper (for exact multi-value match, alternative to analyzed text)", "file": "internal/search/bleve_index.go", "verify_grep": "grep -n 'keyword := func' internal/search/bleve_index.go"},
+   {"name": "database.BookFile.Title / .FilePath fields", "file": "internal/database/store.go", "verify_grep": "grep -n 'Title *string' internal/database/store.go"}
+ ],
+ "polarity": "additive",
+ "effort": "M", "tier": "sonnet", "why_tier": "touches the index schema (mapping-version bump forces a full library reindex on next restart), a probe-derived narrow interface, and query-time field weighting -- needs care to keep interfacebloat-style narrowness",
+ "review_critical": false,
+ "goal": "Add a `TrackNames []string` field to BookDocument, register it as an analyzed multi-value text field in bookIndexMapping, populate it in BookToDoc from each book's BookFile.Title (falling back to the file's base name when Title is empty, mirroring loadChapters' own Title/Filename fallback in mapper.go:258-260), and bump bookMappingVersion so every deployed index is rebuilt to pick it up -- so a smart playlist / free-text search for a track name like 'Job' matches the book that contains it.",
+ "background": [
+   "document.go:19-29: BookDocument today carries only book-level fields (title, author, narrator, series, publisher, description, file_path); no per-track data.",
+   "index_builder.go:23-28 indexBuilderStore has exactly 4 methods (GetBookByID, GetAuthorByID, GetSeriesByID, GetBookTags) -- adding GetBookFiles(bookID) is a 5th narrow addition, still well under interfacebloat limits.",
+   "mapper.go:256-264 already has the exact Title-vs-Filename fallback logic to mirror when building track names.",
+   "bleve_index.go:94 bookMappingVersion=\"2\" is the mechanism that forces Open() to delete and recreate the on-disk index (bleve_index.go:105-138) when the mapping changes; NOT bumping it means the new field is silently invisible on already-deployed indexes."
+ ],
+ "steps": [
+   "1. internal/search/document.go: add `TrackNames []string json:\"track_names,omitempty\"` to BookDocument, near the existing Tags []string field (document.go:33-35), with a doc comment describing it as analyzed multi-value text (one entry per BookFile.Title, or filepath.Base(FilePath) when Title is empty).",
+   "2. internal/search/bleve_index.go: inside bookIndexMapping(), add `trackNames := textAnalyzed()` and `book.AddFieldMappingsAt(\"track_names\", trackNames)` near the existing tags/keyword registrations (bleve_index.go ~505-510). Add \"track_names\" to textFieldBoosts (bleve_index.go:427-433) with a modest boost (e.g. 1.0, same as publisher) so it participates in free-text search without dominating title matches.",
+   "3. internal/search/bleve_index.go: bump `const bookMappingVersion = \"2\"` to `\"3\"` (line 94).",
+   "4. internal/search/index_builder.go: add `GetBookFiles(bookID string) ([]database.BookFile, error)` to indexBuilderStore (index_builder.go:23-28).",
+   "5. internal/search/index_builder.go: inside BookToDoc, after the existing field population, call `store.GetBookFiles(book.ID)` and build `doc.TrackNames` as one entry per file: `f.Title` if non-empty else `filepath.Base(f.FilePath)`. Add `\"path/filepath\"` to imports. Treat a GetBookFiles error as best-effort (log/skip), matching the file's existing 'silently skipped' doc comment (index_builder.go:82).",
+   "6. Verify every caller of indexBuilderStore / BookToDoc's Store argument (server_search.go:87, server_search.go:115, search_coverage_test.go) is *database.PebbleStore or database.Store, which already implement GetBookFiles -- confirm with `grep -n 'GetBookFiles' internal/database/pebble_store_bookfiles.go`."
+ ],
+ "tests": [
+   "internal/search/index_builder_test.go (or new): TestBookToDoc_PopulatesTrackNames -- a book with 2 BookFiles (one with Title set, one with empty Title) yields doc.TrackNames with the Title for the first and filepath.Base for the second.",
+   "internal/search/bleve_index_test.go (or new): TestSearch_MatchesOnTrackName -- index a book whose title/author/narrator do NOT contain 'Job' but one BookFile.Title == 'Job'; a free-text search for 'job' must return that book.",
+   "internal/search/mapping_version_test.go: existing test pattern (readMappingMarker) should be exercised to confirm a v2 on-disk index gets recreated when bookMappingVersion becomes \"3\"."
+ ],
+ "acceptance": [
+   "go test ./internal/search/... passes.",
+   "grep -n 'TrackNames' internal/search/document.go returns 1 hit.",
+   "grep -n 'bookMappingVersion = \"3\"' internal/search/bleve_index.go returns 1 hit."
+ ],
+ "edge_cases": [
+   "Book with zero BookFile rows (ebook-only or fully missing files): TrackNames stays nil/empty, no panic.",
+   "GetBookFiles error (deleted book mid-index-build): BookToDoc must not fail the whole document build -- log and continue with TrackNames unset, matching the file's existing best-effort policy.",
+   "A single-file book whose one file's Title equals the book Title exactly: acceptable duplication in the index, not a bug -- do not de-dup against doc.Title."
+ ],
+ "anti_over_suppression": "N/A -- this is additive indexing, not a filter/guard.",
+ "depends_on_lines": [],
+ "gate": "make ci",
+ "notes": "Bumping bookMappingVersion forces every deployed index to rebuild on next restart (bleve_index.go:122-125 logs a warning and the reconciler drains the dirty set) -- call this out explicitly in the PR description since it is a one-time cost on the production instance, not a bug."
+},
+{
+ "todo_line": 629, "src_id": null, "title": "Decide the detection heuristic for per-chapter split files mis-registered as standalone books",
+ "verdict": "needs_design",
+ "verdict_evidence": "No detector or heuristic exists in the codebase: grep -rn 'per-chapter\\|split.*fragment\\|97e56ed2' --include=*.go . -> 0 hits outside TODO.md. The TODO item is itself only a single hand-found example (book 97e56ed2, a 463s fragment) with no stated rule for what distinguishes a genuine short standalone book from a mis-grouped chapter fragment (duration threshold? filename pattern like a leading track number? sibling-file heuristic within the same folder?). None of the 14 owner decisions address this population.",
+ "domain": "(unresolved)",
+ "exact_files": [],
+ "verified_anchors": [
+   {"claim": "no existing detector references this population", "grep_cmd": "grep -rln '97e56ed2\\|Angel in the Whirlwind' --include=*.go --include=*.md .", "expect": "1 hit, TODO.md only"}
+ ],
+ "reuse": [],
+ "polarity": "additive",
+ "effort": "S", "tier": "opus", "why_tier": "the blocking work is a design decision (what heuristic), not code -- an opus-tier decision writeup, not implementation",
+ "review_critical": false,
+ "goal": "Before any code is written, decide the detection rule for a per-chapter-split-file mis-registered as a standalone book: candidates include (a) duration below some threshold combined with a filename matching a leading track/chapter number pattern (e.g. '01 <Title> - N - <chunk>.m4b'), (b) sibling files in the same source folder sharing a common title stem, or (c) a fingerprint/AcoustID match against a longer sibling book. Each has different false-positive risk against genuinely short standalone audiobooks (novellas, short stories).",
+ "background": [
+   "TODO.md L630-632 (item context): while probing, book 97e56ed2 turned out to be a 463s fragment ('01 Angel in the Whirlwind - 1 - The.m4b') registered as a standalone book; several sampled 'single-file' books share the same mis-grouping.",
+   "The item explicitly says this is 'unrelated to chapter extraction -- those files genuinely have no markers' -- i.e. it is a book-grouping/import bug, not a chapters-backfill bug, even though it surfaced during that op's cohort probing."
+ ],
+ "steps": [
+   "1. Present the three candidate heuristics (filename-pattern, sibling-folder, fingerprint-match) with estimated false-positive risk to the owner, referencing 97e56ed2 as the seed example.",
+   "2. Once a heuristic is chosen, this becomes a new actionable item: a REPORT-ONLY maintenance op (following the missing-file-audit.go / chapters_backfill.go pattern: dry-run reporting, no writes) that flags candidate books for manual review -- never auto-merges or auto-deletes, consistent with the standing 'never delete' rule."
+ ],
+ "tests": ["n/a until the design decision is made"],
+ "acceptance": ["n/a until the design decision is made"],
+ "edge_cases": ["A genuinely short standalone audiobook (novella) must not be flagged -- whichever heuristic is chosen needs an explicit anti-false-positive test case."],
+ "anti_over_suppression": "N/A -- no guard exists yet to over-suppress.",
+ "depends_on_lines": [],
+ "gate": "n/a (design decision, no code yet)",
+ "notes": "Related to L689 (duplicate book rows) and the dedup exact-pending regrowth note in memory (project_dedup_sandbox.md) -- per-chapter-split mis-grouping is a plausible SOURCE for both; worth linking once a detector exists."
+},
+{
+ "todo_line": 642, "src_id": null, "title": "Extend the REPOINT repair to recover BookFile rows via Book.FilePath (the #2372 fallback shape), not just the padded-filename shape",
+ "verdict": "actionable",
+ "verdict_evidence": "maintenance.missing-file-repoint already exists (internal/plugins/maintenance/missing_file_repoint.go, apply=false default, never deletes -- matches owner decision #12) but its candidate derivation ONLY string-transforms the row's own broken path (the 'track-slash flattened into padded filename' shape, e.g. 'Corruption - 2/35.mp3' -> 'Corruption - 02.mp3'): grep -n 'book.FilePath\\|Book.FilePath\\|GetBookByID' internal/plugins/maintenance/missing_file_repoint.go -> 0 hits. It never falls back to the OWNING BOOK's Book.FilePath, which is the specific recovery path this TODO item describes (86 of 88 sampled unresolvable BookFile.FilePath rows have a Book.FilePath that IS a real file on disk) and which chapters_backfill.go already implements for its own narrow purpose (chapters_backfill.go:370-394, 'recoveredViaBook' counter).",
+ "domain": "internal/plugins/maintenance",
+ "exact_files": ["internal/plugins/maintenance/missing_file_repoint.go"],
+ "verified_anchors": [
+   {"claim": "missing_file_repoint.go exists, apply=false default, never deletes", "grep_cmd": "grep -n 'ID:          \"maintenance.missing-file-repoint\"' internal/plugins/maintenance/missing_file_repoint.go", "expect": "1 hit L132"},
+   {"claim": "its candidate derivation never consults Book.FilePath or GetBookByID", "grep_cmd": "grep -n 'book.FilePath\\|Book.FilePath\\|GetBookByID' internal/plugins/maintenance/missing_file_repoint.go", "expect": "0 hits"},
+   {"claim": "chapters_backfill.go already has the Book.FilePath fallback pattern to port", "grep_cmd": "grep -n 'recoveredViaBook' internal/plugins/maintenance/chapters_backfill.go", "expect": ">=3 hits"},
+   {"claim": "16,130 books library-wide have a BookFile.FilePath that does not resolve", "grep_cmd": "grep -n 'probe-failed=16130' internal/plugins/maintenance/chapters_backfill.go", "expect": "1 hit ~L376"}
+ ],
+ "reuse": [
+   {"name": "chaptersBackfillResolves(path) os.Stat regular-file check", "file": "internal/plugins/maintenance/chapters_backfill.go", "verify_grep": "grep -n 'func chaptersBackfillResolves' internal/plugins/maintenance/chapters_backfill.go"},
+   {"name": "candidateItem / RequireSizeMatch scaffolding already in missing_file_repoint.go", "file": "internal/plugins/maintenance/missing_file_repoint.go", "verify_grep": "grep -n 'type candidateItem struct' internal/plugins/maintenance/missing_file_repoint.go"}
+ ],
+ "polarity": "additive",
+ "effort": "M", "tier": "sonnet", "why_tier": "extends an existing production-critical repair op's candidate-derivation strategy; must not change the existing padded-filename candidate path or its RequireSizeMatch safety gate",
+ "review_critical": true,
+ "goal": "Add a second candidate source to maintenance.missing-file-repoint: when a BookFile.FilePath does not resolve, in addition to the existing track-slash/padded-filename transform, also try the owning Book's Book.FilePath (via GetBookByID) as a repoint candidate when it resolves to a regular file and (subject to the existing RequireSizeMatch gate) matches the row's recorded FileSize. Never delete; apply=false stays the default; this only widens what counts as a recoverable row.",
+ "background": [
+   "TODO.md L642-L147: 16,130 books library-wide (33.7% of single-file books) have a BookFile.FilePath that does not resolve; 86/88 (97.7%) sampled have a Book.FilePath that IS a regular file on disk -- so this is recoverable, not data loss.",
+   "PR #2372 already mitigated this INSIDE chapters-backfill only (chapters_backfill.go:370-394): it falls back to Book.FilePath when the BookFile path does not resolve, and increments recoveredViaBook. The TODO explicitly frames the row repair as still open: 'That is a workaround inside ONE op -- the stale rows are still stale, and every other consumer that resolves a file by stored path still degrades silently on them.'",
+   "missing_file_repoint.go's docstring (lines 15-25) is scoped to a DIFFERENT bug shape (per-track subdirectory flattened into a padded filename) and explicitly frames itself as the general 'never delete, only rewrite FilePath' repair vehicle -- the natural place to add a second candidate strategy rather than building a new op."
+ ],
+ "steps": [
+   "1. Read missing_file_repoint.go fully (lines ~250-360) to see the exact candidateItem / Phase-1-stat / Phase-2-apply structure before editing.",
+   "2. Add a `bookFilePathFallback bool` field (default false) or simply always attempt it as a second-priority candidate: after the existing track-slash-derived candidate check finds `NoCandidateBytes`, before giving up on that row, call `p.deps.OpsStore().GetBookByID(file.BookID)` and check `book.FilePath` with the same os.Stat-regular-file check as chaptersBackfillResolves (chapters_backfill.go:229-232).",
+   "3. Gate the Book.FilePath candidate through the SAME RequireSizeMatch logic already in the file (missing_file_repoint.go:57-59) -- do not weaken the existing safety check for the new source.",
+   "4. Add a `recoveredViaBookPath atomic.Int64` counter to the run summary, mirroring chaptersBackfillCounters.recoveredViaBook, so a dry-run report distinguishes which source rescued each row.",
+   "5. Document in the file's header comment that this is now a two-source repair (track-slash transform AND owning-book fallback), citing the 16,130/86-of-88 measurement from chapters_backfill.go as the second population's justification."
+ ],
+ "tests": [
+   "internal/plugins/maintenance/missing_file_repoint_test.go: new test TestMissingFileRepoint_RecoversViaBookFilePath -- a BookFile row whose FilePath does not exist and has no track-slash-shape candidate, but whose owning Book.FilePath resolves to a regular file matching the row's FileSize, is reported as recoverable in dry-run and rewritten under apply=true.",
+   "New test TestMissingFileRepoint_BookFilePathSizeMismatch_NotRecovered -- same setup but Book.FilePath's file size disagrees with the row's FileSize: NOT repointed (anti-over-suppression / safety-preserving test)."
+ ],
+ "acceptance": [
+   "go test ./internal/plugins/maintenance/... -run TestMissingFileRepoint passes.",
+   "A dry run over a synthetic fixture with both candidate shapes reports both recoveredViaBookPath and the existing padded-filename recovery count > 0."
+ ],
+ "edge_cases": [
+   "Book.FilePath itself does not resolve either (the 26.4% 'fully broken' population, 16,265 books): row stays unrecovered, counted under the existing no-candidate-bytes reason -- do NOT touch these (owner decision #12: they stay parked/untouched).",
+   "Book.FilePath resolves but points at a DIRECTORY (multi-file book path used incorrectly): must be rejected the same way chaptersBackfillResolves rejects directories (IsRegular() check), never repointed onto a folder.",
+   "Book.FilePath collides with another book's Book.FilePath (see L670, 6.8% of rows) -- do not extend this fallback further until that collision count is re-verified, per the TODO's own caution."
+ ],
+ "anti_over_suppression": "TestMissingFileRepoint_BookFilePathSizeMismatch_NotRecovered",
+ "depends_on_lines": [670],
+ "gate": "make ci",
+ "notes": "Owner decision #12 ('build the REPOINT repair with apply=false default; owner runs apply; the 16,265 fully-broken books stay untouched/parked') is satisfied in SHAPE by the existing op but not in POPULATION -- this item is the gap between the op that exists and the specific recovery path the TODO and decision #12 were actually written about."
+},
+{
+ "todo_line": 665, "src_id": null, "title": "Decide which of Book.FilePath / BookFile.FilePath is authoritative when they disagree",
+ "verdict": "needs_design",
+ "verdict_evidence": "This is a data-model authority question, not covered by any of the 14 owner decisions (decision #12 covers building the repoint repair, not which field wins when both are populated but disagree). The TODO item literally says 'Decide which is authoritative and make the other derive from it' -- an explicit decision request. grep -rn 'authoritative.*FilePath\\|FilePath.*authoritative' --include=*.go . confirms no code-level ruling exists today (mapper.go:40 calls BookFile-summed duration 'THE authoritative' duration, but that is about duration, not path).",
+ "domain": "(unresolved)",
+ "exact_files": [],
+ "verified_anchors": [
+   {"claim": "no existing code declares one FilePath field authoritative over the other", "grep_cmd": "grep -rn 'authoritative' --include=*.go internal/database internal/organizer internal/metafetch", "expect": "hits are about duration/narrator, not FilePath"}
+ ],
+ "reuse": [],
+ "polarity": "transform",
+ "effort": "S", "tier": "opus", "why_tier": "pure design decision with real blast radius (touches every path-resolving consumer); needs an architectural ruling before any code",
+ "review_critical": true,
+ "goal": "Decide, and document in a design note, whether Book.FilePath or BookFile.FilePath is the authoritative source of truth for where a book's files live, and specify how the non-authoritative field should be kept in sync or deprecated. The Icarus Job example is concrete: Book.FilePath points into the iTunes tree while the BookFile row points at a nonexistent path under the organized tree -- any consumer that picks the 'wrong' one gets a different, silently different, answer.",
+ "background": [
+   "TODO.md L665-L155 (The Icarus Job example): Book.FilePath points into the iTunes tree; BookFile.FilePath points at a nonexistent path under the organized tree.",
+   "This directly interacts with L642's REPOINT-via-Book.FilePath extension and L670's Book.FilePath-uniqueness bound -- an authority decision here changes how much weight L642's fallback should be given (if BookFile.FilePath is meant to be authoritative long-term, Book.FilePath is a stopgap fallback only; if Book.FilePath is meant to be authoritative for single-file books, BookFile rows should be treated as denormalized cache)."
+ ],
+ "steps": [
+   "1. Survey every consumer that reads either field (organizer/pathbuild.go, handlers/abs/mapper.go, metafetch/service_apply.go, maintenance ops) and classify which one each currently trusts.",
+   "2. Present the survey plus the two options (BookFile.FilePath authoritative with Book.FilePath derived/cached, or vice versa) to the owner for a ruling.",
+   "3. Once decided, file the ruling as a new actionable item: make the non-authoritative field derive from the authoritative one on every write path (likely inside the same UpdateBook/UpdateBookFile chokepoints CONS-16/CONS-18 already use for duration)."
+ ],
+ "tests": ["n/a until the design decision is made"],
+ "acceptance": ["n/a until the design decision is made"],
+ "edge_cases": ["A book with zero BookFile rows (Book.FilePath only) vs a book whose BookFile rows disagree among themselves (multi-file) -- the ruling must cover both shapes."],
+ "anti_over_suppression": "N/A",
+ "depends_on_lines": [642, 670],
+ "gate": "n/a (design decision, no code yet)",
+ "notes": "This is the root-cause question L642's fallback and L670's collision bound are both symptoms of; resolving it properly may reduce or reshape those two items' future iterations, but does not block them from landing now since owner decision #12 already authorizes the REPOINT-only, never-delete interim fix."
+},
+{
+ "todo_line": 670, "src_id": null, "title": "Build a REPORT-ONLY counter for Book.FilePath collisions (rows sharing the same path across different books)",
+ "verdict": "actionable",
+ "verdict_evidence": "No existing detector counts Book.FilePath collisions: grep -rn 'FilePath.*collision\\|collision.*FilePath' --include=*.go . -> 0 hits, and grep -rn 'duplicate.*FilePath\\|FilePath.*duplicate' --include=*.go . -> 0 hits. The TODO explicitly requires re-running this count before extending any fallback that WRITES a book row (directly gates L642's Book.FilePath-repoint extension and any future write-path use of Book.FilePath).",
+ "domain": "internal/plugins/maintenance",
+ "exact_files": ["internal/plugins/maintenance/filepath_collision_report.go"],
+ "verified_anchors": [
+   {"claim": "no existing FilePath-collision counter exists anywhere in the codebase", "grep_cmd": "grep -rln 'FilePath.*collision\\|collision.*FilePath\\|duplicate.*FilePath' --include=*.go .", "expect": "0 hits"},
+   {"claim": "GetAllBooksCore is the existing narrow whole-library enumeration method to reuse", "grep_cmd": "grep -n 'GetAllBooksCore(limit int, offset int)' internal/plugins/maintenance/deps.go", "expect": "1 hit"}
+ ],
+ "reuse": [
+   {"name": "opsBookReader.GetAllBooksCore paginated enumeration", "file": "internal/plugins/maintenance/deps.go", "verify_grep": "grep -n 'GetAllBooksCore' internal/plugins/maintenance/deps.go"},
+   {"name": "registry.RunItems bounded worker pool (CLAUDE.md concurrency mandate for whole-library loops)", "file": "internal/operations/registry/run_items.go", "verify_grep": "grep -n 'func RunItems' internal/operations/registry/run_items.go"},
+   {"name": "sdk.OperationDef / dry-run-by-default pattern from missing_file_audit.go", "file": "internal/plugins/maintenance/missing_file_audit.go", "verify_grep": "grep -n 'ID:          \"maintenance.missing-file-audit\"' internal/plugins/maintenance/missing_file_audit.go"}
+ ],
+ "polarity": "additive",
+ "effort": "S", "tier": "sonnet", "why_tier": "small self-contained report op but must use a bounded worker pool / sharded map per the repo's whole-library concurrency mandate, not a naive single-threaded scan",
+ "review_critical": false,
+ "goal": "Build a new REPORT-ONLY maintenance op (no writes, matches the pattern of missing-file-audit.go) that enumerates every book's FilePath, buckets by exact string match, and reports how many books share a FilePath with another book -- reproducing and keeping current the 1,264-values/4,353-of-63,870-rows/6.8% figure so it can be re-run before any future op extends Book.FilePath-derived logic into a WRITE path.",
+ "background": [
+   "TODO.md L670-L169: 1,264 Book.FilePath values are shared by more than one book row (4,353 of 63,870 rows, 6.8%); today it happens not to bite the chapters-backfill fallback (0 of 88 sampled recoverable rows are among the 4,353) but that is a property of today's data, not a guarantee.",
+   "The item explicitly demands: 're-run the collision count before extending the fallback to any op that WRITES a book row' -- this directly gates L642's extension of missing-file-repoint to use Book.FilePath as a repoint source."
+ ],
+ "steps": [
+   "1. Create internal/plugins/maintenance/filepath_collision_report.go modeled on missing_file_audit.go's structure (header comment, sdk.OperationDef with a new ID e.g. 'maintenance.filepath-collision-report', Capabilities: []sdk.Capability{sdk.CapLibraryRead}, no CapLibraryWrite since this never writes).",
+   "2. Enumerate books via GetAllBooksCore in pages (or ListBookIDs + GetBookByID batches), building a map[string][]string (FilePath -> []bookID) sharded across N workers via registry.RunItems, then merge shard maps under a single mutex only at the reduce step (per CLAUDE.md's pairwise/sharded-loop concurrency mandate).",
+   "3. Report: total books, total distinct FilePath values with >1 owner, total rows affected, and (capped, e.g. first 50) example collision groups with their book IDs and the shared path, for manual follow-up.",
+   "4. Wire the op into the maintenance plugin's registration list (grep for where other ops are registered, e.g. plugin.go's list of *Def() calls) and add the file header per file-headers.md."
+ ],
+ "tests": [
+   "internal/plugins/maintenance/filepath_collision_report_test.go: TestFilePathCollisionReport_DetectsSharedPath -- 3 books, 2 sharing an identical FilePath, 1 unique; report counts collisionGroups=1, affectedRows=2.",
+   "TestFilePathCollisionReport_NoCollisions_ReportsZero -- all-unique FilePath fixture reports 0 (anti-over-suppression: proves the detector doesn't fire on clean data)."
+ ],
+ "acceptance": [
+   "go test ./internal/plugins/maintenance/... -run TestFilePathCollisionReport passes.",
+   "A dry run against a full-library fixture reproduces a collision-rate consistent with the 6.8% figure order-of-magnitude (exact figure will drift as the library changes; the op's job is to make it re-derivable, not to hard-code 6.8%)."
+ ],
+ "edge_cases": [
+   "Empty FilePath (blank string) should not itself count as a 'collision' bucket -- exclude rows with FilePath == \"\" from the map, or bucket them separately and call it out distinctly in the report.",
+   "Soft-deleted books: decide (and document) whether ListSoftDeletedBooks rows participate in the collision count -- likely excluded, since a soft-deleted book's path collision with a live book is a different risk profile."
+ ],
+ "anti_over_suppression": "TestFilePathCollisionReport_NoCollisions_ReportsZero",
+ "depends_on_lines": [],
+ "gate": "make ci",
+ "notes": "This is a small, self-contained prerequisite for L642 and for L665's eventual authority decision -- keep it decoupled from those two rather than folding it into either PR, since it has independent value as a standing library-health report."
+},
+{
+ "todo_line": 680, "src_id": null, "title": "Stored Book.Duration is short of the real container duration by 119-186s on some books, and maintenance.duration-reextract's own tolerance floor would not catch this drift class",
+ "verdict": "needs_design",
+ "verdict_evidence": "maintenance.duration-reextract exists and re-derives real durations (internal/plugins/maintenance/duration_reextract.go), but its durationDiffMeaningful gate (duration_reextract.go:106-116) requires BOTH >5s absolute AND >2% relative drift before writing a correction. For the TODO's own example (Mushoku Tensei Vol. 03: stored 33582s, real 33767.759s), delta=185.759s clears the 5s floor but rel=185.759/33582=0.55% does NOT clear the 2% floor, so durationDiffMeaningful returns false and this specific book would be silently skipped even after a correct re-probe. Lowering the 2% floor is a global behavior change of unknown scope (how many other previously-skipped small corrections would newly fire) that is not covered by any of the 14 owner decisions.",
+ "domain": "internal/plugins/maintenance",
+ "exact_files": ["internal/plugins/maintenance/duration_reextract.go"],
+ "verified_anchors": [
+   {"claim": "duration-reextract requires both a 5s absolute AND 2% relative delta before correcting", "grep_cmd": "grep -n 'durationRelTolerance\\|durationAbsToleranceS' internal/plugins/maintenance/duration_reextract.go", "expect": "hits at L100-101 (consts) and inside durationDiffMeaningful"},
+   {"claim": "the Mushoku Tensei-scale drift (185.759s on 33582s = 0.55%) falls below the 2% relative floor", "grep_cmd": "grep -n 'func durationDiffMeaningful' internal/plugins/maintenance/duration_reextract.go", "expect": "1 hit, confirms rel > durationRelTolerance required in addition to the absolute floor"},
+   {"claim": "duration-reextract's own docstring frames its target defect class as the OLD ~2x fileSize/128kbps estimator bug, not small drift", "grep_cmd": "grep -n 'assumed 128 kbps' internal/plugins/maintenance/duration_reextract.go", "expect": "1 hit in the package header comment"}
+ ],
+ "reuse": [{"name": "durationDiffMeaningful threshold function (would need to change, not be reused as-is)", "file": "internal/plugins/maintenance/duration_reextract.go", "verify_grep": "grep -n 'func durationDiffMeaningful' internal/plugins/maintenance/duration_reextract.go"}],
+ "polarity": "transform",
+ "effort": "S", "tier": "opus", "why_tier": "the code path exists; what's missing is an owner ruling on whether/how to widen a global correction-tolerance floor that was deliberately set to avoid churn",
+ "review_critical": true,
+ "goal": "Decide whether to lower or special-case maintenance.duration-reextract's 2% relative tolerance floor so sub-1%-but-multi-minute drifts like the Mushoku Tensei Vol. 03 case get corrected, given that doing so reopens an unknown population of previously-skipped small corrections across the whole library (an unmeasured blast radius, not a design a code-only fix can respect on its own).",
+ "background": [
+   "TODO.md L680-L178: confirmed by ffprobe, Mushoku Tensei Vol. 03 stores 33582s while both physical copies measure 33767.759s (7 cohort books total, drift range 119-186s).",
+   "duration_reextract.go:106-116's durationDiffMeaningful requires BOTH floors (>5s AND >2%) to avoid 'churn over sub-second rounding noise' -- the 2% floor is the one this drift class fails.",
+   "docs/operations/pending-prod-actions.md already tracks a 'Duration-reextract tail' entry (row 3) for the v3 run's ~721-book unfinished tail -- that is a DIFFERENT, already-tracked gap (incomplete coverage) from this one (a coverage-complete run that still wouldn't correct these books due to the tolerance floor)."
+ ],
+ "steps": [
+   "1. Quantify the blast radius: run maintenance.duration-reextract dry-run library-wide and count how many additional books WOULD be corrected if durationRelTolerance were lowered from 2% to e.g. 0.5% or 0% (keeping the 5s absolute floor) -- this requires a small, throwaway instrumentation change (log candidates that pass the absolute floor but fail the relative one) rather than a permanent code change.",
+   "2. Present that count to the owner alongside the current 7-book cohort evidence, and get a ruling: lower the global floor, or add a per-book manual-override list, or leave as-is and treat this as accepted imprecision.",
+   "3. Once decided, implement as a follow-up actionable item."
+ ],
+ "tests": ["n/a until the design decision is made"],
+ "acceptance": ["n/a until the design decision is made"],
+ "edge_cases": ["A book whose real duration is genuinely very long (e.g. a 100-hour omnibus) could have a >119s drift that is well under 0.1% -- any floor change must be considered against absolute-duration-scaled examples, not just the 33582s cohort book."],
+ "anti_over_suppression": "N/A -- this item is about a threshold that currently OVER-suppresses corrections; the eventual fix's test should assert the new floor does NOT also start over-correcting on legitimate rounding noise (e.g. sub-second ffprobe measurement jitter across repeated runs)",
+ "depends_on_lines": [],
+ "gate": "n/a (design decision; instrumentation-only code in step 1 has no gate beyond go vet)",
+ "notes": "Do not conflate with the already-tracked 'Duration-reextract tail' pending-prod-action (row 3 of pending-prod-actions.md) -- that is about the v3 run's incomplete coverage; this item is about the op's own correction threshold, which would still skip these 7 books even on a complete re-run."
+},
+{
+ "todo_line": 685, "src_id": null, "title": "Detect multi-file books whose synthesized chapter timeline stops short of Book.Duration (per-file BookFile.Duration missing or wrong)",
+ "verdict": "actionable",
+ "verdict_evidence": "audioutil.SynthesizeChapters (internal/audioutil/timeline.go:54-70) has no zero-duration guard: `end := start + t.DurationSec` silently produces a degenerate (zero-width or short) chapter when a track's DurationSec is 0 or wrong, and mapper.go's loadChapters (mapper.go:256-264) builds each TrackInfo.DurationSec directly from `float64(f.Duration)` (fileView.DurationSec at mapper.go:217) with no validation against Book.Duration. The TODO's own example (one of two 'Genesis' rows, 1,189 files, ends at 32,636s against a 258,256s Book.Duration while its byte-identical twin ends correctly) shows this is a live, silent data-quality bug, not hypothetical.",
+ "domain": "internal/server/handlers/abs",
+ "exact_files": ["internal/server/handlers/abs/mapper.go"],
+ "verified_anchors": [
+   {"claim": "SynthesizeChapters has no guard against a zero or missing per-track duration", "grep_cmd": "grep -n 'func SynthesizeChapters' internal/audioutil/timeline.go", "expect": "1 hit L54; body shows `end := start + t.DurationSec` with no validation"},
+   {"claim": "loadChapters builds TrackInfo.DurationSec directly from BookFile.Duration with no cross-check against Book.Duration", "grep_cmd": "grep -n 'DurationSec: f.DurationSec' internal/server/handlers/abs/mapper.go", "expect": "1 hit L261"},
+   {"claim": "fileView.DurationSec is a direct cast of BookFile.Duration, no validation", "grep_cmd": "grep -n 'DurationSec: float64(f.Duration)' internal/server/handlers/abs/mapper.go", "expect": "1 hit L217"}
+ ],
+ "reuse": [
+   {"name": "SynthesizeChapters / TrackInfo (the function to add a guard around, or a caller-side check before it)", "file": "internal/audioutil/timeline.go", "verify_grep": "grep -n 'type TrackInfo struct' internal/audioutil/timeline.go"},
+   {"name": "view.DurationSec running total already computed by the caller loop (mapper.go:187-188) as the ground truth to compare against", "file": "internal/server/handlers/abs/mapper.go", "verify_grep": "grep -n 'view.DurationSec += fv.DurationSec' internal/server/handlers/abs/mapper.go"}
+ ],
+ "polarity": "additive",
+ "effort": "S", "tier": "sonnet", "why_tier": "small, localized fix in one file's request-time code path plus a log-based detector; low risk since it only adds observability, not a behavior change to what's served",
+ "review_critical": false,
+ "goal": "Add a divergence check inside loadChapters (mapper.go:243-265): after synthesizing the chapter list for a multi-file book with no persisted chapters, compare the last chapter's EndSec against view.DurationSec (the summed BookFile.Duration, already computed at mapper.go:188 and passed in as book-level context); when they diverge by more than a small tolerance, emit a slog.Warn naming the book ID and both durations so the underlying per-file Duration data-quality bug becomes visible in logs instead of only in ABS's rendered (silently wrong) chapter list. This is a detection/observability fix; correcting the underlying BookFile.Duration values themselves is a data-repair problem (likely via duration-reextract, subject to L680's tolerance-floor caveat) that this item does not attempt to solve.",
+ "background": [
+   "TODO.md L685-L186: one of two 'Genesis' rows (1,189 files) serves 1,189 chapters ending at 32,636s against a 258,256s duration; its twin ends correctly at 258,256s -- same content, different per-file duration data, confirming the bug is in the STORED BookFile.Duration values on one row's segments, not in SynthesizeChapters' arithmetic itself (which is correct given correct inputs -- verified by reading timeline.go:54-70).",
+   "loadChapters (mapper.go:243-265) has no access today to Book.Duration or view.DurationSec at the point it builds tracks -- it only receives bookID and []fileView, so the check needs either a signature change or to be hoisted into the caller (buildItemView at mapper.go:181-206, which already has both view.DurationSec and view.Chapters in scope after the loadChapters call at line 201)."
+ ],
+ "steps": [
+   "1. In internal/server/handlers/abs/mapper.go, after `view.Chapters = h.loadChapters(book.ID, view.Files)` (mapper.go:201), add a check: if len(view.Chapters) > 0, compute `lastEnd := view.Chapters[len(view.Chapters)-1].EndSec` and compare against `view.DurationSec` (already the summed BookFile.Duration from the loop at mapper.go:182-191).",
+   "2. If `view.DurationSec - lastEnd` exceeds a small tolerance (e.g. 5 seconds, matching the pattern in duration_reextract.go's durationAbsToleranceS), emit `slog.Warn(\"abs mapper: synthesized chapter timeline stops short of book duration\", \"book_id\", book.ID, \"chapters_end_sec\", lastEnd, \"book_duration_sec\", view.DurationSec)`.",
+   "3. Do NOT change what is served to the client in this change -- this is detection-only, matching the project's decision pattern of shipping a detector before a fix (see decision #11's precedent: 'build a DETECTION-ONLY counter now; the fix itself is deferred').",
+   "4. Optionally (if reviewer wants it in the same PR): also log a per-file breakdown of which BookFile rows have Duration <= 0 among view.Files, to make root-causing a flagged book faster."
+ ],
+ "tests": [
+   "internal/server/handlers/abs/mapper_test.go: TestLoadChapters_DivergentDurationLogsWarning -- a multi-file book fixture with one BookFile.Duration == 0 among several non-zero durations produces a synthesized chapter list whose last EndSec is well short of the summed intended duration; assert the warning fires (capture via a test slog handler) with the correct book_id and both duration values.",
+   "TestLoadChapters_ConsistentDurations_NoWarning -- a fixture where all BookFile.Duration values are populated and consistent produces no warning (anti-over-suppression: proves the check doesn't fire on healthy data)."
+ ],
+ "acceptance": [
+   "go test ./internal/server/handlers/abs/... -run TestLoadChapters passes.",
+   "grep -n 'synthesized chapter timeline stops short' internal/server/handlers/abs/mapper.go returns 1 hit after the change."
+ ],
+ "edge_cases": [
+   "A book with persisted (not synthesized) chapters (the `if h.chapters != nil` early-return branch at mapper.go:244-251) is out of scope for this check -- persisted chapters are trusted as-is; only the live-synthesis fallback path needs the guard.",
+   "A single-file book (len(files)==1): SynthesizeChapters still runs but there is only one chapter equal to the one file's duration, so lastEnd == view.DurationSec by construction -- the check should be a no-op here, not a false positive.",
+   "view.DurationSec == 0 (book with no BookFile rows, duration pulled from book.Duration per mapper.go:194-196): loadChapters returns nil chapters for zero files, so the len(view.Chapters) > 0 guard already skips this case."
+ ],
+ "anti_over_suppression": "TestLoadChapters_ConsistentDurations_NoWarning",
+ "depends_on_lines": [680],
+ "gate": "make ci",
+ "notes": "This is intentionally scoped to detection/logging only, not to correcting the underlying BookFile.Duration values -- that correction is duration-reextract's job, and L680 already flags that duration-reextract's tolerance floor may not catch every case this detector would surface. Once this logs in production, it becomes new evidence for L680's blast-radius question."
+},
+{
+ "todo_line": 689, "src_id": null, "title": "Duplicate book rows per title under different author folders (pointer note)",
+ "verdict": "not_a_task",
+ "verdict_evidence": "The TODO item explicitly says 'Pointer only; not chased here' (TODO.md L689-L195) -- it is evidence/observation recorded for a future investigation (a possible SOURCE of exact-pending dedup regrowth), not a work item with any deliverable of its own in this pass.",
+ "domain": "(unresolved)",
+ "exact_files": [],
+ "verified_anchors": [
+   {"claim": "the item self-identifies as a pointer, not a task", "grep_cmd": "grep -n 'Pointer only; not chased here' TODO.md", "expect": "1 hit"}
+ ],
+ "reuse": [],
+ "polarity": "additive",
+ "effort": "S", "tier": "haiku", "why_tier": "n/a -- no work to size",
+ "review_critical": false,
+ "goal": "n/a -- this is a cross-reference note, not a task.",
+ "background": ["TODO.md cites Deadly Jobs x3, The Icarus Job x3, every Mushoku Tensei volume x2 (as PZG and Unknown Author) as examples, and links it as a candidate SOURCE for the exact-pending dedup backlog regrowing to 5,947 by 2026-08-12 (memory: project_dedup_sandbox.md, 'needs a SOURCE fix rather than another drain')."],
+ "steps": [],
+ "tests": [],
+ "acceptance": [],
+ "edge_cases": [],
+ "anti_over_suppression": "N/A",
+ "depends_on_lines": [629],
+ "gate": "n/a (docs)",
+ "notes": "If L629's per-chapter-split-file detector work is picked up, its author confirms whether this duplicate-book-row population overlaps with it (both involve author-folder mis-grouping); worth a joint follow-up once L629 has a design decision."
+},
+{
+ "todo_line": 700, "src_id": null, "title": "Capture output if the unreproduced internal/plugins/maintenance mutation-testing failure from 2026-08-13 recurs",
+ "verdict": "not_a_task",
+ "verdict_evidence": "The item is a standing instruction for a FUTURE recurrence ('If it recurs, capture the output first'), not a present deliverable -- 8 subsequent runs (3 under -race) were green per the TODO text, and there is nothing to grep-verify at HEAD since the failure detail was never captured. grep -rn 'unreproduced\\|mutation.*2026-08-13' --include=*.go . confirms no code artifact exists for this.",
+ "domain": "internal/plugins/maintenance",
+ "exact_files": [],
+ "verified_anchors": [
+   {"claim": "no code or test artifact exists for this unreproduced failure", "grep_cmd": "grep -rln 'unreproduced' --include=*.go .", "expect": "0 hits"}
+ ],
+ "reuse": [],
+ "polarity": "additive",
+ "effort": "S", "tier": "haiku", "why_tier": "n/a -- no work exists until the failure recurs",
+ "review_critical": false,
+ "goal": "n/a -- this is a standing watch instruction, not a task with a deliverable today.",
+ "background": ["Memory note project_mutation_matrix_harness.md confirms 22/22 green after #2537-9 but flags 'internal/plugins/maintenance IS flaky' -- consistent with this item's framing as a not-yet-reproduced, watch-for-recurrence issue rather than a fixable bug today."],
+ "steps": [],
+ "tests": [],
+ "acceptance": [],
+ "edge_cases": [],
+ "anti_over_suppression": "N/A",
+ "depends_on_lines": [],
+ "gate": "n/a",
+ "notes": "If this recurs during any future CI run, the actionable follow-up is purely procedural: capture full test output/logs before re-running, per the item's own instruction -- no code change is implied unless a root cause is found."
+},
+{
+ "todo_line": 806, "src_id": null, "title": "filterFieldQueryParams already derived from the canonical filter-field list -- decision made and shipped",
+ "verdict": "stale_done",
+ "verdict_evidence": "filterFieldQueryParams is now DERIVED, not hand-maintained: grep -n 'filterFieldQueryParams = buildFilterFieldQueryParams()' internal/server/handlers/audiobooks/handler.go -> 1 hit L279; buildFilterFieldQueryParams() (handler.go:281-290) iterates audiobookspkg.KnownFilterFields() (internal/audiobooks/service_filtering.go:633-638), whose backing allFilterFieldNames slice (service_filtering.go:646-658) already includes all 14 named fields (year, duration, file_size, bitrate, sample_rate, channels, bit_depth, series_number, isbn10, isbn13, work_id, created_at, updated_at, marked_for_deletion). A dedicated regression test locks this in: grep -n 'TestFilterFieldQueryParams_CoversTheFieldsThatDrifted' internal/server/handlers/audiobooks/bare_filter_param_test.go -> 1 hit L125. handler.go's own comment documents the exact history: 'A literal map here was a THIRD copy of that set -- nothing held it against the first, so it drifted: 17 real filter fields ... were missing.' File last-edited 2026-08-19, after the 2026-08-14 field additions the TODO describes.",
+ "domain": "internal/server/handlers/audiobooks",
+ "exact_files": [],
+ "verified_anchors": [
+   {"claim": "filterFieldQueryParams is derived from KnownFilterFields(), not a hand-maintained literal set", "grep_cmd": "grep -n 'filterFieldQueryParams = buildFilterFieldQueryParams' internal/server/handlers/audiobooks/handler.go", "expect": "1 hit L279"},
+   {"claim": "the 14 named fields are all present in the canonical list KnownFilterFields derives from", "grep_cmd": "grep -n '\"year\", \"created_at\", \"updated_at\", \"marked_for_deletion\"' internal/audiobooks/service_filtering.go", "expect": "1 hit L655"},
+   {"claim": "a regression test pins this derivation against future drift", "grep_cmd": "grep -n 'func TestFilterFieldQueryParams_CoversTheFieldsThatDrifted' internal/server/handlers/audiobooks/bare_filter_param_test.go", "expect": "1 hit L125"},
+   {"claim": "only an explicit, small allow-list (library_state, fingerprint_status) is excluded, matching the TODO's own caution about library_state", "grep_cmd": "grep -n 'var bareParamAllowList' internal/server/handlers/audiobooks/handler.go", "expect": "1 hit L257"}
+ ],
+ "reuse": [],
+ "polarity": "transform",
+ "effort": "S", "tier": "haiku", "why_tier": "no code change -- checking off an already-shipped fix",
+ "review_critical": false,
+ "goal": "No code change needed. Check off this TODO.md item: the DERIVED-set design (audiobooks.FieldIsKnown / KnownFilterFields as single source of truth, with an explicit allow-list for genuine bare parameters) that the TODO speculated about as 'probably the right end state' has already shipped.",
+ "background": [
+   "Memory record project_bare_filter_param_guard_derived.md (in the settled/archived list) corroborates this was completed and archived separately from this TODO item."
+ ],
+ "steps": ["1. Mark the TODO.md checkbox for this item done, citing handler.go:262-290 and bare_filter_param_test.go:125 as the closing evidence."],
+ "tests": ["Existing: TestFilterFieldQueryParams_DerivedFromCanonicalList, TestFilterFieldQueryParams_CoversTheFieldsThatDrifted, TestFilterFieldNames_MatchTheMatcher -- all already pass at HEAD."],
+ "acceptance": ["go test ./internal/server/handlers/audiobooks/... -run TestFilterFieldQueryParams passes at HEAD (no new code)."],
+ "edge_cases": [],
+ "anti_over_suppression": "N/A",
+ "depends_on_lines": [],
+ "gate": "n/a (no code change; TODO.md checkbox only)",
+ "notes": "The TODO's own worry -- that deriving from FieldIsKnown 'inverts the safety property... a new filter field automatically starts rejecting a bare parameter of the same name' -- is exactly the tradeoff the shipped design accepted, mitigated by the allow-list. No further action needed unless a future field name genuinely needs bare-parameter treatment, in which case it goes in bareParamAllowList (handler.go:257-260)."
+},
+{
+ "todo_line": 847, "src_id": "F7", "title": "ApplyMetadataFileIO already returns error and batch_apply_one.go already observes it -- fixed",
+ "verdict": "stale_done",
+ "verdict_evidence": "grep -n 'func (mfs \\*Service) ApplyMetadataFileIO(id string) error' internal/metafetch/service_files.go -> 1 hit L98, returning error (not void as the TODO describes). The function's own doc comment states the fix date: 'Until 2026-08-16 it returned nothing and swallowed the pipeline failure into a slog.Warn... applyCachedCandidateForBook reported Applied:true either way.' internal/server/batch_apply_one.go:29 declares the interface method as `ApplyMetadataFileIO(id string) error`, and batch_apply_one.go:136-142 calls it and returns `applyOutcome{Applied: true, WriteBackFailed: true, Err: fileErr}` on a non-nil error -- exactly the observable-failure behavior the TODO asked for.",
+ "domain": "internal/metafetch",
+ "exact_files": [],
+ "verified_anchors": [
+   {"claim": "ApplyMetadataFileIO now returns error", "grep_cmd": "grep -n 'func (mfs \\*Service) ApplyMetadataFileIO' internal/metafetch/service_files.go", "expect": "1 hit L98, signature ends in `error`"},
+   {"claim": "the fix is dated and self-documented in the function's doc comment", "grep_cmd": "grep -n 'Until 2026-08-16 it returned nothing' internal/metafetch/service_files.go", "expect": "1 hit"},
+   {"claim": "the two interfaces the TODO named now both declare the error return", "grep_cmd": "grep -n 'ApplyMetadataFileIO(id string) error' internal/server/batch_apply_one.go", "expect": "1 hit L29"},
+   {"claim": "batch_apply_one.go observes the error and flags WriteBackFailed instead of unconditionally reporting success", "grep_cmd": "grep -n 'WriteBackFailed: true, Err: fileErr' internal/server/batch_apply_one.go", "expect": "1 hit L139"}
+ ],
+ "reuse": [],
+ "polarity": "transform",
+ "effort": "S", "tier": "haiku", "why_tier": "no code change -- checking off an already-shipped fix",
+ "review_critical": true,
+ "goal": "No code change needed. Check off F7: the return-value plumbing (error return, both named interfaces, and the batch_apply_one.go call site honoring it via applyOutcome.WriteBackFailed) is already in place.",
+ "background": [
+   "service_files.go:82-96's doc comment explicitly documents the applyOutcome.WriteBackFailed convention: 'runApplyPipeline deliberately persists the book_file rows for every rename that DID succeed... Callers must therefore keep reporting the database apply as successful and flag only the file side.'"
+ ],
+ "steps": ["1. Mark the TODO.md checkbox for F7 done, citing service_files.go:98 and batch_apply_one.go:29,136-142 as the closing evidence."],
+ "tests": ["Existing tests around ApplyMetadataFileIO's error path and applyOutcome.WriteBackFailed should already cover this at HEAD (verify with go test ./internal/server/... ./internal/metafetch/... if a stronger acceptance signal is wanted)."],
+ "acceptance": ["grep -n 'ApplyMetadataFileIO(id string) error' internal/server/handlers/metadata_cache.go returns 1 hit as well (the TODO's second named call site), confirming both interfaces were updated together."],
+ "edge_cases": [],
+ "anti_over_suppression": "N/A",
+ "depends_on_lines": [],
+ "gate": "n/a (no code change; TODO.md checkbox only)",
+ "notes": "The TODO called this fix 'mechanical but wide' (six call sites, two regenerated mocks) -- worth spot-checking that all six call sites were updated, not just the two named ones, before checking the box; a quick `grep -rn 'ApplyMetadataFileIO(' --include=*.go .` enumerates all call sites for that verification."
+},
+{
+ "todo_line": 860, "src_id": "F6", "title": "OrganizeBookDirectory already rejects an empty organize at its own chokepoint -- fixed",
+ "verdict": "stale_done",
+ "verdict_evidence": "Commit 37badbcd ('fix(organizer): reject an empty organize inside OrganizeBookDirectory, not at one caller') landed the exact fix: grep -n 'if len(pathMap) == 0' internal/organizer/organizer.go -> 1 hit L813, returning a descriptive error instead of a directory path with nil error. The surrounding comment (organizer.go:797-816) explicitly names ensureLibraryCopy as the caller this closes: 'ensureLibraryCopy (internal/metafetch/service_apply.go) created a version-linked book record pointing at this directory... This is reachable WITHOUT any row being flagged Missing.' A regression test locks it in: grep -n 'func TestOrganizeBookDirectory_AllFilesMissing_IsAnError' internal/organizer/organizer_regression_test.go -> 1 hit L60, whose own comment says 'NONE of these rows is flagged Missing -- that is the whole point.'",
+ "domain": "internal/organizer",
+ "exact_files": [],
+ "verified_anchors": [
+   {"claim": "OrganizeBookDirectory now refuses an empty pathMap with an error instead of returning a directory + nil error", "grep_cmd": "grep -n 'if len(pathMap) == 0' internal/organizer/organizer.go", "expect": "1 hit L813"},
+   {"claim": "the fixing commit exists in history", "grep_cmd": "git log --oneline --grep='reject an empty organize inside OrganizeBookDirectory'", "expect": "1 hit, commit 37badbcd"},
+   {"claim": "a regression test proves the not-flagged-Missing case (the exact gap F6 describes) is now covered", "grep_cmd": "grep -n 'func TestOrganizeBookDirectory_AllFilesMissing_IsAnError' internal/organizer/organizer_regression_test.go", "expect": "1 hit L60"}
+ ],
+ "reuse": [],
+ "polarity": "transform",
+ "effort": "S", "tier": "haiku", "why_tier": "no code change -- checking off an already-shipped fix",
+ "review_critical": true,
+ "goal": "No code change needed. Check off F6: the fix was deliberately placed inside OrganizeBookDirectory itself (not patched at the ensureLibraryCopy call site alone), which the file's own comment says was done specifically because two callers (ensureLibraryCopy and organizeMultiFileBook in itunes/service/importer.go) both took a directory-path-with-nil-error at face value.",
+ "background": [
+   "organizer.go:806-808: 'Only OrganizeDirectoryBook checked, and it had to re-derive the check itself -- the same shape of bug as the target-path divergence: a rule that lives in the caller is a rule every future caller must remember.' -- i.e. the fix is structurally better than the TODO's proposed 'Check len(pathMap) at the call site', since it closes the bug for BOTH known callers at once."
+ ],
+ "steps": ["1. Mark the TODO.md checkbox for F6 done, citing organizer.go:797-819 and commit 37badbcd."],
+ "tests": ["Existing: TestOrganizeBookDirectory_AllFilesMissing_IsAnError, TestOrganizeBookDirectory_PartialFilesMissing -- both already pass at HEAD."],
+ "acceptance": ["go test ./internal/organizer/... -run TestOrganizeBookDirectory passes."],
+ "edge_cases": [],
+ "anti_over_suppression": "N/A",
+ "depends_on_lines": [],
+ "gate": "n/a (no code change; TODO.md checkbox only)",
+ "notes": "The TODO's proposed fix location (ensureLibraryCopy, service_apply.go:~349) was NOT where the actual fix landed -- worth noting for whoever checks the box, since a naive re-read of the TODO would send someone to the wrong file."
+},
+{
+ "todo_line": 872, "part": 1, "src_id": "F5", "title": "Replace the size-equality heuristic in OrganizeBookDirectory's destination-adoption check with a content hash",
+ "verdict": "actionable",
+ "verdict_evidence": "The size-only heuristic is still live: grep -n 'srcInfo.Size() == dstInfo.Size()' internal/organizer/organizer.go -> 1 hit L765, adopting a same-sized-but-different-content destination file as if it were the same file (pathMap[srcPath] = dstPath) with only a comment ('Interrupted copy/reflink from an earlier run: same content, different inode. Adopt it rather than re-copying') justifying the assumption. scanner.ComputeFileHash already exists and is unused here: grep -n 'func ComputeFileHash' internal/scanner/scanner.go -> 1 hit L2517.",
+ "domain": "internal/organizer",
+ "exact_files": ["internal/organizer/organizer.go"],
+ "verified_anchors": [
+   {"claim": "the destination-adoption check still uses size equality, not content hash", "grep_cmd": "grep -n 'srcInfo.Size() == dstInfo.Size()' internal/organizer/organizer.go", "expect": "1 hit L765"},
+   {"claim": "SameFile (inode-identical) is checked first and remains the fast, always-safe path", "grep_cmd": "grep -n 'os.SameFile(srcInfo, dstInfo)' internal/organizer/organizer.go", "expect": "1 hit L763"},
+   {"claim": "scanner.ComputeFileHash exists and can be reused", "grep_cmd": "grep -n 'func ComputeFileHash' internal/scanner/scanner.go", "expect": "1 hit L2517"}
+ ],
+ "reuse": [{"name": "scanner.ComputeFileHash(filePath string) (string, error)", "file": "internal/scanner/scanner.go", "verify_grep": "grep -n 'func ComputeFileHash' internal/scanner/scanner.go"}],
+ "polarity": "transform",
+ "effort": "S", "tier": "sonnet", "why_tier": "small, localized change but touches a prod-data-path chokepoint (organize/rename) that three callers depend on -- warrants care and the existing regression-test suite must stay green",
+ "review_critical": true,
+ "goal": "Replace the `srcInfo.Size() == dstInfo.Size()` adoption check at organizer.go:765 with a content-hash comparison using scanner.ComputeFileHash, so two different files that happen to share a size are no longer silently treated as the same file (which currently corrupts pathMap and, downstream, the book's file rows).",
+ "background": [
+   "organizer.go:222-235 documents the SameFile fast path (hardlink/reflink, already organized) as the trusted case; the size-equality branch at L763-768 is the weaker fallback this item targets.",
+   "internal/organizer/organizer_regression_test.go:140 TestOrganizeBookDirectory_DstAlreadyExists already exercises this code path and will need a new case added, not just an update, to prove the hash comparison actually discriminates two same-sized different-content files."
+ ],
+ "steps": [
+   "1. In organizer.go around line 760-776 (inside the loop that builds pathMap for OrganizeBookDirectory), replace the `case srcErr == nil && srcInfo.Size() == dstInfo.Size():` branch's condition with a content-hash comparison: compute `scanner.ComputeFileHash(srcPath)` and `scanner.ComputeFileHash(dstPath)` and adopt only when the hashes match.",
+   "2. Add `github.com/falkcorp/audiobook-organizer/internal/scanner` to organizer.go's imports (verify no import cycle first: `grep -n 'audiobook-organizer/internal/organizer' internal/scanner/*.go` should return 0 hits, confirming scanner does not already import organizer).",
+   "3. Keep the size check as a cheap pre-filter (skip hashing entirely when sizes already differ -- sizes differing is still a hard 'not the same file' signal) before paying the cost of two full-file hashes.",
+   "4. Treat a hash error (unreadable file) as 'not adopted, leave the row unchanged' (matching the existing default: branch's behavior at organizer.go:769-774), not as a fatal error for the whole organize."
+ ],
+ "tests": [
+   "internal/organizer/organizer_regression_test.go: extend TestOrganizeBookDirectory_DstAlreadyExists (or add TestOrganizeBookDirectory_DstSameSizeDifferentContent_NotAdopted) -- src and dst files of identical size but different byte content must NOT be adopted into pathMap (this is the anti-over-suppression / correctness test: proves the old bug is actually fixed).",
+   "Add TestOrganizeBookDirectory_DstSameSizeSameContent_Adopted -- src and dst files of identical size AND identical content (the legitimate interrupted-copy-resume case) ARE adopted, proving the fix doesn't regress the case the size check was originally added for."
+ ],
+ "acceptance": [
+   "go test ./internal/organizer/... -run TestOrganizeBookDirectory passes, including both new cases.",
+   "grep -n 'ComputeFileHash' internal/organizer/organizer.go returns >=2 hits (src and dst) after the change."
+ ],
+ "edge_cases": [
+   "Very large files: hashing both src and dst on every same-sized-destination-exists case adds I/O cost proportional to file size -- acceptable here since this path only runs when a destination ALREADY exists (the common case is SameFile, which short-circuits before hashing), but call this out in the PR description.",
+   "dst unreadable mid-check (race with another process): treat as 'not adopted' (safe default), not a crash."
+ ],
+ "anti_over_suppression": "TestOrganizeBookDirectory_DstSameSizeDifferentContent_NotAdopted",
+ "depends_on_lines": [],
+ "gate": "make ci",
+ "notes": "This is part 1 of 2 for TODO.md L872 (F5) -- part 2 covers the larger, separately-scoped 'route the three rename paths through MoveBookFile' refactor the TODO calls out as 'Also worth doing'."
+},
+{
+ "todo_line": 872, "part": 2, "src_id": "F5", "title": "Route the three organize/rename paths through organizer.MoveBookFile's verify-move-DB-update-rollback pattern",
+ "verdict": "actionable",
+ "verdict_evidence": "MoveBookFile (internal/organizer/move.go:32) already implements the correct pattern (verify source, verify destination absent, move, DB-update, roll back the file move if the DB write fails) but is used by exactly one caller today: grep -rln 'organizer.MoveBookFile\\|MoveBookFile(' --include=*.go . | grep -v _test -> internal/organizer/move.go (definition) and internal/server/file_move.go (its only caller). None of the three organize/rename paths this TODO section audits (OrganizeBookDirectory, OrganizeBook single-file, ensureLibraryCopy) call it.",
+ "domain": "internal/organizer",
+ "exact_files": ["internal/organizer/organizer.go", "internal/metafetch/service_apply.go"],
+ "verified_anchors": [
+   {"claim": "MoveBookFile is defined once and has exactly one caller outside its own package", "grep_cmd": "grep -rln 'MoveBookFile(' --include=*.go . | grep -v _test", "expect": "2 hits: internal/organizer/move.go, internal/server/file_move.go"},
+   {"claim": "MoveBookFile signature (store, bookID, oldPath, newPath, extraUpdates)", "grep_cmd": "grep -n 'func MoveBookFile' internal/organizer/move.go", "expect": "1 hit L32"}
+ ],
+ "reuse": [{"name": "organizer.MoveBookFile(store, bookID, oldPath, newPath, extraUpdates) -- verify/move/DB-update/rollback pattern", "file": "internal/organizer/move.go", "verify_grep": "grep -n 'func MoveBookFile' internal/organizer/move.go"}],
+ "polarity": "transform",
+ "effort": "L", "tier": "opus", "why_tier": "a structural refactor across the three rename paths in different packages (organizer.OrganizeBookDirectory/OrganizeBook, metafetch.ensureLibraryCopy), each with its own multi-file/single-file/version-record nuances -- needs an architect-level pass to fit MoveBookFile's per-file contract around OrganizeBookDirectory's per-book pathMap contract without changing external behavior for the (majority) success path",
+ "review_critical": true,
+ "goal": "Refactor OrganizeBookDirectory, OrganizeBook (single-file), and ensureLibraryCopy so each individual file move goes through (or is refactored to match) MoveBookFile's verify-source / verify-destination-absent / move / DB-update / rollback-on-DB-failure pattern, retiring the ad-hoc SameFile/size-heuristic/organizeFile logic those three paths currently duplicate.",
+ "background": [
+   "TODO.md L872's 'Also worth doing' paragraph: 'MoveBookFile... is the one function in the repo with the correct pattern... It is on none of the three rename paths. Routing them through it would retire most of the above rather than patching each.'",
+   "MoveBookFile operates per-file with a DB rollback-on-failure guarantee; OrganizeBookDirectory operates per-book with a batched pathMap returned to the caller, who then does its own DB writes -- reconciling these two shapes (per-file transactional vs per-book batch) is the actual design work here, not a mechanical swap."
+ ],
+ "steps": [
+   "1. Read internal/organizer/move.go in full to understand MoveBookFile's exact contract (what store interface it needs, what 'extraUpdates' does, what rollback covers).",
+   "2. Read internal/organizer/organizer.go's OrganizeBookDirectory and OrganizeBook, and internal/metafetch/service_apply.go's ensureLibraryCopy end-to-end to map each one's current file-move + DB-write sequence.",
+   "3. Design (write up before implementing, given effort=L and review_critical=true) how a per-book batch operation adopts MoveBookFile's per-file rollback guarantee -- likely: call MoveBookFile once per file inside the existing loop, accumulating successes into pathMap as today, but now each individual move is already DB-consistent rather than deferring all DB writes to the caller.",
+   "4. Implement incrementally, one rename path at a time (OrganizeBook single-file first, as the simplest case), keeping existing regression tests green after each step.",
+   "5. Once all three paths route through MoveBookFile (or its extracted core logic), remove the now-dead SameFile/size-or-hash-heuristic duplication this TODO section (F5, and part 1 above) was built to patch -- confirm with the reviewer whether part 1's hash-based fix should be kept as MoveBookFile's OWN destination-exists check instead of being retired outright."
+ ],
+ "tests": [
+   "Full existing internal/organizer/organizer_regression_test.go and internal/organizer/unit_test.go suites must stay green throughout.",
+   "New integration-style test exercising ensureLibraryCopy's multi-file organize-then-DB-write sequence to confirm a DB write failure now rolls back the file move (the property MoveBookFile provides that the current ad-hoc path does not)."
+ ],
+ "acceptance": [
+   "go test ./internal/organizer/... ./internal/metafetch/... passes.",
+   "grep -n 'MoveBookFile' internal/organizer/organizer.go internal/metafetch/service_apply.go returns >=1 hit each after the refactor."
+ ],
+ "edge_cases": [
+   "Multi-file books: MoveBookFile's contract is per-file; OrganizeBookDirectory must still produce one coherent pathMap and one book-level empty-organize guard (the L860/F6 fix at organizer.go:813) -- the refactor must not lose that book-level check by decomposing into independent per-file calls.",
+   "Partial failure mid-book (file 500 of 1,189 fails after 499 succeeded): decide and document whether MoveBookFile's rollback is per-file-only (leaving 499 successfully moved) or whether the book-level caller needs its own compensating rollback for the whole batch -- this is a real design question, not an implementation detail."
+ ],
+ "anti_over_suppression": "N/A -- this is a correctness/robustness refactor, not a filter/guard.",
+ "depends_on_lines": [860, 872],
+ "gate": "make ci",
+ "notes": "Part 2 of 2 for TODO.md L872 (F5). Given effort=L and review_critical=true, this likely needs its own PLAN.md and worktree per CLAUDE.md's Plan Before Execution rule rather than being done inline -- flagging that explicitly for the coordinator rather than assuming a single PR."
+},
+{
+ "todo_line": 888, "src_id": null, "title": "audiobookStore was already narrowed to 8 entries WITHOUT splitting the service -- the item's 'irreducible without a split' premise is stale",
+ "verdict": "stale_done",
+ "verdict_evidence": "audiobookStore (internal/audiobooks/service.go:139-148) is now 8 declared entries (authorSeriesStore, bookReader, bookWriter, contributorResolver, contributorHydrator, bookTagStore, bookFileStore, perUserStateStore), not 11, and NOT via a service split: docs/audits/2026-08-18-interface-width-shapes.md's 'Correction: audiobookStore did not need the service split' section explicitly retracts the exact arithmetic (~50 methods / 7-per-group = 8 groups, 'no arrangement of its interface will fix that') this TODO item's title argues from. The mechanism was embedding the pre-existing authorSeriesStore BY NAME (9 methods for 1 entry) rather than inlining, per the audit doc: 'It was narrowed to eight entries with no service change.'",
+ "domain": "internal/audiobooks",
+ "exact_files": [],
+ "verified_anchors": [
+   {"claim": "audiobookStore is 8 entries today, embedding authorSeriesStore by name", "grep_cmd": "grep -n 'type audiobookStore interface' internal/audiobooks/service.go", "expect": "1 hit L139, body shows 8 embeds"},
+   {"claim": "the audit doc explicitly retracts the service-split-is-required premise", "grep_cmd": "grep -n 'Correction: .audiobookStore. did not need the service split' docs/audits/2026-08-18-interface-width-shapes.md", "expect": "1 hit"},
+   {"claim": "the width was measured via the same empty-interface compiler probe methodology the TODO's own numbers came from", "grep_cmd": "grep -n 'empty-interface compiler probe' internal/audiobooks/service.go", "expect": "1 hit in the header comment above audiobookStore"}
+ ],
+ "reuse": [],
+ "polarity": "transform",
+ "effort": "S", "tier": "haiku", "why_tier": "no code change -- checking off/correcting an already-superseded finding",
+ "review_critical": false,
+ "goal": "No code change needed for the interface-width concern this item raises. The residual, narrower finding this item is built on top of -- 'a service with ~50 distinct store dependencies is too big' -- is explicitly preserved by the audit doc's own words ('That is still true and still filed in todo.d/') as a SEPARATE, lower-priority, already-filed finding, not this TODO.md item's job to re-open.",
+ "background": [
+   "docs/audits/2026-08-18-interface-width-shapes.md lines ~265-300: 'What stands: the finding that a service with ~50 distinct store dependencies is too big. That is still true and still filed in todo.d/; the per-file buckets above are still the map for it. What does not stand is treating it as a precondition for narrowing the interface. Transitive width went 172 -> 50 and the gate went 2 -> 1 without touching a single function body.'",
+   "The per-file dependency buckets the TODO cites (service_single.go 23, service_mutation.go 20, service_query.go 15, service_tags.go 10, service_filtering.go 8, helpers.go 5) are still accurate as file-size facts (verified: 531/573/799/93/1186/583 lines respectively) but are evidence for the SEPARATE too-big-service finding, not for this item's interface-narrowing claim."
+ ],
+ "steps": ["1. Mark this TODO.md item done/superseded, citing service.go:139-148 and the audit doc's Correction section. If the owner wants the separate 'service is too big' finding tracked, confirm it already has its own todo.d/ entry rather than re-filing it here."],
+ "tests": ["n/a -- no code change"],
+ "acceptance": ["awk '/^type audiobookStore interface/,/^}/' internal/audiobooks/service.go | grep -cE '^\\t[A-Za-z]' returns 8."],
+ "edge_cases": [],
+ "anti_over_suppression": "N/A",
+ "depends_on_lines": [975],
+ "gate": "n/a (no code change; TODO.md checkbox only)",
+ "notes": "L975 in this same scope makes an overlapping, equally-stale claim (audiobookStore/audiobookUpdateStore '11 each') -- both should be closed together citing the same evidence, not as two separate PRs."
+},
+{
+ "todo_line": 903, "src_id": null, "title": "Audit remaining 'we use the wide type because X requires it' justification comments -- one genuinely stale instance found",
+ "verdict": "actionable",
+ "verdict_evidence": "Surveyed every 'requires the full' / '= database.Store' comment in the repo (grep -rn 'requires the full\\|= database.Store\\|= database.BookStore' --include=*.go .). Two of three checked are CORRECT (internal/server/handlers/operations/interfaces.go:27 already self-documents its own 2026-08-14 narrowing to operationsBookStore; internal/server/handlers/system/interfaces.go:91's SettingsStore claim is verified true -- config.SaveConfigToDatabase's param IS database.SettingsStore itself, grep -n 'func SaveConfigToDatabase' internal/config/persistence.go -> 1 hit L1491, `store database.SettingsStore`). ONE is stale: internal/dedup/collectors_metadata.go:51 claims 'database.EnsureSingletonBookTag (which requires the full Store interface)' but EnsureSingletonBookTag's actual parameter is `BookTagSingletonStore` (grep -n 'func EnsureSingletonBookTag' internal/database/tag_helpers.go -> 1 hit L66, signature `(store BookTagSingletonStore, ...)`), a 3-method interface (GetBookTagsDetailed, RemoveBookTagsByPrefix, AddBookTagWithSource), not the full Store -- yet CollectDuration's tagStore parameter is still declared as the wide dedup.Store (8-entry composition), which is unnecessarily wide for its only two call sites.",
+ "domain": "internal/dedup",
+ "exact_files": ["internal/dedup/collectors_metadata.go"],
+ "verified_anchors": [
+   {"claim": "EnsureSingletonBookTag actually takes the narrow BookTagSingletonStore, not the full Store", "grep_cmd": "grep -n 'func EnsureSingletonBookTag' internal/database/tag_helpers.go", "expect": "1 hit L66, param type BookTagSingletonStore"},
+   {"claim": "BookTagSingletonStore is a 3-method interface", "grep_cmd": "grep -n 'type BookTagSingletonStore interface' internal/database/tag_helpers.go", "expect": "1 hit L46"},
+   {"claim": "CollectDuration's tagStore param is currently the wide dedup.Store", "grep_cmd": "grep -n 'tagStore Store' internal/dedup/collectors_metadata.go", "expect": "1 hit L147"},
+   {"claim": "dedup.Store is an 8-entry composition (the 'whole surface')", "grep_cmd": "grep -n 'type Store interface' internal/dedup/store.go", "expect": "1 hit L102"},
+   {"claim": "operations/interfaces.go's comment already correctly documents its own historical narrowing (verified correct, no action needed)", "grep_cmd": "grep -n 'structural satisfaction requires the full' internal/server/handlers/operations/interfaces.go", "expect": "1 hit L27, in a comment explaining it was narrowed by #2566"},
+   {"claim": "system/interfaces.go's SettingsStore claim is verified accurate (no action needed)", "grep_cmd": "grep -n 'func SaveConfigToDatabase' internal/config/persistence.go", "expect": "1 hit L1491, param `store database.SettingsStore`"}
+ ],
+ "reuse": [{"name": "database.BookTagSingletonStore (the narrow interface to declare CollectDuration's tagStore param as, instead of dedup.Store)", "file": "internal/database/tag_helpers.go", "verify_grep": "grep -n 'type BookTagSingletonStore interface' internal/database/tag_helpers.go"}],
+ "polarity": "transform",
+ "effort": "S", "tier": "sonnet", "why_tier": "single-file, single-parameter narrowing with a clear compiler-checkable target interface already defined; low risk",
+ "review_critical": false,
+ "goal": "Narrow CollectDuration's `tagStore Store` parameter (internal/dedup/collectors_metadata.go:147) to `tagStore database.BookTagSingletonStore`, since its only use is four EnsureSingletonBookTag calls (lines 245,248,261,264) which themselves only need that 3-method interface -- and correct the stale comment at line 51 that currently justifies the wide type with a claim about EnsureSingletonBookTag that is no longer true.",
+ "background": [
+   "This is the third instance of the exact pattern CLAUDE.md's worked example describes (handlers.OrganizeStore, handlers.OperationsStore, both already fixed 2026-08-18) -- 'a comment explains why something must stay wide, verify the claim before believing it.'",
+   "collectors_metadata.go:142-147: 'tagStore is the Store used for side-effect tag writes; it must be [comment continues, truncated in grep] ... may be nil -- side-effect tags silently skipped'."
+ ],
+ "steps": [
+   "1. Read internal/dedup/collectors_metadata.go:130-270 in full to confirm tagStore has no other use besides the four EnsureSingletonBookTag calls.",
+   "2. Change CollectDuration's signature (collectors_metadata.go:145-147) from `tagStore Store` to `tagStore database.BookTagSingletonStore` (database already imported per line ~43).",
+   "3. Update the doc comment at collectors_metadata.go:51 to remove the stale 'requires the full Store interface' claim and instead say EnsureSingletonBookTag needs database.BookTagSingletonStore.",
+   "4. Find and update every call site of CollectDuration to pass a value satisfying the narrower interface (a *database.PebbleStore or database.MockStore already does, structurally, since narrowing a parameter type never requires call-site changes when the passed value's concrete type already implements the wider interface's superset)."
+ ],
+ "tests": ["go build ./internal/dedup/... after the change is itself the test -- a structural interface narrowing has no new runtime behavior to unit-test; existing dedup collector tests must stay green."],
+ "acceptance": ["go build ./... succeeds.", "grep -n 'tagStore database.BookTagSingletonStore' internal/dedup/collectors_metadata.go returns 1 hit."],
+ "edge_cases": ["A caller passing `nil` for tagStore (the documented 'side-effect tags silently skipped' path) must still compile and behave identically -- nil satisfies any interface type."],
+ "anti_over_suppression": "N/A -- this is an interface-narrowing refactor, not a filter/guard.",
+ "depends_on_lines": [],
+ "gate": "make ci",
+ "notes": "Scope for this item is exactly the one stale comment found; the TODO's broader ask ('audit existing... comments across the codebase... grep for justification comments near database.Store / database.BookStore and re-verify each claim') was performed as part of this investigation (see verified_anchors) and turned up only this one additional instance beyond the two CLAUDE.md already documents as fixed."
+},
+{
+ "todo_line": 921, "src_id": null, "title": "Bump the ghcommon reusable-workflow pins in at least two PRs, low-consequence first",
+ "verdict": "actionable",
+ "verdict_evidence": "Confirmed the month-apart split the TODO describes: 7 of 8 workflow files pin falkcorp/github-common at SHA d0c3326b (comment '# main 2026-07-05'), while .github/workflows/ci.yml's reusable-ci-minimal.yml pins a different, newer SHA 828afb50 (comment '# main 2026-08-18 (adds go-lint + advisory super-linter jobs)'). grep -rn 'falkcorp/github-common/.github/workflows/' .github/workflows/*.yml confirms all 9 reference lines across 8 files.",
+ "domain": "ci/scripts",
+ "exact_files": [
+   ".github/workflows/hard-burndown.yml",
+   ".github/workflows/nightly-burndown.yml",
+   ".github/workflows/triage-poll.yml",
+   ".github/workflows/frontend-ci.yml",
+   ".github/workflows/nightly.yml",
+   ".github/workflows/security.yml",
+   ".github/workflows/release-prod.yml",
+   ".github/workflows/prerelease.yml"
+ ],
+ "verified_anchors": [
+   {"claim": "7 workflow files pin the same 2026-07-05 SHA", "grep_cmd": "grep -rn 'd0c3326b96557c8ea9117c1c196b628e5e028186' .github/workflows/*.yml", "expect": "7 hits across hard-burndown.yml, nightly-burndown.yml, triage-poll.yml, frontend-ci.yml, nightly.yml, security.yml, release-prod.yml, prerelease.yml"},
+   {"claim": "ci.yml pins a different, newer SHA (2026-08-18)", "grep_cmd": "grep -n '828afb50d0d18c426c72a6ed1060123677bee674' .github/workflows/ci.yml", "expect": "1 hit L45"}
+ ],
+ "reuse": [],
+ "polarity": "transform",
+ "effort": "M", "tier": "sonnet", "why_tier": "mechanical version-pin bumps across 8 files but requires splitting into >=2 sequenced PRs with a nightly-run wait between the low- and high-consequence groups, which is process/sequencing work, not pure mechanics",
+ "review_critical": false,
+ "goal": "Bump all 7 stale falkcorp/github-common SHA pins to the current main SHA, split across at least 2 PRs ordered by consequence: PR 1 bumps triage-poll.yml, hard-burndown.yml, nightly-burndown.yml (low-consequence, run nightly/on-demand) and is left to run at least once before PR 2 bumps frontend-ci.yml, nightly.yml, security.yml, release-prod.yml, prerelease.yml (release and security paths).",
+ "background": [
+   "TODO.md L921-L327: 'release-prod.yml and prerelease.yml are the risk: a reusable release workflow that broke somewhere in those 22 commits is not discovered until someone cuts a release... Bump the low-consequence ones (triage-poll, the burndowns) first and let them run a nightly before touching release or security.'"
+ ],
+ "steps": [
+   "1. Resolve the current HEAD SHA of falkcorp/github-common's main branch (or the specific commit the owner wants pinned) -- this requires a live lookup (gh api or git ls-remote), not something derivable from this repo alone.",
+   "2. PR 1: update the `uses:` line's SHA (and its trailing `# main <date> (...)` comment, matching the existing comment convention) in .github/workflows/triage-poll.yml, hard-burndown.yml, nightly-burndown.yml only.",
+   "3. Merge PR 1, wait for at least one scheduled/nightly run of each of those three workflows to go green.",
+   "4. PR 2: update the same SHA in .github/workflows/frontend-ci.yml, nightly.yml, security.yml, release-prod.yml, prerelease.yml.",
+   "5. Do NOT touch .github/workflows/ci.yml's reusable-ci-minimal.yml pin (828afb50) -- it is already current; this item is only about the 7 stale pins converging to the same commit ci.yml already uses (or a newer one, if the owner wants to advance both together)."
+ ],
+ "tests": ["n/a -- CI workflow files are validated by GitHub Actions itself running the updated workflows; no local unit test applies."],
+ "acceptance": [
+   "After PR 1 merges: the next scheduled run of triage-poll.yml, hard-burndown.yml, and nightly-burndown.yml (or a manual workflow_dispatch trigger) completes with a green status.",
+   "After PR 2 merges: grep -rn 'd0c3326b96557c8ea9117c1c196b628e5e028186' .github/workflows/*.yml returns 0 hits (all pins converged to the new SHA)."
+ ],
+ "edge_cases": ["A workflow file bumped in PR 1 that has no near-term scheduled trigger (verify each of the three actually has a `schedule:` or is easy to workflow_dispatch) -- if any lacks one, trigger it manually to get the 'let it run once' signal before PR 2."],
+ "anti_over_suppression": "N/A",
+ "depends_on_lines": [],
+ "gate": "n/a (ci/scripts -- verified by the workflow runs themselves, not make ci)",
+ "notes": "This is process/sequencing work as much as a code change -- flag to the coordinator that PR 1 and PR 2 must NOT be dispatched in parallel (they are explicitly sequenced with a real-world wait between them), unlike most items in this scope."
+},
+{
+ "todo_line": 969, "src_id": null, "title": "database.Store (40) -- make it unreachable (Phase 2 items 2+3 of the kill-v1-and-narrow plan), not smaller",
+ "verdict": "actionable",
+ "verdict_evidence": "Phase 2 item 3 ('split iface_misc.go') is already done differently than planned: iface_misc.go no longer exists (find internal/database -iname 'iface_misc*' -> 0 hits); Store's 40 sub-interfaces were REGROUPED into 6 unexported domain composites (catalogStore, mediaStore, accountStore, enrichmentStore, operationsStore, platformStore) inside store.go itself, with the file's own comment stating 'This is a REGROUPING, not a narrowing: Store's method set is byte-identical and no consumer moved.' Phase 2 item 2 ('a build gate on database.Store in new files... must be AST/go-types, not grep') is NOT done: no such gate exists (find . -iname '*store_width*' -o -iname '*interfacebloat*' finds only the golangci-lint declared-entries check, nothing checking database.Store as a parameter type), and 91 files still reference database.Store directly.",
+ "domain": "internal/database",
+ "exact_files": [],
+ "verified_anchors": [
+   {"claim": "iface_misc.go no longer exists -- already split (differently than the plan literally described)", "grep_cmd": "find internal/database -iname 'iface_misc*'", "expect": "0 hits"},
+   {"claim": "Store is now a 6-entry regrouping of the original 40, explicitly NOT a narrowing", "grep_cmd": "grep -n 'This is a REGROUPING, not a narrowing' internal/database/store.go", "expect": "1 hit"},
+   {"claim": "91 files still reference database.Store directly -- reachability is unchanged", "grep_cmd": "grep -rln 'database.Store\\b' --include=*.go . | grep -v _test | grep -v vendor | grep -v .worktrees | wc -l", "expect": "91"},
+   {"claim": "no AST/go-types-based width gate exists yet", "grep_cmd": "find . -iname '*store_width*' -o -iname '*interfacebloat*'", "expect": "only .golangci.yml (the declared-entries linter, not a reachability gate)"}
+ ],
+ "reuse": [
+   {"name": "docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md Phase 2 items 2-3 (the design already written, item 3 partially superseded)", "file": "docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md", "verify_grep": "grep -n 'A build gate on .database.Store. in new files' docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md"},
+   {"name": "the width-ratchet pattern already used for interfacebloat's baseline (#2548) as a precedent for a similar ratchet mechanism", "file": ".golangci.yml", "verify_grep": "grep -n 'interfacebloat' .golangci.yml"}
+ ],
+ "polarity": "additive",
+ "effort": "L", "tier": "opus", "why_tier": "requires an AST/go-types-based static check (grep undercounts by 15% per the plan doc's own measurement) integrated into CI, plus a grandfather list for the 91 existing legitimate uses -- real tooling work, not a mechanical edit",
+ "review_critical": false,
+ "goal": "Build the CI gate Phase 2 item 2 describes: an AST/go-types-based check (not grep, since the plan doc measured grep undercounting database.Store references by 15% -- 11 seen vs 87 real) that fails a PR introducing a NEW file/function parameter typed as the full database.Store, while grandfathering the 91 existing legitimate uses. This makes the wide type unreachable-by-default going forward, which is the actual Phase 2 goal the regrouping (already done) did not achieve.",
+ "background": [
+   "docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md Phase 2 (lines 107-124): 'Not \"shrink BookStore\". Instead, remove the paths by which a new file can acquire 398 methods without deciding to.' Item 2: 'A build gate on database.Store in new files. Must be AST/go-types, not grep.'",
+   "store.go:14-40's own comment on the regrouping explicitly frames it as satisfying the interfacebloat LINTER's declared-entries count, not as achieving the reachability goal: 'a flat list of 40 was the last finding in the whole repo and held the width baseline at 1... This is a REGROUPING, not a narrowing.'",
+   "The 91-file baseline (grep -rln 'database.Store\\b' ...) is the number a new gate would need to grandfather at introduction time."
+ ],
+ "steps": [
+   "1. Write a Go tool (likely under scripts/ or a new cmd/, similar in spirit to the existing scripts/verify_interface_split.py referenced in store.go:24) using go/packages + go/types to walk the module, find every func/method parameter, struct field, and var declared with type database.Store (resolved, not textual), and diff against a checked-in baseline list of allowed files.",
+   "2. Seed the baseline list from the current 91-file grep result (cross-checked with the AST tool's own output, since the plan doc warns grep undercounts by 15%).",
+   "3. Wire the tool into .github/workflows/ci.yml (or a new lightweight job) so it fails a PR that adds database.Store to a file NOT in the baseline list, with an actionable error message pointing at this design doc.",
+   "4. Provide an explicit, reviewed escape hatch (e.g. a comment marker or a second baseline-update PR) for the rare case a new wide use is genuinely justified, mirroring the interfacebloat nolint-with-reason convention CLAUDE.md already establishes."
+ ],
+ "tests": [
+   "Unit test for the AST tool itself: a small fixture module with one file using database.Store as a parameter type is correctly flagged when NOT in the baseline, and correctly passed when it IS.",
+   "CI integration test: a synthetic PR-diff fixture (or a dry-run mode) proving the gate fires in the workflow, not just in a local unit test."
+ ],
+ "acceptance": [
+   "The new tool run against current HEAD reports exactly the 91-file baseline (or the AST-corrected true count, expected higher than 91 per the plan doc's 15%-undercount warning) with zero unexpected new hits.",
+   "A synthetic test file added with a database.Store parameter and NOT added to the baseline causes the CI job to fail."
+ ],
+ "edge_cases": [
+   "database.MockStore (399 methods, 108 files) is explicitly NOT in scope per the plan doc ('What phase 2 does NOT do: delete database.MockStore... it survives until its last direct reference goes') -- the gate must target database.Store specifically, not MockStore or any test-only type.",
+   "A file inside internal/database itself declaring Store-typed values (the type's own home package) should likely be exempt entirely, not counted against the baseline."
+ ],
+ "anti_over_suppression": "The synthetic-new-file-not-in-baseline test above is the anti-over-suppression case: proves the gate actually fires rather than being permissive-by-default.",
+ "depends_on_lines": [],
+ "gate": "make ci (once the new gate is wired into CI, it becomes part of this)",
+ "notes": "This is real, unstarted work despite the interfacebloat linter score having already been fixed by the store.go regrouping -- do not let a green interfacebloat run be mistaken for this item being done; they measure different things (declared entries vs. reachability), exactly as store.go's own comment warns."
+},
+{
+ "todo_line": 970, "src_id": null, "title": "itunes/service.Store already narrowed to 7 entries -- the #2552-first blocker described in the TODO has already been resolved",
+ "verdict": "stale_done",
+ "verdict_evidence": "itunes/service.Store is now 7 composed entries (WriteBackStore, pathReconcilerStore, pathRepairerStore, playlistSyncStore, positionSyncStore, provisionerStore, importerStore): grep -n 'type Store interface' internal/itunes/service/store.go -> 1 hit, body has 7 embeds (awk-counted). docs/audits/2026-08-18-interface-width-shapes.md's 'What changed for itunes/service.Store' section documents exactly this: PRs #2560/#2561/#2563 narrowed the six subsystem leaves first (the #2552 lever the TODO describes as the prerequisite), and re-probing then returned 24 direct calls / 10 constraints landing in one new importerStore interface, 'which is how the result came in at 7 entries rather than the 8 first drafted.'",
+ "domain": "internal/itunes/service",
+ "exact_files": [],
+ "verified_anchors": [
+   {"claim": "itunes/service.Store composes 7 entries today, not 17 declared", "grep_cmd": "awk '/^type Store interface/,/^}/' internal/itunes/service/store.go | grep -cE '^\\t[A-Za-z]'", "expect": "7"},
+   {"claim": "the audit doc documents this as the completed re-probe/narrowing, citing the mechanism (#2552-style leaf narrowing first)", "grep_cmd": "grep -n 'What changed for .itunes/service.Store.' docs/audits/2026-08-18-interface-width-shapes.md", "expect": "1 hit"},
+   {"claim": "the audit doc's line stating the final entry count and its cause", "grep_cmd": "grep -n 'which is how the result came in at 7 entries' docs/audits/2026-08-18-interface-width-shapes.md", "expect": "1 hit"}
+ ],
+ "reuse": [],
+ "polarity": "transform",
+ "effort": "S", "tier": "haiku", "why_tier": "no code change -- checking off an already-completed narrowing",
+ "review_critical": false,
+ "goal": "No code change needed. Check off this TODO.md item: the #2552-style parameter-type fix was applied to itunes/service's helpers (via the six subsystem leaves being narrowed in #2560/#2561/#2563), and the aggregate Store re-probed at 7 entries as a direct consequence.",
+ "background": [
+   "This directly resolves L1000 in this same scope too ('re-probe itunesservice.Store after those two land') -- the audit doc's 'What changed' section IS that re-probe's result."
+ ],
+ "steps": ["1. Mark this TODO.md item done, citing internal/itunes/service/store.go's current 7-entry Store and docs/audits/2026-08-18-interface-width-shapes.md's 'What changed for itunes/service.Store' section."],
+ "tests": ["n/a -- no code change"],
+ "acceptance": ["awk '/^type Store interface/,/^}/' internal/itunes/service/store.go | grep -cE '^\\t[A-Za-z]' returns 7."],
+ "edge_cases": [],
+ "anti_over_suppression": "N/A",
+ "depends_on_lines": [1000],
+ "gate": "n/a (no code change; TODO.md checkbox only)",
+ "notes": "L1000 in this same scope should be closed together with this item -- it asks for exactly the re-probe this item's resolution already performed."
+},
+{
+ "todo_line": 973, "src_id": null, "title": "maintenance.JobStore (12) stays deliberately wide per the #2534 arbitration -- pointer to the real work item, not itself a task",
+ "verdict": "not_a_task",
+ "verdict_evidence": "This TODO item is a decision-status note ('deliberate choice from the #2534 arbitration; revisit only as per-job interfaces') pointing at future work rather than describing a distinct deliverable itself. docs/audits/2026-08-18-interface-width-shapes.md row 229 confirms the current state is unchanged and intentional: 'maintenance.JobStore | 12 | -- | Deliberate: chosen over per-job interfaces in the #2534 arbitration.' The actual per-job-interfaces execution work this item points to is fully specified as its own item at TODO.md L1009 (same scope) and as Phase 2 item 1 of docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md.",
+ "domain": "internal/maintenance",
+ "exact_files": [],
+ "verified_anchors": [
+   {"claim": "JobStore is a 7-group composition today (internal/maintenance/job.go, the v1 package -- distinct from internal/plugins/maintenance's ServerDeps)", "grep_cmd": "grep -n 'type JobStore interface' internal/maintenance/job.go", "expect": "1 hit L293"},
+   {"claim": "the audit doc confirms this width is a deliberate, unchanged decision from the #2534 arbitration", "grep_cmd": "grep -n 'Deliberate: chosen over per-job interfaces in the #2534 arbitration' docs/audits/2026-08-18-interface-width-shapes.md", "expect": "1 hit ~L229"},
+   {"claim": "Phase 2 item 1 of the kill-v1 plan is the execution-level pointer this item defers to", "grep_cmd": "grep -n 'maintenance.JobStore.*per-job interfaces' docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md", "expect": "1 hit in Phase 2 section"}
+ ],
+ "reuse": [],
+ "polarity": "additive",
+ "effort": "S", "tier": "haiku", "why_tier": "n/a -- no distinct deliverable, this item only records a decision",
+ "review_critical": false,
+ "goal": "n/a -- no code change here. If the owner wants JobStore actually split into per-job interfaces, that work is L1009 in this same scope (or Phase 2 item 1 of the kill-v1 plan directly).",
+ "background": ["The item's own wording ('revisit only as per-job interfaces (plan phase 2, item 1)') is explicitly deferring, not requesting, action -- it documents why the current state is intentional rather than an oversight."],
+ "steps": [],
+ "tests": [],
+ "acceptance": [],
+ "edge_cases": [],
+ "anti_over_suppression": "N/A",
+ "depends_on_lines": [1009],
+ "gate": "n/a",
+ "notes": "This is technically a deferral from a real prior arbitration (#2534), not the TODO-inventory-parser over-capturing prose -- flagged as not_a_task rather than parked only because none of the 14 owner decisions in this pass's scope explicitly names it; the underlying deferral is legitimate and well-evidenced. Do not build anything for this line; build L1009 instead."
+},
+{
+ "todo_line": 975, "src_id": null, "title": "audiobookStore/audiobookUpdateStore (11 each) is stale: audiobookUpdateStore was deleted, audiobookStore is now 8 entries",
+ "verdict": "stale_done",
+ "verdict_evidence": "audiobookUpdateStore no longer exists: grep -rn 'type audiobookUpdateStore' --include=*.go . -> 0 hits (confirmed by docs/audits/2026-08-18-interface-width-shapes.md row: '#2559 | 4 | audiobookUpdateStore (11) -- deleted, not split'). audiobookStore is 8 entries today, not 11 (same evidence as L888 in this scope: service.go:139-148). The TODO's own framing ('the finding is that the service is too big; do not re-group the interface in place, it scores worse on the gate and reads no better') is the exact claim the audit doc's 'Correction' section retracts: 'What does not stand is treating [the service split] as a precondition for narrowing the interface.'",
+ "domain": "internal/audiobooks",
+ "exact_files": [],
+ "verified_anchors": [
+   {"claim": "audiobookUpdateStore was deleted, not split", "grep_cmd": "grep -rn 'type audiobookUpdateStore' --include=*.go .", "expect": "0 hits"},
+   {"claim": "the audit doc records the deletion explicitly", "grep_cmd": "grep -n 'audiobookUpdateStore (11) -- .deleted, not split.' docs/audits/2026-08-18-interface-width-shapes.md", "expect": "1 hit"},
+   {"claim": "audiobookStore is 8 entries today (same anchor as L888)", "grep_cmd": "grep -n 'type audiobookStore interface' internal/audiobooks/service.go", "expect": "1 hit L139"}
+ ],
+ "reuse": [],
+ "polarity": "transform",
+ "effort": "S", "tier": "haiku", "why_tier": "no code change -- checking off an already-superseded finding",
+ "review_critical": false,
+ "goal": "No code change needed -- both halves of this item's claim (11-method audiobookStore, 11-method audiobookUpdateStore) are stale.",
+ "background": ["This is the same underlying correction as L888 in this scope (docs/audits/2026-08-18-interface-width-shapes.md's 'Correction: audiobookStore did not need the service split' section) -- close both items together."],
+ "steps": ["1. Mark this TODO.md item done, citing the same evidence as L888."],
+ "tests": ["n/a -- no code change"],
+ "acceptance": ["grep -rn 'type audiobookUpdateStore' --include=*.go . returns 0 hits."],
+ "edge_cases": [],
+ "anti_over_suppression": "N/A",
+ "depends_on_lines": [888],
+ "gate": "n/a (no code change; TODO.md checkbox only)",
+ "notes": "Duplicate finding of L888 -- close together, single evidence citation covers both."
+},
+{
+ "todo_line": 984, "src_id": null, "title": "positionSyncStore, pathRepairerStore, and the readstatus anonymous composite are all already narrowed -- fixed",
+ "verdict": "stale_done",
+ "verdict_evidence": "readstatus.RecomputeUserBookState and SetManualStatus already take a NAMED 4-method readstatus.Store (internal/readstatus/readstatus.go:51-56: GetBookFiles, ListUserPositionsForBook, GetUserBookState, SetUserBookState), not the anonymous composite interface{database.BookFileStore; database.UserPositionStore} the TODO describes: grep -n 'func RecomputeUserBookState' internal/readstatus/readstatus.go -> 1 hit L62, signature `(store Store, ...)`. positionSyncStore embeds readstatus.Store by name and is itself narrow (internal/itunes/service/position_sync.go:47-56, comment: 'Previously database.BookStore + BookFileStore + UserPositionStore, 86 methods transitively... this had to satisfy two whole database surfaces to call a four-method function' -- now fixed). pathRepairerStore is similarly narrow (internal/itunes/service/path_repair.go:93-101, comment: 'Previously database.BookStore + BookFileStore + OperationStore + ExternalIDStore + PathHistoryStore -- 121 methods transitively... narrowing that signature is what unblocked this'), composed of tierAStore, pidLookup, opResultWriter, operations.OperationStateDeleter plus 3 direct methods -- not 'the whole database.OperationStore' as the TODO describes.",
+ "domain": "internal/itunes/service",
+ "exact_files": [],
+ "verified_anchors": [
+   {"claim": "readstatus.Store is a named 4-method interface, not an anonymous composite", "grep_cmd": "grep -n 'type Store interface' internal/readstatus/readstatus.go", "expect": "1 hit L51"},
+   {"claim": "RecomputeUserBookState/SetManualStatus take this named Store, not an inline anonymous interface", "grep_cmd": "grep -n 'func RecomputeUserBookState(store Store' internal/readstatus/readstatus.go", "expect": "1 hit L62"},
+   {"claim": "positionSyncStore's doc comment confirms it was already narrowed from 86 transitive methods", "grep_cmd": "grep -n 'Previously database.BookStore + BookFileStore + UserPositionStore, 86' internal/itunes/service/position_sync.go", "expect": "1 hit"},
+   {"claim": "pathRepairerStore's doc comment confirms it was already narrowed from 121 transitive methods", "grep_cmd": "grep -n 'Previously database.BookStore + BookFileStore + OperationStore' internal/itunes/service/path_repair.go", "expect": "1 hit"}
+ ],
+ "reuse": [],
+ "polarity": "transform",
+ "effort": "S", "tier": "haiku", "why_tier": "no code change -- checking off an already-completed narrowing",
+ "review_critical": false,
+ "goal": "No code change needed. Check off this item: the #2552 lever (narrow the leaf's parameter type first) was already applied one package out, exactly as the item's own final line anticipated ('This is the #2552 lever one package out: fix the parameter types and the two leaves narrow themselves').",
+ "background": [],
+ "steps": ["1. Mark this TODO.md item done, citing readstatus.go:51-56,62 and position_sync.go:47-56 / path_repair.go:93-101's own doc comments as the closing evidence."],
+ "tests": ["n/a -- no code change"],
+ "acceptance": ["go build ./internal/readstatus/... ./internal/itunes/service/... succeeds (structural confirmation the narrower types still compile)."],
+ "edge_cases": [],
+ "anti_over_suppression": "N/A",
+ "depends_on_lines": [],
+ "gate": "n/a (no code change; TODO.md checkbox only)",
+ "notes": "This closure is also part of what makes L970/L1000 stale_done -- the itunes/service.Store aggregate narrowing depended on exactly this leaf-level work landing first."
+},
+{
+ "todo_line": 1000, "src_id": null, "title": "itunesservice.Store re-probe already happened -- 7 entries, and the 8 loose import-pipeline methods were resolved into their own importerStore",
+ "verdict": "stale_done",
+ "verdict_evidence": "docs/audits/2026-08-18-interface-width-shapes.md's 'What changed for itunes/service.Store' section (the same section cited for L970) IS the re-probe this item asks for: 'Narrowing the leaves first (#2560, #2561, #2563)... re-probing then returned 24 direct calls and 10 constraints where before it returned an unusable answer. The 24 all landed in one file, importer.go, which is what made importerStore a real surface.' The item's specific open question -- whether the 8 import-pipeline methods (CreateAuthor, CreateSeries, GetSeriesByName, SetBookAuthors, IsHashBlocked, SaveLibraryFingerprint, GetPendingDeferredITunesUpdates, MarkDeferredITunesUpdateApplied) belong to one of the six subsystems or need their own interface -- was answered: they got their own `importerStore` interface, confirmed as the 7th entry in the current Store composition (grep -n 'importerStore' internal/itunes/service/store.go).",
+ "domain": "internal/itunes/service",
+ "exact_files": [],
+ "verified_anchors": [
+   {"claim": "importerStore exists as its own entry in the Store composition", "grep_cmd": "grep -n 'importerStore' internal/itunes/service/store.go", "expect": ">=1 hit"},
+   {"claim": "the audit doc's re-probe result names importer.go as where the 24 calls landed, motivating importerStore", "grep_cmd": "grep -n 'which is what made .importerStore. a real surface' docs/audits/2026-08-18-interface-width-shapes.md", "expect": "1 hit"}
+ ],
+ "reuse": [],
+ "polarity": "transform",
+ "effort": "S", "tier": "haiku", "why_tier": "no code change -- checking off an already-answered question",
+ "review_critical": false,
+ "goal": "No code change needed. Check off this item: the re-probe happened (as part of the same #2560/#2561/#2563 + importerStore work that resolved L970), and its open composition question was decided in favor of a per-consumer importerStore interface rather than leaving the 8 methods loose on the aggregate.",
+ "background": [],
+ "steps": ["1. Mark this TODO.md item done, citing internal/itunes/service/store.go's importerStore entry and the audit doc's 'What changed for itunes/service.Store' section."],
+ "tests": ["n/a -- no code change"],
+ "acceptance": ["grep -n 'importerStore' internal/itunes/service/store.go returns >=1 hit."],
+ "edge_cases": [],
+ "anti_over_suppression": "N/A",
+ "depends_on_lines": [970, 984],
+ "gate": "n/a (no code change; TODO.md checkbox only)",
+ "notes": "Close together with L970 -- both are resolved by the same 2026-08-18 audit-doc evidence."
+},
+{
+ "todo_line": 1009, "src_id": null, "title": "Give maintenance jobs (v1, internal/maintenance) per-job store interfaces instead of the shared JobStore",
+ "verdict": "actionable",
+ "verdict_evidence": "JobStore (internal/maintenance/job.go:293-301) is still a single shared 7-group composition used by all jobs via the package-level registry: grep -n 'func All(' internal/maintenance/registry.go -> 1 hit L51, signature `func All() []MaintenanceJob` (no store parameter, confirming the structural blocker the TODO describes -- jobs register at init() with no store in scope). The two call sites the TODO names both still exist: internal/server/maintenance_job_op.go and internal/server/maintenance_dispatcher.go (find . -name 'maintenance_dispatcher.go' -> internal/server/maintenance_dispatcher.go). Phase 1 (kill the v1 maintenance stack, which would delete maintenance_dispatcher.go) has NOT completed: the file still exists at HEAD, confirming this item's own stated blocker ('cheaper to do after the v1 retirement... deleted by phase 1') is still live.",
+ "domain": "internal/maintenance",
+ "exact_files": [
+   "internal/maintenance/job.go",
+   "internal/maintenance/registry.go",
+   "internal/server/maintenance_job_op.go",
+   "internal/server/maintenance_dispatcher.go"
+ ],
+ "verified_anchors": [
+   {"claim": "JobStore is still a single shared interface, 7 embedded groups", "grep_cmd": "grep -n 'type JobStore interface' internal/maintenance/job.go", "expect": "1 hit L293"},
+   {"claim": "All() takes no store parameter, confirming jobs register with no store in scope", "grep_cmd": "grep -n 'func All(' internal/maintenance/registry.go", "expect": "1 hit L51, signature `func All() []MaintenanceJob`"},
+   {"claim": "maintenance_dispatcher.go (the call site Phase 1 would delete) still exists", "grep_cmd": "find . -name 'maintenance_dispatcher.go' -not -path './.worktrees/*'", "expect": "1 hit: internal/server/maintenance_dispatcher.go"},
+   {"claim": "the second named call site also still exists", "grep_cmd": "find . -name 'maintenance_job_op.go' -not -path './.worktrees/*'", "expect": "1 hit: internal/server/maintenance_job_op.go"}
+ ],
+ "reuse": [
+   {"name": "internal/plugins/maintenance/deps.go's already-completed per-concern interface segregation (StoreProvider, OpsStore, etc.) as the pattern for per-job interfaces in the v1 package", "file": "internal/plugins/maintenance/deps.go", "verify_grep": "grep -n 'type OpsStore interface' internal/plugins/maintenance/deps.go"},
+   {"name": "docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md Phase 2 item 1 -- the design already written for exactly this", "file": "docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md", "verify_grep": "grep -n 'maintenance.JobStore (187 methods / 12 interfaces) -> per-job interfaces' docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md"}
+ ],
+ "polarity": "transform",
+ "effort": "L", "tier": "sonnet", "why_tier": "mechanical per-job (37 jobs) but touches every job's Run signature plus both registry call sites -- large diff, well-suited to parallel-sweep, but not small",
+ "review_critical": false,
+ "goal": "Replace the package-level All()/Register() registry and the shared 12-group JobStore with per-job store interfaces: each of the 37 jobs in internal/maintenance/jobs/ declares its own 2-5 method interface for exactly what its Run body calls (the same estimate-then-typecheck-proves-it move #2534/#2536 already used), and All(store) is constructed with the store in scope rather than at package-level init().",
+ "background": [
+   "Plan doc Phase 2 item 1 (docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md): 'Each Run body is unchanged and already compiles against a bounded set, so each job can declare its own 2-5 method interface and the type checker verifies it... 37 jobs, mechanical, parallelisable.' The plan's 2026-08-18 update explicitly reaffirms this item is unaffected by the width-sweep correction and 'remains the next real step.'",
+   "TODO.md's own reasoning for sequencing: maintenance_dispatcher.go is one of the two call sites requiring an All()->All(store) signature change, and Phase 1 step 3 (delete maintenance_dispatcher.go) removes that call site entirely -- doing this work before Phase 1 lands means touching a file that will shortly be deleted anyway.",
+   "measured 2026-08-18 (per the TODO and the audit doc row 229): 23 of the 37 directly-called methods are used by exactly one job; only 5 are used by more than 4 jobs (GetAllBooksCore 18, GetBookByID 12, UpdateBook 10, GetAllBookFilesCore 10, GetBookFiles 8) -- so most of the shared JobStore contract is not actually shared."
+ ],
+ "steps": [
+   "1. Confirm whether Phase 1 (kill-v1) has progressed further since this scan (re-run `find . -name maintenance_dispatcher.go`); if it has been deleted, this item's ordering rationale is moot and the work can proceed against `internal/server/maintenance_job_op.go` alone.",
+   "2. If maintenance_dispatcher.go still exists, recommend to the coordinator that Phase 1 (a separate, smaller, already-planned effort) lands FIRST, since this item's own analysis says so -- flag as a sequencing dependency rather than building blind.",
+   "3. Once unblocked: for each of the 37 jobs in internal/maintenance/jobs/, use the same empty-interface compiler-probe methodology as internal/audiobooks/service.go's audiobookStore comment (-gcflags=-e) to enumerate exactly which JobStore methods that job's Run body calls.",
+   "4. Declare a per-job interface (or a small set of grouped narrow interfaces for jobs sharing real overlap, e.g. the 5 methods used by >4 jobs) in each job's own file.",
+   "5. Change MaintenanceJob's Run signature (or the registry's construction) so All(store) is called with a store in scope, updating both surviving call sites (maintenance_job_op.go, and maintenance_dispatcher.go if Phase 1 has not yet deleted it) and the package-level Register()/All() functions in internal/maintenance/registry.go.",
+   "6. This is a strong /parallel-sweep candidate given 37 mechanically-similar per-job tasks -- flag to the coordinator rather than doing all 37 serially."
+ ],
+ "tests": [
+   "Each job's existing unit tests must stay green with the narrower interface -- the type checker is the primary proof (per the plan's stated test strategy: 'Type checker as the test wherever a signature changes').",
+   "internal/maintenance/job_test.go and registry_test.go need updating for the new All(store) signature."
+ ],
+ "acceptance": [
+   "go build ./... succeeds with every job declaring its own narrow interface.",
+   "go vet ./internal/maintenance/... passes.",
+   "grep -n 'func All(' internal/maintenance/registry.go shows the new store-taking signature."
+ ],
+ "edge_cases": [
+   "A job using one of the 5 widely-shared methods (GetAllBooksCore, GetBookByID, UpdateBook, GetAllBookFilesCore, GetBookFiles) should embed a small shared interface for those rather than each independently re-declaring the same 1-5 methods 10+ times -- balance DRY against the per-job-narrow goal, following the same judgment internal/audiobooks/service.go's bookReader/bookWriter grouping already models.",
+   "make ci currently cannot pass on main per the plan doc's own test-strategy note (10 pre-existing staticcheck findings, 0 introduced by this work) -- use go build + targeted go test as the real gate, not a red make ci, matching the plan's explicit guidance."
+ ],
+ "anti_over_suppression": "N/A -- this is an interface-narrowing refactor, not a filter/guard.",
+ "depends_on_lines": [973],
+ "gate": "go build ./... && go test ./internal/maintenance/... (make ci is known-red on main per the plan doc; do not read a red make ci as a signal from this work)",
+ "notes": "L973 in this same scope is a decision-record pointer to this exact item -- close L973 as not_a_task and treat this line as the real, actionable deliverable. Strongly recommend /parallel-sweep given the 37-job mechanical shape, once the Phase-1 sequencing question in step 1-2 is resolved."
+}
+]

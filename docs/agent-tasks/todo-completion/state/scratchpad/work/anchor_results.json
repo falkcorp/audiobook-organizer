@@ -1,0 +1,1026 @@
+[
+ {
+  "task": "TASK-051",
+  "claim": "34 of 36 sampled stale paths are still present in the live spec",
+  "cmd": "python3 -c \"import json; d=json.load(open('docs/api/openapi.json')); print(sum(1 for p in ['/login','/logout','/books','/me','/sessions','/status','/invites'] if p in d['paths']))\"",
+  "expect": "7 (all sampled group-relative duplicates still present)",
+  "nlines": 1,
+  "sample": [
+   "7"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-054",
+  "claim": "the doc still lists playlists, collections, series detail, authors as safe to stub",
+  "cmd": "grep -n 'Safe to stub' -A 1 docs/reference/abs-target-client-contract.md",
+  "expect": "1 hit listing all 4 names",
+  "nlines": 2,
+  "sample": [
+   "505:**Safe to stub** (`[]`/`{}`/404 per \u00a76.6): playlists, collections, series detail, authors",
+   "506-detail, tasks, sessions/listening-sessions, all stats endpoints, users, backups,"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-054",
+  "claim": "the doc has not been edited since the 2026-08-11 audit, despite the playlists/collections/series fixes landing 2026-08-13/2026-08-16",
+  "cmd": "grep -n 'last-edited' docs/reference/abs-target-client-contract.md",
+  "expect": "2026-08-11",
+  "nlines": 1,
+  "sample": [
+   "4:<!-- last-edited: 2026-08-11 -->"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-055",
+  "claim": "todo.d/README.md exists as the target for the new rule",
+  "cmd": "test -f todo.d/README.md && echo exists",
+  "expect": "exists",
+  "nlines": 1,
+  "sample": [
+   "exists"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-055",
+  "claim": "CLAUDE.md already has the CHANGELOG/TODO/executive-summary post-task hygiene triple this item wants extended",
+  "cmd": "grep -n 'Post-Task Hygiene' CLAUDE.md",
+  "expect": "1 hit, the existing section header",
+  "nlines": 1,
+  "sample": [
+   "269:## Post-Task Hygiene"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-056",
+  "claim": "the roundup's linked write-ups stop at 2026-08-09",
+  "cmd": "grep -n '^\\*\\*\\[' docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md",
+  "expect": "7 lines, dates Aug 4, 6, 6, 7, 8, 8, 9",
+  "nlines": 7,
+  "sample": [
+   "69:**[Almost every audiobook was showing the wrong running time](2026-08-04-audiobook-running-times-executive-summary.md)** (Aug 4)",
+   "76:**[Series that were really book numbers](2026-08-06-series-that-were-really-book-numbers-executive-summary.md)** (Aug 6)",
+   "83:**[The outage that marked the library broken \u2014 undone](2026-08-07-the-outage-that-marked-the-library-broken-executive-summary.md)** (Aug 7)"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-056",
+  "claim": "22 individual summaries exist dated 2026-08-10 through 2026-08-19, unlinked",
+  "cmd": "find docs/executive-summaries -iname '2026-08-1[0-9]-*executive-summary.md' | sort",
+  "expect": "22 files listed, none referenced in the roundup body",
+  "nlines": 22,
+  "sample": [
+   "docs/executive-summaries/2026-08-10-the-invisible-sheet-executive-summary.md",
+   "docs/executive-summaries/2026-08-11-instructions-that-were-thrown-away-executive-summary.md",
+   "docs/executive-summaries/2026-08-11-the-fix-that-only-moved-the-window-executive-summary.md"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-056",
+  "claim": "the roundup's own 'Individual write-ups this consolidates' line is stale (says seven, 2026-08-04 to 2026-08-09)",
+  "cmd": "grep -n 'Individual write-ups this consolidates' docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md",
+  "expect": "1 hit at L10",
+  "nlines": 1,
+  "sample": [
+   "10:**Individual write-ups this consolidates:** the seven dated summaries in this directory"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-057",
+  "claim": "no topology/runbook doc scoped to ABS-sync exists today (generic runbook/topology docs do exist elsewhere, e.g. docs/system/runbooks.md, but none is ABS-specific)",
+  "cmd": "find docs \\( -iname '*runbook*' -o -iname '*topology*' \\) | grep -i abs",
+  "expect": "0 hits \u2014 no existing runbook/topology doc is ABS-scoped",
+  "nlines": 0,
+  "sample": [],
+  "rc": 1,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-057",
+  "claim": "the sibling reference docs this new doc should match in structure/location already exist",
+  "cmd": "ls docs/reference/abs-target-client-contract.md docs/reference/abs-implementation-status.md",
+  "expect": "both files exist",
+  "nlines": 2,
+  "sample": [
+   "docs/reference/abs-implementation-status.md",
+   "docs/reference/abs-target-client-contract.md"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-058",
+  "claim": "manifest lists these 5 items as open human gates with DECISIONS-PENDING refs",
+  "cmd": "grep -n 'DECISIONS-PENDING' docs/plans/2026-07-10-execution-manifest.md",
+  "expect": "\u22655 hits at L24-27,81-85",
+  "nlines": 6,
+  "sample": [
+   "24:| INIT-5 | Torrent client-agnostic relocation | [spec](../specs/2026-07-10-torrent-relocation-design.md) | [plan](2026-07-10-torrent-relocation.md) | [7 briefs](../agent-tasks/torrent-relocation/) | SPEC \u2192 EXECUTE; **T2 = real-Deluge spike, STOP-FOR-HUMAN sign-off before T3** | **1/7** \u2014 T1 shipped (18570a39); T2 spike = human gate blocking T3\u2013T7 (DECISIONS-PENDING #2) |",
+   "25:| INIT-6 | Pluggable Workflow System (WF-2..6) | [spec](../specs/2026-07-10-workflow-system-design.md) | [plan (stub)](2026-07-10-workflow-system.md) | [AWAIT-APPROVAL](../agent-tasks/workflow-system/AWAIT-APPROVAL.md) | **STOP-FOR-HUMAN** \u2014 spec-only, core-infra blast radius | **GATED** \u2014 STOP-FOR-HUMAN spec review open (PR #1935; DECISIONS-PENDING #3) |",
+   "26:| INIT-7 | OpenAI Responses API migration | [spec](../specs/2026-07-10-responses-api-migration-design.md) | [plan](2026-07-10-responses-api-migration.md) | [HOLD-STATUS](../agent-tasks/responses-api-migration/HOLD-STATUS.md) | **CONFIRM-HOLD** \u2014 blocked on #1260\u2013#1265 hold-lift | **HOLD** \u2014 greenlight not given (DECISIONS-PENDING #5) |"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-059",
+  "claim": "DEAD-1 symbols removed",
+  "cmd": "grep -rn 'legacySaveConfigToDatabase_REMOVED\\|bookTagKeyspace\\|bookSummarySelectColumnsQualified' --include=*.go .",
+  "expect": "0 hits",
+  "nlines": 0,
+  "sample": [],
+  "rc": 1,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-059",
+  "claim": "CTX-4 done on all ActivityStore implementations",
+  "cmd": "grep -rn 'func.*Summarize(ctx context.Context\\|func.*CompactByDay(ctx context.Context' --include=*.go internal/database internal/activity",
+  "expect": "\u22656 hits",
+  "nlines": 10,
+  "sample": [
+   "internal/database/dual_write_activity_store.go:86:func (d *DualWriteActivityStore) Summarize(ctx context.Context, olderThan time.Time, tier string) (int, error) {",
+   "internal/database/dual_write_activity_store.go:140:func (d *DualWriteActivityStore) CompactByDay(ctx context.Context, olderThan time.Time) (CompactResult, error) {",
+   "internal/database/nuts_activity_store.go:250:func (s *NutsActivityStore) Summarize(ctx context.Context, olderThan time.Time, tier string) (int, error) {"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-059",
+  "claim": "LOG-5 done, sqlite_store.go gone",
+  "cmd": "find . -iname sqlite_store.go; grep -rn 'fmt.Printf\\|log.Printf' internal/database internal/playlist internal/organizer --include=*.go",
+  "expect": "0 hits both",
+  "nlines": 0,
+  "sample": [],
+  "rc": 1,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-059",
+  "claim": "R-10 done",
+  "cmd": "grep -rn 'errors.New(\"[A-Z]\\|fmt.Errorf(\"[A-Z]' internal/metadata/audible.go internal/metadata/audnexus.go internal/metadata/googlebooks.go internal/metadata/hardcover.go internal/metadata/openlibrary.go internal/metadata/wikipedia.go",
+  "expect": "0 hits",
+  "nlines": 0,
+  "sample": [],
+  "rc": 1,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-059",
+  "claim": "DEP-1a-d done (no non-test reads of the deprecated Book field)",
+  "cmd": "grep -rn 'book\\.ITunesPath\\b' --include=*.go internal/",
+  "expect": "0 hits outside _test.go",
+  "nlines": 0,
+  "sample": [],
+  "rc": 1,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-059",
+  "claim": "DEP-1e still open \u2014 field still declared and copied",
+  "cmd": "grep -n 'ITunesPath ' internal/database/store.go; grep -n 'ITunesPath: b.ITunesPath\\|ITunesPath: c.ITunesPath' internal/database/bookcore.go",
+  "expect": "1 hit + 2 hits",
+  "nlines": 2,
+  "sample": [
+   "220:\tITunesPath       *string `json:\"itunes_path,omitempty\"`",
+   "810:\tITunesPath         string `json:\"itunes_path,omitempty\"`"
+  ],
+  "rc": 1,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-059",
+  "claim": "TEST-2 test exists and is not SQLite-backed anymore",
+  "cmd": "grep -n 'func TestStoreAdditionalCoverageSQLite' -A3 internal/database/store_extra_test.go",
+  "expect": "1 hit, body calls setupTestDB (PebbleStore-backed)",
+  "nlines": 4,
+  "sample": [
+   "17:func TestStoreAdditionalCoverageSQLite(t *testing.T) {",
+   "18-\tstore, cleanup := setupTestDB(t)",
+   "19-\tdefer cleanup()"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-060",
+  "claim": "T13's brief is fully specified with 4 concrete steps and an acceptance line",
+  "cmd": "grep -n 'T13 \u2014 Docs truth-up' -A15 docs/agent-tasks/error-correction-2026-07/TASKS.md",
+  "expect": "1 hit ~L398, 4 numbered steps + ACCEPTANCE line through L413",
+  "nlines": 16,
+  "sample": [
+   "398:## T13 \u2014 Docs truth-up after measurements",
+   "399-",
+   "400-DEPENDS ON: T02+T03 (sandbox numbers), ideally T04 (prod numbers)."
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-060",
+  "claim": "T04 (prod numbers) is available now",
+  "cmd": "grep -n 'T04.*ALL DONE' TODO.md",
+  "expect": "1 hit ~L10836, dismissed=7891",
+  "nlines": 1,
+  "sample": [
+   "10866:- [x] **T04** \u2014 \u2705 **prod deploy + dry-run + apply ALL DONE 2026-07-18.** Verified 2026-08-12"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-060",
+  "claim": "T03 (sandbox numbers) is NOT yet available, so sandbox-derived doc updates are blocked",
+  "cmd": "grep -n '\\*\\*T03\\*\\*' TODO.md",
+  "expect": "1 hit ~L10831, unchecked '- [ ]'",
+  "nlines": 1,
+  "sample": [
+   "10861:- [ ] **T03** \u2014 **sandbox** purge wave: `maintenance.dedup-exact-triage {\"apply\":true}` (dismiss"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-123",
+  "claim": "dir contents and line counts",
+  "cmd": "wc -l internal/scanner/mocks/*.go",
+  "expect": "380 mock_scanner.go, 62 mock_scanner_coverage_test.go, 442 total",
+  "nlines": 3,
+  "sample": [
+   "62 internal/scanner/mocks/mock_scanner_coverage_test.go",
+   "     380 internal/scanner/mocks/mock_scanner.go",
+   "     442 total"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-123",
+  "claim": "zero importers repo-wide",
+  "cmd": "grep -rln \"scanner/mocks\" --include=\"*.go\" .",
+  "expect": "0 hits",
+  "nlines": 0,
+  "sample": [],
+  "rc": 1,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-123",
+  "claim": ".mockery.yaml still generates it",
+  "cmd": "grep -n \"Scanner:\" .mockery.yaml",
+  "expect": "1 hit ~L37, under the internal/scanner config block (dir: internal/scanner/mocks)",
+  "nlines": 1,
+  "sample": [
+   "37:      Scanner:"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-123",
+  "claim": "internal/scanner tests use a hand-rolled double instead, to dodge an import cycle",
+  "cmd": "grep -n \"fullMockScanner\" internal/scanner/scanner_coverage_test.go",
+  "expect": "\u22653 hits ~L642,655,659",
+  "nlines": 7,
+  "sample": [
+   "642:\tSetScanner(&fullMockScanner{",
+   "655:type fullMockScanner struct {",
+   "659:func (m *fullMockScanner) ScanDirectory(rootDir string, _ logger.Logger) ([]Book, error) {"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-124",
+  "claim": "ai_failure.go still substring-matches, with a comment pointing at a todo fragment",
+  "cmd": "grep -n \"strings.Contains\\|todo.d/20260816-typed-ai-provider-errors\" internal/scanner/ai_failure.go",
+  "expect": "2 hits ~L18, L53",
+  "nlines": 2,
+  "sample": [
+   "18:// tracked in todo.d/20260816-typed-ai-provider-errors.md; this is deliberately",
+   "53:\t\tif strings.Contains(msg, marker) {"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-124",
+  "claim": "internal/ai already has typed classification via errors.As against *openai.Error",
+  "cmd": "grep -n \"func isPermanentAIError\" -A 13 internal/ai/retry.go",
+  "expect": "1 hit ~L40, body uses `var apiErr *openai.Error; errors.As(err, &apiErr)`, switches on apiErr.StatusCode and apiErr.Code",
+  "nlines": 14,
+  "sample": [
+   "40:func isPermanentAIError(err error) bool {",
+   "41-\tvar apiErr *openai.Error",
+   "42-\tif !errors.As(err, &apiErr) {"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-124",
+  "claim": "the typed classification predates ai_failure.go by 6 weeks",
+  "cmd": "git log -1 --format=%ai bf110a3a -- internal/ai/retry.go; git log -1 --format=%ai a662ec0c -- internal/scanner/ai_failure.go",
+  "expect": "bf110a3a: 2026-07-03; a662ec0c: 2026-08-16",
+  "nlines": 2,
+  "sample": [
+   "2026-07-03 00:49:28 -0400",
+   "2026-08-16 12:39:34 -0400"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-124",
+  "claim": "DoWithRetry wraps a detected-permanent error in the exported *ai.PermanentError before it propagates out of ParseBatch",
+  "cmd": "grep -n \"type PermanentError struct\\|isPermanentAIError(err)\" internal/ai/retry.go",
+  "expect": "2 hits ~L22, L84; L84 body is `if isPermanentAIError(err) { return \\u0026PermanentError{Err: err} }`",
+  "nlines": 2,
+  "sample": [
+   "22:type PermanentError struct {",
+   "84:\t\t\tif isPermanentAIError(err) {"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-124",
+  "claim": "the scanner's aiParser is concretely *ai.OpenAIParser (an openai-go SDK client), so *openai.Error is the right, reachable type",
+  "cmd": "grep -n \"var aiParser \\*ai.OpenAIParser\" internal/scanner/scanner.go",
+  "expect": "1 hit ~L782",
+  "nlines": 1,
+  "sample": [
+   "782:\tvar aiParser *ai.OpenAIParser"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-124",
+  "claim": "the fragment this comment points at no longer exists in todo.d/",
+  "cmd": "find todo.d -iname \"*typed-ai-provider*\"",
+  "expect": "0 hits in todo.d/",
+  "nlines": 0,
+  "sample": [],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-124",
+  "claim": "the fragment was already folded into TODO.md at this exact item",
+  "cmd": "grep -n \"typed provider errors\" TODO.md",
+  "expect": "1 hit in TODO.md at L4852",
+  "nlines": 1,
+  "sample": [
+   "4860:- [ ] **Give the AI parser typed provider errors.** `internal/scanner/ai_failure.go`"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-125",
+  "claim": "BookDocument has no TrackNames field",
+  "cmd": "grep -n 'TrackNames' internal/search/document.go",
+  "expect": "0 hits",
+  "nlines": 0,
+  "sample": [],
+  "rc": 1,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-125",
+  "claim": "bookIndexMapping registers each analyzed text field individually",
+  "cmd": "grep -n 'book.AddFieldMappingsAt' internal/search/bleve_index.go",
+  "expect": ">=15 hits",
+  "nlines": 25,
+  "sample": [
+   "502:\tbook.AddFieldMappingsAt(\"title\", title)",
+   "503:\tbook.AddFieldMappingsAt(\"author\", author)",
+   "504:\tbook.AddFieldMappingsAt(\"narrator\", narrator)"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-125",
+  "claim": "indexBuilderStore is the narrow 4-method probe-derived interface BookToDoc uses",
+  "cmd": "grep -n 'type indexBuilderStore interface' internal/search/index_builder.go",
+  "expect": "1 hit L23",
+  "nlines": 1,
+  "sample": [
+   "25:type indexBuilderStore interface {"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-125",
+  "claim": "GetBookFiles(bookID) exists on the database and returns Title+FilePath per file",
+  "cmd": "grep -n 'GetBookFiles(bookID string) (\\[\\]BookFile, error)' internal/database/iface_bookfile.go",
+  "expect": "1 hit L20",
+  "nlines": 1,
+  "sample": [
+   "20:\tGetBookFiles(bookID string) ([]BookFile, error)"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-125",
+  "claim": "bookMappingVersion gates whether the on-disk index is rebuilt",
+  "cmd": "grep -n 'const bookMappingVersion' internal/search/bleve_index.go",
+  "expect": "1 hit L94, currently \"2\"",
+  "nlines": 1,
+  "sample": [
+   "94:const bookMappingVersion = \"2\""
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-126",
+  "claim": "the stopword-dropping function exists and behaves as described",
+  "cmd": "grep -n 'func dropStopwordOnlyConjuncts' internal/search/bleve_translator.go",
+  "expect": "1 hit, with the function called at L89 from the conjunct-building path",
+  "nlines": 1,
+  "sample": [
+   "166:func dropStopwordOnlyConjuncts(children []Node) []Node {"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-126",
+  "claim": "nothing surfaces the drop to the user today",
+  "cmd": "grep -rn 'stopword\\|dropped' internal/server/handlers/*.go web/src/pages/Library.tsx 2>/dev/null | grep -i 'ignored\\|discard\\|stopword'",
+  "expect": "0 hits",
+  "nlines": 0,
+  "sample": [],
+  "rc": 1,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-142",
+  "claim": "UnmergeAuto has no production caller",
+  "cmd": "grep -rn \"UnmergeAuto\" internal/server internal/plugins",
+  "expect": "only a comment hit at handler.go:1405, no functional call site",
+  "nlines": 2,
+  "sample": [
+   "internal/server/handlers/dedup/handler.go:1405:\t\t// nothing for UnmergeAuto to revert to -- and a merge a human",
+   "internal/server/handlers/dedup/handler_test.go:1059:// Engine.UnmergeAuto would have nothing to revert to. Merges dispatched by"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-142",
+  "claim": "ListAutoMergeJournalEntries exists and is documented as unused, built for this follow-on",
+  "cmd": "grep -n \"ListAutoMergeJournalEntries\" internal/database/dedup_automerge_journal.go",
+  "expect": "1 hit ~L105, doc comment says 'Intended for a follow-on admin undo merge listing'",
+  "nlines": 2,
+  "sample": [
+   "102:// ListAutoMergeJournalEntries returns journal entries in chronological order,",
+   "105:func (s *EmbeddingStore) ListAutoMergeJournalEntries(limit int) ([]AutoMergeJournalEntry, error) {"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-142",
+  "claim": "MergeJournaled's interface is already exported to the dedup handler package for mocking",
+  "cmd": "grep -n \"MergeJournaled\" internal/server/handlers/dedup/interfaces.go",
+  "expect": "1 hit in the DedupEngine interface",
+  "nlines": 2,
+  "sample": [
+   "76:\t// MergeJournaled merges a candidate's two books and guarantees a journal",
+   "83:\tMergeJournaled(candidateID int64, aID, bID, keepID, tag string) (*merge.Result, string, error)"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-143",
+  "claim": "defaultPermissions sets Delete and Update true",
+  "cmd": "grep -n \"Delete: *true\\|Update: *true\" internal/server/handlers/abs/dto.go",
+  "expect": "2 hits inside defaultPermissions()",
+  "nlines": 2,
+  "sample": [
+   "292:\t\tDelete:                    true,",
+   "295:\t\tUpdate:                    true,"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-143",
+  "claim": "LibraryStore has no write methods",
+  "cmd": "grep -n \"type LibraryStore interface\" -A 8 internal/server/handlers/abs/handler.go",
+  "expect": "6 embedded *Reader interfaces only",
+  "nlines": 9,
+  "sample": [
+   "181:type LibraryStore interface {",
+   "182-\tLibraryBookReader",
+   "183-\tLibrarySummaryReader"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-144",
+  "claim": "the /search narrator block hardcodes numBooks: 0",
+  "cmd": "grep -n 'numBooks.: 0' internal/server/handlers/abs/browse.go",
+  "expect": "1 hit ~L1338",
+  "nlines": 1,
+  "sample": [
+   "1338:\t\t\t\tresp.Narrators = append(resp.Narrators, gin.H{\"name\": n.Name, \"numBooks\": 0})"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-145",
+  "claim": "ListeningStats swallows the ListenedSeconds error with no logging or metric",
+  "cmd": "grep -n 'ListenedSeconds\\|slog.Warn\\|metric' internal/server/handlers/abs/stats.go",
+  "expect": "ListenedSeconds hit inside an if err == nil branch; no slog.Warn/metric hit anywhere in the file",
+  "nlines": 1,
+  "sample": [
+   "71:\t\tif seconds, err := h.userData.ListenedSeconds(user.ID); err == nil {"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-146",
+  "claim": "advertised limits are 10 requests / 600000ms",
+  "cmd": "grep -n 'RateLimitLoginRequests\\|RateLimitLoginWindow' internal/server/handlers/abs/dto.go",
+  "expect": "RateLimitLoginRequests: 10, RateLimitLoginWindow: 600000",
+  "nlines": 4,
+  "sample": [
+   "148:\tRateLimitLoginRequests          int      `json:\"rateLimitLoginRequests\"`",
+   "149:\tRateLimitLoginWindow            int64    `json:\"rateLimitLoginWindow\"`",
+   "234:\t\tRateLimitLoginRequests: 10,"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-146",
+  "claim": "the real throttle is 15 failures / 15 minutes",
+  "cmd": "grep -n 'MaxFailuresPerIP\\|Window =' internal/server/absauth/throttle.go",
+  "expect": "MaxFailuresPerIP = 15, Window = 15 * time.Minute",
+  "nlines": 4,
+  "sample": [
+   "34:\t// MaxFailuresPerIP is the hard per-source-IP failure budget inside Window.",
+   "35:\tMaxFailuresPerIP = 15",
+   "37:\tWindow = 15 * time.Minute"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-147",
+  "claim": "the value gate is already default-on, so this item's premise ('so the value gate can be turned on permanently') is partially satisfied already \u2014 the remaining gap is the 12 red tests, not the gate switch itself",
+  "cmd": "grep -n 'CompareValues: true' internal/server/handlers/abs/abs_test.go internal/server/handlers/abs/library_fake_test.go",
+  "expect": "2 hits, matching ABS-N2's evidence",
+  "nlines": 2,
+  "sample": [
+   "internal/server/handlers/abs/abs_test.go:474:\tfindings := f.CompareBody(got, conformance.Options{IgnoreExtra: true, CompareValues: true})",
+   "internal/server/handlers/abs/library_fake_test.go:1153:\tfindings := f.CompareBody(got, conformance.Options{IgnoreExtra: true, CompareValues: true})"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-147",
+  "claim": "library_fake_test.go is the large fixture-seeding file this item says is bounded-but-not-small (767 lines per the TODO)",
+  "cmd": "wc -l internal/server/handlers/abs/library_fake_test.go",
+  "expect": "line count near 767 (may have grown/shrunk slightly since the TODO was written)",
+  "nlines": 1,
+  "sample": [
+   "1215 internal/server/handlers/abs/library_fake_test.go"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-148",
+  "claim": "the fixture's results array is empty",
+  "cmd": "python3 -c \"import json; d=json.load(open('testdata/abs-fixtures/get_api_libraries_id_series.json')); print(len(d['response']['body']['results']))\"",
+  "expect": "0",
+  "nlines": 1,
+  "sample": [
+   "0"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-149",
+  "claim": "SynthesizeChapters has no guard against a zero or missing per-track duration",
+  "cmd": "grep -n 'func SynthesizeChapters' internal/audioutil/timeline.go",
+  "expect": "1 hit L54; body shows `end := start + t.DurationSec` with no validation",
+  "nlines": 1,
+  "sample": [
+   "54:func SynthesizeChapters(tracks []TrackInfo) []Chapter {"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-149",
+  "claim": "loadChapters builds TrackInfo.DurationSec directly from BookFile.Duration with no cross-check against Book.Duration",
+  "cmd": "grep -n 'DurationSec: f.DurationSec' internal/server/handlers/abs/mapper.go",
+  "expect": "1 hit L261",
+  "nlines": 1,
+  "sample": [
+   "261:\t\t\tDurationSec: f.DurationSec,"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-149",
+  "claim": "fileView.DurationSec is a direct cast of BookFile.Duration, no validation",
+  "cmd": "grep -n 'DurationSec: float64(f.Duration)' internal/server/handlers/abs/mapper.go",
+  "expect": "1 hit L217",
+  "nlines": 1,
+  "sample": [
+   "217:\t\tDurationSec: float64(f.Duration),"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-150",
+  "claim": "ApplyRename handler exists",
+  "cmd": "grep -n 'func (h \\*OrganizeHandler) ApplyRename' internal/server/handlers/organize.go",
+  "expect": "1 hit at L157",
+  "nlines": 1,
+  "sample": [
+   "157:func (h *OrganizeHandler) ApplyRename(c *gin.Context) {"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-150",
+  "claim": "ApplyScanResults and ApplyAuthorReview handlers exist",
+  "cmd": "grep -n 'func (h \\*AIHandler) Apply' internal/server/handlers/ai.go",
+  "expect": "2 hits at L484 and L697",
+  "nlines": 2,
+  "sample": [
+   "484:func (h *AIHandler) ApplyScanResults(c *gin.Context) {",
+   "697:func (h *AIHandler) ApplyAuthorReview(c *gin.Context) {"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-150",
+  "claim": "ApplySuggestions handler exists",
+  "cmd": "grep -n 'func (h \\*DiagnosticsHandler) ApplySuggestions' internal/server/handlers/diagnostics.go",
+  "expect": "1 hit at L472",
+  "nlines": 1,
+  "sample": [
+   "472:func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-150",
+  "claim": "review package has a pluggable apply-handler registry",
+  "cmd": "grep -n 'RegisterApplyHandler' internal/server/handlers/review/handler.go",
+  "expect": "1 hit at L137",
+  "nlines": 4,
+  "sample": [
+   "91:// RegisterApplyHandler and the package doc; it was per Kind before 2026-08-06.",
+   "107:\t// regroup) via RegisterApplyHandler. Guarded by mu because registration may",
+   "134:// RegisterApplyHandler registers the code that carries out one ACTION (an"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-151",
+  "claim": "TimeBase is hardcoded with no explanatory comment today",
+  "cmd": "sed -n '635,648p' internal/server/handlers/abs/mapper.go",
+  "expect": "TimeBase: \\\"1/1000\\\", with no preceding // comment block specific to it",
+  "nlines": 14,
+  "sample": [
+   "// ABS indexes tracks from 1, not 0. AudioBooth uses this index as the track",
+   "\t\t// segment of /public/session/:id/track/:index, so an off-by-one here streams",
+   "\t\t// the wrong file."
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-152",
+  "claim": "The unbounded call is still live at HEAD",
+  "cmd": "grep -n \"SearchBooks(search, 0, 0)\" internal/server/handlers/itunes.go",
+  "expect": "1 hit L709",
+  "nlines": 1,
+  "sample": [
+   "709:\t\tallBooks, err := h.store.SearchBooks(search, 0, 0)"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-152",
+  "claim": "An established over-fetch-with-warning precedent already exists elsewhere in the codebase for this exact shape of problem",
+  "cmd": "grep -n \"const searchPostFilterWindow\" internal/audiobooks/service_query.go",
+  "expect": "1 hit L649, value 10000",
+  "nlines": 1,
+  "sample": [
+   "649:const searchPostFilterWindow = 10000"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-153",
+  "claim": "no route exists for /api/session/local or /api/session/local-all today",
+  "cmd": "grep -rn '\"/api/session/' internal/server/handlers/abs/handler.go",
+  "expect": "2 hits, both for /api/session/:id/sync and /api/session/:id/close only",
+  "nlines": 2,
+  "sample": [
+   "internal/server/handlers/abs/handler.go:534:\tr.POST(\"/api/session/:id/sync\", auth, h.SessionSync)",
+   "internal/server/handlers/abs/handler.go:535:\tr.POST(\"/api/session/:id/close\", auth, h.SessionClose)"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-153",
+  "claim": "/api/session/ is a reserved ABS path prefix (protects the route from silently matching a wrong handler)",
+  "cmd": "grep -n '\"/api/session/\"' internal/server/wire_abs_routes.go",
+  "expect": "1 hit at L70",
+  "nlines": 1,
+  "sample": [
+   "70:\t\"/api/session/\","
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-153",
+  "claim": "a design spec already requires this endpoint and documents exact behavior",
+  "cmd": "grep -n 'api/session/local' docs/specs/2026-07-29-abs-sync-api-design.md",
+  "expect": ">=4 hits including \u00a71.8.8 and \u00a71.9.1",
+  "nlines": 7,
+  "sample": [
+   "83:(`/api/session/local`, `/api/session/local-all`); Subsonic's `savePlayQueue` is a single position and",
+   "173:2. **`/api/session/local-all` must return 200 and silently ignore unknown item IDs.** A 4xx **wedges the",
+   "267:- `POST /api/session/local[-all]` session objects use **`timeListening`** (gerund) and it is a"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-153",
+  "claim": "the upstream API reference tracks this as unimplemented",
+  "cmd": "grep -n 'session/local' docs/reference/abs-upstream-api-reference.md",
+  "expect": "1 hit, row marked \u274c",
+  "nlines": 1,
+  "sample": [
+   "167:| POST | `/api/session/local` \u00b7 `/api/session/local-all` | JWT | offline upload `[:238-239]` | \u274c |"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-154",
+  "claim": "spec mandates 200-and-ignore-unknown-IDs for local-all",
+  "cmd": "grep -n 'local-all.*must return 200' docs/specs/2026-07-29-abs-sync-api-design.md",
+  "expect": "1 hit around L173",
+  "nlines": 1,
+  "sample": [
+   "173:2. **`/api/session/local-all` must return 200 and silently ignore unknown item IDs.** A 4xx **wedges the"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-154",
+  "claim": "spec mandates accepting both an object-with-sessions-key and a bare-array body",
+  "cmd": "grep -n 'body shape differs by client' docs/specs/2026-07-29-abs-sync-api-design.md",
+  "expect": "1 hit around L487",
+  "nlines": 1,
+  "sample": [
+   "487:2. **`/api/session/local-all` body shape differs by client:** AudioBooth sends"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-154",
+  "claim": "an existing handler already implements the exact per-item pattern needed: bare array, resolveBookID + applyProgressUpdate, skip unknown, always 200",
+  "cmd": "grep -n 'func (h \\*Handler) MediaProgressBatchUpdate' internal/server/handlers/abs/progress.go",
+  "expect": "1 hit at L157",
+  "nlines": 1,
+  "sample": [
+   "157:func (h *Handler) MediaProgressBatchUpdate(c *gin.Context) {"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-155",
+  "claim": "all 6 routes are registered on operationsH, the legacy v1 operations handler",
+  "cmd": "grep -n '\"/tasks\\|/maintenance-window' internal/server/wire_operations_routes.go",
+  "expect": "6 hits at L84-89, all calling operationsH.<Method>",
+  "nlines": 6,
+  "sample": [
+   "84:\tprotected.GET(\"/tasks\", s.perm(auth.PermSettingsManage), operationsH.ListTasks)",
+   "85:\tprotected.POST(\"/tasks/:name/run\", s.perm(auth.PermSettingsManage), operationsH.RunTask)",
+   "86:\tprotected.PUT(\"/tasks/:name\", s.perm(auth.PermSettingsManage), operationsH.UpdateTaskConfig)"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-155",
+  "claim": "the 6 handler methods live in the same file/struct as the v1 operations-record CRUD being retired elsewhere",
+  "cmd": "grep -n 'func (h \\*Handler) ListTasks\\|func (h \\*Handler) RunTask\\|func (h \\*Handler) UpdateTaskConfig\\|func (h \\*Handler) RunMaintenanceWindowNow\\|func (h \\*Handler) GetMaintenanceWindowStatus\\|func (h \\*Handler) UpdateMaintenanceWindowConfig' internal/server/handlers/operations/handler.go",
+  "expect": "6 hits at L457,467,663,752,768,798",
+  "nlines": 6,
+  "sample": [
+   "457:func (h *Handler) ListTasks(c *gin.Context) {",
+   "467:func (h *Handler) RunTask(c *gin.Context) {",
+   "663:func (h *Handler) UpdateTaskConfig(c *gin.Context) {"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-155",
+  "claim": "the handler already has a documented lazy-scheduler-provider pattern to reuse (scheduler is wired after these handlers are constructed)",
+  "cmd": "grep -n 'getScheduler resolves the scheduler lazily' internal/server/handlers/operations/handler.go",
+  "expect": "1 hit around L48",
+  "nlines": 1,
+  "sample": [
+   "48:\t// getScheduler resolves the scheduler lazily, at request time. The"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-156",
+  "claim": "no socket.io implementation exists in the ABS handler package",
+  "cmd": "grep -rn 'socket.io\\|socketio' internal/server/handlers/abs/*.go",
+  "expect": "0 hits",
+  "nlines": 0,
+  "sample": [],
+  "rc": 1,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-156",
+  "claim": "socket.io IS already excluded from the SPA-fallback 200-HTML bug for the AudioBooth/Absorb clients",
+  "cmd": "grep -n 'socket.io' internal/server/spa_fallback.go",
+  "expect": "\u22652 hits (nonSPAPrefixes/nonSPAExact per abs-implementation-status.md's N-1 finding)",
+  "nlines": 5,
+  "sample": [
+   "39:// The same failure recurred for socket.io, which is why it is listed below.",
+   "43://\tGET /socket.io/?EIO=4&transport=polling",
+   "45:// We do not implement socket.io. The honest answer is 404, which lets the client"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-157",
+  "claim": "DismissDedupCluster loops candidates synchronously calling UpdateCandidateStatus + recordHumanLabel per pair",
+  "cmd": "grep -n \"for _, cand := range candidates\" internal/server/handlers/dedup/handler.go",
+  "expect": "1 hit ~L1206",
+  "nlines": 7,
+  "sample": [
+   "253:\tfor _, cand := range candidates {",
+   "580:\t\tfor _, cand := range candidates {",
+   "628:\tfor _, cand := range candidates {"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-157",
+  "claim": "recordHumanLabel synchronously calls refreshExampleBreakdown before the label upsert",
+  "cmd": "grep -n \"h.refreshExampleBreakdown\" internal/server/handlers/dedup/label_capture.go",
+  "expect": "1 hit ~L92",
+  "nlines": 1,
+  "sample": [
+   "92:\th.refreshExampleBreakdown(context.Background(), ex)"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-182",
+  "claim": "docs/architecture.md explicitly defers subsystem detail to docs/system/",
+  "cmd": "sed -n '6,9p' docs/architecture.md",
+  "expect": "1 hit: 'See also: the deeper, per-subsystem system-documentation set lives in docs/system/'",
+  "nlines": 4,
+  "sample": [
+   "# Architecture",
+   "",
+   "> **See also:** the deeper, per-subsystem system-documentation set lives in"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-182",
+  "claim": "docs/system/README.md declares the DOCS-1 workstream complete, no scope item deferred",
+  "cmd": "grep -n 'DOCS-1 workstream complete' docs/system/README.md",
+  "expect": "1 hit ~L7",
+  "nlines": 1,
+  "sample": [
+   "8:> **Status:** DOCS-1 workstream complete (#1276). All eight area documents below are"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-182",
+  "claim": "docs/system has 9 entries, docs/architecture has 4 (down from the audit's 9) at HEAD",
+  "cmd": "ls docs/system | wc -l; ls docs/architecture | wc -l",
+  "expect": "9 and 4",
+  "nlines": 2,
+  "sample": [
+   "9",
+   "       4"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-182",
+  "claim": "the docs inventory still lists this classification as an open follow-up",
+  "cmd": "grep -n 'docs/system.*and.*docs/architecture' docs/audits/2026-08-11-docs-inventory.md",
+  "expect": "1 hit ~L224",
+  "nlines": 1,
+  "sample": [
+   "224:| **`docs/system/**` (9) and `docs/architecture/**` (9)** | out of the classification scope, but **required** to settle the top-level-vs-`docs/system/` duplicate cluster | follow-up pass |"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-183",
+  "claim": "35 live docs lack the required header at HEAD (drifted from the audit's 34)",
+  "cmd": "find docs -maxdepth 4 -iname '*.md' -not -path '*/archive/*' | xargs grep -L '^<!-- file:' | wc -l",
+  "expect": "35",
+  "nlines": 1,
+  "sample": [
+   "35"
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-183",
+  "claim": "docs/architecture/2026-06-01-server-handler-extraction-design.md has no header comment (uses a bold-label ADR format instead)",
+  "cmd": "head -6 docs/architecture/2026-06-01-server-handler-extraction-design.md",
+  "expect": "starts with '# Server Handler Extraction' and '**Date:**', no '<!-- file:' line",
+  "nlines": 5,
+  "sample": [
+   "# Server Handler Extraction \u2014 ADR-003 Phase 2/3 Design",
+   "",
+   "**Date:** 2026-06-01  "
+  ],
+  "rc": 0,
+  "stderr": ""
+ },
+ {
+  "task": "TASK-183",
+  "claim": "docs/superpowers/fleet-status files are agent-written status trackers, not yet documented as header-exempt anywhere",
+  "cmd": "head -8 docs/superpowers/fleet-status/README.md",
+  "expect": "describes the file-naming/status-value convention; no exemption from the file-header rule is stated",
+  "nlines": 8,
+  "sample": [
+   "# Fleet Task Status",
+   "",
+   "Each file here tracks the status of one fleet task. Agents write to their own"
+  ],
+  "rc": 0,
+  "stderr": ""
+ }
+]

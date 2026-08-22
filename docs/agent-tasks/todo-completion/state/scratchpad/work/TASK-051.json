@@ -1,0 +1,60 @@
+{
+  "todo_line": 296,
+  "part": 1,
+  "src_id": null,
+  "title": "Delete the 34 group-relative duplicate paths from docs/api/openapi.json (safe to delete on sight)",
+  "verdict": "actionable",
+  "verdict_evidence": "Sampling the TODO's own list of 48 stale paths against the live spec confirms 34/36 sampled entries (e.g. /login, /logout, /books, /me, /sessions, /invites, /{id}, /status) are still present in docs/api/openapi.json's paths object at HEAD \u2014 these are documented as group-relative duplicates (the generator missed Gin group prefixes) whose correctly-prefixed twins (/auth/login, /itunes/books, /ai/scans/{id}, etc.) already exist in the spec from the YAML union-merge.",
+  "domain": "docs",
+  "exact_files": [
+    "docs/api/openapi.json"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "34 of 36 sampled stale paths are still present in the live spec",
+      "grep_cmd": "python3 -c \"import json; d=json.load(open('docs/api/openapi.json')); print(sum(1 for p in ['/login','/logout','/books','/me','/sessions','/status','/invites'] if p in d['paths']))\"",
+      "expect": "7 (all sampled group-relative duplicates still present)"
+    }
+  ],
+  "reuse": [],
+  "polarity": "removal",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "Mechanical JSON-path deletion, but requires care not to delete a path that ALSO happens to be a legitimately root-level route (verify each against the real router table before deleting, per the TODO's own caution that this needs 'individual confirmation').",
+  "review_critical": false,
+  "goal": "Remove the group-relative duplicate path entries from docs/api/openapi.json's paths object \u2014 the ones whose correctly-prefixed twin (e.g. /auth/login for /login) already exists in the spec \u2014 after confirming each against the real router table via s.router.Routes(), not by grepping code.",
+  "background": [
+    "The TODO's full list (37 group-relative + torrents + maintenance entries, minus /path and /compare already removed) spans: DELETE /invites/{token}, DELETE /sessions/{id}, DELETE /{id}, GET /books, GET /import-status/{id}, GET /invites, GET /library-status, GET /me, GET /sessions, GET /status, GET /{id}, GET /{id}/results, POST /accept-invite, POST /import, POST /import-status/bulk, POST /invite, POST /login, POST /logout, POST /rebuild, POST /setup, POST /sync, POST /test-connection, POST /test-mapping, POST /validate, POST /write-back, POST /write-back-all, POST /write-back/preview, POST /{id}/apply, POST /{id}/cancel, POST /{id}/deactivate, POST /{id}/reactivate, POST /{id}/reset-password."
+  ],
+  "steps": [
+    "1. Write a small throwaway Go test (or reuse an existing one, e.g. under internal/server) that calls s.router.Routes() on a fully-wired test server and dumps the real route table to a file for comparison \u2014 do not trust a static code grep for this, per the TODO's own stated methodology.",
+    "2. For each path in the list above, confirm the REAL route table has a correctly-prefixed twin (e.g. /auth/login for /login) and that the bare group-relative form is NOT itself a registered route.",
+    "3. Delete each confirmed-duplicate path (and its method entries) from docs/api/openapi.json's `paths` object, preserving valid JSON structure.",
+    "4. If a docs/api generation/lint script exists (`grep -rln openapi.json Makefile .github/workflows/`), re-run it to confirm the edited spec still validates."
+  ],
+  "tests": [
+    "If an OpenAPI schema-validation CI step exists, re-running it locally is the acceptance check; otherwise validate with a JSON schema linter (`python3 -c \"import json; json.load(open('docs/api/openapi.json'))\"`, or a proper OpenAPI validator if the repo has one wired in)."
+  ],
+  "acceptance": [
+    "The 34 confirmed-duplicate paths are absent from docs/api/openapi.json's paths object, and `python3 -c \"import json; json.load(open('docs/api/openapi.json'))\"` still parses without error."
+  ],
+  "edge_cases": [
+    "A route registered through BOTH a direct top-level path AND inside a group (unlikely but possible for back-compat) must not be deleted \u2014 this is exactly why step 2 requires checking the REAL route table, not assuming from the list alone."
+  ],
+  "anti_over_suppression": "N/A",
+  "depends_on_lines": [],
+  "gate": "git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only'",
+  "notes": "Split from the same L296 TODO item; part 2 covers the 16 removed-maintenance-endpoint paths (need individual triage, not blind deletion) and part 3 covers /torrents.",
+  "review_notes": [
+    "[simplicity-scope.json] Three tasks and three waves for three delete-operations on one JSON file, all derived from the same TODO.md line (L296). TASK-051 deletes 34 group-relative paths, TASK-053 deletes one more group-relative fragment (/torrents) \u2014 literally the same operation, split \u2014 and TASK-052 triages 16 more. Three"
+  ],
+  "id": "TASK-051",
+  "stable_key": "scope-01.json|296|1|Delete the 34 group-relative duplicate paths from docs/api/o",
+  "ws": "docs",
+  "slug": "delete-the-34-group-relative-duplicate-paths-fro",
+  "scope_file": "scope-01.json",
+  "dropped_files": [],
+  "tier_label": "Sonnet-class",
+  "depends_on": [],
+  "wave": 1
+}

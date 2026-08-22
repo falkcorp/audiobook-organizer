@@ -1,0 +1,67 @@
+{
+  "todo_line": 53,
+  "src_id": "ABS-N6",
+  "part": 6,
+  "title": "N-6: log + metric when listening-stats read fails (currently silent 0)",
+  "verdict": "actionable",
+  "verdict_evidence": "internal/server/handlers/abs/stats.go's ListeningStats handler (~L62-84) has a comment at L73-76 explaining WHY it returns 0 rather than 5xx on a read failure ('a 5xx trips the SAME connection-error indicator'), but there is no slog.Warn call and no metric anywhere in the function \u2014 `grep -n 'slog.Warn\\|metric' internal/server/handlers/abs/stats.go` returns 0 hits.",
+  "domain": "internal/server/handlers/abs",
+  "exact_files": [
+    "internal/server/handlers/abs/stats.go"
+  ],
+  "verified_anchors": [
+    {
+      "claim": "ListeningStats swallows the ListenedSeconds error with no logging or metric",
+      "grep_cmd": "grep -n 'ListenedSeconds\\|slog.Warn\\|metric' internal/server/handlers/abs/stats.go",
+      "expect": "ListenedSeconds hit inside an if err == nil branch; no slog.Warn/metric hit anywhere in the file"
+    }
+  ],
+  "reuse": [
+    {
+      "name": "an existing Prometheus counter pattern in internal/metrics/metrics.go (not internal/server \u2014 metrics live in their own package)",
+      "file": "internal/metrics/metrics.go",
+      "verify_grep": "grep -n 'prometheus.NewCounterVec\\|promauto' internal/metrics/metrics.go"
+    }
+  ],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Small, localized addition of a log line and a metric increment inside an existing error branch \u2014 mechanical once an existing metrics helper pattern is located to copy.",
+  "review_critical": false,
+  "goal": "Keep the 200/total=0 response on a listening-stats read failure (deliberately, per the existing comment \u2014 do not change the status code), but add slog.Warn(...) with the user ID and error, and increment a Prometheus counter, so the silent failure becomes observable without changing client-visible behavior.",
+  "background": [
+    "Confirmed via CLAUDE.md's own MEMORY.md note ('Prometheus gap \u2014 bare /metrics 401 is BY DESIGN') that this repo does have a metrics surface; find its existing helper conventions before adding a new one from scratch."
+  ],
+  "steps": [
+    "1. Run the reuse grep above to find how other handlers register/increment Prometheus counters in this codebase (likely a shared internal/server/metrics.go or similar).",
+    "2. In internal/server/handlers/abs/stats.go's ListeningStats, inside the `if seconds, err := h.userData.ListenedSeconds(user.ID); err == nil { total = seconds }` block, add an `else` branch: `slog.Warn(\"abs listening-stats read failed, reporting 0\", \"user_id\", user.ID, \"err\", err)` plus an increment of a new/reused counter (e.g. `absListeningStatsReadFailures.Inc()` or labeled by endpoint).",
+    "3. Bump stats.go's version header."
+  ],
+  "tests": [
+    "internal/server/handlers/abs/stats_test.go: TestListeningStats_ReadFailureLogsAndCountsButReturns200 \u2014 stub h.userData.ListenedSeconds to return an error, assert response is still 200 with TotalTime:0 (unchanged behavior), and assert the new counter incremented (or capture log output if no metric helper is reused)."
+  ],
+  "acceptance": [
+    "`go test ./internal/server/handlers/abs/... -run TestListeningStats_ReadFailure -v` passes."
+  ],
+  "edge_cases": [
+    "h.userData itself nil (no store configured): falls into the same total=0 path today without even attempting ListenedSeconds \u2014 decide whether that also deserves a warn/metric (it's a config gap, not a transient read failure) or is out of scope; note the distinction in the log message rather than conflating the two causes."
+  ],
+  "anti_over_suppression": "N/A \u2014 logging addition, not a filter.",
+  "depends_on_lines": [],
+  "gate": "go build ./... && go vet ./... && go test ./internal/server/handlers/abs/... -count=1",
+  "notes": "Do not change the HTTP status code \u2014 the existing comment's reasoning (5xx flips the client's connection dot) is a deliberate, still-valid decision per the TODO text itself ('Keep the 200... but log at warn + add a metric').",
+  "review_notes": [
+    "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
+    "[simplicity-scope.json] One TODO line (L53, 'ABS coverage gaps N-1 \u2026 N-10') becomes four micro-tasks \u2014 each a handful of lines in the ABS DTO/browse/stats layer \u2014 spread over waves 1-2 (TASK-143/146 collide on abs/dto.go, TASK-144 collides with TASK-089 on abs/browse.go), then TASK-147 (Opus, effort L) depends on all four,",
+    "[simplicity-scope.json] The package violates the master plan's own sequencing rule. The plan says 'internal/database is the chokepoint ... Serialize it. Do not run it alongside internal/server/handlers.' The generated plan runs database wave 1 (9 tasks) and server-handlers wave 1 (8 tasks) concurrently, and TASK-022 in dat"
+  ],
+  "id": "TASK-145",
+  "stable_key": "scope-01.json|53|6|N-6: log + metric when listening-stats read fails (currently",
+  "ws": "server-handlers",
+  "slug": "n-6-log-metric-when-listening-stats-read-fails-c",
+  "scope_file": "scope-01.json",
+  "dropped_files": [],
+  "tier_label": "Haiku-class",
+  "depends_on": [],
+  "wave": 1
+}
