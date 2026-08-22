@@ -1,3 +1,8 @@
+<!-- file: docs/superpowers/fleet-tasks/032-arch-4-13-itunes-extract.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: e2d08a63-3862-4985-89e2-562020ed5a4e -->
+<!-- last-edited: 2026-08-22 -->
+
 # Task 032: 4.13 — Extract iTunes integration into `internal/itunes` service
 
 **Depends on:** none

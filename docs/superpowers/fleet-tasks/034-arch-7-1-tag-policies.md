@@ -1,3 +1,8 @@
+<!-- file: docs/superpowers/fleet-tasks/034-arch-7-1-tag-policies.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: d079cd9c-8878-4568-9903-01988c1640e2 -->
+<!-- last-edited: 2026-08-22 -->
+
 # Task 034: 7.1 — Tag-based policies / preference inheritance
 
 **Depends on:** none (7.2 is already complete)

@@ -1,3 +1,8 @@
+<!-- file: docs/superpowers/fleet-tasks/024-ops-1-11-async-embed-batch-api.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: cca53a97-b160-4667-832c-b4aa34f0347d -->
+<!-- last-edited: 2026-08-22 -->
+
 # Task 024: 1.11 — Async embed via OpenAI Batch API for nightly re-scans
 
 **Depends on:** none

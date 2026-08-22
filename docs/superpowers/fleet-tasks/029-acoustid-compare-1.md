@@ -1,3 +1,8 @@
+<!-- file: docs/superpowers/fleet-tasks/029-acoustid-compare-1.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 933f9dae-ce59-4bc7-b0dd-5debfc96b828 -->
+<!-- last-edited: 2026-08-22 -->
+
 # Task 029: ACOUSTID-COMPARE-1 — Manual two-book acoustic comparison tool
 
 **Depends on:** none (independent of other AcoustID tasks)
