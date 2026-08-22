@@ -1,9 +1,7 @@
-<!--
-file: docs/development/writing-a-plugin.md
-version: 1.0.0
-guid: f7a8b9c0-d1e2-3456-g789-h0123456789ab
-last-edited: 2026-05-08
--->
+<!-- file: docs/development/writing-a-plugin.md -->
+<!-- version: 1.0.1 -->
+<!-- guid: f7a8b9c0-d1e2-3456-g789-h0123456789ab -->
+<!-- last-edited: 2026-08-22 -->
 
 # Writing a Plugin for Audiobook Organizer
 

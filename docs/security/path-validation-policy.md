@@ -1,3 +1,8 @@
+<!-- file: docs/security/path-validation-policy.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 68cafa38-50e8-4a5b-905e-e8a7dea5134f -->
+<!-- last-edited: 2026-08-22 -->
+
 # Path Validation Policy
 
 ## Purpose

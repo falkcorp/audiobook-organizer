@@ -1,3 +1,8 @@
+<!-- file: docs/architecture/embedding-store-db-selection.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 7a97ba03-e0f0-46dd-aa57-bf8826a5af25 -->
+<!-- last-edited: 2026-08-22 -->
+
 # Embedding Store: Database Selection Rationale
 
 **Decision date:** 2026-05-11
