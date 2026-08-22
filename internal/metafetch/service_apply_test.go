@@ -19,10 +19,10 @@ import (
 )
 
 // capturingActivityStore is a minimal database.ActivityStorer that keeps every
-// recorded entry in memory. database.MockStore does NOT satisfy ActivityStorer
-// (it is missing CompactByDay and friends — verified by compile probe), and
-// activity.Service takes the concrete store interface, so the only way to see
-// the Summary string RecordChangeHistory builds is to capture it here.
+// recorded entry in memory. activity.Service takes the store interface rather
+// than exposing what it recorded, so capturing here is the only way to see the
+// Summary string RecordChangeHistory builds. The conformance assertion below is
+// what proves this type satisfies the interface.
 type capturingActivityStore struct {
 	mu      sync.Mutex
 	entries []database.ActivityEntry
@@ -95,8 +95,6 @@ func newChangeHistoryHarness(t *testing.T) (*Service, *capturingActivityStore) {
 	return svc, acts
 }
 
-func strPtr(s string) *string { return &s }
-
 // RecordChangeHistory_SummaryLeadsWithBookTitle is the anti-over-suppression
 // case: an ordinary change with a non-empty old value must still render its
 // full before/after line, now prefixed with the book title.
@@ -106,7 +104,7 @@ func TestRecordChangeHistory_SummaryLeadsWithBookTitle(t *testing.T) {
 	book := &database.Book{
 		ID:       "01J0BOOKID000000000000000",
 		Title:    "The Whispering Night",
-		Narrator: strPtr("Alex Kozlowski"),
+		Narrator: stringPtr("Alex Kozlowski"),
 	}
 	svc.RecordChangeHistory(book, metadata.BookMetadata{Narrator: "Grant Cartwright"}, "audible")
 
@@ -145,7 +143,7 @@ func TestRecordChangeHistory_EmptyTitleFallsBackToID(t *testing.T) {
 	book := &database.Book{
 		ID:       "01J0BOOKID000000000000000",
 		Title:    "",
-		Narrator: strPtr("Alex Kozlowski"),
+		Narrator: stringPtr("Alex Kozlowski"),
 	}
 	svc.RecordChangeHistory(book, metadata.BookMetadata{Narrator: "Grant Cartwright"}, "audible")
 
