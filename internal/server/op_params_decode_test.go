@@ -1,7 +1,7 @@
 // file: internal/server/op_params_decode_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a7c1e93-2d84-4f60-b1a7-9e3c05d8f271
-// last-edited: 2026-08-11
+// last-edited: 2026-08-22
 
 package server
 
@@ -70,6 +70,23 @@ func w3allOps() []w3registrar {
 		// in-repo template the fix was modelled on ---
 		{"library.transcode", (*Server).RegisterLibraryTranscodeOp, false},
 		{"library.import", (*Server).RegisterLibraryImportOp, false},
+
+		// --- the 8 dedup ops, added 2026-08-22 when they went v2-native ---
+		//
+		// These were outside the Wave 3 table and so had no contract coverage.
+		// They need it more than most now: dropping legacy_op_id left FOUR of
+		// their param structs empty (BookDedupScan, AuthorDedupScan,
+		// SeriesDedupScan, SeriesNormalize), and an empty struct is exactly when
+		// the next reader deletes the decode as pointless. Nothing would have
+		// caught that. Now this table does.
+		{"dedup.book-scan", (*Server).RegisterBookDedupScanOp, false},
+		{"dedup.book-merge", (*Server).RegisterBookMergeOp, false},
+		{"dedup.author-scan", (*Server).RegisterAuthorDedupScanOp, false},
+		{"dedup.series-scan", (*Server).RegisterSeriesDedupScanOp, false},
+		{"dedup.series-dedup", (*Server).RegisterSeriesDedupOp, false},
+		{"dedup.series-prune", (*Server).RegisterSeriesPruneOp, false},
+		{"dedup.series-merge", (*Server).RegisterSeriesMergeOp, false},
+		{"dedup.series-normalize", (*Server).RegisterSeriesNormalizeOp, false},
 	}
 }
 

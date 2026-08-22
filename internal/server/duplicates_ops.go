@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
 // last-edited: 2026-08-22
 
@@ -62,8 +62,14 @@ func (s *Server) RegisterBookDedupScanOp(reg *opsregistry.Registry) error {
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p dedup.BookDedupScanParams
-			if err := json.Unmarshal(rawParams, &p); err != nil {
-				return fmt.Errorf("dedup.book-scan: decode params: %w", err)
+			// Empty params are legitimate (four of these ops take none at
+			// all); only a NON-empty blob has to parse. This is the guard the
+			// rest of the v2 ops use, and both directions are asserted by the
+			// params-decode contract test in op_params_decode_test.go.
+			if len(rawParams) > 0 {
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("dedup.book-scan: decode params: %w", err)
+				}
 			}
 			store := s.storeForWiring()
 			if store == nil {
@@ -134,8 +140,14 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p dedup.BookMergeParams
-			if err := json.Unmarshal(rawParams, &p); err != nil {
-				return fmt.Errorf("dedup.book-merge: decode params: %w", err)
+			// Empty params are legitimate (four of these ops take none at
+			// all); only a NON-empty blob has to parse. This is the guard the
+			// rest of the v2 ops use, and both directions are asserted by the
+			// params-decode contract test in op_params_decode_test.go.
+			if len(rawParams) > 0 {
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("dedup.book-merge: decode params: %w", err)
+				}
 			}
 			store := s.storeForWiring()
 			if store == nil {
@@ -278,8 +290,14 @@ func (s *Server) RegisterAuthorDedupScanOp(reg *opsregistry.Registry) error {
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p dedup.AuthorDedupScanParams
-			if err := json.Unmarshal(rawParams, &p); err != nil {
-				return fmt.Errorf("dedup.author-scan: decode params: %w", err)
+			// Empty params are legitimate (four of these ops take none at
+			// all); only a NON-empty blob has to parse. This is the guard the
+			// rest of the v2 ops use, and both directions are asserted by the
+			// params-decode contract test in op_params_decode_test.go.
+			if len(rawParams) > 0 {
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("dedup.author-scan: decode params: %w", err)
+				}
 			}
 			store := s.storeForWiring()
 			if store == nil {
@@ -382,8 +400,14 @@ func (s *Server) RegisterSeriesDedupScanOp(reg *opsregistry.Registry) error {
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p dedup.SeriesDedupScanParams
-			if err := json.Unmarshal(rawParams, &p); err != nil {
-				return fmt.Errorf("dedup.series-scan: decode params: %w", err)
+			// Empty params are legitimate (four of these ops take none at
+			// all); only a NON-empty blob has to parse. This is the guard the
+			// rest of the v2 ops use, and both directions are asserted by the
+			// params-decode contract test in op_params_decode_test.go.
+			if len(rawParams) > 0 {
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("dedup.series-scan: decode params: %w", err)
+				}
 			}
 			store := s.storeForWiring()
 			if store == nil {
@@ -459,8 +483,14 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p dedup.SeriesDedupParams
-			if err := json.Unmarshal(rawParams, &p); err != nil {
-				return fmt.Errorf("dedup.series-dedup: decode params: %w", err)
+			// Empty params are legitimate (four of these ops take none at
+			// all); only a NON-empty blob has to parse. This is the guard the
+			// rest of the v2 ops use, and both directions are asserted by the
+			// params-decode contract test in op_params_decode_test.go.
+			if len(rawParams) > 0 {
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("dedup.series-dedup: decode params: %w", err)
+				}
 			}
 			store := s.storeForWiring()
 			if store == nil {
@@ -525,8 +555,14 @@ func (s *Server) RegisterSeriesPruneOp(reg *opsregistry.Registry) error {
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p dedup.SeriesPruneParams
-			if err := json.Unmarshal(rawParams, &p); err != nil {
-				return fmt.Errorf("dedup.series-prune: decode params: %w", err)
+			// Empty params are legitimate (four of these ops take none at
+			// all); only a NON-empty blob has to parse. This is the guard the
+			// rest of the v2 ops use, and both directions are asserted by the
+			// params-decode contract test in op_params_decode_test.go.
+			if len(rawParams) > 0 {
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("dedup.series-prune: decode params: %w", err)
+				}
 			}
 			store := s.storeForWiring()
 			if store == nil {
@@ -590,8 +626,14 @@ func (s *Server) RegisterSeriesMergeOp(reg *opsregistry.Registry) error {
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p dedup.SeriesMergeParams
-			if err := json.Unmarshal(rawParams, &p); err != nil {
-				return fmt.Errorf("dedup.series-merge: decode params: %w", err)
+			// Empty params are legitimate (four of these ops take none at
+			// all); only a NON-empty blob has to parse. This is the guard the
+			// rest of the v2 ops use, and both directions are asserted by the
+			// params-decode contract test in op_params_decode_test.go.
+			if len(rawParams) > 0 {
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("dedup.series-merge: decode params: %w", err)
+				}
 			}
 			store := s.storeForWiring()
 			if store == nil {
@@ -661,8 +703,14 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p dedup.SeriesNormalizeParams
-			if err := json.Unmarshal(rawParams, &p); err != nil {
-				return fmt.Errorf("dedup.series-normalize: decode params: %w", err)
+			// Empty params are legitimate (four of these ops take none at
+			// all); only a NON-empty blob has to parse. This is the guard the
+			// rest of the v2 ops use, and both directions are asserted by the
+			// params-decode contract test in op_params_decode_test.go.
+			if len(rawParams) > 0 {
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("dedup.series-normalize: decode params: %w", err)
+				}
 			}
 			store := s.storeForWiring()
 			if store == nil {
