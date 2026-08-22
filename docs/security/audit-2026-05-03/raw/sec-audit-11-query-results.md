@@ -1,3 +1,8 @@
+<!-- file: docs/security/audit-2026-05-03/raw/sec-audit-11-query-results.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: a7a762dc-715a-4959-9e65-82666f575a1d -->
+<!-- last-edited: 2026-08-22 -->
+
 # SEC-AUDIT-11 Query Snapshot — 2026-05-18
 
 ## Query metadata

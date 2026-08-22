@@ -1,3 +1,8 @@
+<!-- file: docs/itl-binary-format.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: d297cd25-b25e-4134-a7ee-a5d50dd11846 -->
+<!-- last-edited: 2026-08-22 -->
+
 # iTunes Library (ITL) Binary Format Reference
 
 Version: 1.0.0  

@@ -1,3 +1,8 @@
+<!-- file: docs/architecture/2026-06-01-server-handler-extraction-design.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 89456123-acec-4d17-85c0-0c41a4639bb4 -->
+<!-- last-edited: 2026-08-22 -->
+
 # Server Handler Extraction — ADR-003 Phase 2/3 Design
 
 **Date:** 2026-06-01  

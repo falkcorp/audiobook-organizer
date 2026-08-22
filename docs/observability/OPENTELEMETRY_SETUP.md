@@ -1,3 +1,8 @@
+<!-- file: docs/observability/OPENTELEMETRY_SETUP.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: ada445dd-1dd4-4d9f-8e3b-6318e1f750ec -->
+<!-- last-edited: 2026-08-22 -->
+
 # OpenTelemetry Observability Setup
 
 This document covers configuring OpenTelemetry instrumentation for the audiobook-organizer service.
