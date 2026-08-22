@@ -44,7 +44,11 @@ genuine-duplicate review signal:
 4. **Stub/empty records** — 11–91-byte files paired with real books. Cleanup;
    never had real audio.
 
-## Remediation path (in order) — PROVEN END-TO-END ON SANDBOX 2026-07-18
+## Remediation path (in order) — PROVEN END-TO-END ON PRODUCTION 2026-07-18
+
+> Steps 1–3-classify were validated on the sandbox; steps 3-apply and 4 were
+> proven **on production only** — the sandbox apply wave (T03) never ran. The old
+> heading here read "PROVEN END-TO-END ON SANDBOX", which was not true.
 
 1. **Title repair** — `maintenance.title-repair` (op built, PR #1978) re-derives
    CONS-17b agreed chapter titles over stored books so exact-title cliques
@@ -183,8 +187,13 @@ in falkcorp/infra-docs**.
 ## What's DONE (2026-07-18) and what's open
 
 - ✅ **CONS-10 / INIT-2 T6 / PH-2 / PH-2b — the prod drain ran** (see the
-  "EXECUTED ON PRODUCTION" section above): exact-pending 9,074 → 1,311, 7,891
-  purgeable dismissed, 0 errors.
+  "EXECUTED ON PRODUCTION" section above): on 2026-07-18, exact-pending
+  **9,074 (the 2026-07-17 baseline) → 1,311**, **7,891** purgeable dismissed,
+  `dismiss_errors=0`, `outcome=completed`. Both endpoints of that arrow are
+  2026-07-18 figures — see [Current state](#current-state--as-of-2026-08-12).
+- ⏳ **T03 — the sandbox purge-apply parity run — has NOT happened.** Prod ran
+  without it. Until it does, no sandbox apply/purge-stale/full-scan numbers exist
+  and none should be inferred from prod's (`grep -n '\*\*T03\*\*' TODO.md`).
 - ✅ **2026-07-17 review findings F2–F7 fixed** (F2 ApplyVersionGroup integrity
   #1976, F3/F4/F5 index/Rescore-cap #1977, F6 legacy MergeBooks rerouted off
   hard-delete #2007, F7 quarantine RunItems #2004) — full map in
@@ -195,9 +204,12 @@ in falkcorp/infra-docs**.
 
 Still open (fast-follows, not blockers):
 
-- The remaining **~1,311 exact-pending** are the genuine review backlog — the
-  review UI drains these; a **REVIEW-band producer**, **AI-enrichment tier**, and
-  **cover recovery** are the fast-follows (TODO #3, #11, #12).
+- The post-drain residue — **~1,311 exact-pending as of 2026-07-18**, but
+  **5,947 as of 2026-08-12** (see [Current state](#current-state--as-of-2026-08-12))
+  — is the review backlog the review UI drains; a **REVIEW-band producer**,
+  **AI-enrichment tier**, and **cover recovery** are the fast-follows
+  (TODO #3, #11, #12). The ~4.5× regrowth means the candidate **source** is the
+  open problem, not the size of the queue.
 - **`review_apply_enabled` flip** — human decision
   ([DECISIONS-PENDING](../plans/DECISIONS-PENDING.md)).
 - A **fragment-floor rule** for the fragment-vs-full population (not yet a triage
