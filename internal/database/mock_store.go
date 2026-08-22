@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.86.0
+// version: 1.87.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-16
+// last-edited: 2026-08-21
 
 package database
 
@@ -58,11 +58,25 @@ type MockStore struct {
 	GetBookAtVersionFunc            func(id string, ts time.Time) (*Book, error)
 	RevertBookToVersionFunc         func(id string, ts time.Time) (*Book, error)
 	PruneBookVersionsFunc           func(id string, keepCount int) (int, error)
+	MarkITunesSyncedFunc            func(bookIDs []string) (int64, error)
+	GetITunesDirtyBooksFunc         func() ([]Book, error)
+	GetITunesPurgePendingBooksFunc  func() ([]Book, error)
+	GetQuarantinedBooksFunc         func(limit, offset int) ([]Book, error)
+	CountQuarantinedBooksFunc       func() (int, error)
+	GetScanFailCountFunc            func(pathHash string) (int, error)
+	IncrScanFailCountFunc           func(pathHash string) (int, error)
+	ResetScanFailCountFunc          func(pathHash string) error
+	MergeChapterBooksFunc           func(primaryID string, srcIDs []string, commonTitle string, totalDuration float64) error
+	FlagMetadataHashDuplicateFunc   func(primaryID, duplicateID string) error
+	RecomputeBookAggregatesFunc     func(bookID string) error
+	OptimizeFunc                    func() error
 	GetDuplicateBooksFunc           func() ([][]Book, error)
+	GetBooksByTitleInDirFunc        func(normalizedTitle, dirPath string) ([]Book, error)
 	GetFolderDuplicatesCoreFunc     func() ([][]BookCore, error)
 	GetDuplicateBooksByMetadataFunc func(threshold float64) ([][]BookCore, error)
 	CreateBookFunc                  func(book *Book) (*Book, error)
 	UpdateBookFunc                  func(id string, book *Book) (*Book, error)
+	UpdateBookRatingFunc            func(id string, req UpdateBookRatingRequest) error
 	UpdateBookRatingError           error
 	DeleteBookFunc                  func(id string) error
 	SearchBooksFunc                 func(query string, limit, offset int) ([]Book, error)
@@ -74,6 +88,7 @@ type MockStore struct {
 	CountAuthorsFunc                func() (int, error)
 	CountSeriesFunc                 func() (int, error)
 	GetBookCountsByLocationFunc     func(rootDir string) (int, int, error)
+	GetBookSizesByLocationFunc      func(rootDir string) (int64, int64, error)
 	GetDashboardStatsFunc           func() (*DashboardStats, error)
 	SetRootDirFunc                  func(string)
 	InvalidateLibraryStatsFunc      func()
@@ -96,7 +111,16 @@ type MockStore struct {
 	// maps, so a test asserting on "author has N books" cannot express its own
 	// fixture and silently exercises the zero case instead.
 	GetAllAuthorBookCountsFunc func() (map[int]int, error)
+	GetAllWorkBookCountsFunc   func() (map[string]int, error)
 	GetAllAuthorFileCountsFunc func() (map[int]int, error)
+	GetAllSeriesBookCountsFunc func() (map[int]int, error)
+	GetAllSeriesFileCountsFunc func() (map[int]int, error)
+	CreateNarratorFunc         func(name string) (*Narrator, error)
+	GetNarratorByIDFunc        func(id int) (*Narrator, error)
+	GetNarratorByNameFunc      func(name string) (*Narrator, error)
+	ListNarratorsFunc          func() ([]Narrator, error)
+	GetBookNarratorsFunc       func(bookID string) ([]BookNarrator, error)
+	SetBookNarratorsFunc       func(bookID string, narrators []BookNarrator) error
 	UpdateAuthorNameFunc       func(id int, name string) error
 
 	GetAuthorsByIDsFunc func(ids []int) (map[int]*Author, error)
@@ -190,6 +214,9 @@ type MockStore struct {
 	// so a test could assert an operation's SUMMARY but never its CHANGE LOG —
 	// and the two disagreeing, silently, is itself a defect class here.
 	CreateOperationChangeFunc   func(change *OperationChange) error
+	GetOperationChangesFunc     func(operationID string) ([]*OperationChange, error)
+	GetBookChangesFunc          func(bookID string) ([]*OperationChange, error)
+	RevertOperationChangesFunc  func(operationID string) error
 	PruneSystemActivityLogsFunc func(olderThan time.Time) (int, error)
 
 	// AI jobs
@@ -203,9 +230,51 @@ type MockStore struct {
 	ListAIJobsFunc         func(typeFilter, statusFilter string, limit, offset int) ([]AIJob, error)
 
 	// Metadata rejections
-	AddMetadataRejectionFunc     func(r MetadataRejection) error
-	GetMetadataRejectionsFunc    func(bookID string) ([]MetadataRejection, error)
-	DeleteMetadataRejectionsFunc func(bookID string) error
+	AddMetadataRejectionFunc         func(r MetadataRejection) error
+	GetMetadataRejectionsFunc        func(bookID string) ([]MetadataRejection, error)
+	DeleteMetadataRejectionsFunc     func(bookID string) error
+	GetAuthorsByBookIDsFunc          func(ctx context.Context, bookIDs []string) (map[string][]Author, error)
+	GetNarratorsByBookIDsFunc        func(ctx context.Context, bookIDs []string) (map[string][]Narrator, error)
+	UpsertOpDefinitionV2Func         func(row OpDefinitionV2Row) error
+	DeleteOrphanOpDefsV2Func         func(keepIDs []string) error
+	InsertOperationV2Func            func(row OperationV2Row) error
+	ListQueuedOperationsV2Func       func() ([]OperationV2Row, error)
+	GetOperationV2Func               func(id string) (*OperationV2Row, error)
+	UpdateOperationV2StatusFunc      func(id string, status string, startedAt, completedAt *time.Time, errMsg *string) error
+	SetOperationV2StatusIfQueuedFunc func(id, newStatus string) (bool, error)
+	CountRunningByPluginV2Func       func(plugin string) (int, error)
+	ListActiveOperationsV2Func       func() ([]OperationV2Row, error)
+	IncrementResumeCountV2Func       func(id string) error
+	InsertOpStrikeV2Func             func(row OpStrikeV2Row) error
+	GetOpStateV2Func                 func(opID string) (*OpStateV2Row, error)
+	DeleteOpStateV2Func              func(opID string) error
+	UpdateOperationV2ParamsFunc      func(id string, params []byte) error
+	UpdateOpProgressV2Func           func(id string, current, total int, message string) error
+	UpdateOpPhaseV2Func              func(id string, phase *string) error
+	UpdateOpCheckpointV2Func         func(id string, newHWM int) error
+	AppendOpLogsV2Func               func(rows []OpLogV2Row) error
+	InsertOpErrorV2Func              func(row OpErrorV2Row) error
+	UpsertOpStateV2Func              func(row OpStateV2Row) error
+	ListOperationsV2SinceFunc        func(since time.Time, limit int) ([]OperationV2Row, error)
+	GetOpLogsV2Func                  func(opID string, limit int) ([]OpLogV2Row, error)
+	GetDepRevFunc                    func(sub OpSubject) (uint64, error)
+	BumpDepRevFunc                   func(sub OpSubject) (uint64, error)
+	RecordOpCompletionFunc           func(sub OpSubject, opType, fileID string, depRev uint64) error
+	GetOpCompletionFunc              func(sub OpSubject, opType string) (uint64, bool, error)
+	ListFileCompletionsFunc          func(sub OpSubject, opType string) (map[string]uint64, error)
+	ListWaitingDepsOpsFunc           func() ([]OperationV2Row, error)
+	PromoteToQueuedFunc              func(id string) error
+	AddToBatchBucketFunc             func(opType string, sub OpSubject) error
+	ListBatchBucketFunc              func(opType string) ([]BatchBucketEntry, error)
+	ClearBatchBucketFunc             func(opType string, subs []OpSubject) error
+	UpsertReviewItemFunc             func(item ReviewItem) (ReviewItem, error)
+	GetReviewItemFunc                func(id string) (*ReviewItem, error)
+	ListReviewItemsFunc              func(filter ReviewFilter) ([]ReviewItem, int, error)
+	CountReviewItemsFunc             func(status string) (int, error)
+	ReviewStatsByKindFunc            func() ([]ReviewKindStat, error)
+	SetReviewItemStatusFunc          func(id, status string) (*ReviewItem, error)
+	SetReviewItemDecisionFunc        func(id, status, chosenAction string) (*ReviewItem, error)
+	DeleteReviewItemFunc             func(id string) error
 
 	// User Preferences
 	GetUserPreferenceFunc     func(key string) (*UserPreference, error)
@@ -219,11 +288,23 @@ type MockStore struct {
 	DeleteSettingFunc  func(key string) error
 
 	// RawKV — func delegates so tests can intercept prefix scans / deletes.
-	SetRawFunc      func(key string, value []byte) error
-	GetRawFunc      func(key string) ([]byte, error)
-	DeleteRawFunc   func(key string) error
-	ScanPrefixFunc  func(prefix string) ([]KVPair, error)
-	CountPrefixFunc func(prefix string) (int64, error)
+	SetRawFunc                       func(key string, value []byte) error
+	GetRawFunc                       func(key string) ([]byte, error)
+	DeleteRawFunc                    func(key string) error
+	ScanPrefixFunc                   func(prefix string) ([]KVPair, error)
+	CountPrefixFunc                  func(prefix string) (int64, error)
+	CreateOperationResultFunc        func(result *OperationResult) error
+	GetOperationResultsFunc          func(operationID string) ([]OperationResult, error)
+	GetOperationResultsPageFunc      func(operationID string, limit, offset int) ([]OperationResult, int, error)
+	GetRecentCompletedOperationsFunc func(limit int) ([]Operation, error)
+	GetBookUserTagsFunc              func(bookID string) ([]string, error)
+	SetBookUserTagsFunc              func(bookID string, tags []string) error
+	AddBookUserTagFunc               func(bookID string, tag string) error
+	RemoveBookUserTagFunc            func(bookID string, tag string) error
+	GetBookAlternativeTitlesFunc     func(bookID string) ([]BookAlternativeTitle, error)
+	AddBookAlternativeTitleFunc      func(bookID, title, source, language string) error
+	RemoveBookAlternativeTitleFunc   func(bookID, title string) error
+	SetBookAlternativeTitlesFunc     func(bookID string, titles []BookAlternativeTitle) error
 
 	// Playlists
 	CreatePlaylistFunc        func(name string, seriesID *int, filePath string) (*Playlist, error)
@@ -366,10 +447,14 @@ type MockStore struct {
 	GetLibraryFingerprintFunc  func(path string) (*LibraryFingerprintRecord, error)
 
 	// Scan cache
-	GetScanCacheMapFunc     func() (map[string]ScanCacheEntry, error)
-	UpdateScanCacheFunc     func(bookID string, mtime int64, size int64) error
-	MarkNeedsRescanFunc     func(bookID string) error
-	GetDirtyBookFoldersFunc func() ([]string, error)
+	GetScanCacheMapFunc                  func() (map[string]ScanCacheEntry, error)
+	UpdateScanCacheFunc                  func(bookID string, mtime int64, size int64) error
+	MarkNeedsRescanFunc                  func(bookID string) error
+	GetDirtyBookFoldersFunc              func() ([]string, error)
+	CreateDeferredITunesUpdateFunc       func(bookID, persistentID, oldPath, newPath, updateType string) error
+	GetPendingDeferredITunesUpdatesFunc  func() ([]DeferredITunesUpdate, error)
+	MarkDeferredITunesUpdateAppliedFunc  func(id int) error
+	GetDeferredITunesUpdatesByBookIDFunc func(bookID string) ([]DeferredITunesUpdate, error)
 
 	// External ID mapping
 	CreateExternalIDMappingFunc      func(mapping *ExternalIDMapping) error
@@ -380,6 +465,9 @@ type MockStore struct {
 	ReassignExternalIDsFunc          func(oldBookID, newBookID string) error
 	ReassignExternalIDFunc           func(source, externalID, newBookID string) error
 	BulkCreateExternalIDMappingsFunc func(mappings []ExternalIDMapping) error
+	MarkExternalIDRemovedFunc        func(source, externalID string) error
+	SetExternalIDProvenanceFunc      func(source, externalID, provenance string) error
+	GetRemovedExternalIDsFunc        func(source string) ([]ExternalIDMapping, error)
 
 	// BookFile methods
 	CreateBookFileFunc                      func(file *BookFile) error
@@ -448,8 +536,9 @@ type MockStore struct {
 	GetSeriesByTagFunc           func(tag string) ([]int, error)
 
 	// Lifecycle
-	CloseFunc func() error
-	ResetFunc func() error
+	CloseFunc            func() error
+	ResetFunc            func() error
+	SetLastWrittenAtFunc func(id string, t time.Time) error
 
 	// MetadataCacheStore (METADATA-CACHED-MATCHER)
 	GetMetadataCacheFunc      func(bookID string) (*MetadataCandidateCache, error)
@@ -813,6 +902,9 @@ func (m *MockStore) GetDuplicateBooks() ([][]Book, error) {
 }
 
 func (m *MockStore) GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]Book, error) {
+	if m.GetBooksByTitleInDirFunc != nil {
+		return m.GetBooksByTitleInDirFunc(normalizedTitle, dirPath)
+	}
 	return nil, nil
 }
 
@@ -873,6 +965,9 @@ func (m *MockStore) GetAllAuthorBookCounts() (map[int]int, error) {
 }
 
 func (m *MockStore) GetAllWorkBookCounts() (map[string]int, error) {
+	if m.GetAllWorkBookCountsFunc != nil {
+		return m.GetAllWorkBookCountsFunc()
+	}
 	return map[string]int{}, nil
 }
 
@@ -884,34 +979,58 @@ func (m *MockStore) GetAllAuthorFileCounts() (map[int]int, error) {
 }
 
 func (m *MockStore) GetAllSeriesBookCounts() (map[int]int, error) {
+	if m.GetAllSeriesBookCountsFunc != nil {
+		return m.GetAllSeriesBookCountsFunc()
+	}
 	return map[int]int{}, nil
 }
 
 func (m *MockStore) GetAllSeriesFileCounts() (map[int]int, error) {
+	if m.GetAllSeriesFileCountsFunc != nil {
+		return m.GetAllSeriesFileCountsFunc()
+	}
 	return map[int]int{}, nil
 }
 
 func (m *MockStore) CreateNarrator(name string) (*Narrator, error) {
+	if m.CreateNarratorFunc != nil {
+		return m.CreateNarratorFunc(name)
+	}
 	return nil, nil
 }
 
 func (m *MockStore) GetNarratorByID(id int) (*Narrator, error) {
+	if m.GetNarratorByIDFunc != nil {
+		return m.GetNarratorByIDFunc(id)
+	}
 	return nil, nil
 }
 
 func (m *MockStore) GetNarratorByName(name string) (*Narrator, error) {
+	if m.GetNarratorByNameFunc != nil {
+		return m.GetNarratorByNameFunc(name)
+	}
 	return nil, nil
 }
 
 func (m *MockStore) ListNarrators() ([]Narrator, error) {
+	if m.ListNarratorsFunc != nil {
+		return m.ListNarratorsFunc()
+	}
 	return nil, nil
 }
 
 func (m *MockStore) GetBookNarrators(bookID string) ([]BookNarrator, error) {
+	if m.GetBookNarratorsFunc != nil {
+		return m.GetBookNarratorsFunc(bookID)
+	}
 	return nil, nil
 }
 
 func (m *MockStore) SetBookNarrators(bookID string, narrators []BookNarrator) error {
+	if m.SetBookNarratorsFunc != nil {
+		return m.SetBookNarratorsFunc(bookID, narrators)
+	}
 	return nil
 }
 
@@ -930,6 +1049,9 @@ func (m *MockStore) UpdateBook(id string, book *Book) (*Book, error) {
 }
 
 func (m *MockStore) UpdateBookRating(id string, req UpdateBookRatingRequest) error {
+	if m.UpdateBookRatingFunc != nil {
+		return m.UpdateBookRatingFunc(id, req)
+	}
 	return m.UpdateBookRatingError
 }
 
@@ -1004,6 +1126,9 @@ func (m *MockStore) GetBookCountsByLocation(rootDir string) (int, int, error) {
 }
 
 func (m *MockStore) GetBookSizesByLocation(rootDir string) (int64, int64, error) {
+	if m.GetBookSizesByLocationFunc != nil {
+		return m.GetBookSizesByLocationFunc(rootDir)
+	}
 	return 0, 0, nil
 }
 
@@ -2007,6 +2132,9 @@ func (m *MockStore) Reset() error {
 }
 
 func (m *MockStore) SetLastWrittenAt(id string, t time.Time) error {
+	if m.SetLastWrittenAtFunc != nil {
+		return m.SetLastWrittenAtFunc(id, t)
+	}
 	return nil
 }
 
@@ -2039,24 +2167,78 @@ func (m *MockStore) PruneBookSnapshots(id string, keepCount int) (int, error) {
 }
 
 func (m *MockStore) MarkITunesSynced(bookIDs []string) (int64, error) {
+	if m.MarkITunesSyncedFunc != nil {
+		return m.MarkITunesSyncedFunc(bookIDs)
+	}
 	return int64(len(bookIDs)), nil
 }
-func (m *MockStore) GetITunesDirtyBooks() ([]Book, error)                  { return nil, nil }
-func (m *MockStore) GetITunesPurgePendingBooks() ([]Book, error)           { return nil, nil }
-func (m *MockStore) GetQuarantinedBooks(limit, offset int) ([]Book, error) { return nil, nil }
-func (m *MockStore) CountQuarantinedBooks() (int, error)                   { return 0, nil }
-func (m *MockStore) GetScanFailCount(pathHash string) (int, error)         { return 0, nil }
-func (m *MockStore) IncrScanFailCount(pathHash string) (int, error)        { return 1, nil }
-func (m *MockStore) ResetScanFailCount(pathHash string) error              { return nil }
-func (m *MockStore) MergeChapterBooks(_ string, _ []string, _ string, _ float64) error {
+func (m *MockStore) GetITunesDirtyBooks() ([]Book, error) {
+	if m.GetITunesDirtyBooksFunc != nil {
+		return m.GetITunesDirtyBooksFunc()
+	}
+	return nil, nil
+}
+func (m *MockStore) GetITunesPurgePendingBooks() ([]Book, error) {
+	if m.GetITunesPurgePendingBooksFunc != nil {
+		return m.GetITunesPurgePendingBooksFunc()
+	}
+	return nil, nil
+}
+func (m *MockStore) GetQuarantinedBooks(limit, offset int) ([]Book, error) {
+	if m.GetQuarantinedBooksFunc != nil {
+		return m.GetQuarantinedBooksFunc(limit, offset)
+	}
+	return nil, nil
+}
+func (m *MockStore) CountQuarantinedBooks() (int, error) {
+	if m.CountQuarantinedBooksFunc != nil {
+		return m.CountQuarantinedBooksFunc()
+	}
+	return 0, nil
+}
+func (m *MockStore) GetScanFailCount(pathHash string) (int, error) {
+	if m.GetScanFailCountFunc != nil {
+		return m.GetScanFailCountFunc(pathHash)
+	}
+	return 0, nil
+}
+func (m *MockStore) IncrScanFailCount(pathHash string) (int, error) {
+	if m.IncrScanFailCountFunc != nil {
+		return m.IncrScanFailCountFunc(pathHash)
+	}
+	return 1, nil
+}
+func (m *MockStore) ResetScanFailCount(pathHash string) error {
+	if m.ResetScanFailCountFunc != nil {
+		return m.ResetScanFailCountFunc(pathHash)
+	}
+	return nil
+}
+func (m *MockStore) MergeChapterBooks(primaryID string, srcIDs []string, commonTitle string, totalDuration float64) error {
+	if m.MergeChapterBooksFunc != nil {
+		return m.MergeChapterBooksFunc(primaryID, srcIDs, commonTitle, totalDuration)
+	}
 	return nil
 }
 
-func (m *MockStore) FlagMetadataHashDuplicate(_, _ string) error { return nil }
+func (m *MockStore) FlagMetadataHashDuplicate(primaryID, duplicateID string) error {
+	if m.FlagMetadataHashDuplicateFunc != nil {
+		return m.FlagMetadataHashDuplicateFunc(primaryID, duplicateID)
+	}
+	return nil
+}
 
-func (m *MockStore) RecomputeBookAggregates(_ string) error { return nil }
+func (m *MockStore) RecomputeBookAggregates(bookID string) error {
+	if m.RecomputeBookAggregatesFunc != nil {
+		return m.RecomputeBookAggregatesFunc(bookID)
+	}
+	return nil
+}
 
 func (m *MockStore) Optimize() error {
+	if m.OptimizeFunc != nil {
+		return m.OptimizeFunc()
+	}
 	return nil
 }
 
@@ -2068,14 +2250,23 @@ func (m *MockStore) CreateOperationChange(change *OperationChange) error {
 }
 
 func (m *MockStore) GetOperationChanges(operationID string) ([]*OperationChange, error) {
+	if m.GetOperationChangesFunc != nil {
+		return m.GetOperationChangesFunc(operationID)
+	}
 	return nil, nil
 }
 
 func (m *MockStore) GetBookChanges(bookID string) ([]*OperationChange, error) {
+	if m.GetBookChangesFunc != nil {
+		return m.GetBookChangesFunc(bookID)
+	}
 	return nil, nil
 }
 
 func (m *MockStore) RevertOperationChanges(operationID string) error {
+	if m.RevertOperationChangesFunc != nil {
+		return m.RevertOperationChangesFunc(operationID)
+	}
 	return nil
 }
 
@@ -2164,18 +2355,30 @@ func (m *MockStore) GetDirtyBookFolders() ([]string, error) {
 }
 
 func (m *MockStore) CreateDeferredITunesUpdate(bookID, persistentID, oldPath, newPath, updateType string) error {
+	if m.CreateDeferredITunesUpdateFunc != nil {
+		return m.CreateDeferredITunesUpdateFunc(bookID, persistentID, oldPath, newPath, updateType)
+	}
 	return nil
 }
 
 func (m *MockStore) GetPendingDeferredITunesUpdates() ([]DeferredITunesUpdate, error) {
+	if m.GetPendingDeferredITunesUpdatesFunc != nil {
+		return m.GetPendingDeferredITunesUpdatesFunc()
+	}
 	return nil, nil
 }
 
 func (m *MockStore) MarkDeferredITunesUpdateApplied(id int) error {
+	if m.MarkDeferredITunesUpdateAppliedFunc != nil {
+		return m.MarkDeferredITunesUpdateAppliedFunc(id)
+	}
 	return nil
 }
 
 func (m *MockStore) GetDeferredITunesUpdatesByBookID(bookID string) ([]DeferredITunesUpdate, error) {
+	if m.GetDeferredITunesUpdatesByBookIDFunc != nil {
+		return m.GetDeferredITunesUpdatesByBookIDFunc(bookID)
+	}
 	return nil, nil
 }
 
@@ -2235,11 +2438,22 @@ func (m *MockStore) BulkCreateExternalIDMappings(mappings []ExternalIDMapping) e
 	return nil
 }
 
-func (m *MockStore) MarkExternalIDRemoved(source, externalID string) error { return nil }
+func (m *MockStore) MarkExternalIDRemoved(source, externalID string) error {
+	if m.MarkExternalIDRemovedFunc != nil {
+		return m.MarkExternalIDRemovedFunc(source, externalID)
+	}
+	return nil
+}
 func (m *MockStore) SetExternalIDProvenance(source, externalID, provenance string) error {
+	if m.SetExternalIDProvenanceFunc != nil {
+		return m.SetExternalIDProvenanceFunc(source, externalID, provenance)
+	}
 	return nil
 }
 func (m *MockStore) GetRemovedExternalIDs(source string) ([]ExternalIDMapping, error) {
+	if m.GetRemovedExternalIDsFunc != nil {
+		return m.GetRemovedExternalIDsFunc(source)
+	}
 	return nil, nil
 }
 
@@ -2273,28 +2487,78 @@ func (m *MockStore) CountPrefix(prefix string) (int64, error) {
 	}
 	return 0, nil
 }
-func (m *MockStore) CreateOperationResult(result *OperationResult) error { return nil }
+func (m *MockStore) CreateOperationResult(result *OperationResult) error {
+	if m.CreateOperationResultFunc != nil {
+		return m.CreateOperationResultFunc(result)
+	}
+	return nil
+}
 func (m *MockStore) GetOperationResults(operationID string) ([]OperationResult, error) {
+	if m.GetOperationResultsFunc != nil {
+		return m.GetOperationResultsFunc(operationID)
+	}
 	return nil, nil
 }
 func (m *MockStore) GetOperationResultsPage(operationID string, limit, offset int) ([]OperationResult, int, error) {
+	if m.GetOperationResultsPageFunc != nil {
+		return m.GetOperationResultsPageFunc(operationID, limit, offset)
+	}
 	return nil, 0, nil
 }
 func (m *MockStore) GetRecentCompletedOperations(limit int) ([]Operation, error) {
+	if m.GetRecentCompletedOperationsFunc != nil {
+		return m.GetRecentCompletedOperationsFunc(limit)
+	}
 	return nil, nil
 }
 
-func (m *MockStore) GetBookUserTags(bookID string) ([]string, error)    { return nil, nil }
-func (m *MockStore) SetBookUserTags(bookID string, tags []string) error { return nil }
-func (m *MockStore) AddBookUserTag(bookID string, tag string) error     { return nil }
-func (m *MockStore) RemoveBookUserTag(bookID string, tag string) error  { return nil }
+func (m *MockStore) GetBookUserTags(bookID string) ([]string, error) {
+	if m.GetBookUserTagsFunc != nil {
+		return m.GetBookUserTagsFunc(bookID)
+	}
+	return nil, nil
+}
+func (m *MockStore) SetBookUserTags(bookID string, tags []string) error {
+	if m.SetBookUserTagsFunc != nil {
+		return m.SetBookUserTagsFunc(bookID, tags)
+	}
+	return nil
+}
+func (m *MockStore) AddBookUserTag(bookID string, tag string) error {
+	if m.AddBookUserTagFunc != nil {
+		return m.AddBookUserTagFunc(bookID, tag)
+	}
+	return nil
+}
+func (m *MockStore) RemoveBookUserTag(bookID string, tag string) error {
+	if m.RemoveBookUserTagFunc != nil {
+		return m.RemoveBookUserTagFunc(bookID, tag)
+	}
+	return nil
+}
 
 func (m *MockStore) GetBookAlternativeTitles(bookID string) ([]BookAlternativeTitle, error) {
+	if m.GetBookAlternativeTitlesFunc != nil {
+		return m.GetBookAlternativeTitlesFunc(bookID)
+	}
 	return nil, nil
 }
-func (m *MockStore) AddBookAlternativeTitle(bookID, title, source, language string) error { return nil }
-func (m *MockStore) RemoveBookAlternativeTitle(bookID, title string) error                { return nil }
+func (m *MockStore) AddBookAlternativeTitle(bookID, title, source, language string) error {
+	if m.AddBookAlternativeTitleFunc != nil {
+		return m.AddBookAlternativeTitleFunc(bookID, title, source, language)
+	}
+	return nil
+}
+func (m *MockStore) RemoveBookAlternativeTitle(bookID, title string) error {
+	if m.RemoveBookAlternativeTitleFunc != nil {
+		return m.RemoveBookAlternativeTitleFunc(bookID, title)
+	}
+	return nil
+}
 func (m *MockStore) SetBookAlternativeTitles(bookID string, titles []BookAlternativeTitle) error {
+	if m.SetBookAlternativeTitlesFunc != nil {
+		return m.SetBookAlternativeTitlesFunc(bookID, titles)
+	}
 	return nil
 }
 
@@ -2770,72 +3034,266 @@ func (m *MockStore) DeleteMetadataRejections(bookID string) error {
 }
 
 func (m *MockStore) GetAuthorsByBookIDs(ctx context.Context, bookIDs []string) (map[string][]Author, error) {
+	if m.GetAuthorsByBookIDsFunc != nil {
+		return m.GetAuthorsByBookIDsFunc(ctx, bookIDs)
+	}
 	return make(map[string][]Author), nil
 }
 
 func (m *MockStore) GetNarratorsByBookIDs(ctx context.Context, bookIDs []string) (map[string][]Narrator, error) {
+	if m.GetNarratorsByBookIDsFunc != nil {
+		return m.GetNarratorsByBookIDsFunc(ctx, bookIDs)
+	}
 	return make(map[string][]Narrator), nil
 }
 
 // OpsV2Store stub methods — permissive no-ops for tests that don't need v2 ops.
-func (m *MockStore) UpsertOpDefinitionV2(_ OpDefinitionV2Row) error    { return nil }
-func (m *MockStore) DeleteOrphanOpDefsV2(_ []string) error             { return nil }
-func (m *MockStore) InsertOperationV2(_ OperationV2Row) error          { return nil }
-func (m *MockStore) ListQueuedOperationsV2() ([]OperationV2Row, error) { return nil, nil }
-func (m *MockStore) GetOperationV2(_ string) (*OperationV2Row, error)  { return nil, nil }
-func (m *MockStore) UpdateOperationV2Status(_ string, _ string, _, _ *time.Time, _ *string) error {
+func (m *MockStore) UpsertOpDefinitionV2(row OpDefinitionV2Row) error {
+	if m.UpsertOpDefinitionV2Func != nil {
+		return m.UpsertOpDefinitionV2Func(row)
+	}
 	return nil
 }
-func (m *MockStore) SetOperationV2StatusIfQueued(_, _ string) (bool, error) { return false, nil }
-func (m *MockStore) CountRunningByPluginV2(_ string) (int, error)           { return 0, nil }
-func (m *MockStore) ListActiveOperationsV2() ([]OperationV2Row, error)      { return nil, nil }
-func (m *MockStore) IncrementResumeCountV2(_ string) error                  { return nil }
-func (m *MockStore) InsertOpStrikeV2(_ OpStrikeV2Row) error                 { return nil }
-func (m *MockStore) GetOpStateV2(_ string) (*OpStateV2Row, error)           { return nil, nil }
-func (m *MockStore) DeleteOpStateV2(_ string) error                         { return nil }
-func (m *MockStore) UpdateOperationV2Params(_ string, _ []byte) error       { return nil }
-func (m *MockStore) UpdateOpProgressV2(_ string, _, _ int, _ string) error  { return nil }
-func (m *MockStore) UpdateOpPhaseV2(_ string, _ *string) error              { return nil }
-func (m *MockStore) UpdateOpCheckpointV2(_ string, _ int) error             { return nil }
-func (m *MockStore) AppendOpLogsV2(_ []OpLogV2Row) error                    { return nil }
-func (m *MockStore) InsertOpErrorV2(_ OpErrorV2Row) error                   { return nil }
-func (m *MockStore) UpsertOpStateV2(_ OpStateV2Row) error                   { return nil }
-func (m *MockStore) ListOperationsV2Since(_ time.Time, _ int) ([]OperationV2Row, error) {
+func (m *MockStore) DeleteOrphanOpDefsV2(keepIDs []string) error {
+	if m.DeleteOrphanOpDefsV2Func != nil {
+		return m.DeleteOrphanOpDefsV2Func(keepIDs)
+	}
+	return nil
+}
+func (m *MockStore) InsertOperationV2(row OperationV2Row) error {
+	if m.InsertOperationV2Func != nil {
+		return m.InsertOperationV2Func(row)
+	}
+	return nil
+}
+func (m *MockStore) ListQueuedOperationsV2() ([]OperationV2Row, error) {
+	if m.ListQueuedOperationsV2Func != nil {
+		return m.ListQueuedOperationsV2Func()
+	}
 	return nil, nil
 }
-func (m *MockStore) GetOpLogsV2(_ string, _ int) ([]OpLogV2Row, error) { return nil, nil }
+func (m *MockStore) GetOperationV2(id string) (*OperationV2Row, error) {
+	if m.GetOperationV2Func != nil {
+		return m.GetOperationV2Func(id)
+	}
+	return nil, nil
+}
+func (m *MockStore) UpdateOperationV2Status(id string, status string, startedAt, completedAt *time.Time, errMsg *string) error {
+	if m.UpdateOperationV2StatusFunc != nil {
+		return m.UpdateOperationV2StatusFunc(id, status, startedAt, completedAt, errMsg)
+	}
+	return nil
+}
+func (m *MockStore) SetOperationV2StatusIfQueued(id, newStatus string) (bool, error) {
+	if m.SetOperationV2StatusIfQueuedFunc != nil {
+		return m.SetOperationV2StatusIfQueuedFunc(id, newStatus)
+	}
+	return false, nil
+}
+func (m *MockStore) CountRunningByPluginV2(plugin string) (int, error) {
+	if m.CountRunningByPluginV2Func != nil {
+		return m.CountRunningByPluginV2Func(plugin)
+	}
+	return 0, nil
+}
+func (m *MockStore) ListActiveOperationsV2() ([]OperationV2Row, error) {
+	if m.ListActiveOperationsV2Func != nil {
+		return m.ListActiveOperationsV2Func()
+	}
+	return nil, nil
+}
+func (m *MockStore) IncrementResumeCountV2(id string) error {
+	if m.IncrementResumeCountV2Func != nil {
+		return m.IncrementResumeCountV2Func(id)
+	}
+	return nil
+}
+func (m *MockStore) InsertOpStrikeV2(row OpStrikeV2Row) error {
+	if m.InsertOpStrikeV2Func != nil {
+		return m.InsertOpStrikeV2Func(row)
+	}
+	return nil
+}
+func (m *MockStore) GetOpStateV2(opID string) (*OpStateV2Row, error) {
+	if m.GetOpStateV2Func != nil {
+		return m.GetOpStateV2Func(opID)
+	}
+	return nil, nil
+}
+func (m *MockStore) DeleteOpStateV2(opID string) error {
+	if m.DeleteOpStateV2Func != nil {
+		return m.DeleteOpStateV2Func(opID)
+	}
+	return nil
+}
+func (m *MockStore) UpdateOperationV2Params(id string, params []byte) error {
+	if m.UpdateOperationV2ParamsFunc != nil {
+		return m.UpdateOperationV2ParamsFunc(id, params)
+	}
+	return nil
+}
+func (m *MockStore) UpdateOpProgressV2(id string, current, total int, message string) error {
+	if m.UpdateOpProgressV2Func != nil {
+		return m.UpdateOpProgressV2Func(id, current, total, message)
+	}
+	return nil
+}
+func (m *MockStore) UpdateOpPhaseV2(id string, phase *string) error {
+	if m.UpdateOpPhaseV2Func != nil {
+		return m.UpdateOpPhaseV2Func(id, phase)
+	}
+	return nil
+}
+func (m *MockStore) UpdateOpCheckpointV2(id string, newHWM int) error {
+	if m.UpdateOpCheckpointV2Func != nil {
+		return m.UpdateOpCheckpointV2Func(id, newHWM)
+	}
+	return nil
+}
+func (m *MockStore) AppendOpLogsV2(rows []OpLogV2Row) error {
+	if m.AppendOpLogsV2Func != nil {
+		return m.AppendOpLogsV2Func(rows)
+	}
+	return nil
+}
+func (m *MockStore) InsertOpErrorV2(row OpErrorV2Row) error {
+	if m.InsertOpErrorV2Func != nil {
+		return m.InsertOpErrorV2Func(row)
+	}
+	return nil
+}
+func (m *MockStore) UpsertOpStateV2(row OpStateV2Row) error {
+	if m.UpsertOpStateV2Func != nil {
+		return m.UpsertOpStateV2Func(row)
+	}
+	return nil
+}
+func (m *MockStore) ListOperationsV2Since(since time.Time, limit int) ([]OperationV2Row, error) {
+	if m.ListOperationsV2SinceFunc != nil {
+		return m.ListOperationsV2SinceFunc(since, limit)
+	}
+	return nil, nil
+}
+func (m *MockStore) GetOpLogsV2(opID string, limit int) ([]OpLogV2Row, error) {
+	if m.GetOpLogsV2Func != nil {
+		return m.GetOpLogsV2Func(opID, limit)
+	}
+	return nil, nil
+}
 
 // UOS dependency-scheduling stubs (Task 2).
-func (m *MockStore) GetDepRev(_ OpSubject) (uint64, error)                       { return 0, nil }
-func (m *MockStore) BumpDepRev(_ OpSubject) (uint64, error)                      { return 1, nil }
-func (m *MockStore) RecordOpCompletion(_ OpSubject, _, _ string, _ uint64) error { return nil }
-func (m *MockStore) GetOpCompletion(_ OpSubject, _ string) (uint64, bool, error) {
+func (m *MockStore) GetDepRev(sub OpSubject) (uint64, error) {
+	if m.GetDepRevFunc != nil {
+		return m.GetDepRevFunc(sub)
+	}
+	return 0, nil
+}
+func (m *MockStore) BumpDepRev(sub OpSubject) (uint64, error) {
+	if m.BumpDepRevFunc != nil {
+		return m.BumpDepRevFunc(sub)
+	}
+	return 1, nil
+}
+func (m *MockStore) RecordOpCompletion(sub OpSubject, opType, fileID string, depRev uint64) error {
+	if m.RecordOpCompletionFunc != nil {
+		return m.RecordOpCompletionFunc(sub, opType, fileID, depRev)
+	}
+	return nil
+}
+func (m *MockStore) GetOpCompletion(sub OpSubject, opType string) (uint64, bool, error) {
+	if m.GetOpCompletionFunc != nil {
+		return m.GetOpCompletionFunc(sub, opType)
+	}
 	return 0, false, nil
 }
-func (m *MockStore) ListFileCompletions(_ OpSubject, _ string) (map[string]uint64, error) {
+func (m *MockStore) ListFileCompletions(sub OpSubject, opType string) (map[string]uint64, error) {
+	if m.ListFileCompletionsFunc != nil {
+		return m.ListFileCompletionsFunc(sub, opType)
+	}
 	return nil, nil
 }
-func (m *MockStore) ListWaitingDepsOps() ([]OperationV2Row, error) { return nil, nil }
-func (m *MockStore) PromoteToQueued(_ string) error                { return nil }
+func (m *MockStore) ListWaitingDepsOps() ([]OperationV2Row, error) {
+	if m.ListWaitingDepsOpsFunc != nil {
+		return m.ListWaitingDepsOpsFunc()
+	}
+	return nil, nil
+}
+func (m *MockStore) PromoteToQueued(id string) error {
+	if m.PromoteToQueuedFunc != nil {
+		return m.PromoteToQueuedFunc(id)
+	}
+	return nil
+}
 
 // M3 batch bucket stubs. MockStore is a permissive stub — these are no-ops
 // by default. Tests that need batch-bucket behaviour should use fakeStore
 // (in internal/operations/registry/teststore_test.go) which carries real state.
-func (m *MockStore) AddToBatchBucket(_ string, _ OpSubject) error         { return nil }
-func (m *MockStore) ListBatchBucket(_ string) ([]BatchBucketEntry, error) { return nil, nil }
-func (m *MockStore) ClearBatchBucket(_ string, _ []OpSubject) error       { return nil }
+func (m *MockStore) AddToBatchBucket(opType string, sub OpSubject) error {
+	if m.AddToBatchBucketFunc != nil {
+		return m.AddToBatchBucketFunc(opType, sub)
+	}
+	return nil
+}
+func (m *MockStore) ListBatchBucket(opType string) ([]BatchBucketEntry, error) {
+	if m.ListBatchBucketFunc != nil {
+		return m.ListBatchBucketFunc(opType)
+	}
+	return nil, nil
+}
+func (m *MockStore) ClearBatchBucket(opType string, subs []OpSubject) error {
+	if m.ClearBatchBucketFunc != nil {
+		return m.ClearBatchBucketFunc(opType, subs)
+	}
+	return nil
+}
 
 // ReviewStore stubs (PR-A1) — permissive no-ops for tests that don't exercise
 // the review queue. Handler/store tests use a real *PebbleStore, not this mock.
-func (m *MockStore) UpsertReviewItem(item ReviewItem) (ReviewItem, error) { return item, nil }
-func (m *MockStore) GetReviewItem(_ string) (*ReviewItem, error)          { return nil, nil }
-func (m *MockStore) ListReviewItems(_ ReviewFilter) ([]ReviewItem, int, error) {
-	return nil, 0, nil
+func (m *MockStore) UpsertReviewItem(item ReviewItem) (ReviewItem, error) {
+	if m.UpsertReviewItemFunc != nil {
+		return m.UpsertReviewItemFunc(item)
+	}
+	return item, nil
 }
-func (m *MockStore) CountReviewItems(_ string) (int, error)               { return 0, nil }
-func (m *MockStore) ReviewStatsByKind() ([]ReviewKindStat, error)         { return nil, nil }
-func (m *MockStore) SetReviewItemStatus(_, _ string) (*ReviewItem, error) { return nil, nil }
-func (m *MockStore) SetReviewItemDecision(_, _, _ string) (*ReviewItem, error) {
+func (m *MockStore) GetReviewItem(id string) (*ReviewItem, error) {
+	if m.GetReviewItemFunc != nil {
+		return m.GetReviewItemFunc(id)
+	}
 	return nil, nil
 }
-func (m *MockStore) DeleteReviewItem(_ string) error { return nil }
+func (m *MockStore) ListReviewItems(filter ReviewFilter) ([]ReviewItem, int, error) {
+	if m.ListReviewItemsFunc != nil {
+		return m.ListReviewItemsFunc(filter)
+	}
+	return nil, 0, nil
+}
+func (m *MockStore) CountReviewItems(status string) (int, error) {
+	if m.CountReviewItemsFunc != nil {
+		return m.CountReviewItemsFunc(status)
+	}
+	return 0, nil
+}
+func (m *MockStore) ReviewStatsByKind() ([]ReviewKindStat, error) {
+	if m.ReviewStatsByKindFunc != nil {
+		return m.ReviewStatsByKindFunc()
+	}
+	return nil, nil
+}
+func (m *MockStore) SetReviewItemStatus(id, status string) (*ReviewItem, error) {
+	if m.SetReviewItemStatusFunc != nil {
+		return m.SetReviewItemStatusFunc(id, status)
+	}
+	return nil, nil
+}
+func (m *MockStore) SetReviewItemDecision(id, status, chosenAction string) (*ReviewItem, error) {
+	if m.SetReviewItemDecisionFunc != nil {
+		return m.SetReviewItemDecisionFunc(id, status, chosenAction)
+	}
+	return nil, nil
+}
+func (m *MockStore) DeleteReviewItem(id string) error {
+	if m.DeleteReviewItemFunc != nil {
+		return m.DeleteReviewItemFunc(id)
+	}
+	return nil
+}
