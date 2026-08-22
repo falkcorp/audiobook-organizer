@@ -4633,6 +4633,23 @@ book and is most likely to go looking for another by the same author.
       It is also dishonest for rows whose jobs actually completed — `failed` is
       not what happened. Retire it together with the supervised backfill in
       `todo.d/20260816-backfill-stuck-legacy-op-rows.md`, not before.
+
+      **Backfill BUILT 2026-08-22 (#2721):** `operations.backfill-legacy-status`,
+      dry-run by default. Awaiting a prod dry run before applying.
+      ⚠️ **Two findings that change this item.** First, the count: nothing in the
+      codebase could produce one. `GET /operations/stale` and the restart reaper
+      both use `isStaleOperationStatus`, which matches running/queued/in_progress
+      and **NOT** `pending` — the exact status these rows are stuck in — so the
+      stale view answered `count: 0` against prod on 2026-08-22 while the rows
+      existed. `ClearStaleOperations` uses a *different* inline predicate that
+      **does** include `pending`, so the clear button acts on rows the stale view
+      will not show you. The "~183" figure is therefore **unverified**; the
+      backfill's own census (`ListOperations(0,0)`, unwindowed) is the first real
+      instrument for it.
+      Second, `ClearStaleOperations` is capped at `GetRecentOperations(500)`, so
+      even where it *can* see pending rows it only reaches the newest 500 — "the
+      only broom for the ~183 historical rows" holds only for whichever of them
+      fall inside that window.
       ~~Note `internal/aiscan/pipeline.go` still writes the legacy table directly at
       4 call sites, so "nothing writes it anymore" is not yet true.~~
       **Resolved 2026-08-22 (#2720):** aiscan no longer writes the legacy table at
