@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_metadata.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e1f2a3b4-c5d6-4e7f-8a0b-1c2d3e4f5a6b
-// last-edited: 2026-08-19
+// last-edited: 2026-08-22
 
 // Package dedup — metadata-based collector family (fable5 T014).
 //
@@ -47,12 +47,10 @@ import (
 
 // DurationCollectorStore is the subset of Store required by
 // CollectDuration for the book-query and alt-title path.  Tag side-effects
-// use the full Store passed separately so that
-// database.EnsureSingletonBookTag (which requires the full Store interface)
-// can be called without a type assertion.
-//
-// In production code, the caller passes the same *database.PebbleStore
-// (or MockStore) for both parameters.
+// use database.EnsureSingletonBookTag, which requires only the three methods
+// of database.BookTagSingletonStore (GetBookTagsDetailed, RemoveBookTagsByPrefix,
+// AddBookTagWithSource).  CollectDuration's tagStore parameter has been narrowed
+// to this type, directly satisfying that interface.
 type DurationCollectorStore interface {
 	GetBooksByAuthorIDCore(authorID int) ([]database.BookCore, error)
 	GetBookAlternativeTitles(bookID string) ([]database.BookAlternativeTitle, error)
@@ -139,12 +137,13 @@ func allNormalizedTitleFormsForStore(store interface {
 //
 // Logic unchanged from checkDurationMatch; emission shape only.
 //
-// tagStore is the Store used for side-effect tag writes; it must be
-// non-nil if tag side-effects are desired (pass nil to disable).  In production
-// the engine passes its bookStore field which is a Store superset.
+// tagStore is used for side-effect tag writes via database.EnsureSingletonBookTag.
+// It must be non-nil if tag side-effects are desired (pass nil to disable).
+// In production, both callers pass de.bookStore (a dedup.Store, which embeds
+// database.BookTagSingletonStore).
 func CollectDuration(
 	store DurationCollectorStore,
-	tagStore Store, // may be nil — side-effect tags silently skipped
+	tagStore database.BookTagSingletonStore, // may be nil — side-effect tags silently skipped
 	book *database.Book,
 	cfg DurationCollectorConfig,
 ) ([]unified.Signal, error) {
