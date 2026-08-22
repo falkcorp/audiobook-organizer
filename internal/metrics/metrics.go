@@ -1,7 +1,7 @@
 // file: internal/metrics/metrics.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 9f8e7d6c-5b4a-3210-9fed-cba876543210
-// last-edited: 2026-08-14
+// last-edited: 2026-08-22
 
 package metrics
 
@@ -162,6 +162,18 @@ var (
 		Name:      "maintenance_resume_params_fallback_total",
 		Help:      "Interrupted maintenance jobs resumed on the advertised dry_run default because saved params were missing (no_saved_params) or unreadable (load_error). Any fire post-#2419-aging means a params save failed.",
 	}, []string{"job_id", "reason"})
+
+	// absListeningStatsReadFailures counts listening-stats read failures in the ABS
+	// handler. The read gracefully reports 0 total time instead of 5xx, so this counter
+	// makes the silent failure observable (ABS-N6). No labels: this counts one specific
+	// read path, not a family of dimensions, so a plain Counter (not a CounterVec) is
+	// the right shape — see booksGauge/foldersGauge above for the same plain-vs-vec
+	// convention applied to Gauge.
+	absListeningStatsReadFailures = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "audiobook_organizer",
+		Name:      "abs_listening_stats_read_failures_total",
+		Help:      "Total count of ABS listening-stats read failures reported as 0 instead of error",
+	})
 )
 
 // Register initializes metrics with the global Prometheus registry (idempotent)
@@ -172,7 +184,8 @@ func Register() {
 			cacheHits, cacheMisses, cacheSets, cacheInvalidations, cacheEvictions, cacheSize, cacheGetDuration,
 			itunesLocationUnmappable, aiBackendAvailable,
 			opItemsProcessed, opItemsTotal,
-			maintenanceResumeParamsFallback)
+			maintenanceResumeParamsFallback,
+			absListeningStatsReadFailures)
 	})
 }
 
@@ -248,4 +261,10 @@ func RecordCacheEviction(cache, reason string) { cacheEvictions.WithLabelValues(
 func SetCacheSize(cache string, n int)         { cacheSize.WithLabelValues(cache).Set(float64(n)) }
 func ObserveCacheGetDuration(cache string, d time.Duration) {
 	cacheGetDuration.WithLabelValues(cache).Observe(d.Seconds())
+}
+
+// IncABSListeningStatsReadFailures counts a listening-stats read failure in the
+// ABS handler (ABS-N6). The read gracefully reports 0 total time instead of 5xx.
+func IncABSListeningStatsReadFailures() {
+	absListeningStatsReadFailures.Inc()
 }
