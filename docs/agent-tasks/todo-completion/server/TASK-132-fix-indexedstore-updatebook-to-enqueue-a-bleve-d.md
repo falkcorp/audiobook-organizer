@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-132-fix-indexedstore-updatebook-to-enqueue-a-bleve-d.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 88a60a49-ed3f-40c9-bcbc-bc8d6181f658 -->
+<!-- guid: 32f7314f-2565-4109-88d1-782c1cc2e1e4 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-132 — Fix indexedStore.UpdateBook to enqueue a Bleve DELETE when the update is a soft-delete transition (TODO.md L4329)

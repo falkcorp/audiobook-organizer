@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 891c9b2e-97a3-483d-a18b-532c51a2b769 -->
+<!-- guid: 9aa24be1-91e7-412e-8410-fffb9f2340e3 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — dedup workstream (todo-completion)

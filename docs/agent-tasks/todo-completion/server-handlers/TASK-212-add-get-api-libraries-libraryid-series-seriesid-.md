@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-212-add-get-api-libraries-libraryid-series-seriesid-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: bbeb0427-66ff-4ef8-b76e-7867f3512eb8 -->
+<!-- guid: 2e0b5105-c281-4caf-ae8d-7a3f1c27f97f -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-212 — Add GET /api/libraries/:libraryId/series/:seriesId to the ABS surface (TODO.md L476)

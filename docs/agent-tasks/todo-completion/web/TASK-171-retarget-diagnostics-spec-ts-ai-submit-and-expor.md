@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-171-retarget-diagnostics-spec-ts-ai-submit-and-expor.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f7a9792b-2ea4-4c93-a16f-66b359b98449 -->
+<!-- guid: dfdec6ca-94f9-4e6d-b4ce-5115aaabc320 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-171 — Retarget diagnostics.spec.ts AI-submit and export status mocks to v2 (TODO.md L4960)

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-201-wire-per-file-intro-classification-into-the-regr.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 08a8a21a-4926-4f3d-989b-5a7de7c5af01 -->
+<!-- guid: 9b8bf415-3d5e-479f-aaf8-164e98648df5 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-201 — Wire per-file intro classification into the regroup-shattered-books classifier, outranking runtime (TODO.md L8316)

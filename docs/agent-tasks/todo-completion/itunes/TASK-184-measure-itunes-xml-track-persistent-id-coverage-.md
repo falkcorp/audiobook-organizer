@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/TASK-184-measure-itunes-xml-track-persistent-id-coverage-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f1c03ea3-e916-4540-82a0-92662fc1d9c7 -->
+<!-- guid: 5b5b4540-c6c0-4409-915d-d21ddc1e3a90 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-184 — Measure iTunes XML track Persistent ID coverage against the local DB before promising a Playlist-Items snapshot import (ITUNES-SMARTCRIT-PARSE)

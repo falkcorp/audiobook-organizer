@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-091-remove-dead-expanded-state-in-tagcomparison.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 14ca09c0-8b2a-457a-933a-ce0624888b15 -->
+<!-- guid: 6f6ab571-3e7b-4608-ad24-22cbfd956a3a -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-091 — Remove dead expanded state in TagComparison (TODO.md L5736)

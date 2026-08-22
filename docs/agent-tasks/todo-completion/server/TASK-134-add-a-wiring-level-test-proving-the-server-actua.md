@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-134-add-a-wiring-level-test-proving-the-server-actua.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 2fc5c716-482a-426b-b63c-8e779db9a808 -->
+<!-- guid: 91620eb9-3955-4a64-8933-bec17f8f7a08 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-134 — Add a wiring-level test proving the server actually constructs CancelOperationV2 with AI-scan cancellation attached (TODO.md L4449)

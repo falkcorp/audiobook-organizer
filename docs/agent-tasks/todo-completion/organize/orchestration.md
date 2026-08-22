@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/organize/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 7c1cd51a-a93f-4e6b-beb5-b894942b8b6b -->
+<!-- guid: 07197602-a87d-4c0f-97d5-5aa765f54c9a -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — organize workstream (todo-completion)
@@ -15,6 +15,7 @@ flowchart LR
       TASK119[TASK-119 replace-the-size-equality-he]
       TASK121[TASK-121 make-resolveorganizedfilepat]
       TASK122[TASK-122 add-an-edition-suffix-folder]
+      TASK223[TASK-223 organizer-collapse-duplicate]
     end
     subgraph Wave5
       TASK203[TASK-203 add-a-detection-only-counter]

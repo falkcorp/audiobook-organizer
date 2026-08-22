@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 68a35c56-9d2e-4030-93cb-12f9652b231a -->
+<!-- guid: a9b1ed9e-db34-4df4-8b77-93cd6f4d36df -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — itunes (todo-completion)

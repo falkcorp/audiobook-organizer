@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-030-add-a-compare-and-swap-on-collection-version-to-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 69a53e4b-c0e3-425c-a077-affb1840e1a5 -->
+<!-- guid: 5880334b-e2d7-4bc6-8244-a6fa7c43d886 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-030 — Add a compare-and-swap on Collection.Version to PebbleStore.UpdateCollection (TODO.md L4501)

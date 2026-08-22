@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 5fd9daed-6c33-4b98-b796-29f14a868478 -->
+<!-- guid: 5417c60f-1432-468f-94b7-315136b1142f -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — docs (todo-completion)
@@ -34,7 +34,7 @@
 
 ## Collision / wave note
 
-- No same-file collisions inside this workstream.
+- `docs/operations/pending-prod-actions.md`: TASK-060, TASK-220 → serialize by wave (TASK-060=w1, TASK-220=w3)
 
 | Wave | Tasks | Prereq | Parallel-safe because |
 |------|-------|--------|-----------------------|

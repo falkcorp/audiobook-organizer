@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/config/TASK-017-fix-apiratelimitperminute-default-drift-between-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 0e1dd4c2-cd8b-4eeb-995f-b68e21e5d399 -->
+<!-- guid: 493e7668-48f8-4125-9260-21ccfc309ade -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-017 — Fix APIRateLimitPerMinute default drift between fresh-install (0) and ResetToDefaults/.env.example (100) (CFG-AUDIT)

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-215-never-send-batchfetchcandidates-from-the-search-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: a570c73b-97f3-40af-9daf-1652efeab5a1 -->
+<!-- guid: 2e3e7fcf-2a36-459c-8423-11395752a88c -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-215 — Never send batchFetchCandidates({}) from the Search providers command (REV-EMPTY-1)

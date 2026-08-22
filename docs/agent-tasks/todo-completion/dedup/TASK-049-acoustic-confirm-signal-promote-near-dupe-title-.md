@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-049-acoustic-confirm-signal-promote-near-dupe-title-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: dec70a65-e50e-4152-a2d7-34aea5e54e9d -->
+<!-- guid: 06a9f485-6bba-48e2-87e7-d555ae7b86e0 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-049 — Acoustic-confirm signal: promote near-dupe title-leak pairs using WholeFileSimilarity (TODO.md L10750)

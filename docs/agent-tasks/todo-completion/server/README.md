@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: da52e44e-fce4-438d-a16a-1517d0e12cdf -->
+<!-- guid: 8049fdf2-5b86-4d0a-92ee-45e905e2d4c0 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — server (todo-completion)

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 14644122-a135-4fa4-89fc-310635747c11 -->
+<!-- guid: 4525bc82-4fca-4cc8-a8f9-f3a9bc385e04 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — maintenance workstream (todo-completion)
@@ -28,16 +28,24 @@ flowchart LR
     end
     subgraph Wave3
       TASK067[TASK-067 extend-the-repoint-repair-to]
+      TASK220[TASK-220 journal-every-duplicate-row-]
+    end
+    subgraph Wave4
+      TASK219[TASK-219 add-a-per-book-tsv-report-ar]
     end
     subgraph Wave6
       TASK070[TASK-070 add-a-user-configurable-acti]
     end
     TASK066 --> TASK070
     TASK066 --> TASK076
+    TASK066 --> TASK220
     TASK068 --> TASK067
     TASK073 --> TASK070
     TASK076 --> TASK070
+    TASK076 --> TASK220
     TASK086 --> TASK072
+    TASK220 --> TASK070
+    TASK220 --> TASK219
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.

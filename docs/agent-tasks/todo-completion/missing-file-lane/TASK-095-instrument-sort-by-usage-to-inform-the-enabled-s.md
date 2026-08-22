@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-095-instrument-sort-by-usage-to-inform-the-enabled-s.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 3e5eb266-f558-4bd6-a1bb-cf8f16f4de34 -->
+<!-- guid: eef26577-153b-4226-b17f-a6f5d3576404 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-095 — Instrument sort_by usage to inform the enabled_sort_indexes decision (TODO.md L6701)

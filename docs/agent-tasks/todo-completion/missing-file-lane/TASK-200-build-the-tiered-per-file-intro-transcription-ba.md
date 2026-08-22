@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-200-build-the-tiered-per-file-intro-transcription-ba.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: c1bf355e-df53-4368-af41-1c0ce03cbc95 -->
+<!-- guid: 889007a8-4a33-43b4-bf8a-b150cdd5c8ad -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-200 — Build the tiered per-file intro-transcription backfill (Tiers 0/1/1b/2/3) (TODO.md L8316)

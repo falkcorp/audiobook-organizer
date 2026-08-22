@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-001-add-a-short-ttl-cache-to-the-search-branch-of-ge.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: d3ab55cf-dfb0-44cd-8956-63f19fce952c -->
+<!-- guid: 0b3dce4b-d8f5-4473-a427-8dfde63b9105 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-001 — Add a short-TTL cache to the search branch of GetAudiobooksWithTotal (explicit first-cut, defer full dirty-set wiring) (SEARCH-CACHE)

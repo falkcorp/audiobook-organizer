@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-051-delete-the-34-group-relative-duplicate-paths-fro.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: bc889a20-c90a-4bbb-aad8-85aeccea4d70 -->
+<!-- guid: a244eedf-9bff-4633-9ff2-98ca749867b8 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-051 — Delete the 34 group-relative duplicate paths from docs/api/openapi.json (safe to delete on sight) (TODO.md L296)

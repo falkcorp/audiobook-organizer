@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: c0e9ad89-b5c9-49e5-a60c-d2f815069348 -->
+<!-- guid: d68c81bf-02c0-4fab-8093-348332e22a0e -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — database (todo-completion)

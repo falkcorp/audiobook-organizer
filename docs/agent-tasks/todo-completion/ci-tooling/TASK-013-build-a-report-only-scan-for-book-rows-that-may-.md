@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-013-build-a-report-only-scan-for-book-rows-that-may-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f53249ca-d3cf-41de-846f-f0a84e7062eb -->
+<!-- guid: 59068f2c-ee61-4138-be18-de90714732be -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-013 — Build a report-only scan for book rows that may have been spuriously created by the .tmp-rename bug (TODO.md L4844)

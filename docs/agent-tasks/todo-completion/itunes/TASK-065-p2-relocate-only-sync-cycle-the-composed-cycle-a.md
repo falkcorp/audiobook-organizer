@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/TASK-065-p2-relocate-only-sync-cycle-the-composed-cycle-a.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 95337038-9d38-411d-97a7-a658ac9edffd -->
+<!-- guid: 00b2be77-c3a3-40a1-91d9-345f79804900 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-065 — P2 relocate-only sync cycle — the composed cycle already exists (RunRelocateSyncCycle); wire it to a caller and add an end-to-end test (TODO.md L10390)

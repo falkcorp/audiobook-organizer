@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 4bb3ed5a-c119-42f4-88c4-376168d51735 -->
+<!-- guid: e7038b39-802b-46d2-ad21-abc669a67e54 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — ci-tooling (todo-completion)

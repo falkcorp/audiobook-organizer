@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/organize/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 35711d40-514f-4688-b2ee-58abf99dffe0 -->
+<!-- guid: 1643a404-cb9e-4338-be0c-d4c5c1d37bee -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — organize (todo-completion)
 
-4 tasks projected from the 2026-08-21 TODO-completion skeleton (`../skeleton.json`). Every fact here is a projection of that skeleton — edit the skeleton and regenerate, never this file.
+5 tasks projected from the 2026-08-21 TODO-completion skeleton (`../skeleton.json`). Every fact here is a projection of that skeleton — edit the skeleton and regenerate, never this file.
 
 | Task | TODO id | Title | Priority | Effort | Tier | Wave |
 |------|---------|-------|----------|--------|------|------|
@@ -13,6 +13,7 @@
 | TASK-121 | L4919 | Make resolveOrganizedFilePath's plan-on-faith fallback loud and verify | P1 | M | Opus-class | 1 |
 | TASK-122 | L5021 | Add an {edition_suffix} folder-pattern token | P1 | S | Sonnet-class | 1 |
 | TASK-203 | DEC-11 | Add a detection-only counter + structured log for generateTargetPath p | P2 | S | Sonnet-class | 5 |
+| TASK-223 | DUPROW-1 | organizer: collapse duplicate paths in planTargetPaths so totalTracks  | P1 | S | Sonnet-class | 1 |
 
 ## Ground rules
 
@@ -32,7 +33,7 @@
 
 | Wave | Tasks | Prereq | Parallel-safe because |
 |------|-------|--------|-----------------------|
-| 1 | TASK-119, TASK-121, TASK-122 | none | disjoint files within the wave (computed collision matrix) |
+| 1 | TASK-119, TASK-121, TASK-122, TASK-223 | none | disjoint files within the wave (computed collision matrix) |
 | 5 | TASK-203 | wave 4 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
 
 Waves are GLOBAL across the package: a wave-2 task here may be waiting on a wave-1 task in another workstream that shares a file (see `../BREAKDOWN-2026-08-21.md` collision table).

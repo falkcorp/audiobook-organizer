@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 9ea0c2fc-86bb-4405-8699-8736d28ca38c -->
+<!-- guid: dd57fdf3-a57f-4b4f-a282-6d3ad77aa52a -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — dedup (todo-completion)

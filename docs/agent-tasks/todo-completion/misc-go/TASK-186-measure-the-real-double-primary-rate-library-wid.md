@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-186-measure-the-real-double-primary-rate-library-wid.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 91bfb857-b700-4b33-b96e-ca67d01fe7e6 -->
+<!-- guid: 8966db4e-27fe-4949-a247-834520a898c1 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-186 — Measure the real double-primary rate library-wide, then build the demote-extras sibling of ElectMissingPrimaries (VG-DOUBLE-PRIMARY)

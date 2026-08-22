@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-197-audit-every-registry-runitems-caller-s-custom-la.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: c8aa9d79-2371-4bc2-bf8b-92010b340a6a -->
+<!-- guid: d6884b79-a511-4056-b4cb-d6e9030bdb53 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-197 — Audit every registry.RunItems caller's custom Label closure for the post-fn re-render timing change (TODO.md L697)

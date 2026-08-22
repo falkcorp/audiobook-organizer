@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 2b7ef4c4-f431-4d64-99be-d27bd2af16f3 -->
+<!-- guid: 60c74d47-b92e-4e72-9ded-69f70fa229a2 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — misc-go (todo-completion)
@@ -39,6 +39,7 @@
 - `internal/organizer/service.go`: TASK-186, TASK-121, TASK-203 → serialize by wave (TASK-186=w6, TASK-121=w1, TASK-203=w5)
 - `internal/plugins/acoustid/lsh_backfill.go`: TASK-197, TASK-088 → serialize by wave (TASK-197=w2, TASK-088=w1)
 - `internal/plugins/maintenance/chapters_backfill.go`: TASK-066, TASK-197 → serialize by wave (TASK-066=w1, TASK-197=w2)
+- `internal/plugins/maintenance/dedupe_book_file_rows.go`: TASK-219, TASK-220, TASK-197 → serialize by wave (TASK-219=w4, TASK-220=w3, TASK-197=w2)
 - `internal/plugins/maintenance/intro_migrate_single_file.go`: TASK-197, TASK-200 → serialize by wave (TASK-197=w2, TASK-200=w1)
 - `internal/plugins/maintenance/intro_transcribe.go`: TASK-197, TASK-200 → serialize by wave (TASK-197=w2, TASK-200=w1)
 - `internal/plugins/maintenance/missing_file_audit.go`: TASK-195, TASK-197 → serialize by wave (TASK-195=w1, TASK-197=w2)

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 9686d0e4-dd7d-4521-87b4-803a08d79602 -->
+<!-- guid: 3cd67e30-e980-43a9-91f4-d6d6a2e29429 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — server-handlers (todo-completion)

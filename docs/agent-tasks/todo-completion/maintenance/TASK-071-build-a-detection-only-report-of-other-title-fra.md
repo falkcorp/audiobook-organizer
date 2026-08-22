@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-071-build-a-detection-only-report-of-other-title-fra.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 7dc18d72-04ac-4377-aafd-b5f74ce20efb -->
+<!-- guid: f592a62b-538e-4afa-9107-94580cd9f7f0 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-071 — Build a detection-only report of other title-fragment author rows (the 57 rows beginning with '-') (TODO.md L3602)

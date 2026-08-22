@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-034-add-func-override-fields-to-mockstore-s-86-hardw.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b98df400-77ef-47d1-80dc-be3a6004fc1e -->
+<!-- guid: 375778d8-2337-49c5-b3e5-8a6a00846173 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-034 — Add Func override fields to MockStore's ~86 hardwired-zero-return methods (TODO.md L4728)

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-213-replace-the-single-file-organizebook-call-in-fil.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: ad43dbc3-5952-439f-9de8-962ac29de4dd -->
+<!-- guid: 679e2c03-3d44-4d8d-9ddc-e16562e0bdf1 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-213 — Replace the single-file OrganizeBook call in filesystem.go's auto-organize-after-browse block with OrganizeOneBook + counters (ORGANIZE-4TH-COPY)

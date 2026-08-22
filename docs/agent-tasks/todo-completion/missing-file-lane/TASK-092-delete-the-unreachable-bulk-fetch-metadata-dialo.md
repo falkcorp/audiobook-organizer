@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-092-delete-the-unreachable-bulk-fetch-metadata-dialo.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 391befaf-0975-4758-bcbd-1c790443e56d -->
+<!-- guid: f67f45a1-7409-45f5-a58a-9ef00cea6cc4 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-092 — Delete the unreachable Bulk Fetch Metadata dialog and its handler (TODO.md L5742)

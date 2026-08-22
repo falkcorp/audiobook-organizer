@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-039-add-transcribe-status-to-the-book-summary-list-p.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 845b3552-0a83-47cd-a151-149af47ad3c6 -->
+<!-- guid: 7b9cb1fa-bcfd-4420-9472-2264dce6ed92 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-039 — Add transcribe_status to the book-summary list projection and a frontend quality filter control (TODO.md L10728)

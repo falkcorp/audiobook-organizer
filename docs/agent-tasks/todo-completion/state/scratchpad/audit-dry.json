@@ -435,6 +435,16 @@
   "fails": []
  },
  {
+  "brief": "docs/agent-tasks/todo-completion/maintenance/TASK-219-add-a-per-book-tsv-report-artifact-to-the-existi.md",
+  "greps": 11,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/maintenance/TASK-220-journal-every-duplicate-row-deletion-to-the-undo.md",
+  "greps": 17,
+  "fails": []
+ },
+ {
   "brief": "docs/agent-tasks/todo-completion/metadata/TASK-079-route-scoreoneresultwithbreakdown-s-base-0-path-.md",
   "greps": 5,
   "fails": []
@@ -452,6 +462,11 @@
  {
   "brief": "docs/agent-tasks/todo-completion/metadata/TASK-196-build-an-async-fanned-out-background-operation-f.md",
   "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/metadata/TASK-221-metafetch-collapse-duplicate-book-file-rows-by-c.md",
+  "greps": 10,
   "fails": []
  },
  {
@@ -660,6 +675,11 @@
   "fails": []
  },
  {
+  "brief": "docs/agent-tasks/todo-completion/operations/TASK-222-enqueueop-dedupe-only-on-byte-equal-params-or-an.md",
+  "greps": 14,
+  "fails": []
+ },
+ {
   "brief": "docs/agent-tasks/todo-completion/organize/TASK-119-replace-the-size-equality-heuristic-in-organizeb.md",
   "greps": 4,
   "fails": []
@@ -676,6 +696,11 @@
  },
  {
   "brief": "docs/agent-tasks/todo-completion/organize/TASK-203-add-a-detection-only-counter-structured-log-for-.md",
+  "greps": 7,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/organize/TASK-223-organizer-collapse-duplicate-paths-in-plantarget.md",
   "greps": 7,
   "fails": []
  },

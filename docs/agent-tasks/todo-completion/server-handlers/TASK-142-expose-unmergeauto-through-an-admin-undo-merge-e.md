@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-142-expose-unmergeauto-through-an-admin-undo-merge-e.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: a5e85463-156f-4d33-b01a-7677b8f9c93b -->
+<!-- guid: 4c0e1fbc-8c39-4a65-a66d-670fc9a7f4c4 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-142 — Expose UnmergeAuto through an admin undo-merge endpoint (list + invoke) (MERGE-UNDO)

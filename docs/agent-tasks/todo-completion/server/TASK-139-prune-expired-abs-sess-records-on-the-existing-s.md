@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-139-prune-expired-abs-sess-records-on-the-existing-s.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e8953d2a-d14d-4e06-933a-bec59aec62f5 -->
+<!-- guid: 793c9bad-b007-4071-8da4-8fe10eefda0c -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-139 — Prune expired abs_sess: records on the existing session-cleanup schedule (ABS-SYNC)

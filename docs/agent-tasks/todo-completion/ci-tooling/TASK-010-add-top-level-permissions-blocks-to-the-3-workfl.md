@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-010-add-top-level-permissions-blocks-to-the-3-workfl.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b11e7190-3b61-4c6f-851f-6c2d0dd48916 -->
+<!-- guid: a528c1b6-f3f6-4b35-8f1e-8a497e7d78e0 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-010 — Add top-level `permissions:` blocks to the 3 workflows flagged by actions/missing-workflow-permissions (SEC-CODEQL-BACKLOG)

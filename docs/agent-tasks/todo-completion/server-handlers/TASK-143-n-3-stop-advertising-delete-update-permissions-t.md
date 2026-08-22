@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-143-n-3-stop-advertising-delete-update-permissions-t.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 643ad9fa-3c9b-4bc1-bb6f-afbb8e842461 -->
+<!-- guid: b25ac00a-2697-4ff7-8790-cb7aebe98089 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-143 — N-3: stop advertising Delete/Update permissions the library surface cannot honor (ABS-N3)

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-198-diagnose-and-fix-scan-import-organize-spec-ts-s-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 18c6f6d0-d3b3-4084-95bb-1cf52fba2c6c -->
+<!-- guid: 8f116e97-89e3-45e6-a2a4-eff788dc082d -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-198 — Diagnose and fix scan-import-organize.spec.ts's 7 stuck-on-'Add Import Path' failures via DOM snapshot (TODO.md L6394)

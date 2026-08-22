@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-089-log-a-warning-when-getallseriesbookcounts-itself.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 34439dcf-a521-4b2f-af13-13f5b8a100a7 -->
+<!-- guid: 49971e67-a90d-4d9e-87d2-50c1285e3df2 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-089 — Log a warning when GetAllSeriesBookCounts() itself errors in LibrarySeries (TODO.md L5494)

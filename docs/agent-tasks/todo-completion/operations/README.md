@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/operations/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e65cb2dd-0acd-48e8-bab2-a753f9e6c035 -->
+<!-- guid: e3678a81-1f7d-4325-b8d7-0804e6da67aa -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — operations (todo-completion)
 
-4 tasks projected from the 2026-08-21 TODO-completion skeleton (`../skeleton.json`). Every fact here is a projection of that skeleton — edit the skeleton and regenerate, never this file.
+5 tasks projected from the 2026-08-21 TODO-completion skeleton (`../skeleton.json`). Every fact here is a projection of that skeleton — edit the skeleton and regenerate, never this file.
 
 | Task | TODO id | Title | Priority | Effort | Tier | Wave |
 |------|---------|-------|----------|--------|------|------|
@@ -13,6 +13,7 @@
 | TASK-116 | L4586 | Forward IsCanceled() through reporterLogger to the ops registry's canc | P1 | M | Opus-class | 1 |
 | TASK-117 | L4703 | Give prodSchedulerStore an Unwrap() so capability lookups can see past | P2 | S | Sonnet-class | 1 |
 | TASK-118 | L4743 | Delete internal/operations/mocks — its only referencer is dead, perman | P2 | S | Sonnet-class | 1 |
+| TASK-222 | ENQ-DEDUP-1 | EnqueueOp: dedupe only on byte-equal params (or an explicit opt-in), n | P1 | M | Opus-class | 4 |
 
 ## Ground rules
 
@@ -27,14 +28,16 @@
 ## Collision / wave note
 
 - `.mockery.yaml`: TASK-118, TASK-123 → serialize by wave (TASK-118=w1, TASK-123=w2)
-- `internal/operations/registry/registry.go`: TASK-096, TASK-113, TASK-115 → serialize by wave (TASK-096=w3, TASK-113=w1, TASK-115=w2)
-- `internal/operations/registry/registry_test.go`: TASK-096, TASK-115 → serialize by wave (TASK-096=w3, TASK-115=w2)
+- `internal/operations/registry/registry.go`: TASK-096, TASK-113, TASK-115, TASK-222 → serialize by wave (TASK-096=w3, TASK-113=w1, TASK-115=w2, TASK-222=w4)
+- `internal/operations/registry/registry_test.go`: TASK-096, TASK-115, TASK-222 → serialize by wave (TASK-096=w3, TASK-115=w2, TASK-222=w4)
+- `internal/operations/registry/types.go`: TASK-096, TASK-222 → serialize by wave (TASK-096=w3, TASK-222=w4)
 - `internal/server/handlers/operations_v2_test.go`: TASK-115, TASK-134 → serialize by wave (TASK-115=w2, TASK-134=w1)
 
 | Wave | Tasks | Prereq | Parallel-safe because |
 |------|-------|--------|-----------------------|
 | 1 | TASK-116, TASK-117, TASK-118 | none | disjoint files within the wave (computed collision matrix) |
 | 2 | TASK-115 | wave 1 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
+| 4 | TASK-222 | wave 3 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
 
 Waves are GLOBAL across the package: a wave-2 task here may be waiting on a wave-1 task in another workstream that shares a file (see `../BREAKDOWN-2026-08-21.md` collision table).
 

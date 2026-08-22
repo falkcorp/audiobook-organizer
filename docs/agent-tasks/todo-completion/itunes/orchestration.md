@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b720cae9-0272-4ec1-b7cd-2337e1fd654f -->
+<!-- guid: ceae95a5-8180-4d22-9c87-cccc8616fbd8 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — itunes workstream (todo-completion)

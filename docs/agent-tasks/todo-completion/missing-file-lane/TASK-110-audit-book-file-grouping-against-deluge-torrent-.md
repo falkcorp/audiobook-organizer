@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-110-audit-book-file-grouping-against-deluge-torrent-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 38fbc081-5931-4859-bda6-5d28f0490106 -->
+<!-- guid: a2e31f41-2122-4212-bf2d-d068153549bc -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-110 — Audit book/file grouping against Deluge torrent file-list membership (read-only, tier 1 of the item's own 3-tier ambition) (TODO.md L8738)

@@ -7570,6 +7570,315 @@
    "wave": 1
   },
   {
+   "todo_line": 90031,
+   "src_id": "DUPROW-2",
+   "title": "Add a per-book TSV report artifact to the EXISTING dedupe-book-file-rows dry run",
+   "verdict": "actionable",
+   "verdict_evidence": "The op the item asks for already exists \u2014 `grep -n \"func (p *Plugin) dedupeBookFileRowsDef\" internal/plugins/maintenance/dedupe_book_file_rows.go` hits L35 and it is registered at plugin.go:44 \u2014 with a working apply=false dry run; what is missing is the TSV artifact, so the work is a delta on that file, NOT a new op.",
+   "domain": "internal/plugins/maintenance",
+   "exact_files": [
+    "internal/plugins/maintenance/dedupe_book_file_rows.go",
+    "internal/plugins/maintenance/dedupe_book_file_rows_test.go"
+   ],
+   "verified_anchors": [
+    {
+     "claim": "the op already exists, is bounded-worker-pool parallel via registry.RunItems, and dry-runs by default",
+     "grep_cmd": "grep -n \"func (p \\*Plugin) runDedupeBookFileRows\" internal/plugins/maintenance/dedupe_book_file_rows.go",
+     "expect": "1 hit at L157"
+    },
+    {
+     "claim": "it is already registered in the plugin's def list like its siblings",
+     "grep_cmd": "grep -n \"p.dedupeBookFileRowsDef(),\" internal/plugins/maintenance/plugin.go",
+     "expect": "1 hit at L44"
+    },
+    {
+     "claim": "the TSV-artifact pattern to copy is writeReapReport in metadata_cache_reap.go",
+     "grep_cmd": "grep -n \"func writeReapReport\" internal/plugins/maintenance/metadata_cache_reap.go",
+     "expect": "1 hit at L478"
+    },
+    {
+     "claim": "both existing report ops derive the default path as filepath.Join(\"reports\", \"<op>-<name>.tsv\")",
+     "grep_cmd": "grep -n \"reportPath = filepath.Join(\\\"reports\\\"\" internal/plugins/maintenance/metadata_cache_reap.go internal/plugins/maintenance/missing_file_repoint.go",
+     "expect": "2 hits: metadata_cache_reap.go:223 and missing_file_repoint.go:188"
+    },
+    {
+     "claim": "the reports/ directory already exists in the package with a committed artifact",
+     "grep_cmd": "ls internal/plugins/maintenance/reports",
+     "expect": "1 entry: metadata-cache-reap-unknown-op.tsv"
+    },
+    {
+     "claim": "missing-file-audit (the op the TODO says to compare with) writes NO artifact \u2014 it only logs, so there is nothing to reuse from it",
+     "grep_cmd": "grep -n \"tsv\\|os.WriteFile\\|artifact\" internal/plugins/maintenance/missing_file_audit.go",
+     "expect": "0 hits"
+    },
+    {
+     "claim": "the counters the report needs are already accumulated under a mutex inside the RunItems callback",
+     "grep_cmd": "grep -n \"var deleted, wouldDelete, failed, recomputed, salvaged int\" internal/plugins/maintenance/dedupe_book_file_rows.go",
+     "expect": "1 hit at L224"
+    }
+   ],
+   "reuse": [
+    {
+     "name": "writeReapReport \u2014 the TSV writer to model (header line, tab-joined rows, os.WriteFile 0o664, MkdirAll on the parent)",
+     "file": "internal/plugins/maintenance/metadata_cache_reap.go",
+     "verify_grep": "grep -n \"func writeReapReport\" internal/plugins/maintenance/metadata_cache_reap.go"
+    },
+    {
+     "name": "ReportPath params field + default-path derivation",
+     "file": "internal/plugins/maintenance/missing_file_repoint.go",
+     "verify_grep": "grep -n \"ReportPath string\" internal/plugins/maintenance/missing_file_repoint.go"
+    },
+    {
+     "name": "seedDupBooks / concurrentReporter \u2014 existing PebbleStore fixture for this exact op",
+     "file": "internal/plugins/maintenance/dedupe_book_file_rows_parallel_test.go",
+     "verify_grep": "grep -n \"func seedDupBooks\" internal/plugins/maintenance/dedupe_book_file_rows_parallel_test.go"
+    },
+    {
+     "name": "shortPath \u2014 path shortener already in the file",
+     "file": "internal/plugins/maintenance/dedupe_book_file_rows.go",
+     "verify_grep": "grep -n \"func shortPath\" internal/plugins/maintenance/dedupe_book_file_rows.go"
+    }
+   ],
+   "polarity": "additive",
+   "effort": "M",
+   "tier": "sonnet",
+   "why_tier": "Additive report emission on an existing op, but the row collection happens inside a parallel RunItems callback so the accumulator must go under the existing mutex.",
+   "review_critical": false,
+   "goal": "Give the EXISTING `maintenance.dedupe-book-file-rows` op a per-book TSV artifact so a dry run produces a reviewable file instead of ten example strings in a log line. Add a `ReportPath string \\`json:\"reportPath,omitempty\\`` field to DedupeBookFileRowsParams, collect one row per affected book inside the existing RunItems callback (under the existing `mu`), and write the TSV with a new `writeDupeRowsReport` function modeled exactly on `writeReapReport` (internal/plugins/maintenance/metadata_cache_reap.go:478). Columns: book_id, title, rows, distinct, dup_rows, has_fingerprint_on_dupe. The report is written on EVERY run (dry run and apply alike), like missing-file-repoint does. DO NOT CREATE A NEW OPERATION \u2014 the TODO text says 'new op' but the op already exists and a second one would duplicate 459 lines of reviewed keeper logic.",
+   "background": [
+    "maintenance.dedupe-book-file-rows already exists (dedupe_book_file_rows.go:35, registered plugin.go:44), already defaults to apply=false, already uses a bounded worker pool sized to runtime.NumCPU via registry.RunItems (dedupe_book_file_rows.go:252 with RunItemsOptions{Concurrency: workers}), and already counts rows vs distinct paths per book. It is the report op this item describes, minus the artifact.",
+    "Its dry run currently reports only aggregate counters plus up to 10 example strings (dedupe_book_file_rows.go:322-327 builds `examples`), which is not a per-book census.",
+    "The item says to reuse missing-file-audit's artifact writer, but missing-file-audit writes no artifact (grep for tsv/os.WriteFile in missing_file_audit.go returns 0 hits). The real precedents are metadata_cache_reap.go:478 (writeReapReport) and missing_file_repoint.go:490 (writeRepointReport).",
+    "PASS 1 uses the memdb Core projection (GetAllBookFilesCore, L177) which does NOT carry AcoustIDFingerprint \u2014 so has_fingerprint_on_dupe must be computed in PASS 2 from store.GetBookFiles (L256), which reads Pebble directly.",
+    "The op is gated on nothing today; unlike some siblings it does not require RootDir, because it reads only DB rows. Do not add a RootDir gate \u2014 the TODO's 'gated on RootDir like siblings' does not apply to a pure-DB op and would make it inert (see the standing maintenance-plugin-gated-on-RootDir hazard)."
+   ],
+   "steps": [
+    "1. In internal/plugins/maintenance/dedupe_book_file_rows.go, add a field to DedupeBookFileRowsParams (currently L26-33):\n\t// ReportPath overrides where the per-book TSV lands. Empty means a derived\n\t// path under reports/. The report is written on EVERY run, dry or apply,\n\t// so an operator always has the census the summary line only samples.\n\tReportPath string `json:\"reportPath,omitempty\"`",
+    "2. Add a row type near dupGroup (L69-74):\n\n// dupeReportRow is one affected book's line in the TSV.\ntype dupeReportRow struct {\n\tBookID     string\n\tTitle      string\n\tRows       int\n\tDistinct   int\n\tDupRows    int\n\tDupHasFP   bool // at least one of the REDUNDANT rows carries an AcoustID fingerprint\n}",
+    "3. In runDedupeBookFileRows, next to the existing `var mu sync.Mutex` / counters block (L223-225), add `var reportRows []dupeReportRow`.",
+    "4. Inside the RunItems callback, after `byPath` is built (L265-272) and before the group loop, compute the per-book totals: `totalRows := 0; for _, rs := range byPath { totalRows += len(rs) }` and `distinct := len(byPath)`. Track `dupHasFP` as the group loop runs: after `ranked := rankKeeper(rows)` and `keeper, redundant := ranked[0], ranked[1:]` (L299-300), set `if !dupHasFP { for ri := range redundant { if len(redundant[ri].AcoustIDFingerprint) > 0 { dupHasFP = true; break } } }`.",
+    "5. Still inside the callback, after the group loop and before the batched delete, append the row when the book actually had duplicates:\n\tif totalRows > distinct {\n\t\ttitle := \"\"\n\t\tif b, berr := store.GetBookByID(bookID); berr == nil && b != nil { title = b.Title }\n\t\tmu.Lock()\n\t\treportRows = append(reportRows, dupeReportRow{BookID: bookID, Title: title, Rows: totalRows, Distinct: distinct, DupRows: totalRows - distinct, DupHasFP: dupHasFP})\n\t\tmu.Unlock()\n\t}\nGetBookByID is already in OpsStore via opsBookReader (deps.go:41) \u2014 verify with `grep -n \"GetBookByID(id string)\" internal/plugins/maintenance/deps.go`, which returns 2 hits (L41 in opsBookReader, L146 in ReconcileStore); the L41 one is the one OpsStore embeds.",
+    "6. After the RunItems call returns and before the summary is built (around L433), derive the path and write the report:\n\treportPath := params.ReportPath\n\tif reportPath == \"\" {\n\t\tmode := \"dryrun\"\n\t\tif params.Apply { mode = \"apply\" }\n\t\treportPath = filepath.Join(\"reports\", \"dedupe-book-file-rows-\"+mode+\".tsv\")\n\t}\n\tsort.Slice(reportRows, func(i, j int) bool { return reportRows[i].BookID < reportRows[j].BookID }) // workers finish out of order; the file must be diffable between runs\n\tif werr := writeDupeRowsReport(reportPath, reportRows); werr != nil {\n\t\tlog.Warn(\"dedupe-book-file-rows: could not write report\", \"path\", reportPath, \"err\", werr, \"rows\", len(reportRows))\n\t} else {\n\t\tlog.Info(\"dedupe-book-file-rows: wrote report\", \"path\", reportPath, \"rows\", len(reportRows))\n\t}\nAdd `\"path/filepath\"` to the import block (sort is already imported).",
+    "7. Append the writer at the bottom of the file, copying the shape of writeReapReport (metadata_cache_reap.go:478-492):\n\n// writeDupeRowsReport dumps EVERY affected book and its duplication shape, TSV.\n// Written on dry runs as well as applies: the dry run is the artifact an owner\n// approves an apply from, and a log line capped at ten examples is not that.\nfunc writeDupeRowsReport(path string, rows []dupeReportRow) error {\n\tif err := os.MkdirAll(filepath.Dir(path), 0o775); err != nil { return err }\n\tvar b strings.Builder\n\tb.WriteString(\"book_id\\ttitle\\trows\\tdistinct\\tdup_rows\\thas_fingerprint_on_dupe\\n\")\n\tfor _, r := range rows {\n\t\tfmt.Fprintf(&b, \"%s\\t%s\\t%d\\t%d\\t%d\\t%t\\n\", r.BookID, strings.ReplaceAll(r.Title, \"\\t\", \" \"), r.Rows, r.Distinct, r.DupRows, r.DupHasFP)\n\t}\n\treturn os.WriteFile(path, []byte(b.String()), 0o664)\n}\nAdd \"os\" to the import block. Read metadata_cache_reap.go:478-492 first and match its exact conventions (it may already MkdirAll or not \u2014 follow it).",
+    "8. Add the report path to the op's summary string (L443-446) so the operator is told where the file went, e.g. append `| report: %s`.",
+    "9. Bump `// version:` on internal/plugins/maintenance/dedupe_book_file_rows.go (1.4.0 -> 1.5.0) and set `// last-edited:` to today.",
+    "10. Add a changelog fragment under changelog.d/ (no file header in the fragment)."
+   ],
+   "tests": [
+    "internal/plugins/maintenance/dedupe_book_file_rows_test.go (EXISTING file \u2014 append): `TestWriteDupeRowsReport_HeaderAndRows` \u2014 call writeDupeRowsReport(filepath.Join(t.TempDir(), \"r.tsv\"), []dupeReportRow{...2 rows...}), read the file back, assert line 1 is exactly \"book_id\\ttitle\\trows\\tdistinct\\tdup_rows\\thas_fingerprint_on_dupe\" and that each data line splits into exactly 6 tab-separated fields.",
+    "internal/plugins/maintenance/dedupe_book_file_rows_test.go: `TestWriteDupeRowsReport_TitleWithTabDoesNotBreakColumns` \u2014 a row whose Title contains a literal tab; assert the data line still splits into exactly 6 fields.",
+    "internal/plugins/maintenance/dedupe_book_file_rows_test.go: `TestDedupeBookFileRows_DryRunWritesReport` (guard with `if testing.Short() { t.Skip(...) }`, same as the parallel tests) \u2014 build a PebbleStore with `database.NewPebbleStore(t.TempDir())` + `s.WaitForWarmup()`, seed with the existing `seedDupBooks(t, s, 3, 4)`, run `p.runDedupeBookFileRows(ctx, json.Marshal(DedupeBookFileRowsParams{Apply:false, ReportPath: filepath.Join(t.TempDir(),\"r.tsv\")}), &concurrentReporter{})`, then assert the file exists, has 1 header + 3 data lines, every row reports rows=4 distinct=1 dup_rows=3, and that `s.GetBookFiles(id)` still returns 4 rows for each book (the dry run mutated nothing).",
+    "internal/plugins/maintenance/dedupe_book_file_rows_test.go: `TestDedupeBookFileRows_ReportRowsAreSortedByBookID` \u2014 same fixture with 6 books; assert the data lines are in ascending book_id order, proving the sort survives the out-of-order parallel completion.",
+    "internal/plugins/maintenance/dedupe_book_file_rows_test.go: ANTI-OVER-SUPPRESSION \u2014 `TestDedupeBookFileRows_ReportOmitsBooksWithNoDuplicates`: seed 3 duplicated books via seedDupBooks AND create 2 books with a single unique file each; assert the report contains exactly 3 data lines and none of them names a clean book. Without this a writer that emitted a row for every book would pass every other assertion."
+   ],
+   "acceptance": [
+    "`go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1` exits 0.",
+    "`grep -n \"func writeDupeRowsReport\" internal/plugins/maintenance/dedupe_book_file_rows.go` returns exactly 1 hit.",
+    "`grep -c \"dedupeBookFileRowsDef\" internal/plugins/maintenance/*.go` still reports ONE definition \u2014 i.e. no second op was created.",
+    "`grep -n \"book_id\\\\\\\\ttitle\\\\\\\\trows\\\\\\\\tdistinct\\\\\\\\tdup_rows\\\\\\\\thas_fingerprint_on_dupe\" internal/plugins/maintenance/dedupe_book_file_rows.go` returns 1 hit (the header is spelled exactly as specified).",
+    "`go test ./internal/plugins/maintenance/... -run 'DupeRowsReport|DedupeBookFileRows_' -count=1 -v` shows all listed tests PASS."
+   ],
+   "edge_cases": [
+    "Zero affected books \u2192 still write the file, containing only the header line. An empty file and a missing file are indistinguishable from 'the op did not run'; a header-only file is not.",
+    "A book that becomes unreadable mid-run (GetBookFiles fails, L257-264) already increments `failed` and returns nil \u2014 it contributes NO report row. Say so in the summary so 'books_affected' and 'report rows' can legitimately differ.",
+    "GetBookByID failing or returning nil \u2192 title is the empty string, not an error. The report is diagnostic; a missing title must never abort it.",
+    "Titles containing tabs or newlines must be sanitized (replace tab with space; also replace \\n and \\r with space) or the TSV column count breaks.",
+    "params.Limit truncates bookIDs (L208-210) \u2014 the report then covers only the processed subset while the summary's `books_affected` covers all of them. State that in the report-written log line so a capped run is never mistaken for a full census.",
+    "reportRows is appended from parallel workers: EVERY append must be inside mu.Lock()/Unlock(). `go test -race ./internal/plugins/maintenance/...` must be run at least once during development."
+   ],
+   "anti_over_suppression": "TestDedupeBookFileRows_ReportOmitsBooksWithNoDuplicates",
+   "depends_on_lines": [
+    90032
+   ],
+   "gate": "go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1",
+   "notes": "MOST IMPORTANT: the TODO text says 'New op in internal/plugins/maintenance' \u2014 that is WRONG at HEAD. maintenance.dedupe-book-file-rows already exists (dedupe_book_file_rows.go, 459 lines, v1.4.0, registered plugin.go:44) and already has the parallel RunItems worker pool and the apply=false dry run. The brief must be executed as a delta on that file; creating a second op would fork 459 lines of data-loss-reviewed keeper logic. It also says to gate on RootDir 'like siblings' \u2014 do NOT: this op reads only DB rows and a RootDir gate would make it inert. depends_on_lines lists 90032 only because both edit the SAME file (internal/plugins/maintenance/dedupe_book_file_rows.go) \u2014 they must not run in parallel worktrees; land 90032 first (it is the riskier, review_critical one) then rebase this on top. The package's flakiness is known: internal/plugins/maintenance is on the flaky list, so a single red run is not proof of a regression \u2014 re-run before concluding.",
+   "id": "TASK-219",
+   "stable_key": "scope-21.json|90031|None|Add a per-book TSV report artifact to the EXISTING dedupe-bo",
+   "ws": "maintenance",
+   "slug": "add-a-per-book-tsv-report-artifact-to-the-existi",
+   "scope_file": "scope-21.json",
+   "dropped_files": [],
+   "tier_label": "Sonnet-class",
+   "depends_on": [
+    "TASK-220"
+   ],
+   "wave": 4
+  },
+  {
+   "todo_line": 90032,
+   "src_id": "DUPROW-3",
+   "title": "Journal every duplicate-row deletion to the undo ledger and refuse to apply while a library.scan is active",
+   "verdict": "actionable",
+   "verdict_evidence": "The repair op exists but neither guard does: `grep -rn \"CreateOperationChange\" internal/plugins/ --include='*.go'` returns exactly 1 hit and it is the interface declaration at deps.go:114, never a call; and no scan-running guard exists anywhere (`grep -rn \"scan is running|while a scan|scanInProgress|IsScanning|scanActive\" internal/ --include='*.go'` returns 0 hits).",
+   "domain": "internal/plugins/maintenance",
+   "exact_files": [
+    "docs/operations/pending-prod-actions.md",
+    "internal/plugins/maintenance/dedupe_book_file_rows.go",
+    "internal/plugins/maintenance/dedupe_book_file_rows_parallel_test.go",
+    "internal/plugins/maintenance/dedupe_book_file_rows_test.go",
+    "internal/plugins/maintenance/deps.go",
+    "internal/plugins/maintenance/title_backfill_test.go",
+    "internal/server/server_maintenance_deps.go"
+   ],
+   "verified_anchors": [
+    {
+     "claim": "the repair op exists with apply=false as its default and does the keeper/salvage/delete work already",
+     "grep_cmd": "grep -n \"func (p \\*Plugin) runDedupeBookFileRows\" internal/plugins/maintenance/dedupe_book_file_rows.go",
+     "expect": "1 hit at L157"
+    },
+    {
+     "claim": "NO op in internal/plugins/ calls CreateOperationChange \u2014 the only hit is the interface declaration",
+     "grep_cmd": "grep -rn \"CreateOperationChange\" internal/plugins/ --include='*.go'",
+     "expect": "1 hit: internal/plugins/maintenance/deps.go:114 (declaration only)"
+    },
+    {
+     "claim": "CreateOperationChange is ALREADY reachable from the maintenance ops store, so no widening is needed for the journal half",
+     "grep_cmd": "grep -n \"CreateOperationChange(change \\*database.OperationChange) error\" internal/plugins/maintenance/deps.go",
+     "expect": "1 hit at L114, inside opsHousekeeping which OpsStore embeds (OpsStore at L127)"
+    },
+    {
+     "claim": "ListActiveOperationsV2 returns queued+running ops and is the mechanism for the scan guard",
+     "grep_cmd": "grep -n \"ListActiveOperationsV2() (\\[\\]OperationV2Row, error)\" internal/database/iface_ops_v2.go",
+     "expect": "1 hit at L140"
+    },
+    {
+     "claim": "ListActiveOperationsV2 is NOT reachable from the maintenance plugin today",
+     "grep_cmd": "grep -n \"ListActiveOperationsV2\" internal/plugins/maintenance/deps.go",
+     "expect": "0 hits"
+    },
+    {
+     "claim": "the def ID to guard against is exactly 'library.scan'",
+     "grep_cmd": "grep -n \"ID:              \\\"library.scan\\\",\" internal/server/library_core_ops.go",
+     "expect": "1 hit at L68"
+    },
+    {
+     "claim": "an op can learn its own operation id through registry.ReporterOpID, which degrades to \"\" for a fake reporter",
+     "grep_cmd": "grep -n \"func ReporterOpID\" internal/operations/registry/reporter.go",
+     "expect": "1 hit at L48"
+    },
+    {
+     "claim": "OperationChange is the undo-ledger row type with ID/OperationID/BookID/ChangeType/FieldName/OldValue/NewValue",
+     "grep_cmd": "grep -n \"type OperationChange struct\" internal/database/store.go",
+     "expect": "1 hit at L581"
+    },
+    {
+     "claim": "there are exactly two ServerDeps implementors to update if StoreProvider grows a method: *Server and the fakeDeps test fake (t09OpsFakeDeps and provDeps embed fakeDeps)",
+     "grep_cmd": "grep -rn \"var _ ServerDeps\" internal/ --include='*.go'",
+     "expect": "3 hits: internal/plugins/maintenance/backfill_ops_test.go:52, internal/plugins/maintenance/title_backfill_test.go:129, internal/server/server_maintenance_deps.go:32"
+    },
+    {
+     "claim": "the interfacebloat linter caps declared entries at 8 and OpsStore is already at exactly 8 embeds, so ListActiveOperationsV2 must NOT be added to OpsStore",
+     "grep_cmd": "grep -n \"max: 8\" .golangci.yml",
+     "expect": "1 hit at L64 (settings.interfacebloat.max)"
+    },
+    {
+     "claim": "the established precedent for a narrow extra store accessor is MetadataCacheStore/FileProvenanceStore on StoreProvider",
+     "grep_cmd": "grep -n \"FileProvenanceStore() database.FileProvenanceStore\" internal/plugins/maintenance/deps.go internal/server/server_maintenance_deps.go",
+     "expect": "2 hits: deps.go:174 (declaration) and server_maintenance_deps.go:67 (implementation)"
+    },
+    {
+     "claim": "a test can seed a fake running library.scan row directly",
+     "grep_cmd": "grep -n \"InsertOperationV2(row OperationV2Row) error\" internal/database/iface_ops_v2.go",
+     "expect": "1 hit at L119"
+    },
+    {
+     "claim": "the dispatcher already has a Gate 4 that blocks dispatch while a named def is running \u2014 DependsOn",
+     "grep_cmd": "grep -n \"Gate 4: DependsOn\" internal/operations/registry/dispatcher.go",
+     "expect": "1 hit at L135"
+    }
+   ],
+   "reuse": [
+    {
+     "name": "CreateOperationChange journal-row pattern (ID via ulid.Make().String(), OperationID, BookID, ChangeType, FieldName, OldValue, NewValue)",
+     "file": "internal/organizer/service.go",
+     "verify_grep": "grep -n \"orgSvc.db.CreateOperationChange(&database.OperationChange{\" internal/organizer/service.go"
+    },
+    {
+     "name": "StoreProvider narrow-accessor pattern (MetadataCacheStore / FileProvenanceStore)",
+     "file": "internal/plugins/maintenance/deps.go",
+     "verify_grep": "grep -n \"MetadataCacheStore() database.MetadataCacheStore\" internal/plugins/maintenance/deps.go"
+    },
+    {
+     "name": "seedDupBooks + concurrentReporter + `p := &Plugin{deps: fakeDeps{store: s}}` PebbleStore fixture for this exact op",
+     "file": "internal/plugins/maintenance/dedupe_book_file_rows_parallel_test.go",
+     "verify_grep": "grep -n \"p := &Plugin{deps: fakeDeps{store: s}}\" internal/plugins/maintenance/dedupe_book_file_rows_parallel_test.go"
+    },
+    {
+     "name": "GetOperationChanges / GetBookChanges \u2014 the readers a test uses to prove the journal landed",
+     "file": "internal/database/iface_ops.go",
+     "verify_grep": "grep -n \"GetOperationChanges(operationID string)\" internal/database/iface_ops.go"
+    }
+   ],
+   "polarity": "additive",
+   "effort": "M",
+   "tier": "opus",
+   "why_tier": "Row deletion on a prod data path with an owner decision still open; the journal must be complete enough to replay a deletion back, the guard must fail closed, and it crosses an interface boundary with an interfacebloat cap that makes the obvious edit illegal.",
+   "review_critical": true,
+   "goal": "Make the EXISTING `maintenance.dedupe-book-file-rows` op safe to run in production by adding the two things it lacks: (1) every deleted row is journaled to the undo ledger via `store.CreateOperationChange` BEFORE the delete commits, carrying the full JSON of the row in OldValue so the deletion can be replayed back; and (2) an apply=true run REFUSES to start while a `library.scan` op is queued or running, checked through a new narrow `OperationQueueStore()` accessor on the maintenance StoreProvider (ListActiveOperationsV2). Keep apply=false as the default. Do NOT create a new op \u2014 the op exists at internal/plugins/maintenance/dedupe_book_file_rows.go:35 and is registered at plugin.go:44. Also record the still-open owner decision (deleting duplicate rows vs the standing never-delete-rows rule) in docs/operations/pending-prod-actions.md.",
+   "background": [
+    "The op already ranks keepers (rankKeeper, L91), merges salvageable fields into the keeper and commits that BEFORE deleting donors (L339-355), and batch-deletes via DeleteBookFilesByIDs which is fail-closed on unresolvable IDs (L363-381). What it does NOT do is record what it deleted.",
+    "No operation anywhere in internal/plugins/ writes an undo-ledger row: `grep -rn \"CreateOperationChange\" internal/plugins/` returns only the interface declaration at deps.go:114. The call-site pattern to copy lives in internal/organizer/service.go (e.g. L1559, L1568).",
+    "CreateOperationChange is ALREADY in OpsStore via opsHousekeeping (deps.go:113-122), so the journal half needs no interface change at all.",
+    "ListActiveOperationsV2 is NOT reachable from the plugin. OpsStore has exactly 8 embedded interfaces and opsHousekeeping has exactly 8 declared methods, and .golangci.yml:64 sets interfacebloat max: 8 \u2014 so adding the method to either one breaks the lint gate. The compliant move is a NEW narrow accessor on StoreProvider (which has 5 methods today), exactly as MetadataCacheStore and FileProvenanceStore did.",
+    "StoreProvider is embedded in ServerDeps (deps.go:369), which has exactly two direct implementors: *Server (internal/server/server_maintenance_deps.go:32) and fakeDeps (internal/plugins/maintenance/title_backfill_test.go:129). t09OpsFakeDeps (backfill_ops_test.go:24) and provDeps (file_provenance_capture_test.go:22) both EMBED fakeDeps and inherit automatically.",
+    "*Server's store field is `database.Store` (internal/server/server.go:165), which embeds operationsStore -> OpsV2Store, so `return s.store` satisfies the new accessor with no other change.",
+    "database.MockStore already implements ListActiveOperationsV2 as a no-hook stub returning (nil, nil) at internal/database/mock_store.go:2791, so mock-backed tests see 'no active ops' by default.",
+    "registry.OperationDef already has a `DependsOn []string` field enforced by dispatcher Gate 4 (dispatcher.go:135), but it only DEFERS DISPATCH while the named def is RUNNING \u2014 it does not see QUEUED rows and it cannot be conditional on params.Apply. It is worth adding as defence in depth but is NOT a substitute for the in-run refusal."
+   ],
+   "steps": [
+    "1. internal/plugins/maintenance/deps.go \u2014 add a new one-method interface next to the other narrow ones and a new accessor on StoreProvider:\n\n// OpQueueReader is the single method the dedupe repair needs to see whether a\n// library scan is in flight. It is its OWN accessor rather than a method on\n// OpsStore because OpsStore is already at the interfacebloat cap of 8 embeds\n// (.golangci.yml settings.interfacebloat.max) \u2014 the same reason\n// MetadataCacheStore and FileProvenanceStore have their own accessors.\ntype OpQueueReader interface {\n\tListActiveOperationsV2() ([]database.OperationV2Row, error)\n}\n\nand inside `type StoreProvider interface` (L154-175) add:\n\t// OperationQueueStore serves the dedupe-book-file-rows scan guard: an apply\n\t// run must refuse while library.scan is queued or running, because a scan\n\t// concurrently rewrites the same book_file rows this op deletes.\n\tOperationQueueStore() OpQueueReader",
+    "2. internal/server/server_maintenance_deps.go \u2014 add the implementation next to the existing accessors (around L54-67):\n\n// OperationQueueStore implements maintenance.StoreProvider.\nfunc (s *Server) OperationQueueStore() maintenanceplugin.OpQueueReader { return s.store }\n\nUse whatever the file's existing import alias for the plugin package is (grep -n \"maintenanceplugin\" internal/server/server_maintenance_deps.go).",
+    "3. internal/plugins/maintenance/title_backfill_test.go \u2014 add the matching fake method next to the other four store accessors (near L44-58):\n\nfunc (d fakeDeps) OperationQueueStore() OpQueueReader { return d.store }\n\n`d.store` is typed database.Store, which already has the method, so nothing else changes. Verify `var _ ServerDeps = fakeDeps{}` at L129 still compiles.",
+    "4. internal/plugins/maintenance/dedupe_book_file_rows.go \u2014 add the scan guard at the top of runDedupeBookFileRows, AFTER params are unmarshalled and the store nil-check (currently L157-169), and BEFORE PASS 1:\n\n\t// \ud83d\udd34 FAIL CLOSED. A library.scan rewrites the same book_file rows this op\n\t// deletes, so a concurrent scan can resurrect a row we just collapsed or\n\t// mutate the keeper mid-flight. Applies refuse; a dry run is read-only and\n\t// is allowed through so an operator can still take the census during a scan.\n\tif params.Apply {\n\t\tqs := p.deps.OperationQueueStore()\n\t\tif qs == nil {\n\t\t\treturn fmt.Errorf(\"dedupe-book-file-rows: cannot verify no library.scan is active; refusing to apply\")\n\t\t}\n\t\tactive, aerr := qs.ListActiveOperationsV2()\n\t\tif aerr != nil {\n\t\t\t// Fail CLOSED: an unreadable queue is not proof of an idle queue.\n\t\t\treturn fmt.Errorf(\"dedupe-book-file-rows: cannot list active operations; refusing to apply: %w\", aerr)\n\t\t}\n\t\tfor _, op := range active {\n\t\t\tif op.DefID == \"library.scan\" && (op.Status == \"running\" || op.Status == \"queued\") {\n\t\t\t\treturn fmt.Errorf(\"dedupe-book-file-rows: library.scan is %s (op %s); refusing to apply \u2014 a running scan rewrites the rows this op deletes\", op.Status, op.ID)\n\t\t\t}\n\t\t}\n\t}",
+    "5. internal/plugins/maintenance/dedupe_book_file_rows.go \u2014 add `DependsOn: []string{\"library.scan\"}` to dedupeBookFileRowsDef() (L36-66), with a comment saying it is defence in depth: dispatcher Gate 4 (internal/operations/registry/dispatcher.go:135) defers DISPATCH while a scan RUNS, but does not see QUEUED scans and cannot be conditional on params.Apply, so the in-run refusal in step 4 is the real guard.",
+    "6. internal/plugins/maintenance/dedupe_book_file_rows.go \u2014 journal every deletion. Inside the RunItems callback, the group loop already accumulates `pendingDeletes` (L358-360). Change it to also accumulate the FULL rows so they can be serialized: add `var pendingRows []database.BookFile` next to `var pendingDeletes []string` (L294) and append `redundant[ri]` alongside each ID.\n\nThen, in the batched-delete block (L368-381), journal BEFORE calling DeleteBookFilesByIDs:\n\n\tif len(pendingDeletes) > 0 {\n\t\t// \ud83d\udd34 JOURNAL FIRST. The ledger row must exist before the delete commits:\n\t\t// a journal written after a delete is lost exactly when the process dies\n\t\t// between the two, which is the only case it exists for. A journal write\n\t\t// that FAILS aborts this book's delete \u2014 an unreplayable deletion is worse\n\t\t// than a duplicate row that survives to the next run.\n\t\tjournalOK := true\n\t\tfor ri := range pendingRows {\n\t\t\tblob, merr := json.Marshal(pendingRows[ri])\n\t\t\tif merr != nil { journalOK = false; break }\n\t\t\tif jerr := store.CreateOperationChange(&database.OperationChange{\n\t\t\t\tID:          ulid.Make().String(),\n\t\t\t\tOperationID: opID,          // from registry.ReporterOpID(reporter), captured once before RunItems\n\t\t\t\tBookID:      bookID,\n\t\t\t\tChangeType:  \"book_file_delete\",\n\t\t\t\tFieldName:   pendingRows[ri].ID,\n\t\t\t\tOldValue:    string(blob),   // the ENTIRE row, so the deletion can be replayed back\n\t\t\t\tNewValue:    \"\",\n\t\t\t}); jerr != nil {\n\t\t\t\tlog.Warn(\"dedupe-book-file-rows: journal write failed; leaving this book's rows intact\",\n\t\t\t\t\t\"book_id\", bookID, \"row\", pendingRows[ri].ID, \"err\", jerr)\n\t\t\t\tjournalOK = false\n\t\t\t\tbreak\n\t\t\t}\n\t\t}\n\t\tif !journalOK {\n\t\t\tmu.Lock(); failed++; mu.Unlock()\n\t\t} else if derr := store.DeleteBookFilesByIDs(pendingDeletes); derr != nil {\n\t\t\t... existing failure branch unchanged ...\n\t\t} else {\n\t\t\t... existing success branch unchanged ...\n\t\t}\n\t}\n\nAdd imports: \"github.com/oklog/ulid/v2\" (match the exact import path already used in internal/organizer/service.go \u2014 check it with `grep -n \"ulid\" internal/organizer/service.go`). encoding/json is already imported.",
+    "7. internal/plugins/maintenance/dedupe_book_file_rows.go \u2014 capture the op id ONCE before the RunItems call: `opID := registry.ReporterOpID(reporter)` (registry is already imported for RunItems). Log a WARN if it is empty (`\"dedupe-book-file-rows: no operation id; journal rows will be uncorrelated\"`) but do NOT refuse \u2014 ReporterOpID degrades to \"\" for fakes by design (internal/operations/registry/reporter.go:43-47).",
+    "8. Bump `// version:` and `// last-edited:` headers on internal/plugins/maintenance/dedupe_book_file_rows.go (1.4.0 -> 1.5.0), internal/plugins/maintenance/deps.go (1.10.0 -> 1.11.0), and internal/server/server_maintenance_deps.go.",
+    "9. docs/operations/pending-prod-actions.md \u2014 append an entry (do not replace existing content): op id `maintenance.dedupe-book-file-rows`, params `{\"apply\": true}`, the OPEN OWNER DECISION (deleting duplicate book_file rows conflicts with the standing 'never delete rows in any repair; REPOINT' rule), the mitigation now in place (every deletion journaled as change_type book_file_delete with the full row JSON in old_value, replayable via GetOperationChanges(<op id>)), and the pre-run checklist (no library.scan queued or running; run apply=false first and review the TSV). Bump the file's version header. ALSO record the question flagged in notes below: the file's own comments describe a completed production run, which may mean rows were already deleted before this decision was made \u2014 that must be verified, not assumed.",
+    "10. Add a changelog fragment under changelog.d/ and, if a new follow-up task falls out (e.g. building the replay-from-journal tool), a todo.d/ fragment. NEITHER fragment gets a file/version/guid header."
+   ],
+   "tests": [
+    "internal/plugins/maintenance/dedupe_book_file_rows_parallel_test.go (EXISTING file \u2014 append): `TestDedupeBookFileRows_ApplyJournalsEveryDeletedRow` \u2014 PebbleStore fixture (`database.NewPebbleStore(t.TempDir())` + `s.WaitForWarmup()`), `seedDupBooks(t, s, 3, 4)`, run with Apply:true, then for each book call `s.GetBookChanges(bookID)` and assert exactly 3 rows with ChangeType==\"book_file_delete\", each OldValue unmarshalling into a database.BookFile whose ID is one of the deleted ones and whose FilePath equals the book's seeded path. 9 journal rows total for 3 books x 3 deletions.",
+    "internal/plugins/maintenance/dedupe_book_file_rows_parallel_test.go: `TestDedupeBookFileRows_JournalFailureLeavesRowsIntact` \u2014 wrap the store in a small test type embedding *database.PebbleStore that overrides CreateOperationChange to return an error; run with Apply:true; assert `s.GetBookFiles(id)` still returns all `copies` rows for every book and the op returned nil (it degrades, it does not abort the sweep). This is THE data-loss assertion: an unjournaled deletion must never happen.",
+    "internal/plugins/maintenance/dedupe_book_file_rows_parallel_test.go: `TestDedupeBookFileRows_ApplyRefusesWhileLibraryScanRunning` \u2014 seed dup books, then `s.InsertOperationV2(database.OperationV2Row{ID:\"scan-1\", DefID:\"library.scan\", Status:\"running\"})`; run with Apply:true; assert the returned error is non-nil and its message contains \"library.scan\" and \"refusing to apply\", AND that `s.GetBookFiles(id)` still returns all `copies` rows for every book.",
+    "internal/plugins/maintenance/dedupe_book_file_rows_parallel_test.go: `TestDedupeBookFileRows_ApplyRefusesWhileLibraryScanQueued` \u2014 identical but Status:\"queued\". Proves the guard covers the case dispatcher Gate 4 cannot see.",
+    "internal/plugins/maintenance/dedupe_book_file_rows_parallel_test.go: ANTI-OVER-SUPPRESSION \u2014 `TestDedupeBookFileRows_ApplyProceedsWhenOnlyAnUnrelatedOpIsActive`: insert an active row with DefID \"maintenance.title-repair\" Status \"running\", run with Apply:true, assert the op returns nil AND every book collapsed to exactly 1 row. Without this a guard that refused on ANY active op \u2014 or on all applies \u2014 would pass every other test.",
+    "internal/plugins/maintenance/dedupe_book_file_rows_parallel_test.go: `TestDedupeBookFileRows_DryRunIsAllowedDuringALibraryScan` \u2014 library.scan row inserted with Status \"running\", run with Apply:false; assert nil error and that no rows were deleted. The guard must be apply-only.",
+    "internal/plugins/maintenance/dedupe_book_file_rows_test.go: `TestDedupeBookFileRowsDef_DependsOnLibraryScan` \u2014 pure assertion that `(&Plugin{}).dedupeBookFileRowsDef().DependsOn` contains \"library.scan\"."
+   ],
+   "acceptance": [
+    "`go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... ./internal/server/... -count=1` exits 0.",
+    "`go test -race ./internal/plugins/maintenance/... -run DedupeBookFileRows -count=1` exits 0 (the journal writes happen inside parallel workers).",
+    "`grep -rn \"CreateOperationChange\" internal/plugins/ --include='*.go' | grep -v deps.go | wc -l` reports >= 1 \u2014 i.e. the plugin now actually calls it, where before the only hit was the declaration.",
+    "`grep -n \"refusing to apply\" internal/plugins/maintenance/dedupe_book_file_rows.go` returns >= 2 hits (list failure and scan-active).",
+    "`grep -n \"OperationQueueStore\" internal/plugins/maintenance/deps.go internal/server/server_maintenance_deps.go internal/plugins/maintenance/title_backfill_test.go` returns exactly 1 hit in each of the three files.",
+    "`grep -n \"dedupe-book-file-rows\" docs/operations/pending-prod-actions.md` returns >= 1 hit.",
+    "golangci-lint on the changed packages reports no `interfacebloat` finding (OpsStore stayed at 8 embeds; the new method went on StoreProvider, which goes 5 -> 6)."
+   ],
+   "edge_cases": [
+    "ListActiveOperationsV2 returns an error \u2192 FAIL CLOSED and refuse the apply. An unreadable queue is not proof of an idle queue.",
+    "OperationQueueStore() returns nil (a fake that did not wire it) \u2192 refuse the apply with a clear message; never silently proceed.",
+    "registry.ReporterOpID(reporter) returns \"\" (fake reporter, or a reporter that does not implement OpID) \u2192 journal rows are still written with OperationID \"\". They are then uncorrelated but still carry the full row in OldValue, so replay by BookID via GetBookChanges still works. Log a WARN; do NOT refuse.",
+    "json.Marshal of a BookFile failing \u2192 treat exactly like a journal write failure: skip this book's delete, count it as failed. Do not delete a row you could not serialize.",
+    "A zombie 'running' library.scan row with no live handle (the C-3 case the registry itself guards against at registry.go:631) will make this op refuse. That is the SAFE direction \u2014 say so in the error message so an operator knows to clear the stale row rather than assume the op is broken.",
+    "The scan guard is a point-in-time check: a library.scan enqueued one second later is not caught. DependsOn (step 5) narrows that window at dispatch. State this limitation in the code comment; do not claim the op is scan-proof.",
+    "params.Apply == false must skip the guard entirely \u2014 a dry run is read-only and blocking it would remove the operator's only way to take a census during a long scan."
+   ],
+   "anti_over_suppression": "TestDedupeBookFileRows_ApplyProceedsWhenOnlyAnUnrelatedOpIsActive",
+   "depends_on_lines": [],
+   "gate": "go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... ./internal/server/... -count=1",
+   "notes": "NOT A NEW OP. maintenance.dedupe-book-file-rows already exists at internal/plugins/maintenance/dedupe_book_file_rows.go:35 (459 lines, v1.4.0, registered plugin.go:44) with apply=false default, a reviewed keeper order (rankKeeper L91), field salvage-before-delete ordering (L339-355), and a bounded RunItems worker pool. This brief adds ONLY the journal and the scan guard. \u26a0\ufe0f VERIFY, DO NOT ASSUME: the file's own comments describe a production run that already collapsed rows ('its 130 rows were collapsed', 'the first full production run was killed at book 19/194', 'a later full-library dry run confirmed it'). If accurate, rows were deleted BEFORE the owner decision this item asks for \u2014 that changes what the pending-prod-actions.md entry should say, and it means unjournaled deletions may already exist with no replay path. Check the prod operation history for this def id before writing that entry, and report what you find rather than asserting either way. FILE COLLISION: this edits the same file as todo_line 90031 \u2014 land this one FIRST (it is the review_critical one) and rebase 90031 on top; never run them in parallel worktrees. Known flaky: internal/plugins/maintenance is on the repo's flaky list, so re-run before concluding a red test is a regression.",
+   "id": "TASK-220",
+   "stable_key": "scope-21.json|90032|None|Journal every duplicate-row deletion to the undo ledger and ",
+   "ws": "maintenance",
+   "slug": "journal-every-duplicate-row-deletion-to-the-undo",
+   "scope_file": "scope-21.json",
+   "dropped_files": [],
+   "tier_label": "Opus-class",
+   "depends_on": [],
+   "wave": 3
+  },
+  {
    "todo_line": 1338,
    "src_id": "SCORE-REC",
    "title": "Route ScoreOneResultWithBreakdown's base==0 path through scoreRecorder instead of a hand-built ScoreStep",
@@ -7903,6 +8212,134 @@
    "scope_file": "scope-18.json",
    "dropped_files": [],
    "tier_label": "Opus-class",
+   "depends_on": [],
+   "wave": 1
+  },
+  {
+   "todo_line": 90030,
+   "part": 1,
+   "src_id": "DUPROW-1",
+   "title": "metafetch: collapse duplicate book_file rows by cleaned path before write/rename",
+   "verdict": "actionable",
+   "verdict_evidence": "No dedupe exists on any metafetch book-file load path: `grep -n \"GetBookFiles(\" internal/metafetch/*.go | grep -v _test.go` returns 10 hits and none of them collapse by FilePath, so a book holding 42 rows for 21 paths is processed 42 times.",
+   "domain": "internal/metafetch",
+   "exact_files": [
+    "internal/metafetch/helpers.go",
+    "internal/metafetch/service.go",
+    "internal/metafetch/service_mock_test.go",
+    "internal/metafetch/service_writeback.go",
+    "internal/metafetch/service_writeback_duprows_test.go"
+   ],
+   "verified_anchors": [
+    {
+     "claim": "runApplyPipeline loads book files at service_writeback.go:480 and never dedupes them",
+     "grep_cmd": "grep -n \"func (mfs \\*Service) runApplyPipeline\" internal/metafetch/service_writeback.go",
+     "expect": "1 hit at L464 (the GetBookFiles call is at L480)"
+    },
+    {
+     "claim": "generateSegmentTitles loads book files at service_writeback.go:412 and assigns TrackNumber=i+1 / TrackCount=len(rows), so duplicated rows corrupt track numbering",
+     "grep_cmd": "grep -n \"func (mfs \\*Service) generateSegmentTitles\" internal/metafetch/service_writeback.go",
+     "expect": "1 hit at L411"
+    },
+    {
+     "claim": "writeBackForBook loads book files at service_writeback.go:730 into activeFiles, which is what writes tags once per row",
+     "grep_cmd": "grep -n \"bookFiles, bfErr := mfs.db.GetBookFiles(book.ID)\" internal/metafetch/service_writeback.go",
+     "expect": "1 hit at L730"
+    },
+    {
+     "claim": "the prod symptom 'wrote metadata back to' logged twice per file comes from the multi-file write loop at service_writeback.go:822",
+     "grep_cmd": "grep -n \"slog.Info(\\\"wrote metadata back to\\\"\" internal/metafetch/service_writeback.go",
+     "expect": "2 hits at L822 (multi-file branch) and L870 (single-file branch)"
+    },
+    {
+     "claim": "RunApplyPipelineRenameOnly is a fourth apply-pipeline entry point that loads book files (service.go:524)",
+     "grep_cmd": "grep -n \"func (mfs \\*Service) RunApplyPipelineRenameOnly\" internal/metafetch/service.go",
+     "expect": "1 hit at L513"
+    },
+    {
+     "claim": "the package already has an unexported-helpers file to host the new function",
+     "grep_cmd": "grep -n \"^func stripSubtitle\" internal/metafetch/helpers.go",
+     "expect": "1 hit at L86"
+    },
+    {
+     "claim": "generateSegmentTitles already has a mock-store test harness to extend",
+     "grep_cmd": "grep -n \"func TestGenerateSegmentTitles\" internal/metafetch/service_mock_test.go",
+     "expect": "1 hit at L1258"
+    }
+   ],
+   "reuse": [
+    {
+     "name": "database.MockStore{GetBookFilesFunc, UpdateBookFileFunc} + NewService(mock) test harness",
+     "file": "internal/metafetch/service_mock_test.go",
+     "verify_grep": "grep -n \"GetBookFilesFunc: func(bookID string)\" internal/metafetch/service_mock_test.go"
+    },
+    {
+     "name": "rankKeeper \u2014 the repo's existing, data-loss-reviewed keeper preference order (fingerprint > duration > hash > smallest ID). UNEXPORTED in another package: copy the ORDER, do not import.",
+     "file": "internal/plugins/maintenance/dedupe_book_file_rows.go",
+     "verify_grep": "grep -n \"func rankKeeper\" internal/plugins/maintenance/dedupe_book_file_rows.go"
+    },
+    {
+     "name": "makeTestAudio \u2014 real-file fixture builder if a end-to-end test is wanted",
+     "file": "internal/metafetch/service_writeback_realfile_test.go",
+     "verify_grep": "grep -n \"func makeTestAudio\" internal/metafetch/service_writeback_realfile_test.go"
+    }
+   ],
+   "polarity": "additive",
+   "effort": "S",
+   "tier": "sonnet",
+   "why_tier": "One new pure helper plus four mechanical call-site insertions, but the keeper-choice rule is data-adjacent and must match the existing rankKeeper order.",
+   "review_critical": true,
+   "goal": "Add ONE unexported helper `dedupeBookFilesByPath(bookID string, files []database.BookFile) []database.BookFile` to internal/metafetch/helpers.go and call it immediately after every `GetBookFiles` load on the apply pipeline, so no path in a book is ever written, renamed, or renumbered twice in a single run. It collapses rows whose cleaned absolute path (`filepath.Clean(strings.TrimSpace(f.FilePath))`) is identical, keeping the best-evidenced row using the same preference order the repo already reviewed for `rankKeeper` (has AcoustIDFingerprint > has Duration > has FileHash > lexicographically smallest ID). Rows with an empty path are passed through untouched (they are another op's problem). When it collapses anything it logs exactly one WARN per call: `slog.Warn(\"duplicate book_file rows collapsed\", \"book_id\", bookID, \"rows\", len(files), \"distinct\", len(out), \"collapsed\", len(files)-len(out))`. This is the fix for the 2026-08-21 prod incident where book 01KZR9GEH5ZQW9CV1EN130Y7C0 held 42 rows for 21 distinct paths, every file was tag-written twice, and the second rename pass failed with `stat rename source ...: no such file or directory` because the first pass had already moved the file.",
+   "background": [
+    "The apply pipeline has FOUR independent book-file load sites, all of which must be fixed or the incident only half-goes-away: service_writeback.go:412 (generateSegmentTitles), :480 (runApplyPipeline), :730 (writeBackForBook), and service.go:524 (RunApplyPipelineRenameOnly). Verified: grep -n \"GetBookFiles(\" internal/metafetch/*.go | grep -v _test.go.",
+    "generateSegmentTitles (service_writeback.go:411) is the silent corrupter: it sets bookFiles[i].TrackNumber = i+1 and bookFiles[i].TrackCount = totalTracks over the raw row list, so a 21-file book with 42 rows is stamped as a 42-track book in the database.",
+    "writeBackForBook (service_writeback.go:730) filters only on `!bf.Missing` and the optional segmentFilter \u2014 nothing collapses by path \u2014 which is why every file logged 'wrote metadata back to' twice (service_writeback.go:822).",
+    "runApplyPipeline (service_writeback.go:464) feeds its raw row list into newPathOrganizer(...).ComputeTargetPaths, which is what produced the prod log line 'file naming pattern does not distinguish... files=42' for a 21-file book (internal/organizer/pipeline.go:149).",
+    "The repo already has a reviewed, data-loss-critical keeper order in internal/plugins/maintenance/dedupe_book_file_rows.go:91 (rankKeeper). It is unexported and in another package, so it cannot be imported; matching the order by hand is required and the drift risk is recorded in notes."
+   ],
+   "steps": [
+    "1. In internal/metafetch/helpers.go, add imports as needed (`path/filepath`, `log/slog`, `strings` \u2014 check which are already imported before adding) and append a new unexported function:\n\nfunc dedupeBookFilesByPath(bookID string, files []database.BookFile) []database.BookFile {\n\tif len(files) < 2 {\n\t\treturn files\n\t}\n\tbetter := func(cand, cur database.BookFile) bool {\n\t\t// SAME ORDER as maintenance.rankKeeper: a fingerprint costs a full-file\n\t\t// decode and cannot be guessed back, so it outranks everything.\n\t\tcf, uf := len(cand.AcoustIDFingerprint) > 0, len(cur.AcoustIDFingerprint) > 0\n\t\tif cf != uf { return cf }\n\t\tcd, ud := cand.Duration > 0, cur.Duration > 0\n\t\tif cd != ud { return cd }\n\t\tch, uh := strings.TrimSpace(cand.FileHash) != \"\", strings.TrimSpace(cur.FileHash) != \"\"\n\t\tif ch != uh { return ch }\n\t\treturn cand.ID < cur.ID\n\t}\n\tidx := make(map[string]int, len(files))\n\tout := make([]database.BookFile, 0, len(files))\n\tfor _, f := range files {\n\t\tkey := strings.TrimSpace(f.FilePath)\n\t\tif key == \"\" {\n\t\t\t// A pathless row is not a duplicate of anything; pass it through so\n\t\t\t// this helper never changes which rows exist, only how many twins do.\n\t\t\tout = append(out, f)\n\t\t\tcontinue\n\t\t}\n\t\tkey = filepath.Clean(key)\n\t\tif at, seen := idx[key]; seen {\n\t\t\tif better(f, out[at]) { out[at] = f }\n\t\t\tcontinue\n\t\t}\n\t\tidx[key] = len(out)\n\t\tout = append(out, f)\n\t}\n\tif len(out) != len(files) {\n\t\tslog.Warn(\"duplicate book_file rows collapsed\",\n\t\t\t\"book_id\", bookID, \"rows\", len(files), \"distinct\", len(out),\n\t\t\t\"collapsed\", len(files)-len(out))\n\t}\n\treturn out\n}\n\nAdd a doc comment above it explaining the prod incident (book 01KZR9GEH5ZQW9CV1EN130Y7C0, 42 rows / 21 paths, double tag write + rename ENOENT) and that the ORDER of `better` mirrors maintenance.rankKeeper.",
+    "2. In internal/metafetch/service_writeback.go, inside generateSegmentTitles: find the line `bookFiles, err := mfs.db.GetBookFiles(bookID)` at L412 and insert immediately after its error check: `bookFiles = dedupeBookFilesByPath(bookID, bookFiles)`. Do this BEFORE the `totalTracks` computation and the `for i := range bookFiles` loop so TrackCount is the distinct-path count.",
+    "3. In internal/metafetch/service_writeback.go, inside runApplyPipeline: after the `bookFiles, err := mfs.db.GetBookFiles(id)` block at L480 and its `if len(bookFiles) == 0 { return nil }` guard, insert `bookFiles = dedupeBookFilesByPath(id, bookFiles)`. It must come BEFORE the `newPathOrganizer(mfs.db).ComputeTargetPaths(book, bookFiles)` call at L493.",
+    "4. In internal/metafetch/service_writeback.go, inside writeBackForBook: at L730 `bookFiles, bfErr := mfs.db.GetBookFiles(book.ID)`, insert `bookFiles = dedupeBookFilesByPath(book.ID, bookFiles)` right after the `if bfErr != nil { bookFiles = nil }` block and BEFORE the `!bf.Missing` filter that builds activeFiles.",
+    "5. In internal/metafetch/service.go, inside RunApplyPipelineRenameOnly (starts L513): after `bookFiles, err := mfs.db.GetBookFiles(id)` at L524 and its error return, insert `bookFiles = dedupeBookFilesByPath(id, bookFiles)`. Place it BEFORE the `if len(bookFiles) == 0 && book.FilePath != \"\"` virtual-entry branch so the virtual-entry logic is unaffected.",
+    "6. Bump the `// version:` header on internal/metafetch/helpers.go, internal/metafetch/service_writeback.go and internal/metafetch/service.go (minor bump, e.g. 1.2.0 -> 1.3.0) and set `// last-edited:` to today's date on each.",
+    "7. Add a changelog fragment under changelog.d/ describing the fix (NO file/version/guid header in the fragment \u2014 fragments are header-exempt)."
+   ],
+   "tests": [
+    "internal/metafetch/service_writeback_duprows_test.go (NEW file, needs the standard 4-line // file/version/guid/last-edited header): `TestDedupeBookFilesByPath_CollapsesExactDuplicates` \u2014 table test on the pure helper. Case 'prod shape': 42 rows built as 21 paths x 2 \u2192 asserts len(out)==21 and that the returned paths are the 21 distinct ones in first-seen order.",
+    "internal/metafetch/service_writeback_duprows_test.go: `TestDedupeBookFilesByPath_KeepsTheFingerprintedTwin` \u2014 two rows, same FilePath, the SECOND carrying AcoustIDFingerprint: []byte{0x01}; asserts the surviving row's ID is the fingerprinted one. This is the data-loss assertion.",
+    "internal/metafetch/service_writeback_duprows_test.go: `TestDedupeBookFilesByPath_KeeperOrderMatchesRankKeeper` \u2014 three sub-cases mirroring dedupe_book_file_rows_test.go: fingerprint beats duration; duration beats nothing; on a full tie the lexicographically smallest ID wins (assert determinism by running the helper twice on freshly-built equal inputs and comparing the surviving IDs).",
+    "internal/metafetch/service_writeback_duprows_test.go: `TestDedupeBookFilesByPath_NormalizesPathBeforeComparing` \u2014 rows with '/a/b/1.mp3' and '/a/./b/1.mp3' and '/a/b/1.mp3 ' (trailing space) collapse to one.",
+    "internal/metafetch/service_writeback_duprows_test.go: ANTI-OVER-SUPPRESSION \u2014 `TestDedupeBookFilesByPath_DistinctPathsAllSurvive`: 21 rows with 21 different paths \u2192 asserts len(out)==21 and that the slice is returned with every original ID present. Without this a helper that returned only the first row would pass every other test.",
+    "internal/metafetch/service_writeback_duprows_test.go: `TestDedupeBookFilesByPath_EmptyPathRowsPassThrough` \u2014 two rows with FilePath \"\" plus one real path \u2192 asserts all three survive (empty paths are not duplicates of each other).",
+    "internal/metafetch/service_mock_test.go: extend TestGenerateSegmentTitles with sub-test `duplicate_rows_do_not_inflate_track_count` \u2014 GetBookFilesFunc returns 4 rows across 2 distinct paths; asserts UpdateBookFileFunc was called exactly 2 times and every captured file has TrackCount == 2 (NOT 4). This is the regression that reproduces the prod 'files=42' symptom at the DB level."
+   ],
+   "acceptance": [
+    "`go build ./... && go vet ./... && go test ./internal/metafetch/... -count=1` exits 0.",
+    "`grep -c \"dedupeBookFilesByPath(\" internal/metafetch/service_writeback.go internal/metafetch/service.go internal/metafetch/helpers.go` reports 3, 1 and 1 respectively (3 call sites in service_writeback.go, 1 in service.go, 1 definition in helpers.go).",
+    "`grep -n \"duplicate book_file rows collapsed\" internal/metafetch/helpers.go` returns exactly 1 hit.",
+    "`go test ./internal/metafetch/... -run 'DedupeBookFilesByPath|GenerateSegmentTitles' -count=1 -v` shows every listed test PASS, including TestDedupeBookFilesByPath_DistinctPathsAllSurvive."
+   ],
+   "edge_cases": [
+    "len(files) < 2 \u2192 return the input slice unchanged and log nothing.",
+    "FilePath empty or whitespace-only \u2192 the row is NOT a dedupe candidate; append it verbatim. Two empty-path rows both survive. internal/organizer/pipeline.go:101 already drops them downstream.",
+    "All rows identical in every ranking field \u2192 the lexicographically smallest ID wins, so a dry run and a later run pick the same survivor.",
+    "Rows flagged Missing are NOT special-cased here: a Missing twin of a present row still collapses (the present row wins on Duration/hash/fingerprint or on ID). Do not add a Missing filter \u2014 that is planTargetPaths' job and duplicating it here would change totalTracks semantics.",
+    "The helper returns a NEW slice; callers must reassign (`bookFiles = dedupeBookFilesByPath(...)`). It must not mutate the input slice in place, because runApplyPipeline later builds bfMap over the returned slice and writes bf.FilePath back to the DB.",
+    "Case sensitivity: compare paths byte-exactly after Clean/TrimSpace. Do NOT lowercase \u2014 the library lives on a case-sensitive NAS mount and two case-different paths are two real files."
+   ],
+   "anti_over_suppression": "TestDedupeBookFilesByPath_DistinctPathsAllSurvive",
+   "depends_on_lines": [],
+   "gate": "go build ./... && go vet ./... && go test ./internal/metafetch/... -count=1",
+   "notes": "internal/metafetch/service_writeback_duprows_test.go is a NEW file (needs the 4-line version header; only changelog.d/ and todo.d/ fragments are header-exempt). DRIFT RISK worth stating in the helper's doc comment: the keeper order is duplicated from maintenance.rankKeeper (internal/plugins/maintenance/dedupe_book_file_rows.go:91) because that function is unexported in another package; if either order changes the two must be changed together. Part 2 of this todo_line (organizer planTargetPaths) is independent and can land in either order \u2014 this part alone fixes the reported incident.",
+   "id": "TASK-221",
+   "stable_key": "scope-21.json|90030|1|metafetch: collapse duplicate book_file rows by cleaned path",
+   "ws": "metadata",
+   "slug": "metafetch-collapse-duplicate-book-file-rows-by-c",
+   "scope_file": "scope-21.json",
+   "dropped_files": [],
+   "tier_label": "Sonnet-class",
    "depends_on": [],
    "wave": 1
   },
@@ -11242,6 +11679,158 @@
    "wave": 1
   },
   {
+   "todo_line": 90033,
+   "src_id": "ENQ-DEDUP-1",
+   "title": "EnqueueOp: dedupe only on byte-equal params (or an explicit opt-in), never silently drop a different request",
+   "verdict": "actionable",
+   "verdict_evidence": "The dedup block at internal/operations/registry/registry.go:619-641 returns the existing op's ID on defID match alone and never looks at params \u2014 `grep -n \"if def.ConcurrencyKey != \\\"\\\"\" internal/operations/registry/registry.go` hits L619 and the `return op.ID, nil` at L638 happens before params are ever marshalled (marshalling is at L643-652).",
+   "domain": "internal/operations/registry",
+   "exact_files": [
+    "internal/operations/registry/enqueue_dedupe_test.go",
+    "internal/operations/registry/registry.go",
+    "internal/operations/registry/registry_test.go",
+    "internal/operations/registry/types.go"
+   ],
+   "verified_anchors": [
+    {
+     "claim": "EnqueueOp's dedup block matches on defID only and returns the existing op id",
+     "grep_cmd": "grep -n \"ConcurrencyKey != \\\"\\\"\\|ListActiveOperationsV2()\\|hasLiveHandle(op.ID)\\|return op.ID, nil\\|func (r \\*Registry) EnqueueOp\" internal/operations/registry/registry.go",
+     "expect": "5 hits: EnqueueOp at L573, the guard at L619, ListActiveOperationsV2 at L620, the C-3 zombie skip at L631, and `return op.ID, nil` at L638"
+    },
+    {
+     "claim": "params are marshalled AFTER the dedup block, so the fix requires moving the marshal above it",
+     "grep_cmd": "grep -n \"// Marshal params.\" internal/operations/registry/registry.go",
+     "expect": "1 hit at L642 (the rawParams block runs L643-652, below the dedup at L619-641)"
+    },
+    {
+     "claim": "the active-op row carries the stored params to compare against",
+     "grep_cmd": "grep -n \"Params            string\" internal/database/iface_ops_v2.go",
+     "expect": "1 hit at L54 (OperationV2Row.Params)"
+    },
+    {
+     "claim": "Gate 3 in the dispatcher already serializes RUNS by ConcurrencyKey, so a second QUEUED row cannot run concurrently",
+     "grep_cmd": "grep -n \"Gate 3: ConcurrencyKey already running?\" internal/operations/registry/dispatcher.go",
+     "expect": "1 hit at L107"
+    },
+    {
+     "claim": "metadata.batch-apply-cached carries an explicit book_ids selection and is not batchable \u2014 the op from the 2026-08-21 incident",
+     "grep_cmd": "grep -n \"ConcurrencyKey:  \\\"metadata.batch-apply-cached\\\"\" internal/server/batch_apply_op.go",
+     "expect": "1 hit at L71 (its params struct with BookIDs []string is at L37)"
+    },
+    {
+     "claim": "sdk.OperationDef is a type ALIAS of registry.OperationDef, so a field added to the registry type automatically reaches every plugin op",
+     "grep_cmd": "grep -n \"type OperationDef = registry.OperationDef\" pkg/plugin/sdk/operation.go",
+     "expect": "1 hit at L11"
+    },
+    {
+     "claim": "the ConcurrencyKey field and its doc comment live here, which is where the new field goes",
+     "grep_cmd": "grep -n \"ConcurrencyKey: ops with same non-empty key serialize\" internal/operations/registry/types.go",
+     "expect": "1 hit at L68"
+    },
+    {
+     "claim": "OperationDef already has a Schedule field marking cron-driven defs \u2014 the population the dedup was written for",
+     "grep_cmd": "grep -n \"Schedule \\*string // cron expression\" internal/operations/registry/types.go",
+     "expect": "1 hit at L83"
+    },
+    {
+     "claim": "FULL ENUMERATION of defs with a ConcurrencyKey",
+     "grep_cmd": "grep -rn \"ConcurrencyKey:\" internal --include='*.go' | grep -v _test.go | wc -l",
+     "expect": "152 lines, of which 3 are non-defs (types.go:68 doc comment, server/maintenance_job_op.go:97 `policy.ConcurrencyKey` dynamic) and 3 are the empty string (server/library_core_ops.go:332, server/folder_autoscan_op.go:50, maintenance/job.go:131) \u2192 ~146 real defs with a non-empty key"
+    },
+    {
+     "claim": "the CATEGORY A exception list \u2014 every def whose params carry an explicit selection and which must therefore QUEUE rather than dedupe",
+     "grep_cmd": "grep -rn \"BookIDs\\|book_ids\" internal/server/*_op*.go internal/plugins/*/*.go | grep \"\\[\\]string \\`json:\"",
+     "expect": "8 hits: server/batch_save_op.go:31, server/batch_apply_op.go:37, server/library_writeback_op.go:22, server/library_core_ops.go:53 (libraryOrganizeParams -> library.organize), plugins/acoustid/fingerprint_rescan.go:29, plugins/maintenance/chapters_backfill.go:96, plugins/maintenance/regroup_shattered_ai.go:68, plugins/maintenance/write_back.go:22"
+    },
+    {
+     "claim": "checkpoint state is merged back into a running op's stored params, so a running op's Params can drift from what was enqueued",
+     "grep_cmd": "grep -n \"UpdateOperationV2Params(id string, params \\[\\]byte) error\" internal/database/iface_ops_v2.go",
+     "expect": "1 hit at L130"
+    }
+   ],
+   "reuse": [
+    {
+     "name": "the existing C-3 zombie-row skip inside the dedup loop \u2014 KEEP IT, do not restructure around it",
+     "file": "internal/operations/registry/registry.go",
+     "verify_grep": "grep -n \"C-3: skip zombie rows\" internal/operations/registry/registry.go"
+    },
+    {
+     "name": "subjectFromParams / the batchable early-return above the dedup block \u2014 the fix must sit BELOW it, untouched",
+     "file": "internal/operations/registry/registry.go",
+     "verify_grep": "grep -n \"if def.Batchable {\" internal/operations/registry/registry.go"
+    },
+    {
+     "name": "existing registry test file and its fixtures",
+     "file": "internal/operations/registry/registry_test.go",
+     "verify_grep": "grep -n \"func Test\" internal/operations/registry/registry_test.go"
+    }
+   ],
+   "polarity": "transform",
+   "effort": "M",
+   "tier": "opus",
+   "why_tier": "One conditional, but it changes enqueue semantics for ~146 operation definitions across every plugin; getting the default backwards either re-creates the cron pile-up or keeps silently dropping user work.",
+   "review_critical": true,
+   "goal": "Stop EnqueueOp from silently discarding a second request whose params differ from the active op's. In internal/operations/registry/registry.go, move the params marshal above the ConcurrencyKey dedup block and change the dedup condition so an active op is only reused when `def.DedupeQueuedRuns || def.Schedule != nil || bytes.Equal(rawParams, []byte(op.Params))`. Otherwise fall through and enqueue a NEW queued row and return the NEW op id \u2014 dispatcher Gate 3 (internal/operations/registry/dispatcher.go:107) already serializes the runs, so the second job runs after the first instead of vanishing. Add `DedupeQueuedRuns bool` to registry.OperationDef next to ConcurrencyKey (types.go:68); because sdk.OperationDef is a type alias (pkg/plugin/sdk/operation.go:11) this reaches every plugin op with no other change. Set it on ZERO defs today \u2014 the Schedule!=nil clause already covers the cron case the dedup was written for. Keep the C-3 zombie-row skip intact.",
+   "background": [
+    "Prod incident 2026-08-21 23:49: metadata.batch-apply-cached (ConcurrencyKey \"metadata.batch-apply-cached\", internal/server/batch_apply_op.go:71, NOT batchable) is enqueued with explicit book_ids (batchApplyOpParams.BookIDs at batch_apply_op.go:37). Approving more books while a batch apply ran neither queued a second job nor grew the running one: EnqueueOp returned the running op's id at registry.go:638 and the new params were discarded. The caller saw success; the approved books were never applied.",
+    "The dedup was written for cron pile-up \u2014 its own comment (registry.go:615-618) cites 'Active Operations panel shows Purge Soft-Deleted twice from one cron schedule + one maintenance.window pass'. Cron ticks enqueue identical params, so byte-equality preserves exactly that behaviour.",
+    "Gate 3 in the dispatcher (dispatcher.go:107-114) already refuses to START a second op holding the same ConcurrencyKey, so a second QUEUED row is safe: it waits, then runs. ConcurrencyKey serializes RUNS; it was never supposed to drop QUEUE entries carrying different work.",
+    "params are marshalled at registry.go:642-652, BELOW the dedup block at 619-641, so the comparison bytes do not exist yet at the point of the decision. The marshal must move up. The batchable branch above (registry.go:585-609) already marshals its own copy for subject extraction \u2014 after moving the marshal, reuse the single rawParams there too rather than marshalling twice.",
+    "PER-DEF DECISION, stated as a rule over the full enumeration (146 defs with a non-empty ConcurrencyKey; see the enumeration anchor): CATEGORY A \u2014 the 8 defs whose params carry an explicit selection (metadata.batch-save, metadata.batch-apply-cached, library.bulk-write-back, library.organize, acoustid.fingerprint via fingerprint_rescan, maintenance.probe-directory-books via chapters_backfill, maintenance.regroup-shattered-ai, maintenance.bulk-write-back) \u2192 default false, and byte-inequality means a different selection QUEUES. CATEGORY B \u2014 the ~45 defs with a non-nil cron Schedule \u2192 covered by the Schedule!=nil clause, dedupe on defID alone exactly as today, because a cron tick must never pile up and a resumable cron op's stored params drift via checkpoint merge (UpdateOperationV2Params, iface_ops_v2.go:130). CATEGORY C \u2014 every remaining def (manual, parameterless or with fixed params) \u2192 default false; identical params still dedupe (a double-click), different params queue. DedupeQueuedRuns exists so a future CATEGORY C def whose params legitimately vary per tick can opt back into defID-only dedupe; it is set on NO def in this change.",
+    "OperationV2Row.Params is a string (internal/database/iface_ops_v2.go:54) holding the marshalled JSON, so the comparison is bytes.Equal(rawParams, []byte(op.Params))."
+   ],
+   "steps": [
+    "1. internal/operations/registry/types.go \u2014 add the field immediately after ConcurrencyKey (L69) with a full doc comment:\n\n\t// DedupeQueuedRuns makes an enqueue reuse an already queued/running op for\n\t// this def REGARDLESS of params. Default false: an enqueue only dedupes when\n\t// its marshalled params are byte-identical to the active op's, so a request\n\t// carrying a different selection queues a second run instead of being\n\t// silently dropped (prod, 2026-08-21: approving more books while\n\t// metadata.batch-apply-cached ran discarded the new book_ids and reported\n\t// success). Cron-scheduled defs (Schedule != nil) already dedupe on def id\n\t// alone without setting this \u2014 see EnqueueOp. Set this only for a def whose\n\t// params legitimately vary between runs that must NOT both happen.\n\tDedupeQueuedRuns bool",
+    "2. internal/operations/registry/registry.go \u2014 move the params marshal ABOVE the dedup block. Cut the block currently at L642-652 (`// Marshal params.` through the `rawParams = json.RawMessage(\"{}\")` else branch) and paste it immediately BELOW the batchable early-return (which ends around L609) and ABOVE the `// Dedupe:` comment at L611. Then delete the now-duplicated `rawParamsForSubject` marshal inside the batchable branch and use `rawParams` there instead \u2014 verify with `grep -n rawParamsForSubject internal/operations/registry/registry.go` that no reference survives.",
+    "3. internal/operations/registry/registry.go \u2014 change the dedup decision inside the loop. The loop currently reads: skip non-matching DefID, skip C-3 zombie rows, then log and `return op.ID, nil`. Insert the params check between the zombie skip and the return:\n\n\t\t\t\t// ConcurrencyKey serializes RUNS (dispatcher Gate 3); it was never\n\t\t\t\t// meant to drop QUEUE entries carrying different work. Only reuse\n\t\t\t\t// the active op when this request asks for the SAME thing.\n\t\t\t\tsameWork := def.DedupeQueuedRuns ||\n\t\t\t\t\tdef.Schedule != nil || // cron tick: the pile-up case this dedup was written for\n\t\t\t\t\tbytes.Equal(rawParams, []byte(op.Params))\n\t\t\t\tif !sameWork {\n\t\t\t\t\tr.logger.Info(\"registry: active op exists but params differ \u2014 queueing a second run\",\n\t\t\t\t\t\t\"op_id\", op.ID, \"def_id\", defID, \"status\", op.Status)\n\t\t\t\t\tcontinue\n\t\t\t\t}\n\nKeep the existing C-3 zombie skip and the existing `r.logger.Info(\"registry: enqueue deduped \u2014 active op exists\", ...)` line exactly as they are. Add \"bytes\" to the import block.",
+    "4. internal/operations/registry/registry.go \u2014 `continue` (not `break`) is deliberate: another active row for the same def might match byte-for-byte. Add a one-line comment saying so.",
+    "5. Confirm nothing downstream assumes EnqueueOp is idempotent per def. Run `grep -rn \"EnqueueOp(\" internal --include='*.go' | grep -v _test.go | wc -l` and skim the call sites for any that compare the returned id to a stored one; if one exists, note it in the PR body rather than changing it.",
+    "6. Bump `// version:` and `// last-edited:` on internal/operations/registry/types.go and internal/operations/registry/registry.go.",
+    "7. Add a changelog fragment under changelog.d/ (no file header in the fragment) describing the behaviour change: a second enqueue with different params now creates a second QUEUED op instead of returning the running one's id."
+   ],
+   "tests": [
+    "internal/operations/registry/enqueue_dedupe_test.go (NEW file, needs the 4-line version header): `TestEnqueueOp_SameParamsReturnsSameOpID` \u2014 register a def with ConcurrencyKey \"t.dedupe\" and Schedule nil; enqueue params {\"book_ids\":[\"a\"]}, then enqueue the identical params again; assert both calls return the SAME op id and only one row is active.",
+    "internal/operations/registry/enqueue_dedupe_test.go: `TestEnqueueOp_DifferentParamsQueuesASecondOp` \u2014 same def; enqueue {\"book_ids\":[\"a\"]} then {\"book_ids\":[\"b\"]}; assert the second call returns a DIFFERENT, non-empty op id and that ListActiveOperationsV2 now reports two rows for the def, the second with status \"queued\". This is the prod-incident regression.",
+    "internal/operations/registry/enqueue_dedupe_test.go: `TestEnqueueOp_SecondQueuedOpStartsOnlyAfterTheFirstCompletes` \u2014 drive the dispatcher (or assert directly against Gate 3 via the registry's concurrencyKeys map) to show the second op does not start while the first holds the key, and does start after it completes. If driving the dispatcher is impractical in a unit test, assert instead that the def's ConcurrencyKey is non-empty and cite dispatcher.go:107 in a comment \u2014 but say so explicitly rather than silently weakening the test.",
+    "internal/operations/registry/enqueue_dedupe_test.go: `TestEnqueueOp_CronScheduledDefStillDedupesOnDefIDAlone` \u2014 register a def with ConcurrencyKey \"t.cron\" AND Schedule pointing at a cron string; enqueue with params {\"limit\":1} then {\"limit\":2}; assert BOTH calls return the same op id. This pins the pile-up behaviour the original dedup existed for.",
+    "internal/operations/registry/enqueue_dedupe_test.go: `TestEnqueueOp_DedupeQueuedRunsOptInIgnoresParams` \u2014 def with DedupeQueuedRuns:true, Schedule nil; two different param payloads; assert the same op id both times.",
+    "internal/operations/registry/enqueue_dedupe_test.go: `TestEnqueueOp_NilParamsAndEmptyObjectAreEqual` \u2014 enqueue with params nil (marshals to \"{}\") then with an explicit empty struct; assert the same op id, so a nil/empty caller does not spuriously queue a duplicate.",
+    "internal/operations/registry/enqueue_dedupe_test.go: `TestEnqueueOp_ZombieRunningRowIsStillSkipped` \u2014 the C-3 regression: seed a 'running' row with no live handle and identical params; assert a NEW op id is returned (the zombie is skipped, not deduped against).",
+    "internal/operations/registry/enqueue_dedupe_test.go: ANTI-OVER-SUPPRESSION \u2014 `TestEnqueueOp_DedupeStillFiresForTheCommonDoubleClick`: same def, Schedule nil, DedupeQueuedRuns false, identical params enqueued three times in a row; assert exactly ONE active row exists. Without this, a change that simply deleted the dedup block would pass every 'queues a second op' test.",
+    "internal/operations/registry/enqueue_dedupe_test.go: `TestOperationDefs_DedupeDecisionIsExplicit` \u2014 the per-def table test. Iterate every def the registry has registered via `Registry.ActiveDefs() []OperationDef` (internal/operations/registry/registry.go:977 \u2014 verify with `grep -n \"func (r \\*Registry) ActiveDefs\" internal/operations/registry/registry.go`, 1 hit). For each def with a non-empty ConcurrencyKey assert exactly one of these holds and record which: (a) DedupeQueuedRuns is true AND the def id appears in an in-test `optedIn` map (empty today \u2014 a new opt-in fails the test until it is listed with a reason), or (b) DedupeQueuedRuns is false. Additionally assert that each of the 8 selection-carrying def ids \u2014 \"metadata.batch-save\", \"metadata.batch-apply-cached\", \"library.bulk-write-back\", \"library.organize\", \"maintenance.bulk-write-back\", \"maintenance.regroup-shattered-ai\", plus the acoustid fingerprint-rescan and maintenance.probe-directory-books ids (read the exact ID strings from their def files) \u2014 has DedupeQueuedRuns == false. If the test cannot enumerate registered defs without a full server, put it in internal/server/ instead and say so in the PR body."
+   ],
+   "acceptance": [
+    "`go build ./... && go vet ./... && go test ./internal/operations/registry/... ./internal/server/... -count=1` exits 0.",
+    "`grep -n \"DedupeQueuedRuns\" internal/operations/registry/types.go internal/operations/registry/registry.go` returns 1 hit in types.go (the declaration) and 1 in registry.go (the condition).",
+    "`grep -rn \"DedupeQueuedRuns: *true\" internal --include='*.go' | grep -v _test.go | wc -l` reports 0 \u2014 no def opts in as part of this change.",
+    "`grep -n \"C-3: skip zombie rows\" internal/operations/registry/registry.go` still returns 1 hit \u2014 the zombie skip survived.",
+    "`grep -n \"bytes.Equal(rawParams\" internal/operations/registry/registry.go` returns 1 hit, and its line number is LESS than the line number of `grep -n \"// Marshal params.\"`... i.e. verify with `grep -n \"rawParams\" internal/operations/registry/registry.go` that the first assignment to rawParams precedes the dedup loop.",
+    "`go test ./internal/operations/registry/... -run 'EnqueueOp_|DedupeDecisionIsExplicit' -count=1 -v` shows every listed test PASS, including TestEnqueueOp_DedupeStillFiresForTheCommonDoubleClick."
+   ],
+   "edge_cases": [
+    "nil params vs an empty struct: both must marshal to the same bytes before comparison (the existing code already substitutes json.RawMessage(\"{}\") for nil \u2014 keep that, and do the substitution BEFORE the comparison).",
+    "Semantically-equal but textually-different JSON (key order, whitespace, an omitempty field present as its zero value) compares UNEQUAL and therefore QUEUES a second op. That is the safe direction \u2014 queue, never drop \u2014 and must be stated in the code comment. Do NOT add canonicalization; it would reintroduce a silent-drop path.",
+    "A RUNNING op's stored Params can drift from what was enqueued because checkpoint state is merged back in (UpdateOperationV2Params, internal/database/iface_ops_v2.go:130). For a resumable cron def this would break dedupe \u2014 which is exactly why the Schedule != nil clause exists. For a manual def it means a redundant queued row, not data loss.",
+    "Batchable defs return early ABOVE the dedup block (registry.go:585-609) and are unaffected. Do not move the dedup above the batch branch.",
+    "The C-3 zombie skip must run BEFORE the params comparison: a zombie row's params are irrelevant, it must be skipped either way.",
+    "`continue` rather than `break` on a params mismatch: another active row for the same def may still match byte-for-byte.",
+    "ListActiveOperationsV2 returning an error keeps the EXISTING behaviour (the `if listErr == nil` guard at L620 means the whole dedup is skipped and the op enqueues). Do not change that \u2014 failing open here means an extra queued row, and Gate 3 still serializes it."
+   ],
+   "anti_over_suppression": "TestEnqueueOp_DedupeStillFiresForTheCommonDoubleClick",
+   "depends_on_lines": [],
+   "gate": "go build ./... && go vet ./... && go test ./internal/operations/registry/... -count=1",
+   "notes": "internal/operations/registry/enqueue_dedupe_test.go is a NEW file (needs the 4-line version header). sdk.OperationDef is a type ALIAS of registry.OperationDef (pkg/plugin/sdk/operation.go:11) \u2014 verified \u2014 so the new field reaches all ~146 plugin defs automatically; there is no second struct to edit and no converter. FULL ENUMERATION as required: `grep -rn \"ConcurrencyKey:\" internal --include='*.go' | grep -v _test.go` returns 152 lines = 146 real defs with a non-empty key + 3 empty-string defs (library.transcode at library_core_ops.go:332, library.folder-auto-scan at folder_autoscan_op.go:50, maintenance/job.go:131) + 1 dynamic (`policy.ConcurrencyKey`, server/maintenance_job_op.go:97) + 1 doc comment (types.go:68) + 1 duplicate counted in the plugins/scheduler overlap; the per-def decision is stated as three categories in `background` with the grep that derives each. The dynamic `policy.ConcurrencyKey` def (maintenance_job_op.go:97) inherits the same rule and needs no per-policy decision because its params come from the policy row. BEHAVIOUR CHANGE the owner should know about: the UI will now show a second job where it previously showed none \u2014 that is the intended fix, not a regression.",
+   "id": "TASK-222",
+   "stable_key": "scope-21.json|90033|None|EnqueueOp: dedupe only on byte-equal params (or an explicit ",
+   "ws": "operations",
+   "slug": "enqueueop-dedupe-only-on-byte-equal-params-or-an",
+   "scope_file": "scope-21.json",
+   "dropped_files": [],
+   "tier_label": "Opus-class",
+   "depends_on": [],
+   "wave": 4
+  },
+  {
    "todo_line": 872,
    "part": 1,
    "src_id": "F5",
@@ -11595,6 +12184,110 @@
    "tier_label": "Sonnet-class",
    "depends_on": [],
    "wave": 5
+  },
+  {
+   "todo_line": 90030,
+   "part": 2,
+   "src_id": "DUPROW-1",
+   "title": "organizer: collapse duplicate paths in planTargetPaths so totalTracks counts files, not rows",
+   "verdict": "actionable",
+   "verdict_evidence": "planTargetPaths normalizes the row set by dropping empty-FilePath rows (internal/organizer/pipeline.go:99-105) but does NOT collapse duplicate paths, so `totalTracks := len(sorted)` at L130 counted 42 for a 21-file book and tripped the collision path at L148.",
+   "domain": "internal/organizer",
+   "exact_files": [
+    "internal/organizer/pipeline.go",
+    "internal/organizer/plan_dedupe_test.go"
+   ],
+   "verified_anchors": [
+    {
+     "claim": "planTargetPaths is the shared normalizer for all three plan callers and already filters empty-path rows",
+     "grep_cmd": "grep -n \"func planTargetPaths\" internal/organizer/pipeline.go",
+     "expect": "1 hit at L78"
+    },
+    {
+     "claim": "totalTracks is a raw row count, which is what made a 21-file book plan as a 42-track book",
+     "grep_cmd": "grep -n \"totalTracks := len(sorted)\" internal/organizer/pipeline.go",
+     "expect": "1 hit at L130"
+    },
+    {
+     "claim": "the prod warning 'file naming pattern does not distinguish ... files=42' is emitted from the collision branch here",
+     "grep_cmd": "grep -n \"file naming pattern does not distinguish\" internal/organizer/pipeline.go",
+     "expect": "1 hit at L149"
+    },
+    {
+     "claim": "planPass keys its output on SegmentID, so two rows with the same SourcePath produce two rename entries \u2014 the second stats a source the first already moved",
+     "grep_cmd": "grep -n \"func planPass\" internal/organizer/pipeline.go",
+     "expect": "1 hit at L166"
+    },
+    {
+     "claim": "existing characterization tests already exercise planTargetPaths and are the pattern to follow",
+     "grep_cmd": "grep -rln \"planTargetPaths\" internal/organizer/*_test.go",
+     "expect": "3 files: path_builder_characterization_test.go, organizer_regression_test.go, unit_test.go"
+    }
+   ],
+   "reuse": [
+    {
+     "name": "the existing row-set normalization block (empty-FilePath drop) at pipeline.go:99-105 \u2014 extend it, do not add a second normalization pass",
+     "file": "internal/organizer/pipeline.go",
+     "verify_grep": "grep -n \"if f.FilePath == \\\"\\\" {\" internal/organizer/pipeline.go"
+    },
+    {
+     "name": "path_builder_characterization_test.go \u2014 existing table-test harness for planTargetPaths",
+     "file": "internal/organizer/path_builder_characterization_test.go",
+     "verify_grep": "grep -n \"planTargetPaths\" internal/organizer/path_builder_characterization_test.go"
+    }
+   ],
+   "polarity": "transform",
+   "effort": "S",
+   "tier": "sonnet",
+   "why_tier": "Small edit, but it changes totalTracks and therefore the track numbers every organize run produces \u2014 the blast radius is every book, so the test must pin the numbering, not just the absence of a crash.",
+   "review_critical": true,
+   "goal": "Extend the existing row-set normalization inside `planTargetPaths` (internal/organizer/pipeline.go:78) so that, alongside dropping empty-FilePath rows, it also collapses rows whose `filepath.Clean(strings.TrimSpace(FilePath))` is identical, keeping the FIRST such row encountered after the existing sort-stable ordering. Doing it here rather than in each caller is the point: the function's own doc comment (L83-95) says the row set is normalized HERE rather than trusting callers to agree, and this is the same class of bug that comment describes. After the change a book with 42 rows over 21 distinct paths plans 21 entries, `totalTracks` is 21, and the collision/track-suffix branch at L148 is not tripped.",
+   "background": [
+    "planTargetPaths is the ONE shared planner: ComputeTargetPaths (L54) and OrganizeBookDirectory both go through it, so a fix here covers the organize path as well as the metafetch apply path.",
+    "`totalTracks := len(sorted)` (L130) is deliberately documented (L124-129) to count Missing rows so a partially-missing book keeps stable track numbers. Collapsing DUPLICATE PATHS does not touch that rule \u2014 a duplicate is not a separate track \u2014 but it does change the number for any book that currently has duplicate rows, which is the intended correction.",
+    "planPass (L166) emits one FileRenameEntry per row, keyed by SegmentID. Two rows sharing a SourcePath therefore yield two entries with the same source; RenameFiles moves the file on the first and fails `stat rename source ...: no such file or directory` on the second. That is the exact prod failure of 2026-08-21.",
+    "The collision branch at L148 re-plans with forceTrackSuffix when two rows land on the same target. With duplicate rows it fires spuriously \u2014 the prod log 'files=42' for a 21-file book \u2014 and renames every file of the book to add a suffix it did not need."
+   ],
+   "steps": [
+    "1. In internal/organizer/pipeline.go, locate the normalization loop at L99-105 (`sorted := make(...)` / `for _, f := range files { if f.FilePath == \"\" { continue }; sorted = append(sorted, f) }`).",
+    "2. Replace that loop body so it also skips a row whose cleaned path was already appended. Keep the existing empty-path drop first:\n\n\tsorted := make([]database.BookFile, 0, len(files))\n\tseenPath := make(map[string]struct{}, len(files))\n\tdupes := 0\n\tfor _, f := range files {\n\t\tif f.FilePath == \"\" {\n\t\t\tcontinue\n\t\t}\n\t\tkey := filepath.Clean(strings.TrimSpace(f.FilePath))\n\t\tif _, ok := seenPath[key]; ok {\n\t\t\t// Duplicate book_file rows for ONE path. Planning both gives two\n\t\t\t// entries with the same SourcePath: the first rename moves the file\n\t\t\t// and the second fails ENOENT. It also inflates totalTracks, which\n\t\t\t// renumbered a 21-file book as 42 tracks in production on 2026-08-21.\n\t\t\tdupes++\n\t\t\tcontinue\n\t\t}\n\t\tseenPath[key] = struct{}{}\n\t\tsorted = append(sorted, f)\n\t}\n\tif dupes > 0 {\n\t\tslog.Warn(\"duplicate book_file paths collapsed while planning target paths\",\n\t\t\t\"title\", vars.Title, \"rows\", len(files), \"distinct\", len(sorted), \"collapsed\", dupes)\n\t}",
+    "3. Confirm `strings` is already imported in pipeline.go (it is \u2014 check with `grep -n '\"strings\"' internal/organizer/pipeline.go`); `filepath` and `slog` are already imported (lines 11-12 of the import block).",
+    "4. IMPORTANT ORDERING NOTE to put in a comment: the dedupe runs BEFORE the `sort.Slice` at L109, so 'first wins' means first in the caller's order, not first by track number. Do not move it after the sort \u2014 the sort is not stable with respect to equal (TrackNumber, FilePath) pairs and moving it would make the survivor non-deterministic.",
+    "5. Bump the `// version:` header on internal/organizer/pipeline.go (1.1.0 -> 1.2.0) and set `// last-edited:` to today's date.",
+    "6. Add a changelog fragment under changelog.d/ (no file header in the fragment)."
+   ],
+   "tests": [
+    "internal/organizer/plan_dedupe_test.go (NEW file, needs the 4-line version header): `TestPlanTargetPaths_DuplicateRowsCollapseToDistinctFiles` \u2014 build 42 rows as 21 distinct paths x 2 (TrackNumber 0 on every row so numbering is position-derived), call planTargetPaths with a file pattern that has NO {track} placeholder (e.g. \"{title} - {author}\", the live prod pattern shape). Assert: len(entries)==21, and the produced filenames end '- 01' .. '- 21' (NOT '- 01' .. '- 42'). This pins totalTracks==21.",
+    "internal/organizer/plan_dedupe_test.go: `TestPlanTargetPaths_NoDuplicateSourcePathIsPlannedTwice` \u2014 over the same 42-row input, collect entry.SourcePath into a map and assert every source appears exactly once. This is the direct assertion for the prod ENOENT.",
+    "internal/organizer/plan_dedupe_test.go: ANTI-OVER-SUPPRESSION \u2014 `TestPlanTargetPaths_DistinctRowsAreAllPlanned`: 21 rows with 21 distinct paths and no duplicates \u2192 assert len(planTargetPaths(...))==21 and every input path appears as a SourcePath. Without this a change that returned only the first row would pass the two tests above.",
+    "internal/organizer/plan_dedupe_test.go: `TestPlanTargetPaths_MissingRowsStillCountTowardTotalTracks` \u2014 12 rows, 11 flagged Missing, all distinct paths \u2192 assert the single planned entry is numbered '- 07' if its TrackNumber is 7, proving the documented Missing-counting rule (pipeline.go:124-129) survives this change. Run the existing suite too: `go test ./internal/organizer/... -run PlanTargetPaths -count=1`.",
+    "Re-run the existing characterization suite unchanged: `go test ./internal/organizer/... -count=1` \u2014 path_builder_characterization_test.go and organizer_regression_test.go both drive planTargetPaths and must stay green; if one fails, its fixture has duplicate paths and the EXPECTATION is what changed, so read it before editing it."
+   ],
+   "acceptance": [
+    "`go build ./... && go vet ./... && go test ./internal/organizer/... -count=1` exits 0.",
+    "`grep -n \"duplicate book_file paths collapsed\" internal/organizer/pipeline.go` returns exactly 1 hit.",
+    "`go test ./internal/organizer/... -run 'PlanTargetPaths' -count=1 -v` shows TestPlanTargetPaths_DuplicateRowsCollapseToDistinctFiles, TestPlanTargetPaths_NoDuplicateSourcePathIsPlannedTwice and TestPlanTargetPaths_DistinctRowsAreAllPlanned all PASS."
+   ],
+   "edge_cases": [
+    "Empty FilePath: keep the EXISTING behaviour \u2014 dropped outright, and never entered into seenPath (so two empty rows do not collapse into a phantom entry).",
+    "A duplicate pair where one row is Missing and the other is not: first-wins means the Missing one can survive if it comes first. That is acceptable here because planPass skips Missing rows (L178) and totalTracks still counts it \u2014 same as any other Missing row. Do NOT add a not-Missing preference: it would change totalTracks semantics that pipeline.go:124-129 deliberately fixes.",
+    "Trailing-slash / './' variants of the same path must collapse (filepath.Clean handles both). Case differences must NOT collapse \u2014 the library is on a case-sensitive mount.",
+    "len(files)==0 or rootDir==\"\" \u2192 the existing early return at L79-81 still applies and no warning is logged.",
+    "A book whose rows are ALL duplicates of one path (e.g. 6 rows, 1 path) plans exactly 1 entry with totalTracks==1, so the pattern gets no track suffix \u2014 correct, it is a single-file book."
+   ],
+   "anti_over_suppression": "TestPlanTargetPaths_DistinctRowsAreAllPlanned",
+   "depends_on_lines": [],
+   "gate": "go build ./... && go vet ./... && go test ./internal/organizer/... -count=1",
+   "notes": "internal/organizer/plan_dedupe_test.go is a NEW file (needs the 4-line version header). This is part 2 of todo_line 90030 and is INDEPENDENT of part 1 \u2014 no ordering dependency, but both touch the same incident so the coordinator should not run them in the same worktree (part 1 edits internal/metafetch only, part 2 edits internal/organizer only; no file overlap). Blast radius: this changes track numbering for any book that currently holds duplicate rows, so it should land alongside or after the maintenance repair op (todo_line 90032) rather than being treated as cosmetic.",
+   "id": "TASK-223",
+   "stable_key": "scope-21.json|90030|2|organizer: collapse duplicate paths in planTargetPaths so to",
+   "ws": "organize",
+   "slug": "organizer-collapse-duplicate-paths-in-plantarget",
+   "scope_file": "scope-21.json",
+   "dropped_files": [],
+   "tier_label": "Sonnet-class",
+   "depends_on": [],
+   "wave": 1
   },
   {
    "todo_line": 4739,
@@ -17902,6 +18595,10 @@
    "TASK-192",
    "TASK-193"
   ],
+  "docs/operations/pending-prod-actions.md": [
+   "TASK-060",
+   "TASK-220"
+  ],
   "internal/itunes/backfill.go": [
    "TASK-062",
    "TASK-063"
@@ -17926,11 +18623,13 @@
   "internal/plugins/maintenance/deps.go": [
    "TASK-066",
    "TASK-070",
-   "TASK-076"
+   "TASK-076",
+   "TASK-220"
   ],
   "internal/server/server_maintenance_deps.go": [
    "TASK-066",
-   "TASK-070"
+   "TASK-070",
+   "TASK-220"
   ],
   "internal/plugins/maintenance/missing_file_repoint.go": [
    "TASK-067",
@@ -17947,6 +18646,15 @@
   "internal/plugins/maintenance/missing_file_audit.go": [
    "TASK-195",
    "TASK-197"
+  ],
+  "internal/plugins/maintenance/dedupe_book_file_rows.go": [
+   "TASK-219",
+   "TASK-220",
+   "TASK-197"
+  ],
+  "internal/plugins/maintenance/dedupe_book_file_rows_test.go": [
+   "TASK-219",
+   "TASK-220"
   ],
   "web/src/components/audiobooks/BulkMetadataSearchDialog.tsx": [
    "TASK-196",
@@ -18032,11 +18740,17 @@
   "internal/operations/registry/registry.go": [
    "TASK-096",
    "TASK-113",
-   "TASK-115"
+   "TASK-115",
+   "TASK-222"
   ],
   "internal/operations/registry/registry_test.go": [
    "TASK-096",
-   "TASK-115"
+   "TASK-115",
+   "TASK-222"
+  ],
+  "internal/operations/registry/types.go": [
+   "TASK-096",
+   "TASK-222"
   ],
   "internal/server/batch_apply_op.go": [
    "TASK-096",
@@ -18367,7 +19081,9 @@
     "TASK-076",
     "TASK-077",
     "TASK-078",
-    "TASK-195"
+    "TASK-195",
+    "TASK-219",
+    "TASK-220"
    ]
   },
   {
@@ -18376,7 +19092,8 @@
     "TASK-079",
     "TASK-080",
     "TASK-081",
-    "TASK-196"
+    "TASK-196",
+    "TASK-221"
    ]
   },
   {
@@ -18432,7 +19149,8 @@
     "TASK-115",
     "TASK-116",
     "TASK-117",
-    "TASK-118"
+    "TASK-118",
+    "TASK-222"
    ]
   },
   {
@@ -18441,7 +19159,8 @@
     "TASK-119",
     "TASK-121",
     "TASK-122",
-    "TASK-203"
+    "TASK-203",
+    "TASK-223"
    ]
   },
   {

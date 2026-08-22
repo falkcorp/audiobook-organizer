@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b48eb904-eacd-4aec-aa59-45827011d64b -->
+<!-- guid: adc74ebd-aa8c-4d92-a8e5-d2e0934faa83 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — server-handlers workstream (todo-completion)

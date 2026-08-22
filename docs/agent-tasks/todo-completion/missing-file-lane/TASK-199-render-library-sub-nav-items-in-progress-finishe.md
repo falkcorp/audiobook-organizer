@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-199-render-library-sub-nav-items-in-progress-finishe.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 8c70f068-72e4-4c26-a02b-daf576e0c731 -->
+<!-- guid: 6b44cbb3-6aa4-4e0a-8ad3-049a594a1939 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-199 — Render Library sub-nav items (In Progress/Finished) in collapsed-sidebar mode (TODO.md L7819)

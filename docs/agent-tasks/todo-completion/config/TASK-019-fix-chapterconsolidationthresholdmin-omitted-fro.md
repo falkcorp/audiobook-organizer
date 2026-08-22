@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/config/TASK-019-fix-chapterconsolidationthresholdmin-omitted-fro.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 3c917e56-85a7-4fb9-8994-8016bc4fca2f -->
+<!-- guid: 4f8d6bfa-88f2-4b46-ac86-5c50d0983cd8 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-019 — Fix ChapterConsolidationThresholdMin omitted from ResetToDefaults (factory reset silently disables consolidation) (CFG-AUDIT)

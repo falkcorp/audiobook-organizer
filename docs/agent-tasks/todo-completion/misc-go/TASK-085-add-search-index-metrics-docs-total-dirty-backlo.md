@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-085-add-search-index-metrics-docs-total-dirty-backlo.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 424d67e7-8827-4de7-93d5-71d014ea02ed -->
+<!-- guid: 0abf3e85-4ff3-484d-9905-86f14c78ea15 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-085 — Add search-index metrics (docs total, dirty backlog) to /metrics — the search index has zero metrics today (TODO.md L3433)

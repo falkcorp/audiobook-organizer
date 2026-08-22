@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-003-fix-the-author-path-post-filter-to-treat-nil-isp.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 85b0cd74-0fc5-4a63-b0f2-8906fc4b30a0 -->
+<!-- guid: 1e7f7ce5-390f-4e42-a7b6-5be4084082dd -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-003 — Fix the author-path post-filter to treat nil IsPrimaryVersion as primary, matching storage's default (TODO.md L3884)

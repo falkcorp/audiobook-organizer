@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-193-wire-round-2-confidence-bound-clamping-into-a-di.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 616cbfb0-23b0-44f1-9b29-c36645ffb9fe -->
+<!-- guid: 6b1a5d03-38b0-4c53-b544-03f2621ff390 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-193 — Wire Round-2 confidence-bound clamping into a distinct apply_confidence path; keep the live display score raw (DEC-10)

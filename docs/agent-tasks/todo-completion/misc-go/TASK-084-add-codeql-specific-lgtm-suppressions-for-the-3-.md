@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-084-add-codeql-specific-lgtm-suppressions-for-the-3-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: d52dabb5-3fd4-4896-ad4f-45eca586de90 -->
+<!-- guid: d80aba87-7684-4893-b1c0-b3b7d4348862 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-084 — Add CodeQL-specific lgtm suppressions for the 3 already-justified go/disabled-certificate-check findings (SEC-CODEQL-BACKLOG)

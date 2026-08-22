@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-153-implement-post-api-session-local-2xx-stub.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 233a19eb-da9f-4159-9d73-093faf832abe -->
+<!-- guid: 4987845c-fc10-4e03-baf9-8e75376a43de -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-153 — Implement POST /api/session/local (2xx stub) (TODO.md L4507)

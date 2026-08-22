@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-133-regression-test-soft-deleting-an-indexed-book-mu.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 6f5b2820-fd37-4c2c-ae02-c7af4e768107 -->
+<!-- guid: 58b0da5e-dfe6-4454-bc1b-db42a1ef8b6e -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-133 — Regression test: soft-deleting an indexed book must be unsearchable without a boot reconcile (TODO.md L4334)

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-137-fix-testorganizeservice-performorganize-nobookst.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b682d8bc-9b6c-4932-84d8-15ea8c314dc4 -->
+<!-- guid: e9f0a4b0-0252-49c3-96ec-855b20711e3b -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-137 — Fix TestOrganizeService_PerformOrganize_NoBooksToOrganize to mock the method PerformOrganize actually calls (TODO.md L4732)

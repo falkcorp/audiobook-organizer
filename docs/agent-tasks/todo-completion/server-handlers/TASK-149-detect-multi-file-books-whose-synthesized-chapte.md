@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-149-detect-multi-file-books-whose-synthesized-chapte.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: d3d72628-622e-429a-a8f5-34ebd2264f20 -->
+<!-- guid: a82ae8a4-0357-4c9c-9878-79d00f59ccfd -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-149 — Detect multi-file books whose synthesized chapter timeline stops short of Book.Duration (per-file BookFile.Duration missing or wrong) (TODO.md L685)
