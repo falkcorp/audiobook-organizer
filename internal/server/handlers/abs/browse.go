@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-08-17
+// last-edited: 2026-08-22
 
 package abs
 
@@ -503,6 +503,7 @@ func (h *Handler) LibrarySeries(c *gin.Context) {
 	if err != nil {
 		// A missing count is not worth failing the page over; report 0 books rather
 		// than 500 the whole series list.
+		slog.Warn("abs: series book counts unavailable, reporting 0 for all series", "err", err)
 		counts = map[int]int{}
 	}
 

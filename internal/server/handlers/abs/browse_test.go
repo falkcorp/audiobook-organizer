@@ -1,11 +1,14 @@
 // file: internal/server/handlers/abs/browse_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8b3e10c4-6d97-4a52-bf08-2e4c95d7130a
-// last-edited: 2026-08-12
+// last-edited: 2026-08-22
 
 package abs_test
 
 import (
+	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -687,4 +690,110 @@ func writeCover(t *testing.T, seed *oracleSeed, bookID string) {
 	if err := os.WriteFile(filepath.Join(dir, bookID+".png"), png, 0o644); err != nil {
 		t.Fatalf("write cover: %v", err)
 	}
+}
+
+// TestLibrarySeries_CountsErrorLogsWarning verifies that when GetAllSeriesBookCounts()
+// fails, the error is logged with a warning, and the endpoint still returns a successful
+// response with zero counts for all series.
+func TestLibrarySeries_CountsErrorLogsWarning(t *testing.T) {
+	// Test error case: GetAllSeriesBookCounts fails
+	t.Run("error_logs_warning", func(t *testing.T) {
+		h, seed, tok := newBrowseHarness(t)
+		// Capture slog records
+		var records []*slog.Record
+		handler := &recordingHandler{records: &records}
+		oldDefault := slog.Default()
+		slog.SetDefault(slog.New(handler))
+		defer slog.SetDefault(oldDefault)
+
+		// Inject failure into GetAllSeriesBookCounts
+		seed.lib.mu.Lock()
+		seed.lib.failSeriesCounts = true
+		seed.lib.seriesCountsErr = errors.New("counts unavailable")
+		seed.lib.mu.Unlock()
+
+		code, body := h.doAny(t, request{
+			method: http.MethodGet, path: "/api/libraries/" + h.libraryID() + "/series",
+			headers: bearer(tok),
+		})
+
+		// Should still return 200 OK (graceful degradation)
+		if code != http.StatusOK {
+			t.Fatalf("got status %d want 200", code)
+		}
+
+		// Verify response structure is present even with failed counts
+		if _, isMap := body.(map[string]any); !isMap {
+			t.Fatal("series response must be a map")
+		}
+
+		// Verify the warning was logged
+		found := false
+		for _, rec := range records {
+			if rec.Level == slog.LevelWarn && strings.Contains(rec.Message, "series book counts unavailable") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Error("warning log message not found for GetAllSeriesBookCounts error")
+		}
+	})
+
+	// Test happy path: no error, no warning
+	t.Run("no_error_no_warning", func(t *testing.T) {
+		h, _, tok := newBrowseHarness(t)
+		// Capture slog records
+		var records []*slog.Record
+		handler := &recordingHandler{records: &records}
+		oldDefault := slog.Default()
+		slog.SetDefault(slog.New(handler))
+		defer slog.SetDefault(oldDefault)
+
+		// GetAllSeriesBookCounts works normally (default fakeLibrary behavior)
+		code, body := h.doAny(t, request{
+			method: http.MethodGet, path: "/api/libraries/" + h.libraryID() + "/series",
+			headers: bearer(tok),
+		})
+
+		// Should return 200 OK
+		if code != http.StatusOK {
+			t.Fatalf("got status %d want 200", code)
+		}
+
+		// Verify response is valid
+		if _, isMap := body.(map[string]any); !isMap {
+			t.Fatal("series response must be a map")
+		}
+
+		// Verify the warning was NOT logged (happy path)
+		for _, rec := range records {
+			if rec.Level == slog.LevelWarn && strings.Contains(rec.Message, "series book counts unavailable") {
+				t.Error("warning should not appear when GetAllSeriesBookCounts succeeds")
+				break
+			}
+		}
+	})
+}
+
+// recordingHandler captures slog records for testing
+type recordingHandler struct {
+	records *[]*slog.Record
+}
+
+func (h *recordingHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return true
+}
+
+func (h *recordingHandler) Handle(ctx context.Context, record slog.Record) error {
+	*h.records = append(*h.records, &record)
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return h
+}
+
+func (h *recordingHandler) WithGroup(name string) slog.Handler {
+	return h
 }

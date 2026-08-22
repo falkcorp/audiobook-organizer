@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
-// last-edited: 2026-08-13
+// last-edited: 2026-08-22
 
 package abs_test
 
@@ -63,6 +63,10 @@ type fakeLibrary struct {
 	// full-library count scan is cached rather than repeated per request.
 	countFiltered int
 	authorCounts  int
+
+	// failSeriesCounts injects an error on GetAllSeriesBookCounts() for testing.
+	failSeriesCounts bool
+	seriesCountsErr  error
 }
 
 // authorCountCalls reports how many times the full author-count scan ran. The
@@ -417,6 +421,9 @@ func (f *fakeLibrary) GetAllSeries() ([]database.Series, error) {
 func (f *fakeLibrary) GetAllSeriesBookCounts() (map[int]int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failSeriesCounts {
+		return nil, f.seriesCountsErr
+	}
 	out := map[int]int{}
 	for _, b := range f.books {
 		if b.SeriesID != nil {
