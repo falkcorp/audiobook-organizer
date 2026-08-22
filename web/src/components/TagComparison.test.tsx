@@ -1,5 +1,5 @@
 // file: web/src/components/TagComparison.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8c4e2f5a-7b1e-4d2f-a8c9-3f2e1b4c5d6a
 // last-edited: 2026-08-22
 
@@ -8,6 +8,7 @@ import { screen, waitFor } from '@testing-library/react';
 import { renderWithProviders } from '../test/renderWithProviders';
 import { TagComparison } from './TagComparison';
 import * as api from '../services/api';
+import type { Book } from '../services/api';
 
 // Mock the API to return test data
 vi.mock('../services/api', async () => {
@@ -19,9 +20,26 @@ vi.mock('../services/api', async () => {
 });
 
 describe('TagComparison', () => {
-  const mockVersions = [
-    { id: 'book1', title: 'Version 1', format: 'mp3' },
-    { id: 'book2', title: 'Version 2', format: 'aac' },
+  // Typed as Book[] on purpose: Vitest transpiles without typechecking, so an
+  // untyped literal here compiles under the test runner and only fails later
+  // under `tsc --noEmit`.
+  const mockVersions: Book[] = [
+    {
+      id: 'book1',
+      title: 'Version 1',
+      format: 'mp3',
+      file_path: '/library/book1.mp3',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    },
+    {
+      id: 'book2',
+      title: 'Version 2',
+      format: 'aac',
+      file_path: '/library/book2.m4b',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    },
   ];
 
   const mockTags = {
