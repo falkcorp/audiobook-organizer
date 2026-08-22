@@ -473,16 +473,8 @@
    "Repeat the identical change in web/tests/e2e/dedup.spec.ts at line 163 (same fix, same test scenario, different file).",
    "Run the two specs locally: npx playwright test web/tests/e2e/dedup-operations.spec.ts web/tests/e2e/dedup.spec.ts --grep 'Find Real Author' to confirm the 'clicking Find Real Author calls resolve API' / 'triggers API call' tests still pass with the corrected mock."
   ],
-  "tests": [
-   "web/tests/e2e/dedup-operations.spec.ts: 'clicking Find Real Author calls resolve API' \u2014 still passes after the mock is retargeted to v2 (this is the existing test; verify it doesn't regress).",
-   "web/tests/e2e/dedup.spec.ts: 'clicking Find Real Author triggers API call' \u2014 same."
-  ],
-  "acceptance": [
-   "grep -n \"operations/v2\" web/tests/e2e/dedup-operations.spec.ts returns a hit where line 118 used to be",
-   "grep -n \"operations/v2\" web/tests/e2e/dedup.spec.ts returns a hit where line 163 used to be",
-   "grep -n 'progress_current' web/tests/e2e/dedup-operations.spec.ts and web/tests/e2e/dedup.spec.ts each return >=1 hit",
-   "npx playwright test web/tests/e2e/dedup-operations.spec.ts web/tests/e2e/dedup.spec.ts exits 0"
-  ],
+  "tests": "Run the two specs through the repo's Playwright runner, not the Vitest gate: npm --prefix web exec -- playwright test -c tests/e2e/playwright.config.ts --project chromium tests/e2e/dedup-operations.spec.ts tests/e2e/dedup.spec.ts --grep 'Find Real Author'. The Vitest gate (npm --prefix web test) EXCLUDES tests/e2e/** and will pass regardless.",
+  "acceptance": "grep -n 'operations/v2' web/tests/e2e/dedup-operations.spec.ts and web/tests/e2e/dedup.spec.ts each return >=1 hit; grep -c \"operations/\\\\*/status\" in both returns 0 (1 each at HEAD: dedup-operations.spec.ts:118, dedup.spec.ts:163); grep -n 'progress_current' in both returns >=1 hit; grep -n 'data: { operation' in both returns >=1 hit; and the specs pass via the repo's own runner: npm --prefix web exec -- playwright test -c tests/e2e/playwright.config.ts --project chromium tests/e2e/dedup-operations.spec.ts tests/e2e/dedup.spec.ts",
   "edge_cases": [
    "If the resolve-production trigger's real def_id differs from 'authors.resolve-production', the mock's def_id field is cosmetic (getOperationStatus does not filter on it), so getting it exactly right is nice-to-have, not required for the test to pass \u2014 but check anyway rather than guessing, since a coordinator-level convention may expect it to match wire_operations_routes.go's registered ID."
   ],
@@ -492,7 +484,9 @@
   "notes": "Per the TODO item's own 2026-08-16 measurement, fixing this mock is the RIGHT engineering fix regardless of whether it changes any test's pass/fail count \u2014 a stale mock 'fails silently' by falling through to a 404 rather than erroring loudly, which is a correctness bug in the test fixture even if today it happens not to flip a result.",
   "review_notes": [
    "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for "
+   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
+   "[verify-8.json] Acceptance box 4 \u2014 '`npx playwright test web/tests/e2e/dedup-operations.spec.ts web/tests/e2e/dedup.spec.ts` exits 0' \u2014 and step 5's equivalent command cannot run. There is no Playwright config at the repo root (`ls playwright.config.*` -> no matches); the config is at web/tests/e2e/playwright.confi",
+   "[verify-8.json] The declared gate never runs the files this brief edits. exact_files is two web/tests/e2e/*.spec.ts files; the gate is `npm --prefix web run lint && npm --prefix web test`, and web/package.json maps test -> `vitest`, whose config excludes exactly that directory (web/vitest.config.ts:12: `exclude: ['"
   ]
  },
  {
@@ -546,15 +540,8 @@
    "Locate the second page.route call ~L175 for '**/api/v1/operations/op-1' (the export-ZIP test) and apply the identical URL+body fix, using op-1's existing single-shot 'completed' response.",
    "Run: npx playwright test web/tests/e2e/diagnostics.spec.ts to confirm the AI-results and export-ZIP tests still pass."
   ],
-  "tests": [
-   "web/tests/e2e/diagnostics.spec.ts \u2014 the AI-results flow test(s) driven by setupAiResultsMocks still pass.",
-   "web/tests/e2e/diagnostics.spec.ts \u2014 'download ZIP flow triggers export' still passes."
-  ],
-  "acceptance": [
-   "grep -n 'operations/v2/op-2' web/tests/e2e/diagnostics.spec.ts returns 1 hit",
-   "grep -n 'operations/v2/op-1' web/tests/e2e/diagnostics.spec.ts returns 1 hit",
-   "npx playwright test web/tests/e2e/diagnostics.spec.ts exits 0"
-  ],
+  "tests": "web/tests/e2e/diagnostics.spec.ts, run through Playwright: npm --prefix web exec -- playwright test -c tests/e2e/playwright.config.ts --project chromium tests/e2e/diagnostics.spec.ts. Confirm both the setupAiResultsMocks AI-results flow and the export-ZIP flow still pass. The Vitest gate does not run this file.",
+  "acceptance": "grep -n 'operations/v2/op-2' web/tests/e2e/diagnostics.spec.ts returns 1 hit and grep -n \"operations/op-2'\" returns 0 (1 at HEAD, L80); same pair for op-1 (L175 at HEAD); grep -n 'progress_current' web/tests/e2e/diagnostics.spec.ts returns >=2 hits; and the spec passes via npm --prefix web exec -- playwright test -c tests/e2e/playwright.config.ts --project chromium tests/e2e/diagnostics.spec.ts",
   "edge_cases": [
    "The AI-results mock also serves a separate GET /diagnostics/ai-results/op-2 endpoint (unrelated to operation polling) \u2014 do not touch that route, only the operation-status poll route."
   ],
@@ -564,7 +551,9 @@
   "notes": null,
   "review_notes": [
    "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for "
+   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
+   "[verify-8.json] Acceptance box 3 ('`npx playwright test web/tests/e2e/diagnostics.spec.ts` exits 0') and step 4's identical command cannot run: no Playwright config exists at the repo root (`ls playwright.config.*` -> no matches). The config is web/tests/e2e/playwright.config.ts and the repo invokes it as `playwrig",
+   "[verify-8.json] The gate excludes the only file in exact_files. `npm --prefix web test` is `vitest`, and web/vitest.config.ts:12 excludes 'tests/e2e/**'. The brief's Gate-green box is therefore satisfiable with the edit entirely broken."
   ]
  },
  {
@@ -619,7 +608,8 @@
   "verdict_evidence": "No {edition_suffix} token exists at HEAD: grep -n 'edition_suffix' internal/organizer/pathbuild.go returns 0 hits. {edition} exists as a raw, unguarded value (pathbuild.go:279) and {series_prefix} (pathbuild.go:298-311) is the exact model the item asks to copy \u2014 both confirmed present and available to pattern the new token on.",
   "domain": "internal/organizer",
   "exact_files": [
-   "internal/organizer/pathbuild.go"
+   "internal/organizer/pathbuild.go",
+   "internal/organizer/pathbuild_test.go"
   ],
   "verified_anchors": [
    {
@@ -685,7 +675,8 @@
   "gate": "make ci",
   "notes": "The item's own text calls this 'deliberately deferred... an ergonomics fix, not a correctness one' (discussed 2026-08-17) \u2014 flagging for the coordinator that this is real, well-specified, low-risk work, but was explicitly deprioritized relative to correctness fixes elsewhere in this scope (e.g. L4919, L5290). Not covered by any of the 14 owner decisions in SCOUT-INSTRUCTIONS.md, so verdict is 'actionable' rather than 'parked' \u2014 but sequence it behind higher-priority items unless told otherwise.",
   "review_notes": [
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
+   "[verify-10.json] exact_files is ['internal/organizer/pathbuild.go'] but both required tests go in internal/organizer/pathbuild_test.go, which exists at HEAD (verified by `ls`)."
   ]
  },
  {
@@ -975,7 +966,8 @@
   "verdict_evidence": "internal/plugins/maintenance/author_purge_empty.go already computes and reports the ZeroBooksWithFiles count (emptyAuthorReport.ZeroBooksWithFiles, L74-78) but only as a bare number, not a categorized/sampled list \u2014 grep -n 'ZeroBooksWithFiles' internal/plugins/maintenance/author_purge_empty.go shows the field exists and is surfaced in summary() but no per-author sample of this specific held-back population is captured (the existing Sample field, per its comment, samples the ELIGIBLE-for-delete population, not the held-back one).",
   "domain": "internal/plugins/maintenance",
   "exact_files": [
-   "internal/plugins/maintenance/author_purge_empty.go"
+   "internal/plugins/maintenance/author_purge_empty.go",
+   "internal/plugins/maintenance/author_purge_empty_test.go"
   ],
   "verified_anchors": [
    {
@@ -1028,7 +1020,10 @@
   "anti_over_suppression": "TestPurgeEmptyAuthors_HeldBackSample_CapAtLimit",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "This does NOT decide what the 822 authors are \u2014 it only builds the tool a human needs to look at a sample and decide, matching the item's own framing ('Someone has to look at a sample and decide before that flag is ever flipped'). The flip itself stays a human call."
+  "notes": "This does NOT decide what the 822 authors are \u2014 it only builds the tool a human needs to look at a sample and decide, matching the item's own framing ('Someone has to look at a sample and decide before that flag is ever flipped'). The flip itself stays a human call.",
+  "review_notes": [
+   "[verify-10.json] exact_files is ['internal/plugins/maintenance/author_purge_empty.go'] only, but the Tests section adds two tests to internal/plugins/maintenance/author_purge_empty_test.go, which exists at HEAD (verified by `ls`)."
+  ]
  },
  {
   "todo_line": 5281,
@@ -1039,6 +1034,8 @@
   "domain": "internal/plugins/maintenance",
   "exact_files": [
    "internal/plugins/maintenance/author_narrator_swap_review.go",
+   "internal/plugins/maintenance/author_narrator_swap_review_test.go",
+   "internal/plugins/maintenance/deps.go",
    "internal/plugins/maintenance/plugin.go"
   ],
   "verified_anchors": [
@@ -1124,7 +1121,8 @@
   "gate": "make ci",
   "notes": "The existing internal/maintenance/jobs/fix_author_narrator_swap.go job is NOT what this item is asking to fix or extend \u2014 it solves a narrower, different problem (same-book field equality) and predates the review-queue infrastructure. Do not conflate the two in a PR description; flag both to the coordinator as related-but-distinct so a reviewer doesn't assume this item is already covered.",
   "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re",
+   "[verify-10.json] exact_files is ['internal/plugins/maintenance/author_narrator_swap_review.go','internal/plugins/maintenance/plugin.go'] but the Tests section defines four tests in internal/plugins/maintenance/author_narrator_swap_review_test.go, and step 2 requires internal/plugins/maintenance/deps.go."
   ]
  },
  {

@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-165-review-the-17-apifetch-callers-catch-handlers-fo.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 2a843ecc-e71d-49a1-84dd-6f91d2df9249 -->
+<!-- guid: 11c9349f-feef-4f23-aa3d-22c16bca2871 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-165 — Review the 17 apiFetch-callers' catch handlers for session-expiry messaging (TODO.md L2486)
 
-**Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · web subagent · **Why:** Mechanically similar review across 18 files, but each catch site needs a judgment call on whether the existing message reads sensibly for a session-expiry vs. a genuine failure — not pure mechanical replacement. · **Depends on:** none · **Wave:** 8 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · web subagent · **Why:** Mechanically similar review across 18 files, but each catch site needs a judgment call on whether the existing message reads sensibly for a session-expiry vs. a genuine failure — not pure mechanical replacement. · **Depends on:** none · **Wave:** 7 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 2486 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**17 API calls will now surface an expired session" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-04.json`.
 
@@ -78,8 +78,533 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] npm --prefix web run lint && npm --prefix web test passes.
-- [ ] grep -c 'isAuthRedirectError' across exact_files increases from 1 to 17 call-site checks performed (not all 17 necessarily need a code change — some may already be fine).
+- [ ] P
+- [ ] r
+- [ ] o
+- [ ] d
+- [ ] u
+- [ ] c
+- [ ] e
+- [ ]  
+- [ ] a
+- [ ]  
+- [ ] w
+- [ ] r
+- [ ] i
+- [ ] t
+- [ ] t
+- [ ] e
+- [ ] n
+- [ ]  
+- [ ] p
+- [ ] e
+- [ ] r
+- [ ] -
+- [ ] f
+- [ ] u
+- [ ] n
+- [ ] c
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ]  
+- [ ] t
+- [ ] a
+- [ ] b
+- [ ] l
+- [ ] e
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] f
+- [ ] i
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ] o
+- [ ] r
+- [ ] t
+- [ ]  
+- [ ] c
+- [ ] o
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ]  
+- [ ] a
+- [ ] l
+- [ ] l
+- [ ]  
+- [ ] 1
+- [ ] 7
+- [ ]  
+- [ ] n
+- [ ] a
+- [ ] m
+- [ ] e
+- [ ] s
+- [ ]  
+- [ ] (
+- [ ] q
+- [ ] u
+- [ ] a
+- [ ] r
+- [ ] a
+- [ ] n
+- [ ] t
+- [ ] i
+- [ ] n
+- [ ] e
+- [ ] B
+- [ ] o
+- [ ] o
+- [ ] k
+- [ ]  
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] v
+- [ ] o
+- [ ] k
+- [ ] e
+- [ ] A
+- [ ] P
+- [ ] I
+- [ ] K
+- [ ] e
+- [ ] y
+- [ ] )
+- [ ] ,
+- [ ]  
+- [ ] e
+- [ ] a
+- [ ] c
+- [ ] h
+- [ ]  
+- [ ] m
+- [ ] a
+- [ ] r
+- [ ] k
+- [ ] e
+- [ ] d
+- [ ]  
+- [ ] C
+- [ ] H
+- [ ] A
+- [ ] N
+- [ ] G
+- [ ] E
+- [ ] D
+- [ ]  
+- [ ] o
+- [ ] r
+- [ ]  
+- [ ] O
+- [ ] K
+- [ ] -
+- [ ] A
+- [ ] S
+- [ ] -
+- [ ] I
+- [ ] S
+- [ ]  
+- [ ] w
+- [ ] i
+- [ ] t
+- [ ] h
+- [ ]  
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] f
+- [ ] i
+- [ ] l
+- [ ] e
+- [ ] :
+- [ ] l
+- [ ] i
+- [ ] n
+- [ ] e
+- [ ] ;
+- [ ]  
+- [ ] e
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] y
+- [ ]  
+- [ ] C
+- [ ] H
+- [ ] A
+- [ ] N
+- [ ] G
+- [ ] E
+- [ ] D
+- [ ]  
+- [ ] s
+- [ ] i
+- [ ] t
+- [ ] e
+- [ ]  
+- [ ] m
+- [ ] u
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] s
+- [ ] h
+- [ ] o
+- [ ] w
+- [ ]  
+- [ ] a
+- [ ] n
+- [ ]  
+- [ ] i
+- [ ] s
+- [ ] A
+- [ ] u
+- [ ] t
+- [ ] h
+- [ ] R
+- [ ] e
+- [ ] d
+- [ ] i
+- [ ] r
+- [ ] e
+- [ ] c
+- [ ] t
+- [ ] E
+- [ ] r
+- [ ] r
+- [ ] o
+- [ ] r
+- [ ]  
+- [ ] b
+- [ ] r
+- [ ] a
+- [ ] n
+- [ ] c
+- [ ] h
+- [ ]  
+- [ ] (
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] i
+- [ ] s
+- [ ] A
+- [ ] u
+- [ ] t
+- [ ] h
+- [ ] R
+- [ ] e
+- [ ] d
+- [ ] i
+- [ ] r
+- [ ] e
+- [ ] c
+- [ ] t
+- [ ] E
+- [ ] r
+- [ ] r
+- [ ] o
+- [ ] r
+- [ ] '
+- [ ]  
+- [ ] <
+- [ ] f
+- [ ] i
+- [ ] l
+- [ ] e
+- [ ] >
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] r
+- [ ] l
+- [ ]  
+- [ ] '
+- [ ] i
+- [ ] s
+- [ ] A
+- [ ] u
+- [ ] t
+- [ ] h
+- [ ] R
+- [ ] e
+- [ ] d
+- [ ] i
+- [ ] r
+- [ ] e
+- [ ] c
+- [ ] t
+- [ ] E
+- [ ] r
+- [ ] r
+- [ ] o
+- [ ] r
+- [ ] '
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] s
+- [ ] r
+- [ ] c
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] i
+- [ ] n
+- [ ] c
+- [ ] l
+- [ ] u
+- [ ] d
+- [ ] e
+- [ ] =
+- [ ] '
+- [ ] *
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ] '
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] i
+- [ ] n
+- [ ] c
+- [ ] l
+- [ ] u
+- [ ] d
+- [ ] e
+- [ ] =
+- [ ] '
+- [ ] *
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ] x
+- [ ] '
+- [ ]  
+- [ ] |
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] v
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] |
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] v
+- [ ]  
+- [ ] a
+- [ ] p
+- [ ] i
+- [ ] F
+- [ ] e
+- [ ] t
+- [ ] c
+- [ ] h
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] l
+- [ ] i
+- [ ] s
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] e
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] y
+- [ ]  
+- [ ] C
+- [ ] H
+- [ ] A
+- [ ] N
+- [ ] G
+- [ ] E
+- [ ] D
+- [ ]  
+- [ ] f
+- [ ] i
+- [ ] l
+- [ ] e
+- [ ]  
+- [ ] (
+- [ ] o
+- [ ] n
+- [ ] l
+- [ ] y
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] s
+- [ ] r
+- [ ] c
+- [ ] /
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] p
+- [ ] o
+- [ ] n
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] r
+- [ ] e
+- [ ] v
+- [ ] i
+- [ ] e
+- [ ] w
+- [ ] /
+- [ ] l
+- [ ] a
+- [ ] n
+- [ ] e
+- [ ] s
+- [ ] /
+- [ ] u
+- [ ] s
+- [ ] e
+- [ ] M
+- [ ] e
+- [ ] t
+- [ ] a
+- [ ] d
+- [ ] a
+- [ ] t
+- [ ] a
+- [ ] L
+- [ ] a
+- [ ] n
+- [ ] e
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] l
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ]  
+- [ ] &
+- [ ] &
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] e
+- [ ] x
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] 0
+- [ ] .
 - [ ] Anti-over-suppression test: `Test asserting a genuine 500 still shows the original 'Failed to X' message, not the session-expired one.` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.

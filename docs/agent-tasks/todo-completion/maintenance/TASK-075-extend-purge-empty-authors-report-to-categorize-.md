@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-075-extend-purge-empty-authors-report-to-categorize-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: ea309b5e-98ea-4866-97ed-0491bd0d21c9 -->
+<!-- guid: 89bf4079-d435-4ee7-81e2-2a7ed6343c63 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-075 — Extend purge-empty-authors' report to categorize the 822 zero-book-but-has-files authors (TODO.md L5275)
@@ -101,7 +101,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/plugins/maintenance/... -run TestPurgeEmptyAuthors_HeldBack passes`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `grep -n 'HeldBackSample' internal/plugins/maintenance/author_purge_empty.go returns hits in both the struct definition and the population loop` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

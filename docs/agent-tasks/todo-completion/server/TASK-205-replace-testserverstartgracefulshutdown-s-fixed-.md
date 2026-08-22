@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-205-replace-testserverstartgracefulshutdown-s-fixed-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 3e418798-4527-49a9-8791-8d44889bb9cb -->
+<!-- guid: cd47ebc6-9132-44ea-b903-d3b5fcc74db2 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-205 — Replace TestServerStartGracefulShutdown's fixed 6s sleep with a bounded readiness poll (TODO.md L283)

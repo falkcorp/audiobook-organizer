@@ -100,12 +100,14 @@
   "domain": "internal/plugins/maintenance",
   "exact_files": [
    "internal/config/config.go",
-   "internal/server/server_maintenance_deps.go",
-   "internal/plugins/maintenance/deps.go",
    "internal/plugins/maintenance/cleanup.go",
+   "internal/plugins/maintenance/deps.go",
+   "internal/server/server_maintenance_deps.go",
+   "internal/server/server_maintenance_deps_test.go",
+   "web/src/pages/ActivityLog.test.tsx",
    "web/src/pages/ActivityLog.tsx",
-   "web/src/services/api.ts",
-   "web/src/services/activityApi.ts"
+   "web/src/services/activityApi.ts",
+   "web/src/services/api.ts"
   ],
   "verified_anchors": [
    {
@@ -150,7 +152,7 @@
   "effort": "M",
   "tier": "sonnet",
   "why_tier": "spans backend config + an existing maintenance op + a new frontend control; needs the 0=never semantics wired correctly through both layers",
-  "review_critical": false,
+  "review_critical": true,
   "goal": "Add config.AppConfig.ActivityLogRetentionDays (json key activity_log_retention_days, default 7, 0 = never compact) and use it to drive the existing maintenance.cleanup-activity-log op's compaction cutoff instead of (or alongside) the current ActivityLogCompactionDays constant, then expose a control to edit it directly on the ActivityLog page (not buried in general Settings), with a header line reading 'entries older than N days are compacted automatically' (or 'automatic compaction is off' when N=0).",
   "background": [
    "internal/plugins/maintenance/cleanup.go:150-165 runCleanupActivityLog already calls p.deps.CompactActivityLog(ctx, p.deps.ActivityLogCompactionDays(), p.deps.ActivityLogRetentionChangeDays(), p.deps.ActivityLogRetentionDebugDays())",
@@ -189,7 +191,9 @@
   "notes": "D111 'Stored zeros must not shadow defaults' (docs/handoffs/2026-08-14-task-board.md:83) is still open design status ('\u2b1c design') and is the general version of this field's 0-vs-absent ambiguity; PurgeSoftDeletedAfterDays already ships the same 0=never pattern without D111 being resolved, so this is not a hard blocker, but flag the D111 dependency to the coordinator in case a general resolution lands first and changes the config-loading convention.",
   "review_notes": [
    "[ops-rollback.json] TASK-080 quietly changes the behaviour of a daily scheduled job on every existing install, in two ways, with no rollout or rollback note: (1) the effective compaction window drops from 14 days to 7, because the new ActivityLogRetentionDays (default 7) replaces ActivityLogCompactionDays as the argume",
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)"
+   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
+   "[verify-10.json] This silently shortens a destructive retention window on prod data at Sonnet tier with review_critical=false. Today an unset/zero compaction value falls back to 14 days (verified: internal/server/server_maintenance_deps.go:238-240 `if compactionDays <= 0 { compactionDays = 14 }`, and internal/config",
+   "[verify-10.json] exact_files omits both test files the Tests section requires and that already exist at HEAD: internal/server/server_maintenance_deps_test.go and web/src/pages/ActivityLog.test.tsx (verified by `ls`)."
   ]
  },
  {
@@ -929,7 +933,10 @@
   "verdict_evidence": "No existing op enumerates title-fragment author rows beyond the shipped IsDirtyAuthorName/looksLikePersonName creation-time gates, which prevent NEW bad rows but do not report on EXISTING ones: `grep -rn 'beginning with' internal/plugins/maintenance/*.go` and `grep -rln 'title-fragment\\|titleFragment' internal/` both return 0 hits. This matches the owner's decision-#11 pattern in this scope's preamble ('build a DETECTION-ONLY counter now... the fix itself is deferred').",
   "domain": "internal/plugins/maintenance",
   "exact_files": [
+   "internal/dedup/author.go",
+   "internal/dedup/author_test.go",
    "internal/plugins/maintenance/author_title_fragment_report.go",
+   "internal/plugins/maintenance/author_title_fragment_report_test.go",
    "internal/plugins/maintenance/plugin.go"
   ],
   "verified_anchors": [
@@ -998,7 +1005,8 @@
   "gate": "make ci",
   "notes": "Per owner decision #9/#11 pattern: this is a REPORT op only. Do not add a delete/merge/apply path in this task \u2014 that is future work gated on a design decision the owner has not made (see L3586/3588/3589).",
   "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re",
+   "[verify-10.json] exact_files is ['internal/plugins/maintenance/author_title_fragment_report.go','internal/plugins/maintenance/plugin.go'] but step 1 renames a symbol in internal/dedup/author.go and the Tests section edits internal/dedup/author_test.go and adds internal/plugins/maintenance/author_title_fragment_repor"
   ]
  },
  {

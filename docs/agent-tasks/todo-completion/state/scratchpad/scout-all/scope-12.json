@@ -142,10 +142,11 @@
    "react (^19.2.8) and @mui/material (^9.3.1) are both already at their final target versions, so this is safe to do standalone."
   ],
   "steps": [
-   "1. Open web/package.json.",
-   "2. In the top-level \"overrides\" object, delete the line `\"react-is\": \"^19.0.0\",` and keep minimatch and brace-expansion.",
-   "3. Run `cd web && npm install` to regenerate the lockfile without the override.",
-   "4. Run `npm run build` and `npm test` inside web/ to confirm nothing regresses now that react-is resolves naturally instead of being forced."
+   "Open web/package.json. Verify the shape first: `sed -n '35,39p' web/package.json` shows the overrides object as minimatch, brace-expansion, then `\"react-is\": \"^19.0.0\"` at L38 as the LAST key with NO trailing comma.",
+   "Delete the react-is entry AND the trailing comma on the now-last key: after the edit the object must read `\"overrides\": { \"minimatch\": \">=10.2.1\", \"brace-expansion\": \"^5.0.7\" }` with valid JSON. Confirm with `python3 -m json.tool web/package.json > /dev/null`.",
+   "Run `npm --prefix web install` to regenerate web/package-lock.json without the override.",
+   "Run `npm --prefix web run build` and `npm --prefix web test` to confirm react-is resolving naturally does not regress anything.",
+   "Do NOT attempt a file-header bump on web/package.json or web/package-lock.json \u2014 both are strict JSON with no comment syntax and neither carries a header at HEAD (`head -3 web/package.json` shows the bare `{`)."
   ],
   "tests": [
    "No new test file needed \u2014 rely on the existing web test suite (`npm --prefix web test`) and `npm --prefix web run build` staying green after the override removal."
@@ -162,7 +163,8 @@
   "gate": "npm --prefix web run lint && npm --prefix web test",
   "notes": "Low-risk cleanup. package.json has no repo-wide version-header convention (not a .go/.md/.yml doc file), so no header bump applies.",
   "review_notes": [
-   "[simplicity-scope.json] TASK-102 is 'TypeScript 6.0.3 \u2192 7.0.2 migration', tier Opus / effort L, with exact_files = ['web/package.json'] \u2014 a single dependency-version string. A TS major bump changes compiler defaults and will touch web/tsconfig.json (and web/tsconfig.node.json) plus every source file that trips a new error;"
+   "[simplicity-scope.json] TASK-102 is 'TypeScript 6.0.3 \u2192 7.0.2 migration', tier Opus / effort L, with exact_files = ['web/package.json'] \u2014 a single dependency-version string. A TS major bump changes compiler defaults and will touch web/tsconfig.json (and web/tsconfig.node.json) plus every source file that trips a new error;",
+   "[verify-7.json] Step 2 says 'delete the line `\"react-is\": \"^19.0.0\",`' \u2014 with a trailing comma. At HEAD that comma does not exist: `sed -n '35,39p' web/package.json` shows react-is is the LAST key in the overrides object (`\"react-is\": \"^19.0.0\"` at L38, followed by `}`). A literal-string-match worker finds no such "
   ]
  },
  {
@@ -422,8 +424,11 @@
    "No Go/Vitest unit test applies to a GitHub Actions workflow directly; validate the counting logic by dry-running the new step's shell against a captured `gh release list` JSON fixture containing 10+ fake -rc entries for one base version and fewer for another, confirming only the matching base is counted."
   ],
   "acceptance": [
-   "A state with 10 or more existing -rc.N releases for the current base version causes the new step to fail with a message naming the base version.",
-   "grep -n 'rc' .github/workflows/prerelease.yml matches the new counting step."
+   "`git diff --check` exits 0 (run it as its own command, not chained before an echo).",
+   "`grep -L 'last-edited: ' .github/workflows/prerelease.yml` prints nothing (the header is present and bumped) \u2014 verified the file has a header block at HEAD: `head -6 .github/workflows/prerelease.yml` shows `# file:`/`# version: 2.10.4`/`# last-edited: 2026-07-06`.",
+   "`grep -n 'rc' .github/workflows/prerelease.yml` matches the new counting step.",
+   "`bash .github/scripts/check-rc-ordinal.sh testdata/gh-release-list-10rc.json v0.217` exits 1 and names the base version; the same script against testdata/gh-release-list-1rc.json exits 0 (the anti-vacuous case).",
+   "Changelog fragment present: `test -f changelog.d/20260821_missing-file-lane_099.md`."
   ],
   "edge_cases": [
    "First RC of a brand-new base version (0 existing RCs) must not trip the >=10 check.",
@@ -432,7 +437,10 @@
   "anti_over_suppression": "N/A \u2014 this is a threshold check, not a filter/skip; the failure-direction to guard is under-counting (missing RCs for the current base), covered by the multi-base-version edge case above.",
   "depends_on_lines": [],
   "gate": "n/a (ci workflow \u2014 validate by reading the YAML for syntax and dry-running the shell logic against fixture JSON)",
-  "notes": "Owner also floated 'consider auto-promoting' \u2014 that's a bigger, more consequential decision (auto-cutting a stable release with no human gate) and should be a separate needs_design conversation with the owner, not bundled into this fail-loud CI check."
+  "notes": "Owner also floated 'consider auto-promoting' \u2014 that's a bigger, more consequential decision (auto-cutting a stable release with no human gate) and should be a separate needs_design conversation with the owner, not bundled into this fail-loud CI check.",
+  "review_notes": [
+   "[verify-7.json] The declared gate is `git diff --check && grep -L 'last-edited: ' $(...) ; echo 'docs/tooling task: header check only'`. Because the final `echo` follows a `;`, the pipeline's exit status is always 0 \u2014 the acceptance box 'Gate green: <gate> exits 0' can never fail, including when `git diff --check` "
+  ]
  },
  {
   "todo_line": 8094,
@@ -555,10 +563,11 @@
   "verdict_evidence": "Login.tsx passes location.state.from straight to navigate() with no validation (grep -n 'state?.from' web/src/pages/Login.tsx, hit ~L80-81), and BookDetail.tsx reads sessionStorage's library_return_url unvalidated at two call sites (grep -n 'library_return_url' BookDetail.tsx, hits L1012 and L1050). The Go side already has the exact guard to mirror: sanitizeReturn in internal/server/handlers/oauth_login.go (L262-273).",
   "domain": "web",
   "exact_files": [
-   "web/src/utils/safeReturn.ts",
-   "web/src/pages/Login.tsx",
    "web/src/pages/BookDetail.tsx",
-   "web/src/utils/safeReturn.test.ts"
+   "web/src/pages/Login.test.tsx",
+   "web/src/pages/Login.tsx",
+   "web/src/utils/safeReturn.test.ts",
+   "web/src/utils/safeReturn.ts"
   ],
   "verified_anchors": [
    {
@@ -617,7 +626,10 @@
   "anti_over_suppression": "TestSanitizeReturn_AcceptsOrdinaryInternalPaths",
   "depends_on_lines": [],
   "gate": "npm --prefix web run lint && npm --prefix web test",
-  "notes": "Explicitly do NOT touch or loosen internal/server/handlers/oauth_login.go's sanitizeReturn itself \u2014 the TODO item flags a separate TODO-SSO-EDGE entry (~TODO.md L1040) as off-limits for that reason; that entry is a functional gap, not a vulnerability."
+  "notes": "Explicitly do NOT touch or loosen internal/server/handlers/oauth_login.go's sanitizeReturn itself \u2014 the TODO item flags a separate TODO-SSO-EDGE entry (~TODO.md L1040) as off-limits for that reason; that entry is a functional gap, not a vulnerability.",
+  "review_notes": [
+   "[verify-7.json] Tests section requires 'A Login.test.tsx case: malicious location.state.from (\"//evil.com\") falls back to \"/dashboard\"'. `ls web/src/pages/Login.test.tsx` -> No such file at HEAD, and it is not in exact_files (which lists BookDetail.tsx, Login.tsx, safeReturn.ts, safeReturn.test.ts). The worker must"
+  ]
  },
  {
   "todo_line": 8236,
@@ -672,6 +684,7 @@
   "verdict_evidence": "The recommender logic that decides separate vs duplicate-of vs combine for a regroup.multidisc hold lives in internal/plugins/maintenance/regroup_shattered_ai.go (has Recommend-named logic); no test today pins its behavior specifically for these three real, equal-runtime, two-member holds.",
   "domain": "internal/plugins/maintenance",
   "exact_files": [
+   "internal/itunes/service/fs_regroup_shape_test.go",
    "internal/plugins/maintenance/regroup_shattered_ai_test.go"
   ],
   "verified_anchors": [
@@ -722,7 +735,10 @@
   "anti_over_suppression": "TestRecommend_DistinctRuntimes_ReturnsDifferentDefaultThanEqualRuntimes",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "This is a narrow slice; the item's real ask ('feed them to the duplicate-detection track') is the still-unbuilt L8943 (never-delete-re-associate) \u2014 this test just locks in today's safe default so it can't silently drift while that larger work is pending."
+  "notes": "This is a narrow slice; the item's real ask ('feed them to the duplicate-detection track') is the still-unbuilt L8943 (never-delete-re-associate) \u2014 this test just locks in today's safe default so it can't silently drift while that larger work is pending.",
+  "review_notes": [
+   "[verify-7.json] Consequence: the test cannot be written where the brief puts it. classifyGroup and its input type memberInfo are both unexported members of package `service` (internal/itunes/service), so a test in package `maintenance` (internal/plugins/maintenance/regroup_shattered_ai_test.go \u2014 the sole entry in e"
+  ]
  },
  {
   "todo_line": 8273,
@@ -779,11 +795,15 @@
    "typescript-eslint may not yet support TS7's compiler API \u2014 check compatibility before upgrading and pin an explicitly-compatible version if required."
   ],
   "anti_over_suppression": "N/A \u2014 the anti-suppression risk here is specifically 'do not @ts-expect-error away real type errors', called out explicitly in step 3.",
-  "depends_on_lines": [],
+  "depends_on_lines": [
+   "L6394 (TASK-198, scan-import-organize.spec.ts e2e repair) \u2014 TASK-102's own Background declares the e2e suite a HARD BLOCKER; it must be verified green first",
+   "TODO-MUI-3 (TASK-097, react-is override removal \u2014 shared web/package.json)"
+  ],
   "gate": "make build && npm --prefix web run lint && npm --prefix web test && npm --prefix web run test:e2e",
   "notes": "The item's own text lists MUI 5\u21929 as 'do last, purely maintenance' \u2014 but MUI is ALREADY at 9.3.1 in this repo, so that step is moot; TS7 is now the only remaining piece of the whole L8273 survey. HARD BLOCKED on the e2e suite being fixed first, per the item's own explicit instruction.",
   "review_notes": [
-   "[simplicity-scope.json] TASK-102 is 'TypeScript 6.0.3 \u2192 7.0.2 migration', tier Opus / effort L, with exact_files = ['web/package.json'] \u2014 a single dependency-version string. A TS major bump changes compiler defaults and will touch web/tsconfig.json (and web/tsconfig.node.json) plus every source file that trips a new error;"
+   "[simplicity-scope.json] TASK-102 is 'TypeScript 6.0.3 \u2192 7.0.2 migration', tier Opus / effort L, with exact_files = ['web/package.json'] \u2014 a single dependency-version string. A TS major bump changes compiler defaults and will touch web/tsconfig.json (and web/tsconfig.node.json) plus every source file that trips a new error;",
+   "[verify-7.json] The declared hard blocker is not encoded in the dependency graph. missing-file-lane/orchestration.md shows only `TASK097 --> TASK102`; the e2e-repair task in the same workstream (TASK-198) is in the SAME wave 2, so the coordinator may dispatch TASK-102 before TASK-198 lands. Either add the dependenc"
   ]
  },
  {
@@ -920,12 +940,13 @@
    "This must use registry.RunItems with a bounded worker pool per CLAUDE.md's concurrency rule for whole-library loops."
   ],
   "steps": [
-   "1. Re-locate the current name of the outcome-application function in internal/plugins/maintenance/intro_transcribe.go (grep -n 'func ' internal/plugins/maintenance/intro_transcribe.go) and confirm which field-write is conditional on outcome type before citing it in any comment.",
-   "2. Add internal/plugins/maintenance/transcribe_status_drift_report.go, modeled on missing_file_repoint.go's structure: sdk.OperationDef with Liveness: sdk.LivenessRunItems, Capabilities: []sdk.Capability{sdk.CapLibraryRead} ONLY \u2014 this op never writes.",
-   "3. Load all books via the store's existing bulk-book accessor, filter to non-empty IntroTranscription.",
-   "4. Bucket by TranscribeStatus (ok/whisper_error/unparsed/empty/other); within whisper_error, sub-bucket by whether TranscribeAttemptedAt is meaningfully later than IntroTranscribedAt (e.g. >1h) \u2192 'stale-drift' vs 'recent-failure'; a book with either timestamp unset lands in its own 'unknown-timing' sub-bucket.",
-   "5. Write a TSV report (bucket, book_id, transcribe_status, transcribed_at, attempted_at) mirroring writeRepointReport's report-before-summary ordering, plus a JSON summary log line with bucket counts.",
-   "6. Register the new op in the maintenance plugin's op list, following the pattern used to register missingFileRepointDef/probeDirectoryBooksDef."
+   "Re-locate the outcome-application function in internal/plugins/maintenance/intro_transcribe.go (`grep -n '^func ' internal/plugins/maintenance/intro_transcribe.go`) and confirm which field-write is conditional on outcome type before citing any name in a comment. The TODO item's cited 'applyOutcome' does not exist at HEAD.",
+   "Add internal/plugins/maintenance/transcribe_status_drift_report.go modeled on missing_file_repoint.go: sdk.OperationDef with `Liveness: sdk.LivenessRunItems` and `Capabilities: []sdk.Capability{sdk.CapLibraryRead}` ONLY \u2014 this op never writes. (Both symbols verified in use at internal/plugins/acoustid/lsh_backfill.go:59,69.)",
+   "Load books with the store's GetAllBooksCore accessor \u2014 name it explicitly, because `grep -oE 'GetAllBooks[A-Za-z]*' internal/database/*.go` shows FOUR distinct bulk-book accessors (GetAllBooks, GetAllBooksCore, GetAllBooksFullFrom, plus their Func variants). BookCore carries IntroTranscription (internal/database/bookcore.go:140, copied at :257), so the core projection is sufficient; do not reach for GetAllBooksFullFrom. Filter to non-empty IntroTranscription.",
+   "Bucket by TranscribeStatus using the EXACT closed set documented at internal/database/store.go:346-352: \"ok\", \"source_file_missing\", \"no_audio\", \"ffmpeg_error\", \"whisper_error\", \"empty\", plus a nil/unset bucket and an \"other\" bucket for any future value. Do NOT invent an \"unparsed\" status \u2014 it does not exist.",
+   "Within the whisper_error bucket, sub-bucket on whether TranscribeAttemptedAt is more than 1h later than IntroTranscribedAt -> 'stale-drift' vs 'recent-failure'; a book with EITHER timestamp nil lands in 'unknown-timing' and is never compared against a zero time.Time.",
+   "Write a TSV report (bucket, book_id, transcribe_status, transcribed_at, attempted_at) before the summary, mirroring `writeRepointReport` (verified at internal/plugins/maintenance/missing_file_repoint.go:497), plus a JSON summary log line with bucket counts.",
+   "Register the op in internal/plugins/maintenance/plugin.go's op list next to `p.missingFileRepointDef()` (L64) and `p.probeDirectoryBooksDef()` (L101)."
   ],
   "tests": [
    "internal/plugins/maintenance/transcribe_status_drift_report_test.go: TestTranscribeStatusDrift_BucketsByStatus \u2014 fixture books with known TranscribeStatus/IntroTranscription/timestamps land in the expected buckets.",
@@ -943,14 +964,15 @@
   "gate": "make ci",
   "notes": "Matches decision 13's 'categorizing REPORT op only' pattern for a sibling item (book_file rows with no bytes) \u2014 same shape, applied here to transcribe-status drift. Diagnostic-only; whether the tiered backfill's 'needs work' query needs fixing based on the findings is a follow-up, not part of this task.",
   "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re",
+   "[verify-7.json] Step 4 tells the worker to 'Bucket by TranscribeStatus (ok/whisper_error/unparsed/empty/other)'. 'unparsed' is not a value this field ever takes. internal/database/store.go:346-352 documents the closed set: \"ok\", \"source_file_missing\", \"no_audio\", \"ffmpeg_error\", \"whisper_error\", \"empty\". A worker f"
   ]
  },
  {
   "todo_line": 8551,
   "title": "Build the version-group acoustic audit op (tier 2 of First Aid)",
-  "verdict": "actionable",
-  "verdict_evidence": "BookFile already carries AcoustIDFingerprint and per-segment AcoustIDSeg0-6 fields, and VersionGroupID/IsPrimaryVersion already exist as the fields an auto-fix would clear \u2014 but no existing op audits version groups against acoustic/transcript agreement.",
+  "verdict": "needs_design",
+  "verdict_evidence": "[verify-7.json] The op's auto-apply path clears VersionGroupID and rewrites IsPrimaryVersion on production rows, but three inputs that decide WHETHER to write are left for the worker to invent: the transcript quality filter ('after filtering unparsed/low-quality per whatever quality signal the intro-transcribe parser already emits' \u2014 no such signal is named and none was found), the acoustic similarity function ('find existing similarity code in internal/plugins/acoustid before writing a new distance function'), and the confidence threshold (a param with no value or units). An owner decision is required on all three before this is executable; it is not a Bucket-1 task. | BookFile already carries AcoustIDFingerprint and per-segment AcoustIDSeg0-6 fields, and VersionGroupID/IsPrimaryVersion already exist as the fields an auto-fix would clear \u2014 but no existing op audits version groups against acoustic/transcript agreement.",
   "domain": "internal/plugins/maintenance",
   "exact_files": [
    "internal/plugins/maintenance/plugin.go",
@@ -1026,7 +1048,8 @@
   "gate": "make ci",
   "notes": "Owner-requested 2026-08-05, 'not scheduled' \u2014 no owner decision among the given 14 either builds or defers this, so it is treated as in-scope actionable work. Home: tier 2 of First Aid per .claude/notes/2026-08-05-first-aid-architecture.md, feeding a tier-3 ungroup fixer; consider splitting audit from fixer if L8890's orchestrator lands first.",
   "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re",
+   "[verify-7.json] "
   ]
  },
  {
@@ -1077,8 +1100,8 @@
  {
   "todo_line": 8611,
   "title": "Build chapters backfill from a near-exact-acoustic-match duplicate (or provider data, or a cue/playlist)",
-  "verdict": "actionable",
-  "verdict_evidence": "chapters_backfill.go (already built) covers ONLY re-extracting a container's OWN embedded ffprobe chapter markers \u2014 it never borrows timings from a different file (grep -n 'duplicate|borrow' chapters_backfill.go returns 0 hits), confirming this is a genuinely separate, unbuilt feature.",
+  "verdict": "needs_design",
+  "verdict_evidence": "[verify-7.json] Step 4 is 'Find or add the M4B chapter-atom write function (search internal/audioutil, internal/mediainfo for existing atom-writing code first)'. Verified there is none: `grep -rn 'func.*Chapter' internal/audioutil internal/mediainfo` returns only ProbeChapters (chapters.go:52, read-only ffprobe), SynthesizeChapters (timeline.go:54) and ShiftChapters (timeline.go:78) \u2014 all read-only or pure. So the task silently requires inventing an in-place MP4/M4B atom mutator that rewrites the user's library files, with no library named, no fixture, and no rollback story, in a repo whose own note calls bare write-back the dominant data-loss incident class. That is an owner design decision, not a Bucket-1 implementation task. | chapters_backfill.go (already built) covers ONLY re-extracting a container's OWN embedded ffprobe chapter markers \u2014 it never borrows timings from a different file (grep -n 'duplicate|borrow' chapters_backfill.go returns 0 hits), confirming this is a genuinely separate, unbuilt feature.",
   "domain": "internal/plugins/maintenance",
   "exact_files": [
    "internal/plugins/maintenance/chapters_backfill_from_duplicate.go",
@@ -1145,7 +1168,8 @@
   "gate": "make ci",
   "notes": "Owner was explicit that borrowing offsets from a different edition is WORSE than no chapters \u2014 the near-exact-match gate is the single most important correctness property of this op; do not loosen it under time pressure.",
   "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re",
+   "[verify-7.json] "
   ]
  },
  {
@@ -1232,17 +1256,18 @@
   "effort": "L",
   "tier": "opus",
   "why_tier": "four file formats to parse, entry-to-book_file resolution with a real 38.2%-missing-book_file-row caveat this item itself flags, and scan-pipeline hook wiring",
-  "review_critical": false,
+  "review_critical": true,
   "goal": "During scan, detect .m3u/.m3u8/.pls/.cue/.xspf playlist files, parse their entries, resolve each entry path to a book_file row (never store the raw path, so a later reorganize doesn't silently break the playlist), and create a static UserPlaylist via the existing CreateUserPlaylist path.",
   "background": [
    "38.2% of books were in the no-book_file-row state as of 2026-08-05 per this item's own warning \u2014 entries pointing at such files will silently drop; sequence this AFTER relink/import work (relink-unlinked-books already exists) or the import will look lossy for unrelated reasons."
   ],
   "steps": [
-   "1. Add internal/playlist/import.go with one parser per format: ParseM3U(path) ([]string, error) (handling #EXTM3U/#EXTINF comment lines), ParsePLS, ParseCue (track offsets + one referenced audio file), ParseXSPF (XML track list).",
-   "2. Add ResolveEntriesToBookFiles(store, paths []string) \u2014 looks up each path via the store's existing file-path lookup and returns matched book_file IDs plus a list of unresolved paths (logged, never silently dropped from the return value).",
-   "3. Add ImportPlaylistFile(store, path string) (*database.UserPlaylist, error) that dispatches by extension, resolves entries, and calls CreateUserPlaylist with Type: static and BookIDs from the resolved set.",
-   "4. Hook into the scan pipeline (find where scanner.go detects non-audio files of interest, or add a post-scan pass) to call ImportPlaylistFile for each detected playlist file.",
-   "5. Add file headers to all new files."
+   "Add internal/playlist/import.go with one parser per format. ParseM3U/ParsePLS/ParseXSPF return ([]string, error); ParseCue returns its own type (one referenced audio file plus per-track offsets) \u2014 it does NOT fit the []string shape and must not be forced into it.",
+   "Add ResolveEntriesToBookFiles(store, paths []string) returning matched book_file IDs AND the list of unresolved paths. Name the store lookup explicitly rather than 'the store's existing file-path lookup'.",
+   "Add ImportPlaylistFile(store, path string) (*database.UserPlaylist, error) that dispatches by extension and calls CreateUserPlaylist (internal/database/pebble_store_playlists.go:142) with Type: static. Before creating, call GetUserPlaylistByName (pebble_store_playlists.go:219) and SKIP if a playlist with the derived name already exists \u2014 a scan runs repeatedly and must not create a duplicate playlist each time. Assert this with TestImportPlaylistFile_SecondScanCreatesNoDuplicate.",
+   "Decide and hard-code the empty-playlist rule: a playlist file with 0 resolvable entries is a no-op and creates NO row (do not leave this to the worker).",
+   "Hook into internal/scanner/scanner.go as a POST-scan pass (not inline in the per-file walk), so a partially-complete scan cannot create a playlist whose members have not been imported yet. Note the owner rule that a running scan must not mutate applied metadata \u2014 this pass creates playlist rows only and touches no Book row.",
+   "Add file headers to all new files."
   ],
   "tests": [
    "internal/playlist/import_test.go: TestParseM3U_ExtractsPaths, TestParsePLS_ExtractsPaths, TestParseCue_ExtractsOffsetsAndFile, TestParseXSPF_ExtractsPaths \u2014 one fixture per format.",
@@ -1262,7 +1287,8 @@
   "notes": "Sequence after relink-unlinked-books-derived work per the item's own 38.2% warning.",
   "review_notes": [
    "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th"
+   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th",
+   "[verify-7.json] The op creates production rows on every scan (step 3: 'calls CreateUserPlaylist with Type: static'), and there is no apply/dry-run gate anywhere in the brief and no idempotency rule. Re-scanning the library re-runs step 4 for every playlist file already imported, so a second scan creates a second co"
   ]
  },
  {
@@ -1274,7 +1300,8 @@
   "domain": "internal/server/handlers",
   "exact_files": [
    "internal/server/handlers/playlists.go",
-   "internal/server/handlers/playlists_export_test.go"
+   "internal/server/handlers/playlists_export_test.go",
+   "internal/server/wire_library_routes.go"
   ],
   "verified_anchors": [
    {
@@ -1322,7 +1349,8 @@
   "gate": "make ci",
   "notes": "Playlist entries carrying explicit timings (cue-derived) are a separate future chapter-offset source per this item's own cross-reference to chapters-backfill-from-duplicates (L8611) \u2014 out of scope for export itself.",
   "review_notes": [
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
+   "[verify-7.json] Step 4 is 'Wire the route alongside ReorderPlaylist's route'. That route is registered in internal/server/wire_library_routes.go:85 (`protected.POST(\"/playlists/:id/reorder\", playlistH.ReorderPlaylist)`), NOT in internal/server/handlers/playlists.go (which only defines the handler at :396). wire_lib"
   ]
  },
  {
@@ -1356,9 +1384,9 @@
   ],
   "polarity": "additive",
   "effort": "M",
-  "tier": "sonnet",
+  "tier": "opus",
   "why_tier": "extends an existing, well-understood merge-semantics endpoint with one more field; needs real-client verification before finalizing the shape",
-  "review_critical": false,
+  "review_critical": true,
   "goal": "Since ABS core has no first-class review object (per the item), inspect what AudioBooth and Absorb actually send for a rating before designing the field; add a Rating field to the MediaProgress/UserBookState model and its merge logic in progress.go mirroring the existing IsFinished pattern; verify round-trip \u2014 set on the app, persists, and comes BACK on the next sync, not just accepted once.",
   "background": [
    "IsFinished is already fully modeled with merge semantics at progress.go L292-343 \u2014 reading status is done, per the TODO item's own 2026-08-14 update.",
@@ -1386,7 +1414,10 @@
   "anti_over_suppression": "TestMediaProgress_RatingAbsentDoesNotClearIsFinished",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Verify against real clients, not just a spec guess \u2014 the item explicitly warns AudioBooth and Absorb differ in which endpoints they call."
+  "notes": "Verify against real clients, not just a spec guess \u2014 the item explicitly warns AudioBooth and Absorb differ in which endpoints they call.",
+  "review_notes": [
+   "[verify-7.json] Adding a persisted Rating field to database.UserBookState (internal/database/store.go:964) is a schema change on a live user-data record, but the brief is tier=sonnet with review_critical=false. Per the prod-data rule this must be Opus-class AND review_critical so the PR stays open for the owner."
+  ]
  },
  {
   "todo_line": 8707,
@@ -1461,6 +1492,7 @@
   "verdict_evidence": "No existing code audits book/file grouping against a torrent's file list \u2014 grep -rn 'audit|grouping' internal/deluge/*.go internal/plugins/deluge/*.go returns 0 hits \u2014 while the Deluge client already exposes the needed per-torrent file list via core.get_torrent_status's fields parameter.",
   "domain": "internal/deluge",
   "exact_files": [
+   "internal/deluge/client.go",
    "internal/deluge/grouping_audit.go",
    "internal/deluge/grouping_audit_test.go"
   ],
@@ -1518,7 +1550,10 @@
    8707
   ],
   "gate": "make ci",
-  "notes": "The item's own roadmap (evidence-feeding the regroup classifier, then repair) is future work beyond this audit tier \u2014 do not build repair here; it must stay review-gated like every other regroup proposal, per the item's own text."
+  "notes": "The item's own roadmap (evidence-feeding the regroup classifier, then repair) is future work beyond this audit tier \u2014 do not build repair here; it must stay review-gated like every other regroup proposal, per the item's own text.",
+  "review_notes": [
+   "[verify-7.json] Consequence: the task cannot start without editing internal/deluge/client.go \u2014 adding a `Files` field to TorrentStatus (verified at client.go:42-51: Hash, Name, SavePath, State, Progress, Label, TotalSize \u2014 no Files) and either extending GetTorrent's hardcoded fields list or adding a new accessor. c"
+  ]
  },
  {
   "todo_line": 8837,
@@ -1706,6 +1741,7 @@
    "internal/plugins/maintenance/first_aid_orchestrator.go",
    "internal/plugins/maintenance/first_aid_orchestrator_test.go",
    "internal/plugins/maintenance/plugin.go",
+   "web/src/pages/System.tsx",
    "web/src/pages/SystemMaintenance.tsx"
   ],
   "verified_anchors": [
@@ -1744,24 +1780,21 @@
    "Explicitly excluded from First Aid's roster per the item: purge-deleted, tombstone-cleanup, temp-file-cleanup, cleanup-activity-log, purge-old-logs, cleanup-old-backups, trash-cleanup, archive-sweep, db-optimize, optimize, batch-poller, bulk-write-back, intro-transcribe, extract-wav-clips \u2014 server-health janitorial ops, not book-correctness ops."
   ],
   "steps": [
-   "1. Read .claude/notes/2026-08-05-first-aid-architecture.md in full before writing any code.",
-   "2. Build a sequencer that runs the tier-1 ops (relink-unlinked-books, reconcile-scan, orphan-book-files-cleanup, dedupe-book-file-rows, purge-millisecond-durations, booksig-recovery-audit \u2014 all already exist) over the whole library.",
-   "3. Collect each op's flagged output and hand it to the corresponding tier-2 op (probe-directory-books already exists and covers part of tier 2; verify which of duration-reextract/file-integrity-check/malformed-m4b-remux still need building).",
-   "4. Hand tier-2's escalated verdicts to tier-3 fixers (duration-backfill, repair-junk-titles, title-repair, title-backfill, series-denumber, regroup-shattered-ai \u2014 all already exist).",
-   "5. After a fixer pass, RE-RUN tier-1 investigation on the affected set and loop until a pass finds nothing actionable (convergence), rather than hardcoding a fixed relink-then-regroup order.",
-   "6. Wire the 'missing-input triggering' behavior ONLY if the sibling item (part 4, same todo_line) is done first \u2014 otherwise fall back to the current waiting_deps parking behavior without enqueueing producers.",
-   "7. Add a frontend trigger button (follow the existing System > Maintenance panel's op-trigger UI convention) that calls the orchestrator with apply=false (dry-run) by default; do NOT add a cron Schedule to the op def.",
-   "8. Exclude the janitorial ops list verbatim from the sequence."
+   "Read .claude/notes/2026-08-05-first-aid-architecture.md in full before writing any code.",
+   "Build a sequencer that runs the tier-1 ops (relink-unlinked-books, reconcile-scan, orphan-book-files-cleanup, dedupe-book-file-rows, purge-millisecond-durations, booksig-recovery-audit) over the whole library; all six exist as files in internal/plugins/maintenance/.",
+   "Collect each op's flagged output and hand it to the tier-2 ops that ALREADY EXIST: probe-directory-books (probe_directory_books.go), duration-reextract (duration_reextract.go), file-integrity-check (integrity_check.go). malformed-m4b-remux does NOT exist and is explicitly OUT OF SCOPE for this task: do not build it, record it as a gap in the final report.",
+   "Hand tier-2's escalated verdicts to tier-3 fixers (duration-backfill, repair-junk-titles, title-repair, title-backfill, series-denumber, regroup-shattered-ai), all of which already exist.",
+   "After a fixer pass, RE-RUN tier-1 investigation on the affected set and loop until a pass finds nothing actionable (convergence), rather than hardcoding a fixed relink-then-regroup order. Cap iterations at a named constant maxFirstAidIterations.",
+   "Do NOT wire 'missing-input triggering' - that behavior is the sibling brief TASK-113 and is not yet merged. Keep the current waiting_deps parking behavior unchanged.",
+   "Add the frontend trigger button to the existing System > Maintenance panel in web/src/pages/System.tsx (do NOT create a new page); it calls the orchestrator with apply=false (dry-run) by default. Do NOT add a cron Schedule to the op def.",
+   "Exclude the janitorial ops list verbatim from the sequence."
   ],
   "tests": [
    "internal/plugins/maintenance/first_aid_orchestrator_test.go: TestFirstAid_ConvergesAfterFixerPass \u2014 a fixture where tier-1 flags a book, a fixer resolves it, and the re-investigation pass no longer flags it; the orchestrator terminates rather than looping forever.",
    "TestFirstAid_ExcludesJanitorialOps \u2014 anti-over-suppression: asserts none of the 14 explicitly-excluded op IDs ever appear in the orchestrator's sequence.",
    "TestFirstAid_DryRunMakesNoWrites \u2014 default apply=false path calls zero tier-3 fixers in apply mode."
   ],
-  "acceptance": [
-   "go test ./internal/plugins/maintenance/... -run FirstAid passes all three cases.",
-   "A dry run against a fixture library with one deliberately-broken book converges within a bounded number of iterations, logging each iteration's flagged count trending toward zero."
-  ],
+  "acceptance": "go test ./internal/plugins/maintenance/... -run FirstAid passes all three cases; TestFirstAid_ConvergesAfterFixerPass asserts the orchestrator terminates with iterations <= maxFirstAidIterations and a non-increasing flagged count per iteration; `grep -n 'maxFirstAidIterations' internal/plugins/maintenance/first_aid_orchestrator.go` hits.",
   "edge_cases": [
    "A book that OSCILLATES (a fixer's output gets re-flagged by investigation every pass) must trip a max-iteration safety cap and surface as a genuine unresolvable case, not loop forever."
   ],
@@ -1773,7 +1806,11 @@
   "notes": "Owner design 2026-08-05, architecture LOCKED per the referenced note \u2014 do not redesign the tier boundaries, only implement the sequencer/orchestrator around the already-built ops.",
   "review_notes": [
    "[ops-rollback.json] TASK-124 makes the operations registry AUTO-ENQUEUE producer ops with no operator involvement, and is marked review_critical=false. It never says the enqueued producer inherits the requester's dry_run/apply posture, so a First Aid dry run (TASK-123, apply=false by design) can cause real mutating pro",
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re",
+   "[verify-7.json] exact_files lists web/src/pages/SystemMaintenance.tsx and step 7 says to 'follow the existing System > Maintenance panel's op-trigger UI convention', but that file does not exist at HEAD: `ls web/src/pages/SystemMaintenance.tsx` -> No such file or directory. The real page is web/src/pages/System.tsx",
+   "[verify-7.json] Step 3 tells the agent to 'verify which of duration-reextract/file-integrity-check/malformed-m4b-remux still need building'. duration_reextract.go and integrity_check.go exist, but no remux op exists: `grep -rl 'remux\\|Remux' internal/plugins/maintenance/` -> deps.go, plugin.go, backfill.go, backfil",
+   "[verify-7.json] Acceptance box 2 - 'A dry run against a fixture library with one deliberately-broken book converges within a bounded number of iterations, logging each iteration's flagged count trending toward zero' - names no fixture, no command, and 'trending toward zero' has no machine-checkable predicate.",
+   "[verify-7.json] Step 6 makes behavior conditional on 'the sibling item (part 4, same todo_line) is done first' - that sibling is TASK-113 - but skeleton has depends_on none for TASK-112 and puts BOTH at wave 1. Two Wave-1 agents run concurrently, so the condition is unevaluable at execution time and each agent gues"
   ]
  },
  {
@@ -1784,9 +1821,10 @@
   "verdict_evidence": "ReqOpCompleted/ReqFieldSet requirement evaluation and a waiting_deps scheduler already exist (>10 grep hits across internal/operations/registry/deps.go and deps_scheduler.go), but the scheduler currently only PROMOTES an already-queued waiting op when its dependency completes (PromoteToQueued) \u2014 it never itself enqueues the producer op (0 hits for an Enqueue-producer function).",
   "domain": "internal/operations/registry",
   "exact_files": [
-   "internal/operations/registry/deps_scheduler.go",
    "internal/operations/registry/deps.go",
-   "internal/operations/registry/deps_scheduler_test.go"
+   "internal/operations/registry/deps_scheduler.go",
+   "internal/operations/registry/deps_scheduler_test.go",
+   "internal/operations/registry/registry.go"
   ],
   "verified_anchors": [
    {
@@ -1803,6 +1841,21 @@
     "claim": "the scheduler never enqueues a missing producer (no Enqueue-producer function in this file)",
     "grep_cmd": "grep -n 'func.*Enqueue' internal/operations/registry/deps_scheduler.go",
     "expect": "0 hits \u2014 no Enqueue-producer function exists in deps_scheduler.go today"
+   },
+   {
+    "claim": "the real op-submission path the producer must reuse is Registry.EnqueueOp",
+    "grep_cmd": "grep -n 'func (r \\*Registry) EnqueueOp' internal/operations/registry/registry.go",
+    "expect": "1 hit at L573"
+   },
+   {
+    "claim": "DepsScheduler already holds a *Registry, so it can call EnqueueOp without a new interface",
+    "grep_cmd": "grep -n 'reg    \\*Registry' internal/operations/registry/deps_scheduler.go",
+    "expect": "1 hit at L55"
+   },
+   {
+    "claim": "the park-into-waiting_deps site that must call the new method lives in registry.go, not deps*.go",
+    "grep_cmd": "grep -n 'waiting_deps' internal/operations/registry/registry.go",
+    "expect": "hits at L701 (status assignment) and L754-755 (parked log)"
    }
   ],
   "reuse": [
@@ -1836,16 +1889,17 @@
   "acceptance": [
    "go test ./internal/operations/registry/... -run DepsScheduler_Enqueues passes both cases."
   ],
-  "edge_cases": [
-   "A producer op type that doesn't exist/isn't registered must fail loudly (log + leave the dependent parked with a clear reason), not silently enqueue nothing and pretend it tried."
-  ],
+  "edge_cases": "A producer op that ITSELF parks in waiting_deps must not re-trigger enqueue-the-producer recursively - bound the chain (do not enqueue a producer from within a producer-triggered park) and assert it with a test. A producer op type that is not registered must fail loudly (log + leave the dependent parked with a clear reason), not silently enqueue nothing. The 'has this opType ANY run for the subject' lookup needs a named store method - add it to SchedulerStore explicitly rather than reaching for database.Store.",
   "anti_over_suppression": "TestDepsScheduler_DoesNotDoubleEnqueueAlreadyRunningProducer",
   "depends_on_lines": [],
   "gate": "make ci",
   "notes": "This is core operations-registry infrastructure, not First Aid-specific \u2014 First Aid (part 3) is its first real consumer, but review this change with the same care the item says its one prior review needed.",
   "review_notes": [
    "[ops-rollback.json] TASK-124 makes the operations registry AUTO-ENQUEUE producer ops with no operator involvement, and is marked review_critical=false. It never says the enqueued producer inherits the requester's dry_run/apply posture, so a First Aid dry run (TASK-123, apply=false by design) can cause real mutating pro",
-   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th"
+   "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th",
+   "[verify-7.json] Step 3 says 'Call this from wherever a new op transitions into waiting_deps'. That site is internal/operations/registry/registry.go:701 (status = \"waiting_deps\") and registry.go:754-755 (the 'registry: parked op (waiting_deps)' log), verified with `grep -n 'waiting_deps' internal/operations/registry",
+   "[verify-7.json] Step 2 says to enqueue 'via the same path normal op submission uses' but names no symbol. That path is (*Registry).EnqueueOp at internal/operations/registry/registry.go:573, and the Reuse block omits it entirely. Worse, the third re-verify grep is scoped to the wrong file - `grep -n 'func.*Enqueue' ",
+   "[verify-7.json] Re-entrancy is unspecified. EnqueueOp is itself the function that parks ops (registry.go:701), so calling EnsureProducerEnqueued from the park site re-enters EnqueueOp; a producer whose own requirements are unmet parks and re-triggers the same path. Step 4's guard only covers 'producer ALREADY queue"
   ]
  },
  {
@@ -1895,13 +1949,13 @@
    "missing_file_repoint.go's apply=false-default + full-report-before-any-write + explicit collision handling is the closest in-repo precedent for 'match by measured evidence, never guess from names, report everything including the rejected rows' \u2014 follow that shape."
   ],
   "steps": [
-   "1. Find or build the 'group's tracks map onto a better-assembled sibling' detector \u2014 likely reuses existing dedup/similarity scoring (search internal/plugins/dedup or wherever candidate grouping lives) to find, for a debris group, a candidate 'template' book with a clean, complete track list of similar total duration.",
-   "2. Build the template-matching function: given the template's ordered track durations and the debris group's file durations, assign each debris file to the template slot whose duration it matches within a tolerance; files with no matching slot (missing tracks) are reported as gaps, not silently dropped; multiple debris files matching one slot (internal redundancy) are reported as a collision needing a documented tie-break rule.",
-   "3. On apply=true only: combine the debris books' files into the template book, reusing whatever CombineBooks-style function regroup_apply.go's ApplyMultidisc/ApplyDuplicateOf already call \u2014 do not write a second combine implementation.",
-   "4. Version-group the result: primary = most complete book, ties broken by earliest ULID, reusing pickPrimary's exact convention (regroup_apply.go L391) rather than reimplementing tie-breaking.",
-   "5. NEVER call a row-delete function anywhere in this file \u2014 mirror missing_file_repoint.go's structural (not just documented) never-delete guarantee.",
-   "6. Write a full per-group report (every debris file's outcome: matched-slot / gap / collision) before any apply-mode write, mirroring missing_file_repoint.go's report-before-summary ordering.",
-   "7. Default apply=false; register the op."
+   "Find the 'group's tracks map onto a better-assembled sibling' detector. Do NOT invent one: use the existing candidate grouping in internal/plugins/dedup (enumerate with `grep -rn '^func ' internal/plugins/dedup/*.go` and name the chosen function in your report before writing code). If no suitable scorer exists, STOP and report - do not write a new similarity scorer inside this op.",
+   "Build the template-matching function: given the template's ordered track durations and the debris group's file durations, assign each debris file to the template slot whose duration it matches within a tolerance; files with no matching slot are reported as gaps, not silently dropped; multiple debris files matching one slot are reported as a collision needing a documented tie-break rule.",
+   "On apply=true only: MOVE the debris books' book_file rows onto the template book with the store's book-file reassignment call and leave every debris BOOK row in place (empty but present). Do NOT call merge.Service.CombineBooks or anything behind regroup_apply.go's bookCombiner - internal/merge/serialize.go:15 documents CombineBooks as hard-deleting shells, which violates the never-delete rule this op exists to honor.",
+   "Version-group the result: primary = most complete book, ties broken by earliest ULID, reusing pickPrimary's exact convention (internal/plugins/maintenance/regroup_apply.go:391) rather than reimplementing tie-breaking.",
+   "NEVER call a row-delete function anywhere in this file - mirror missing_file_repoint.go's structural (not just documented) never-delete guarantee, and assert it with TestCombineByTemplate_NeverDeletesARow.",
+   "Write a full per-group report (every debris file's outcome: matched-slot / gap / collision) before any apply-mode write, mirroring missing_file_repoint.go's report-before-summary ordering.",
+   "Default apply=false; register the op in internal/plugins/maintenance/plugin.go."
   ],
   "tests": [
    "TestCombineByTemplate_MatchesByDurationNotFilename \u2014 a debris file whose NAME suggests the wrong track but whose DURATION matches a different template slot is assigned by duration, proving filename guessing isn't happening.",
@@ -1923,7 +1977,8 @@
   "gate": "make ci",
   "notes": "This is the umbrella 'never-delete-re-associate' track referenced by L8245 (3 real duplicate-shaped multidisc holds usable as future test fixtures, though those specifically default to 'separate', not this combine path), L8094 (the ~180 bracketed-number shattered-series books are input candidates for this exact mechanism once built), and L8890 part 2 (the First Aid roster's identical sub-bullet \u2014 do not build it twice, this is the canonical spec).",
   "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re",
+   "[verify-7.json] OWNER RULE VIOLATION (REPOINT, never delete). Step 3 mandates 'reusing whatever CombineBooks-style function regroup_apply.go's ApplyMultidisc/ApplyDuplicateOf already call'. That combiner is the bookCombiner interface (internal/plugins/maintenance/regroup_apply.go:85-88) over merge.Service, and merg"
   ]
  },
  {

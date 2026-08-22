@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-212-add-get-api-libraries-libraryid-series-seriesid-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 83ac2ea3-65dd-46ac-8fb4-47abdd5dcc78 -->
+<!-- guid: bbeb0427-66ff-4ef8-b76e-7867f3512eb8 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-212 — Add GET /api/libraries/:libraryId/series/:seriesId to the ABS surface (TODO.md L476)
@@ -40,6 +40,10 @@ Implement GET /api/libraries/:libraryId/series/:seriesId on the ABS-compatible s
   grep -n "\"/api/libraries/\"" internal/server/wire_abs_routes.go   # 1 hit, L68 inside absReservedPathPrefixes — /api/libraries/ is unconditionally reserved from the /api -> /api/v1 compat redirect, so no routing decision is needed to add a sub-path here
   grep -n "GET /api/playlists/:id" internal/server/wire_abs_routes.go   # 2 hits (absRouteList doc entry L624 + absCollisionDetailRoutes L142), with a comment block above explaining playlists opened empty until this route was added — the exact same detail-route-missing defect was already fixed once for playlists, establishing the precedent pattern this item follows
   grep -n "GetSeriesByIDs" internal/server/handlers/abs/handler.go internal/server/handlers/abs/browse.go   # 1 hit only, in handler.go:164 (interface declaration) -- 0 hits in browse.go confirms it is not yet called there — GetSeriesByIDs already exists on the library interface but is unused in browse.go, making it the natural fetch-one-series method to reuse instead of GetAllSeries+filter
+  grep -n 'libraries/:libraryId/series' internal/server/handlers/abs/handler.go   # 1 hit at L465: r.GET("/api/libraries/:libraryId/series", auth, h.LibrarySeries) — only the series LIST route is registered today, not a detail route
+  grep -n '"/api/libraries/"' internal/server/wire_abs_routes.go   # 1 hit at L68 inside absReservedPathPrefixes — /api/libraries/ is already unconditionally reserved, so no absCollisionDetailRoutes entry is needed
+  grep -n 'Pattern: "/api/playlists/:id"' internal/server/wire_abs_routes.go   # 1 hit at L142 inside absCollisionDetailRoutes (which starts at L141) — the same detail-route-missing defect was already fixed for playlists, which DID need a collision entry because /api/playlists/ has a live /api/v1 twin
+  grep -n 'GetSeriesByIDs' internal/server/handlers/abs/handler.go internal/server/handlers/abs/browse.go   # 1 hit only, handler.go:164 (interface declaration); 0 hits in browse.go — GetSeriesByIDs exists on the ABS library interface but is not yet called in browse.go, making it the fetch-one method to reuse
   ```
 
 ### Reuse — don't invent
@@ -51,14 +55,15 @@ Implement GET /api/libraries/:libraryId/series/:seriesId on the ABS-compatible s
 
 ## Step-by-step
 
-1. In internal/server/handlers/abs/browse.go, add a new method near LibrarySeries (after line 649, where LibrarySeries returns): `func (h *Handler) LibrarySeriesDetail(c *gin.Context) { ... }`.
-2. Inside it: call `if !h.knownLibrary(c) { return }` first (same guard every sibling handler uses, e.g. browse.go:494).
-3. Parse `seriesID, err := strconv.Atoi(c.Param("seriesId"))`; on error call `respondError(c, http.StatusNotFound, "series not found")` and return (series IDs are always numeric internally; a malformed id is indistinguishable from unknown).
-4. Call `byID, err := h.library.GetSeriesByIDs([]int{seriesID})`; on err call `respondError(c, http.StatusInternalServerError, "could not load series")` and return; if the map has no entry for seriesID, call `respondError(c, http.StatusNotFound, "series not found")` and return.
-5. Fetch book counts and book lists exactly like LibrarySeries does but scoped to the one series: reuse `h.seriesBooksCached()` (browse.go:521) to get `bySeries map[int]seriesBooksBuilt`, then reuse `h.seriesPageBooks(c.Request.Context(), []database.Series{*byID[seriesID]}, bySeries)` (the same signature LibrarySeries calls at browse.go:597) to hydrate the one series' books into full LibraryItem objects.
-6. Build and return the single-object response with the exact same field set LibrarySeries emits per series (browse.go:606-632: id as string via strconv.Itoa, name, nameIgnorePrefix via ignorePrefix(s.Name), libraryId via h.libraryID(), addedAt/updatedAt via msEpoch(h.now()), books, totalDuration, numBooks) using `respondJSON(c, http.StatusOK, gin.H{...})` -- NOT wrapped in pageResponse, since this is a single-resource route.
-7. In internal/server/handlers/abs/handler.go, add the registration line directly after line 465 (`r.GET("/api/libraries/:libraryId/series", auth, h.LibrarySeries)`): `r.GET("/api/libraries/:libraryId/series/:seriesId", auth, h.LibrarySeriesDetail)`.
-8. In internal/server/wire_abs_routes.go, add `"GET /api/libraries/:libraryId/series/:seriesId",` directly after line 619 (`"GET /api/libraries/:libraryId/series",`) inside absRouteList().
+1. In internal/server/handlers/abs/browse.go, add a new method after LibrarySeries returns (~L649): `func (h *Handler) LibrarySeriesDetail(c *gin.Context)`.
+2. Call `if !h.knownLibrary(c) { return }` first (browse.go:117), the same guard every sibling handler uses.
+3. Parse `seriesID, err := strconv.Atoi(c.Param("seriesId"))`; on error respondError(c, http.StatusNotFound, "series not found") and return - series IDs are numeric internally, so a malformed id is indistinguishable from unknown.
+4. Call `byID, err := h.library.GetSeriesByIDs([]int{seriesID})` (declared internal/server/handlers/abs/handler.go:164); on err respondError 500 'could not load series'; if byID has no entry for seriesID respondError 404 'series not found'.
+5. Get `bySeries, berr := h.seriesBooksCached()` (browse.go:759, called by LibrarySeries at browse.go:521) and `enriched := h.seriesPageBooks(c.Request.Context(), []database.Series{*byID[seriesID]}, bySeries)` (browse.go:663, called by LibrarySeries at browse.go:597). seriesPageBooks returns map[int][]any and gives you ONLY the books.
+6. Derive the other two numbers exactly as LibrarySeries does at browse.go:600-601 and browse.go:631: `built := bySeries[seriesID]`, `items, total := enriched[seriesID], built.totalDuration`, `if items == nil { items = []any{} }`, and numBooks = len(items). Do NOT take numBooks from a store count - browse.go:620-630 documents that as a measured production bug (9 of 50 series claimed numBooks >= 1 while carrying books: []). totalDuration must stay an int, never a float (browse.go:608-610).
+7. Return the single object with respondJSON(c, http.StatusOK, gin.H{...}) carrying the same field set LibrarySeries emits per series (browse.go:606-632): id via strconv.Itoa, name, nameIgnorePrefix via ignorePrefix (internal/server/handlers/abs/mapper.go:487), libraryId via h.libraryID(), addedAt/updatedAt via msEpoch (internal/server/handlers/abs/dto.go:36), books, totalDuration, numBooks - NOT wrapped in pageResponse.
+8. In internal/server/handlers/abs/handler.go, add the registration directly after L465: `r.GET("/api/libraries/:libraryId/series/:seriesId", auth, h.LibrarySeriesDetail)`.
+9. In internal/server/wire_abs_routes.go, add `"GET /api/libraries/:libraryId/series/:seriesId",` directly after L619 inside absRouteList().
 
 Then, always:
 - Keep the change purely additive — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
@@ -115,7 +120,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`curl (or httptest) GET /api/libraries/1/series/<real-id> with a valid auth token returns 200 and a JSON object (not an array) with the same numBooks/totalDuration a corresponding LibrarySeries list entry shows for that id`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `curl (or httptest) GET /api/libraries/1/series/<real-id> with a valid auth token returns 200 and a JSON object (not an array) with the same numBooks/totalDuration a corresponding LibrarySeries list entry shows for that id` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

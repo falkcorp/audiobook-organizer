@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-199-render-library-sub-nav-items-in-progress-finishe.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 81aea5f8-463f-4d55-aa6b-f86b214eda49 -->
+<!-- guid: 8c70f068-72e4-4c26-a02b-daf576e0c731 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-199 — Render Library sub-nav items (In Progress/Finished) in collapsed-sidebar mode (TODO.md L7819)
@@ -46,10 +46,10 @@ In web/src/components/layout/Sidebar.tsx's collapsed-sidebar branch (L173-191), 
 
 ## Step-by-step
 
-1. Read librarySubItems' declaration (near the top of Sidebar.tsx, alongside the 'In Progress'/'Finished' text at L70) to get its exact shape (text/path pairs) for reuse in the collapsed-mode menu.
-2. In the isCollapsed branch (L173-191), replace the single static Tooltip+ListItemButton with a small stateful menu: track an anchorEl (e.g. `const [libraryMenuAnchor, setLibraryMenuAnchor] = useState<null | HTMLElement>(null)`), open it on click of the Library icon (instead of immediately navigating), and render an MUI Menu with one MenuItem per librarySubItems entry (plus 'All Books' navigating to /library?reset=1) that calls handleNavigation(item.path) and closes the menu.
-3. Reuse (do not reimplement) whatever selection-matching helper #2193 introduced for the expanded mode (grep the file for isSubItemSelected or an equivalent exported function) so the collapsed menu's selected highlighting and the expanded sidebar's highlighting can never drift into disagreeing about which sub-item is active.
-4. Preserve the existing Tooltip('Library') hover affordance on the collapsed icon itself for users who just want to go to /library directly without opening the menu -- do not force every collapsed-mode Library click through the submenu if the icon itself should still support a direct single click to the plain Library page (confirm this UX choice reads naturally; a simple design is: single click -> /library (all books), a small chevron/secondary icon or long-press opens the submenu -- pick whichever matches how MUI's own existing patterns in this file already indicate submenus elsewhere, since the file may already have a precedent from the expanded-mode ExpandLessIcon/ExpandMoreIcon pattern).
+1. Read librarySubItems' declaration at web/src/components/layout/Sidebar.tsx:51 to get its exact shape (text/icon/path/matchPath/matchSearch). NOTE: it already contains an 'All Books' entry pointing at /library?reset=1 - do NOT add a second one.
+2. In the isCollapsed branch (Sidebar.tsx:173-191), replace the single static Tooltip+ListItemButton with a stateful menu: track an anchorEl (const [libraryMenuAnchor, setLibraryMenuAnchor] = useState<null | HTMLElement>(null)), open it on click of the Library icon instead of navigating immediately, and render an MUI Menu with exactly one MenuItem per librarySubItems entry, each calling handleNavigation(item.path) and then closing the menu.
+3. Drive each MenuItem's selected state with the imported isSubItemSelected(item, location.pathname, location.search) - it is imported from './sidebarSelection' at Sidebar.tsx:39 and already used by the expanded branch at Sidebar.tsx:219. Do not reimplement it and never compare raw pathname/search strings.
+4. LOCKED UX (do not re-decide): in collapsed mode a single click on the Library icon OPENS THE MENU; it does not navigate. The existing Tooltip('Library') stays for hover. The icon's broader selected= state (Sidebar.tsx:177-182, matching /library, /fingerprints, /series, /authors) is preserved unchanged.
 
 Then, always:
 - Keep the change purely additive — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
@@ -64,8 +64,736 @@ Then, always:
 
 ## Tests
 
-- web/src/components/layout/Sidebar.test.tsx: TestSidebar_CollapsedMode_LibrarySubItemsReachable (or the project's existing naming convention in that file) -- render Sidebar with the collapsed prop/state set, click/open the Library menu, assert In Progress and Finished are present and each click calls navigate with the expected path.
-- web/src/components/layout/Sidebar.test.tsx: extend or add a test asserting collapsed-mode selection highlighting agrees with expanded-mode highlighting for the same URL (reusing whatever the existing Sidebar.test.tsx 11-case suite from #2193 already covers for expanded mode, applied to the collapsed variant).
+- w
+- e
+- b
+- /
+- s
+- r
+- c
+- /
+- c
+- o
+- m
+- p
+- o
+- n
+- e
+- n
+- t
+- s
+- /
+- l
+- a
+- y
+- o
+- u
+- t
+- /
+- S
+- i
+- d
+- e
+- b
+- a
+- r
+- .
+- t
+- e
+- s
+- t
+- .
+- t
+- s
+- x
+-  
+- (
+- N
+- E
+- W
+-  
+- F
+- I
+- L
+- E
+-  
+- -
+-  
+- n
+- o
+-  
+- c
+- o
+- m
+- p
+- o
+- n
+- e
+- n
+- t
+-  
+- r
+- e
+- n
+- d
+- e
+- r
+-  
+- t
+- e
+- s
+- t
+-  
+- f
+- o
+- r
+-  
+- S
+- i
+- d
+- e
+- b
+- a
+- r
+-  
+- e
+- x
+- i
+- s
+- t
+- s
+-  
+- t
+- o
+- d
+- a
+- y
+- ;
+-  
+- t
+- h
+- e
+-  
+- 1
+- 1
+- -
+- c
+- a
+- s
+- e
+-  
+- #
+- 2
+- 1
+- 9
+- 3
+-  
+- s
+- u
+- i
+- t
+- e
+-  
+- i
+- s
+-  
+- w
+- e
+- b
+- /
+- s
+- r
+- c
+- /
+- c
+- o
+- m
+- p
+- o
+- n
+- e
+- n
+- t
+- s
+- /
+- l
+- a
+- y
+- o
+- u
+- t
+- /
+- s
+- i
+- d
+- e
+- b
+- a
+- r
+- S
+- e
+- l
+- e
+- c
+- t
+- i
+- o
+- n
+- .
+- t
+- e
+- s
+- t
+- .
+- t
+- s
+- ,
+-  
+- a
+-  
+- p
+- u
+- r
+- e
+- -
+- f
+- u
+- n
+- c
+- t
+- i
+- o
+- n
+-  
+- t
+- e
+- s
+- t
+-  
+- o
+- v
+- e
+- r
+-  
+- i
+- s
+- S
+- u
+- b
+- I
+- t
+- e
+- m
+- S
+- e
+- l
+- e
+- c
+- t
+- e
+- d
+- ,
+-  
+- a
+- n
+- d
+-  
+- c
+- a
+- n
+- n
+- o
+- t
+-  
+- s
+- i
+- m
+- p
+- l
+- y
+-  
+- b
+- e
+-  
+- e
+- x
+- t
+- e
+- n
+- d
+- e
+- d
+- )
+- .
+-  
+- R
+- e
+- n
+- d
+- e
+- r
+-  
+- <
+- S
+- i
+- d
+- e
+- b
+- a
+- r
+-  
+- o
+- p
+- e
+- n
+-  
+- o
+- n
+- C
+- l
+- o
+- s
+- e
+- =
+- {
+- .
+- .
+- .
+- }
+-  
+- d
+- r
+- a
+- w
+- e
+- r
+- W
+- i
+- d
+- t
+- h
+- =
+- {
+- 2
+- 4
+- 0
+- }
+-  
+- c
+- o
+- l
+- l
+- a
+- p
+- s
+- e
+- d
+-  
+- /
+- >
+-  
+- (
+- S
+- i
+- d
+- e
+- b
+- a
+- r
+- P
+- r
+- o
+- p
+- s
+-  
+- i
+- s
+-  
+- d
+- e
+- c
+- l
+- a
+- r
+- e
+- d
+-  
+- a
+- t
+-  
+- w
+- e
+- b
+- /
+- s
+- r
+- c
+- /
+- c
+- o
+- m
+- p
+- o
+- n
+- e
+- n
+- t
+- s
+- /
+- l
+- a
+- y
+- o
+- u
+- t
+- /
+- S
+- i
+- d
+- e
+- b
+- a
+- r
+- .
+- t
+- s
+- x
+- :
+- 4
+- 2
+- -
+- 4
+- 8
+-  
+- a
+- n
+- d
+-  
+- `
+- c
+- o
+- l
+- l
+- a
+- p
+- s
+- e
+- d
+- `
+-  
+- d
+- e
+- f
+- a
+- u
+- l
+- t
+- s
+-  
+- t
+- o
+-  
+- f
+- a
+- l
+- s
+- e
+-  
+- a
+- t
+-  
+- L
+- 1
+- 0
+- 4
+- )
+- ,
+-  
+- o
+- p
+- e
+- n
+-  
+- t
+- h
+- e
+-  
+- L
+- i
+- b
+- r
+- a
+- r
+- y
+-  
+- m
+- e
+- n
+- u
+- ,
+-  
+- a
+- s
+- s
+- e
+- r
+- t
+-  
+- '
+- I
+- n
+-  
+- P
+- r
+- o
+- g
+- r
+- e
+- s
+- s
+- '
+-  
+- a
+- n
+- d
+-  
+- '
+- F
+- i
+- n
+- i
+- s
+- h
+- e
+- d
+- '
+-  
+- a
+- r
+- e
+-  
+- p
+- r
+- e
+- s
+- e
+- n
+- t
+-  
+- a
+- n
+- d
+-  
+- e
+- a
+- c
+- h
+-  
+- c
+- l
+- i
+- c
+- k
+-  
+- n
+- a
+- v
+- i
+- g
+- a
+- t
+- e
+- s
+-  
+- t
+- o
+-  
+- t
+- h
+- e
+-  
+- e
+- x
+- p
+- e
+- c
+- t
+- e
+- d
+-  
+- p
+- a
+- t
+- h
+- .
+-  
+- A
+- d
+- d
+-  
+- a
+-  
+- s
+- e
+- c
+- o
+- n
+- d
+-  
+- c
+- a
+- s
+- e
+-  
+- a
+- s
+- s
+- e
+- r
+- t
+- i
+- n
+- g
+-  
+- c
+- o
+- l
+- l
+- a
+- p
+- s
+- e
+- d
+- -
+- m
+- o
+- d
+- e
+-  
+- s
+- e
+- l
+- e
+- c
+- t
+- i
+- o
+- n
+-  
+- h
+- i
+- g
+- h
+- l
+- i
+- g
+- h
+- t
+- i
+- n
+- g
+-  
+- a
+- g
+- r
+- e
+- e
+- s
+-  
+- w
+- i
+- t
+- h
+-  
+- e
+- x
+- p
+- a
+- n
+- d
+- e
+- d
+- -
+- m
+- o
+- d
+- e
+-  
+- h
+- i
+- g
+- h
+- l
+- i
+- g
+- h
+- t
+- i
+- n
+- g
+-  
+- f
+- o
+- r
+-  
+- t
+- h
+- e
+-  
+- s
+- a
+- m
+- e
+-  
+- U
+- R
+- L
+- ,
+-  
+- d
+- r
+- i
+- v
+- e
+- n
+-  
+- b
+- y
+-  
+- t
+- h
+- e
+-  
+- s
+- a
+- m
+- e
+-  
+- i
+- s
+- S
+- u
+- b
+- I
+- t
+- e
+- m
+- S
+- e
+- l
+- e
+- c
+- t
+- e
+- d
+-  
+- i
+- m
+- p
+- o
+- r
+- t
+- .
 
 Anti-over-suppression test: `N/A -- this is a missing-UI-affordance fix, not a filter/guard/skip` — a known-good input still passes with the new guard active.
 
@@ -103,7 +831,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`npm --prefix web test -- Sidebar passes including the new collapsed-mode test(s)`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run sed -n '173,191p' web/src/components/layout/Sidebar.tsx` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

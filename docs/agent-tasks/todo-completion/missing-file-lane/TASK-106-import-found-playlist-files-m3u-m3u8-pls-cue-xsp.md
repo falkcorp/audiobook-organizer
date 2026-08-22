@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-106-import-found-playlist-files-m3u-m3u8-pls-cue-xsp.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: c97757f7-d6b2-4cfe-85c6-9624565e6126 -->
+<!-- guid: c2f2cd72-f9f6-43fe-9804-311e613bb8c6 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-106 — Import found playlist files (.m3u/.m3u8/.pls/.cue/.xspf) during scan, resolving entries to book_file rows (TODO.md L8646)
 
-**Priority:** P2 · **Effort:** L · **Recommended subagent:** Opus-class · missing-file-lane subagent · **Why:** four file formats to parse, entry-to-book_file resolution with a real 38.2%-missing-book_file-row caveat this item itself flags, and scan-pipeline hook wiring · **Depends on:** none · **Wave:** 1
+**Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · missing-file-lane subagent · **Why:** four file formats to parse, entry-to-book_file resolution with a real 38.2%-missing-book_file-row caveat this item itself flags, and scan-pipeline hook wiring · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 8646 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**Playlists — implement the whole surface** — owne" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-12.json`.
 
@@ -43,11 +43,12 @@ During scan, detect .m3u/.m3u8/.pls/.cue/.xspf playlist files, parse their entri
 
 ## Step-by-step
 
-1. Add internal/playlist/import.go with one parser per format: ParseM3U(path) ([]string, error) (handling #EXTM3U/#EXTINF comment lines), ParsePLS, ParseCue (track offsets + one referenced audio file), ParseXSPF (XML track list).
-2. Add ResolveEntriesToBookFiles(store, paths []string) — looks up each path via the store's existing file-path lookup and returns matched book_file IDs plus a list of unresolved paths (logged, never silently dropped from the return value).
-3. Add ImportPlaylistFile(store, path string) (*database.UserPlaylist, error) that dispatches by extension, resolves entries, and calls CreateUserPlaylist with Type: static and BookIDs from the resolved set.
-4. Hook into the scan pipeline (find where scanner.go detects non-audio files of interest, or add a post-scan pass) to call ImportPlaylistFile for each detected playlist file.
-5. Add file headers to all new files.
+1. Add internal/playlist/import.go with one parser per format. ParseM3U/ParsePLS/ParseXSPF return ([]string, error); ParseCue returns its own type (one referenced audio file plus per-track offsets) — it does NOT fit the []string shape and must not be forced into it.
+2. Add ResolveEntriesToBookFiles(store, paths []string) returning matched book_file IDs AND the list of unresolved paths. Name the store lookup explicitly rather than 'the store's existing file-path lookup'.
+3. Add ImportPlaylistFile(store, path string) (*database.UserPlaylist, error) that dispatches by extension and calls CreateUserPlaylist (internal/database/pebble_store_playlists.go:142) with Type: static. Before creating, call GetUserPlaylistByName (pebble_store_playlists.go:219) and SKIP if a playlist with the derived name already exists — a scan runs repeatedly and must not create a duplicate playlist each time. Assert this with TestImportPlaylistFile_SecondScanCreatesNoDuplicate.
+4. Decide and hard-code the empty-playlist rule: a playlist file with 0 resolvable entries is a no-op and creates NO row (do not leave this to the worker).
+5. Hook into internal/scanner/scanner.go as a POST-scan pass (not inline in the per-file walk), so a partially-complete scan cannot create a playlist whose members have not been imported yet. Note the owner rule that a running scan must not mutate applied metadata — this pass creates playlist rows only and touches no Book row.
+6. Add file headers to all new files.
 
 Then, always:
 - Keep the change purely additive — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
@@ -100,7 +101,9 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/playlist/... passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+**This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: (1) the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; (2) every mutation is journaled through the existing undo ledger (`CreateOperationChange` — verify: `grep -rn "func.*CreateOperationChange" internal/database/*.go`) so `internal/undo` can replay it — a mutation without a journal row is a defect; (3) acceptance includes a test that applies on a fixture and then undoes via `internal/undo` and asserts the fixture is byte-identical; (4) the apply path refuses to start while a `library.scan` operation is running or queued (check the registry for an active scan before mutating — a running scan clobbers applied metadata). Idempotency: re-running in dry-run must report 0 pending changes after a successful apply. Rollback of the CODE = `git revert`; rollback of the DATA = the undo ledger, which is why (2) is not optional. PR stays open for the owner — the coordinator never admin-merges it.
+
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'func parseM3UFile' internal/scanner/scanner.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

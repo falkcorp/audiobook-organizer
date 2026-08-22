@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-103-build-a-report-only-op-categorizing-the-transcri.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 79b65648-773f-416d-8671-4ade0ae0d299 -->
+<!-- guid: 26bea1fb-35cd-4a3b-9687-e9f970f40e75 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-103 — Build a report-only op categorizing the transcribe_status vs IntroTranscription drift (79.3% whisper_error-with-transcript sample) (TODO.md L8433)
@@ -46,12 +46,13 @@ Add a report-only maintenance op that scans every book with a non-empty IntroTra
 
 ## Step-by-step
 
-1. Re-locate the current name of the outcome-application function in internal/plugins/maintenance/intro_transcribe.go (grep -n 'func ' internal/plugins/maintenance/intro_transcribe.go) and confirm which field-write is conditional on outcome type before citing it in any comment.
-2. Add internal/plugins/maintenance/transcribe_status_drift_report.go, modeled on missing_file_repoint.go's structure: sdk.OperationDef with Liveness: sdk.LivenessRunItems, Capabilities: []sdk.Capability{sdk.CapLibraryRead} ONLY — this op never writes.
-3. Load all books via the store's existing bulk-book accessor, filter to non-empty IntroTranscription.
-4. Bucket by TranscribeStatus (ok/whisper_error/unparsed/empty/other); within whisper_error, sub-bucket by whether TranscribeAttemptedAt is meaningfully later than IntroTranscribedAt (e.g. >1h) → 'stale-drift' vs 'recent-failure'; a book with either timestamp unset lands in its own 'unknown-timing' sub-bucket.
-5. Write a TSV report (bucket, book_id, transcribe_status, transcribed_at, attempted_at) mirroring writeRepointReport's report-before-summary ordering, plus a JSON summary log line with bucket counts.
-6. Register the new op in the maintenance plugin's op list, following the pattern used to register missingFileRepointDef/probeDirectoryBooksDef.
+1. Re-locate the outcome-application function in internal/plugins/maintenance/intro_transcribe.go (`grep -n '^func ' internal/plugins/maintenance/intro_transcribe.go`) and confirm which field-write is conditional on outcome type before citing any name in a comment. The TODO item's cited 'applyOutcome' does not exist at HEAD.
+2. Add internal/plugins/maintenance/transcribe_status_drift_report.go modeled on missing_file_repoint.go: sdk.OperationDef with `Liveness: sdk.LivenessRunItems` and `Capabilities: []sdk.Capability{sdk.CapLibraryRead}` ONLY — this op never writes. (Both symbols verified in use at internal/plugins/acoustid/lsh_backfill.go:59,69.)
+3. Load books with the store's GetAllBooksCore accessor — name it explicitly, because `grep -oE 'GetAllBooks[A-Za-z]*' internal/database/*.go` shows FOUR distinct bulk-book accessors (GetAllBooks, GetAllBooksCore, GetAllBooksFullFrom, plus their Func variants). BookCore carries IntroTranscription (internal/database/bookcore.go:140, copied at :257), so the core projection is sufficient; do not reach for GetAllBooksFullFrom. Filter to non-empty IntroTranscription.
+4. Bucket by TranscribeStatus using the EXACT closed set documented at internal/database/store.go:346-352: "ok", "source_file_missing", "no_audio", "ffmpeg_error", "whisper_error", "empty", plus a nil/unset bucket and an "other" bucket for any future value. Do NOT invent an "unparsed" status — it does not exist.
+5. Within the whisper_error bucket, sub-bucket on whether TranscribeAttemptedAt is more than 1h later than IntroTranscribedAt -> 'stale-drift' vs 'recent-failure'; a book with EITHER timestamp nil lands in 'unknown-timing' and is never compared against a zero time.Time.
+6. Write a TSV report (bucket, book_id, transcribe_status, transcribed_at, attempted_at) before the summary, mirroring `writeRepointReport` (verified at internal/plugins/maintenance/missing_file_repoint.go:497), plus a JSON summary log line with bucket counts.
+7. Register the op in internal/plugins/maintenance/plugin.go's op list next to `p.missingFileRepointDef()` (L64) and `p.probeDirectoryBooksDef()` (L101).
 
 Then, always:
 - Keep the change purely additive — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
@@ -103,7 +104,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/plugins/maintenance/... -run TranscribeStatusDrift passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'IntroTranscription' internal/plugins/maintenance/intro_transcribe.go | head -5` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

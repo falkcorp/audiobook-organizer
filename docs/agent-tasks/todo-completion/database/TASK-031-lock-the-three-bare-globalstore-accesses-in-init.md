@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-031-lock-the-three-bare-globalstore-accesses-in-init.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 2d4e6a79-ac2d-451c-929d-cc4a540cec08 -->
+<!-- guid: d6f7a701-7bac-4404-9818-363c47206edd -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-031 — Lock the three bare globalStore accesses in InitializeStore/CloseStore (TODO.md L4678)

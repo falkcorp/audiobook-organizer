@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-149-detect-multi-file-books-whose-synthesized-chapte.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b4f3ef21-9878-40c2-befb-1d35b2d09b2b -->
+<!-- guid: d3d72628-622e-429a-a8f5-34ebd2264f20 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-149 — Detect multi-file books whose synthesized chapter timeline stops short of Book.Duration (per-file BookFile.Duration missing or wrong) (TODO.md L685)
@@ -103,7 +103,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/server/handlers/abs/... -run TestLoadChapters passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `grep -n 'synthesized chapter timeline stops short' internal/server/handlers/abs/mapper.go returns 1 hit after the change.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-146-n-10-advertised-login-rate-limit-10-10min-does-n.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 7bfffcea-e639-4ea2-b952-a10e378f89e3 -->
+<!-- guid: 3316e711-7ac8-4332-bd0c-473c5ec3eae4 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-146 — N-10: advertised login rate limit (10/10min) does not match the real throttle (15/15min) (ABS-N10)
 
-**Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · server-handlers subagent · **Why:** Two-constant correction, using already-exported values from absauth — fully mechanical, no design judgment needed since the real values are the source of truth. · **Depends on:** none · **Wave:** 2
+**Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · server-handlers subagent · **Why:** Two-constant correction, using already-exported values from absauth — fully mechanical, no design judgment needed since the real values are the source of truth. · **Depends on:** none · **Wave:** 3
 
 Source: `TODO.md` line 53 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "🔌 **ABS coverage gaps N-1 … N-10** (audit:" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-01.json`.
 

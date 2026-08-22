@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-193-wire-round-2-confidence-bound-clamping-into-a-di.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 7dc3abbf-181f-4628-8e1c-d2e82c921089 -->
+<!-- guid: 616cbfb0-23b0-44f1-9b29-c36645ffb9fe -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-193 — Wire Round-2 confidence-bound clamping into a distinct apply_confidence path; keep the live display score raw (DEC-10)
 
-**Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · dedup subagent · **Why:** Touches the dedup auto-merge threshold gate (auto_resolve.go) and the live scoring call sites feeding it — a wrong clamp changes which pairs get auto-merged in production; the decision's own text calls for review_critical, and the architecture requires moving clamping logic across a package layering boundary (plugins/dedup -> dedup/unified) without duplicating it, since engine.go/rescore.go live in the lower internal/dedup layer and cannot import internal/plugins/dedup. · **Depends on:** none · **Wave:** 8 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · dedup subagent · **Why:** Touches the dedup auto-merge threshold gate (auto_resolve.go) and the live scoring call sites feeding it — a wrong clamp changes which pairs get auto-merged in production; the decision's own text calls for review_critical, and the architecture requires moving clamping logic across a package layering boundary (plugins/dedup -> dedup/unified) without duplicating it, since engine.go/rescore.go live in the lower internal/dedup layer and cannot import internal/plugins/dedup. · **Depends on:** none · **Wave:** 7 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 90010 as of commit 46628240 (later edits shift lines) — re-find it with `sed -n '90010p' TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-19.json`.
 

@@ -117,7 +117,7 @@
     "verify_grep": "grep -n \"DryRun \\*bool\" internal/plugins/maintenance/author_conjunction_repair.go"
    }
   ],
-  "polarity": "removal",
+  "polarity": "additive",
   "effort": "M",
   "tier": "sonnet",
   "why_tier": "Deletes author rows and rewrites book links on a prod data path; needs a deliberately narrow, explicit-allowlist design (see notes) plus full dry-run/canonical-selection test coverage, not a mechanical change.",
@@ -161,7 +161,8 @@
   "gate": "make ci",
   "notes": "Soft dependency on L3790 (whitespace-normalization fix) only in the sense that re-measuring duplicate groups after L3790 ships will show fewer/different groups; this op works correctly either way since it groups by util.NormalizeAuthor at call time.",
   "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re",
+   "[verify-10.json] Idempotency polarity is inverted. The skeleton marks this task polarity='removal' even though it CREATES a new op, so the rendered guard is the removal variant: 'If the removed symbol/file is already ABSENT at HEAD (re-run the re-verify greps above: zero hits = already removed) ... the removal is al"
   ]
  },
  {

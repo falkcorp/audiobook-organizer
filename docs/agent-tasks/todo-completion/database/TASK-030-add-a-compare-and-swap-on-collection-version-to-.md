@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-030-add-a-compare-and-swap-on-collection-version-to-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 3a626c04-4731-4e3b-954e-c5db3a8b7211 -->
+<!-- guid: 69a53e4b-c0e3-425c-a077-affb1840e1a5 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-030 — Add a compare-and-swap on Collection.Version to PebbleStore.UpdateCollection (TODO.md L4501)
@@ -74,7 +74,7 @@ Anti-over-suppression test: `TestUpdateCollection_CorrectVersion_Succeeds` — a
 ## How to test
 
 ```bash
-go build ./... && go vet ./... && go test ./internal/database/... -count=1
+go build ./... && go vet ./... && go test ./internal/database/... ./internal/server/handlers/abs/... -count=1
 ```
 Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
@@ -85,7 +85,7 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 - [ ] MockStore.UpdateCollection and PebbleStore.UpdateCollection agree on CAS behavior (both reject a stale-version write) — verify with `grep -n 'version conflict' internal/database/*.go` showing the message in both implementations.
 - [ ] Anti-over-suppression test: `TestUpdateCollection_CorrectVersion_Succeeds` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/database/... -count=1` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/database/... ./internal/server/handlers/abs/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_database_030.md`.
 

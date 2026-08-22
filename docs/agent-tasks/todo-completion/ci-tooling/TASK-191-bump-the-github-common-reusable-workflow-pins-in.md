@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-191-bump-the-github-common-reusable-workflow-pins-in.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 5621202d-0ac6-4089-9f5a-16b2556241bd -->
+<!-- guid: 9266b877-6921-4429-8bdc-53fc62f0db2e -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-191 — Bump the github-common reusable-workflow pins in at least two PRs, low-consequence first (TODO.md L921)

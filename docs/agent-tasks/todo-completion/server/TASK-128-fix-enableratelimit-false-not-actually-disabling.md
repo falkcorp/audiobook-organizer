@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-128-fix-enableratelimit-false-not-actually-disabling.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 19859ccf-242c-40e0-a42a-8f8205083260 -->
+<!-- guid: 14e0f2ed-ac06-4290-b480-f7cec69b355c -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-128 — Fix EnableRateLimit=false not actually disabling rate limiting (CFG-AUDIT)

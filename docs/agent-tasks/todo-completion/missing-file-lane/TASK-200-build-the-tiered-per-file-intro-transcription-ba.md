@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-200-build-the-tiered-per-file-intro-transcription-ba.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 3f55570d-070d-44d0-af7c-8dd24f960f85 -->
+<!-- guid: c1bf355e-df53-4368-af41-1c0ce03cbc95 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-200 — Build the tiered per-file intro-transcription backfill (Tiers 0/1/1b/2/3) (TODO.md L8316)
@@ -85,9 +85,696 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] go test ./internal/plugins/maintenance/... -run TestTieredBackfill -count=1 -v passes
-- [ ] a dry run against a small fixture library completes all 5 tiers without a full-corpus GPU cost for the single-file majority
-- [ ] go build ./... && go vet ./... exit 0
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] p
+- [ ] l
+- [ ] u
+- [ ] g
+- [ ] i
+- [ ] n
+- [ ] s
+- [ ] /
+- [ ] m
+- [ ] a
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] n
+- [ ] a
+- [ ] n
+- [ ] c
+- [ ] e
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] -
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] T
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] T
+- [ ] i
+- [ ] e
+- [ ] r
+- [ ] e
+- [ ] d
+- [ ] B
+- [ ] a
+- [ ] c
+- [ ] k
+- [ ] f
+- [ ] i
+- [ ] l
+- [ ] l
+- [ ]  
+- [ ] -
+- [ ] c
+- [ ] o
+- [ ] u
+- [ ] n
+- [ ] t
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] -
+- [ ] v
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] ;
+- [ ]  
+- [ ] `
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] A
+- [ ] p
+- [ ] p
+- [ ] l
+- [ ] y
+- [ ]  
+- [ ] b
+- [ ] o
+- [ ] o
+- [ ] l
+- [ ] '
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] p
+- [ ] l
+- [ ] u
+- [ ] g
+- [ ] i
+- [ ] n
+- [ ] s
+- [ ] /
+- [ ] m
+- [ ] a
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] n
+- [ ] a
+- [ ] n
+- [ ] c
+- [ ] e
+- [ ] /
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] r
+- [ ] o
+- [ ] _
+- [ ] t
+- [ ] i
+- [ ] e
+- [ ] r
+- [ ] e
+- [ ] d
+- [ ] _
+- [ ] b
+- [ ] a
+- [ ] c
+- [ ] k
+- [ ] f
+- [ ] i
+- [ ] l
+- [ ] l
+- [ ] .
+- [ ] g
+- [ ] o
+- [ ] `
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] (
+- [ ] a
+- [ ] p
+- [ ] p
+- [ ] l
+- [ ] y
+- [ ] =
+- [ ] f
+- [ ] a
+- [ ] l
+- [ ] s
+- [ ] e
+- [ ]  
+- [ ] d
+- [ ] e
+- [ ] f
+- [ ] a
+- [ ] u
+- [ ] l
+- [ ] t
+- [ ] ,
+- [ ]  
+- [ ] m
+- [ ] i
+- [ ] r
+- [ ] r
+- [ ] o
+- [ ] r
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] p
+- [ ] l
+- [ ] u
+- [ ] g
+- [ ] i
+- [ ] n
+- [ ] s
+- [ ] /
+- [ ] m
+- [ ] a
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] n
+- [ ] a
+- [ ] n
+- [ ] c
+- [ ] e
+- [ ] /
+- [ ] m
+- [ ] i
+- [ ] s
+- [ ] s
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ] _
+- [ ] f
+- [ ] i
+- [ ] l
+- [ ] e
+- [ ] _
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ] o
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] .
+- [ ] g
+- [ ] o
+- [ ] :
+- [ ] 5
+- [ ] 2
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] `
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] C
+- [ ] r
+- [ ] e
+- [ ] a
+- [ ] t
+- [ ] e
+- [ ] O
+- [ ] p
+- [ ] e
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] C
+- [ ] h
+- [ ] a
+- [ ] n
+- [ ] g
+- [ ] e
+- [ ] '
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] p
+- [ ] l
+- [ ] u
+- [ ] g
+- [ ] i
+- [ ] n
+- [ ] s
+- [ ] /
+- [ ] m
+- [ ] a
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] n
+- [ ] a
+- [ ] n
+- [ ] c
+- [ ] e
+- [ ] /
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] r
+- [ ] o
+- [ ] _
+- [ ] t
+- [ ] i
+- [ ] e
+- [ ] r
+- [ ] e
+- [ ] d
+- [ ] _
+- [ ] b
+- [ ] a
+- [ ] c
+- [ ] k
+- [ ] f
+- [ ] i
+- [ ] l
+- [ ] l
+- [ ] .
+- [ ] g
+- [ ] o
+- [ ] `
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] f
+- [ ] o
+- [ ] r
+- [ ]  
+- [ ] e
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] y
+- [ ]  
+- [ ] m
+- [ ] u
+- [ ] t
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] t
+- [ ] h
+- [ ] ;
+- [ ]  
+- [ ] T
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] T
+- [ ] i
+- [ ] e
+- [ ] r
+- [ ] e
+- [ ] d
+- [ ] B
+- [ ] a
+- [ ] c
+- [ ] k
+- [ ] f
+- [ ] i
+- [ ] l
+- [ ] l
+- [ ] _
+- [ ] R
+- [ ] e
+- [ ] f
+- [ ] u
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] W
+- [ ] h
+- [ ] i
+- [ ] l
+- [ ] e
+- [ ] L
+- [ ] i
+- [ ] b
+- [ ] r
+- [ ] a
+- [ ] r
+- [ ] y
+- [ ] S
+- [ ] c
+- [ ] a
+- [ ] n
+- [ ] A
+- [ ] c
+- [ ] t
+- [ ] i
+- [ ] v
+- [ ] e
+- [ ]  
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] a
+- [ ] p
+- [ ] p
+- [ ] l
+- [ ] y
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] t
+- [ ] h
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] w
+- [ ] i
+- [ ] t
+- [ ] h
+- [ ] o
+- [ ] u
+- [ ] t
+- [ ]  
+- [ ] w
+- [ ] r
+- [ ] i
+- [ ] t
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ]  
+- [ ] w
+- [ ] h
+- [ ] e
+- [ ] n
+- [ ]  
+- [ ] a
+- [ ]  
+- [ ] l
+- [ ] i
+- [ ] b
+- [ ] r
+- [ ] a
+- [ ] r
+- [ ] y
+- [ ] .
+- [ ] s
+- [ ] c
+- [ ] a
+- [ ] n
+- [ ]  
+- [ ] o
+- [ ] p
+- [ ]  
+- [ ] i
+- [ ] s
+- [ ]  
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ] n
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ]  
+- [ ] o
+- [ ] r
+- [ ]  
+- [ ] q
+- [ ] u
+- [ ] e
+- [ ] u
+- [ ] e
+- [ ] d
+- [ ] ;
+- [ ]  
+- [ ] T
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] T
+- [ ] i
+- [ ] e
+- [ ] r
+- [ ] e
+- [ ] d
+- [ ] B
+- [ ] a
+- [ ] c
+- [ ] k
+- [ ] f
+- [ ] i
+- [ ] l
+- [ ] l
+- [ ] _
+- [ ] A
+- [ ] p
+- [ ] p
+- [ ] l
+- [ ] y
+- [ ] T
+- [ ] h
+- [ ] e
+- [ ] n
+- [ ] U
+- [ ] n
+- [ ] d
+- [ ] o
+- [ ] I
+- [ ] s
+- [ ] B
+- [ ] y
+- [ ] t
+- [ ] e
+- [ ] I
+- [ ] d
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] i
+- [ ] c
+- [ ] a
+- [ ] l
+- [ ]  
+- [ ] a
+- [ ] p
+- [ ] p
+- [ ] l
+- [ ] i
+- [ ] e
+- [ ] s
+- [ ]  
+- [ ] o
+- [ ] n
+- [ ]  
+- [ ] a
+- [ ]  
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] e
+- [ ] ,
+- [ ]  
+- [ ] u
+- [ ] n
+- [ ] d
+- [ ] o
+- [ ] e
+- [ ] s
+- [ ]  
+- [ ] v
+- [ ] i
+- [ ] a
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] u
+- [ ] n
+- [ ] d
+- [ ] o
+- [ ] ,
+- [ ]  
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ]  
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] e
+- [ ]  
+- [ ] i
+- [ ] s
+- [ ]  
+- [ ] u
+- [ ] n
+- [ ] c
+- [ ] h
+- [ ] a
+- [ ] n
+- [ ] g
+- [ ] e
+- [ ] d
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] b
+- [ ] u
+- [ ] i
+- [ ] l
+- [ ] d
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] &
+- [ ] &
+- [ ]  
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] v
+- [ ] e
+- [ ] t
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] e
+- [ ] x
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] 0
+- [ ] .
 - [ ] Anti-over-suppression test: `TestTieredBackfill_AbsentTranscriptNeverReadsAsContinuation` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... ./internal/transcribe/... -count=1` exits 0; `go vet`/lint clean.
@@ -112,7 +799,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 **This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: (1) the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; (2) every mutation is journaled through the existing undo ledger (`CreateOperationChange` — verify: `grep -rn "func.*CreateOperationChange" internal/database/*.go`) so `internal/undo` can replay it — a mutation without a journal row is a defect; (3) acceptance includes a test that applies on a fixture and then undoes via `internal/undo` and asserts the fixture is byte-identical; (4) the apply path refuses to start while a `library.scan` operation is running or queued (check the registry for an active scan before mutating — a running scan clobbers applied metadata). Idempotency: re-running in dry-run must report 0 pending changes after a successful apply. Rollback of the CODE = `git revert`; rollback of the DATA = the undo ledger, which is why (2) is not optional. PR stays open for the owner — the coordinator never admin-merges it.
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/plugins/maintenance/... -run TestTieredBackfill -count=1 -v passes`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'func ClassifyIntro' internal/transcribe/classify.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/config/TASK-019-fix-chapterconsolidationthresholdmin-omitted-fro.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 69cb703a-8147-4a24-8949-ce5aa4aeaded -->
+<!-- guid: 3c917e56-85a7-4fb9-8994-8016bc4fca2f -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-019 — Fix ChapterConsolidationThresholdMin omitted from ResetToDefaults (factory reset silently disables consolidation) (CFG-AUDIT)
 
-**Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · config subagent · **Why:** One missing field in a large struct literal — add it. · **Depends on:** none · **Wave:** 3
+**Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · config subagent · **Why:** One missing field in a large struct literal — add it. · **Depends on:** none · **Wave:** 2
 
 Source: `TODO.md` line 1317 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**CFG-AUDIT**" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-03.json`.
 

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-176-build-a-read-only-census-tool-for-the-41-ungroup.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: bad65b5d-d0a3-42d8-8e3e-da6b78341f96 -->
+<!-- guid: ec206140-5b53-440d-b0c6-472594281a35 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-176 — Build a read-only census tool for the 41 ungrouped-but-explicitly-non-primary books (TODO.md L3354)
@@ -52,7 +52,7 @@ Write tools/cmd/orphan-nonprimary-census/main.go (read-only, modeled on reconcil
 4. Write findings to a new docs/audits/ file or todo.d fragment describing the root cause, once found, as a candidate for a targeted fix distinct from ElectMissingPrimaries (which only helps books that DO have a version group).
 
 Then, always:
-- Keep the change purely transform — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
+- Keep the change purely additive — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
 - Bump the file header (`version` + `last-edited: 2026-08-21`) on every file you touch; keep existing guids. New files get a fresh guid (`uuidgen | tr A-Z a-z`).
 - Add a changelog fragment `changelog.d/20260821_audiobooks_176.md` (NO file header; format per `changelog.d/README.md`: a `### Fixed|Changed|Added` heading, a `####` title, one paragraph).
 - Do NOT edit `TODO.md` — the coordinator closes the source item in one commit per wave (every brief in a wave would otherwise collide on it). In your final report, state the exact `TODO.md` line text to check off. Never add new TODO items directly — use a `todo.d/` fragment (no header).
@@ -63,7 +63,540 @@ Then, always:
 
 ## Tests
 
-- N/A for the diagnostic itself (read-only report, similar to reconcile-paths which has no dedicated test file). If a writer bug is found, its fix needs a regression test mirroring the pattern in internal/itunes/service/importer_primary_version_test.go.
+- t
+- o
+- o
+- l
+- s
+- /
+- c
+- m
+- d
+- /
+- o
+- r
+- p
+- h
+- a
+- n
+- -
+- n
+- o
+- n
+- p
+- r
+- i
+- m
+- a
+- r
+- y
+- -
+- c
+- e
+- n
+- s
+- u
+- s
+- /
+- m
+- a
+- i
+- n
+- _
+- t
+- e
+- s
+- t
+- .
+- g
+- o
+- :
+-  
+- T
+- e
+- s
+- t
+- S
+- e
+- l
+- e
+- c
+- t
+- s
+- O
+- n
+- l
+- y
+- E
+- x
+- p
+- l
+- i
+- c
+- i
+- t
+- l
+- y
+- N
+- o
+- n
+- P
+- r
+- i
+- m
+- a
+- r
+- y
+- U
+- n
+- g
+- r
+- o
+- u
+- p
+- e
+- d
+-  
+- -
+-  
+- t
+- a
+- b
+- l
+- e
+- -
+- d
+- r
+- i
+- v
+- e
+- n
+-  
+- o
+- v
+- e
+- r
+-  
+- i
+- n
+- -
+- m
+- e
+- m
+- o
+- r
+- y
+-  
+- b
+- o
+- o
+- k
+-  
+- r
+- o
+- w
+- s
+- ,
+-  
+- a
+- s
+- s
+- e
+- r
+- t
+- i
+- n
+- g
+-  
+- t
+- h
+- e
+-  
+- p
+- r
+- e
+- d
+- i
+- c
+- a
+- t
+- e
+-  
+- m
+- a
+- t
+- c
+- h
+- e
+- s
+-  
+- O
+- N
+- L
+- Y
+-  
+- (
+- V
+- e
+- r
+- s
+- i
+- o
+- n
+- G
+- r
+- o
+- u
+- p
+- I
+- D
+-  
+- n
+- i
+- l
+- /
+- e
+- m
+- p
+- t
+- y
+-  
+- A
+- N
+- D
+-  
+- I
+- s
+- P
+- r
+- i
+- m
+- a
+- r
+- y
+- V
+- e
+- r
+- s
+- i
+- o
+- n
+-  
+- !
+- =
+-  
+- n
+- i
+- l
+-  
+- A
+- N
+- D
+-  
+- *
+- I
+- s
+- P
+- r
+- i
+- m
+- a
+- r
+- y
+- V
+- e
+- r
+- s
+- i
+- o
+- n
+-  
+- =
+- =
+-  
+- f
+- a
+- l
+- s
+- e
+- )
+-  
+- a
+- n
+- d
+-  
+- i
+- n
+-  
+- p
+- a
+- r
+- t
+- i
+- c
+- u
+- l
+- a
+- r
+-  
+- d
+- o
+- e
+- s
+-  
+- N
+- O
+- T
+-  
+- m
+- a
+- t
+- c
+- h
+-  
+- a
+-  
+- b
+- o
+- o
+- k
+-  
+- w
+- i
+- t
+- h
+-  
+- I
+- s
+- P
+- r
+- i
+- m
+- a
+- r
+- y
+- V
+- e
+- r
+- s
+- i
+- o
+- n
+-  
+- =
+- =
+-  
+- n
+- i
+- l
+-  
+- (
+- w
+- h
+- i
+- c
+- h
+-  
+- i
+- n
+- t
+- e
+- r
+- n
+- a
+- l
+- /
+- a
+- u
+- d
+- i
+- o
+- b
+- o
+- o
+- k
+- s
+- /
+- s
+- e
+- r
+- v
+- i
+- c
+- e
+- _
+- f
+- i
+- l
+- t
+- e
+- r
+- i
+- n
+- g
+- .
+- g
+- o
+- :
+- 8
+- 6
+- 4
+-  
+- t
+- r
+- e
+- a
+- t
+- s
+-  
+- a
+- s
+-  
+- p
+- r
+- i
+- m
+- a
+- r
+- y
+- )
+-  
+- n
+- o
+- r
+-  
+- o
+- n
+- e
+-  
+- t
+- h
+- a
+- t
+-  
+- h
+- a
+- s
+-  
+- a
+-  
+- v
+- e
+- r
+- s
+- i
+- o
+- n
+-  
+- g
+- r
+- o
+- u
+- p
+- .
+-  
+- E
+- x
+- t
+- r
+- a
+- c
+- t
+-  
+- t
+- h
+- e
+-  
+- p
+- r
+- e
+- d
+- i
+- c
+- a
+- t
+- e
+-  
+- i
+- n
+- t
+- o
+-  
+- a
+-  
+- t
+- e
+- s
+- t
+- a
+- b
+- l
+- e
+-  
+- f
+- u
+- n
+- c
+- t
+- i
+- o
+- n
+-  
+- s
+- o
+-  
+- t
+- h
+- e
+-  
+- c
+- e
+- n
+- s
+- u
+- s
+-  
+- l
+- o
+- g
+- i
+- c
+-  
+- i
+- s
+-  
+- v
+- e
+- r
+- i
+- f
+- i
+- a
+- b
+- l
+- e
+-  
+- w
+- i
+- t
+- h
+- o
+- u
+- t
+-  
+- a
+-  
+- l
+- i
+- v
+- e
+-  
+- s
+- t
+- o
+- r
+- e
+- .
 
 Anti-over-suppression: N/A
 
@@ -86,7 +619,7 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 ## Commit message
 
 ```
-refactor(audiobooks): Build a read-only census tool for the 41 ungrouped-but-expli (TODO L3354)
+feat(audiobooks): Build a read-only census tool for the 41 ungrouped-but-expli (TODO L3354)
 
 <why the change was needed; what it protects; what it deliberately does NOT change>
 
@@ -99,7 +632,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the symbol already lives at its NEW location and is absent from the old one (re-run the re-verify greps above), the move is already done — run acceptance instead. Rollback = `git revert` the commit; behaviour at the old site is restored.
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run sed -n '862,866p' internal/audiobooks/service_filtering.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

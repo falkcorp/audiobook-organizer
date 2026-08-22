@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-182-record-the-docs-system-vs-top-level-architecture.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f38b49e4-76d4-4905-a6e5-efd0fc44ff89 -->
+<!-- guid: 39c0d0c2-fef7-40b9-a6b4-141ff835d585 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-182 — Record the docs/system vs top-level architecture classification decision in the docs inventory (TODO.md L101)
@@ -98,7 +98,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`docs/audits/2026-08-11-docs-inventory.md's L224 entry (or its replacement) records an explicit keep/archive decision for both docs/system/** and docs/architecture/**, citing the cross-reference evidence.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run sed -n '6,9p' docs/architecture.md` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

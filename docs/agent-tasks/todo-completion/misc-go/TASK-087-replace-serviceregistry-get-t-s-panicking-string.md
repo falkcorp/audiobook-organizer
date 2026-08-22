@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-087-replace-serviceregistry-get-t-s-panicking-string.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 8b1d4cb8-4133-4a7a-a5f8-a3fdc4d9517e -->
+<!-- guid: 5021c842-6090-4c4e-9af7-0fb5fbbe9c4e -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-087 — Replace serviceregistry.Get[T]'s panicking string-key lookups with typed accessors (ARCH-8)

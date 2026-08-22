@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-039-add-transcribe-status-to-the-book-summary-list-p.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f65a5f86-4a60-475d-80a6-1e54a055d96d -->
+<!-- guid: 845b3552-0a83-47cd-a151-149af47ad3c6 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-039 — Add transcribe_status to the book-summary list projection and a frontend quality filter control (TODO.md L10728)
 
-**Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · database subagent · **Why:** touches the database summary projection (2 construction sites) plus a new frontend filter control; must not break the memdb round-trip contract · **Depends on:** TASK-005 · **Wave:** 3
+**Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · database subagent · **Why:** touches the database summary projection (2 construction sites) plus a new frontend filter control; must not break the memdb round-trip contract · **Depends on:** TASK-005 · **Wave:** 4
 
 Source: `TODO.md` line 10728 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**Transcription quality filter**" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-15.json`.
 
@@ -74,7 +74,7 @@ Anti-over-suppression test: `test: 'TranscribeStatus=nil (never attempted) rende
 ## How to test
 
 ```bash
-go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... -count=1
+go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... -count=1 && npm --prefix web run lint && npm --prefix web test
 ```
 Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
@@ -85,7 +85,7 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 - [ ] `make test` passes for internal/database.
 - [ ] Anti-over-suppression test: `test: 'TranscribeStatus=nil (never attempted) renders differently from TranscribeStatus=statusUnparsed (attempted, failed to parse)'` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... -count=1` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... -count=1 && npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_database_039.md`.
 
@@ -105,7 +105,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (``grep -n TranscribeStatus internal/database/store.go` shows it on both Book and BookSummary.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — ``grep -n TranscribeStatus internal/database/store.go` shows it on both Book and BookSummary.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

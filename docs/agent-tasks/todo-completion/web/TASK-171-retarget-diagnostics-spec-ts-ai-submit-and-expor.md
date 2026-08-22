@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-171-retarget-diagnostics-spec-ts-ai-submit-and-expor.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 08d42cce-b3d5-4407-a6f2-4e8acc25195e -->
+<!-- guid: f7a9792b-2ea4-4c93-a16f-66b359b98449 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-171 — Retarget diagnostics.spec.ts AI-submit and export status mocks to v2 (TODO.md L4960)
@@ -62,8 +62,318 @@ Then, always:
 
 ## Tests
 
-- web/tests/e2e/diagnostics.spec.ts — the AI-results flow test(s) driven by setupAiResultsMocks still pass.
-- web/tests/e2e/diagnostics.spec.ts — 'download ZIP flow triggers export' still passes.
+- w
+- e
+- b
+- /
+- t
+- e
+- s
+- t
+- s
+- /
+- e
+- 2
+- e
+- /
+- d
+- i
+- a
+- g
+- n
+- o
+- s
+- t
+- i
+- c
+- s
+- .
+- s
+- p
+- e
+- c
+- .
+- t
+- s
+- ,
+-  
+- r
+- u
+- n
+-  
+- t
+- h
+- r
+- o
+- u
+- g
+- h
+-  
+- P
+- l
+- a
+- y
+- w
+- r
+- i
+- g
+- h
+- t
+- :
+-  
+- n
+- p
+- m
+-  
+- -
+- -
+- p
+- r
+- e
+- f
+- i
+- x
+-  
+- w
+- e
+- b
+-  
+- e
+- x
+- e
+- c
+-  
+- -
+- -
+-  
+- p
+- l
+- a
+- y
+- w
+- r
+- i
+- g
+- h
+- t
+-  
+- t
+- e
+- s
+- t
+-  
+- -
+- c
+-  
+- t
+- e
+- s
+- t
+- s
+- /
+- e
+- 2
+- e
+- /
+- p
+- l
+- a
+- y
+- w
+- r
+- i
+- g
+- h
+- t
+- .
+- c
+- o
+- n
+- f
+- i
+- g
+- .
+- t
+- s
+-  
+- -
+- -
+- p
+- r
+- o
+- j
+- e
+- c
+- t
+-  
+- c
+- h
+- r
+- o
+- m
+- i
+- u
+- m
+-  
+- t
+- e
+- s
+- t
+- s
+- /
+- e
+- 2
+- e
+- /
+- d
+- i
+- a
+- g
+- n
+- o
+- s
+- t
+- i
+- c
+- s
+- .
+- s
+- p
+- e
+- c
+- .
+- t
+- s
+- .
+-  
+- C
+- o
+- n
+- f
+- i
+- r
+- m
+-  
+- b
+- o
+- t
+- h
+-  
+- t
+- h
+- e
+-  
+- s
+- e
+- t
+- u
+- p
+- A
+- i
+- R
+- e
+- s
+- u
+- l
+- t
+- s
+- M
+- o
+- c
+- k
+- s
+-  
+- A
+- I
+- -
+- r
+- e
+- s
+- u
+- l
+- t
+- s
+-  
+- f
+- l
+- o
+- w
+-  
+- a
+- n
+- d
+-  
+- t
+- h
+- e
+-  
+- e
+- x
+- p
+- o
+- r
+- t
+- -
+- Z
+- I
+- P
+-  
+- f
+- l
+- o
+- w
+-  
+- s
+- t
+- i
+- l
+- l
+-  
+- p
+- a
+- s
+- s
+- .
+-  
+- T
+- h
+- e
+-  
+- V
+- i
+- t
+- e
+- s
+- t
+-  
+- g
+- a
+- t
+- e
+-  
+- d
+- o
+- e
+- s
+-  
+- n
+- o
+- t
+-  
+- r
+- u
+- n
+-  
+- t
+- h
+- i
+- s
+-  
+- f
+- i
+- l
+- e
+- .
 
 Anti-over-suppression: N/A
 
@@ -76,9 +386,403 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] grep -n 'operations/v2/op-2' web/tests/e2e/diagnostics.spec.ts returns 1 hit
-- [ ] grep -n 'operations/v2/op-1' web/tests/e2e/diagnostics.spec.ts returns 1 hit
-- [ ] npx playwright test web/tests/e2e/diagnostics.spec.ts exits 0
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] o
+- [ ] p
+- [ ] e
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] s
+- [ ] /
+- [ ] v
+- [ ] 2
+- [ ] /
+- [ ] o
+- [ ] p
+- [ ] -
+- [ ] 2
+- [ ] '
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] e
+- [ ] 2
+- [ ] e
+- [ ] /
+- [ ] d
+- [ ] i
+- [ ] a
+- [ ] g
+- [ ] n
+- [ ] o
+- [ ] s
+- [ ] t
+- [ ] i
+- [ ] c
+- [ ] s
+- [ ] .
+- [ ] s
+- [ ] p
+- [ ] e
+- [ ] c
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] "
+- [ ] o
+- [ ] p
+- [ ] e
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] s
+- [ ] /
+- [ ] o
+- [ ] p
+- [ ] -
+- [ ] 2
+- [ ] '
+- [ ] "
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] 0
+- [ ]  
+- [ ] (
+- [ ] 1
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] ,
+- [ ]  
+- [ ] L
+- [ ] 8
+- [ ] 0
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] s
+- [ ] a
+- [ ] m
+- [ ] e
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] i
+- [ ] r
+- [ ]  
+- [ ] f
+- [ ] o
+- [ ] r
+- [ ]  
+- [ ] o
+- [ ] p
+- [ ] -
+- [ ] 1
+- [ ]  
+- [ ] (
+- [ ] L
+- [ ] 1
+- [ ] 7
+- [ ] 5
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] p
+- [ ] r
+- [ ] o
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] s
+- [ ] s
+- [ ] _
+- [ ] c
+- [ ] u
+- [ ] r
+- [ ] r
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] '
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] e
+- [ ] 2
+- [ ] e
+- [ ] /
+- [ ] d
+- [ ] i
+- [ ] a
+- [ ] g
+- [ ] n
+- [ ] o
+- [ ] s
+- [ ] t
+- [ ] i
+- [ ] c
+- [ ] s
+- [ ] .
+- [ ] s
+- [ ] p
+- [ ] e
+- [ ] c
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] >
+- [ ] =
+- [ ] 2
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ] ;
+- [ ]  
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] s
+- [ ] p
+- [ ] e
+- [ ] c
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ]  
+- [ ] v
+- [ ] i
+- [ ] a
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] e
+- [ ] x
+- [ ] e
+- [ ] c
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ]  
+- [ ] p
+- [ ] l
+- [ ] a
+- [ ] y
+- [ ] w
+- [ ] r
+- [ ] i
+- [ ] g
+- [ ] h
+- [ ] t
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] -
+- [ ] c
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] e
+- [ ] 2
+- [ ] e
+- [ ] /
+- [ ] p
+- [ ] l
+- [ ] a
+- [ ] y
+- [ ] w
+- [ ] r
+- [ ] i
+- [ ] g
+- [ ] h
+- [ ] t
+- [ ] .
+- [ ] c
+- [ ] o
+- [ ] n
+- [ ] f
+- [ ] i
+- [ ] g
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] o
+- [ ] j
+- [ ] e
+- [ ] c
+- [ ] t
+- [ ]  
+- [ ] c
+- [ ] h
+- [ ] r
+- [ ] o
+- [ ] m
+- [ ] i
+- [ ] u
+- [ ] m
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] e
+- [ ] 2
+- [ ] e
+- [ ] /
+- [ ] d
+- [ ] i
+- [ ] a
+- [ ] g
+- [ ] n
+- [ ] o
+- [ ] s
+- [ ] t
+- [ ] i
+- [ ] c
+- [ ] s
+- [ ] .
+- [ ] s
+- [ ] p
+- [ ] e
+- [ ] c
+- [ ] .
+- [ ] t
+- [ ] s
 - [ ] Anti-over-suppression: N/A
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-189-play-the-first-2-minutes-of-part-1-s-audio-direc.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 8156fd84-6632-46d5-ab95-2719526686f0 -->
+<!-- guid: 4b3899e6-4bb1-485d-a29e-ffa91faf74b6 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-189 — Play the first ~2 minutes of part 1's audio directly from the review metadata panel, reusing the existing bounded audio-sample endpoint (REVIEW-PREVIEW)
@@ -50,10 +50,12 @@ Add a 'preview' control to web/src/components/review/MetadataPanel.tsx that stre
 
 ## Step-by-step
 
-1. In internal/server/audio_sample.go's handleAudioSample, replace `FilePath: book.FilePath` with a resolution step: call `s.Ops().GetBookFiles(book.ID)` (or the equivalent store method available on Server), sort by TrackNumber (nil-safe), and use the first entry's FilePath as req.FilePath -- falling back to book.FilePath only if GetBookFiles returns empty (single-file/legacy books where FilePath might coincidentally be a file).
-2. Add a query param or keep duration capped via the existing `duration` param defaulting differently for this caller if a distinct default is wanted (~120s per the item vs AudioSampleCompare's 30s default) -- confirm audio.SampleMaxDuration=60s is NOT a hard blocker for a 2-minute preview (currently it IS: 60s < 120s), so raise SampleMaxDuration or add a separate, still-server-enforced cap specific to this longer preview use case.
-3. Add a preview button/control to web/src/components/review/MetadataPanel.tsx that, on click, plays via the endpoint from steps 1-2, targeting part 1's file specifically.
-4. Add internal/server/audio_sample_test.go covering the new file-resolution behavior.
+1. In internal/server/audio_sample.go's handleAudioSample, fix the streaming deadline at L47: `context.WithTimeout(c.Request.Context(), 120)` passes a bare int, which Go reads as 120 NANOSECONDS. It must be `120 * time.Second`. This is in the same function and the same request path this task changes, and no preview can play while it stands — do not defer it.
+2. Replace `FilePath: book.FilePath` (internal/server/audio_sample.go:42) with real part-1 resolution: call s.Ops().GetBookFiles(book.ID) (declared on the ServerOpsStore interface at internal/server/server_ops_store.go:122, implemented at internal/database/pebble_store_bookfiles.go:397), sort nil-safely by TrackNumber, and use the first entry's FilePath. Fall back to book.FilePath only when GetBookFiles returns empty — the scanner sets book.FilePath to a DIRECTORY (internal/scanner/scanner.go:1699 `dbBook.FilePath = dirPath`), so the current code cannot serve a multi-file book.
+3. Resolve the duration cap explicitly BEFORE writing frontend code: internal/audio/sample.go:18 hard-caps every request at SampleMaxDuration = 60s (enforced L56-57), which is half the ~2 minutes this item asks for. Either raise that constant (and state the effect on the existing 30s consumer AudioSampleCompare.tsx:46) or add a second, still-server-enforced per-caller cap. Do not let the client request 120s against a 60s server cap and call it done.
+4. Add a preview control to web/src/components/review/MetadataPanel.tsx that builds the URL the way AudioSampleCompare.tsx:46 does (`/api/v1/audiobooks/${bookId}/sample?start=${start}&duration=${...}`) and plays it, with a clear 'preview unavailable' state for a book with zero files or an unreadable part 1.
+5. Add internal/server/audio_sample_test.go (new file, fresh header): a multi-file book resolves to the lowest-TrackNumber file rather than the directory; an over-cap `duration` query param is still capped server-side; a book with zero book_file rows returns a clean error rather than streaming a directory.
+6. Bump headers on every changed file and add changelog fragment changelog.d/20260821_web_189.md (no file header).
 
 Then, always:
 - Keep the change purely additive — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
@@ -77,16 +79,490 @@ Anti-over-suppression: N/A
 ## How to test
 
 ```bash
-go build ./... && go vet ./... && go test ./internal/server/... -count=1 && npm --prefix web run lint && npm --prefix web test
+go build ./... && go vet ./... && go test ./internal/audio/... ./internal/server/... -count=1 && npm --prefix web run lint && npm --prefix web test
 ```
 Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
 ## Acceptance criteria
 
-- [ ] Manual: on a multi-part book in the review panel, click preview and confirm audio plays from the START of part 1, not a directory-path failure or silent no-op.
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] c
+- [ ] o
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] x
+- [ ] t
+- [ ] .
+- [ ] W
+- [ ] i
+- [ ] t
+- [ ] h
+- [ ] T
+- [ ] i
+- [ ] m
+- [ ] e
+- [ ] o
+- [ ] u
+- [ ] t
+- [ ] '
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] /
+- [ ] a
+- [ ] u
+- [ ] d
+- [ ] i
+- [ ] o
+- [ ] _
+- [ ] s
+- [ ] a
+- [ ] m
+- [ ] p
+- [ ] l
+- [ ] e
+- [ ] .
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] s
+- [ ] h
+- [ ] o
+- [ ] w
+- [ ] s
+- [ ]  
+- [ ] a
+- [ ]  
+- [ ] t
+- [ ] i
+- [ ] m
+- [ ] e
+- [ ] .
+- [ ] S
+- [ ] e
+- [ ] c
+- [ ] o
+- [ ] n
+- [ ] d
+- [ ] -
+- [ ] s
+- [ ] c
+- [ ] a
+- [ ] l
+- [ ] e
+- [ ] d
+- [ ]  
+- [ ] d
+- [ ] u
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ]  
+- [ ] (
+- [ ] b
+- [ ] a
+- [ ] r
+- [ ] e
+- [ ]  
+- [ ] `
+- [ ] 1
+- [ ] 2
+- [ ] 0
+- [ ] `
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] ,
+- [ ]  
+- [ ] L
+- [ ] 4
+- [ ] 7
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] F
+- [ ] i
+- [ ] l
+- [ ] e
+- [ ] P
+- [ ] a
+- [ ] t
+- [ ] h
+- [ ] :
+- [ ]  
+- [ ] b
+- [ ] o
+- [ ] o
+- [ ] k
+- [ ] .
+- [ ] F
+- [ ] i
+- [ ] l
+- [ ] e
+- [ ] P
+- [ ] a
+- [ ] t
+- [ ] h
+- [ ] '
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] /
+- [ ] a
+- [ ] u
+- [ ] d
+- [ ] i
+- [ ] o
+- [ ] _
+- [ ] s
+- [ ] a
+- [ ] m
+- [ ] p
+- [ ] l
+- [ ] e
+- [ ] .
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] 0
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] (
+- [ ] 1
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] ,
+- [ ]  
+- [ ] L
+- [ ] 4
+- [ ] 2
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] G
+- [ ] e
+- [ ] t
+- [ ] B
+- [ ] o
+- [ ] o
+- [ ] k
+- [ ] F
+- [ ] i
+- [ ] l
+- [ ] e
+- [ ] s
+- [ ] '
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] /
+- [ ] a
+- [ ] u
+- [ ] d
+- [ ] i
+- [ ] o
+- [ ] _
+- [ ] s
+- [ ] a
+- [ ] m
+- [ ] p
+- [ ] l
+- [ ] e
+- [ ] .
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] >
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] b
+- [ ] u
+- [ ] i
+- [ ] l
+- [ ] d
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] &
+- [ ] &
+- [ ]  
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] v
+- [ ] e
+- [ ] t
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] &
+- [ ] &
+- [ ]  
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] -
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] A
+- [ ] u
+- [ ] d
+- [ ] i
+- [ ] o
+- [ ] S
+- [ ] a
+- [ ] m
+- [ ] p
+- [ ] l
+- [ ] e
+- [ ]  
+- [ ] -
+- [ ] c
+- [ ] o
+- [ ] u
+- [ ] n
+- [ ] t
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] e
+- [ ] x
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] 0
+- [ ] ;
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ]  
+- [ ] M
+- [ ] e
+- [ ] t
+- [ ] a
+- [ ] d
+- [ ] a
+- [ ] t
+- [ ] a
+- [ ] P
+- [ ] a
+- [ ] n
+- [ ] e
+- [ ] l
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] ;
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] l
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] .
 - [ ] Anti-over-suppression: N/A
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/server/... -count=1 && npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/audio/... ./internal/server/... -count=1 && npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_web_189.md`.
 
@@ -106,7 +582,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`Manual: on a multi-part book in the review panel, click preview and confirm audio plays from the START of part 1, not a directory-path failure or silent no-op.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'SampleMaxDuration\|func ExtractSample' internal/audio/sample.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

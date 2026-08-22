@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-101-pin-a-regression-test-the-regroup-recommender-mu.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 0f5556fb-7d23-411a-91ea-c42d0c2e6a2d -->
+<!-- guid: 6d5df56f-c677-4b01-bee9-0407ad8944fb -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-101 — Pin a regression test: the regroup recommender must not default to duplicate-of on equal-runtime alone, using the 3 real multidisc holds as fixtures (TODO.md L8245)
@@ -69,7 +69,7 @@ Anti-over-suppression test: `TestRecommend_DistinctRuntimes_ReturnsDifferentDefa
 ## How to test
 
 ```bash
-go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1
+go build ./... && go vet ./... && go test ./internal/itunes/service/... ./internal/plugins/maintenance/... -count=1
 ```
 Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
@@ -78,7 +78,7 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 - [ ] go test ./internal/plugins/maintenance/... -run TestRecommend_EqualRuntimeMultidiscHolds passes.
 - [ ] Anti-over-suppression test: `TestRecommend_DistinctRuntimes_ReturnsDifferentDefaultThanEqualRuntimes` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/itunes/service/... ./internal/plugins/maintenance/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_missing-file-lane_101.md`.
 
@@ -98,7 +98,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/plugins/maintenance/... -run TestRecommend_EqualRuntimeMultidiscHolds passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'recommend\|Recommend' internal/plugins/maintenance/regroup_shattered_ai.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-034-add-func-override-fields-to-mockstore-s-86-hardw.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 1450ef0e-683e-4db9-b585-b3ad36087ba8 -->
+<!-- guid: b98df400-77ef-47d1-80dc-be3a6004fc1e -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-034 — Add Func override fields to MockStore's ~86 hardwired-zero-return methods (TODO.md L4728)
@@ -103,7 +103,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go build ./internal/database/... exits 0.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `grep -c "Func != nil" internal/database/mock_store.go returns ≥399 (every method now checks its own override, some methods may have >1 check if they branch).` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

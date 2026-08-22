@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-211-migrate-internal-server-test-fixtures-to-setupte.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 2ae137fd-2a1c-43b5-bfd5-9efa3dc76e0c -->
+<!-- guid: 57edfb88-2092-421a-af0b-626cc28ea80a -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-211 — Migrate internal/server test fixtures to setupTestServerWithStore — cover_history_test.go, server_middleware_test.go, ai_jobs_handlers_test.go, entity_tag_handlers_test.go, import_collision_test.go, reading_handlers_test.go, user_handlers_test.go, organize_integration_test.go, server_op_registration_test.go, metadata_handlers_test.go (DEC-6)
 
-**Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · server subagent · **Why:** 10 files, 1 site each — individually trivial, but 3 of them (ai_jobs, reading, rating) route through their own single-use wrapper helper whose internals must be migrated the same way as Part 3's wrapper files, requiring the same judgment about how to thread cleanup. · **Depends on:** none · **Wave:** 1
+**Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · server subagent · **Why:** 10 files, 1 site each — individually trivial, but 3 of them (ai_jobs, reading, rating) route through their own single-use wrapper helper whose internals must be migrated the same way as Part 3's wrapper files, requiring the same judgment about how to thread cleanup. · **Depends on:** none · **Wave:** 2
 
 Source: `TODO.md` line 90006 as of commit 46628240 (later edits shift lines) — re-find it with `sed -n '90006p' TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-19.json`.
 
@@ -37,6 +37,12 @@ Replace the single direct NewServer(...) construction in each of the 10 files wi
   ```bash
   grep -n "NewServer(" internal/server/cover_history_test.go internal/server/server_middleware_test.go internal/server/ai_jobs_handlers_test.go internal/server/entity_tag_handlers_test.go internal/server/import_collision_test.go internal/server/reading_handlers_test.go internal/server/user_handlers_test.go internal/server/organize_integration_test.go internal/server/server_op_registration_test.go internal/server/metadata_handlers_test.go   # 10 hits total, 1 per file: cover_history_test.go:44, server_middleware_test.go:38, ai_jobs_handlers_test.go:40, entity_tag_handlers_test.go:36, import_collision_test.go:38, reading_handlers_test.go:35, user_handlers_test.go:35, organize_integration_test.go:53, server_op_registration_test.go:46, metadata_handlers_test.go:32 — each of the 10 files has exactly 1 direct NewServer(...) construction site
   grep -n "^func setupAIJobsTestServer\|^func setupReadingTestServer\|^func setupRatingTestServer" internal/server/ai_jobs_handlers_test.go internal/server/reading_handlers_test.go internal/server/metadata_handlers_test.go   # 3 hits: ai_jobs_handlers_test.go:25, reading_handlers_test.go:19, metadata_handlers_test.go:19 — ai_jobs_handlers_test.go, reading_handlers_test.go, and metadata_handlers_test.go each define their own single-use wrapper helper (setupAIJobsTestServer, setupReadingTestServer, setupRatingTestServer) around their site
+  grep -n 'config.AppConfig.RootDir = ""\|origStore := database.GetGlobalStore()\|srv := NewServer(store)' internal/server/server_op_registration_test.go   # 3 hits: L34 RootDir pin, L42 origStore := database.GetGlobalStore(), L46 srv := NewServer(store) — each RootDir/store change paired with its own t.Cleanup restore — server_op_registration_test.go deliberately hand-builds to pin the empty-RootDir op-registration regression, and restores the global store, which the fixture does not
+  grep -n 'database.SetGlobalStore' internal/server/server_test.go   # 3 hits: L84 and L123 (the OTHER fixture sets, then nils, the global store); L170 in setupTestServerWithStore, whose cleanup restores only fileIOPool, writeBackBatcher and config.AppConfig and never the global store — the fixture pins RootDir empty and never restores the global store
+  grep -n 'RootDir' internal/server/cover_history_test.go   # 1 hit at L29: config.AppConfig.RootDir = rootDir — cover_history_test.go sets its own RootDir before constructing
+  grep -n 'NewServer(env.Store)\|library.organize' internal/server/organize_integration_test.go   # `server := NewServer(env.Store)` at L53 and the `"def_id":"library.organize"` POST body at L60 — a real-RootDir organize run with its own opRegistry Start/Shutdown — organize_integration_test.go runs library.organize against a real RootDir from SetupIntegration and keeps its own opRegistry start/shutdown
+  grep -n 'NewServer(' internal/server/cover_history_test.go internal/server/server_middleware_test.go internal/server/ai_jobs_handlers_test.go internal/server/entity_tag_handlers_test.go internal/server/import_collision_test.go internal/server/reading_handlers_test.go internal/server/user_handlers_test.go internal/server/organize_integration_test.go internal/server/server_op_registration_test.go internal/server/metadata_handlers_test.go   # exactly 10 hits, one per file, at L44,38,40,36,38,35,35,53,46,32 — the 10 claimed single sites, one per file
+  grep -n '^func setupAIJobsTestServer\|^func setupReadingTestServer\|^func setupRatingTestServer' internal/server/ai_jobs_handlers_test.go internal/server/reading_handlers_test.go internal/server/metadata_handlers_test.go   # ai_jobs_handlers_test.go:25, reading_handlers_test.go:19, metadata_handlers_test.go:19 — the 3 wrapper definitions
   ```
 
 ### Reuse — don't invent
@@ -45,11 +51,14 @@ Replace the single direct NewServer(...) construction in each of the 10 files wi
 
 ## Step-by-step
 
-1. For the 7 inline-construction files (cover_history_test.go:44, server_middleware_test.go:38, entity_tag_handlers_test.go:36, import_collision_test.go:38, user_handlers_test.go:35, organize_integration_test.go:53, server_op_registration_test.go:46), replace `srv := NewServer(<store-var>)` with `srv, cleanup := setupTestServerWithStore(t, <store-var>); defer cleanup()`, deleting only lines that exactly duplicate setupTestServerWithStore's internal gin.SetMode/database.SetGlobalStore/allowOpDefinitionUpserts calls.
-2. For ai_jobs_handlers_test.go's setupAIJobsTestServer (NewServer at L40): replace its internal construction with `srv, cleanup := setupTestServerWithStore(t, store)`, add `t.Cleanup(cleanup)` inside the wrapper immediately after (so its existing `(*Server, *database.PebbleStore)` return signature and all 5 call sites need zero changes), and delete now-redundant manual boilerplate inside the wrapper only.
-3. Apply the same t.Cleanup(cleanup)-inside-the-wrapper approach to reading_handlers_test.go's setupReadingTestServer (NewServer at L35) and metadata_handlers_test.go's setupRatingTestServer (NewServer at L32).
-4. Bump version headers on all 10 files.
-5. List Test function names per file and run: go build ./... && go vet ./... && go test ./internal/server/... -run '<discovered Test names>' -count=1.
+1. EXCLUDE internal/server/server_op_registration_test.go from this migration entirely and record the exclusion in the Coordinator notes alongside fingerprint_rescan_test.go. Its TestNewServer_RegistersOpsWithEmptyRootDir hand-builds on purpose: it pins config.AppConfig.RootDir="" with its own restore (L33-35), saves and restores database.GetGlobalStore() (L41-44) which setupTestServerWithStore never does, and asserts srv.opRegistry.ActiveDefs() != 0. Routing it through the shared fixture would make the empty RootDir incidental rather than asserted.
+2. For the 6 remaining inline-construction files (cover_history_test.go:44, server_middleware_test.go:38, entity_tag_handlers_test.go:36, import_collision_test.go:38, user_handlers_test.go:35, organize_integration_test.go:53), replace `<var> := NewServer(<store>)` with `<var>, cleanup := setupTestServerWithStore(t, <store>)` + `defer cleanup()`, deleting ONLY lines that exactly duplicate gin.SetMode / database.SetGlobalStore / allowOpDefinitionUpserts.
+3. BEFORE migrating cover_history_test.go and organize_integration_test.go, handle the RootDir pin: setupTestServerWithStore sets config.AppConfig.RootDir="" (internal/server/server_test.go:160-161). cover_history_test.go:29 sets `config.AppConfig.RootDir = rootDir` itself, and organize_integration_test.go uses testutil.SetupIntegration (non-empty RootDir) and then POSTs def_id library.organize, asserting 2 books exist afterwards — an empty RootDir gives the organize op no destination. Re-pin RootDir immediately after the setupTestServerWithStore call in both, and never delete their RootDir assignment as a duplicate.
+4. organize_integration_test.go:54-58 also has a manual `if server.opRegistry != nil { Start(...); defer Shutdown }` pair. setupTestServerWithStore does not start the registry, so keep that block verbatim.
+5. For ai_jobs_handlers_test.go's setupAIJobsTestServer (L25, NewServer at L40), reading_handlers_test.go's setupReadingTestServer (L19, NewServer at L35) and metadata_handlers_test.go's setupRatingTestServer (L19, NewServer at L32): replace the internal construction with setupTestServerWithStore(t, store) and add t.Cleanup(cleanup) inside the wrapper so the existing signatures and all call sites are untouched.
+6. Bump the version header and last-edited: 2026-08-21 on every file actually changed (9 files, not 10).
+7. Capture a per-test PASS/FAIL baseline with `go test ./internal/server/... -count=1 -v` before and after, and diff the lists.
+8. Add changelog fragment changelog.d/20260821_server_211.md (no file header).
 
 Then, always:
 - Keep the change purely transform — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
@@ -59,7 +68,9 @@ Then, always:
 
 ### Edge-case semantics (conservative defaults — treat unknown as unknown, never as disqualifying)
 
-- reset_handler_test.go calls metadata_handlers_test.go's setupRatingTestServer (a cross-file caller, not counted among the 10 direct-construction sites) — after migrating setupRatingTestServer's internals in step 3, its unchanged signature means reset_handler_test.go needs NO edit; verify this with go build after the change rather than assuming.
+- setupTestServerWithStore's cleanup restores config.AppConfig but NEVER restores the previous database global store. Any test that saves/restores the global store itself (server_op_registration_test.go) must not be migrated.
+- setupRatingTestServer's callers are both inside metadata_handlers_test.go (L38, L86). reset_handler_test.go calls setupHandlerTestServer (L26, L81, L108), which is Part 3's file, not this part's — no cross-file coupling exists here.
+- cover_history_test.go and organize_integration_test.go depend on a real config.AppConfig.RootDir; the fixture blanks it.
 
 ## Tests
 

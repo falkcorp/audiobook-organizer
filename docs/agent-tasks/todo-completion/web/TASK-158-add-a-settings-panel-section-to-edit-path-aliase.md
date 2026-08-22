@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-158-add-a-settings-panel-section-to-edit-path-aliase.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 8b969496-4a2d-4e3e-87bc-725c95cf1a07 -->
+<!-- guid: 092788dd-1c9d-4917-a186-67008ac723a6 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-158 — Add a Settings panel section to edit path_aliases (2026-08-20-dual-path-settings-panel.md#1)
@@ -90,10 +90,551 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] npm --prefix web run lint passes with no new errors.
-- [ ] npm --prefix web test -- PathAliasesSection passes all new tests.
-- [ ] grep -n "path_aliases: pathAliases" web/src/hooks/useSettingsHandlers.ts returns 1 hit, proving the panel's state reaches the PATCH /config payload.
-- [ ] Manual smoke (optional, not required for CI): load Settings, Paths tab shows the new Path Aliases section seeded from GET /config path_aliases, edit a row, Save, reload page, edited value persists.
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] -
+- [ ] f
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] s
+- [ ] r
+- [ ] c
+- [ ] /
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] p
+- [ ] o
+- [ ] n
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] t
+- [ ] t
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ] s
+- [ ] /
+- [ ] P
+- [ ] a
+- [ ] t
+- [ ] h
+- [ ] A
+- [ ] l
+- [ ] i
+- [ ] a
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] S
+- [ ] e
+- [ ] c
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ] x
+- [ ]  
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] -
+- [ ] f
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] s
+- [ ] r
+- [ ] c
+- [ ] /
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] p
+- [ ] o
+- [ ] n
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] t
+- [ ] t
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ] s
+- [ ] /
+- [ ] P
+- [ ] a
+- [ ] t
+- [ ] h
+- [ ] A
+- [ ] l
+- [ ] i
+- [ ] a
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] S
+- [ ] e
+- [ ] c
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] .
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ] x
+- [ ]  
+- [ ] b
+- [ ] o
+- [ ] t
+- [ ] h
+- [ ]  
+- [ ] s
+- [ ] u
+- [ ] c
+- [ ] c
+- [ ] e
+- [ ] e
+- [ ] d
+- [ ]  
+- [ ] (
+- [ ] n
+- [ ] e
+- [ ] i
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ] r
+- [ ]  
+- [ ] e
+- [ ] x
+- [ ] i
+- [ ] s
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] p
+- [ ] a
+- [ ] t
+- [ ] h
+- [ ] _
+- [ ] a
+- [ ] l
+- [ ] i
+- [ ] a
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] :
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] t
+- [ ] h
+- [ ] A
+- [ ] l
+- [ ] i
+- [ ] a
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] '
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] s
+- [ ] r
+- [ ] c
+- [ ] /
+- [ ] h
+- [ ] o
+- [ ] o
+- [ ] k
+- [ ] s
+- [ ] /
+- [ ] u
+- [ ] s
+- [ ] e
+- [ ] S
+- [ ] e
+- [ ] t
+- [ ] t
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ] s
+- [ ] H
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ] l
+- [ ] e
+- [ ] r
+- [ ] s
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] (
+- [ ] 0
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] )
+- [ ] ,
+- [ ]  
+- [ ] p
+- [ ] r
+- [ ] o
+- [ ] v
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] n
+- [ ] e
+- [ ] l
+- [ ] '
+- [ ] s
+- [ ]  
+- [ ] s
+- [ ] t
+- [ ] a
+- [ ] t
+- [ ] e
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] a
+- [ ] c
+- [ ] h
+- [ ] e
+- [ ] s
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] P
+- [ ] A
+- [ ] T
+- [ ] C
+- [ ] H
+- [ ]  
+- [ ] /
+- [ ] c
+- [ ] o
+- [ ] n
+- [ ] f
+- [ ] i
+- [ ] g
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] y
+- [ ] l
+- [ ] o
+- [ ] a
+- [ ] d
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] P
+- [ ] a
+- [ ] t
+- [ ] h
+- [ ] A
+- [ ] l
+- [ ] i
+- [ ] a
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] S
+- [ ] e
+- [ ] c
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] '
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] s
+- [ ] r
+- [ ] c
+- [ ] /
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] p
+- [ ] o
+- [ ] n
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] t
+- [ ] t
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ] s
+- [ ] /
+- [ ] P
+- [ ] a
+- [ ] t
+- [ ] h
+- [ ] s
+- [ ] S
+- [ ] e
+- [ ] t
+- [ ] t
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ] s
+- [ ] T
+- [ ] a
+- [ ] b
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ] x
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] >
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] ;
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ]  
+- [ ] P
+- [ ] a
+- [ ] t
+- [ ] h
+- [ ] A
+- [ ] l
+- [ ] i
+- [ ] a
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] S
+- [ ] e
+- [ ] c
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ]  
+- [ ] a
+- [ ] l
+- [ ] l
+- [ ]  
+- [ ] f
+- [ ] o
+- [ ] u
+- [ ] r
+- [ ]  
+- [ ] n
+- [ ] e
+- [ ] w
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] s
+- [ ] ;
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] l
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ]  
+- [ ] w
+- [ ] i
+- [ ] t
+- [ ] h
+- [ ]  
+- [ ] n
+- [ ] o
+- [ ]  
+- [ ] n
+- [ ] e
+- [ ] w
+- [ ]  
+- [ ] e
+- [ ] r
+- [ ] r
+- [ ] o
+- [ ] r
+- [ ] s
+- [ ] .
 - [ ] Anti-over-suppression test: `PathAliasesSection.test.tsx 'Add Alias appends an empty row without touching existing rows'` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.
@@ -116,7 +657,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`npm --prefix web run lint passes with no new errors.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n "export interface PathAlias" web/src/services/api.ts` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-041-audit-remaining-we-use-the-wide-type-because-x-r.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 0c6cf70f-f0d8-40f9-b481-daca2a3580c4 -->
+<!-- guid: 7793bc67-599a-44e8-83ae-2f8251aca272 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-041 — Audit remaining 'we use the wide type because X requires it' justification comments -- one genuinely stale instance found (TODO.md L903)

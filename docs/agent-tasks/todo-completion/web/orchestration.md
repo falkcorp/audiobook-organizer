@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 3a4fefbf-0817-4510-8800-54af215debd3 -->
+<!-- guid: 51b4dc99-64a5-4594-af38-c710fec8c345 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — web workstream (todo-completion)
@@ -17,7 +17,6 @@ flowchart LR
       TASK160[TASK-160 move-openai-api-key-validati]
       TASK162[TASK-162 reformat-metadata-tags-in-br]
       TASK188[TASK-188 harden-muimenu-against-the-d]
-      TASK163[TASK-163 find-the-mechanism-behind-th]
       TASK189[TASK-189 play-the-first-2-minutes-of-]
       TASK170[TASK-170 retarget-dedup-operations-sp]
       TASK171[TASK-171 retarget-diagnostics-spec-ts]
@@ -25,9 +24,13 @@ flowchart LR
       TASK173[TASK-173 add-resizable-sortable-colum]
       TASK174[TASK-174 add-resizable-sortable-colum]
       TASK175[TASK-175 add-resizable-sortable-colum]
+      TASK218[TASK-218 operationactivitypanel-stop-]
     end
     subgraph Wave2
       TASK161[TASK-161 strip-dedup-and-metadata-sou]
+      TASK215[TASK-215 never-send-batchfetchcandida]
+      TASK216[TASK-216 show-a-loading-skeleton-not-]
+      TASK217[TASK-217 evidence-panel-explain-a-mis]
     end
     subgraph Wave3
       TASK166[TASK-166 make-the-book-detail-page-s-]
@@ -42,36 +45,29 @@ flowchart LR
       TASK169[TASK-169 link-version-group-id-to-a-f]
     end
     subgraph Wave7
-      TASK164[TASK-164 let-the-owner-combine-merge-]
-    end
-    subgraph Wave8
       TASK165[TASK-165 review-the-17-apifetch-calle]
     end
-    TASK042 --> TASK164
-    TASK161 --> TASK164
+    TASK159 --> TASK215
+    TASK159 --> TASK217
     TASK161 --> TASK165
     TASK161 --> TASK166
     TASK161 --> TASK167
     TASK161 --> TASK168
     TASK161 --> TASK169
     TASK162 --> TASK161
-    TASK164 --> TASK165
-    TASK166 --> TASK164
     TASK166 --> TASK165
     TASK166 --> TASK167
     TASK166 --> TASK168
     TASK166 --> TASK169
-    TASK167 --> TASK164
     TASK167 --> TASK165
     TASK167 --> TASK168
     TASK167 --> TASK169
-    TASK168 --> TASK164
     TASK168 --> TASK165
     TASK168 --> TASK169
-    TASK169 --> TASK164
     TASK169 --> TASK165
     TASK173 --> TASK165
-    TASK186 --> TASK164
+    TASK189 --> TASK216
+    TASK217 --> TASK165
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -80,7 +76,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/server/... -count=1 && npm --prefix web run lint && npm --prefix web test ; npm --prefix web run lint && npm --prefix web test`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/audio/... ./internal/server/... -count=1 && npm --prefix web run lint && npm --prefix web test ; go build ./... && go vet ./... && go test ./internal/server/handlers/... -count=1 && npm --prefix web run lint && npm --prefix web test ; npm --prefix web run lint && npm --prefix web test`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

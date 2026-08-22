@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-204-guard-testserverstartgracefulshutdown-s-sigterm-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 0f58441a-4690-478d-aa95-5a157c57684b -->
+<!-- guid: 08f4f963-9fe5-4eba-8aef-84553d49fb29 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-204 — Guard TestServerStartGracefulShutdown's SIGTERM against future parallelism (TODO.md L280)
@@ -100,7 +100,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`grep -n 'SIGTERM' -B3 internal/server/server_more_test.go shows the new warning comment directly above the syscall.Kill call`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `grep -n 'SIGTERM' -B3 internal/server/server_more_test.go shows the new warning comment directly above the syscall.Kill call` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

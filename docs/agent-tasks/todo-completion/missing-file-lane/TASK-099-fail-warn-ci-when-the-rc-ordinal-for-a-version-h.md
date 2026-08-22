@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-099-fail-warn-ci-when-the-rc-ordinal-for-a-version-h.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: ccb516e0-99fe-43d6-a338-8d3046dbf3e8 -->
+<!-- guid: 0123cf64-f9ae-46c7-9df6-3dfd680f4242 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-099 — Fail/warn CI when the RC ordinal for a version hits 10 (TODO.md L8044)
@@ -78,8 +78,11 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] A state with 10 or more existing -rc.N releases for the current base version causes the new step to fail with a message naming the base version.
-- [ ] grep -n 'rc' .github/workflows/prerelease.yml matches the new counting step.
+- [ ] `git diff --check` exits 0 (run it as its own command, not chained before an echo).
+- [ ] `grep -L 'last-edited: ' .github/workflows/prerelease.yml` prints nothing (the header is present and bumped) — verified the file has a header block at HEAD: `head -6 .github/workflows/prerelease.yml` shows `# file:`/`# version: 2.10.4`/`# last-edited: 2026-07-06`.
+- [ ] `grep -n 'rc' .github/workflows/prerelease.yml` matches the new counting step.
+- [ ] `bash .github/scripts/check-rc-ordinal.sh testdata/gh-release-list-10rc.json v0.217` exits 1 and names the base version; the same script against testdata/gh-release-list-1rc.json exits 0 (the anti-vacuous case).
+- [ ] Changelog fragment present: `test -f changelog.d/20260821_missing-file-lane_099.md`.
 - [ ] Anti-over-suppression test: `N/A — this is a threshold check, not a filter/skip; the failure-direction to guard is under-counting (missing RCs for the current base), covered by the multi-base-version edge case above.` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only'` exits 0; `go vet`/lint clean.
@@ -102,7 +105,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`A state with 10 or more existing -rc.N releases for the current base version causes the new step to fail with a message naming the base version.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — ``grep -L 'last-edited: ' .github/workflows/prerelease.yml` prints nothing (the header is present and bumped) — verified the file has a header block at HEAD: `head -6 .github/workflows/prerelease.yml` shows `# file:`/`# version: 2.10.4`/`# last-edited: 2026-07-06`.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

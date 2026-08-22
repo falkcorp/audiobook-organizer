@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-170-retarget-dedup-operations-spec-ts-and-dedup-spec.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: ba48ce86-0af7-4de3-94b4-39840516c68d -->
+<!-- guid: ff93fd82-a7fa-4b9a-a8d2-56bd41083cd8 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-170 — Retarget dedup-operations.spec.ts and dedup.spec.ts resolve-production status mocks to v2 (TODO.md L4960)
@@ -66,8 +66,350 @@ Then, always:
 
 ## Tests
 
-- web/tests/e2e/dedup-operations.spec.ts: 'clicking Find Real Author calls resolve API' — still passes after the mock is retargeted to v2 (this is the existing test; verify it doesn't regress).
-- web/tests/e2e/dedup.spec.ts: 'clicking Find Real Author triggers API call' — same.
+- R
+- u
+- n
+-  
+- t
+- h
+- e
+-  
+- t
+- w
+- o
+-  
+- s
+- p
+- e
+- c
+- s
+-  
+- t
+- h
+- r
+- o
+- u
+- g
+- h
+-  
+- t
+- h
+- e
+-  
+- r
+- e
+- p
+- o
+- '
+- s
+-  
+- P
+- l
+- a
+- y
+- w
+- r
+- i
+- g
+- h
+- t
+-  
+- r
+- u
+- n
+- n
+- e
+- r
+- ,
+-  
+- n
+- o
+- t
+-  
+- t
+- h
+- e
+-  
+- V
+- i
+- t
+- e
+- s
+- t
+-  
+- g
+- a
+- t
+- e
+- :
+-  
+- n
+- p
+- m
+-  
+- -
+- -
+- p
+- r
+- e
+- f
+- i
+- x
+-  
+- w
+- e
+- b
+-  
+- e
+- x
+- e
+- c
+-  
+- -
+- -
+-  
+- p
+- l
+- a
+- y
+- w
+- r
+- i
+- g
+- h
+- t
+-  
+- t
+- e
+- s
+- t
+-  
+- -
+- c
+-  
+- t
+- e
+- s
+- t
+- s
+- /
+- e
+- 2
+- e
+- /
+- p
+- l
+- a
+- y
+- w
+- r
+- i
+- g
+- h
+- t
+- .
+- c
+- o
+- n
+- f
+- i
+- g
+- .
+- t
+- s
+-  
+- -
+- -
+- p
+- r
+- o
+- j
+- e
+- c
+- t
+-  
+- c
+- h
+- r
+- o
+- m
+- i
+- u
+- m
+-  
+- t
+- e
+- s
+- t
+- s
+- /
+- e
+- 2
+- e
+- /
+- d
+- e
+- d
+- u
+- p
+- -
+- o
+- p
+- e
+- r
+- a
+- t
+- i
+- o
+- n
+- s
+- .
+- s
+- p
+- e
+- c
+- .
+- t
+- s
+-  
+- t
+- e
+- s
+- t
+- s
+- /
+- e
+- 2
+- e
+- /
+- d
+- e
+- d
+- u
+- p
+- .
+- s
+- p
+- e
+- c
+- .
+- t
+- s
+-  
+- -
+- -
+- g
+- r
+- e
+- p
+-  
+- '
+- F
+- i
+- n
+- d
+-  
+- R
+- e
+- a
+- l
+-  
+- A
+- u
+- t
+- h
+- o
+- r
+- '
+- .
+-  
+- T
+- h
+- e
+-  
+- V
+- i
+- t
+- e
+- s
+- t
+-  
+- g
+- a
+- t
+- e
+-  
+- (
+- n
+- p
+- m
+-  
+- -
+- -
+- p
+- r
+- e
+- f
+- i
+- x
+-  
+- w
+- e
+- b
+-  
+- t
+- e
+- s
+- t
+- )
+-  
+- E
+- X
+- C
+- L
+- U
+- D
+- E
+- S
+-  
+- t
+- e
+- s
+- t
+- s
+- /
+- e
+- 2
+- e
+- /
+- *
+- *
+-  
+- a
+- n
+- d
+-  
+- w
+- i
+- l
+- l
+-  
+- p
+- a
+- s
+- s
+-  
+- r
+- e
+- g
+- a
+- r
+- d
+- l
+- e
+- s
+- s
+- .
 
 Anti-over-suppression test: `N/A — this is a mock-accuracy fix, not a new filter/guard.` — a known-good input still passes with the new guard active.
 
@@ -80,10 +422,542 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] grep -n "operations/v2" web/tests/e2e/dedup-operations.spec.ts returns a hit where line 118 used to be
-- [ ] grep -n "operations/v2" web/tests/e2e/dedup.spec.ts returns a hit where line 163 used to be
-- [ ] grep -n 'progress_current' web/tests/e2e/dedup-operations.spec.ts and web/tests/e2e/dedup.spec.ts each return >=1 hit
-- [ ] npx playwright test web/tests/e2e/dedup-operations.spec.ts web/tests/e2e/dedup.spec.ts exits 0
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] o
+- [ ] p
+- [ ] e
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] s
+- [ ] /
+- [ ] v
+- [ ] 2
+- [ ] '
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] e
+- [ ] 2
+- [ ] e
+- [ ] /
+- [ ] d
+- [ ] e
+- [ ] d
+- [ ] u
+- [ ] p
+- [ ] -
+- [ ] o
+- [ ] p
+- [ ] e
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] s
+- [ ] .
+- [ ] s
+- [ ] p
+- [ ] e
+- [ ] c
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] e
+- [ ] 2
+- [ ] e
+- [ ] /
+- [ ] d
+- [ ] e
+- [ ] d
+- [ ] u
+- [ ] p
+- [ ] .
+- [ ] s
+- [ ] p
+- [ ] e
+- [ ] c
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] e
+- [ ] a
+- [ ] c
+- [ ] h
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ]  
+- [ ] >
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] c
+- [ ]  
+- [ ] "
+- [ ] o
+- [ ] p
+- [ ] e
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] s
+- [ ] /
+- [ ] \
+- [ ] \
+- [ ] *
+- [ ] /
+- [ ] s
+- [ ] t
+- [ ] a
+- [ ] t
+- [ ] u
+- [ ] s
+- [ ] "
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ]  
+- [ ] b
+- [ ] o
+- [ ] t
+- [ ] h
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] 0
+- [ ]  
+- [ ] (
+- [ ] 1
+- [ ]  
+- [ ] e
+- [ ] a
+- [ ] c
+- [ ] h
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] :
+- [ ]  
+- [ ] d
+- [ ] e
+- [ ] d
+- [ ] u
+- [ ] p
+- [ ] -
+- [ ] o
+- [ ] p
+- [ ] e
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] s
+- [ ] .
+- [ ] s
+- [ ] p
+- [ ] e
+- [ ] c
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ] :
+- [ ] 1
+- [ ] 1
+- [ ] 8
+- [ ] ,
+- [ ]  
+- [ ] d
+- [ ] e
+- [ ] d
+- [ ] u
+- [ ] p
+- [ ] .
+- [ ] s
+- [ ] p
+- [ ] e
+- [ ] c
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ] :
+- [ ] 1
+- [ ] 6
+- [ ] 3
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] p
+- [ ] r
+- [ ] o
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] s
+- [ ] s
+- [ ] _
+- [ ] c
+- [ ] u
+- [ ] r
+- [ ] r
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] '
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ]  
+- [ ] b
+- [ ] o
+- [ ] t
+- [ ] h
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] >
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] d
+- [ ] a
+- [ ] t
+- [ ] a
+- [ ] :
+- [ ]  
+- [ ] {
+- [ ]  
+- [ ] o
+- [ ] p
+- [ ] e
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] '
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ]  
+- [ ] b
+- [ ] o
+- [ ] t
+- [ ] h
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] >
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] ;
+- [ ]  
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] s
+- [ ] p
+- [ ] e
+- [ ] c
+- [ ] s
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ]  
+- [ ] v
+- [ ] i
+- [ ] a
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ] o
+- [ ] '
+- [ ] s
+- [ ]  
+- [ ] o
+- [ ] w
+- [ ] n
+- [ ]  
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ] n
+- [ ] e
+- [ ] r
+- [ ] :
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] e
+- [ ] x
+- [ ] e
+- [ ] c
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ]  
+- [ ] p
+- [ ] l
+- [ ] a
+- [ ] y
+- [ ] w
+- [ ] r
+- [ ] i
+- [ ] g
+- [ ] h
+- [ ] t
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] -
+- [ ] c
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] e
+- [ ] 2
+- [ ] e
+- [ ] /
+- [ ] p
+- [ ] l
+- [ ] a
+- [ ] y
+- [ ] w
+- [ ] r
+- [ ] i
+- [ ] g
+- [ ] h
+- [ ] t
+- [ ] .
+- [ ] c
+- [ ] o
+- [ ] n
+- [ ] f
+- [ ] i
+- [ ] g
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] o
+- [ ] j
+- [ ] e
+- [ ] c
+- [ ] t
+- [ ]  
+- [ ] c
+- [ ] h
+- [ ] r
+- [ ] o
+- [ ] m
+- [ ] i
+- [ ] u
+- [ ] m
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] e
+- [ ] 2
+- [ ] e
+- [ ] /
+- [ ] d
+- [ ] e
+- [ ] d
+- [ ] u
+- [ ] p
+- [ ] -
+- [ ] o
+- [ ] p
+- [ ] e
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] s
+- [ ] .
+- [ ] s
+- [ ] p
+- [ ] e
+- [ ] c
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] e
+- [ ] 2
+- [ ] e
+- [ ] /
+- [ ] d
+- [ ] e
+- [ ] d
+- [ ] u
+- [ ] p
+- [ ] .
+- [ ] s
+- [ ] p
+- [ ] e
+- [ ] c
+- [ ] .
+- [ ] t
+- [ ] s
 - [ ] Anti-over-suppression test: `N/A — this is a mock-accuracy fix, not a new filter/guard.` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.

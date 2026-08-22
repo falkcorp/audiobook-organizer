@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f5690caa-91c2-438f-86f8-97ca9ccbe9da -->
+<!-- guid: 14644122-a135-4fa4-89fc-310635747c11 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — maintenance workstream (todo-completion)
@@ -14,28 +14,29 @@ flowchart LR
     subgraph Wave1
       TASK066[TASK-066 wire-a-durable-freshness-sta]
       TASK068[TASK-068 build-a-report-only-counter-]
-      TASK069[TASK-069 give-maintenance-jobs-v1-int]
       TASK071[TASK-071 build-a-detection-only-repor]
       TASK073[TASK-073 read-through-audit-of-the-8-]
       TASK074[TASK-074 build-a-report-only-census-o]
       TASK075[TASK-075 extend-purge-empty-authors-r]
-      TASK076[TASK-076 author-narrator-swap-repair-]
       TASK077[TASK-077 narrow-the-3-remaining-maint]
       TASK078[TASK-078 task-04-build-the-idempotent]
       TASK195[TASK-195 add-a-zero-size-bucket-to-ma]
     end
     subgraph Wave2
       TASK072[TASK-072 new-maintenance-op-merge-an-]
+      TASK076[TASK-076 author-narrator-swap-repair-]
     end
     subgraph Wave3
       TASK067[TASK-067 extend-the-repoint-repair-to]
     end
-    subgraph Wave5
+    subgraph Wave6
       TASK070[TASK-070 add-a-user-configurable-acti]
     end
     TASK066 --> TASK070
+    TASK066 --> TASK076
     TASK068 --> TASK067
     TASK073 --> TASK070
+    TASK076 --> TASK070
     TASK086 --> TASK072
 ```
 
@@ -45,7 +46,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/config/... ./internal/plugins/maintenance/... ./internal/server/... -count=1 && npm --prefix web run lint && npm --prefix web test ; go build ./... && go vet ./... && go test ./internal/maintenance/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/maintenance/jobs/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... ./internal/server/... -count=1`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/config/... ./internal/plugins/maintenance/... ./internal/server/... -count=1 && npm --prefix web run lint && npm --prefix web test ; go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/plugins/maintenance/... -count=1 ; go build ./... && go vet ./... && go test ./internal/maintenance/jobs/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... ./internal/server/... -count=1`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

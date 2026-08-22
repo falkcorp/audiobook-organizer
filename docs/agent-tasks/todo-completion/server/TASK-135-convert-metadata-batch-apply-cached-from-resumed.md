@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-135-convert-metadata-batch-apply-cached-from-resumed.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 9443fa85-030d-4c89-aa75-3c35c5940f27 -->
+<!-- guid: 80a085c7-7301-475c-b42c-33fd18a2950b -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-135 — Convert metadata.batch-apply-cached from ResumeDrop to real checkpoint/resume (TODO.md L4575)

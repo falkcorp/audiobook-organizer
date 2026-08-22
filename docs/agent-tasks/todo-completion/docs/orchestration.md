@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 5d9d9cac-f04f-43b7-82b3-4319fa8e08d0 -->
+<!-- guid: 441d5e8c-3016-4f2c-95e5-ab58cc43f4ff -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — docs workstream (todo-completion)
@@ -20,7 +20,6 @@ flowchart LR
       TASK054[TASK-054 re-verify-docs-reference-abs]
       TASK055[TASK-055 document-the-todo-d-fragment]
       TASK056[TASK-056 consolidate-the-august-execu]
-      TASK194[TASK-194 harden-the-systemd-unit-prot]
       TASK057[TASK-057 phase-8-write-the-abs-topolo]
       TASK058[TASK-058 update-execution-manifest-do]
       TASK059[TASK-059 close-out-the-2026-05-01-re-]

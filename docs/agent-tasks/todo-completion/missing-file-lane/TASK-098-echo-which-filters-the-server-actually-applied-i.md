@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-098-echo-which-filters-the-server-actually-applied-i.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e84e3886-b03d-4c7e-aa5e-5529b074973c -->
+<!-- guid: 1f21484f-86f1-4400-bf56-4513d61a7d9d -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-098 — Echo which filters the server actually applied in the /audiobooks list response (TODO.md L7736)
@@ -100,7 +100,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`curl with filters=[{"field":"library_state","value":"imported"}] returns a body containing "applied_filters":[{"field":"library_state","value":"imported"}]`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `curl with filters=[{"field":"library_state","value":"imported"}] returns a body containing "applied_filters":[{"field":"library_state","value":"imported"}]` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

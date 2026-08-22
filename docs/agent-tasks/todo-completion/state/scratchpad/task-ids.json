@@ -211,5 +211,10 @@
  "scope-19.json|90006|4|Migrate internal/server test fixtures to setupTestServerWith": "TASK-211",
  "scope-19.json|90010|None|Wire Round-2 confidence-bound clamping into a distinct apply": "TASK-193",
  "scope-19.json|90011|None|Add a detection-only counter + structured log for generateTa": "TASK-203",
- "scope-19.json|90013|None|Add a zero-size bucket to maintenance.missing-file-audit (th": "TASK-195"
+ "scope-19.json|90013|None|Add a zero-size bucket to maintenance.missing-file-audit (th": "TASK-195",
+ "scope-20.json|90020|1|Never send batchFetchCandidates({}) from the Search provider": "TASK-215",
+ "scope-20.json|90020|2|Show a loading skeleton, not the empty state, while the meta": "TASK-216",
+ "scope-20.json|90021|None|Cap GET /api/v1/audiobooks/metadata/cache/review to a defaul": "TASK-214",
+ "scope-20.json|90022|None|Evidence panel: explain a missing score derivation in plain ": "TASK-217",
+ "scope-20.json|90023|None|OperationActivityPanel: stop re-appending the last SSE log l": "TASK-218"
 }

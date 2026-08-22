@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-013-build-a-report-only-scan-for-book-rows-that-may-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 09c245fc-6862-4e1d-9d40-d15bedeaf219 -->
+<!-- guid: f53249ca-d3cf-41de-846f-f0a84e7062eb -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-013 — Build a report-only scan for book rows that may have been spuriously created by the .tmp-rename bug (TODO.md L4844)
@@ -109,7 +109,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`python3 scripts/find_spurious_stranded_book_rows.py --help exits 0.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `grep -rn "DELETE\|requests.delete\|api.*delete" scripts/find_spurious_stranded_book_rows.py returns 0 hits — confirms the report-only constraint is honored in the code, not just the docstring.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

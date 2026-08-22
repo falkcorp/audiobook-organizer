@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-114-never-delete-re-associate-combine-debris-books-i.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 8cb439e2-cd4e-4285-b74e-61fee11210ed -->
+<!-- guid: 8f9090cf-dfd5-4831-9ecc-5c36c40d9690 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-114 — Never delete — re-associate: combine debris books into a template match by duration, then version-group (TODO.md L8943)
@@ -46,13 +46,13 @@ Build the combine-by-template repair for redundant/debris book groups (the Succe
 
 ## Step-by-step
 
-1. Find or build the 'group's tracks map onto a better-assembled sibling' detector — likely reuses existing dedup/similarity scoring (search internal/plugins/dedup or wherever candidate grouping lives) to find, for a debris group, a candidate 'template' book with a clean, complete track list of similar total duration.
-2. Build the template-matching function: given the template's ordered track durations and the debris group's file durations, assign each debris file to the template slot whose duration it matches within a tolerance; files with no matching slot (missing tracks) are reported as gaps, not silently dropped; multiple debris files matching one slot (internal redundancy) are reported as a collision needing a documented tie-break rule.
-3. On apply=true only: combine the debris books' files into the template book, reusing whatever CombineBooks-style function regroup_apply.go's ApplyMultidisc/ApplyDuplicateOf already call — do not write a second combine implementation.
-4. Version-group the result: primary = most complete book, ties broken by earliest ULID, reusing pickPrimary's exact convention (regroup_apply.go L391) rather than reimplementing tie-breaking.
-5. NEVER call a row-delete function anywhere in this file — mirror missing_file_repoint.go's structural (not just documented) never-delete guarantee.
+1. Find the 'group's tracks map onto a better-assembled sibling' detector. Do NOT invent one: use the existing candidate grouping in internal/plugins/dedup (enumerate with `grep -rn '^func ' internal/plugins/dedup/*.go` and name the chosen function in your report before writing code). If no suitable scorer exists, STOP and report - do not write a new similarity scorer inside this op.
+2. Build the template-matching function: given the template's ordered track durations and the debris group's file durations, assign each debris file to the template slot whose duration it matches within a tolerance; files with no matching slot are reported as gaps, not silently dropped; multiple debris files matching one slot are reported as a collision needing a documented tie-break rule.
+3. On apply=true only: MOVE the debris books' book_file rows onto the template book with the store's book-file reassignment call and leave every debris BOOK row in place (empty but present). Do NOT call merge.Service.CombineBooks or anything behind regroup_apply.go's bookCombiner - internal/merge/serialize.go:15 documents CombineBooks as hard-deleting shells, which violates the never-delete rule this op exists to honor.
+4. Version-group the result: primary = most complete book, ties broken by earliest ULID, reusing pickPrimary's exact convention (internal/plugins/maintenance/regroup_apply.go:391) rather than reimplementing tie-breaking.
+5. NEVER call a row-delete function anywhere in this file - mirror missing_file_repoint.go's structural (not just documented) never-delete guarantee, and assert it with TestCombineByTemplate_NeverDeletesARow.
 6. Write a full per-group report (every debris file's outcome: matched-slot / gap / collision) before any apply-mode write, mirroring missing_file_repoint.go's report-before-summary ordering.
-7. Default apply=false; register the op.
+7. Default apply=false; register the op in internal/plugins/maintenance/plugin.go.
 
 Then, always:
 - Keep the change purely additive — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
@@ -110,7 +110,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 **This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: (1) the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; (2) every mutation is journaled through the existing undo ledger (`CreateOperationChange` — verify: `grep -rn "func.*CreateOperationChange" internal/database/*.go`) so `internal/undo` can replay it — a mutation without a journal row is a defect; (3) acceptance includes a test that applies on a fixture and then undoes via `internal/undo` and asserts the fixture is byte-identical; (4) the apply path refuses to start while a `library.scan` operation is running or queued (check the registry for an active scan before mutating — a running scan clobbers applied metadata). Idempotency: re-running in dry-run must report 0 pending changes after a successful apply. Rollback of the CODE = `git revert`; rollback of the DATA = the undo ledger, which is why (2) is not optional. PR stays open for the owner — the coordinator never admin-merges it.
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/plugins/maintenance/... -run CombineByTemplate passes all five cases.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -rln 'Successors\|combine_by_template\|CombineByTemplate' internal --include='*.go'` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

@@ -133,6 +133,10 @@ for t in tasks:
     if any(re.match(r"internal/database/iface_.*\.go$", f) or f == "internal/database/store.go" for f in ef):
         for m in ("internal/database/mock_store.go", "internal/database/mocks/mock_store.go"):
             if os.path.exists(os.path.join(REPO, m)): ef.append(m)
+    # verifier groups 8/9 (systematic check-9): every test file a brief edits or creates must be in exact_files
+    blob = json.dumps([t.get("steps"), t.get("tests"), t.get("acceptance"), t.get("edge_cases"), t.get("notes")])
+    for m in re.findall(r"(?<![\w/.-])((?:web/src|internal|cmd|pkg|scripts|tests?|e2e)/[\w./-]+?(?:_test\.go|\.test\.tsx?|\.spec\.tsx?))", blob):
+        if m not in ef and " " not in m: ef.append(m)
     t["exact_files"] = sorted(set(ef))
     t["tier_label"] = {"haiku": "Haiku-class", "sonnet": "Sonnet-class", "opus": "Opus-class"}.get((t.get("tier") or "sonnet").lower(), "Sonnet-class")
     if t.get("review_critical") and t["tier_label"] != "Opus-class":
@@ -251,10 +255,17 @@ def brief(t):
         anchors = "\n".join(f"  test -f {f} && echo OK   # 1 hit — file exists at HEAD (docs/edit target)" for f in ex) or "  # (new-file task: no pre-existing anchors; the exact_files above are CREATED by this task)"
     reuse = "\n".join(f"- Use `{r.get('name')}` in `{r.get('file')}` (verify: `{r.get('verify_grep')}`) — do NOT write a parallel helper." for r in (t.get("reuse") or [])) or "- No existing helper identified; do not invent new constants for concepts that already have a name — grep first."
     pol = t.get("polarity") or "additive"
-    new_sym = (t.get("acceptance") or ["<new symbol>"])[0]
+    def _presence(a):
+        a = str(a)
+        return bool(re.search(r"grep|test -f|ls |exists|present|returns|renders|contains", a, re.I)) and not re.search(r"lint|vet|go build|passes|green|npm --prefix web test$|make ci", a, re.I)
+    _acc = [str(a) for a in (t.get("acceptance") or [])]
+    new_sym = next((a for a in _acc if _presence(a)), None)
+    if new_sym is None:
+        _anch = [a for a in (t.get("verified_anchors") or []) if a.get("grep_cmd")]
+        new_sym = ("the artifact this task adds is present: re-run " + _anch[0]["grep_cmd"]) if _anch else (_acc[0] if _acc else "<new symbol>")
     DATA_ROLLBACK = ("**This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: (1) the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; (2) every mutation is journaled through the existing undo ledger (`CreateOperationChange` — verify: `grep -rn \"func.*CreateOperationChange\" internal/database/*.go`) so `internal/undo` can replay it — a mutation without a journal row is a defect; (3) acceptance includes a test that applies on a fixture and then undoes via `internal/undo` and asserts the fixture is byte-identical; (4) the apply path refuses to start while a `library.scan` operation is running or queued (check the registry for an active scan before mutating — a running scan clobbers applied metadata). Idempotency: re-running in dry-run must report 0 pending changes after a successful apply. Rollback of the CODE = `git revert`; rollback of the DATA = the undo ledger, which is why (2) is not optional. PR stays open for the owner — the coordinator never admin-merges it.\n\n")
     if pol == "additive":
-        idem = f"If the first acceptance check below already passes at HEAD (`{new_sym}`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change)."
+        idem = f"If this presence check already passes at HEAD — `{new_sym}` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change)."
     elif pol == "removal":
         idem = f"If the removed symbol/file is already ABSENT at HEAD (re-run the re-verify greps above: zero hits = already removed) AND the replacement is present, the removal is already done — run acceptance instead. Rollback = `git revert` the commit to restore the file + its call sites; no data or schema is touched."
     else:

@@ -1,0 +1,1917 @@
+{
+ "TASK-026": [
+  {
+   "claim": "uncontrolled-allocation-size is clamped (cap0 <= 4096)",
+   "cmd": "grep -n 'cap0 > 4096' internal/database/memdb_summaries.go",
+   "expect": "1 hit at L151",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "151:\tif cap0 > 4096 {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "no CodeQL suppression comment (lgtm/nosec/nolint) exists near the allocation",
+   "cmd": "grep -n 'lgtm\\|nosec\\|nolint' internal/database/memdb_summaries.go",
+   "expect": "0 hits \u2014 no suppression comment anywhere in the file",
+   "rc": 1,
+   "n": 0,
+   "out": [],
+   "err": ""
+  },
+  {
+   "claim": "the originally-cited clear-text-logging line no longer exists as described",
+   "cmd": "grep -n '%T.*Store()\\|Sprintf(\\\"%T' internal/server/server.go",
+   "expect": "0 hits \u2014 the code has moved or been refactored since the alert was filed",
+   "rc": 1,
+   "n": 0,
+   "out": [],
+   "err": ""
+  },
+  {
+   "claim": "the %T pattern does still exist elsewhere in the server package",
+   "cmd": "grep -rn 'Sprintf(\\\"%T\\\"' internal/server/",
+   "expect": "hits in server_lifecycle.go:1178 and handlers/system/handler.go:553, neither is 's.Store()'",
+   "rc": 0,
+   "n": 3,
+   "out": [
+    "internal/server/server_lifecycle.go:1178:\t\t\t\t\"store_type\", fmt.Sprintf(\"%T\", s.Ops()))",
+    "internal/server/library_list_warmer.go:124:func typeName(v interface{}) string { return fmt.Sprintf(\"%T\", v) }",
+    "internal/server/handlers/system/handler.go:553:\t\t\t\t\"store_type\", fmt.Sprintf(\"%T\", store))"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-027": [
+  {
+   "claim": "ListBookIDs already excludes MarkedForDeletion",
+   "cmd": "grep -n 'ListBookIDs' internal/database/pebble_store.go | head -3",
+   "expect": "comment: 'When memdb is available, delegates to the memdb fast path (which also filters MarkedForDeletion)'",
+   "rc": 0,
+   "n": 3,
+   "out": [
+    "600:\t\t// ListBookIDs walks the same memdb ID index as GetAllBooks and applies",
+    "604:\t\tids, err := p.mem().ListBookIDs()",
+    "699:// ListBookIDs returns the IDs of all books, without materializing Book"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "an identical 67,824 figure appears elsewhere, already explained as a stale-search-index-doc-count issue, not a store-boo",
+   "cmd": "grep -n '67,824' internal/server/search_coverage.go",
+   "expect": "1 hit in the file's header comment, describing Bleve DocCount()=67,824 vs live books=63,871 \u2014 a DIFFERENT axis of measurement than 'store reports 67,824 live bo",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "68:// 67,824 docs against 63,871 live books \u2014 3,953 soft-deleted books indexed"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-028": [
+  {
+   "claim": "DeleteAuthor uses the listing getter as its existence check",
+   "cmd": "grep -n 'GetBooksByAuthorIDCore(authorID)' internal/server/handlers/entities/handler.go",
+   "expect": "1 hit, L585",
+   "rc": 0,
+   "n": 2,
+   "out": [
+    "585:\tbooks, err := h.store.GetBooksByAuthorIDCore(authorID)",
+    "649:\tbooksCore, err := h.store.GetBooksByAuthorIDCore(authorID)"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "BulkDeleteAuthors uses the same listing getter per-ID in a loop",
+   "cmd": "grep -n 'GetBooksByAuthorIDCore(id)' internal/server/handlers/entities/handler.go",
+   "expect": "1 hit, L616",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "616:\t\tbooks, err := h.store.GetBooksByAuthorIDCore(id)"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "the getter's own doc comment says it is wrong for delete callers",
+   "cmd": "grep -n 'GetBooksByAuthorIDWithRoleCore is what merges and deletes consult' internal/database/memdb_reads.go",
+   "expect": "1 hit ~L512",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "512://   - GetBooksByAuthorIDWithRoleCore is what merges and deletes consult to find"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "the series twin of this exact bug already has a working fix and template",
+   "cmd": "grep -n 'func AsSeriesBookRefStore\\|func (m \\*MemStore) GetAllSeriesBookRefCounts\\|func (p \\*PebbleStore) GetAllSeriesBookRefCounts' internal/database/series_bookref.go",
+   "expect": "3 hits",
+   "rc": 0,
+   "n": 3,
+   "out": [
+    "59:func AsSeriesBookRefStore(s any) SeriesBookRefStore {",
+    "73:func (m *MemStore) GetAllSeriesBookRefCounts() (map[int]int, error) {",
+    "94:func (p *PebbleStore) GetAllSeriesBookRefCounts() (map[int]int, error) {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "the series fix's handler-layer wrapper + fail-closed error message is a direct template",
+   "cmd": "grep -n 'func seriesRefCounts' internal/server/handlers/entities/series_refcount.go",
+   "expect": "1 hit, L33",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "33:func seriesRefCounts(store any) (map[int]int, error) {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "the book_authors junction table exists with a Pebble key prefix 'book_authors:<bookID>'",
+   "cmd": "grep -n 'book_authors:%s' internal/database/pebble_store_authors.go",
+   "expect": ">=2 hits",
+   "rc": 0,
+   "n": 2,
+   "out": [
+    "463:\tkey := []byte(fmt.Sprintf(\"book_authors:%s\", bookID))",
+    "481:\tkey := []byte(fmt.Sprintf(\"book_authors:%s\", bookID))"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "a conformance test file for author getters already exists and is the place to add the memdb-vs-Pebble agreement test",
+   "cmd": "grep -n 'func Test' internal/database/author_getter_conformance_test.go",
+   "expect": ">=3 hits including TestGetBooksByAuthorIDCore_MemDBAndPebbleAgree",
+   "rc": 0,
+   "n": 3,
+   "out": [
+    "168:func TestGetBooksByAuthorIDWithRoleCore_MemDBAndPebbleAgree(t *testing.T) {",
+    "223:func TestGetBooksByAuthorIDCore_MemDBAndPebbleAgree(t *testing.T) {",
+    "270:func TestAuthorGetters_WithRoleIsASupersetOfCore(t *testing.T) {"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-029": [
+  {
+   "claim": "DedupSeries's merge loop uses the primary-filtered listing getter",
+   "cmd": "grep -n \"GetBooksBySeriesIDCore\" internal/dedup/series_dedup.go",
+   "expect": ">=3 hits incl L344, L492, L565",
+   "rc": 0,
+   "n": 4,
+   "out": [
+    "105:\t\tif books, err := store.GetBooksBySeriesIDCore(s.ID); err == nil {",
+    "344:\t\t\tbooks, err := store.GetBooksBySeriesIDCore(s.ID)",
+    "492:\t\tbooks, err := store.GetBooksBySeriesIDCore(mergeID)",
+    "565:\t\tallBooks, err := store.GetBooksBySeriesIDCore(keepID)"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "No series equivalent of GetBooksByAuthorIDAllVersions exists yet",
+   "cmd": "grep -n \"func.*GetBooksBySeriesID\" internal/database/memdb_reads.go internal/database/pebble_store.go",
+   "expect": "only Core-typed getters, no AllVersions variant",
+   "rc": 0,
+   "n": 2,
+   "out": [
+    "internal/database/memdb_reads.go:453:func (m *MemStore) GetBooksBySeriesIDCore(seriesID int, limit, offset int) ([]BookCore, error) {",
+    "internal/database/pebble_store.go:1811:func (p *PebbleStore) GetBooksBySeriesIDCore(seriesID int) ([]BookCore, error) {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "The author-side precedent this should mirror",
+   "cmd": "grep -n \"func (m \\*MemStore) GetBooksByAuthorIDAllVersions\" internal/database/memdb_reads.go",
+   "expect": "1 hit L524",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "524:func (m *MemStore) GetBooksByAuthorIDAllVersions(authorID int, limit, offset int) ([]Book, error) {"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-030": [
+  {
+   "claim": "UpdateCollection increments Version unconditionally with no CAS check",
+   "cmd": "grep -n 'col.Version = prev.Version' internal/database/pebble_store_collections.go",
+   "expect": "1 hit at L217",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "217:\tcol.Version = prev.Version + 1"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "all 6 call sites read-then-write, so col.Version is always populated with the just-read value before this call",
+   "cmd": "grep -n 'UpdateCollection(col)' internal/server/handlers/collections.go internal/server/handlers/abs/collections.go",
+   "expect": "6 hits total across both files",
+   "rc": 0,
+   "n": 6,
+   "out": [
+    "internal/server/handlers/collections.go:259:\t\t_ = h.store.UpdateCollection(col)",
+    "internal/server/handlers/collections.go:341:\tif err := h.store.UpdateCollection(col); err != nil {",
+    "internal/server/handlers/collections.go:396:\t\tif uerr := h.store.UpdateCollection(col); uerr != nil {",
+    "internal/server/handlers/abs/collections.go:249:\tif err := h.collections.UpdateCollection(col); err != nil {",
+    "internal/server/handlers/abs/collections.go:324:\tif err := h.collections.UpdateCollection(col); err != nil {",
+    "internal/server/handlers/abs/collections.go:365:\tif err := h.collections.UpdateCollection(col); err != nil {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "Collection already carries a Version field",
+   "cmd": "grep -n 'Version         int' internal/database/store.go",
+   "expect": "1 hit inside the Collection struct",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "525:\tVersion         int    `json:\"version\"`"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-031": [
+  {
+   "claim": "globalStore/globalStoreMu declared",
+   "cmd": "grep -n \"var globalStore Store\\|var globalStoreMu\" internal/database/store.go",
+   "expect": "2 hits at :1279-1280",
+   "rc": 0,
+   "n": 2,
+   "out": [
+    "1279:var globalStore Store",
+    "1280:var globalStoreMu sync.RWMutex"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "InitializeStore writes globalStore bare",
+   "cmd": "grep -n \"globalStore = s$\" internal/database/store.go",
+   "expect": "1 hit ~L1323",
+   "rc": 0,
+   "n": 2,
+   "out": [
+    "1293:\tglobalStore = s",
+    "1323:\tglobalStore = s"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "CloseStore reads+nils globalStore bare then sleeps as a race workaround",
+   "cmd": "grep -n \"store := globalStore\\|globalStore = nil\\|time.Sleep(100\" internal/database/store.go",
+   "expect": "3 hits ~L1337-1342",
+   "rc": 0,
+   "n": 3,
+   "out": [
+    "1337:\tstore := globalStore",
+    "1338:\tglobalStore = nil",
+    "1342:\t\ttime.Sleep(100 * time.Millisecond)"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "GetGlobalStore/SetGlobalStore already lock correctly",
+   "cmd": "grep -n \"globalStoreMu.RLock\\|globalStoreMu.Lock\" internal/database/store.go",
+   "expect": "2 hits ~L1284,1292",
+   "rc": 0,
+   "n": 2,
+   "out": [
+    "1284:\tglobalStoreMu.RLock()",
+    "1292:\tglobalStoreMu.Lock()"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "no production (non-test, non-comment, non-definition) caller of GetGlobalStore() exists today",
+   "cmd": "grep -rn \"GetGlobalStore()\" --include=\"*.go\" . | grep -v _test.go | grep -v '//' | grep -v 'func GetGlobalStore'",
+   "expect": "0 hits (excluding the func GetGlobalStore() definition itself, which also matches the bare literal text)",
+   "rc": 1,
+   "n": 0,
+   "out": [],
+   "err": ""
+  }
+ ],
+ "TASK-032": [
+  {
+   "claim": "iface_assert.go currently has 36 assertions",
+   "cmd": "grep -c \"_ .* = (\\*PebbleStore)(nil)\" internal/database/iface_assert.go",
+   "expect": "36",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "37"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "OAuthIdentityStore interface exists",
+   "cmd": "grep -n \"^type OAuthIdentityStore interface\" internal/database/iface_oauth.go",
+   "expect": "1 hit ~L9",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "9:type OAuthIdentityStore interface {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "MetadataCacheStore interface exists",
+   "cmd": "grep -n \"^type MetadataCacheStore interface\" internal/database/iface_metadata.go",
+   "expect": "1 hit ~L65",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "65:type MetadataCacheStore interface {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "RejectedMetadataStore interface exists",
+   "cmd": "grep -n \"^type RejectedMetadataStore interface\" internal/database/iface_metadata.go",
+   "expect": "1 hit ~L123",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "123:type RejectedMetadataStore interface {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "ReviewStore interface exists",
+   "cmd": "grep -n \"^type ReviewStore interface\" internal/database/iface_review.go",
+   "expect": "1 hit ~L12",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "12:type ReviewStore interface {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "PebbleStore implements CreateOAuthIdentity, GetMetadataCache, AddMetadataRejection, UpsertReviewItem (one method each of",
+   "cmd": "grep -n \"func (p \\*PebbleStore) CreateOAuthIdentity\\|func (p \\*PebbleStore) GetMetadataCache(\\|func (p \\*PebbleStore) AddMetadataRejection\\|func (p \\*PebbleStore) UpsertReviewItem\" internal/database/*.go",
+   "expect": "4 hits across oauth_identity.go, pebble_store_metadata_cache.go, pebble_store_metadata.go, review_store.go",
+   "rc": 0,
+   "n": 4,
+   "out": [
+    "internal/database/oauth_identity.go:36:func (p *PebbleStore) CreateOAuthIdentity(identity *OAuthIdentity) (*OAuthIdentity, error) {",
+    "internal/database/pebble_store_metadata_cache.go:24:func (p *PebbleStore) GetMetadataCache(bookID string) (*MetadataCandidateCache, error) {",
+    "internal/database/pebble_store_metadata.go:153:func (p *PebbleStore) AddMetadataRejection(r MetadataRejection) error {",
+    "internal/database/review_store.go:152:func (p *PebbleStore) UpsertReviewItem(item ReviewItem) (ReviewItem, error) {"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-033": [
+  {
+   "claim": "the broken reference exists at the cited line",
+   "cmd": "grep -n \"store-interface-segregation-design\" internal/database/store.go",
+   "expect": "1 hit ~L17",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "17:// wide access. See docs/superpowers/specs/2026-04-17-store-interface-segregation-design.md."
+   ],
+   "err": ""
+  },
+  {
+   "claim": "docs/superpowers/ is now gitignored, so nothing there is on main",
+   "cmd": "grep -n \"docs/superpowers/\" .gitignore",
+   "expect": "1 hit, with narrow !docs/superpowers/fleet-tasks/ etc. exceptions that do not cover specs/",
+   "rc": 0,
+   "n": 5,
+   "out": [
+    "304:docs/superpowers/",
+    "305:!docs/superpowers/fleet-tasks/",
+    "306:!docs/superpowers/fleet-tasks/*",
+    "307:!docs/superpowers/fleet-status/",
+    "308:!docs/superpowers/fleet-status/*"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "the commit that untracked it",
+   "cmd": "git log --oneline --all --grep=\"untrack docs/superpowers\"",
+   "expect": "1 hit: ff6607fe",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "ff6607fe chore: untrack docs/superpowers/ AI planning files and gitignore them"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "the archived counterpart exists on main under a slightly different filename",
+   "cmd": "find docs/archive/superpowers/plans -iname \"*store-interface-segregation*\"",
+   "expect": "1 hit: docs/archive/superpowers/plans/2026-04-17-store-interface-segregation.md",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "docs/archive/superpowers/plans/2026-04-17-store-interface-segregation.md"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-034": [
+  {
+   "claim": "total MockStore methods",
+   "cmd": "grep -c \"^func (m \\*MockStore)\" internal/database/mock_store.go",
+   "expect": "399",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "399"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "methods with a Func-override guard",
+   "cmd": "grep -c \"Func != nil\" internal/database/mock_store.go",
+   "expect": "313",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "313"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "GetAllAuthorBookCounts DOES have an override field, contradicting the item's specific example",
+   "cmd": "grep -n \"func (m \\*MockStore) GetAllAuthorBookCounts\" -A 4 internal/database/mock_store.go",
+   "expect": "1 hit, body is `if m.GetAllAuthorBookCountsFunc != nil { return m.GetAllAuthorBookCountsFunc() }`",
+   "rc": 0,
+   "n": 5,
+   "out": [
+    "868:func (m *MockStore) GetAllAuthorBookCounts() (map[int]int, error) {",
+    "869-\tif m.GetAllAuthorBookCountsFunc != nil {",
+    "870-\t\treturn m.GetAllAuthorBookCountsFunc()",
+    "871-\t}",
+    "872-\treturn map[int]int{}, nil"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "TestListAuthors_Success never sets GetAllAuthorBookCountsFunc and never asserts BookCount",
+   "cmd": "grep -n \"func TestListAuthors_Success\" -A 25 internal/server/handlers_integration_test.go",
+   "expect": "1 hit; body only asserts resp.Count == 2, no BookCount assertion, no GetAllAuthorBookCountsFunc set",
+   "rc": 0,
+   "n": 26,
+   "out": [
+    "360:func TestListAuthors_Success(t *testing.T) {",
+    "361-\tserver := setupHandlerTestServer(t)",
+    "362-",
+    "363-\tw := httptest.NewRecorder()",
+    "364-\treq := httptest.NewRequest(\"GET\", \"/api/authors\", nil)",
+    "365-\tc, _ := gin.CreateTestContext(w)"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-035": [
+  {
+   "claim": "DeleteNarrator does not exist anywhere in the store layer",
+   "cmd": "grep -rn 'DeleteNarrator' internal/database/*.go",
+   "expect": "0 hits",
+   "rc": 1,
+   "n": 0,
+   "out": [],
+   "err": ""
+  },
+  {
+   "claim": "CreateNarrator exists and writes narrator:%d plus narrator_name:%s index keys",
+   "cmd": "grep -n 'narrator_name:%s\\|narrator:%d' internal/database/pebble_store_authors.go",
+   "expect": ">=2 hits, ~L719-722",
+   "rc": 0,
+   "n": 4,
+   "out": [
+    "719:\tif err := batch.Set([]byte(fmt.Sprintf(\"narrator:%d\", nextID)), data, nil); err != nil {",
+    "723:\tnameKey := []byte(fmt.Sprintf(\"narrator_name:%s\", util.NormalizeAuthor(name)))",
+    "741:\tkey := []byte(fmt.Sprintf(\"narrator:%d\", id))",
+    "759:\tnameKey := []byte(fmt.Sprintf(\"narrator_name:%s\", util.NormalizeAuthor(name)))"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "CreateNarrator is declared on the Store interface (the file to add DeleteNarrator's declaration alongside)",
+   "cmd": "grep -n 'CreateNarrator(name string) (\\*Narrator, error)' internal/database/iface_catalog.go",
+   "expect": "1 hit, L46",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "46:\tCreateNarrator(name string) (*Narrator, error)"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "DeleteAuthor is the sibling method to mirror the shape of (batch delete + memdb cleanup)",
+   "cmd": "grep -n 'func (p \\*PebbleStore) DeleteAuthor(id int) error' internal/database/pebble_store_authors.go",
+   "expect": "1 hit, L157",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "157:func (p *PebbleStore) DeleteAuthor(id int) error {"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-036": [
+  {
+   "claim": "DeleteAuthor iterates the dead singular book_author: keyspace",
+   "cmd": "grep -n 'LowerBound: \\[\\]byte(\"book_author:\")' internal/database/pebble_store_authors.go",
+   "expect": "1 hit, inside DeleteAuthor, ~L180",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "185:\t\tLowerBound: []byte(\"book_author:\"),"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "the live junction data lives under the plural book_authors:<bookID> key, one JSON array per book",
+   "cmd": "grep -n 'func (p \\*PebbleStore) GetBookAuthors\\|func (p \\*PebbleStore) SetBookAuthors' internal/database/pebble_store_authors.go",
+   "expect": "2 hits, L462 and L480",
+   "rc": 0,
+   "n": 2,
+   "out": [
+    "462:func (p *PebbleStore) GetBookAuthors(bookID string) ([]BookAuthor, error) {",
+    "480:func (p *PebbleStore) SetBookAuthors(bookID string, authors []BookAuthor) error {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "nothing else in the store writes the singular book_author: keyspace DeleteAuthor reads from",
+   "cmd": "grep -rn '\"book_author:' internal/database/*.go",
+   "expect": "hits only inside DeleteAuthor's own iterator bounds, no writer anywhere",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "internal/database/pebble_store_authors.go:185:\t\tLowerBound: []byte(\"book_author:\"),"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-037": [
+  {
+   "claim": "book_type is not yet a Book field or DB column anywhere",
+   "cmd": "grep -rn \"book_type\\|BookType\" internal/database/bookcore.go internal/database/migrations.go",
+   "expect": "0 hits",
+   "rc": 1,
+   "n": 0,
+   "out": [],
+   "err": ""
+  }
+ ],
+ "TASK-038": [
+  {
+   "claim": "ListAllUserTags just forwards to store.ListAllTags with no source filter",
+   "cmd": "grep -n \"func (svc \\*AudiobookService) ListAllUserTags\" -A5 internal/audiobooks/service_tags.go",
+   "expect": "1 hit ~L16, body is 'return svc.store.ListAllTags()'",
+   "rc": 0,
+   "n": 6,
+   "out": [
+    "16:func (svc *AudiobookService) ListAllUserTags() ([]database.TagWithCount, error) {",
+    "17-\tif svc.store == nil {",
+    "18-\t\treturn nil, fmt.Errorf(\"database not initialized\")",
+    "19-\t}",
+    "20-\treturn svc.store.ListAllTags()",
+    "21-}"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "ListAllTags's tag_idx: index carries no source, so cannot distinguish system vs user tags today",
+   "cmd": "grep -n \"tag_idx:\" internal/database/pebble_store_tags.go",
+   "expect": "\u22651 hit ~L223",
+   "rc": 0,
+   "n": 10,
+   "out": [
+    "58:\t// Reverse index: tag_idx:<tag>:<bookID>",
+    "59:\ttagIdxKey := []byte(fmt.Sprintf(\"tag_idx:%s:%s\", tag, bookID))",
+    "75:\ttagIdxKey := []byte(fmt.Sprintf(\"tag_idx:%s:%s\", tag, bookID))",
+    "223:\tprefix := []byte(\"tag_idx:\")",
+    "235:\t\t// Key format: tag_idx:<tag>:<bookID>. Tags may themselves contain",
+    "241:\t\trest := strings.TrimPrefix(key, \"tag_idx:\")"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "System tags use colon namespaces like metadata:source:<name>",
+   "cmd": "grep -n \"metadata:source:\" internal/database/tag_helpers.go",
+   "expect": "1 hit ~L21",
+   "rc": 0,
+   "n": 2,
+   "out": [
+    "20://\tmetadata:source:<name>    \u2014 last metadata apply provenance",
+    "38:// programmer bugs (\"metadata:source:audible\" with prefix"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "book_tag: primary records DO carry a Source field ('user' vs 'system')",
+   "cmd": "grep -n \"Source:\" internal/database/pebble_store_tags.go",
+   "expect": "\u22651 hit ~L44",
+   "rc": 0,
+   "n": 2,
+   "out": [
+    "44:\t\tSource:    source,",
+    "308:\t\tSource:    source,"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-039": [
+  {
+   "claim": "BookSummary has TranscribedTitle but not TranscribeStatus",
+   "cmd": "grep -n 'TranscribedTitle\\|TranscribeStatus' internal/database/store.go",
+   "expect": "TranscribedTitle inside BookSummary (~L405); TranscribeStatus only on the full Book struct (~L350), not BookSummary",
+   "rc": 0,
+   "n": 11,
+   "out": [
+    "328:\t// Never used as the canonical title/author \u2014 see TranscribedTitle/Author/Narrator.",
+    "330:\t// TranscribedTitle / TranscribedAuthor / TranscribedNarrator are the fields",
+    "334:\tTranscribedTitle    *string `json:\"transcribed_title,omitempty\"`",
+    "344:\t// TranscribeStatus records the outcome of the most recent transcription",
+    "350:\tTranscribeStatus *string `json:\"transcribe_status,omitempty\"`",
+    "403:\t// TranscribedTitle is the Whisper-parsed intro title, carried in the"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "two BookSummary construction sites both need updating",
+   "cmd": "grep -n 'func bookToSummary' internal/database/pebble_store.go; grep -n 'BookSummary{' internal/database/memdb_summaries.go",
+   "expect": "1 hit ~L1043 and 1 hit ~L220",
+   "rc": 0,
+   "n": 3,
+   "out": [
+    "1043:func bookToSummary(b *Book) BookSummary {",
+    "89:\t\treturn []BookSummary{}, nil",
+    "220:\t\tout = append(out, BookSummary{"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-177": [
+  {
+   "claim": "go.mod targets a Go version supporting t.Context() (1.24+)",
+   "cmd": "grep -n '^go ' go.mod",
+   "expect": "go 1.24.0 (per CLAUDE.md this should be bumped to 1.25/1.26; either way t.Context() is available)",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "3:go 1.26.0"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "no test in internal/database currently uses t.Context()",
+   "cmd": "grep -rn 't.Context()' internal/database/*.go | wc -l",
+   "expect": "0",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "0"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "exactly 12 test files contain the unbounded-wait pattern",
+   "cmd": "grep -rl '\\.Wait()\\|<-.*chan\\|\\.Lock()' internal/database/*_test.go internal/database/dbtest/*.go | sort | wc -l",
+   "expect": "12",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "12"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "one concrete example -- dataloss_concurrency_test.go has a bare wg.Wait() with no timeout",
+   "cmd": "grep -n '\\.Wait()' internal/database/dataloss_concurrency_test.go",
+   "expect": "1 hit ~L109",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "109:\twg.Wait()"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "embedding_store_chaos_test.go's own comment documents a bare wg.Wait() having hung before with no test failure",
+   "cmd": "grep -n 'a bare wg.Wait() produced NO test failure' internal/database/embedding_store_chaos_test.go",
+   "expect": "1 hit ~L38",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "38:// commitPipeline.prepare), a bare wg.Wait() produced NO test failure \u2014 it hung"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-178": [
+  {
+   "claim": "coverage-check-short and test-short targets exist and this package's run time counts against them",
+   "cmd": "grep -n 'coverage-check-short\\|test-short:' Makefile",
+   "expect": "\u22651 hit each",
+   "rc": 0,
+   "n": 8,
+   "out": [
+    "24:        coverage coverage-check coverage-check-short ci \\",
+    "193:## test-short: Run Go backend tests in short mode \u2014 skips slow property",
+    "195:## Produces coverage.out as a side effect (consumed by coverage-check-short).",
+    "205:## 81950 profile lines), so the coverage-check-short floor is unaffected.",
+    "211:test-short: vet",
+    "535:## coverage-check-short: Verify coverage using pre-existing coverage.out (produced by test-short)."
+   ],
+   "err": ""
+  },
+  {
+   "claim": "internal/database has 123 test files -- large surface, profiling needed before picking a fix",
+   "cmd": "ls internal/database/*_test.go | wc -l",
+   "expect": "123",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "123"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "no TestMain exists to hoist shared setup into",
+   "cmd": "grep -rln 'func TestMain' internal/database/*.go",
+   "expect": "0 hits",
+   "rc": 1,
+   "n": 0,
+   "out": [],
+   "err": ""
+  }
+ ],
+ "TASK-179": [
+  {
+   "claim": "iface_misc.go no longer exists -- already split (differently than the plan literally described)",
+   "cmd": "find internal/database -iname 'iface_misc*'",
+   "expect": "0 hits",
+   "rc": 0,
+   "n": 0,
+   "out": [],
+   "err": ""
+  },
+  {
+   "claim": "Store is now a 6-entry regrouping of the original 40, explicitly NOT a narrowing",
+   "cmd": "grep -n 'This is a REGROUPING, not a narrowing' internal/database/store.go",
+   "expect": "1 hit ~L20",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "20:// This is a REGROUPING, not a narrowing: Store's method set is byte-identical"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "91 files still reference database.Store directly -- reachability is unchanged",
+   "cmd": "grep -rln 'database\\.Store\\b' --include='*.go' . | grep -v _test | grep -v vendor | grep -v .worktrees | wc -l",
+   "expect": "91",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "91"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "the existing Interface Width Ratchet CI job measures a DIFFERENT metric (interfacebloat declared width, not database.Sto",
+   "cmd": "grep -n 'interfacebloat ONLY, deliberately' scripts/check-interface-width.sh",
+   "expect": "1 hit -- the script's own comment names interfacebloat as its sole, deliberate target",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "60:# interfacebloat ONLY, deliberately. nolintlint is gated separately by the"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "no width-reachability gate targeting database.Store as a parameter type exists yet",
+   "cmd": "find . -iname '*store_width*' -o -iname '*interfacebloat*'",
+   "expect": "0 hits outside .golangci.yml",
+   "rc": 0,
+   "n": 0,
+   "out": [],
+   "err": ""
+  },
+  {
+   "claim": "the plan doc's Phase 2 item 2 explicitly demands AST/go-types, not grep",
+   "cmd": "grep -n 'A build gate on .database.Store. in new files' docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md",
+   "expect": "1 hit ~L117",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "117:2. **A build gate on `database.Store` in new files.** Must be AST/`go-types`, not grep:"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "an AST-parsing Go tool precedent already exists to model the new tool on",
+   "cmd": "grep -n '\"go/parser\"' tools/cmd/oplint/main.go",
+   "expect": "1 hit",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "18:\t\"go/parser\""
+   ],
+   "err": ""
+  },
+  {
+   "claim": "a baseline-ratchet CI job pattern already exists to model the new gate's wiring on",
+   "cmd": "sed -n '101,107p' .github/workflows/ci.yml",
+   "expect": "shows the 'interface-width' job name and its steps, the pattern to mirror for a new 'store-width' job",
+   "rc": 0,
+   "n": 7,
+   "out": [
+    "interface-width:",
+    "    name: Interface Width Ratchet",
+    "    runs-on: ubuntu-latest",
+    "    timeout-minutes: 15",
+    "    env:",
+    "      GOEXPERIMENT: jsonv2"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-040": [
+  {
+   "claim": "MergeBooks reassigns ALL of a loser's external IDs to the winner, irreversibly, with no record kept of the pre-reassignm",
+   "cmd": "grep -n \"ReassignExternalIDs(book.ID, resolvedPrimaryID)\" internal/merge/service.go",
+   "expect": "1 hit ~L254",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "254:\t\t\tif err := eidStore.ReassignExternalIDs(book.ID, resolvedPrimaryID); err != nil {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "ReassignExternalIDs moves ALL mappings for oldBookID to newBookID, it is not scoped to a subset",
+   "cmd": "grep -n \"func (p \\*PebbleStore) ReassignExternalIDs\" internal/database/pebble_store_externalids.go",
+   "expect": "1 hit ~L148, body iterates GetExternalIDsForBook(oldBookID) unconditionally",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "148:func (p *PebbleStore) ReassignExternalIDs(oldBookID, newBookID string) error {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "AutoMergeJournalEntry has no field to record the loser's pre-merge external IDs or removed iTunes PIDs",
+   "cmd": "grep -n \"type AutoMergeJournalEntry struct\" -A 25 internal/database/dedup_automerge_journal.go",
+   "expect": "struct fields are Key/CandidateID/WinnerID/LoserID/WinnerPreMergeTS/LoserPreMergeTS/Tag/MergedAt only, no ext-id or PID field",
+   "rc": 0,
+   "n": 26,
+   "out": [
+    "36:type AutoMergeJournalEntry struct {",
+    "37-\t// Key is the full Pebble key this entry is stored at (dedup:automerge:...).",
+    "38-\t// Populated on read so callers can pass it straight to UnmergeAuto.",
+    "39-\tKey string `json:\"key,omitempty\"`",
+    "40-",
+    "41-\t// CandidateID is the dedup candidate that triggered the merge."
+   ],
+   "err": ""
+  },
+  {
+   "claim": "UnmergeAuto only calls RevertBookToVersion on both books, nothing else",
+   "cmd": "grep -n \"RevertBookToVersion\" internal/dedup/auto_resolve.go",
+   "expect": "2 hits inside UnmergeAuto ~L403,L410",
+   "rc": 0,
+   "n": 2,
+   "out": [
+    "403:\t\tif _, err := de.bookStore.RevertBookToVersion(entry.LoserID, time.Unix(0, entry.LoserPreMergeTS)); err != nil {",
+    "410:\t\tif _, err := de.bookStore.RevertBookToVersion(entry.WinnerID, time.Unix(0, entry.WinnerPreMergeTS)); err != nil {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "WriteBackEnqueuer has no reverse (add-back) method, only EnqueueRemove",
+   "cmd": "grep -n \"type WriteBackEnqueuer interface\" -A 4 internal/merge/service.go",
+   "expect": "interface has exactly one method, EnqueueRemove(pid string)",
+   "rc": 0,
+   "n": 5,
+   "out": [
+    "21:type WriteBackEnqueuer interface {",
+    "22-\tEnqueueRemove(pid string)",
+    "23-}",
+    "24-",
+    "25-// ExternalIDReassigner is the subset of external-ID operations that"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-041": [
+  {
+   "claim": "EnsureSingletonBookTag actually takes the narrow BookTagSingletonStore, not the full Store",
+   "cmd": "grep -n 'func EnsureSingletonBookTag' internal/database/tag_helpers.go",
+   "expect": "1 hit L66, param type BookTagSingletonStore",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "66:func EnsureSingletonBookTag(store BookTagSingletonStore, bookID, prefix, fullTag, source string) error {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "BookTagSingletonStore is a 3-method interface",
+   "cmd": "grep -n 'type BookTagSingletonStore interface' internal/database/tag_helpers.go",
+   "expect": "1 hit L46",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "46:type BookTagSingletonStore interface {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "CollectDuration's tagStore param is currently the wide dedup.Store",
+   "cmd": "grep -n 'tagStore Store' internal/dedup/collectors_metadata.go",
+   "expect": "1 hit L147",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "147:\ttagStore Store, // may be nil \u2014 side-effect tags silently skipped"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "dedup.Store is an 8-entry composition (the 'whole surface')",
+   "cmd": "grep -n 'type Store interface' internal/dedup/store.go",
+   "expect": "1 hit L102",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "102:type Store interface {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "operations/interfaces.go's comment already correctly documents its own historical narrowing (verified correct, no action",
+   "cmd": "grep -n 'structural satisfaction requires the full' internal/server/handlers/operations/interfaces.go",
+   "expect": "1 hit L27, in a comment explaining it was narrowed by #2566",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "27:// \"structural satisfaction requires the full\" \u2014 accurate until #2566 narrowed the"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "system/interfaces.go's SettingsStore claim is verified accurate (no action needed)",
+   "cmd": "grep -n 'func SaveConfigToDatabase' internal/config/persistence.go",
+   "expect": "1 hit L1491, param `store database.SettingsStore`",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "1491:func SaveConfigToDatabase(store database.SettingsStore) error {"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-042": [
+  {
+   "claim": "group ID is reused from any book already carrying one",
+   "cmd": "grep -n 'versionGroupID = \\*b.VersionGroupID' internal/merge/service.go",
+   "expect": "1 hit ~L224",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "200:\t\t\tversionGroupID = *b.VersionGroupID"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "the primary-flag loop only touches the `books` argument, never queries for other existing group members",
+   "cmd": "grep -n 'for i, book := range books' internal/merge/service.go",
+   "expect": "1 hit ~L232, followed by `book.IsPrimaryVersion = &isPrimary` with no lookup of sibling books sharing versionGroupID",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "214:\tfor i, book := range books {"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-043": [
+  {
+   "claim": "DedupSeries has no dry-run parameter",
+   "cmd": "grep -n \"func DedupSeries\" internal/dedup/series_dedup.go",
+   "expect": "1 hit L266, signature has no DryRun/params arg",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "266:func DedupSeries("
+   ],
+   "err": ""
+  },
+  {
+   "claim": "No DryRun/dry_run token exists anywhere in the file",
+   "cmd": "grep -n \"DryRun\\|dry_run\" internal/dedup/series_dedup.go",
+   "expect": "0 hits",
+   "rc": 1,
+   "n": 0,
+   "out": [],
+   "err": ""
+  },
+  {
+   "claim": "Series-prune (a sibling op) has the DryRun pattern to model this on",
+   "cmd": "grep -n \"p.LegacyOpID\" internal/server/duplicates_ops.go",
+   "expect": "hits at L513/L522 for the series-prune op, a nearby sibling to wire similarly",
+   "rc": 0,
+   "n": 32,
+   "out": [
+    "75:\t\t\t\tID:     p.LegacyOpID,",
+    "103:\t\t\tif s.activityWriter != nil && p.LegacyOpID != \"\" {",
+    "104:\t\t\t\tactivity.FlushOperation(s.activityWriter, p.LegacyOpID)",
+    "105:\t\t\t\tactivity.EmitInfo(s.activityWriter, p.LegacyOpID, \"dedup.book-scan\", \"dedup\",",
+    "142:\t\t\t\tID:     p.LegacyOpID,",
+    "187:\t\t\tif s.activityWriter != nil && p.LegacyOpID != \"\" {"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-044": [
+  {
+   "claim": "DedupSeries/MergeSeries in series_dedup.go still use the filtered counter at 4 call sites",
+   "cmd": "grep -n \"GetBooksBySeriesIDCore\" internal/dedup/series_dedup.go",
+   "expect": "4 hits: L105, L344, L492, L565",
+   "rc": 0,
+   "n": 4,
+   "out": [
+    "105:\t\tif books, err := store.GetBooksBySeriesIDCore(s.ID); err == nil {",
+    "344:\t\t\tbooks, err := store.GetBooksBySeriesIDCore(s.ID)",
+    "492:\t\tbooks, err := store.GetBooksBySeriesIDCore(mergeID)",
+    "565:\t\tallBooks, err := store.GetBooksBySeriesIDCore(keepID)"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "csUnlinkAndDeleteSeries/csMergeSeriesGroup in cleanup_series.go still use the filtered counter",
+   "cmd": "grep -n \"GetBooksBySeriesIDCore\" internal/maintenance/jobs/cleanup_series.go",
+   "expect": "2 hits: L68, L160",
+   "rc": 0,
+   "n": 3,
+   "out": [
+    "68:\t\tbooks, bErr := store.GetBooksBySeriesIDCore(ser.ID)",
+    "160:\t\tbooks, err := store.GetBooksBySeriesIDCore(fromID)",
+    "162:\t\t\treturn fmt.Errorf(\"GetBooksBySeriesIDCore(%d): %w\", fromID, err)"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "PebbleStore.DeleteSeries already notifies memdb on delete (confirming the TODO's own claim, so store-layer invalidation ",
+   "cmd": "grep -n \"p.DeleteSeriesFromMemDB(id)\" internal/database/pebble_store_series.go",
+   "expect": "1 hit ~L188",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "188:\tp.DeleteSeriesFromMemDB(id)"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-045": [
+  {
+   "claim": "no existing classifier for title-derived series",
+   "cmd": "grep -rln \"title-derived.*series\\|near.*bucket\" internal --include=*.go",
+   "expect": "0 hits",
+   "rc": 1,
+   "n": 0,
+   "out": [],
+   "err": ""
+  },
+  {
+   "claim": "reusable report-only op pattern with Apply bool default-false",
+   "cmd": "grep -n \"Apply bool\" internal/plugins/maintenance/dedup_triage.go",
+   "expect": "1 hit ~L288, comment describing the report-only contract",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "294:\tApply bool `json:\"apply\"`"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-046": [
+  {
+   "claim": "AsExternalIDReassigner uses a bare type assertion",
+   "cmd": "grep -n \"func AsExternalIDReassigner\" -A 8 internal/merge/service.go",
+   "expect": "1 hit ~L34, body is `s.(ExternalIDReassigner)`",
+   "rc": 0,
+   "n": 9,
+   "out": [
+    "34:func AsExternalIDReassigner(s any) ExternalIDReassigner {",
+    "35-\tif s == nil {",
+    "36-\t\treturn nil",
+    "37-\t}",
+    "38-\tif eid, ok := s.(ExternalIDReassigner); ok {",
+    "39-\t\treturn eid"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "called on ms.db at two sites",
+   "cmd": "grep -n \"AsExternalIDReassigner(ms.db)\" internal/merge/service.go",
+   "expect": "2 hits ~L236,377",
+   "rc": 0,
+   "n": 2,
+   "out": [
+    "236:\teidStore := AsExternalIDReassigner(ms.db)",
+    "377:\teidStore := AsExternalIDReassigner(ms.db)"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "database.AsCapability exists and is the documented fix for exactly this shape",
+   "cmd": "grep -n \"func AsCapability\" internal/database/store_capability.go",
+   "expect": "1 hit ~L86",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "86:func AsCapability[T any](s any) (T, bool) {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "the identical pattern is already fixed once, as a copyable reference",
+   "cmd": "grep -n \"func resolveFingerprintResetter\" -A 6 internal/plugins/acoustid/reset_all.go",
+   "expect": "1 hit ~L223, body calls database.AsCapability[fingerprintResetter](s)",
+   "rc": 0,
+   "n": 6,
+   "out": [
+    "223:func resolveFingerprintResetter(s any) fingerprintResetter {",
+    "224-\tif c, ok := database.AsCapability[fingerprintResetter](s); ok {",
+    "225-\t\treturn c",
+    "226-\t}",
+    "227-\treturn nil",
+    "228-}"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "merge.Service.db is an interface (any-compatible), not a concrete type",
+   "cmd": "grep -n \"db  *Store\" internal/merge/service.go",
+   "expect": "1 hit ~L51 `db Store` inside `type Service struct`",
+   "rc": 0,
+   "n": 2,
+   "out": [
+    "51:\tdb               Store",
+    "85:func NewService(db Store) *Service {"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-047": [
+  {
+   "claim": "CollectDuration's tagStore param is typed dedup.Store",
+   "cmd": "grep -n \"func CollectDuration\" -A 5 internal/dedup/collectors_metadata.go",
+   "expect": "1 hit ~L145, param `tagStore Store`",
+   "rc": 0,
+   "n": 6,
+   "out": [
+    "145:func CollectDuration(",
+    "146-\tstore DurationCollectorStore,",
+    "147-\ttagStore Store, // may be nil \u2014 side-effect tags silently skipped",
+    "148-\tbook *database.Book,",
+    "149-\tcfg DurationCollectorConfig,",
+    "150-) ([]unified.Signal, error) {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "EnsureSingletonBookTag actually requires only BookTagSingletonStore (3 methods)",
+   "cmd": "grep -n \"func EnsureSingletonBookTag\" internal/database/tag_helpers.go",
+   "expect": "1 hit ~L66: `func EnsureSingletonBookTag(store BookTagSingletonStore, ...)`",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "66:func EnsureSingletonBookTag(store BookTagSingletonStore, bookID, prefix, fullTag, source string) error {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "BookTagSingletonStore is exactly 3 methods",
+   "cmd": "grep -n \"type BookTagSingletonStore interface\" -A 4 internal/database/tag_helpers.go",
+   "expect": "1 hit ~L46, 3 method lines",
+   "rc": 0,
+   "n": 5,
+   "out": [
+    "46:type BookTagSingletonStore interface {",
+    "47-\tGetBookTagsDetailed(bookID string) ([]BookTag, error)",
+    "48-\tRemoveBookTagsByPrefix(bookID, prefix, source string) error",
+    "49-\tAddBookTagWithSource(bookID, tag, source string) error",
+    "50-}"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "dedup.Store already embeds database.BookTagSingletonStore by name (so narrowing the param does not require touching call",
+   "cmd": "grep -n \"database.BookTagSingletonStore\" internal/dedup/store.go",
+   "expect": "1 hit inside dedupForwardedStores",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "42:\tdatabase.BookTagSingletonStore"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "the only two callers pass either nil or de.bookStore (dedup.Store), both of which satisfy the narrower type",
+   "cmd": "grep -n \"CollectDuration(\" internal/dedup/rescore.go internal/dedup/engine.go",
+   "expect": "2 hits: rescore.go:228 passes nil, engine.go:562 passes de.bookStore",
+   "rc": 0,
+   "n": 2,
+   "out": [
+    "internal/dedup/rescore.go:228:\tallDurationSigs, _ := CollectDuration(de.bookStore, nil, book, durCfg)",
+    "internal/dedup/engine.go:562:\tallDurationSigs, _ := CollectDuration(de.bookStore, de.bookStore, book, durCfg)"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-048": [
+  {
+   "claim": "CombineBooks is DB-only today and doesn't move files",
+   "cmd": "grep -n \"DB-only: files stay where they are\" internal/merge/service.go",
+   "expect": "1 hit ~L330",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "331:// DB-only: files stay where they are on disk (most shattered sets are already in"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "ensureUnderRoot helper already exists to gate root-relative moves",
+   "cmd": "grep -n \"func ensureUnderRoot\" internal/organizer/organizer.go",
+   "expect": "1 hit ~L573",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "573:func ensureUnderRoot(fullPath, rootDir string) error {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "Organizer.OrganizeBook is the existing physical-move entrypoint to reuse",
+   "cmd": "grep -n \"func (o \\*Organizer) OrganizeBook\" internal/organizer/organizer.go",
+   "expect": "1 hit ~L171",
+   "rc": 0,
+   "n": 2,
+   "out": [
+    "171:func (o *Organizer) OrganizeBook(book *database.Book) (string, string, error) {",
+    "702:func (o *Organizer) OrganizeBookDirectory(book *database.Book, files []database.BookFile) (string, map[string]string, error) {"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-049": [
+  {
+   "claim": "WholeFileSimilarity already used as a scoring signal",
+   "cmd": "grep -n WholeFileSimilarity internal/dedup/engine.go internal/dedup/collectors_acoustid.go internal/fingerprint/wholefile.go",
+   "expect": "3 hits across the 3 files",
+   "rc": 0,
+   "n": 6,
+   "out": [
+    "internal/dedup/engine.go:4104:\t\t\t\t\t\tsim, simErr := fingerprint.WholeFileSimilarity(f.AcoustIDFingerprint, cand.AcoustIDFingerprint)",
+    "internal/dedup/collectors_acoustid.go:16://     index built by T012 (LSHProbe), followed by WholeFileSimilarity Hamming",
+    "internal/dedup/collectors_acoustid.go:229://  3. For each candidate, WholeFileSimilarity computes the Hamming similarity",
+    "internal/dedup/collectors_acoustid.go:326:\t\thamming, simErr := fingerprint.WholeFileSimilarity(",
+    "internal/fingerprint/wholefile.go:137:// WholeFileSimilarity compares two whole-file fingerprints (raw LE uint32",
+    "internal/fingerprint/wholefile.go:144:func WholeFileSimilarity(a, b []byte) (float64, error) {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "autoResolveEligible's corroboration gate and its existing fallback branch",
+   "cmd": "grep -n 'DistinctAutoResolvePrimaryKinds\\|whole-book-signature true_dup' internal/dedup/auto_resolve.go",
+   "expect": "\u22652 hits ~L250,262",
+   "rc": 0,
+   "n": 7,
+   "out": [
+    "35:// whole-book-signature true_dup label.",
+    "43:// DistinctAutoResolvePrimaryKinds returns the distinct PRIMARY signal kinds",
+    "55:func DistinctAutoResolvePrimaryKinds(signals []unified.Signal) []unified.SignalKind {",
+    "251:\t// whole-book-signature true_dup labeled example.",
+    "252:\t// Sorted by DistinctAutoResolvePrimaryKinds, so the audit reason string is",
+    "255:\tdistinct := DistinctAutoResolvePrimaryKinds(c.ScoreBreakdown.Signals)"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "AutoResolveEnabled kill switch gates all apply=true auto-resolve calls",
+   "cmd": "grep -n AutoResolveEnabled internal/dedup/auto_resolve.go",
+   "expect": "\u22652 hits ~L96-122",
+   "rc": 0,
+   "n": 3,
+   "out": [
+    "96:// always works regardless of the AutoResolveEnabled kill switch so an operator",
+    "99:// Apply (apply=true) requires config.AppConfig.Dedup.AutoResolveEnabled to be",
+    "122:\tif apply && !config.AppConfig.Dedup.AutoResolveEnabled {"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-050": [
+  {
+   "claim": "existing split-book detection is metadata/title-shape only, no fingerprint matching",
+   "cmd": "grep -n 'AcoustID\\|Fingerprint\\|fpidx' internal/dedup/split_book_detector.go",
+   "expect": "0 hits",
+   "rc": 1,
+   "n": 0,
+   "out": [],
+   "err": ""
+  },
+  {
+   "claim": "fpidx LSH probe API exists to build the containment match on (the real symbol is LSHProbe, not Lookup/Query)",
+   "cmd": "grep -n 'func.*LSHProbe\\|func.*Subprints' internal/database/pebble_store_lsh.go internal/fingerprint/lsh.go",
+   "expect": "2 hits: internal/database/pebble_store_lsh.go:123 (LSHProbe), internal/fingerprint/lsh.go:64 (Subprints)",
+   "rc": 0,
+   "n": 2,
+   "out": [
+    "internal/database/pebble_store_lsh.go:123:func (s *PebbleStore) LSHProbe(subs []fingerprint.Subprint, bands []byte, maxCandidates int) (map[string]int, error) {",
+    "internal/fingerprint/lsh.go:64:func Subprints(raw []byte) ([]Subprint, []byte, error) {"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-180": [
+  {
+   "claim": "the abridged tag is applied by a duration-ratio check in collectors_metadata.go, with the exact threshold visible",
+   "cmd": "grep -n 'dedup:duration-abridged\\|pct >= 0.10' internal/dedup/collectors_metadata.go",
+   "expect": "hits at ~L134 (doc comment), L261/264 (EnsureSingletonBookTag calls), and L263 (pct >= 0.10 condition)",
+   "rc": 0,
+   "n": 4,
+   "out": [
+    "134://   - dedup:duration-abridged tag applied to BOTH books when duration differs",
+    "259:\t\tif pct >= 0.10 && titleDist <= cfg.LevenshteinMax {",
+    "261:\t\t\t\tif err := database.EnsureSingletonBookTag(tagStore, book.ID, \"dedup:duration-abridged\", \"dedup:duration-abridged\", \"system\"); err != nil {",
+    "264:\t\t\t\tif err := database.EnsureSingletonBookTag(tagStore, other.ID, \"dedup:duration-abridged\", \"dedup:duration-abridged\", \"system\"); err != nil {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "a directly analogous report-only maintenance op already exists to model the new one on",
+   "cmd": "grep -n 'func (p \\*Plugin) dedupExactTriageDef' internal/plugins/maintenance/dedup_triage.go",
+   "expect": "1 hit ~L299",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "299:func (p *Plugin) dedupExactTriageDef() sdk.OperationDef {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "maintenance ops are registered in plugin.go by listing their Def() constructors",
+   "cmd": "grep -n 'dedupExactTriageDef()' internal/plugins/maintenance/plugin.go",
+   "expect": "1 hit ~L81",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "81:\t\tp.dedupExactTriageDef(),"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "an existing title-based Abridged/Unabridged regex exists to cross-check against",
+   "cmd": "grep -n '(un)?abridged' internal/plugins/metafetch/calibrate_scoring.go",
+   "expect": "1 hit ~L315",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "315:\tclean := regexp.MustCompile(`(?i)\\s*\\((un)?abridged\\)\\s*$`).ReplaceAllString(title, \"\")"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-181": [
+  {
+   "claim": "split_book_detector.go only reads SeriesID for grouping comparison, never writes/creates a book with it",
+   "cmd": "grep -n \"SeriesID\" internal/dedup/split_book_detector.go",
+   "expect": "hits at L31 (comment), L85 (struct field), L137, L372, L378 -- all reads, no CreateBook in this file",
+   "rc": 0,
+   "n": 6,
+   "out": [
+    "31://     same SeriesID (allow nil-on-all-sides), AND filename or parent-dir-name",
+    "85:\tSeriesID *int",
+    "137:\t\t\t\tSeriesID: b.SeriesID,",
+    "372:\t\t\tfirstSeries = b.SeriesID",
+    "375:\t\tif (firstSeries == nil) != (b.SeriesID == nil) {",
+    "378:\t\tif firstSeries != nil && *firstSeries != *b.SeriesID {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "regroup_shattered_ai.go has zero SeriesID references",
+   "cmd": "grep -n \"SeriesID\" internal/plugins/maintenance/regroup_shattered_ai.go",
+   "expect": "0 hits",
+   "rc": 1,
+   "n": 0,
+   "out": [],
+   "err": ""
+  },
+  {
+   "claim": "itunes_regroup.go's single CreateBook call sets only Title",
+   "cmd": "grep -n \"CreateBook\" internal/plugins/maintenance/itunes_regroup.go",
+   "expect": "1 hit ~L261: store.CreateBook(&database.Book{Title: a.Title})",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "261:\t\t\tnb, err := store.CreateBook(&database.Book{Title: a.Title})"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "resolveSeriesID always creates-if-absent, ruling out a plain scan as the source (line number has drifted from the prior ",
+   "cmd": "grep -n \"func resolveSeriesID\" internal/scanner/scanner.go",
+   "expect": "1 hit ~L2657 (drifted from L2487)",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "2657:func resolveSeriesID(seriesName string, authorID *int) (*int, error) {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "NEW: importer.go's assignAuthorAndSeries (called before the CreateBook at L973) resolves SeriesID fresh via GetSeriesByN",
+   "cmd": "grep -n \"func (imp \\*Importer) ensureSeriesID\" internal/itunes/service/importer.go",
+   "expect": "1 hit ~L2012, body confirms GetSeriesByName then CreateSeries, no copy from a sibling book",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "2012:func (imp *Importer) ensureSeriesID(name string, authorID *int) (*int, error) {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "exhaustive list of every remaining CreateBook call site in the relevant packages",
+   "cmd": "grep -rn \"CreateBook(\" internal/scanner internal/dedup internal/plugins internal/itunes --include='*.go' | grep -v _test.go",
+   "expect": "exactly 5 hits: scanner.go:2417, itunes_regroup.go:261 (already ruled out), importer.go:427/973/1797",
+   "rc": 0,
+   "n": 9,
+   "out": [
+    "internal/scanner/scanner.go:2417:\t\t\t_, err = getStore().CreateBook(dbBook)",
+    "internal/scanner/store.go:41:\tCreateBook(book *database.Book) (*database.Book, error)",
+    "internal/plugins/maintenance/itunes_regroup.go:261:\t\t\tnb, err := store.CreateBook(&database.Book{Title: a.Title})",
+    "internal/plugins/maintenance/deps.go:48:\tCreateBook(book *database.Book) (*database.Book, error)",
+    "internal/plugins/maintenance/store_slices.go:139:\tCreateBook(book *database.Book) (*database.Book, error)",
+    "internal/itunes/service/importer.go:146:\tCreateBook(book *database.Book) (*database.Book, error)"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-192": [
+  {
+   "claim": "ComposeScore reads Signal.Confidence with no clamp against per-kind bounds",
+   "cmd": "grep -n 'notDup \\*= (1.0 - s.Confidence)' internal/dedup/unified/compose.go",
+   "expect": "1 hit, L67",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "67:\t\tnotDup *= (1.0 - s.Confidence)"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "the confidence-bound override storage (MinConfidence/MaxConfidence) already exists and is documented as unwired into sco",
+   "cmd": "grep -n 'does not clamp it against these bounds' internal/config/config.go",
+   "expect": "1 hit, in the DedupSignalConfig.Confidence field doc comment, L235-241",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "236:\t// and does not clamp it against these bounds (see"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "SetKindConfidenceOverrides is already wired from config into the unified package at server startup/update time",
+   "cmd": "grep -n 'unified.SetKindConfidenceOverrides' internal/server/registry_wire.go",
+   "expect": "1 hit, L177",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "177:\t\t\t\tunified.SetKindConfidenceOverrides(confOverrides)"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "calibrate-composite's Round 2 sweep computes suggestions but never persists them -- only the existing single Apply flag ",
+   "cmd": "grep -n 'ADVISORY only\\|Never persisted' internal/plugins/dedup/calibrate_composite.go",
+   "expect": "hits at L527-529 confirming Round 2's advisory-only status",
+   "rc": 0,
+   "n": 3,
+   "out": [
+    "55://   - Round 2 \u2014 per-signal confidence bounds \u2014 remains ADVISORY only. It is",
+    "527:\t// --- Round 2: per-kind confidence-bound sweep (ADVISORY only) ---",
+    "529:\t// a band was not met). Never persisted; never gates the band apply."
+   ],
+   "err": ""
+  },
+  {
+   "claim": "the exact persistence pattern to mirror for confidence already exists for bands (config.NewUpdateService(p.store).ApplyU",
+   "cmd": "grep -n 'config.NewUpdateService(p.store)' internal/plugins/dedup/calibrate_composite.go",
+   "expect": "1 hit, L669, inside applyBandThresholds",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "669:\tsvc := config.NewUpdateService(p.store)"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-193": [
+  {
+   "claim": "ComposeScore's Score is already capped at 100",
+   "cmd": "grep -n \"score = 100.0\" internal/dedup/unified/compose.go",
+   "expect": "1 hit ~L81",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "81:\t\tscore = 100.0"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "TestComposeScore_CapRespected already tests the cap",
+   "cmd": "grep -n \"TestComposeScore_CapRespected\" internal/dedup/unified/compose_test.go",
+   "expect": "1 hit ~L169",
+   "rc": 0,
+   "n": 2,
+   "out": [
+    "169:// TestComposeScore_CapRespected verifies that the score never exceeds 100",
+    "171:func TestComposeScore_CapRespected(t *testing.T) {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "calibrate_composite.go cites DECISIONS-PENDING.md row 10 as the open decision this closes",
+   "cmd": "grep -n \"DECISIONS-PENDING.md row 10\" internal/plugins/dedup/calibrate_composite.go",
+   "expect": "1 hit ~L38",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "48:// change; see docs/plans/DECISIONS-PENDING.md row 10. Until it lands:"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "scoreWithClamp exists as the calibration-only simulation, not wired to persistence or live scoring",
+   "cmd": "grep -n \"func scoreWithClamp\" internal/plugins/dedup/calibrate_composite.go",
+   "expect": "1 hit ~L198",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "198:func scoreWithClamp(signals []models.Signal, cfg unified.ScoreConfig) float64 {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "config.DedupSignalConfig.Confidence is already a persistence surface, wired into unified.LoadScoreConfig via SetKindConf",
+   "cmd": "grep -n \"SetKindConfidenceOverrides\" internal/server/registry_wire.go",
+   "expect": "1 hit ~L177",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "177:\t\t\t\tunified.SetKindConfidenceOverrides(confOverrides)"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "the production auto-merge gate reads the stored Band, not a clamped variant",
+   "cmd": "grep -n \"c.Band != unified.BandCertain\" internal/dedup/auto_resolve.go",
+   "expect": "1 hit ~L214",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "214:\tif c.Band != unified.BandCertain {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "3 production call sites feed the live/display score+band from unclamped confidence",
+   "cmd": "grep -n \"unified.ComposeScore(\" internal/dedup/engine.go internal/dedup/rescore.go",
+   "expect": "3 hits: engine.go:685, engine.go:2983, rescore.go:276",
+   "rc": 0,
+   "n": 3,
+   "out": [
+    "internal/dedup/engine.go:685:\t\tcomposed := unified.ComposeScore(signals, nil, cfg, canonicalPair)",
+    "internal/dedup/engine.go:2983:\t\tnewScore := unified.ComposeScore(sb.Signals, sb.Suppressors, cfg, sb.Pair)",
+    "internal/dedup/rescore.go:276:\t\t\tcomposed := unified.ComposeScore(signals, nil, cfg, canonicalPairIDs(aID, in.OtherID))"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "UnifiedDedupScore is a type alias for models.UnifiedDedupScore, where a new field would be added",
+   "cmd": "grep -n \"type UnifiedDedupScore = models.UnifiedDedupScore\" internal/dedup/unified/score.go",
+   "expect": "1 hit ~L87",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "87:type UnifiedDedupScore = models.UnifiedDedupScore"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-082": [
+  {
+   "claim": "the restore path extracts tar entries by their archive-supplied name",
+   "cmd": "sed -n '265,285p' internal/backup/backup.go",
+   "expect": "tar.NewReader / tarReader.Next() loop with no filepath.Clean/prefix-check visible in this window",
+   "rc": 0,
+   "n": 21,
+   "out": [
+    "return fmt.Errorf(\"failed to create gzip reader: %w\", err)",
+    "\t}",
+    "\tdefer gzipReader.Close()",
+    "",
+    "\t// Create tar reader",
+    "\ttarReader := tar.NewReader(gzipReader)"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-083": [
+  {
+   "claim": "service_mutation.go's path-injection alert is already suppressed with justification",
+   "cmd": "grep -n 'lgtm\\[go/path-injection\\]' internal/audiobooks/service_mutation.go",
+   "expect": "1 hit, preceded by a comment citing fileops.IsAllowedPath as the validating gate",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "63:\t\tif _, err := os.Stat(absNewPath); err != nil { // lgtm[go/path-injection]"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "safe_operations.go still performs unchecked file writes in a rollback path",
+   "cmd": "grep -n 'os.Stat(op.backupPath)\\|copyFile(op.backupPath' internal/fileops/safe_operations.go",
+   "expect": "\u22652 hits, no lgtm suppression nearby",
+   "rc": 0,
+   "n": 7,
+   "out": [
+    "122:\t\tif _, statErr := os.Stat(op.backupPath); statErr == nil {",
+    "123:\t\t\tif rbErr := copyFile(op.backupPath, op.targetPath); rbErr != nil {",
+    "157:\t\t\tif _, statErr := os.Stat(op.backupPath); statErr == nil {",
+    "158:\t\t\t\tif rbErr := copyFile(op.backupPath, op.targetPath); rbErr != nil {",
+    "198:\tif _, err := os.Stat(op.backupPath); err == nil {",
+    "199:\t\tif err := copyFile(op.backupPath, op.targetPath); err != nil {"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-084": [
+  {
+   "claim": "provisioning.go's InsecureSkipVerify already has a detailed justification comment",
+   "cmd": "sed -n '138,143p' internal/mtls/provisioning.go",
+   "expect": "'#nosec G402 -- bootstrap-only: InsecureSkipVerify is required during initial mTLS cert provisioning...'",
+   "rc": 0,
+   "n": 6,
+   "out": [
+    "addr,",
+    "\t\t// #nosec G402 -- bootstrap-only: InsecureSkipVerify is required during initial mTLS",
+    "\t\t// cert provisioning before a valid client cert exists. This code path only runs once",
+    "\t\t// per installation and is never used in normal operation.",
+    "\t\t&tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13},",
+    "\t)"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "both tools/cmd one-offs already have nolint suppressions",
+   "cmd": "grep -n 'InsecureSkipVerify' tools/cmd/merge-split-books/main.go tools/cmd/reconcile-paths/main.go",
+   "expect": "2 hits, both with '//nolint:gosec'",
+   "rc": 0,
+   "n": 2,
+   "out": [
+    "tools/cmd/merge-split-books/main.go:93:\t\t\tTLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec",
+    "tools/cmd/reconcile-paths/main.go:117:\t\tTLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-085": [
+  {
+   "claim": "zero search-related metrics exist in the metrics package",
+   "cmd": "grep -n 'search\\|bleve\\|dirty' internal/metrics/metrics.go",
+   "expect": "0 hits",
+   "rc": 1,
+   "n": 0,
+   "out": [],
+   "err": ""
+  },
+  {
+   "claim": "books_total exists as a working precedent to follow",
+   "cmd": "sed -n '45,49p' internal/metrics/metrics.go",
+   "expect": "booksGauge NewGauge with Name: 'books_total'",
+   "rc": 0,
+   "n": 5,
+   "out": [
+    "booksGauge = prometheus.NewGauge(prometheus.GaugeOpts{",
+    "\t\tNamespace: \"audiobook_organizer\",",
+    "\t\tName:      \"books_total\",",
+    "\t\tHelp:      \"Current total number of books in library\",",
+    "\t})"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-086": [
+  {
+   "claim": "NormalizeAuthor only trims+lowercases, no internal-whitespace collapse",
+   "cmd": "grep -n \"func NormalizeAuthor\" internal/util/normalize.go",
+   "expect": "1 hit L26",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "26:func NormalizeAuthor(s string) string {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "CollapseSpaces already exists in the same package, unused by NormalizeAuthor",
+   "cmd": "grep -n \"func CollapseSpaces\" internal/util/normalize.go",
+   "expect": "1 hit L36",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "36:func CollapseSpaces(s string) string {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "Author creation/lookup indexes through util.NormalizeAuthor",
+   "cmd": "grep -n \"util.NormalizeAuthor(name)\" internal/database/pebble_store_authors.go",
+   "expect": ">=3 hits incl L96, L138, L241",
+   "rc": 0,
+   "n": 5,
+   "out": [
+    "96:\tindexKey := []byte(fmt.Sprintf(\"author:name:%s\", util.NormalizeAuthor(name)))",
+    "138:\tindexKey := []byte(fmt.Sprintf(\"author:name:%s\", util.NormalizeAuthor(name)))",
+    "241:\tif err := batch.Set([]byte(fmt.Sprintf(\"author:name:%s\", util.NormalizeAuthor(name))), []byte(strconv.Itoa(id)), nil); err != nil {",
+    "723:\tnameKey := []byte(fmt.Sprintf(\"narrator_name:%s\", util.NormalizeAuthor(name)))",
+    "759:\tnameKey := []byte(fmt.Sprintf(\"narrator_name:%s\", util.NormalizeAuthor(name)))"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-087": [
+  {
+   "claim": "Get[T] panics when the requested service name is not in the active builder's Needs",
+   "cmd": "grep -n \"panic(fmt.Sprintf\" internal/serviceregistry/container.go",
+   "expect": "2 hits at L248 and L255",
+   "rc": 0,
+   "n": 3,
+   "out": [
+    "248:\t\t\tpanic(fmt.Sprintf(",
+    "255:\t\tpanic(fmt.Sprintf(\"serviceregistry: service %q not built (called from %q)\",",
+    "260:\t\tpanic(fmt.Sprintf(\"serviceregistry: service %q is %T, not %T\","
+   ],
+   "err": ""
+  },
+  {
+   "claim": "Get is a generic function keyed by a bare string name",
+   "cmd": "grep -n \"func Get\\[T any\\](c \\*Container, name string) T\" internal/serviceregistry/container.go",
+   "expect": "1 hit",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "244:func Get[T any](c *Container, name string) T {"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-088": [
+  {
+   "claim": "bare assertion at the cited line",
+   "cmd": "grep -n \"lshIndexChecker\" internal/plugins/acoustid/lsh_backfill.go",
+   "expect": "3 hits: type decl ~L24, bare assertion ~L86, a test-file comment",
+   "rc": 0,
+   "n": 3,
+   "out": [
+    "19:// lshIndexChecker is satisfied by any store that can answer \"do I already",
+    "24:type lshIndexChecker interface {",
+    "86:\tchecker, _ := p.store.(lshIndexChecker)"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "lshIndexChecker is a 1-method interface",
+   "cmd": "grep -n \"type lshIndexChecker interface\" -A 3 internal/plugins/acoustid/lsh_backfill.go",
+   "expect": "1 hit ~L24",
+   "rc": 0,
+   "n": 4,
+   "out": [
+    "24:type lshIndexChecker interface {",
+    "25-\tHasLSHIndex(bookFileID string) bool",
+    "26-}",
+    "27-"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "p.store is sourced from the service-registry container's KeyStore (bare store today)",
+   "cmd": "grep -n \"serviceregistry.Get\\[pluginStore\\]\" internal/plugins/acoustid/register.go",
+   "expect": "1 hit ~L32",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "34:\t\t\tstore := serviceregistry.Get[pluginStore](c, serviceregistry.KeyStore)"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-186": [
+  {
+   "claim": "the existing GetBooksByVersionGroup query path this backfill needs to enumerate groups by",
+   "cmd": "grep -n 'func (p \\*PebbleStore) GetBooksByVersionGroup' internal/database/pebble_store.go",
+   "expect": "1 hit ~L3194",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "3194:func (p *PebbleStore) GetBooksByVersionGroup(groupID string) ([]Book, error) {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "ElectMissingPrimaries exists and explicitly only handles the zero-primary case, skipping any group with an existing prim",
+   "cmd": "grep -n 'gs.primaries > 0' internal/reconcile/elect_primaries.go",
+   "expect": "1 hit ~L158",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "158:\t\tif gs.primaries > 0 {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "the real winner-selection helper to reuse is electPrimaryFor, not 'BookIsBetter' (which does not exist)",
+   "cmd": "grep -n 'func electPrimaryFor' internal/reconcile/elect_primaries.go",
+   "expect": "1 hit ~L71",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "71:func electPrimaryFor(members []database.Book) *database.Book {"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "no double-primary detection/repair exists anywhere in the repo yet",
+   "cmd": "grep -rln 'primaries > 1\\|MultiPrimary\\|DoublePrimary\\|double_primary' --include='*.go' internal | grep -v _test.go",
+   "expect": "0 hits \u2014 no production code measures multi-primary groups yet (one test file mentions it)",
+   "rc": 1,
+   "n": 0,
+   "out": [],
+   "err": ""
+  },
+  {
+   "claim": "the existing caller site for ElectMissingPrimaries, the wiring template for the new sibling function",
+   "cmd": "grep -n 'reconcile.ElectMissingPrimaries' internal/server/reconcile.go",
+   "expect": "1 hit ~L195",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "195:\tresult, err := reconcile.ElectMissingPrimaries(s.storeForWiring(), dryRun)"
+   ],
+   "err": ""
+  }
+ ],
+ "TASK-197": [
+  {
+   "claim": "the label is now rendered after fn runs, not before",
+   "cmd": "grep -n \"Re-render the label AFTER fn\" internal/operations/registry/run_items.go",
+   "expect": "1 hit, comment starting at L236",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "236:\t\t// Re-render the label AFTER fn rather than reusing the pre-work string."
+   ],
+   "err": ""
+  },
+  {
+   "claim": "the fix landed as a dedicated commit",
+   "cmd": "git log --oneline -- internal/operations/registry/run_items.go | grep 9d2307a6",
+   "expect": "1 hit: 9d2307a6 fix(operations): report progress labels after the work, not before",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "9d2307a6 fix(operations): report progress labels after the work, not before"
+   ],
+   "err": ""
+  },
+  {
+   "claim": "31 distinct plugin files pass a custom Label closure to RunItems and are therefore in scope for the audit",
+   "cmd": "grep -rl 'Label:\\s*func' internal/plugins | wc -l",
+   "expect": "31",
+   "rc": 0,
+   "n": 1,
+   "out": [
+    "32"
+   ],
+   "err": ""
+  }
+ ]
+}

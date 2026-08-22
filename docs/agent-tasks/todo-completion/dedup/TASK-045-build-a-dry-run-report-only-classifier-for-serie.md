@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-045-build-a-dry-run-report-only-classifier-for-serie.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 3220dbcd-c2fe-4b1b-b35b-85de3d0a7d68 -->
+<!-- guid: 43b770fd-d811-418b-8063-bfbeaa0b70a3 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-045 — Build a dry-run report-only classifier for series that look like they were minted from a book title (TODO.md L4304)
@@ -102,7 +102,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/plugins/maintenance/... -run TestSeriesTitleLeakAudit passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `POST /api/v1/operations/v2 {"def_id":"maintenance.series-title-leak-audit"} on a running dev/sandbox server returns a report with ExactMatch/NearMatch counts roughly consistent with the TODO's cited 990/1,280 (allowing for drift since the TODO was written) and mutates nothing.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

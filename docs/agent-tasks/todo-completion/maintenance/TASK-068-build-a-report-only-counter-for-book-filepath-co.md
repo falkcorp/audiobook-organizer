@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-068-build-a-report-only-counter-for-book-filepath-co.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 3dae6153-4672-449c-a35e-b964585df44c -->
+<!-- guid: d395a483-0751-42d2-be24-d5dae1e2115d -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-068 — Build a REPORT-ONLY counter for Book.FilePath collisions (rows sharing the same path across different books) (TODO.md L670)
@@ -102,7 +102,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/plugins/maintenance/... -run TestFilePathCollisionReport passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -rn 'FilePathCollision\|CollisionCount\|filepath_collision' --include="*.go" .` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

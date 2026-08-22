@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-066-wire-a-durable-freshness-stamp-for-maintenance-c.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: aa4be81e-e5b1-479d-85e3-755cac6bb928 -->
+<!-- guid: bafad512-b7e3-4b39-876f-8a9b643b885d -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-066 — Wire a durable freshness stamp for maintenance.chapters-backfill before it is ever scheduled (TODO.md L606)
@@ -111,7 +111,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go build ./... succeeds with the new Freshness() method on ServerDeps and *Server.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `grep -n 'freshness.Stamp\|freshness.ShouldProcess' internal/plugins/maintenance/chapters_backfill.go returns >=2 hits after the change.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

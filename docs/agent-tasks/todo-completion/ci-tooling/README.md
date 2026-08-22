@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 3a9ad3a0-0e4c-40f1-955f-c8b48498cd0f -->
+<!-- guid: 4bb3ed5a-c119-42f4-88c4-376168d51735 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — ci-tooling (todo-completion)
@@ -13,11 +13,11 @@
 | TASK-007 | L50 | Wire scripts/test_check_memory_leaks.py into a CI job (repo-guards) | P2 | S | Haiku-class | 1 |
 | TASK-191 | L921 | Bump the github-common reusable-workflow pins in at least two PRs, low | P2 | M | Sonnet-class | 2 |
 | TASK-009 | L2568 | Teach the ABS fixture-capture harness to record request headers | P2 | S | Sonnet-class | 1 |
-| TASK-010 | SEC-CODEQL-BACKLOG | Add top-level `permissions:` blocks to the 3 workflows flagged by acti | P2 | S | Haiku-class | 1 |
+| TASK-010 | SEC-CODEQL-BACKLOG | Add top-level `permissions:` blocks to the 3 workflows flagged by acti | P2 | S | Sonnet-class | 1 |
 | TASK-011 | SEC-8 | Pin SHA256 checksums for Dockerfile-fetched utfcpp/taglib tarballs | P2 | S | Haiku-class | 1 |
 | TASK-012 | L4312 | scripts/setup-prometheus-auth.py does NOT share the server-side shell  | P2 | S | Haiku-class | 1 |
 | TASK-013 | L4844 | Build a report-only scan for book rows that may have been spuriously c | P2 | M | Sonnet-class | 1 |
-| TASK-014 | REPO-SIZE-1 | Remove committed mtls-bridge build artifact and gitignore it | P2 | S | Haiku-class | 1 |
+| TASK-014 | REPO-SIZE-1 | Remove committed mtls-bridge build artifact and gitignore it | P2 | S | Sonnet-class | 1 |
 | TASK-015 | REPO-SIZE-1 | Stop committing series_dedup.py's generated dump/fix cache files | P2 | S | Haiku-class | 2 |
 
 ## Ground rules

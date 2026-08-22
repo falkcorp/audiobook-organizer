@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-134-add-a-wiring-level-test-proving-the-server-actua.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 25c24cc5-fc3a-4cc6-90b8-4485935fae2c -->
+<!-- guid: 2fc5c716-482a-426b-b63c-8e779db9a808 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-134 — Add a wiring-level test proving the server actually constructs CancelOperationV2 with AI-scan cancellation attached (TODO.md L4449)
@@ -39,6 +39,10 @@ Add a test in package server (alongside server_queue_test.go's pattern) that con
   grep -n 'v2Pipeline\|v2ScanStore\|WithAIScanCancellation' internal/server/wire_handlers.go   # hits at L164,166,168,170,176 — wire_handlers.go already narrows s.pipelineManager/s.aiScanStore into those interfaces before passing WithAIScanCancellation
   grep -rn 'pipelineManager\s*=\|aiScanStore\s*=' internal/server/*_test.go   # 0 hits — no existing test constructs a *Server with real pipelineManager/aiScanStore and drives the route through wireHandlers
   grep -n 'func NewPipelineManager' internal/aiscan/pipeline.go   # 1 hit at L47, params (scanStore *database.AIScanStore, mainStore Store, parser *ai.OpenAIParser) — a real *aiscan.PipelineManager can be constructed with a fake narrow Store and a real *database.AIScanStore for a test
+  grep -n 'v2Pipeline\|v2ScanStore\|WithAIScanCancellation' internal/server/wire_handlers.go   # hits at L164,166,168,170,176 — the wiring line the new test must guard exists
+  grep -n 'type ScanCanceler interface\|type AIScanLister interface' internal/server/handlers/operations_v2.go   # L73 and L79 — the narrow interfaces already exist
+  ls internal/server/wire_handlers_test.go   # No such file or directory (exit 1) — no test file exists yet, so the -run acceptance must be replaced by a file-existence + named-test grep
+  grep -rn 'pipelineManager\s*=\|aiScanStore\s*=' internal/server/*_test.go   # 0 hits — no existing test constructs a Server with a real pipelineManager/aiScanStore
   ```
 
 ### Reuse — don't invent
@@ -49,14 +53,15 @@ Add a test in package server (alongside server_queue_test.go's pattern) that con
 
 ## Step-by-step
 
-1. Create internal/server/wire_handlers_test.go (package server) with the standard file header (version 1.0.0, new guid, today's date).
-2. Define a minimal fake implementing internal/aiscan.Store's 7 methods (CreateOperation, UpdateOperationStatus, UpdateOperationError, GetAllAuthors, GetAuthorByID, GetAllAuthorBookCounts, GetBooksByAuthorIDWithRoleCore) — a struct recording UpdateOperationStatus calls is enough since that is what CancelScan ultimately drives (internal/aiscan/pipeline.go:103).
-3. In the test: `scanStore, err := database.NewAIScanStore(t.TempDir())`; create a scan via `scanStore.CreateScan(...)`; call `scanStore.UpdateScanOperationID(scan.ID, "op-under-test")`.
-4. Construct `pm := aiscan.NewPipelineManager(scanStore, fakeStore, nil)` (parser can be nil if CancelScan does not dereference it — verify with `grep -n 'parser' internal/aiscan/pipeline.go` around CancelScan; if it does, pass a zero-value/no-op *ai.OpenAIParser).
-5. Build `srv := &Server{router: gin.New(), store: mockStore, pipelineManager: pm, aiScanStore: scanStore, opRegistry: <a MockOperationsRegistry with no expectations, to prove the AI-scan branch is what handled the request>}`; call `srv.setupRoutes()`.
-6. Issue `DELETE /api/v1/operations/v2/op-under-test` through `srv.router.ServeHTTP`.
-7. Assert the response is 204, AND assert scanStore.GetScan(scan.ID) (or the fake mainStore's recorded UpdateOperationStatus call) shows the scan was actually acted on — the failure mode this test exists to catch is '204 returned but nothing was signalled'.
-8. Bump internal/server/wire_handlers.go's version header only if you also add a defensive comment there pointing at the new test; otherwise leave it untouched since no production code changes.
+1. Create internal/server/wire_handlers_test.go (package server) with a fresh file header (version 1.0.0, new guid from `uuidgen | tr A-Z a-z`, last-edited: 2026-08-21).
+2. Define a minimal fake implementing internal/aiscan.Store's 7 methods (CreateOperation, UpdateOperationStatus, UpdateOperationError, GetAllAuthors, GetAuthorByID, GetAllAuthorBookCounts, GetBooksByAuthorIDWithRoleCore); record UpdateOperationStatus calls.
+3. scanStore, err := database.NewAIScanStore(t.TempDir()) (internal/database/ai_scan_store.go:91); create a scan; call scanStore.UpdateScanOperationID(scan.ID, "op-under-test") — note the signature is UpdateScanOperationID(id int, operationID string) (ai_scan_store.go:257), so scan.ID is an int, not a string.
+4. pm := aiscan.NewPipelineManager(scanStore, fakeStore, nil) (internal/aiscan/pipeline.go:47); confirm CancelScan does not dereference the parser before passing nil.
+5. Build srv := &Server{router: gin.New(), store: mockStore, pipelineManager: pm, aiScanStore: scanStore, opRegistry: <mock registry with no expectations>} and call srv.setupRoutes(), mirroring TestCancelOperationV2_NilRegistry (internal/server/server_queue_test.go:27).
+6. Issue DELETE /api/v1/operations/v2/op-under-test via srv.router.ServeHTTP.
+7. Assert BOTH the 204 status AND that the fake recorded the cancellation — the failure this test exists to catch is '204 returned but nothing was signalled'.
+8. Do NOT edit internal/server/wire_handlers.go — this brief is test-only. Verify the test really guards the wiring by temporarily deleting handlers.WithAIScanCancellation(...) at wire_handlers.go:176, confirming the new test goes red, then restoring it.
+9. Add changelog fragment changelog.d/20260821_server_134.md (no file header).
 
 Then, always:
 - Keep the change purely additive — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
@@ -77,7 +82,7 @@ Anti-over-suppression test: `N/A — this is a coverage-gap fix, not a filter/gu
 ## How to test
 
 ```bash
-go build ./... && go vet ./... && go test ./internal/server/... -count=1
+go build ./... && go vet ./... && go test ./internal/server/... ./internal/server/handlers/... -count=1
 ```
 Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
@@ -87,7 +92,7 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 - [ ] Deleting `handlers.WithAIScanCancellation(v2Pipeline, v2ScanStore)` from wire_handlers.go:176 (as a manual sabotage check) makes the new test fail — confirming it actually guards the wiring line, not just the handler's internal logic (which internal/server/handlers/operations_v2_test.go already covers).
 - [ ] Anti-over-suppression test: `N/A — this is a coverage-gap fix, not a filter/guard.` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/server/... -count=1` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/server/... ./internal/server/handlers/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_server_134.md`.
 
@@ -107,7 +112,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (``go test ./internal/server/... -run TestWireHandlers_CancelOperationV2ReachesAIScanPipeline` passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'type ScanCanceler interface\|type AIScanLister interface' internal/server/handlers/operations_v2.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

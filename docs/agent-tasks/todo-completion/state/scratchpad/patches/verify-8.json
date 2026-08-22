@@ -1,0 +1,1370 @@
+[
+ {
+  "task_id": "TASK-131",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Step 2 tells the agent to write `s.Ops().CountAllBooks()`. CountAllBooks is NOT a member of ServerOpsStore: `grep -n 'CountAllBooks\\|CountPrimaryBooks' internal/server/server_ops_store.go` returns exactly one hit, `129: CountPrimaryBooks() (int, error)`. The brief's only verification was `grep -n 'func (p \\*PebbleStore) CountAllBooks' internal/database/pebble_store.go` (L3028), which proves the PebbleStore method exists but not that s.Ops() exposes it. The step as written does not compile.",
+    "fix": {
+     "steps": [
+      "In internal/server/server_ops_store.go, add `CountAllBooks() (int, error)` to the `serverStatsReader` sub-interface (declared at internal/server/server_ops_store.go:128, the one that already declares `CountPrimaryBooks() (int, error)` at L129), immediately after that line \u2014 verify placement with `grep -n 'CountPrimaryBooks' internal/server/server_ops_store.go`. PebbleStore already satisfies it (internal/database/pebble_store.go:3028) so `var _ ServerOpsStore = (*database.PebbleStore)(nil)` at server_ops_store.go:262 keeps compiling; both MockStores already implement CountAllBooks (internal/database/mock_store.go:957, internal/database/mocks/mock_store.go).",
+      "In internal/metrics/metrics.go, add a second gauge `booksTotalAllGauge` with Name 'books_total_all' and Help 'Current total number of books in library, all versions', following the exact NewGauge/MustRegister/setter pattern used by booksGauge (metrics.go:45-49), plus a `SetBooksTotalAll(n int)` setter mirroring SetBooks.",
+      "In internal/metrics/metrics.go, change booksGauge's Help text (L48) from 'Current total number of books in library' to 'Current total number of PRIMARY-version books in library'. Do NOT rename its Name ('books_total') \u2014 existing dashboards key on it.",
+      "In internal/server/server_lifecycle.go, inside the existing `if s.Ops() != nil {` block at L498-505, add `if bc, err := s.Ops().CountAllBooks(); err == nil { metrics.SetBooksTotalAll(bc) }` alongside the existing CountPrimaryBooks call at L499. Guard each independently so one error does not suppress the other.",
+      "Add internal/metrics/metrics_test.go coverage asserting the two gauges hold DIFFERENT values when primary != total.",
+      "Bump the file header (version + last-edited: 2026-08-21) on internal/metrics/metrics.go, internal/metrics/metrics_test.go, internal/server/server_lifecycle.go and internal/server/server_ops_store.go.",
+      "Add changelog fragment changelog.d/20260821_server_131.md (no file header)."
+     ],
+     "exact_files": [
+      "internal/metrics/metrics.go",
+      "internal/metrics/metrics_test.go",
+      "internal/server/server_lifecycle.go",
+      "internal/server/server_ops_store.go"
+     ],
+     "verified_anchors": [
+      {
+       "claim": "the metric is fed by CountPrimaryBooks, not a true total",
+       "grep_cmd": "grep -n 'CountPrimaryBooks()\\|metrics.SetBooks(' internal/server/server_lifecycle.go",
+       "expect": "2 hits: L499 `if bc, err := s.Ops().CountPrimaryBooks(); err == nil {` and L508 `metrics.SetBooks(bookCount)`"
+      },
+      {
+       "claim": "CountAllBooks exists on PebbleStore but is NOT on the ServerOpsStore interface s.Ops() returns",
+       "grep_cmd": "grep -n 'CountAllBooks' internal/database/pebble_store.go internal/server/server_ops_store.go",
+       "expect": "hit at pebble_store.go:3028; ZERO hits in server_ops_store.go"
+      },
+      {
+       "claim": "booksGauge's Help text falsely claims a true total",
+       "grep_cmd": "grep -n 'Name: *\"books_total\"\\|Current total number of books in library' internal/metrics/metrics.go",
+       "expect": "2 hits: L47 `Name: \"books_total\"` and L48 `Help: \"Current total number of books in library\"`"
+      }
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Goal and Steps prescribe two different code outcomes. The Goal's stated PREFERRED option is 'rename booksGauge's metric Name/Help ... (e.g. Name: primary_books_total) and add a NEW gauge books_total fed by CountAllBooks'. Step 1 instead adds 'books_total_all' and Step 3 explicitly keeps booksGauge's name, changing only its Help. Two weak models reading Goal-first vs Steps-first ship incompatible metric names."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "The Tests section requires 'internal/metrics/metrics_test.go: assert both gauges reflect the correct, DIFFERENT values', but exact_files is only ['internal/metrics/metrics.go','internal/server/server_lifecycle.go'] \u2014 the test file is outside the brief's commit scope, as is internal/server/server_ops_store.go which the compile fix above forces."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-132",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "The Tests section is not optional ('write it as part of the same change, not deferred') and both named tests (TestIndexedStore_SoftDeleteIsUnsearchableWithoutReconcile and the anti-over-suppression TestIndexedStoreUpdateBook_RestoreStillReindexes) must live in internal/server/indexed_store_test.go. exact_files is only ['internal/server/indexed_store.go']. Worse, indexed_store_test.go is already owned by TWO other briefs: TASK-133 (wave 2) and TASK-209 (wave 1, migrates its 4 NewServer sites \u2014 verified `grep -n 'NewServer(' internal/server/indexed_store_test.go` \u2192 L51,99,144,183). TASK-132 is wave 1, so it collides with TASK-209 in the same wave and the README collision table does not list indexed_store_test.go for TASK-132.",
+    "fix": {
+     "exact_files": [
+      "internal/server/indexed_store.go",
+      "internal/server/indexed_store_test.go"
+     ],
+     "depends_on_lines": [
+      "4334"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "TASK-133 is a standalone brief in this same package whose entire content is 'add TestIndexedStore_SoftDeleteIsUnsearchableWithoutReconcile + TestIndexedStoreUpdateBook_RestoreStillReindexes to indexed_store_test.go'. TASK-132's Tests section orders the SAME agent to write those tests. Two agents will write the same two test functions into the same file in different waves; the wave-2 one will conflict or duplicate."
+   },
+   {
+    "severity": "advisory",
+    "check": 5,
+    "problem": "Idempotency block is the generic move-task text ('If the symbol already lives at its NEW location and is absent from the old one, the move is already done'). Nothing moves here \u2014 the change is a branch inside indexedStore.UpdateBook (internal/server/indexed_store.go:68-74). The stated check is inapplicable rather than merely unhelpful."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-133",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 1 is 'Before L4329's fix: this new test FAILS (search still finds the soft-deleted book).' TASK-133 is wave 2 and Depends on TASK-132 (the L4329 fix), which merges in wave 1 \u2014 so at execution time the fix is already in the tree and this counterfactual cannot be checked by any command. The Idempotency block then compounds it: 'If the first acceptance check below already passes at HEAD (`Before L4329's fix: this new test FAILS ...`), this task is already applied' is not a runnable check at all."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "The review-critical Idempotency boilerplate imposes four MANDATORY requirements that a test-only, additive brief cannot satisfy: '(1) the op/endpoint defaults to dry-run/apply=false', '(3) acceptance includes a test that applies on a fixture and then undoes via internal/undo and asserts the fixture is byte-identical', '(4) the apply path refuses to start while a library.scan operation is running'. exact_files is a single _test.go file; there is no op, no endpoint and no apply path. A cold model either invents one or stalls.",
+    "fix": {
+     "review_critical": false
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 8,
+    "problem": "Marked REVIEW-CRITICAL (prod-data path) while the workstream README's ground rule says 'Review-critical tasks (prod-data paths) are Opus-class'; this brief is Sonnet-class. The task adds two functions to one _test.go file and touches no prod data at all \u2014 the review_critical flag is what is wrong, not the tier."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-134",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency polarity is inverted for an additive test task: 'If the first acceptance check below already passes at HEAD (`go test ./internal/server/... -run TestWireHandlers_CancelOperationV2ReachesAIScanPipeline` passes.), this task is already applied.' `go test -run <pattern>` with no matching test function exits 0 (it reports `ok ... [no tests to run]`), and internal/server/wire_handlers_test.go does not exist at HEAD (`ls internal/server/wire_handlers_test.go` \u2192 No such file or directory). The check therefore passes at HEAD and a cold weak model reports 'already applied' without writing anything.",
+    "fix": {
+     "polarity": "additive",
+     "verified_anchors": [
+      {
+       "claim": "the wiring line the new test must guard exists",
+       "grep_cmd": "grep -n 'v2Pipeline\\|v2ScanStore\\|WithAIScanCancellation' internal/server/wire_handlers.go",
+       "expect": "hits at L164,166,168,170,176"
+      },
+      {
+       "claim": "the narrow interfaces already exist",
+       "grep_cmd": "grep -n 'type ScanCanceler interface\\|type AIScanLister interface' internal/server/handlers/operations_v2.go",
+       "expect": "L73 and L79"
+      },
+      {
+       "claim": "no test file exists yet, so the -run acceptance must be replaced by a file-existence + named-test grep",
+       "grep_cmd": "ls internal/server/wire_handlers_test.go",
+       "expect": "No such file or directory (exit 1)"
+      },
+      {
+       "claim": "no existing test constructs a Server with a real pipelineManager/aiScanStore",
+       "grep_cmd": "grep -rn 'pipelineManager\\s*=\\|aiScanStore\\s*=' internal/server/*_test.go",
+       "expect": "0 hits"
+      }
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Step 8 authorises editing internal/server/wire_handlers.go ('Bump internal/server/wire_handlers.go's version header only if you also add a defensive comment there'). exact_files is only ['internal/server/wire_handlers_test.go'], so that edit falls outside the brief's commit scope, and wire_handlers.go is a production file shared with other briefs.",
+    "fix": {
+     "exact_files": [
+      "internal/server/wire_handlers_test.go"
+     ],
+     "steps": [
+      "Create internal/server/wire_handlers_test.go (package server) with a fresh file header (version 1.0.0, new guid from `uuidgen | tr A-Z a-z`, last-edited: 2026-08-21).",
+      "Define a minimal fake implementing internal/aiscan.Store's 7 methods (CreateOperation, UpdateOperationStatus, UpdateOperationError, GetAllAuthors, GetAuthorByID, GetAllAuthorBookCounts, GetBooksByAuthorIDWithRoleCore); record UpdateOperationStatus calls.",
+      "scanStore, err := database.NewAIScanStore(t.TempDir()) (internal/database/ai_scan_store.go:91); create a scan; call scanStore.UpdateScanOperationID(scan.ID, \"op-under-test\") \u2014 note the signature is UpdateScanOperationID(id int, operationID string) (ai_scan_store.go:257), so scan.ID is an int, not a string.",
+      "pm := aiscan.NewPipelineManager(scanStore, fakeStore, nil) (internal/aiscan/pipeline.go:47); confirm CancelScan does not dereference the parser before passing nil.",
+      "Build srv := &Server{router: gin.New(), store: mockStore, pipelineManager: pm, aiScanStore: scanStore, opRegistry: <mock registry with no expectations>} and call srv.setupRoutes(), mirroring TestCancelOperationV2_NilRegistry (internal/server/server_queue_test.go:27).",
+      "Issue DELETE /api/v1/operations/v2/op-under-test via srv.router.ServeHTTP.",
+      "Assert BOTH the 204 status AND that the fake recorded the cancellation \u2014 the failure this test exists to catch is '204 returned but nothing was signalled'.",
+      "Do NOT edit internal/server/wire_handlers.go \u2014 this brief is test-only. Verify the test really guards the wiring by temporarily deleting handlers.WithAIScanCancellation(...) at wire_handlers.go:176, confirming the new test goes red, then restoring it.",
+      "Add changelog fragment changelog.d/20260821_server_134.md (no file header)."
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-135",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Both required tests are specified in internal/server/batch_apply_op_test.go, including the named anti-over-suppression test TestBatchApplyOp_Checkpoint_CarriesWriteBackFlag. That file does not exist at HEAD (`ls internal/server/batch_apply_op_test.go` \u2192 No such file or directory), so it is a NEW file, and exact_files is only ['internal/server/batch_apply_op.go'].",
+    "fix": {
+     "exact_files": [
+      "internal/server/batch_apply_op.go",
+      "internal/server/batch_apply_op_test.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "The review-critical Idempotency block makes four items MANDATORY, including '(1) the op/endpoint defaults to dry-run / apply=false and prints what it WOULD change' and '(3) acceptance includes a test that applies on a fixture and then undoes via internal/undo and asserts the fixture is byte-identical'. This brief converts a ResumePolicy from ResumeDrop to ResumeRestart on an EXISTING op; adding a dry-run default would change metadata.batch-apply-cached's production contract, which the Goal explicitly forbids ('Keep the change purely transform'). The two sections give contradictory orders and neither box can be honestly checked."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Step 6 says to 'Verify (read internal/operations/registry/worker.go or wherever ResumeRestart is handled) that a restarted op actually re-decodes its checkpointed params as the new run's rawParams'. No anchor grep is supplied for this file, and the wording ('or wherever') admits the brief never located it. This is the single load-bearing assumption of the whole task and it is left for the worker to find."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-136",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Steps 1-2 hedge on whether reconcile.apply already uses RunItems and tell the worker to convert its 'Matches-processing loop' to opsregistry.RunItems if not. There is no such loop in this file: `grep -n 'RunItems\\|ResumePolicy' internal/server/reconcile_ops.go` returns only two ResumePolicy hits (L50, L90) and ZERO RunItems hits, and reconcile.apply's Run body (L104) is a single delegating call \u2014 `runErr := reconcile.ExecuteReconcile(ctx, store, p.LegacyOpID, p.Matches, log)`. The per-item loop lives in package internal/reconcile, so 'convert the loop to RunItems' means rewriting a different package that the brief never names or verifies.",
+    "fix": {
+     "exact_files": [
+      "internal/reconcile/",
+      "internal/server/reconcile_ops.go",
+      "internal/server/reconcile_ops_test.go"
+     ],
+     "verified_anchors": [
+      {
+       "claim": "reconcile.apply is registered in reconcile_ops.go and is currently ResumeDrop",
+       "grep_cmd": "grep -n 'RegisterReconcileApplyOp\\|\"reconcile.apply\"\\|ResumePolicy' internal/server/reconcile_ops.go",
+       "expect": "ID \"reconcile.apply\" at L81, ResumePolicy: opsregistry.ResumeDrop at L90 \u2014 and a SECOND ResumeDrop at L50 belonging to reconcile.scan"
+      },
+      {
+       "claim": "reconcile_ops.go contains no per-item loop and no RunItems call \u2014 the work is delegated out of the package",
+       "grep_cmd": "grep -n 'RunItems' internal/server/reconcile_ops.go",
+       "expect": "0 hits; the Run body instead calls reconcile.ExecuteReconcile(ctx, store, p.LegacyOpID, p.Matches, log)"
+      },
+      {
+       "claim": "reconcile.apply moves files and writes the library, so any resume must be item-idempotent",
+       "grep_cmd": "grep -n 'CapFilesWrite\\|Description:' internal/server/reconcile_ops.go",
+       "expect": "Description 'Apply a set of file-to-book reconcile matches, moving files and updating the database.' with Capabilities including CapLibraryWrite and CapFilesWrite"
+      }
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 2 is \"`grep -n 'ResumePolicy' internal/server/reconcile_ops.go` shows opsregistry.ResumeRestart\". That grep matches TWO lines at HEAD (L50 reconcile.scan and L90 reconcile.apply), both ResumeDrop. After a correct fix the grep still prints a ResumeDrop line, so the box is not decidable as written \u2014 and a weak model chasing a clean grep will convert reconcile.scan too, changing an op the brief never mentions."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Both required tests target internal/server/reconcile_ops_test.go, which does not exist at HEAD (`ls internal/server/reconcile_ops_test.go` \u2192 No such file or directory). exact_files is only ['internal/server/reconcile_ops.go'], and the step-2 conversion additionally forces edits in internal/reconcile/."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-137",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 7,
+    "problem": "Step 3 orders a new test, TestOrganizeService_PerformOrganize_WithBooks, that feeds PerformOrganize a non-empty book list 'with a FilePath needing organization'. PerformOrganize does not stop at the store: internal/organizer/service.go:335 calls orgSvc.organizeBooks(...), which performs real filesystem organization against config.AppConfig.RootDir. The brief never tells the worker to sandbox config.AppConfig (no t.TempDir() RootDir pin, no restore), and internal/server tests share a process-global config.AppConfig \u2014 so this test can copy/move files against whatever RootDir ambient state left behind. A brief that makes a Haiku-class agent invent filesystem sandboxing for an organize path is unsafe as written.",
+    "fix": {
+     "tier": "sonnet",
+     "steps": [
+      "Open internal/server/organize_service_test.go.",
+      "In TestOrganizeService_PerformOrganize_NoBooksToOrganize (L33-49), replace the `GetAllBooksFunc: func(limit, offset int) ([]database.Book, error)` stub at L35 with `GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) { return []database.BookCore{}, nil }` \u2014 the exact field and signature are at internal/database/mock_store.go:44. PerformOrganize pages through GetAllBooksCore (internal/organizer/service.go:265 and :312), never GetAllBooks, so the current stub is inert and the test passes vacuously.",
+      "Add TestOrganizeService_PerformOrganize_WithBooks in the same file. FIRST pin the filesystem: `origCfg := config.AppConfig; config.AppConfig.RootDir = t.TempDir(); t.Cleanup(func() { config.AppConfig = origCfg })` \u2014 PerformOrganize reaches orgSvc.organizeBooks (internal/organizer/service.go:335) and does real file I/O under RootDir, so an unsandboxed run writes outside the test.",
+      "Populate GetAllBooksCoreFunc with 1-2 BookCore rows whose FilePath points at files created under that same t.TempDir(), and stub every other MockStore Func PerformOrganize's non-BookIDs branch reaches, recording that each was called.",
+      "Assert PerformOrganize returns nil AND that the recorded calls fired \u2014 this is the anti-over-suppression twin that stops the suite regressing to a vacuous 'zero books, err==nil' pass.",
+      "Bump the file header (version + last-edited: 2026-08-21) on internal/server/organize_service_test.go.",
+      "Add changelog fragment changelog.d/20260821_server_137.md (no file header)."
+     ],
+     "edge_cases": [
+      "PerformOrganize's paging loop breaks when len(page) < fetchPageSize (1000), so a 1-2 book fake page terminates on the first iteration \u2014 no multi-page simulation needed.",
+      "config.AppConfig is process-global and shared across the whole internal/server test binary: the WithBooks test MUST snapshot and restore it, or it leaks a RootDir into every sibling test that runs after it."
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 8,
+    "problem": "Rated Haiku-class, but step 3 requires enumerating every store dependency PerformOrganize's non-BookIDs branch reaches (a ~145-line method at internal/organizer/service.go:234-343 that delegates into organizeBooks), stubbing each, and asserting side effects. That is judgment work, not a mechanical edit."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-138",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The Background states as fact that ABS's own middleware 'already enforces its own scheme ... and must be the ONLY auth gate on that surface'. That is false for a third of the ABS surface. Reading internal/server/handlers/abs/handler.go:432-445, these routes are registered WITHOUT the `auth := servermiddleware.ABSRequireAuth(h.resolver)` middleware: `r.GET(\"/ping\")`, `r.GET(\"/status\")`, `r.POST(\"/login\")`, `r.POST(\"/auth/refresh\")`, `r.GET(\"/auth/openid\")`, `r.GET(\"/auth/openid/callback\")` \u2014 the `auth` variable is only created at L446 and first applied at L447. `r.GET(\"/api/items/:id/cover\")` is also deliberately auth-free per its own comment. Today HTTP Basic is the ONLY gate on those paths when BasicAuthEnabled=true. Step 2's prefix list explicitly names '/status', '/ping' and '/auth/openid', so following this brief removes their only authentication.",
+    "fix": {
+     "background": [
+      "internal/server/middleware/basicauth.go's BasicAuth() exempts only /api/health, /api/v1/health (L28-32) and static assets (L34-45); everything else on s.router is gated.",
+      "internal/server/handlers/abs/handler.go:432 Register mounts the ABS surface. CRITICAL: the ABSRequireAuth middleware is not constructed until L446 \u2014 /ping (L433), /status (L434), /login (L436), /auth/refresh (L437), /auth/openid (L442) and /auth/openid/callback (L443) are registered with NO app-layer auth, and /api/items/:id/cover is deliberately auth-free. For those paths BasicAuth is currently the only gate, so they MUST NOT be added to the exemption list.",
+      "Only the routes that carry the `auth` middleware may be exempted: /logout, /api/authorize, /api/me*, /api/libraries*, /api/collections*, /api/playlists/:id, /api/items/:id (but NOT /api/items/:id/cover), /api/items/:id/play, /api/items/:id/file*.",
+      "internal/server/server.go:469 applies servermiddleware.BasicAuth() globally; internal/server/wire_abs_routes.go:504 mounts absGroup := s.router.Group(\"\") as a child, so it inherits BasicAuth with no override."
+     ],
+     "verified_anchors": [
+      {
+       "claim": "BasicAuth is applied globally to s.router",
+       "grep_cmd": "grep -n 'BasicAuth()' internal/server/server.go",
+       "expect": "1 hit at L469: router.Use(servermiddleware.BasicAuth())"
+      },
+      {
+       "claim": "the ABS group inherits it with no exemption",
+       "grep_cmd": "grep -n 'absGroup := s.router.Group' internal/server/wire_abs_routes.go",
+       "expect": "1 hit at L504"
+      },
+      {
+       "claim": "six ABS routes have NO ABS auth middleware and rely on BasicAuth as their only gate",
+       "grep_cmd": "grep -n 'r.GET(\"/ping\"\\|r.GET(\"/status\"\\|r.POST(\"/login\"\\|r.GET(\"/auth/openid\"\\|ABSRequireAuth(h.resolver)' internal/server/handlers/abs/handler.go",
+       "expect": "/ping L433, /status L434, /login L436, /auth/openid L443 \u2014 all registered BEFORE `auth := servermiddleware.ABSRequireAuth(h.resolver)` at L446, so BasicAuth is their only gate"
+      },
+      {
+       "claim": "the existing exemption style to mirror",
+       "grep_cmd": "grep -n 'Exempt\\|HasPrefix' internal/server/middleware/basicauth.go",
+       "expect": "comments at L28 and L34, strings.HasPrefix(path, \"/assets/\") at L35"
+      }
+     ],
+     "anti_over_suppression": "TestBasicAuth_UnauthenticatedABSRoutesStillEnforced \u2014 with BasicAuthEnabled=true, GET /ping, GET /status, POST /login and GET /auth/openid must STILL be challenged with 401 by BasicAuth, because ABSRequireAuth is not on those routes (abs/handler.go:433-443). Plus TestBasicAuth_NonABSPathStillEnforced for a plain /api/v1/... path."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "The Goal and Step 2 enumerate different exemption sets. Goal: '/api/authorize, /api/me*, /api/libraries*, /api/items*, /api/session*, /public/session*, /api/playlists/:id, /login, /logout, /auth/*, /status, /ping'. Step 2: '/api/me, /api/libraries, /api/items, /api/session, /public/session, /api/authorize, /api/playlists, /auth/openid, /status, /ping' \u2014 /login and /logout are dropped, /auth/* narrows to /auth/openid. Two reasonable models ship different exemption lists, and on an auth boundary the diff is the whole security property. Neither list matches what abs/handler.go:432 actually registers (no /api/session* or /public/session* appear there at all)."
+   },
+   {
+    "severity": "advisory",
+    "check": 8,
+    "problem": "Sonnet-class on a change that widens an authentication bypass, while the workstream README's own ground rule says 'Review-critical tasks (prod-data paths) are Opus-class'. The brief carries the REVIEW-CRITICAL banner but not the tier."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-139",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 3 is literally '- [ ] `make ci` passes'. The same brief's How-to-test section says 'Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task.' The box therefore cannot be checked, and it directly contradicts the brief's own gate.",
+    "fix": {
+     "acceptance": "grep -n 'DeleteExpiredABSSessions' internal/server/server_lifecycle.go shows a call inside the session-cleanup ticker block (0 hits at HEAD); grep -n 'DeleteExpiredABSSessions' internal/server/server_ops_store.go shows the new interface method next to DeleteExpiredSessions (currently the only hit is L227 DeleteExpiredSessions); go build ./... succeeds, proving PebbleStore already satisfies the widened interface (internal/database/pebble_store_abssession.go:308); go test ./internal/database/... ./internal/database/mocks/... ./internal/server/... -count=1 exits 0.",
+     "exact_files": [
+      "internal/database/mock_store.go",
+      "internal/database/mocks/mock_store.go",
+      "internal/server/server_lifecycle.go",
+      "internal/server/server_lifecycle_abssession_test.go",
+      "internal/server/server_ops_store.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "The Tests section names 'internal/server/server_lifecycle_test.go (or a new focused test file)' for the both-methods-called-on-tick assertion. `ls internal/server/server_lifecycle_test.go` \u2192 No such file or directory, so it is a NEW file, and no test file appears in exact_files (['internal/database/mock_store.go','internal/database/mocks/mock_store.go','internal/server/server_lifecycle.go','internal/server/server_ops_store.go'])."
+   },
+   {
+    "severity": "advisory",
+    "check": 8,
+    "problem": "Rated Haiku-class, but step 4 asks the worker to decide whether to hand-edit internal/database/mocks/mock_store.go or run mockery ('check whether this repo runs `go generate` for mocks ... and prefer running that'), i.e. to discover the mock-generation toolchain unaided. Widening ServerOpsStore also risks breaking the compile-time assertion at internal/server/server_ops_store.go:262."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-140",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 1 and the edge-case section prescribe two different, observable API contracts for the empty-ops apply request, and the brief never picks one. Step 1 says to replace `lines 44-60, the apply path` with an unconditional refusal \u2014 that range includes the `if ops.IsEmpty()` branch (verified: `grep -n 'ops.IsEmpty()\\|c.Query(\"dry_run\")\\|SafeWriteITL(itlPath' internal/server/itl_cleanup.go` -> L40 dry_run branch, L45 ops.IsEmpty(), L53 SafeWriteITL), whose body today is `httputil.RespondWithOK(c, gin.H{\"applied\": true, \"preview\": preview})`. The edge-case section then says that branch should be `remove or repurpose`d. A worker who removes it makes `dry_run=false` with zero pending ops return 410 `applied:false`, where it returns 200 `applied:true` today; a worker who 'repurposes' it leaves an apply-path response that still reports `applied: true`, which contradicts the Goal's 'the apply path ... must refuse' and leaves the retirement half-done. Two reasonable weak models ship two different response codes and two different `applied` values on the same request.",
+    "fix": {
+     "edge_cases": [
+      "The `if ops.IsEmpty()` branch at internal/server/itl_cleanup.go:45 MUST be deleted, not repurposed: after the retirement there is exactly one success path (dry_run=true) and one refusal path (everything else). An empty-ops apply request is an apply request and must get the same 410 refusal as any other \u2014 it must NOT keep returning 200 `applied: true`, which would report a successful apply on a path that no longer applies anything.",
+      "The refusal must be returned before any ITL path resolution or file access, so a missing/unreadable .itl file cannot turn the refusal into a 500 \u2014 treat unknown iTunes state as 'refused', never as 'failed'.",
+      "dry_run=true must keep returning 200 with the preview even when ops is empty (an empty preview is a valid measurement, not an error)."
+     ],
+     "acceptance": [
+      "A dry_run=true request returns 200 with the preview payload, including when the computed ops set is empty.",
+      "A dry_run=false request AND a request with the dry_run param omitted BOTH return HTTP 410 with `applied: false` and the retirement message \u2014 asserted for a non-empty ops fixture and for an empty ops fixture (the deleted IsEmpty branch's case).",
+      "`grep -n 'ops.IsEmpty()' internal/server/itl_cleanup.go` returns ZERO hits.",
+      "`grep -n 'SafeWriteITL' internal/server/itl_cleanup.go` returns ZERO hits.",
+      "The .itl fixture's bytes are byte-identical before and after the dry_run=false call.",
+      "File header bumped: `grep -n 'last-edited: 2026-08-21' internal/server/itl_cleanup.go` hits.",
+      "Changelog fragment present: `test -f changelog.d/20260821_server_140.md`."
+     ],
+     "verified_anchors": [
+      {
+       "claim": "the three branch anchors step 1 depends on, and the IsEmpty body that step 1 and the edge case disagree about",
+       "grep_cmd": "grep -n 'ops.IsEmpty()\\|c.Query(\"dry_run\")\\|SafeWriteITL(itlPath\\|RespondWithOK' internal/server/itl_cleanup.go",
+       "expect": "dry_run branch L40 returning RespondWithOK at L41; ops.IsEmpty() L45 returning RespondWithOK(gin.H{\"applied\": true, ...}) at L46; SafeWriteITL(itlPath, *ops) at L53; final RespondWithOK applied:true at L60"
+      }
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "Acceptance box 2 ('a manual curl of POST /api/v1/itunes/cleanup-merged?dry_run=false against a test server ...') needs a running server; the automated TestCleanupMergedHandler_Apply_RefusesAndNeverWrites box already covers the property, so the manual box is unfalsifiable in an agent run."
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "The review-critical Idempotency boilerplate demands undo-ledger journaling of 'every mutation' and a fixture round-trip through internal/undo. This brief REMOVES the only mutation in the handler, so items (2) and (3) have nothing to apply to. Harmless here, but a literal-minded worker may try to add an undo path to a no-op."
+   },
+   {
+    "severity": "advisory",
+    "check": 8,
+    "problem": "REVIEW-CRITICAL + Sonnet-class against the README ground rule that review-critical is Opus-class. Defensible in this direction (the change removes a destructive apply path rather than adding one), but the inconsistency is real."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-141",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency polarity is inverted for an additive test task: 'If the first acceptance check below already passes at HEAD (`go test ./internal/server/... -run TestHandleDiscoveryImport_HydrateFailure` passes.), this task is already applied.' `go test -run` with a pattern that matches nothing exits 0. Neither test exists at HEAD (`grep -c 'GetBookFileByID' internal/server/deluge_discovery_test.go` \u2192 0; `ls internal/maintenance/jobs/bulk_deluge_import_test.go` \u2192 No such file or directory), so the check passes at HEAD and a cold weak model reports the task already done and writes nothing.",
+    "fix": {
+     "polarity": "additive",
+     "acceptance": "grep -n 'func TestHandleDiscoveryImport_HydrateFailure' internal/server/deluge_discovery_test.go returns 1 hit (0 at HEAD); grep -n 'func TestBulkDelugeImportJob_HydrateFailure' internal/maintenance/jobs/bulk_deluge_import_test.go returns 1 hit (the file does not exist at HEAD); go test ./internal/server/... -run TestHandleDiscoveryImport_HydrateFailure -count=1 -v prints '--- PASS: TestHandleDiscoveryImport_HydrateFailure' (not '[no tests to run]'); same for the jobs package."
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 1 says to 'call handleDiscoveryImport via its route/handler'. handleDiscoveryImport is a method on *Server (internal/server/deluge_discovery.go:115) and reads its store via s.storeForWiring(), so the test needs a *Server fixture and a global-store wiring the brief never specifies. Two models will pick different fixtures (raw &Server{} vs setupTestServerWithStore), and setupTestServerWithStore additionally pins config.AppConfig.RootDir=\"\" (internal/server/server_test.go:161)."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Step 2 says to assert the job 'records the hydrate failure via reporter.Log or equivalent' \u2014 'or equivalent' is the brief admitting it never read bulkDelugeImportJob.Run's reporting shape. The hydrate site is verified (internal/maintenance/jobs/bulk_deluge_import.go:96) but the assertion surface is not."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-204",
+  "verdict": "pass",
+  "findings": []
+ },
+ {
+  "task_id": "TASK-205",
+  "verdict": "pass",
+  "findings": [
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 3 adds `close(s.shutdownArmed)` inside Server.Start with no sync.Once. Start has exactly one production call site today (cmd/root.go:53, `return srv.Start(cfg)`), so a double close cannot happen at HEAD \u2014 but the brief adds a lazy-init fallback in step 5 without adding the matching once-guard, so a future second Start on the same *Server panics with 'close of closed channel'. Cheap fix: `s.shutdownArmedOnce.Do(func() { close(s.shutdownArmed) })`."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-206",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['internal/server/server_test.go'], but steps 4-5 migrate '~60 call sites' across internal/server/*_test.go \u2014 the brief's own anchor says `ls internal/server/*_test.go | wc -l` = 139 files. Every one of those migrations is outside the declared commit scope."
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "TASK-206 (wave 1) and TASK-208/209/210/211 (all wave 1) give opposite instructions on the same files. TASK-206 step 3-4: build newTestServer and 'migrate the ~60 call sites currently paying the full setupTestServer cost ... AWAY from' setupTestServer/setupTestServerFS/setupTestServerWithStore. TASK-208-211: migrate 46 hand-built NewServer sites across 23 test files TOWARD setupTestServerWithStore. Both directions land in the same wave on overlapping files with no collision-table entry (the README lists only internal/server/server_test.go for TASK-206/207)."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 1 is \"grep -c 'newTestServer(' internal/server/*_test.go sums to roughly 60 (the owner-decision's stated target)\" and box 2 is 'materially more than 30% headroom ... (i.e. well under ~420s, ideally much less)'. 'Roughly', 'materially' and 'ideally much less' are not decidable by any command, and the brief's own edge-case section says the ~60 figure 'is an estimate ..., not a quota to force' \u2014 contradicting the box that treats it as the target."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "The underlying TODO item is quoted in TASK-207 as 'residual needs an owner decision: raise timeout / split package / migrate ~60 call sites to newTestServer (see DECISIONS-PENDING)'. This brief silently picks one of the three branches. Step 2 also asks the worker to add temporary profiling instrumentation to a shared fixture and run the full 434-480s package repeatedly \u2014 an investigation, not an executable change."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-207",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "The brief's entire Goal is 'Do not implement this as a second, separate task' and its single step is 'See todo_line 10104's steps -- do not duplicate the implementation work'. There is no work here. It nonetheless ships a full START HERE worktree+branch block, a changelog-fragment requirement (changelog.d/20260821_server_207.md), a commit message template and an exact_files of ['internal/server/server_test.go'] \u2014 so a cold weak model creates a worktree and a branch, then either commits nothing or invents a duplicate of TASK-206 on the same file in the next wave."
+   }
+  ],
+  "verdict_override": "not_a_task",
+  "reason": "The brief is an explicit bookkeeping duplicate of TASK-206 (its own Goal: 'Do not implement this as a second, separate task ... the coordinator should check off BOTH TODO.md checkboxes'). It has one step that says to do nothing, its Reuse entry is 'n/a (this scope file's own todo_line 10104 object)' with verify grep 'n/a', and its only re-verify anchor is `git show 46628240:TODO.md | sed -n '10600,10601p'` \u2014 reading a historical blob, not HEAD. Bucket 1 should carry the coordinator note on TASK-206 (close both TODO lines) rather than a worktree-consuming brief."
+ },
+ {
+  "task_id": "TASK-208",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The Goal and Background enumerate what setupTestServerWithStore does \u2014 'sets gin.TestMode, calls allowOpDefinitionUpserts(store), database.SetGlobalStore(store), NewServer(store)' \u2014 and omit the one side effect that breaks this migration. Reading internal/server/server_test.go:151-176, it also does `origCfg := config.AppConfig; config.AppConfig.RootDir = \"\"` (L160-161) BEFORE NewServer. itunes_error_test.go builds its env with testutil.SetupIntegration, which deliberately sets a non-empty RootDir (`RootDir: rootDir` in the config.Mutate block, internal/testutil/integration.go). All 11 sites in this file therefore run their iTunes import against RootDir=\"\" after the migration, which also nils out the itunes plugin (internal/plugins/itunes/register.go:52: `if cfg.RootDir == \"\" { return (*Plugin)(nil), nil }`). The brief gives the worker no warning and no override step. Note TASK-209 flags exactly this hazard \u2014 but only for e2e_workflow_test.go.",
+    "fix": {
+     "background": [
+      "internal/server/server_test.go:151 defines setupTestServerWithStore(t, store) (*Server, func()). It sets gin.TestMode, PINS config.AppConfig.RootDir=\"\" (L160-161), calls allowOpDefinitionUpserts(store), database.SetGlobalStore(store), NewServer(store), and returns a cleanup that stops fileIOPool/writeBackBatcher and restores config.AppConfig. It does NOT start the operations registry and does NOT restore the previous global store.",
+      "CRITICAL for this part: itunes_error_test.go builds its env via testutil.SetupIntegration(t), which sets a NON-EMPTY config RootDir (internal/testutil/integration.go, `RootDir: rootDir` inside config.Mutate). setupTestServerWithStore blanks it. An empty RootDir makes internal/plugins/itunes/register.go:52 return a typed-nil plugin, so the iTunes plugin registers nothing. Every one of the 11 sites in this file must therefore re-pin RootDir to env.TempDir/env.RootDir immediately after the setupTestServerWithStore call, or be left unmigrated.",
+      "itunes_error_test.go's 11 sites each follow NewServer(env.Store) with a manual `if server.opRegistry != nil { server.opRegistry.Start(...); defer Shutdown }` pair (L35-40, L84-89, L131-136, L284-289). setupTestServerWithStore does NOT start the registry, so those pairs must be kept verbatim.",
+      "version_lifecycle_test.go's single site at L37 constructs from a plain store with no SetupIntegration and no extra wiring."
+     ],
+     "steps": [
+      "Open internal/server/itunes_error_test.go. For each of the 11 sites (L34,66,83,130,162,175,201,217,233,259,283) replace `server := NewServer(env.Store)` with `server, cleanup := setupTestServerWithStore(t, env.Store)` followed immediately by `defer cleanup()`.",
+      "IMMEDIATELY after each setupTestServerWithStore call, restore the root dir the fixture blanked: `config.AppConfig.RootDir = env.RootDir` (use whatever field testutil.IntegrationEnv exposes \u2014 verify with `grep -n 'RootDir\\|TempDir' internal/testutil/integration.go`). Without this the iTunes plugin build guard at internal/plugins/itunes/register.go:52 sees an empty RootDir and registers nothing, and the import tests fail. Do NOT skip this step even though the tests may appear to pass locally.",
+      "Keep each existing `if server.opRegistry != nil { server.opRegistry.Start(context.Background()); defer func() { _ = server.opRegistry.Shutdown(context.Background()) }() }` block UNCHANGED \u2014 setupTestServerWithStore does not start the registry.",
+      "Remove only lines that EXACTLY duplicate what setupTestServerWithStore performs (gin.SetMode(gin.TestMode), database.SetGlobalStore(store), allowOpDefinitionUpserts(store)). Never remove a config.AppConfig assignment \u2014 that is the hazard above, not duplication.",
+      "Repeat for internal/server/version_lifecycle_test.go:37 (plain store, no SetupIntegration, no opRegistry wiring): replace with setupTestServerWithStore(t, store) + defer cleanup().",
+      "Run a BASELINE `go test ./internal/server/... -run 'TestITunesImport' -count=1 -v` BEFORE editing and diff the per-test PASS/FAIL list against the post-change run \u2014 an identical list is the acceptance, not merely 'exit 0'.",
+      "Bump the version header and last-edited: 2026-08-21 on both files.",
+      "Add changelog fragment changelog.d/20260821_server_208.md (no file header)."
+     ],
+     "edge_cases": [
+      "setupTestServerWithStore pins config.AppConfig.RootDir=\"\" and its cleanup restores config.AppConfig wholesale. Any test in scope that depends on a real RootDir (everything built by testutil.SetupIntegration) must re-pin it after the call.",
+      "setupTestServerWithStore calls database.SetGlobalStore(store) but its cleanup never restores the previous global store. Do not migrate a test that saves/restores the global store itself.",
+      "A construction site inside a subtest table loop needs its defer cleanup() inside the loop body \u2014 none in these two files, but check the enclosing braces before applying the replacement."
+     ],
+     "verified_anchors": [
+      {
+       "claim": "setupTestServerWithStore also blanks config.AppConfig.RootDir before NewServer \u2014 the fact the original brief omitted",
+       "grep_cmd": "grep -n 'config.AppConfig.RootDir = \"\"' internal/server/server_test.go",
+       "expect": "exactly 1 hit, L161, inside setupTestServerWithStore \u2014 the side effect the brief omits"
+      },
+      {
+       "claim": "the fixture's other two side effects, in order, after the RootDir pin",
+       "grep_cmd": "grep -n 'allowOpDefinitionUpserts(store)\\|database.SetGlobalStore' internal/server/server_test.go",
+       "expect": "allowOpDefinitionUpserts(store) at L167 and database.SetGlobalStore(store) at L170 (plus L84/L123 belonging to the other fixture)"
+      },
+      {
+       "claim": "testutil.SetupIntegration deliberately sets a non-empty RootDir",
+       "grep_cmd": "grep -n 'RootDir' internal/testutil/integration.go",
+       "expect": "rootDir := filepath.Join(tmpBase, \"library\") and RootDir: rootDir inside the config.Mutate block"
+      },
+      {
+       "claim": "an empty RootDir disables the iTunes plugin entirely",
+       "grep_cmd": "grep -n 'if cfg.RootDir == \"\"' internal/plugins/itunes/register.go",
+       "expect": "exactly 1 hit at L52 \u2014 `if cfg.RootDir == \"\" { return (*Plugin)(nil), nil }`: an empty RootDir returns a nil plugin, disabling iTunes entirely"
+      },
+      {
+       "claim": "11 direct NewServer(env.Store) sites in itunes_error_test.go",
+       "grep_cmd": "grep -n 'NewServer(' internal/server/itunes_error_test.go",
+       "expect": "11 hits at L34,66,83,130,162,175,201,217,233,259,283"
+      },
+      {
+       "claim": "1 direct NewServer(store) site in version_lifecycle_test.go",
+       "grep_cmd": "grep -n 'NewServer(' internal/server/version_lifecycle_test.go",
+       "expect": "1 hit at L37"
+      },
+      {
+       "claim": "the manual opRegistry pairs that must survive the migration",
+       "grep_cmd": "grep -n 'opRegistry' internal/server/itunes_error_test.go",
+       "expect": "Start/Shutdown pairs at L35-39, L84-88, L131-135, L284-288"
+      }
+     ]
+    }
+   }
+  ],
+  "note": "Verified clean and NOT a finding: the 4-part split really is disjoint and exhaustive. My own independent census `grep -rn 'NewServer(' internal/server --include='*_test.go' | grep -v httptest.NewServer | grep -v server_test.go | grep -v fingerprint_rescan_test.go` returns exactly 46 sites across exactly 23 files, and the per-file counts match Part1=12 (itunes_error 11 + version_lifecycle 1), Part2=12 (itunes_integration 5 + indexed_store 4 + similar_books 2 + e2e_workflow 1), Part3=12, Part4=10 with no file appearing in two parts."
+ },
+ {
+  "task_id": "TASK-209",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The RootDir hazard is flagged for only 1 of this part's 4 files. The edge-case section warns that setupTestServerWithStore's 'config-pinning (RootDir=\\\"\\\", server_test.go:161)' could break e2e_workflow_test.go \u2014 but itunes_integration_test.go's 5 sites (L56,124,172,222,256) come from the SAME testutil.SetupIntegration env (`grep -ln 'SetupIntegration' internal/server/*_test.go` lists e2e_workflow_test.go, itunes_integration_test.go, itunes_error_test.go, organize_integration_test.go) and that file references RootDir directly (`grep -ln RootDir` hits it). So 5 of this part's 12 sites carry the identical hazard with no warning, and the Background instead tells the worker the only thing to watch for is 'a manual opRegistry.Start/Shutdown pair ... or other custom wiring'.",
+    "fix": {
+     "background": [
+      "setupTestServerWithStore (internal/server/server_test.go:151) sets gin.TestMode, PINS config.AppConfig.RootDir=\"\" (L160-161), calls allowOpDefinitionUpserts, database.SetGlobalStore(store) and NewServer(store); it does NOT start the operations registry and does NOT restore the previous global store.",
+      "itunes_integration_test.go AND e2e_workflow_test.go both build their env via testutil.SetupIntegration(t), which deliberately sets a non-empty RootDir. Both must re-pin config.AppConfig.RootDir after each setupTestServerWithStore call, or be left unmigrated \u2014 an empty RootDir also nils the iTunes plugin (internal/plugins/itunes/register.go:52).",
+      "indexed_store_test.go (4 sites) and similar_books_test.go (2 sites) use a plain store with no SetupIntegration and no RootDir dependence \u2014 these are the safe, purely mechanical sites in this part.",
+      "Before editing each site, read the ~15 surrounding lines (grep -n -B5 -A10 'NewServer(' <file>) to check for a manual opRegistry.Start/Shutdown pair or other custom wiring that must be preserved rather than deleted."
+     ],
+     "edge_cases": [
+      "Any site fed by testutil.SetupIntegration (itunes_integration_test.go x5, e2e_workflow_test.go x1) loses its RootDir to setupTestServerWithStore's pin. Re-pin it immediately after the call rather than silently dropping the requirement.",
+      "setupTestServerWithStore calls database.SetGlobalStore(store) and its cleanup never restores the prior global store \u2014 do not migrate a test that manages the global store itself.",
+      "indexed_store_test.go's 4 sites are 4 separate Test functions, not a table loop (verify with grep -n '^func Test'), so each gets a straightforward defer cleanup().",
+      "Capture a per-test PASS/FAIL baseline before editing and diff it after \u2014 'the package still exits 0' is not the same as 'the same tests still pass'."
+     ],
+     "verified_anchors": [
+      {
+       "claim": "5 sites in itunes_integration_test.go",
+       "grep_cmd": "grep -n 'NewServer(' internal/server/itunes_integration_test.go",
+       "expect": "5 hits at L56,124,172,222,256"
+      },
+      {
+       "claim": "4 sites in indexed_store_test.go",
+       "grep_cmd": "grep -n 'NewServer(' internal/server/indexed_store_test.go",
+       "expect": "4 hits at L51,99,144,183"
+      },
+      {
+       "claim": "2 sites in similar_books_test.go",
+       "grep_cmd": "grep -n 'NewServer(' internal/server/similar_books_test.go",
+       "expect": "2 hits at L42,136"
+      },
+      {
+       "claim": "1 site in e2e_workflow_test.go",
+       "grep_cmd": "grep -n 'NewServer(' internal/server/e2e_workflow_test.go",
+       "expect": "1 hit at L49"
+      },
+      {
+       "claim": "itunes_integration_test.go and e2e_workflow_test.go both come from SetupIntegration, which sets a non-empty RootDir that the fixture blanks",
+       "grep_cmd": "grep -ln 'SetupIntegration' internal/server/*_test.go",
+       "expect": "includes e2e_workflow_test.go, itunes_integration_test.go, itunes_error_test.go, organize_integration_test.go"
+      },
+      {
+       "claim": "the fixture's RootDir pin",
+       "grep_cmd": "grep -n 'origCfg := config.AppConfig\\|config.AppConfig.RootDir = \"\"' internal/server/server_test.go",
+       "expect": "hits at L160 `origCfg := config.AppConfig` and L161 `config.AppConfig.RootDir = \"\"` inside setupTestServerWithStore (plus the other fixture's origCfg capture)"
+      }
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 9,
+    "problem": "indexed_store_test.go is also TASK-133's and TASK-132's target file. TASK-209 is wave 1 and TASK-132 is wave 1; the README collision table lists indexed_store_test.go for TASK-133/TASK-209 only. See the TASK-132 finding \u2014 the collision is on that brief's side, but it lands here."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-210",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Step 4 tells the worker to migrate setupUserTagsAuthzTestServer (internal/server/user_tags_authz_test.go:38, NewServer at L79) by replacing 'the construction line' and to preserve only 'the session/book seeding logic that follows construction'. But that wrapper sets its OWN config first \u2014 `grep -n 'RootDir' internal/server/user_tags_authz_test.go` returns `49: RootDir: tempDir,` \u2014 and setupTestServerWithStore blanks config.AppConfig.RootDir to \"\" (internal/server/server_test.go:160-161) before calling NewServer. The brief's model of the fixture ('gin.SetMode/database.SetGlobalStore/allowOpDefinitionUpserts') never mentions the config pin, and step 3's instruction to find 'any manual config/global-store lines above it' and delete exact duplicates points a weak model straight at deleting the RootDir assignment.",
+    "fix": {
+     "background": [
+      "setupTestServerWithStore (internal/server/server_test.go:151) does FOUR things, not three: gin.SetMode(gin.TestMode), config.AppConfig.RootDir=\"\" with a whole-config restore in cleanup (L160-161), allowOpDefinitionUpserts(store) (L167), database.SetGlobalStore(store), then NewServer(store). The RootDir pin is the one that silently changes behaviour.",
+      "server_coverage_phase2_test.go's 4 sites (L76,134,168,223) are each preceded by a manual allowOpDefinitionUpserts(mockStore) (L75,133,167,222) \u2014 genuine duplication that becomes redundant post-migration. This file already pins RootDir itself via its own pinEmptyRootDir helper (L29), so it is safe.",
+      "user_tags_authz_test.go's wrapper sets RootDir: tempDir at L49 before NewServer at L79. Migrating its construction blanks that RootDir for the duration of the test. Re-pin config.AppConfig.RootDir = tempDir immediately after the setupTestServerWithStore call, and never delete the L49 config setup as a 'duplicate'.",
+      "The 4 wrapper-helper files each define one function other tests in the same file call repeatedly \u2014 setupMaintenanceTestServer (4 callers), setupUserTagsAuthzTestServer (2), setupPlaylistTestServer (10), setupHandlerTestServer (13, plus 3 CROSS-FILE callers in reset_handler_test.go). Migrate the wrapper's internals and use t.Cleanup(cleanup) so no signature and no call site changes."
+     ],
+     "edge_cases": [
+      "Never delete a config.AppConfig assignment as 'boilerplate setupTestServerWithStore already performs'. The fixture BLANKS RootDir; it does not reproduce a test's chosen value.",
+      "setupTestServerWithStore's cleanup restores config.AppConfig wholesale and does NOT restore the previous global store \u2014 a wrapper that saves/restores the global store itself must keep doing so.",
+      "handlers_integration_test.go's setupHandlerTestServer uses mockDB; confirm it is *mocks.MockStore, the type allowOpDefinitionUpserts type-asserts against (server_test.go: `ms, ok := store.(*mocks.MockStore)`). A different mock type makes that call a silent no-op, which is safe but should be noted.",
+      "If t.Cleanup(cleanup) goes inside a wrapper, make sure no call site still does `defer cleanup()` on a value the wrapper no longer returns."
+     ],
+     "verified_anchors": [
+      {
+       "claim": "the fixture pins RootDir to empty \u2014 the omitted side effect",
+       "grep_cmd": "grep -n 'config.AppConfig.RootDir = \"\"\\|allowOpDefinitionUpserts(store)' internal/server/server_test.go",
+       "expect": "exactly 2 hits: L161 `config.AppConfig.RootDir = \"\"` and L167 `allowOpDefinitionUpserts(store)`"
+      },
+      {
+       "claim": "user_tags_authz_test.go sets its own RootDir before constructing",
+       "grep_cmd": "grep -n 'RootDir' internal/server/user_tags_authz_test.go",
+       "expect": "1 hit at L49: RootDir: tempDir,"
+      },
+      {
+       "claim": "server_coverage_phase2_test.go duplicates allowOpDefinitionUpserts at every site",
+       "grep_cmd": "grep -n 'NewServer(\\|allowOpDefinitionUpserts(' internal/server/server_coverage_phase2_test.go",
+       "expect": "8 hits: allowOpDefinitionUpserts at L75,133,167,222 each immediately preceding NewServer at L76,134,168,223"
+      },
+      {
+       "claim": "2 real sites each in deluge_integration_test.go and search_reconciler_test.go",
+       "grep_cmd": "grep -n 'NewServer(store)' internal/server/deluge_integration_test.go internal/server/search_reconciler_test.go",
+       "expect": "deluge_integration_test.go L113,161; search_reconciler_test.go L46,242"
+      },
+      {
+       "claim": "the 4 wrapper definitions and their internal NewServer lines",
+       "grep_cmd": "grep -n 'NewServer(' internal/server/maintenance_window_handlers_test.go internal/server/user_tags_authz_test.go internal/server/playlist_handlers_test.go internal/server/handlers_integration_test.go",
+       "expect": "L41, L79, L45, L220 respectively"
+      },
+      {
+       "claim": "setupHandlerTestServer has cross-file callers the brief's in-file count of 13 misses",
+       "grep_cmd": "grep -rn 'setupHandlerTestServer(' internal/server --include='*_test.go'",
+       "expect": "13 in handlers_integration_test.go plus 3 in reset_handler_test.go (L26, L81, L108)"
+      }
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "The Background's wrapper call counts are described as 'per grep -rn <fnName>( <file>' \u2014 i.e. deliberately scoped to one file. The measured in-file counts do check out (4 / 2 / 10 / 13), but setupHandlerTestServer additionally has 3 CROSS-FILE callers in reset_handler_test.go (L26, L81, L108). The t.Cleanup approach the brief prefers happens to make this harmless; the count is still understated."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-211",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "server_op_registration_test.go is listed among 'the simplest of the 46 sites to migrate'. It is the opposite: it is the regression test that PINS the removed RootDir op-registration gate, and it hand-builds deliberately. Reading internal/server/server_op_registration_test.go:30-51, TestNewServer_RegistersOpsWithEmptyRootDir sets `config.AppConfig.RootDir = \"\"` with its own t.Cleanup restore (L33-35), saves and RESTORES the previous global store (`origStore := database.GetGlobalStore(); database.SetGlobalStore(store); t.Cleanup(func() { database.SetGlobalStore(origStore) })`, L41-44), then calls NewServer(store) itself and asserts srv.opRegistry.ActiveDefs() is non-empty. setupTestServerWithStore sets the global store and NEVER restores it, and supplies the empty RootDir incidentally \u2014 so migrating this test launders the exact condition it exists to prove. It belongs on the fingerprint_rescan_test.go exclusion list.",
+    "fix": {
+     "steps": [
+      "EXCLUDE internal/server/server_op_registration_test.go from this migration entirely and record the exclusion in the Coordinator notes alongside fingerprint_rescan_test.go. Its TestNewServer_RegistersOpsWithEmptyRootDir hand-builds on purpose: it pins config.AppConfig.RootDir=\"\" with its own restore (L33-35), saves and restores database.GetGlobalStore() (L41-44) which setupTestServerWithStore never does, and asserts srv.opRegistry.ActiveDefs() != 0. Routing it through the shared fixture would make the empty RootDir incidental rather than asserted.",
+      "For the 6 remaining inline-construction files (cover_history_test.go:44, server_middleware_test.go:38, entity_tag_handlers_test.go:36, import_collision_test.go:38, user_handlers_test.go:35, organize_integration_test.go:53), replace `<var> := NewServer(<store>)` with `<var>, cleanup := setupTestServerWithStore(t, <store>)` + `defer cleanup()`, deleting ONLY lines that exactly duplicate gin.SetMode / database.SetGlobalStore / allowOpDefinitionUpserts.",
+      "BEFORE migrating cover_history_test.go and organize_integration_test.go, handle the RootDir pin: setupTestServerWithStore sets config.AppConfig.RootDir=\"\" (internal/server/server_test.go:160-161). cover_history_test.go:29 sets `config.AppConfig.RootDir = rootDir` itself, and organize_integration_test.go uses testutil.SetupIntegration (non-empty RootDir) and then POSTs def_id library.organize, asserting 2 books exist afterwards \u2014 an empty RootDir gives the organize op no destination. Re-pin RootDir immediately after the setupTestServerWithStore call in both, and never delete their RootDir assignment as a duplicate.",
+      "organize_integration_test.go:54-58 also has a manual `if server.opRegistry != nil { Start(...); defer Shutdown }` pair. setupTestServerWithStore does not start the registry, so keep that block verbatim.",
+      "For ai_jobs_handlers_test.go's setupAIJobsTestServer (L25, NewServer at L40), reading_handlers_test.go's setupReadingTestServer (L19, NewServer at L35) and metadata_handlers_test.go's setupRatingTestServer (L19, NewServer at L32): replace the internal construction with setupTestServerWithStore(t, store) and add t.Cleanup(cleanup) inside the wrapper so the existing signatures and all call sites are untouched.",
+      "Bump the version header and last-edited: 2026-08-21 on every file actually changed (9 files, not 10).",
+      "Capture a per-test PASS/FAIL baseline with `go test ./internal/server/... -count=1 -v` before and after, and diff the lists.",
+      "Add changelog fragment changelog.d/20260821_server_211.md (no file header)."
+     ],
+     "exact_files": [
+      "internal/server/ai_jobs_handlers_test.go",
+      "internal/server/cover_history_test.go",
+      "internal/server/entity_tag_handlers_test.go",
+      "internal/server/import_collision_test.go",
+      "internal/server/metadata_handlers_test.go",
+      "internal/server/organize_integration_test.go",
+      "internal/server/reading_handlers_test.go",
+      "internal/server/server_middleware_test.go",
+      "internal/server/user_handlers_test.go"
+     ],
+     "edge_cases": [
+      "setupTestServerWithStore's cleanup restores config.AppConfig but NEVER restores the previous database global store. Any test that saves/restores the global store itself (server_op_registration_test.go) must not be migrated.",
+      "setupRatingTestServer's callers are both inside metadata_handlers_test.go (L38, L86). reset_handler_test.go calls setupHandlerTestServer (L26, L81, L108), which is Part 3's file, not this part's \u2014 no cross-file coupling exists here.",
+      "cover_history_test.go and organize_integration_test.go depend on a real config.AppConfig.RootDir; the fixture blanks it."
+     ],
+     "verified_anchors": [
+      {
+       "claim": "server_op_registration_test.go deliberately hand-builds to pin the empty-RootDir op-registration regression, and restores the global store, which the fixture does not",
+       "grep_cmd": "grep -n 'config.AppConfig.RootDir = \"\"\\|origStore := database.GetGlobalStore()\\|srv := NewServer(store)' internal/server/server_op_registration_test.go",
+       "expect": "3 hits: L34 RootDir pin, L42 origStore := database.GetGlobalStore(), L46 srv := NewServer(store) \u2014 each RootDir/store change paired with its own t.Cleanup restore"
+      },
+      {
+       "claim": "the fixture pins RootDir empty and never restores the global store",
+       "grep_cmd": "grep -n 'database.SetGlobalStore' internal/server/server_test.go",
+       "expect": "3 hits: L84 and L123 (the OTHER fixture sets, then nils, the global store); L170 in setupTestServerWithStore, whose cleanup restores only fileIOPool, writeBackBatcher and config.AppConfig and never the global store"
+      },
+      {
+       "claim": "cover_history_test.go sets its own RootDir before constructing",
+       "grep_cmd": "grep -n 'RootDir' internal/server/cover_history_test.go",
+       "expect": "1 hit at L29: config.AppConfig.RootDir = rootDir"
+      },
+      {
+       "claim": "organize_integration_test.go runs library.organize against a real RootDir from SetupIntegration and keeps its own opRegistry start/shutdown",
+       "grep_cmd": "grep -n 'NewServer(env.Store)\\|library.organize' internal/server/organize_integration_test.go",
+       "expect": "`server := NewServer(env.Store)` at L53 and the `\"def_id\":\"library.organize\"` POST body at L60 \u2014 a real-RootDir organize run with its own opRegistry Start/Shutdown"
+      },
+      {
+       "claim": "the 10 claimed single sites, one per file",
+       "grep_cmd": "grep -n 'NewServer(' internal/server/cover_history_test.go internal/server/server_middleware_test.go internal/server/ai_jobs_handlers_test.go internal/server/entity_tag_handlers_test.go internal/server/import_collision_test.go internal/server/reading_handlers_test.go internal/server/user_handlers_test.go internal/server/organize_integration_test.go internal/server/server_op_registration_test.go internal/server/metadata_handlers_test.go",
+       "expect": "exactly 10 hits, one per file, at L44,38,40,36,38,35,35,53,46,32"
+      },
+      {
+       "claim": "the 3 wrapper definitions",
+       "grep_cmd": "grep -n '^func setupAIJobsTestServer\\|^func setupReadingTestServer\\|^func setupRatingTestServer' internal/server/ai_jobs_handlers_test.go internal/server/reading_handlers_test.go internal/server/metadata_handlers_test.go",
+       "expect": "ai_jobs_handlers_test.go:25, reading_handlers_test.go:19, metadata_handlers_test.go:19"
+      }
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The edge-case section states 'reset_handler_test.go calls metadata_handlers_test.go's setupRatingTestServer (a cross-file caller ...)'. It does not. `grep -rn 'setupRatingTestServer' internal/server --include='*_test.go'` returns three hits, all inside metadata_handlers_test.go (definition L19, callers L38 and L86). `grep -n 'setup[A-Za-z]*(' internal/server/reset_handler_test.go` shows it calls setupHandlerTestServer at L26, L81 and L108 \u2014 which belongs to TASK-210's handlers_integration_test.go, not this part. The one cross-file coupling the brief tries to warn about is attributed to the wrong helper and the wrong task."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "organize_integration_test.go:54-58 carries the same manual `if server.opRegistry != nil { Start(); defer Shutdown }` pair that TASK-208 explicitly protects in itunes_error_test.go. TASK-211's step 1 only says to delete gin.SetMode/SetGlobalStore/allowOpDefinitionUpserts duplicates; it never repeats the keep-the-registry-wiring warning, so a worker who has not read Part 1 has nothing telling them to preserve it."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-158",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency check is a green-gate assertion, not a check for this task's own artifact: 'If the first acceptance check below already passes at HEAD (`npm --prefix web run lint passes with no new errors.`), this task is already applied \u2014 run the acceptance checks instead of re-applying.' Lint passing has nothing to do with whether PathAliasesSection exists. A cold weak model runs lint, sees it green, and reports the task already applied without writing a line.",
+    "fix": {
+     "polarity": "additive",
+     "acceptance": "test -f web/src/components/settings/PathAliasesSection.tsx and test -f web/src/components/settings/PathAliasesSection.test.tsx both succeed (neither exists at HEAD); grep -n 'path_aliases: pathAliases' web/src/hooks/useSettingsHandlers.ts returns 1 hit (0 at HEAD), proving the panel's state reaches the PATCH /config payload; grep -n 'PathAliasesSection' web/src/components/settings/PathsSettingsTab.tsx returns >=1 hit; npm --prefix web test -- PathAliasesSection passes all four new tests; npm --prefix web run lint passes with no new errors."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Step 3 offers two placements and states a preference for the one outside scope: '...or pass pathAliases/setPathAliases as props into PathsSettingsTab and render it there instead, matching how DelugeSettingsTab is nested inside PathsSettingsTab at PathsSettingsTab.tsx:260 -- prefer this nesting'. web/src/components/settings/PathsSettingsTab.tsx is NOT in exact_files (['web/src/components/settings/PathAliasesSection.test.tsx','web/src/components/settings/PathAliasesSection.tsx','web/src/hooks/useSettingsHandlers.ts','web/src/pages/Settings.tsx']), so the brief's own preferred path edits a file outside its commit scope. Verified: grep -n 'DelugeSettingsTab' web/src/components/settings/PathsSettingsTab.tsx -> L31 import, L260 render.",
+    "fix": {
+     "exact_files": [
+      "web/src/components/settings/PathAliasesSection.test.tsx",
+      "web/src/components/settings/PathAliasesSection.tsx",
+      "web/src/components/settings/PathsSettingsTab.tsx",
+      "web/src/hooks/useSettingsHandlers.ts",
+      "web/src/pages/Settings.tsx"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 2 says to add the load line 'In the config-load effect where `if (config.embedding) setEmbeddingConfig(config.embedding);` appears (line 601)'. That line is real (Settings.tsx:601) but sits in a run of five sibling `if (config.X)` lines (600-603); a weak model may append rather than insert, which is harmless \u2014 noted only because the brief cites a single line where the anchor is a block."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-159",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency: 'If the first acceptance check below already passes at HEAD (`npm --prefix web run lint passes.`), this task is already applied.' Lint being green is unrelated to whether the reset hooks exist. Verified they do not: grep -n 'cachedAliasesPromise' web/src/components/common/PathLinks.tsx returns 5 hits (L102,105,106,112,116), all internal, with no export; same for cachedVarsPromise in web/src/utils/formatPath.ts (L50,53,54,58,62). A cold model reports 'already applied'.",
+    "fix": {
+     "polarity": "additive",
+     "acceptance": "grep -n '__resetPathAliasesCacheForTests' web/src/components/common/PathLinks.tsx returns 1 export (0 at HEAD); grep -n '__resetPathVarsCacheForTests' web/src/utils/formatPath.ts returns 1 export (0 at HEAD); grep -rl '__resetPath.*CacheForTests' web/src --include='*.test.tsx' lists all 6 target test files; npm --prefix web test -- PathLinks passes including the new re-fetch-after-reset test; npm --prefix web run lint passes."
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "The Tests section opens 'no new test needed for the reset function itself' and then mandates one in the same sentence ('but add one regression test ...'). The acceptance box requires that test, so the resolution is knowable, but the sentence reads as optional on first pass."
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "Acceptance box 3 asks for 'the same pass/fail counts as before this change' across five named test files. That needs a pre-change baseline run the steps never tell the worker to capture. Add 'capture the baseline BEFORE editing' as an explicit step or the box is uncheckable after the fact."
+   }
+  ],
+  "note": "Verified clean: all three re-verify anchors hit exactly as stated, and every one of the 6 test files named in exact_files already contains a beforeEach block (grep -c 'beforeEach(' returns 1 for PathLinks.test.tsx, ReviewWorkspace.test.tsx, ReviewWorkspace.refetchStale.test.tsx, CompareSpine.test.tsx, DupesSpine.test.tsx, RegroupSpine.test.tsx), so step 3's premise holds for all six."
+ },
+ {
+  "task_id": "TASK-160",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['web/src/components/wizard/WelcomeWizard.tsx'] \u2014 a single .tsx file \u2014 but the task builds a new Go HTTP endpoint (step 2), registers a route (step 3), adds Go tests (Tests: 'internal/server/handlers/<file>_test.go'), and adds a web test (Tests: 'web/src/components/wizard/WelcomeWizard.test.tsx'). Verified `ls web/src/components/wizard/` contains ONLY WelcomeWizard.tsx \u2014 no test file exists \u2014 yet acceptance box 3 is '`npm --prefix web test -- WelcomeWizard` passes'. Four files outside the declared scope, three of which do not exist.",
+    "fix": {
+     "tier": "opus"
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The Reuse block instructs 'Use existing setup-wizard handler file(s) this new endpoint should live alongside in internal/server/handlers/ (search for the wizard/setup handler) (verify: `grep -rln 'setup\\|wizard' internal/server/handlers/*.go | grep -v _test`)'. I ran that grep: it returns internal/server/handlers/ai.go, auth.go, diagnostics.go, reading.go \u2014 none of which is a setup-wizard handler; they match on incidental uses of the word 'setup'. No wizard/setup handler file exists. The brief's single instruction for WHERE the endpoint goes resolves to four unrelated files, so two weak models put a credential-receiving endpoint in two different places."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Two acceptance boxes cannot be reached by the brief's own gate. The gate is `npm --prefix web run lint && npm --prefix web test`, which never compiles or runs Go; box 2 is '`go test ./internal/server/handlers/... -run ValidateOpenAIKey -v` passes'. And the Tests section names the target file as the literal placeholder 'internal/server/handlers/<file>_test.go' \u2014 there is no file to check.",
+    "fix": {
+     "tests": "internal/server/handlers/openai_validate_test.go (new): TestValidateOpenAIKey_ValidKey (httptest server returning 200, assert valid:true), TestValidateOpenAIKey_InvalidKey (401 -> valid:false), TestValidateOpenAIKey_NetworkError (5xx/timeout -> a distinguishable error, NOT a silent valid:false), and TestValidateOpenAIKey_DoesNotLogKey (assert the raw key never reaches the log sink). web/src/components/wizard/WelcomeWizard.test.tsx (new): mock the network layer and assert the component calls the local backend path and never api.openai.com.",
+     "acceptance": "grep -n 'api.openai.com' web/src/components/wizard/WelcomeWizard.tsx returns 0 hits (1 hit at HEAD, L160); go build ./... && go vet ./... && go test ./internal/server/handlers/... -run ValidateOpenAIKey -count=1 exits 0; npm --prefix web test -- WelcomeWizard passes; npm --prefix web run lint passes."
+    }
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-161",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Both required tests (the hide test and the named anti-over-suppression selected-but-hidden twin) go in web/src/components/library/TagCloud.test.tsx, which exists at HEAD but is NOT in exact_files (['web/src/components/library/TagCloud.tsx','web/src/pages/Library.tsx']). Conversely web/src/pages/Library.tsx IS in exact_files but no step edits it \u2014 step 3 only says to 'confirm' other consumers are unaffected via grep. The scope is wrong on both ends.",
+    "fix": {
+     "exact_files": [
+      "web/src/components/library/TagCloud.test.tsx",
+      "web/src/components/library/TagCloud.tsx"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "The first re-verify anchor is prose, not a grep whose result can be judged: \"grep -n 'renderChip\\|label=' web/src/components/library/TagCloud.tsx # renderChip builds label from `${t.tag} (${t.count})` verbatim, no filter step before sortedTags/previewTags\". The actual grep returns 5 lines (L115 renderChip, L120 label, L145 aria-label, L170, L188). The stated expectation gives the worker nothing to compare a count against, and the sibling brief TASK-162 asserts '1 hit' for a grep that returns 2."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 1 says to put isHiddenTagNamespace 'in web/src/components/library/TagCloud.tsx near the top (or in a shared lib file if one exists for tag utilities \u2014 check `grep -rn 'namespace\\|tag.*prefix' web/src/lib/*.ts` first and reuse if found)'. TASK-162 (wave 1, i.e. BEFORE this wave-2 brief) is told to add formatTagLabel 'near isHiddenTagNamespace (from part 1)'. If this brief picks the shared-lib option the sibling's anchor disappears."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-162",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "The wave order is inverted against the brief's own stated dependency. Step 1 says: 'add a pure function formatTagLabel(tag: string): string near `isHiddenTagNamespace` (from part 1)'. isHiddenTagNamespace is created by TASK-161, and the web README's wave table places TASK-161 in wave 2 and TASK-162 in wave 1 (collision note: 'web/src/components/library/TagCloud.tsx: TASK-161, TASK-162 -> serialize by wave (TASK-161=w2, TASK-162=w1)'). Both briefs also record 'Depends on: none'. A wave-1 worker looking for isHiddenTagNamespace at HEAD finds nothing (grep -n 'isHiddenTagNamespace' web/src/components/library/TagCloud.tsx -> 0 hits) and either invents it, duplicating TASK-161's work, or stops.",
+    "fix": {
+     "depends_on_lines": [
+      "TASK-161 must land first; either swap the waves (TASK-161=w1, TASK-162=w2) or drop the 'near isHiddenTagNamespace (from part 1)' placement reference so this brief stands alone"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "All four required assertions are in web/src/components/library/TagCloud.test.tsx (which exists at HEAD), but exact_files is only ['web/src/components/library/TagCloud.tsx'].",
+    "fix": {
+     "exact_files": [
+      "web/src/components/library/TagCloud.test.tsx",
+      "web/src/components/library/TagCloud.tsx"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 1 says 'split on \\':\\' into exactly 3 parts'; the edge-case section then says the opposite \u2014 'use tag.split(\\':\\').slice(2).join(\\':\\') for the value segment to be safe rather than a strict 3-part split'. The edge case is correct; the step should say so directly rather than leaving the reader to notice the contradiction."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "The single re-verify anchor claims \"grep -n 'label={' web/src/components/library/TagCloud.tsx  # 1 hit\". The actual grep returns 2 (L120 the chip label, L145 an aria-label on the expand button). Since the brief's rule is 'a zero-hit grep means STOP', 2 hits is not fatal, but the count is wrong and the second hit is a plausible mis-edit target."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-163",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 1 is '`npx playwright test batch-operations --project=webkit --repeat-each=20` passes 20/20 after the fix, where it previously failed intermittently.' Two problems. (a) The command cannot run as written: there is no playwright config at the repo root (`ls playwright.config.*` -> no matches); the config lives at web/tests/e2e/playwright.config.ts and package.json's own script is `playwright test -c tests/e2e/playwright.config.ts` run with --prefix web. (b) An intermittent flake of unknown rate passing 20/20 is not evidence of a fix \u2014 the brief's own step 2 concedes the rate is unmeasured ('establish a reproducible failure rate before making any change'), so there is no baseline to compare 20/20 against."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "The gate cannot exercise the file this task edits. exact_files is ['web/tests/e2e/batch-operations.spec.ts'] and the gate is `npm --prefix web run lint && npm --prefix web test`. web/package.json maps test -> `vitest`, and web/vitest.config.ts:12 sets `exclude: ['tests/e2e/**', 'node_modules/**', 'dist/**']`. The gate therefore runs zero of this brief's tests, and a green gate proves nothing about the change."
+   }
+  ],
+  "verdict_override": "needs_design",
+  "reason": "This is an investigation, not an executable change. The Goal is 'Determine why...'; step 2 is 'Run the test repeatedly ... to establish a reproducible failure rate'; step 3 is 'add temporary diagnostic logging/tracing'; step 4 is 'Identify the specific race: likely candidates are (a) ... or (b) ...'; and the edge-case section leaves open whether the fix belongs in test code or app code ('both are legitimate outcomes, decide based on what step 4 actually finds'). No mechanism is known, so no steps can be written and no acceptance can be stated. The single verified anchor (grep -n 'selection persists across page navigation' web/tests/e2e/batch-operations.spec.ts -> 1 hit at L100) locates the test but says nothing about the cause. Bucket 1 should carry a scoped repro/measurement task whose deliverable is a written mechanism, with the fix filed separately once the mechanism is known."
+ },
+ {
+  "task_id": "TASK-164",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Step 2 tells the worker to 'find the chooser component \u2014 grep for MetadataChooser or similar under web/src/components'. I ran it: `grep -rln 'MetadataChooser' web/src` returns ZERO hits. The component this entire brief hangs off is never identified, and 'or similar' gives a weak model licence to pick any of several plausible candidates (MetadataSearchDialog, BulkMetadataSearchDialog, MetadataPanel), each producing a different feature."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['web/src/components/BatchToolbar.tsx','web/src/pages/Library.tsx'], which contains neither the (unidentified) chooser component the entry point must be added to, nor any test file. The Tests section names 'web/src/pages/Library.test.tsx or a new component test' \u2014 `ls web/src/pages/Library.test.tsx` -> No such file or directory."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "The only substantive acceptance box is manual: 'Manual: from the metadata chooser on a multi-row book, combine or merge without leaving the chooser or losing the current candidate selection...'. Nothing in the acceptance is a command or grep, and the E2E test in the Tests section has no named file."
+   }
+  ],
+  "verdict_override": "needs_design",
+  "reason": "The brief itself says the design does not exist: 'the bulk-metadata-review and dedup-label-review-panel plans were both archived without shipping \u2014 there is no existing \"one home\" for this to slot into, it must be designed fresh.' It is also gated on two other items landing (step 1: 'DO NOT START until L2373 (VG-DOUBLE-PRIMARY) part 1 ... has landed', plus Depends on TASK-042, TASK-186), and step 5 asks the worker to confirm a branch fix landed on main before relying on it. Its own anchors are real (grep -n 'Combine into One Book' web/src/components/BatchToolbar.tsx -> L128; grep -n 'api.combineBooks' web/src/pages/Library.tsx -> L1306; grep -n 'audiobooks/combine' internal/server/wire_dedup_routes.go -> L75; grep -n 'handleMergeAsVersions' web/src/pages/Library.tsx -> L1268) but they only prove the BACKEND exists \u2014 the UI design, the state-preservation contract and the host component are all open. This is a design task on a prod-data (hard-delete) path, not an implementable brief."
+ },
+ {
+  "task_id": "TASK-165",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 2 is \"grep -c 'isAuthRedirectError' across exact_files increases from 1 to 17 call-site checks performed (not all 17 necessarily need a code change \u2014 some may already be fine).\" A grep count cannot measure 'checks performed', and the parenthetical concedes the count will NOT reach 17. There is no command that decides this box. The brief's step 3 explicitly allows 'leave it \u2014 note OK as-is and move on' for any of the 17, so the finished state is undefined.",
+    "fix": {
+     "acceptance": "Produce a written per-function table in the final report covering all 17 names (quarantineBook ... revokeAPIKey), each marked CHANGED or OK-AS-IS with its file:line; every CHANGED site must show an isAuthRedirectError branch (grep -n 'isAuthRedirectError' <file>); grep -rl 'isAuthRedirectError' web/src --include='*.ts' --include='*.tsx' | grep -v test | grep -v apiFetch.ts lists every CHANGED file (only web/src/components/review/lanes/useMetadataLane.ts at HEAD); npm --prefix web run lint && npm --prefix web test exits 0."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "The Tests section names 'web/src/pages/BookDetail.test.tsx (or nearest existing test file per component)'. `ls web/src/pages/BookDetail.test.tsx` -> No such file or directory, and it is not in exact_files (which lists 20 files including web/src/pages/BookDetail.tsx and web/src/utils/apiFetch.test.ts but no BookDetail test). The named anti-over-suppression test ('a genuine 500 still shows the original Failed to X message') therefore has no file to live in, and 'or nearest existing test file per component' means 17 sites resolve to 17 different guesses."
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "The review-critical Idempotency boilerplate mandates dry-run defaults, undo-ledger journaling of 'every mutation', and a fixture round-trip through internal/undo. This brief only edits frontend catch handlers' toast wording \u2014 it introduces no mutation at all, so items (1)-(4) are unsatisfiable as written."
+   }
+  ],
+  "note": "Anchors verified clean: grep -n 'throw new ApiAuthRedirectError' web/src/utils/apiFetch.ts -> L100, L110; grep -n 'export function isAuthRedirectError' web/src/utils/apiFetch.ts -> L70; and useMetadataLane.ts is indeed the only non-test consumer today."
+ },
+ {
+  "task_id": "TASK-166",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency check is a green-gate assertion, not a check for this task's artifact: 'If the first acceptance check below already passes at HEAD (`npm --prefix web run lint && npm --prefix web test passes.`), this task is already applied.' Both pass on main regardless of whether author links exist, so a cold weak model reports 'already applied' and writes nothing. Verified the feature is absent: grep -c 'author_id' web/src/pages/Library.tsx web/src/hooks/useLibraryQuery.ts -> 0 and 0.",
+    "fix": {
+     "polarity": "additive",
+     "acceptance": "grep -n 'author_id' web/src/hooks/useLibraryQuery.ts returns >=1 hit (0 at HEAD); grep -n 'author_id' web/src/components/bookdetail/BookDetailInfoTab.tsx returns >=1 hit (0 at HEAD); a 2-author fixture in web/src/components/bookdetail/BookDetailInfoTab.test.tsx renders 2 separate <a href> elements; npm --prefix web test -- BookDetailInfoTab and npm --prefix web test -- useLibraryQuery both pass; npm --prefix web run lint passes."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['web/src/components/bookdetail/BookDetailInfoTab.tsx','web/src/hooks/useLibraryQuery.ts','web/src/pages/Library.tsx'] but both required test files are outside it: web/src/components/bookdetail/BookDetailInfoTab.test.tsx does NOT exist (new file) and web/src/hooks/useLibraryQuery.test.ts DOES exist but is not listed.",
+    "fix": {
+     "exact_files": [
+      "web/src/components/bookdetail/BookDetailInfoTab.test.tsx",
+      "web/src/components/bookdetail/BookDetailInfoTab.tsx",
+      "web/src/hooks/useLibraryQuery.test.ts",
+      "web/src/hooks/useLibraryQuery.ts",
+      "web/src/pages/Library.tsx"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 2 hedges the link target: 'grep the existing route path for the library page (likely / or /library) to get the exact base path right.' It is /library (web/src/App.tsx:237) \u2014 state it, rather than leaving a coin-flip on the href in a brief whose whole deliverable is an href."
+   }
+  ],
+  "note": "The backend side is verified real: internal/server/handlers/audiobooks/handler.go:345 `authorID := httputil.ParseQueryIntPtr(c, \"author_id\")`, and BookDetailInfoTab.tsx:215-217 does build authorVal as `book.authors.map((a) => a.name).join(' & ')` rendered as plain text."
+ },
+ {
+  "task_id": "TASK-167",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Same inverted idempotency as TASK-166: 'If the first acceptance check below already passes at HEAD (`npm --prefix web run lint && npm --prefix web test passes.`), this task is already applied.' Green on main either way; the task's own artifact is never checked. Verified absent: grep -c 'series_id' web/src/hooks/useLibraryQuery.ts -> 0.",
+    "fix": {
+     "polarity": "additive",
+     "acceptance": "grep -n 'series_id' web/src/hooks/useLibraryQuery.ts returns >=1 hit (0 at HEAD); grep -n 'series_id' web/src/components/bookdetail/BookDetailInfoTab.tsx returns >=1 hit (0 at HEAD); npm --prefix web test -- BookDetailInfoTab and npm --prefix web test -- useLibraryQuery pass; npm --prefix web run lint passes."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "The brief leaves its own scope undecided in two places and offers to escalate mid-run. The Goal: 'confirm whether the Library page has any existing scroll to or sort by series_number then filter capability before committing to that stretch goal; if not, the minimal correct scope is just the series_id filter link with series_position not wired to anything yet.' Step 3: 'Decide (or ask) whether the resulting library view should additionally sort_by=series_number ascending ... If yes, set sort=series_number&order=asc in the same URL alongside series_id.' Two weak models ship different URLs, and 'or ask' has no addressee in an autonomous run."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Both named test files are outside exact_files (['web/src/components/bookdetail/BookDetailInfoTab.tsx','web/src/hooks/useLibraryQuery.ts','web/src/pages/Library.tsx']): BookDetailInfoTab.test.tsx does not exist at HEAD, and useLibraryQuery.test.ts exists but is unlisted."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-168",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The whole feature is built on a URL parameter the app never reads. The Goal targets `/library?filters=[{\"field\":\"narrator\",...}]` and the Background asserts 'genre and language already have an existing UI-driven filters= path via Library.tsx's buildFieldFilters (filters.genre, filters.language)'. That is false. I ran `grep -rn \"searchParams.get('filters')\" web/src` -> ZERO hits, and `grep -n \"searchParams.get\" web/src/hooks/useLibraryFilters.ts` shows the filter state is seeded from INDIVIDUAL params only: author, series, genre, language, state, has_file_errors, fingerprint_status, coverage_percent_min/max, missing_covers, in_import_path, no_isbn, duplicates_flagged (L56-69, repeated at L155-167). buildFieldFilters (web/src/pages/Library.tsx:804) reads that state and produces an OUTGOING API query param \u2014 `filters: fieldFilters.length > 0 ? JSON.stringify(fieldFilters) : undefined` at web/src/hooks/useLibraryQuery.ts:263. Nothing ever parses an incoming filters= URL. Four links shipped per this brief would silently do nothing, and step 5's 'confirm rather than assume' passes that unverified premise to the worker as an afterthought rather than as the blocking prerequisite it is.",
+    "fix": {
+     "goal": "First add incoming ?filters= URL-param parsing to the Library page (it does not exist: zero hits for searchParams.get('filters') anywhere in web/src), then turn Narrator, Publisher, Genre and Release Year in BookDetailInfoTab.tsx into real <a href> links carrying that param. Narrator gets one link per entry in book.narrators[]; Release Year filters on the 'year' field using book.audiobook_release_year. If the owner prefers not to add filters= URL parsing, use the individual params useLibraryFilters ALREADY reads (?genre=, ?language=) for those two fields and file narrator/publisher separately \u2014 do not ship links that resolve to an ignored param.",
+     "background": [
+      "internal/audiobooks/service_filtering.go implements all four fields as filter cases: narrator L440, genre L446, publisher L450, year L538, and all four appear in allFilterFieldNames (L647-656). The BACKEND is ready.",
+      "THE BLOCKER: the frontend never reads a filters= URL param. useLibraryFilters.ts seeds state from individual params only (L56-69 and L155-167: author, series, genre, language, state, has_file_errors, fingerprint_status, coverage_percent_min/max, missing_covers, in_import_path, no_isbn, duplicates_flagged). buildFieldFilters (Library.tsx:804) converts that state INTO an outgoing API param at useLibraryQuery.ts:263. There is no inbound path.",
+      "genre and language are reachable today via ?genre= / ?language=; narrator, publisher and year have no URL param at all."
+     ],
+     "exact_files": [
+      "web/src/components/bookdetail/BookDetailInfoTab.test.tsx",
+      "web/src/components/bookdetail/BookDetailInfoTab.tsx",
+      "web/src/hooks/useLibraryFilters.ts",
+      "web/src/pages/Library.tsx"
+     ],
+     "verified_anchors": [
+      {
+       "claim": "all four fields are real backend filter fields",
+       "grep_cmd": "grep -n 'case \"narrator\"\\|case \"genre\"\\|case \"publisher\"\\|case \"year\"' internal/audiobooks/service_filtering.go",
+       "expect": "L440, L446, L450, L538"
+      },
+      {
+       "claim": "the frontend never reads an incoming filters= URL param",
+       "grep_cmd": "grep -rn \"searchParams.get('filters')\" web/src",
+       "expect": "0 hits"
+      },
+      {
+       "claim": "filters= is an OUTGOING API param only",
+       "grep_cmd": "grep -n 'fieldFilters' web/src/hooks/useLibraryQuery.ts",
+       "expect": "L263: filters: fieldFilters.length > 0 ? JSON.stringify(fieldFilters) : undefined"
+      },
+      {
+       "claim": "the params the Library page DOES read from the URL",
+       "grep_cmd": "grep -n 'searchParams.get' web/src/hooks/useLibraryFilters.ts",
+       "expect": "author/series/genre/language/state/... at L56-69 and L155-167 \u2014 no 'filters'"
+      }
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['web/src/components/bookdetail/BookDetailInfoTab.tsx','web/src/pages/Library.tsx']. Both named test files are outside it and neither exists: web/src/components/bookdetail/BookDetailInfoTab.test.tsx and web/src/pages/Library.test.tsx (`ls` -> No such file or directory for both). Fixing the filters= gap additionally requires web/src/hooks/useLibraryFilters.ts, also unlisted."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-169",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Same dead-parameter defect as TASK-168, which this brief explicitly inherits ('using the same filters=JSON mechanism as the narrator/publisher/genre links in todo_line 3164'). `/library?filters=[{\"field\":\"version_group_id\",...}]` resolves to nothing: `grep -rn \"searchParams.get('filters')\" web/src` -> 0 hits; useLibraryFilters.ts reads only individual named params (L56-69, L155-167); filters= is produced as an OUTGOING API param at useLibraryQuery.ts:263. The link would render and navigate but never narrow the list.",
+    "fix": {
+     "exact_files": [
+      "web/src/components/bookdetail/BookDetailVersionGroup.test.tsx",
+      "web/src/components/bookdetail/BookDetailVersionGroup.tsx",
+      "web/src/hooks/useLibraryFilters.ts",
+      "web/src/pages/Library.tsx"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "The Reuse block and the Steps point at two different components. Reuse: 'Use BookDetailHeader.tsx (existing component that already reads book.version_group_id \u2014 BookDetailVersionGroup.tsx, by contrast, only receives a pre-grouped Book[] and never references the field name directly)'. Steps 1-2 and exact_files and the acceptance box all target BookDetailVersionGroup.tsx. Verified: BookDetailHeader.tsx:191 does gate on book.version_group_id, and BookDetailVersionGroup.tsx DOES receive a `book: Book` prop (BookDetailVersionGroupProps, L87-88) so the field is reachable there too \u2014 meaning both readings compile and two weak models edit different files. BookDetailHeader.tsx is not in exact_files."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 3 leaves an open question in the deliverable: 'consider explicitly appending &is_primary_version=false or omitting the default in this one link's URL if the Library page's default would otherwise hide exactly the books this link exists to show. Check how Library.tsx applies its default before deciding.' Since the point of the link is to show non-primary siblings, this is the load-bearing decision and it is delegated unresolved."
+   }
+  ],
+  "note": "The backend evidence in this brief is genuinely solid and all of it re-verified: version_group_id is a real filter field (internal/audiobooks/service_filtering.go:528 matcher case, L654 in allFilterFieldNames), commit b0ebccb0 is an ancestor of HEAD, and TestVersionGroupIDFilter_MatchesMembersOnly exists at internal/audiobooks/filter_field_conformance_test.go:140. The defect is entirely on the frontend URL-plumbing side."
+ },
+ {
+  "task_id": "TASK-170",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 4 \u2014 '`npx playwright test web/tests/e2e/dedup-operations.spec.ts web/tests/e2e/dedup.spec.ts` exits 0' \u2014 and step 5's equivalent command cannot run. There is no Playwright config at the repo root (`ls playwright.config.*` -> no matches); the config is at web/tests/e2e/playwright.config.ts and the repo's own script is `playwright test -c tests/e2e/playwright.config.ts` invoked from web/ (web/package.json test:e2e). Run from the repo root as written, Playwright finds no config and no testDir.",
+    "fix": {
+     "acceptance": "grep -n 'operations/v2' web/tests/e2e/dedup-operations.spec.ts and web/tests/e2e/dedup.spec.ts each return >=1 hit; grep -c \"operations/\\\\*/status\" in both returns 0 (1 each at HEAD: dedup-operations.spec.ts:118, dedup.spec.ts:163); grep -n 'progress_current' in both returns >=1 hit; grep -n 'data: { operation' in both returns >=1 hit; and the specs pass via the repo's own runner: npm --prefix web exec -- playwright test -c tests/e2e/playwright.config.ts --project chromium tests/e2e/dedup-operations.spec.ts tests/e2e/dedup.spec.ts"
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "The declared gate never runs the files this brief edits. exact_files is two web/tests/e2e/*.spec.ts files; the gate is `npm --prefix web run lint && npm --prefix web test`, and web/package.json maps test -> `vitest`, whose config excludes exactly that directory (web/vitest.config.ts:12: `exclude: ['tests/e2e/**', 'node_modules/**', 'dist/**']`). A green gate is compatible with a completely broken edit.",
+    "fix": {
+     "tests": "Run the two specs through the repo's Playwright runner, not the Vitest gate: npm --prefix web exec -- playwright test -c tests/e2e/playwright.config.ts --project chromium tests/e2e/dedup-operations.spec.ts tests/e2e/dedup.spec.ts --grep 'Find Real Author'. The Vitest gate (npm --prefix web test) EXCLUDES tests/e2e/** and will pass regardless."
+    }
+   }
+  ],
+  "note": "The substantive content of this brief is excellent and fully re-verified: both stale mocks are exactly where claimed (dedup-operations.spec.ts:118 and dedup.spec.ts:163, both `page.route('**/api/v1/operations/*/status'`), and both cited already-correct exemplars exist (dynamic-ui-interactions.spec.ts:49 `'**/api/v1/operations/v2/*'`, transcode-and-counting.spec.ts:115 `JSON.stringify({ data: { operation, logs: [] } })`). Only the verification commands are wrong."
+ },
+ {
+  "task_id": "TASK-171",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 3 ('`npx playwright test web/tests/e2e/diagnostics.spec.ts` exits 0') and step 4's identical command cannot run: no Playwright config exists at the repo root (`ls playwright.config.*` -> no matches). The config is web/tests/e2e/playwright.config.ts and the repo invokes it as `playwright test -c tests/e2e/playwright.config.ts` from web/.",
+    "fix": {
+     "acceptance": "grep -n 'operations/v2/op-2' web/tests/e2e/diagnostics.spec.ts returns 1 hit and grep -n \"operations/op-2'\" returns 0 (1 at HEAD, L80); same pair for op-1 (L175 at HEAD); grep -n 'progress_current' web/tests/e2e/diagnostics.spec.ts returns >=2 hits; and the spec passes via npm --prefix web exec -- playwright test -c tests/e2e/playwright.config.ts --project chromium tests/e2e/diagnostics.spec.ts"
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "The gate excludes the only file in exact_files. `npm --prefix web test` is `vitest`, and web/vitest.config.ts:12 excludes 'tests/e2e/**'. The brief's Gate-green box is therefore satisfiable with the edit entirely broken.",
+    "fix": {
+     "tests": "web/tests/e2e/diagnostics.spec.ts, run through Playwright: npm --prefix web exec -- playwright test -c tests/e2e/playwright.config.ts --project chromium tests/e2e/diagnostics.spec.ts. Confirm both the setupAiResultsMocks AI-results flow and the export-ZIP flow still pass. The Vitest gate does not run this file."
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "The Background hedges the def_id values ('Use def_id values diagnostics.submit-ai and diagnostics.export unless a grep of the real registered op IDs (search internal/server for the diagnostics operation defs) shows different strings \u2014 cosmetic either way'). No grep is supplied and none is in the re-verify block, so two workers write two different def_ids into the fixture."
+   }
+  ],
+  "note": "Anchors verified: grep -n 'operations/op-2' web/tests/e2e/diagnostics.spec.ts -> L80; 'operations/op-1' -> L175; and the cited v2 exemplar transcode-and-counting.spec.ts:115 exists."
+ },
+ {
+  "task_id": "TASK-172",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "The brief's test-file path contradicts the directory's actual convention, and its own step tells the worker to look for a precedent that does not exist. exact_files and the Goal both name web/src/components/dedup/DedupEmbeddingTab.test.tsx (directly beside the component), while step 1 says 'check a sibling test file in the same directory for the render-with-props pattern'. `ls web/src/components/dedup/` contains ZERO *.test.tsx files \u2014 all five dedup tests live in web/src/components/dedup/__tests__/ (BandFilterBar, BulkActionBar, CandidateCompareDrawer, FolderFilesChip, LabelToggle). A worker following exact_files writes to a non-conventional path; one following step 1 finds nothing and guesses.",
+    "fix": {
+     "exact_files": [
+      "web/src/components/dedup/__tests__/DedupEmbeddingTab.test.tsx"
+     ],
+     "steps": [
+      "Create web/src/components/dedup/__tests__/DedupEmbeddingTab.test.tsx \u2014 the dedup directory's tests all live under __tests__/ (BandFilterBar.test.tsx, BulkActionBar.test.tsx, CandidateCompareDrawer.test.tsx, FolderFilesChip.test.tsx, LabelToggle.test.tsx); there are no *.test.tsx files directly beside the components. Mirror CandidateCompareDrawer.test.tsx for the render-with-props and mocking pattern, since it is the closest in size to DedupEmbeddingTab.",
+      "Give the new file a fresh header (version 1.0.0, new guid via `uuidgen | tr A-Z a-z`, last-edited: 2026-08-21).",
+      "Add TestBookSigCoverage_RendersPartialBadge: render DedupEmbeddingTab with a candidate book whose book_sig_coverage_pct is 62, assert getByText(/partial fp 62%/) is present. The badge is gated at web/src/components/dedup/DedupEmbeddingTab.tsx:783 by `book.book_sig_coverage_pct != null && book.book_sig_coverage_pct < 100` and rendered as a Chip labelled `partial fp ${pct}%` at L788.",
+      "Add TestBookSigCoverage_HidesBadgeAtFullCoverage: render with book_sig_coverage_pct=100, and again with null/undefined, asserting the partial-fp text is absent in both \u2014 100 is the boundary the `< 100` check excludes.",
+      "Before writing assertions, read DedupEmbeddingTab.tsx's props and any API calls it makes on mount, and stub them; it is a full tab component, not a leaf, so a bare render will not mount without mocks.",
+      "Add changelog fragment changelog.d/20260821_web_172.md (no file header)."
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 8,
+    "problem": "Rated Haiku-class, but the deliverable is 'render DedupEmbeddingTab' \u2014 a large tab component whose mount-time props and API calls the brief never enumerates. The only anchor supplied is the one-line badge conditional at DedupEmbeddingTab.tsx:783. Getting the component to render at all is the hard part and it is unaddressed."
+   }
+  ],
+  "note": "Idempotency polarity is CORRECT here, unlike its web siblings: 'npm --prefix web run test -- DedupEmbeddingTab passes with both new tests green' fails at HEAD because Vitest exits non-zero when no test file matches the filter."
+ },
+ {
+  "task_id": "TASK-173",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency check is a green-gate assertion rather than a check for this task's artifact: 'If the first acceptance check below already passes at HEAD (`npm --prefix web run lint` passes with no new errors in DedupAcousticTab.tsx.), this task is already applied.' Lint is green on main whether or not the table was converted, so a cold weak model reports 'already applied'. Verified unconverted: grep -n 'ConfigurableTable' web/src/components/dedup/DedupAcousticTab.tsx -> 0 hits.",
+    "fix": {
+     "polarity": "additive",
+     "acceptance": "grep -n 'useConfigurableTable' web/src/components/dedup/DedupAcousticTab.tsx returns >=1 hit (0 at HEAD); grep -n \"storageKey: 'dedup-acoustic-candidates'\" returns 1 hit; grep -n 'ResizableHeaderCell' web/src/components/dedup/DedupAcousticTab.tsx returns >=1 hit; grep -n 'table.sortRows(candidates)' returns 1 hit (candidates.map((c) => is at L1163 at HEAD); npm --prefix web test -- DedupAcousticTab passes including the select-all regression test; npm --prefix web run lint passes."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['web/src/components/dedup/DedupAcousticTab.tsx'] alone, but the brief names a required anti-over-suppression test ('select-all checkbox still selects all visible rows after ConfigurableTable conversion') plus a sort-order test, in 'web/src/components/dedup/__tests__/DedupAcousticTab.test.tsx (create if absent)'. That file does not exist and is outside the commit scope \u2014 so the guard against the exact regression this refactor risks (breaking selectedCandIds) has nowhere to live.",
+    "fix": {
+     "exact_files": [
+      "web/src/components/dedup/__tests__/DedupAcousticTab.test.tsx",
+      "web/src/components/dedup/DedupAcousticTab.tsx"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 5 offers two materially different endpoints: iterate table.visibleColumns for the row cells, 'or keep static cells gated by table.isColumnVisible(key) if a full generic-row-render refactor is out of scope for this pass'. One yields configurable columns, the other yields sortable+resizable headers over fixed cells. Both are defensible; the brief should pick one so the three sibling table briefs (173/174/175) land consistently."
+   }
+  ],
+  "note": "Every API reference in this brief re-verified against web/src/components/common/ConfigurableTable.tsx: useConfigurableTable is exported at L88, ResizableHeaderCell at L255, ColumnDef carries render/sortValue/sortable (L23-42), and the hook's return object really does expose visibleColumns, isColumnVisible and sortRows (L226-238). WriteBackPreviewTable.tsx:160 and :167 are the working precedent as claimed."
+ },
+ {
+  "task_id": "TASK-174",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency is the same green-gate false positive: 'If the first acceptance check below already passes at HEAD (`npm --prefix web run lint` passes.), this task is already applied.' Verified unconverted: grep -n 'ConfigurableTable' web/src/pages/ActivityLog.tsx -> 0 hits, and the header row is still static TableCells (ActivityLog.tsx:2095 `<TableCell>Time</TableCell>`).",
+    "fix": {
+     "polarity": "additive",
+     "acceptance": "grep -n 'useConfigurableTable' web/src/pages/ActivityLog.tsx returns >=1 hit (0 at HEAD); grep -n \"storageKey: 'activity-log'\" returns 1 hit; grep -n 'table.sortRows(entries)' returns 1 hit (entries.map((entry) => is at L2105 at HEAD); grep -n '<TableCell>Time</TableCell>' returns 0 hits (1 at HEAD, L2095); npm --prefix web test -- ActivityLog passes including the digest expand/collapse regression test; npm --prefix web run lint passes."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['web/src/pages/ActivityLog.tsx'] alone. The Tests section requires web/src/pages/__tests__/ActivityLog.test.tsx (`ls` -> No such file or directory) plus the named anti-over-suppression test 'digest-entry expand/collapse still works after entries are sorted by a resizable-column header click' \u2014 the guard for the three-way row branch this refactor reorders has no in-scope home.",
+    "fix": {
+     "exact_files": [
+      "web/src/pages/__tests__/ActivityLog.test.tsx",
+      "web/src/pages/ActivityLog.tsx"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 4 offers three different ways to keep the existing mobile behaviour: '(either via column defaultVisible gated on isMobile, recomputed with a useMemo keyed on isMobile, or by leaving Source/Tags always in columns and letting the user's own visibility toggle handle small screens)'. These are not stylistic variants \u2014 the third silently changes mobile rendering (Source/Tags become visible where `!isMobile &&` hides them today), and the first two differ in whether a viewport change re-derives the column set. Two reasonable workers ship different mobile behaviour."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Step 2 cannot name the field it sorts on: 'Level (sortValue: entry.tier or level field \u2014 check the entry type's actual field name via `grep -n \\'interface ActivityEntry\\' web/src/pages/ActivityLog.tsx` or wherever it\\'s imported from)'. The brief never ran that grep, so the sort key for one of the six columns is unresolved."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-175",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Same green-gate false positive: 'If the first acceptance check below already passes at HEAD (`npm --prefix web run lint` passes.), this task is already applied.' Verified unconverted: grep -n 'ConfigurableTable' web/src/components/dedup/DedupSplitBookTab.tsx -> 0 hits.",
+    "fix": {
+     "polarity": "additive",
+     "acceptance": "grep -n 'useConfigurableTable' web/src/components/dedup/DedupSplitBookTab.tsx returns >=1 hit (0 at HEAD); grep -n \"storageKey: 'dedup-split-book-candidates'\" returns 1 hit; grep -n 'table.sortRows(candidates)' returns 1 hit; grep -n 'ResizableHeaderCell' returns >=1 hit; npm --prefix web test -- DedupSplitBookTab passes including the expanded-row-survives-sort test; npm --prefix web run lint passes."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['web/src/components/dedup/DedupSplitBookTab.tsx'] alone, while the Tests section requires web/src/components/dedup/__tests__/DedupSplitBookTab.test.tsx (does not exist) carrying the named anti-over-suppression test 'expanded row state survives a column-header sort' \u2014 precisely the invariant a sort-before-pagination change threatens, with no in-scope file to assert it in.",
+    "fix": {
+     "exact_files": [
+      "web/src/components/dedup/__tests__/DedupSplitBookTab.test.tsx",
+      "web/src/components/dedup/DedupSplitBookTab.tsx"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Step 5's suggested rewrite is `const sorted = table.sortRows(candidates); const pageSlice = sorted.slice(...)`, but pageSlice is not a plain expression \u2014 it is a useMemo at web/src/components/dedup/DedupSplitBookTab.tsx:257. Applying the suggested shape literally drops the memo (or leaves table.sortRows out of its dependency array). The brief does tell the worker to 'locate the exact current expression via grep -n', but it should say the target is a useMemo."
+   }
+  ],
+  "note": "Anchors verified: CandidateRow is a real custom expandable row component (DedupSplitBookTab.tsx:70 definition, :359 usage), TablePagination at :371, pageSlice.map at :358, and the four proposed sortValue fields all exist on the candidate (parent_folder :82, suggested_title :92, suggested_author :95, book_ids :71)."
+ },
+ {
+  "task_id": "TASK-188",
+  "verdict": "pass",
+  "findings": [
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "Acceptance box 1 admits it cannot fail: 'The e2e stress run above passes 20/20 both before and after (exit:0 already measured 20/20 per theme.ts's own history)'. The change is a defensible strict hardening, but nothing in the acceptance can demonstrate it did anything \u2014 the only real check is the grep that the slotProps line landed. Worth adding: `grep -n 'slotProps: { transition: { exit: false } }' web/src/theme.ts` returns 2 hits after the change (1 at HEAD, L285, inside MuiDrawer)."
+   },
+   {
+    "severity": "advisory",
+    "check": 9,
+    "problem": "web/src/theme.slot-merge.test.ts exists and pins the mitigation's merge contract, but scoped to MuiDrawer only: its header comment reads 'The stuck-modal mitigation in theme.ts lives in MuiDrawer.defaultProps as ...' and its suite is `describe('MuiDrawer default slotProps merging')` reading `appTheme.components?.MuiDrawer?.defaultProps`. After this change the mitigation also lives in MuiMenu.defaultProps, so that comment goes stale and MuiMenu's slotProps merge is unpinned. exact_files is ['web/src/theme.ts'] only \u2014 consider adding web/src/theme.slot-merge.test.ts and an equivalent MuiMenu describe block."
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "The declared gate (`npm --prefix web run lint && npm --prefix web test`) is Vitest, which excludes tests/e2e/** (web/vitest.config.ts:12), so it never runs the 'clears all filters' stress test the acceptance rests on. Unlike sibling briefs TASK-163/170/171 the e2e command itself is correct here (`--config=tests/e2e/playwright.config.ts`, run from web/), so this is a gate/acceptance mismatch rather than a broken command."
+   }
+  ],
+  "note": "Every anchor re-verified exactly: web/src/theme.ts:347-351 is MuiMenu with `transitionDuration: { enter: 225, exit: 0 }` and no slotProps; MuiDrawer carries `slotProps: { transition: { exit: false } }` at L285; the 'THE DEFECT (same one as MuiMenu below)' comment is at L220; 'STILL UNEXPLAINED' at L273; and 'clears all filters' is present in web/tests/e2e/library-browser.spec.ts. exact_files (['web/src/theme.ts']) matches the steps."
+ },
+ {
+  "task_id": "TASK-189",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "The headline requirement is unbuildable inside the declared scope. The Goal asks for a ~2-minute (120s) preview, but the server caps every request at 60s: internal/audio/sample.go:18 `SampleMaxDuration = 60 // seconds \u2014 hard cap per request`, enforced at L56-57 (`if dur > SampleMaxDuration { dur = SampleMaxDuration }`). Step 2 concedes this ('confirm audio.SampleMaxDuration=60s is NOT a hard blocker for a 2-minute preview (currently it IS: 60s < 120s), so raise SampleMaxDuration or add a separate, still-server-enforced cap'), which means editing internal/audio/sample.go \u2014 not in exact_files (['internal/server/audio_sample.go','internal/server/audio_sample_test.go','web/src/components/review/MetadataPanel.tsx']).",
+    "fix": {
+     "exact_files": [
+      "internal/audio/sample.go",
+      "internal/server/audio_sample.go",
+      "internal/server/audio_sample_test.go",
+      "web/src/components/review/MetadataPanel.tsx"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "The cap decision is explicitly left open: the edge-case section says 'audio.SampleMaxDuration (currently 60s) is BELOW this item's requested ~2-minute (120s) preview length -- this needs an explicit decision (raise the constant globally, or add a second, still-server-enforced cap for this specific caller) before the frontend can request the full 2 minutes.' Raising a global cap changes every existing consumer (AudioSampleCompare.tsx already uses this endpoint at a 30s CLIP_DURATION \u2014 web/src/components/AudioSampleCompare.tsx:46); adding a per-caller cap is a different design. Two weak models ship materially different security/bandwidth postures on a streaming endpoint."
+   },
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The brief documents a defect that blocks its own acceptance and then forbids fixing it. Background: 'context.WithTimeout(c.Request.Context(), 120) at audio_sample.go:47 passes a bare int (120) as the timeout Duration, which Go interprets as 120 NANOSECONDS, not 120 seconds -- likely a pre-existing latent bug unrelated to this item's scope; flagged in notes for the coordinator's awareness, not to be fixed under this task per the stay-on-target scope discipline.' I re-verified the line at internal/server/audio_sample.go:47. A 120ns deadline cancels the streaming context essentially immediately, so the endpoint this brief builds a UI on top of cannot serve any preview \u2014 yet the sole substantive acceptance box is the manual 'click preview and confirm audio plays from the START of part 1, not a directory-path failure or silent no-op', which cannot pass while that line stands. Per the repo's Fix It Right rule this is the same bug in the same code path being fixed, not adjacent cleanup: surface it with its cost, do not pre-emptively discount it.",
+    "fix": {
+     "steps": [
+      "In internal/server/audio_sample.go's handleAudioSample, fix the streaming deadline at L47: `context.WithTimeout(c.Request.Context(), 120)` passes a bare int, which Go reads as 120 NANOSECONDS. It must be `120 * time.Second`. This is in the same function and the same request path this task changes, and no preview can play while it stands \u2014 do not defer it.",
+      "Replace `FilePath: book.FilePath` (internal/server/audio_sample.go:42) with real part-1 resolution: call s.Ops().GetBookFiles(book.ID) (declared on the ServerOpsStore interface at internal/server/server_ops_store.go:122, implemented at internal/database/pebble_store_bookfiles.go:397), sort nil-safely by TrackNumber, and use the first entry's FilePath. Fall back to book.FilePath only when GetBookFiles returns empty \u2014 the scanner sets book.FilePath to a DIRECTORY (internal/scanner/scanner.go:1699 `dbBook.FilePath = dirPath`), so the current code cannot serve a multi-file book.",
+      "Resolve the duration cap explicitly BEFORE writing frontend code: internal/audio/sample.go:18 hard-caps every request at SampleMaxDuration = 60s (enforced L56-57), which is half the ~2 minutes this item asks for. Either raise that constant (and state the effect on the existing 30s consumer AudioSampleCompare.tsx:46) or add a second, still-server-enforced per-caller cap. Do not let the client request 120s against a 60s server cap and call it done.",
+      "Add a preview control to web/src/components/review/MetadataPanel.tsx that builds the URL the way AudioSampleCompare.tsx:46 does (`/api/v1/audiobooks/${bookId}/sample?start=${start}&duration=${...}`) and plays it, with a clear 'preview unavailable' state for a book with zero files or an unreadable part 1.",
+      "Add internal/server/audio_sample_test.go (new file, fresh header): a multi-file book resolves to the lowest-TrackNumber file rather than the directory; an over-cap `duration` query param is still capped server-side; a book with zero book_file rows returns a clean error rather than streaming a directory.",
+      "Bump headers on every changed file and add changelog fragment changelog.d/20260821_web_189.md (no file header)."
+     ],
+     "acceptance": "grep -n 'context.WithTimeout' internal/server/audio_sample.go shows a time.Second-scaled duration (bare `120` at HEAD, L47); grep -n 'FilePath: book.FilePath' internal/server/audio_sample.go returns 0 hits (1 at HEAD, L42); grep -n 'GetBookFiles' internal/server/audio_sample.go returns >=1 hit; go build ./... && go vet ./... && go test ./internal/server/... -run AudioSample -count=1 exits 0; npm --prefix web test -- MetadataPanel passes; npm --prefix web run lint passes."
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "The only non-boilerplate acceptance box is manual ('Manual: on a multi-part book in the review panel, click preview and confirm audio plays...'). The Tests section names three real checks; promote them into acceptance so the task is decidable without a human and a real library."
+   }
+  ],
+  "note": "All six re-verify anchors hit exactly as stated: internal/audio/sample.go:18 SampleMaxDuration and :39 ExtractSample; AudioSampleCompare.tsx:46 sample?start=; audio_sample.go:42 FilePath: book.FilePath; scanner.go:1699 dbBook.FilePath = dirPath; pebble_store_bookfiles.go:397 GetBookFiles; MetadataSearchDialog present in MetadataPanel.tsx (2 hits). GetBookFiles is also confirmed on the ServerOpsStore interface at server_ops_store.go:122, so step 1's s.Ops().GetBookFiles(...) compiles."
+ }
+]

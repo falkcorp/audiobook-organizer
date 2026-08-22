@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-072-new-maintenance-op-merge-an-operator-confirmed-l.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: d0485580-247b-4632-8724-cfdf55787cee -->
+<!-- guid: fb541cf9-5780-430a-99b2-8a196868b10e -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-072 — New maintenance op: merge an operator-confirmed list of duplicate real-author rows (TODO.md L3795)
@@ -58,7 +58,7 @@ Add a new maintenance op (e.g. 'maintenance.author-duplicate-merge') that merges
 8. Add a changelog.d fragment and a todo.d fragment (both header-less per repo convention) noting the new op.
 
 Then, always:
-- Keep the change purely removal — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
+- Keep the change purely additive — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
 - Bump the file header (`version` + `last-edited: 2026-08-21`) on every file you touch; keep existing guids. New files get a fresh guid (`uuidgen | tr A-Z a-z`).
 - Add a changelog fragment `changelog.d/20260821_maintenance_072.md` (NO file header; format per `changelog.d/README.md`: a `### Fixed|Changed|Added` heading, a `####` title, one paragraph).
 - Do NOT edit `TODO.md` — the coordinator closes the source item in one commit per wave (every brief in a wave would otherwise collide on it). In your final report, state the exact `TODO.md` line text to check off. Never add new TODO items directly — use a `todo.d/` fragment (no header).
@@ -99,7 +99,7 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 ## Commit message
 
 ```
-refactor(maintenance): New maintenance op: merge an operator-confirmed list of dupl (TODO L3795)
+feat(maintenance): New maintenance op: merge an operator-confirmed list of dupl (TODO L3795)
 
 <why the change was needed; what it protects; what it deliberately does NOT change>
 
@@ -114,7 +114,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 **This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: (1) the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; (2) every mutation is journaled through the existing undo ledger (`CreateOperationChange` — verify: `grep -rn "func.*CreateOperationChange" internal/database/*.go`) so `internal/undo` can replay it — a mutation without a journal row is a defect; (3) acceptance includes a test that applies on a fixture and then undoes via `internal/undo` and asserts the fixture is byte-identical; (4) the apply path refuses to start while a `library.scan` operation is running or queued (check the registry for an active scan before mutating — a running scan clobbers applied metadata). Idempotency: re-running in dry-run must report 0 pending changes after a successful apply. Rollback of the CODE = `git revert`; rollback of the DATA = the undo ledger, which is why (2) is not optional. PR stays open for the owner — the coordinator never admin-merges it.
 
-If the removed symbol/file is already ABSENT at HEAD (re-run the re-verify greps above: zero hits = already removed) AND the replacement is present, the removal is already done — run acceptance instead. Rollback = `git revert` the commit to restore the file + its call sites; no data or schema is touched.
+If this presence check already passes at HEAD — `grep -n 'maintenance.author-duplicate-merge' internal/plugins/maintenance/author_duplicate_merge.go returns >=1 hit (op ID registered).` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

@@ -1,0 +1,584 @@
+[
+ {
+  "todo_line": 90020,
+  "part": 1,
+  "src_id": "REV-EMPTY-1",
+  "title": "Never send batchFetchCandidates({}) from the Search providers command",
+  "verdict": "actionable",
+  "verdict_evidence": "web/src/components/review/ReviewWorkspace.tsx:271 calls `api.batchFetchCandidates({})` unconditionally, and the server 400s an empty selection: `grep -n \"book_ids or selection is required\" internal/server/metadata_batch_candidates.go` -> 1 hit at L69.",
+  "domain": "web",
+  "exact_files": [
+   "web/src/components/review/ReviewWorkspace.tsx",
+   "web/src/components/review/ReviewWorkspace.searchProviders.test.tsx"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the 'Search providers\u2026' command's run() calls batchFetchCandidates({}) with an empty body",
+    "grep_cmd": "grep -n \"run: startJob('Provider search'\" web/src/components/review/ReviewWorkspace.tsx",
+    "expect": "1 hit, L271: `run: startJob('Provider search', () => api.batchFetchCandidates({})),`"
+   },
+   {
+    "claim": "the server 400s when book_ids/selection resolve to zero ids",
+    "grep_cmd": "grep -n \"book_ids or selection is required\" internal/server/metadata_batch_candidates.go",
+    "expect": "1 hit, ~L69"
+   },
+   {
+    "claim": "an empty FilterSpec (no Search/LibraryState/Tag/FieldFilters) resolves to every primary-version book, up to 100000, via GetAudiobooks",
+    "grep_cmd": "grep -n \"IsPrimaryVersion: &trueVal\" internal/server/metadata_ops.go",
+    "expect": "1 hit, ~L480, inside resolveFilterToBookIDs"
+   },
+   {
+    "claim": "FilterSpec.OnlyUnmatched is applied server-side during filter resolution itself, so selection.filter.only_unmatched alone (no book_ids) is a complete, valid whole-library request",
+    "grep_cmd": "grep -n \"if f.OnlyUnmatched {\" internal/server/metadata_ops.go",
+    "expect": "1 hit, ~L530, inside resolveFilterToBookIDs, after the primary GetAudiobooks call"
+   },
+   {
+    "claim": "the TS BatchFetchRequest type already has selection.filter.only_unmatched",
+    "grep_cmd": "grep -n \"only_unmatched\" web/src/services/api.ts",
+    "expect": "2 hits: L3637 (nested under selection.filter) and L3640 (top-level BatchFetchRequest.only_unmatched)"
+   },
+   {
+    "claim": "the working sibling command already shows the pattern of passing an explicit target instead of {}",
+    "grep_cmd": "grep -n \"run: startJob('Search for selected'\" web/src/components/review/ReviewWorkspace.tsx",
+    "expect": "1 hit, L279, followed by `api.batchFetchCandidates({ book_ids: [...metadata.selectedIds] })` on the next line"
+   },
+   {
+    "claim": "the CommandBar menu button and menu item carry stable testids for driving this from a test",
+    "grep_cmd": "grep -n \"data-testid={\\`command-menu-\\${menu.id}\\`}\\|data-testid={\\`command-\\${cmd.id}\\`}\" web/src/components/review/CommandBar.tsx",
+    "expect": "2 hits, ~L82 and ~L99"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "startJob(label, fn) uniform job-starter",
+    "file": "web/src/components/review/ReviewWorkspace.tsx",
+    "verify_grep": "grep -n \"const startJob = \" web/src/components/review/ReviewWorkspace.tsx"
+   },
+   {
+    "name": "BatchFetchRequest.selection.filter.only_unmatched (existing TS type, no new field needed)",
+    "file": "web/src/services/api.ts",
+    "verify_grep": "grep -n \"only_unmatched?: boolean;\" web/src/services/api.ts"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "One-line call-site edit plus a small, template-following new test file; no new types or cross-file wiring.",
+  "review_critical": false,
+  "goal": "The 'Search providers\u2026' command (CommandBar 'metadata' menu, id 'search-providers', scope 'library') must send a request the server can resolve to a real, library-wide target instead of an empty body that always 400s. Replace the empty-object call with an explicit selection that means 'every book without a matched candidate yet' -- the natural reading of a library-wide 'search providers' action.",
+  "background": [
+   "web/src/components/review/ReviewWorkspace.tsx:271 currently reads `run: startJob('Provider search', () => api.batchFetchCandidates({})),` -- an empty body.",
+   "internal/server/metadata_batch_candidates.go's handleBatchFetchCandidates resolves BookIDs first, then Selection; if both are empty it 400s 'book_ids or selection is required' (L69). An empty {} satisfies neither, so this command has never worked in production.",
+   "internal/server/metadata_ops.go's resolveFilterToBookIDs (used when Selection.Filter is set) applies IsPrimaryVersion=true and, when f.OnlyUnmatched is true, filters the resolved list down to books with no 'matched' candidate on file (L530-539) -- this all happens server-side before the 400 check, so `{ selection: { filter: { only_unmatched: true } } }` alone is a complete, non-empty request.",
+   "The TS client type BatchFetchRequest (web/src/services/api.ts:3629-3641) already models `selection.filter.only_unmatched?: boolean` -- no new field needs to be added to the API layer, only a new call site.",
+   "The sibling command 'Bulk search selected\u2026' (L274-282) is the one variant that already works, because it passes an explicit `{ book_ids: [...] }`."
+  ],
+  "steps": [
+   "1. Open web/src/components/review/ReviewWorkspace.tsx. In the 'metadata' CommandMenu's commands array, find the 'search-providers' command (currently at L268-272).",
+   "2. Change its `run` from `startJob('Provider search', () => api.batchFetchCandidates({}))` to `startJob('Provider search', () => api.batchFetchCandidates({ selection: { filter: { only_unmatched: true } } }))`. This asks the server to resolve every primary-version book and narrow it to unmatched-only -- a real library-wide fetch, matching the command's `scope: 'library'` label and its 'library-wide' UI note.",
+   "3. Bump the file's version header at the top (currently `// version: 1.5.0`) to `1.5.1` and update `// last-edited:` to today's date (YYYY-MM-DD).",
+   "4. Create a new test file web/src/components/review/ReviewWorkspace.searchProviders.test.tsx (new). Copy the render harness verbatim from web/src/components/review/ReviewWorkspace.refetchStale.test.tsx: the `makeResult`, `renderWorkspace`, `seed`, `beforeEach`, and `openWorkspace` helpers (import { render, screen, waitFor } from '@testing-library/react'; MemoryRouter; userEvent; vi/describe/it/expect/beforeEach from 'vitest'; * as api from '../../services/api'; ReviewWorkspace; ToastProvider). Give the new file its own version header (version 1.0.0, a fresh v4 guid, today's last-edited).",
+   "5. In the new test file's `seed()` (or beforeEach), also mock `vi.mocked(api.batchFetchCandidates).mockResolvedValue({ operation_id: 'op-1' })`, exactly as ReviewWorkspace.refetchStale.test.tsx's `seed()` does at L72.",
+   "6. Write test 1: 'sends an explicit unmatched selection, never an empty body'. Render the workspace, wait for `screen.getByTestId('compare-spine')`, click `screen.getByTestId('command-menu-metadata')`, click `await screen.findByTestId('command-search-providers')`, then `await waitFor(() => expect(api.batchFetchCandidates).toHaveBeenCalledTimes(1))` and assert `expect(api.batchFetchCandidates).toHaveBeenCalledWith({ selection: { filter: { only_unmatched: true } } })`. Also assert `expect(api.batchFetchCandidates).not.toHaveBeenCalledWith({})` for extra safety (this is the literal regression the bug report describes).",
+   "7. Write test 2: 'the working sibling command is unaffected' (regression guard so the fix does not accidentally touch the selection-scoped command). Seed one selected row is not straightforward without selection UI, so instead just assert the two commands' testids are both present and distinct: `expect(screen.getByTestId('command-search-providers')).toBeInTheDocument()` and `expect(screen.getByTestId('command-bulk-search-selected')).toBeInTheDocument()` after opening the metadata menu -- this guards against a future edit accidentally merging or removing one of the two commands."
+  ],
+  "tests": [
+   "web/src/components/review/ReviewWorkspace.searchProviders.test.tsx: 'sends an explicit unmatched selection, never an empty body' -- clicks the CommandBar's Metadata menu then 'Search providers\u2026', asserts api.batchFetchCandidates was called exactly once with `{ selection: { filter: { only_unmatched: true } } }` and never with `{}`.",
+   "web/src/components/review/ReviewWorkspace.searchProviders.test.tsx: 'the working sibling command is unaffected' -- asserts both 'command-search-providers' and 'command-bulk-search-selected' render as distinct menu items."
+  ],
+  "acceptance": [
+   "`npm --prefix web test -- src/components/review/ReviewWorkspace` passes, including the two new tests.",
+   "`grep -n \"api.batchFetchCandidates({})\" web/src/components/review/ReviewWorkspace.tsx` returns no hits (the empty-body call site is gone).",
+   "`npm --prefix web run lint` is clean on the two changed/new files."
+  ],
+  "edge_cases": [
+   "If the server ever returns zero unmatched books for `{ selection: { filter: { only_unmatched: true } } }` (a fully-matched library), handleBatchFetchCandidates's existing OnlyUnmatched branch already returns 200 with `operation_id: ''` and a 'already matched' message (internal/server/metadata_batch_candidates.go L83-90) -- no client change needed to handle that, `startJob`'s toast still fires 'started' generically; this is a pre-existing minor UX rough edge, out of scope for this fix.",
+   "Do not change the sibling 'Bulk search selected\u2026' command (L274-282) -- it already sends an explicit, correct `book_ids` selection and is the reference implementation this fix is modelled on."
+  ],
+  "anti_over_suppression": "the working sibling command is unaffected",
+  "depends_on_lines": [],
+  "gate": "npm --prefix web run lint && npm --prefix web test -- src/components/review/ReviewWorkspace",
+  "notes": "Do not touch todo_line 90020 part 2 (loading-skeleton fix) in this task -- that lives entirely in MetadataPanel.tsx, a different file, and is a separate JSON object. This task and that one can run in parallel with no file collision."
+ },
+ {
+  "todo_line": 90020,
+  "part": 2,
+  "src_id": "REV-EMPTY-1",
+  "title": "Show a loading skeleton, not the empty state, while the metadata review list is still fetching",
+  "verdict": "actionable",
+  "verdict_evidence": "CompareSpine renders emptyMessage whenever `rows.length === 0 && groups.length === 0` with no awareness of loading (`grep -n \"if (rows.length === 0 && groups.length === 0)\" web/src/components/review/spine/CompareSpine.tsx` -> 1 hit L1047), and MetadataPanel passes metadata.rows/groups straight through without checking metadata.loading (`grep -n \"rows={metadata.rows}\" web/src/components/review/MetadataPanel.tsx` -> 1 hit L121) -- so a slow/in-flight fetch (measured 34.8s and 18.4s in prod while a scan ran) renders the 'no metadata \u2014 search providers' empty state until it resolves.",
+  "domain": "web",
+  "exact_files": [
+   "web/src/components/review/MetadataPanel.tsx",
+   "web/src/components/review/ReviewWorkspace.metadataLoading.test.tsx"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "CompareSpine shows the emptyMessage box whenever rows and groups are both empty, regardless of a loading flag (it has none)",
+    "grep_cmd": "grep -n \"if (rows.length === 0 && groups.length === 0)\" web/src/components/review/spine/CompareSpine.tsx",
+    "expect": "1 hit, L1047, inside export function CompareSpine, followed by a Box data-testid=\"spine-empty\" rendering {emptyMessage}"
+   },
+   {
+    "claim": "CompareSpine's props do not include a loading flag at all",
+    "grep_cmd": "grep -n \"emptyMessage?: string;\" web/src/components/review/spine/CompareSpine.tsx",
+    "expect": "1 hit, ~L1040, the last prop in CompareSpine's prop type -- no `loading` prop is declared"
+   },
+   {
+    "claim": "MetadataPanel passes metadata.rows/groups to CompareSpine without gating on metadata.loading",
+    "grep_cmd": "grep -n \"rows={metadata.rows}\" web/src/components/review/MetadataPanel.tsx",
+    "expect": "1 hit, L121, inside the CompareSpine JSX block (L120-126)"
+   },
+   {
+    "claim": "MetadataLane exposes a `loading` boolean the panel can read",
+    "grep_cmd": "grep -n \"loading: boolean;\" web/src/components/review/lanes/useMetadataLane.ts",
+    "expect": "1 hit, L274, first field of the MetadataLane interface"
+   },
+   {
+    "claim": "the metadata lane's fetch effect sets loading true at the start of every fetch (initial mount AND every subsequent refresh(), not just once)",
+    "grep_cmd": "grep -n \"setLoading(true)\" web/src/components/review/lanes/useMetadataLane.ts",
+    "expect": "1 hit, ~L407, first line of the fetch useEffect body, whose deps are [active, refreshKey]"
+   },
+   {
+    "claim": "the lane's own emptyMessage string is what the reviewer saw during the wait",
+    "grep_cmd": "grep -n \"emptyMessage:\" web/src/components/review/lanes/metadata.ts",
+    "expect": "1 hit, ~L39: 'No metadata matches to review. Search providers from the Metadata menu to find some.'"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "CompareSpine's existing data-testid=\"spine-empty\" box (do not change CompareSpine itself -- guard its caller instead)",
+    "file": "web/src/components/review/spine/CompareSpine.tsx",
+    "verify_grep": "grep -n \"data-testid=\\\"spine-empty\\\"\" web/src/components/review/spine/CompareSpine.tsx"
+   },
+   {
+    "name": "metadata.loading (already computed, no new state needed)",
+    "file": "web/src/components/review/lanes/useMetadataLane.ts",
+    "verify_grep": "grep -n \"const \\[loading, setLoading\\] = useState(true);\" web/src/components/review/lanes/useMetadataLane.ts"
+   },
+   {
+    "name": "DupesPanel's existing loading-bar pattern, for visual consistency (LinearProgress)",
+    "file": "web/src/components/review/DupesPanel.tsx",
+    "verify_grep": "grep -n \"dupes.loading && <LinearProgress\" web/src/components/review/DupesPanel.tsx"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "S",
+  "tier": "sonnet",
+  "why_tier": "The guard condition has a real correctness trap (guarding on `loading` alone would flicker the spine to a loading skeleton on every post-apply refresh, since results are stale-but-present during a refresh's loading window) that a Haiku-tier pass is likely to get wrong; needs the reasoning spelled out in steps, which this brief does.",
+  "review_critical": false,
+  "goal": "In MetadataPanel.tsx, render a loading indicator instead of CompareSpine's empty state ONLY while metadata.loading is true AND there is nothing to show yet (metadata.rows.length === 0 && metadata.groups.length === 0). Once results arrive (even if the resolved set is genuinely empty), or once anything is already on screen, hand off to CompareSpine exactly as today.",
+  "background": [
+   "useMetadataLane's fetch effect runs on mount and on every refresh() call (e.g. after an apply operation completes) -- see the effect's deps `[active, refreshKey]` -- and sets `loading` true at its start every time, not just on first mount.",
+   "During a REFRESH (not the initial mount), `metadata.rows`/`metadata.results` still hold the previous page's data while the new fetch is in flight, because `setResults` is not called until the fetch resolves. So a naive guard of `metadata.loading ? <Skeleton/> : <CompareSpine/>` would replace an already-rendered, non-empty spine with a loading skeleton on every refresh -- a visible regression (flicker) the bug report does not ask for and that would fail review.",
+   "The correct guard is therefore `metadata.loading && metadata.rows.length === 0 && metadata.groups.length === 0`: true only on the genuine first-paint/no-data-yet case this bug is about, false on every refresh where something is already on screen, and false once the fetch resolves (whether to a populated or a genuinely empty set) so CompareSpine's real empty state still works for an actually-empty library."
+  ],
+  "steps": [
+   "1. Open web/src/components/review/MetadataPanel.tsx. Add `LinearProgress` and `Typography` to the existing `import { Box } from '@mui/material';` (L21) -> `import { Box, LinearProgress, Typography } from '@mui/material';`.",
+   "2. Locate the CompareSpine block (L119-127): `<Box sx={{ minWidth: 0, overflowY: 'auto' }}><CompareSpine rows={metadata.rows} groups={metadata.groups} viewMode={viewMode} ctx={metadata.spineCtx} emptyMessage={LANES.metadata.emptyMessage} /></Box>`.",
+   "3. Replace it with a conditional: when `metadata.loading && metadata.rows.length === 0 && metadata.groups.length === 0` is true, render a loading placeholder instead of CompareSpine; otherwise render CompareSpine exactly as before. Example:\n```tsx\n<Box sx={{ minWidth: 0, overflowY: 'auto' }}>\n  {metadata.loading && metadata.rows.length === 0 && metadata.groups.length === 0 ? (\n    <Box sx={{ p: 3 }} data-testid=\"metadata-loading\">\n      <LinearProgress sx={{ mb: 2 }} />\n      <Typography variant=\"body2\" sx={{ color: 'text.secondary' }}>\n        Loading the review queue\u2026\n      </Typography>\n    </Box>\n  ) : (\n    <CompareSpine\n      rows={metadata.rows}\n      groups={metadata.groups}\n      viewMode={viewMode}\n      ctx={metadata.spineCtx}\n      emptyMessage={LANES.metadata.emptyMessage}\n    />\n  )}\n</Box>\n```",
+   "4. Bump MetadataPanel.tsx's version header (currently `// version: 1.0.0`) to `1.0.1`, update `// last-edited:` to today.",
+   "5. Create web/src/components/review/ReviewWorkspace.metadataLoading.test.tsx (new). Copy the render harness from ReviewWorkspace.refetchStale.test.tsx (makeResult/renderWorkspace/seed/beforeEach), but do NOT use `seed()`'s default immediate mock resolution for this file's tests -- you need a controllable, not-yet-resolved promise for `api.getCachedReviewResults`. Give the file a version header (1.0.0, fresh v4 guid, today).",
+   "6. Write test 1: 'shows a loading indicator, not the empty state, while the review fetch is pending'. In the test, do: `let resolveFetch: (v: unknown) => void; const pending = new Promise((r) => { resolveFetch = r; }); vi.mocked(api.getCachedReviewResults).mockReturnValue(pending as ReturnType<typeof api.getCachedReviewResults>);` plus the other beforeEach mocks (getDedupCandidates, getDedupStats, getReviewItems, getReviewCount, getConfig) exactly as seed() sets them. Render the workspace. Assert `await screen.findByTestId('metadata-loading')` appears and `screen.queryByTestId('spine-empty')` is null. Then `resolveFetch({ results: [], total_count: 0, matched: 0, no_match: 0, errors: 0 });` inside `act()` (or await it via `await waitFor`), and assert `await screen.findByTestId('spine-empty')` now appears with text matching `LANES.metadata.emptyMessage` and `screen.queryByTestId('metadata-loading')` is null.",
+   "7. Write test 2: 'a refresh does not flicker an already-populated spine back to loading'. Seed with one normal result via the standard `seed([makeResult('a')], 0)` helper (copy it from ReviewWorkspace.refetchStale.test.tsx too), open the workspace, wait for `compare-spine`. Then trigger a second fetch of `getCachedReviewResults` that resolves slowly (mock a second call to return a pending promise), and cause a refresh (the simplest lever already wired to `metadata.refresh()` is clicking a row's Apply button and letting `runApplyOp`'s poll->refresh fire -- if that is too indirect for a Haiku-tier implementer, instead directly assert the invariant at the guard-condition level: render with `metadata.loading` forced true via a lingering pending promise from mount, but seed one row into the FIRST resolution before triggering the second pending fetch, then assert the row (`screen.getByText(/Book a/)`) is still visible and `metadata-loading` is NOT rendered during the second, still-pending fetch)."
+  ],
+  "tests": [
+   "web/src/components/review/ReviewWorkspace.metadataLoading.test.tsx: 'shows a loading indicator, not the empty state, while the review fetch is pending' -- asserts metadata-loading is shown before the fetch resolves and spine-empty is shown only after it resolves to an empty set.",
+   "web/src/components/review/ReviewWorkspace.metadataLoading.test.tsx: 'a refresh does not flicker an already-populated spine back to loading' -- the anti-over-suppression case: proves the loading guard does not hide already-rendered rows during a later in-flight refresh."
+  ],
+  "acceptance": [
+   "`npm --prefix web test -- src/components/review/ReviewWorkspace` passes, including both new tests in the new file.",
+   "`grep -n \"data-testid=\\\"metadata-loading\\\"\" web/src/components/review/MetadataPanel.tsx` returns 1 hit.",
+   "Manual/visual check not required for scout sign-off, but note for the reviewer: confirm in a real slow-network dev session (throttle the /cache/review request) that the spine shows the LinearProgress bar, not 'Search providers from the Metadata menu to find some', during the wait."
+  ],
+  "edge_cases": [
+   "Guarding on `metadata.loading` alone (without the rows/groups-empty check) is the wrong fix -- see 'background' above; it would flicker an already-populated spine to a loading skeleton on every post-apply refresh. The second test exists specifically to catch that mistake.",
+   "A genuinely empty library (zero cached candidates ever) must still show CompareSpine's real empty state once `loading` resolves to false -- do not suppress that case."
+  ],
+  "anti_over_suppression": "a refresh does not flicker an already-populated spine back to loading",
+  "depends_on_lines": [],
+  "gate": "npm --prefix web run lint && npm --prefix web test -- src/components/review/ReviewWorkspace",
+  "notes": "Independent of todo_line 90020 part 1 (different files: MetadataPanel.tsx here vs ReviewWorkspace.tsx there) -- safe to run in parallel with it. Shares no file with todo_line 90021 (server-side) or 90022 (evidence panel), also safe to parallelize with those."
+ },
+ {
+  "todo_line": 90021,
+  "src_id": "REV-EMPTY-2",
+  "title": "Cap GET /api/v1/audiobooks/metadata/cache/review to a default page size, add all=true escape hatch, and log when it exceeds 5s",
+  "verdict": "actionable",
+  "verdict_evidence": "The handler currently treats limit=0/absent as 'return every reviewable row' with no cap (`grep -n \"limit := httputil.ParseQueryInt\" internal/server/handlers/metadata_cache.go` -> 1 hit L168, followed by `if limit > 0 { end = start + limit }` at L348 meaning limit=0 never truncates), and it is measured at 34.8s/18.4s in prod (scope doc). The sole web caller (`grep -n \".getCachedReviewResults(0, 0)\" web/src/components/review/lanes/useMetadataLane.ts` -> 1 hit L410) deliberately relies on limit=0 meaning 'all rows' for its client-side filter/group/staleIds derivation, so per the owner's own conditional in the scope brief ('keep limit=0 only behind an explicit all=true if something depends on it') this is the one caller that must be switched to pass all=true explicitly rather than have its behaviour silently changed.",
+  "domain": "internal/server/handlers",
+  "exact_files": [
+   "internal/server/handlers/metadata_cache.go",
+   "internal/server/handlers/metadata_cache_test.go",
+   "internal/server/handlers/mocks/mock_metadata_cache_book_store.go",
+   "web/src/services/api.ts",
+   "web/src/components/review/lanes/useMetadataLane.ts"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the handler parses limit/offset with ParseQueryInt, default 0, and never caps a 0/absent limit",
+    "grep_cmd": "grep -n \"limit := httputil.ParseQueryInt\" internal/server/handlers/metadata_cache.go",
+    "expect": "1 hit, L168: `limit := httputil.ParseQueryInt(c, \"limit\", 0)`"
+   },
+   {
+    "claim": "the page slice only truncates when limit > 0, so limit=0 (or absent) returns every reviewable row today",
+    "grep_cmd": "grep -n \"if limit > 0 {\" internal/server/handlers/metadata_cache.go",
+    "expect": "1 hit, ~L348, inside the pagination block right before `page := reviewable[start:end]`"
+   },
+   {
+    "claim": "total_count is computed from len(reviewable) independent of the page slice, so capping the page will not change total_count/matched/no_match/stale/etc reporting",
+    "grep_cmd": "grep -n '\"total_count\": len(reviewable)' internal/server/handlers/metadata_cache.go",
+    "expect": "1 hit, ~L384, in the final httputil.RespondWithOK gin.H{...}"
+   },
+   {
+    "claim": "the ONLY web caller of this endpoint sends limit=0, offset=0",
+    "grep_cmd": "grep -rn \"getCachedReviewResults(\" web/src --include=*.ts --include=*.tsx",
+    "expect": "2 hits: web/src/services/api.ts:3734 (the function definition) and web/src/components/review/lanes/useMetadataLane.ts:410 (the sole call site, `.getCachedReviewResults(0, 0)`)"
+   },
+   {
+    "claim": "that caller's own comment explains WHY it needs every row in one call: client-side filtering/grouping/staleIds span the whole library, not one page",
+    "grep_cmd": "grep -n \"the lane fetches with limit=0\" web/src/components/review/lanes/useMetadataLane.ts",
+    "expect": "1 hit at L319 \u2014 comment spans two lines; the client depends on limit=0 returning every row"
+   },
+   {
+    "claim": "httputil already has a bool query-param parser to reuse for all=true, so no new parsing helper is needed",
+    "grep_cmd": "grep -n \"func ParseQueryBool\" internal/httputil/parse.go",
+    "expect": "1 hit, L44: `func ParseQueryBool(c *gin.Context, key string, defaultValue bool) bool`"
+   },
+   {
+    "claim": "the concrete store already implements ListActiveOperationsV2 (used to detect an active library.scan), and it is already wired into this handler's constructor via storeForWiring(), so only the narrow interface needs widening -- no new dependency to inject",
+    "grep_cmd": "grep -n \"NewMetadataCacheHandler(s.storeForWiring()\" internal/server/wire_handlers.go",
+    "expect": "1 hit, L66"
+   },
+   {
+    "claim": "ListActiveOperationsV2 returns only queued/running rows already, so no extra status filter is needed when checking for an active scan",
+    "grep_cmd": "grep -n \"ListActiveOperationsV2 returns ops with status 'queued' or 'running'\" internal/database/iface_ops_v2.go",
+    "expect": "1 hit, ~L139, the doc comment directly above the interface method at L140"
+   },
+   {
+    "claim": "library.scan's v2 OperationDef ID is exactly the literal to match against DefID",
+    "grep_cmd": "grep -n 'ID:.*\"library.scan\"' internal/server/library_core_ops.go",
+    "expect": "1 hit, ~L68"
+   },
+   {
+    "claim": "MetadataCacheBookStore is registered in .mockery.yaml so `make mocks` regenerates its mock after the interface is widened",
+    "grep_cmd": "grep -n \"MetadataCacheBookStore:\" .mockery.yaml",
+    "expect": "1 hit, ~L213"
+   },
+   {
+    "claim": "an existing Go test already exercises this handler with limit=0 and a small (2-4 row) fixture, so it will keep passing unchanged once limit=0 defaults to a 200-row page (2-4 < 200)",
+    "grep_cmd": "grep -n 'reviewCtx(\"limit=0&offset=0\")' internal/server/handlers/metadata_cache_test.go",
+    "expect": "3 hits across TestGetCacheReviewResults_CountsOnlyReviewableRows, _UnreviewableSplitByCause, _FlagsStaleRows"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "httputil.ParseQueryBool(c, key, defaultValue)",
+    "file": "internal/httputil/parse.go",
+    "verify_grep": "grep -n \"func ParseQueryBool\" internal/httputil/parse.go"
+   },
+   {
+    "name": "reviewCtx(query string) test helper (build a GET gin.Context for this endpoint)",
+    "file": "internal/server/handlers/metadata_cache_test.go",
+    "verify_grep": "grep -n \"func reviewCtx\" internal/server/handlers/metadata_cache_test.go"
+   },
+   {
+    "name": "the metadata_batch_candidates.go pattern of checking recent/active ops by def/type before acting -- same idea, different store method (ListActiveOperationsV2 vs GetRecentOperations) because this handler only has the narrow MetadataCacheBookStore, not the full Ops() store",
+    "file": "internal/server/metadata_batch_candidates.go",
+    "verify_grep": "grep -n \"activeOps, _ := store.GetRecentOperations(50)\" internal/server/metadata_batch_candidates.go"
+   },
+   {
+    "name": "MockStore_ListActiveOperationsV2 -- the mockery-generated template for a no-arg two-return-value method, to copy the shape from if `make mocks` cannot be run in the environment",
+    "file": "internal/database/mocks/mock_store.go",
+    "verify_grep": "grep -n \"func (_mock \\*MockStore) ListActiveOperationsV2\" internal/database/mocks/mock_store.go"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "L",
+  "tier": "sonnet",
+  "why_tier": "Requires widening a shared narrow interface plus regenerating (or hand-mirroring) a mockery-managed mock file correctly, adding a testable pure helper for the scan-active check, and building a >200-row Go test fixture -- more surface and more ways to get the mock/interface sync wrong than a Haiku pass should be trusted with.",
+  "review_critical": false,
+  "goal": "GetCacheReviewResults (internal/server/handlers/metadata_cache.go) must not hand back the entire cache to a caller that does not explicitly ask for it. When `limit` is 0 or absent AND the new `all` query param is not `true`, treat the request as if `limit=200` had been sent (existing total_count/matched/etc. reporting is unaffected, since those are already computed over the full `reviewable` set independent of the page slice). When `all=true` is sent, preserve today's literal-everything behaviour exactly, because the one existing caller (useMetadataLane.ts, client-side filter/group/stale derivation spanning the whole library) depends on it and must keep working unchanged -- update that caller to pass `all=true` explicitly. Separately, add a WARN log line whenever the handler's own processing exceeds 5 seconds, including the measured duration and whether a `library.scan` op is currently queued or running, so a future slow request can be diagnosed instead of only reported.",
+  "background": [
+   "internal/server/handlers/metadata_cache.go's GetCacheReviewResults computes `reviewable` (every cache row this endpoint COULD return) up front regardless of limit/offset -- pagination only slices `reviewable[start:end]` afterwards (L343-354) -- and `total_count`/`matched`/`no_match`/`stale`/`unreviewable*` are all derived from the full `reviewable`/`prepared` sets, never from the page. So capping the default page size changes only how many `results` rows come back in one response; it does not change any of the summary counts the rail displays.",
+   "The expensive part of this handler that the file's own comments already call out (L189-195, L256-270) is NOT the per-page BuildCandidateBookInfo work (that already only runs over `page`, L356-380) -- it is the concurrent GetCachedCandidates read over EVERY prepared row (L271-284, bounded to reviewListConcurrency=8), which runs unconditionally regardless of limit. Capping the page size therefore reduces response PAYLOAD size and BuildCandidateBookInfo cost, but will NOT by itself eliminate the 34.8s/18.4s prod timings if those were dominated by the cache-read fan-out contending with a concurrent library.scan -- which is exactly why the WARN timing log is the other half of this task: it turns 'sometimes slow' into a measurable, correlatable signal instead of a one-off prod log line.",
+   "The sole web caller, useMetadataLane.ts:410 (`api.getCachedReviewResults(0, 0)`), is deliberate: its own JSDoc (L318-321) explains the lane fetches ALL rows once and paginates/filters/groups/derives staleIds client-side across the WHOLE library, because per-page derivation would miss cross-page duplicates and could not report 'X stale of Y total' accurately. This is the caller the scope brief's conditional ('keep limit=0 only behind an explicit all=true if something depends on it') is asking about, and the grep above proves something does depend on it.",
+   "MetadataCacheBookStore (the narrow interface this handler is built against) does not currently expose any operations-listing method. The concrete value always passed in (`s.storeForWiring()`, a `database.Store`) already implements `ListActiveOperationsV2() ([]OperationV2Row, error)` (internal/database/iface_ops_v2.go:140) as part of the wider `database.OpsV2Store` interface it embeds -- so this task widens `MetadataCacheBookStore` by exactly that one method rather than injecting a new dependency or reaching for the wide `OpsV2Store`."
+  ],
+  "steps": [
+   "1. In internal/server/handlers/metadata_cache.go, add a package-level const near `reviewListConcurrency` (L37): `// defaultReviewPageSize bounds a review-listing request that does not explicitly\\n// ask for everything. limit=0/absent used to mean \"return every row\", measured\\n// at 34.8s and 18.4s in production while a library.scan ran concurrently; a\\n// caller that forgets to page (or a stray curl) must not pay for the whole cache.\\nconst defaultReviewPageSize = 200`.",
+   "2. In GetCacheReviewResults, right after the existing `limit`/`offset` parsing and clamping (L168-175), add: `all := httputil.ParseQueryBool(c, \"all\", false)` then `if limit == 0 && !all { limit = defaultReviewPageSize }`. Leave everything else in the function (the `reviewable` build-up, the summary counts, the `start`/`end`/`page` slicing at L343-354) untouched -- it already respects a positive `limit` correctly.",
+   "3. Widen the `MetadataCacheBookStore` interface (L39-48) by adding one method: `// ListActiveOperationsV2 backs the diagnostic \"is a library.scan running\" check\\n// logged when GetCacheReviewResults exceeds 5s. The concrete store passed in\\n// (database.Store, via storeForWiring()) already implements this.\\nListActiveOperationsV2() ([]database.OperationV2Row, error)`.",
+   "4. Add a small exported helper function in metadata_cache.go, below the interface: `// LibraryScanActive reports whether a \"library.scan\" op is currently queued or\\n// running. Diagnostic only: a nil store or a lookup error is reported as \"not\\n// scanning\" rather than aborting or erroring the caller.\\nfunc LibraryScanActive(store MetadataCacheBookStore) bool {\\n\\tif store == nil {\\n\\t\\treturn false\\n\\t}\\n\\tactive, err := store.ListActiveOperationsV2()\\n\\tif err != nil {\\n\\t\\treturn false\\n\\t}\\n\\tfor _, op := range active {\\n\\t\\tif op.DefID == \"library.scan\" {\\n\\t\\t\\treturn true\\n\\t\\t}\\n\\t}\\n\\treturn false\\n}`.",
+   "5. At the very top of GetCacheReviewResults's body (right after the `h.store == nil || h.svc == nil` guard, before `limit := httputil.ParseQueryInt(...)`), add `start := time.Now()` (the `time` package is already imported in this file).",
+   "6. Immediately before the final `httputil.RespondWithOK(c, gin.H{...})` call (L382), add: `if d := time.Since(start); d > 5*time.Second {\\n\\tslog.Warn(\"GetCacheReviewResults exceeded 5s\",\\n\\t\\t\"duration\", d.Round(time.Millisecond),\\n\\t\\t\"total_reviewable\", len(reviewable),\\n\\t\\t\"returned\", len(results),\\n\\t\\t\"library_scan_active\", LibraryScanActive(h.store),\\n\\t)\\n}` (`slog` is already imported).",
+   "7. Run `make mocks` (pinned mockery v3.7.1; install via `bash scripts/setup-mockery.sh` if the binary is missing) to regenerate internal/server/handlers/mocks/mock_metadata_cache_book_store.go with the new `ListActiveOperationsV2` method. If mockery cannot run in this environment, hand-add the method by copying the exact shape of `MockStore_ListActiveOperationsV2` from internal/database/mocks/mock_store.go (lines ~20160-20213: the direct method, the `MockMetadataCacheBookStore_ListActiveOperationsV2_Call` type, the `.EXPECT().ListActiveOperationsV2()` builder, `.Run()`, `.Return()`, `.RunAndReturn()`), renaming `MockStore`/`_e.mock`/etc. to match `MockMetadataCacheBookStore`'s existing naming convention in that file, and changing the return type import qualifier from bare `OperationV2Row` to `database.OperationV2Row` (the mock package already imports `database`).",
+   "8. In web/src/services/api.ts, change `getCachedReviewResults`'s signature (L3734) to accept a third parameter: `export async function getCachedReviewResults(limit: number, offset: number, all = false): Promise<{...}>` (keep the existing return type unchanged), and change the URL build (L3769-3771) from the template literal to: `const params = new URLSearchParams({ limit: String(limit), offset: String(offset) }); if (all) params.set('all', 'true'); const response = await apiFetch(\\`${API_BASE}/audiobooks/metadata/cache/review?${params}\\`);`.",
+   "9. In web/src/components/review/lanes/useMetadataLane.ts, change the sole call site (L410) from `.getCachedReviewResults(0, 0)` to `.getCachedReviewResults(0, 0, true)`, preserving today's 'fetch everything, paginate client-side' behaviour exactly.",
+   "10. Bump version headers: metadata_cache.go (currently 1.7.1 -> 1.7.2), metadata_cache_test.go (2.1.0 -> 2.2.0), api.ts (2.69.0 -> 2.70.0), useMetadataLane.ts (1.4.0 -> 1.4.1); all with today's date. Do NOT hand-edit the mock file's header -- mockery does not manage one, leave it as `// Code generated by mockery; DO NOT EDIT.`",
+   "11. In internal/server/handlers/metadata_cache_test.go, add `\"fmt\"` to the import block (needed for the new fixture's id generation).",
+   "12. Add TestGetCacheReviewResults_DefaultsToPageSizeWhenLimitAbsent: build a 205-entry fixture (loop `i := 0; i < 205; i++`, ids like `fmt.Sprintf(\"b%03d\", i)`, one `metafetch.MetadataCacheSummary{BookID: id}` and one `database.Book{ID: id}` per id), `svc.EXPECT().ListCachedSummaries(mock.Anything).Return(summaries, nil)`, `store.EXPECT().GetBooksByIDs(mock.Anything).Return(books, nil)`, `store.EXPECT().GetBookFiles(mock.Anything).Return(nil, nil).Maybe()`, one shared `withCandidate` fixture and `svc.EXPECT().GetCachedCandidates(mock.Anything).Return(withCandidate, true, nil)` (matches every id). Call `h.GetCacheReviewResults(c)` with `reviewCtx(\"\")` (no query at all -- exercises the 'absent' branch, not just literal limit=0). Assert `len(body.Data.Results) == 200` and `body.Data.TotalCount == 205`.",
+   "13. Add TestGetCacheReviewResults_AllTrueReturnsEverything: same 205-entry fixture (extract the fixture-building into a small local helper or duplicate it -- either is fine), call with `reviewCtx(\"all=true\")`, assert `len(body.Data.Results) == 205` (the full set, proving `all=true` still bypasses the new default).",
+   "14. Add TestLibraryScanActive_DetectsRunningScan and TestLibraryScanActive_FalseWhenNoneActive: construct a `handlersmocks.NewMockMetadataCacheBookStore(t)`, `.EXPECT().ListActiveOperationsV2().Return([]database.OperationV2Row{{DefID: \"library.scan\", Status: \"running\"}}, nil)` for the true case (assert `handlers.LibraryScanActive(store)` is true) and `.Return(nil, nil)` for the false case (assert false). Also add TestLibraryScanActive_NilStoreIsFalse asserting `handlers.LibraryScanActive(nil)` is false without panicking."
+  ],
+  "tests": [
+   "internal/server/handlers/metadata_cache_test.go: TestGetCacheReviewResults_DefaultsToPageSizeWhenLimitAbsent -- 205 reviewable rows, request with no limit/all params, asserts exactly 200 results returned but total_count still reports 205.",
+   "internal/server/handlers/metadata_cache_test.go: TestGetCacheReviewResults_AllTrueReturnsEverything -- same fixture, `all=true`, asserts all 205 rows returned (the anti-over-suppression case: proves the one real caller's behaviour is fully preserved).",
+   "internal/server/handlers/metadata_cache_test.go: TestLibraryScanActive_DetectsRunningScan / _FalseWhenNoneActive / _NilStoreIsFalse -- pins the diagnostic helper in isolation (the 5s-WARN threshold itself is wall-clock-dependent and intentionally not unit-tested; acceptance for that half is a code-level check, see 'acceptance')."
+  ],
+  "acceptance": [
+   "`go build ./... && go vet ./... && go test ./internal/server/handlers/... -count=1` passes.",
+   "`git diff --stat internal/server/handlers/mocks/mock_metadata_cache_book_store.go` shows the file changed (new ListActiveOperationsV2 method added) after `make mocks`; `make mocks-check` is clean.",
+   "`grep -n 'if d := time.Since(start); d > 5\\*time.Second' internal/server/handlers/metadata_cache.go` returns 1 hit, confirming the WARN guard landed.",
+   "`grep -n '.getCachedReviewResults(0, 0, true)' web/src/components/review/lanes/useMetadataLane.ts` returns 1 hit -- the one real caller opted into the full-set behaviour explicitly.",
+   "`npm --prefix web run lint && npm --prefix web run build --workspace web` (or `make build-api`/`make ci` per the repo's own gate) type-checks the new third `getCachedReviewResults` parameter cleanly."
+  ],
+  "edge_cases": [
+   "limit=0&all=true must return literally everything, unbounded by defaultReviewPageSize -- this is the exact case the sole existing caller relies on; do not let `all` only raise the cap to some larger number.",
+   "A positive explicit `limit` (e.g. `limit=50`) must behave exactly as before, `all` is irrelevant to it -- only the limit==0 branch is touched.",
+   "LibraryScanActive must never error out or panic the response path -- it is diagnostic-only, called only inside the WARN branch, and swallows its own store error into `false`.",
+   "Do not add a status filter inside LibraryScanActive -- ListActiveOperationsV2's own contract (per its doc comment) already restricts to queued/running rows, so re-checking op.Status here would be redundant and could silently diverge from the store's contract if that doc comment is ever wrong without this code failing loudly."
+  ],
+  "anti_over_suppression": "TestGetCacheReviewResults_AllTrueReturnsEverything",
+  "depends_on_lines": [],
+  "gate": "go build ./... && go vet ./... && go test ./internal/server/handlers/... -count=1",
+  "notes": "Shares web/src/components/review/lanes/useMetadataLane.ts with todo_line 90022 (evidence panel task) -- that task edits the spineCtx useMemo (~L860-871) for an unrelated onRefetch field, this task edits the fetch call site (L410) for the third getCachedReviewResults arg. Different lines, low collision risk, but flag for the coordinator to serialize or merge if both land in the same worktree. Per owner decision #14 in SCOUT-INSTRUCTIONS.md, this is a code-build task (the endpoint itself is always safe to call, read-only); it is not a 'prod_run' item -- no production trigger is needed, it ships as a normal deploy."
+ },
+ {
+  "todo_line": 90022,
+  "src_id": "REV-EMPTY-3",
+  "title": "Evidence panel: explain a missing score derivation in plain language and offer re-search inline",
+  "verdict": "actionable",
+  "verdict_evidence": "web/src/components/review/evidence/adapters.ts:91-92 currently reads 'This candidate was produced without a recorded derivation, so its score cannot be explained here.' with no next step, and metadataEvidence's only two callers (web/src/components/review/spine/CompareSpine.tsx:723,1005) both already have `ctx`/`bookId` in scope but pass EvidenceSection nothing beyond `candidate` (`grep -n \"function EvidenceSection\" web/src/components/review/spine/CompareSpine.tsx` -> 1 hit L90, taking only `{ candidate }`), so there is no re-search action wired -- and this is directly covered by an existing (currently passing) render test, `grep -n \"says so when a candidate has no recorded derivation\" web/src/components/review/ReviewWorkspace.test.tsx` -> 1 hit L286, which must be updated alongside the text change.",
+  "domain": "web",
+  "exact_files": [
+   "web/src/components/review/evidence/adapters.ts",
+   "web/src/components/review/evidence/adapters.test.ts",
+   "web/src/components/review/spine/CompareSpine.tsx",
+   "web/src/components/review/spine/CompareSpine.test.tsx",
+   "web/src/components/review/lanes/useMetadataLane.ts",
+   "web/src/components/review/ReviewWorkspace.test.tsx"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the current emptyReason text names no cause and offers no next step",
+    "grep_cmd": "grep -n \"emptyReason:\" web/src/components/review/evidence/adapters.ts",
+    "expect": "5 hits total in the file; the relevant one is L91-92: `emptyReason: 'This candidate was produced without a recorded derivation, so its score cannot be explained here.'`"
+   },
+   {
+    "claim": "EvidenceSection (the only renderer of metadataEvidence in the app) takes just `candidate`, nothing else",
+    "grep_cmd": "grep -n \"function EvidenceSection\" web/src/components/review/spine/CompareSpine.tsx",
+    "expect": "1 hit, L90: `function EvidenceSection({ candidate }: { candidate: MetadataCandidate }) {`"
+   },
+   {
+    "claim": "EvidenceSection is called from exactly two sites, both already holding `ctx: SpineContext` and a `bookId`/`r.book.id` in scope",
+    "grep_cmd": "grep -n \"<EvidenceSection\" web/src/components/review/spine/CompareSpine.tsx",
+    "expect": "2 hits: L723 (inside CompactRow, which declares `const bookId = r.book.id;` at L383) and L1005 (inside TwoColumnCard, which declares the same at L739)"
+   },
+   {
+    "claim": "SpineContext already carries direct (non-dispatched) single-purpose callbacks alongside onAction, e.g. onPreviewCover -- the precedent this task's onRefetch field follows",
+    "grep_cmd": "grep -n \"onPreviewCover: (url: string) => void;\" web/src/components/review/spine/CompareSpine.tsx",
+    "expect": "1 hit, ~L124, inside the SpineContext interface (L120-129)"
+   },
+   {
+    "claim": "the metadata lane already has a single-book refetch function to reuse -- no new API call needed",
+    "grep_cmd": "grep -n \"refetchBooks: (ids: string\\[\\]) => Promise<string | null>;\" web/src/components/review/lanes/useMetadataLane.ts",
+    "expect": "1 hit, in the MetadataLane interface"
+   },
+   {
+    "claim": "MetadataPanel already wires that exact function to a per-row refetch button for the identical single-book use case (the pattern to mirror for SpineContext.onRefetch's real implementation)",
+    "grep_cmd": "grep -n \"void metadata.refetchBooks(\\[bookId\\]);\" web/src/components/review/MetadataPanel.tsx",
+    "expect": "1 hit, ~L114, inside QueueRail's onRefetchRow prop"
+   },
+   {
+    "claim": "the real spineCtx object is constructed in exactly one place in production code",
+    "grep_cmd": "grep -n \"const spineCtx: SpineContext = useMemo\" web/src/components/review/lanes/useMetadataLane.ts",
+    "expect": "1 hit, L860"
+   },
+   {
+    "claim": "an existing passing test asserts the OLD wording verbatim and will fail once the text changes unless updated",
+    "grep_cmd": "grep -n \"without a recorded derivation\" web/src/components/review/ReviewWorkspace.test.tsx",
+    "expect": "1 hit, L296: `expect(panel).toHaveTextContent(/without a recorded derivation/i);`, inside the test at L286-297"
+   },
+   {
+    "claim": "CompareSpine.test.tsx builds its own SpineContext fixture by hand and will need the new field added once SpineContext gains a required onRefetch",
+    "grep_cmd": "grep -n \"function makeCtx\" web/src/components/review/spine/CompareSpine.test.tsx",
+    "expect": "1 hit, ~L71"
+   },
+   {
+    "claim": "no adapters.test.ts exists yet -- this is a new file, not an edit",
+    "grep_cmd": "ls web/src/components/review/evidence/adapters.test.ts",
+    "expect": "'No such file or directory' -- confirms the file does not exist yet"
+   },
+   {
+    "claim": "the OLD wording is also used as a literal test FIXTURE (not an assertion against the real string) in EvidencePanel.test.tsx, which is therefore NOT affected by this change and must not be edited",
+    "grep_cmd": "grep -n \"produced without a recorded derivation\" web/src/components/review/evidence/EvidencePanel.test.tsx",
+    "expect": "1 hit, L126, inside a hand-built `emptyReason: '...'` object literal, unrelated to adapters.ts's actual constant"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "metadata.refetchBooks([bookId]) -- the exact single-book fetch this task must dispatch, already implemented, no new API call",
+    "file": "web/src/components/review/lanes/useMetadataLane.ts",
+    "verify_grep": "grep -n \"const refetchBooks = useCallback\" web/src/components/review/lanes/useMetadataLane.ts"
+   },
+   {
+    "name": "SpineContext's onPreviewCover pattern (direct callback field, not a dispatched MetadataAction) -- the precedent onRefetch follows",
+    "file": "web/src/components/review/spine/CompareSpine.tsx",
+    "verify_grep": "grep -n \"onPreviewCover: (url: string) => void;\" web/src/components/review/spine/CompareSpine.tsx"
+   },
+   {
+    "name": "MUI Button, already imported in CompareSpine.tsx -- no new import needed for the re-search button itself",
+    "file": "web/src/components/review/spine/CompareSpine.tsx",
+    "verify_grep": "grep -n \"^import {\" web/src/components/review/spine/CompareSpine.tsx"
+   },
+   {
+    "name": "makeCtx() test fixture builder for SpineContext",
+    "file": "web/src/components/review/spine/CompareSpine.test.tsx",
+    "verify_grep": "grep -n \"function makeCtx\" web/src/components/review/spine/CompareSpine.test.tsx"
+   }
+  ],
+  "polarity": "additive",
+  "effort": "L",
+  "tier": "sonnet",
+  "why_tier": "Touches a shared, documented interface (SpineContext) and its sole real constructor plus two render call sites and a test fixture builder; getting the reachable-vs-unreachable emptyReason branch distinction right (see edge_cases) needs the reasoning spelled out, which is more than a mechanical Haiku pass should be trusted with.",
+  "review_critical": false,
+  "goal": "Two changes, shipped together because the second one's test depends on the first one's exact wording. (1) In adapters.ts, reword metadataEvidence's emptyReason to name the cause in plain language and point at the remedy, matching the scope brief's suggested phrasing. (2) In CompareSpine.tsx, when a candidate's waterfall evidence has zero steps (i.e. no recorded derivation), render a 'Re-search this book' button next to the empty-state text that calls the existing per-book refetch path (metadata.refetchBooks via a new SpineContext.onRefetch field) -- reusing the exact mechanism MetadataPanel's QueueRail already uses for the same single-book refetch, not a new API call.",
+  "background": [
+   "metadataEvidence(candidate) (adapters.ts:79-108) is called from exactly two places in the whole app, both inside CompareSpine.tsx's EvidenceSection helper (L90-99), which itself is only ever invoked with a non-null `r.candidate` (both call sites are already inside a `r.candidate &&`-guarded region). This means the OTHER emptyReason branch in metadataEvidence -- `!candidate` -> 'No candidate selected.' (adapters.ts:82-84) -- is unreachable from the real UI today; only the 'breakdown missing or empty' branch (L86-93) is ever shown. Do not touch the `!candidate` branch's text; only L91-92 is in scope.",
+   "Candidates cached before 2026-08-20 (commit cf3aeb9b added internal/metafetch/score_breakdown.go) have no score_breakdown at all; a fresh search attaches one (internal/metafetch/service_search.go:619 and :702 both set `ScoreBreakdown: rec.breakdown()`/`asinRec.breakdown()`). So 'this candidate predates the derivation feature; re-search to get one' is a literally true, actionable explanation, not just friendlier phrasing.",
+   "SpineContext (CompareSpine.tsx:120-129) already mixes a dispatched-action field (`onAction`) with several direct single-purpose callback fields (`onPreviewCover`, `onToggleSelect`, `onToggleExpand`) -- adding `onRefetch: (bookId: string) => void` follows that existing precedent rather than extending the separately-documented, exhaustively-switched MetadataAction union in reviewActions.ts (which is used by three lanes and has its own reversibility/confirmation/affectedCount semantics that a single-purpose refetch button does not need to participate in).",
+   "The real (non-test) construction of a SpineContext happens in exactly one place: useMetadataLane.ts's `spineCtx` useMemo (L860-871), which already has `refetchBooks` in its own closure (defined later in the same hook, L882-913) -- wiring `onRefetch: (bookId) => { void refetchBooks([bookId]); }` there, plus adding `refetchBooks` to the useMemo's dependency array, is a same-scope closure reference and does not need any reordering of the file (JS closures resolve `refetchBooks` at call time, which is always after the whole hook body -- including `refetchBooks`'s own `const` -- has run once)."
+  ],
+  "steps": [
+   "1. In web/src/components/review/evidence/adapters.ts, change the emptyReason string at L91-92 from `'This candidate was produced without a recorded derivation, so its score cannot be explained here.'` to `'This candidate was cached before score derivations were recorded. Re-search this book to see one.'` (keep the surrounding object shape and the `steps: []` field untouched -- only the string literal changes).",
+   "2. Bump adapters.ts's version header (currently 1.0.0) to 1.0.1, today's date.",
+   "3. In web/src/components/review/spine/CompareSpine.tsx, widen the `SpineContext` interface (L120-129) by adding one field, following the style of the existing `onPreviewCover` line: `/** Dispatches a single-book metadata refetch -- the remedy the 'no recorded\\n * derivation' evidence empty-state offers. Not a MetadataAction: this is a\\n * direct single-purpose callback like onPreviewCover, not something the three\\n * lanes' reversibility/confirmation machinery needs to know about. */\\nonRefetch: (bookId: string) => void;`.",
+   "4. Change `EvidenceSection`'s signature (L90) from `function EvidenceSection({ candidate }: { candidate: MetadataCandidate }) {` to accept two more props: `function EvidenceSection({ candidate, bookId, onRefetch }: { candidate: MetadataCandidate; bookId: string; onRefetch: (bookId: string) => void }) {`.",
+   "5. Inside EvidenceSection's body, compute the evidence once (`const evidence = metadataEvidence(candidate);`) instead of inlining the call in the JSX, and derive `const noDerivation = evidence.kind === 'waterfall' && evidence.steps.length === 0;`. Change `<EvidencePanel evidence={metadataEvidence(candidate)} />` to `<EvidencePanel evidence={evidence} />`, and immediately after it, conditionally render: `{noDerivation && (\\n  <Button\\n    size=\"small\"\\n    variant=\"text\"\\n    data-testid=\"evidence-refetch\"\\n    onClick={() => onRefetch(bookId)}\\n    sx={{ mt: 0.5 }}\\n  >\\n    Re-search this book\\n  </Button>\\n)}` (Button is already imported at the top of this file).",
+   "6. Update both call sites: L723 (inside CompactRow) `<EvidenceSection candidate={r.candidate} />` -> `<EvidenceSection candidate={r.candidate} bookId={bookId} onRefetch={ctx.onRefetch} />`; L1005 (inside TwoColumnCard) `{r.candidate && <EvidenceSection candidate={r.candidate} />}` -> `{r.candidate && <EvidenceSection candidate={r.candidate} bookId={bookId} onRefetch={ctx.onRefetch} />}`.",
+   "7. Bump CompareSpine.tsx's version header (currently 1.3.0) to 1.4.0, today's date (minor bump: new public field on an exported interface).",
+   "8. In web/src/components/review/lanes/useMetadataLane.ts, inside the `spineCtx` useMemo (L860-871), add `onRefetch: (bookId: string) => { void refetchBooks([bookId]); },` as a new field in the returned object, and add `refetchBooks` to the useMemo's dependency array (currently `[rowStates, selectedIds, toggleSelect, dispatch, expandedId, toggleExpand]`).",
+   "9. Bump useMetadataLane.ts's version header (currently 1.4.0) to 1.4.1 unless todo_line 90021's task already bumped it to 1.4.1 in the same worktree first, in which case bump to 1.4.2 -- check the file's current header before writing a version, do not blindly overwrite a bump made by the other task.",
+   "10. In web/src/components/review/spine/CompareSpine.test.tsx, update `makeCtx()` (L71-85) to add `onRefetch: vi.fn(),` to the default `ctx` object (alongside the existing `onPreviewCover: vi.fn()` etc.), so every existing test in this file keeps compiling and passing.",
+   "11. In web/src/components/review/ReviewWorkspace.test.tsx, update the existing test 'says so when a candidate has no recorded derivation' (L286-297): change the assertion at L296 from `expect(panel).toHaveTextContent(/without a recorded derivation/i);` to `expect(panel).toHaveTextContent(/cached before score derivations were recorded/i);`, and extend the same test (or add a new one directly below it) to also assert the button renders and works: `const refetchBtn = within(panel).getByTestId('evidence-refetch'); expect(refetchBtn).toHaveTextContent(/re-search/i);` then, after mocking `vi.mocked(api.batchFetchCandidates).mockResolvedValue({ operation_id: 'op-1' })` in this test (it is NOT set in this file's shared beforeEach), `await user.click(refetchBtn); await waitFor(() => expect(api.batchFetchCandidates).toHaveBeenCalledWith({ book_ids: ['a'] }));` (book 'a' is the row this test already expands, per `makeResult('a')` in this file's beforeEach).",
+   "12. Bump ReviewWorkspace.test.tsx's version header (currently 1.6.0) to 1.7.0, today's date.",
+   "13. Create web/src/components/review/evidence/adapters.test.ts (new). Import `metadataEvidence` from './adapters' and `MetadataCandidate` from '../../../services/api'. Write three tests: (a) 'a candidate with no score_breakdown reports the cached-before-recording reason' -- pass a candidate object with no `score_breakdown` field, assert `result.kind === 'waterfall'`, `result.steps` is empty, and `result.emptyReason` matches `/cached before score derivations were recorded/i`. (b) 'a candidate with an empty steps array reports the same reason' -- pass `score_breakdown: { score: 0.5, steps: [] }`, assert the same emptyReason. (c) 'a candidate with recorded steps returns them verbatim, with no emptyReason' -- pass a `score_breakdown` with 1-2 real `steps` (id/label/op/operand/running), assert `result.steps.length` matches and `result.emptyReason` is `undefined`. Give the file a version header (1.0.0, fresh v4 guid, today's date)."
+  ],
+  "tests": [
+   "web/src/components/review/evidence/adapters.test.ts (new): three cases above -- missing breakdown, empty-steps breakdown, and populated breakdown -- pin metadataEvidence's emptyReason text and the steps pass-through.",
+   "web/src/components/review/ReviewWorkspace.test.tsx: updated 'says so when a candidate has no recorded derivation' -- now also asserts the 'Re-search this book' button renders inside the evidence panel and, on click, calls api.batchFetchCandidates with `{ book_ids: ['a'] }` (via metadata.refetchBooks, no new API surface).",
+   "web/src/components/review/spine/CompareSpine.test.tsx: existing tests continue to pass once makeCtx() supplies `onRefetch: vi.fn()` -- no new test strictly required here, but add one asserting the button is ABSENT when a candidate's steps are non-empty (the anti-over-suppression case: proves the button does not appear on a normal, fully-derived candidate)."
+  ],
+  "acceptance": [
+   "`npm --prefix web test -- src/components/review/evidence` passes, including the new adapters.test.ts.",
+   "`npm --prefix web test -- src/components/review/ReviewWorkspace` and `npm --prefix web test -- src/components/review/spine/CompareSpine` both pass.",
+   "`grep -n \"onRefetch\" web/src/components/review/spine/CompareSpine.tsx` shows the interface field plus both call sites wired (3+ hits).",
+   "`npm --prefix web run lint` is clean on all six changed/new files."
+  ],
+  "edge_cases": [
+   "The `!candidate` branch of metadataEvidence ('No candidate selected.') is unreachable from EvidenceSection today (both call sites are already `r.candidate &&`-guarded) -- do not add a re-search button for that branch, and do not reword its text; this task's scope is only the 'breakdown missing or empty' branch.",
+   "A candidate whose steps array is non-empty but whose waterfall is INCONSISTENT (recomposeWaterfall does not reproduce the score -- see EvidencePanel.tsx's `inconsistent` chip) is a DIFFERENT problem from having no derivation at all, and must NOT show the re-search button -- `noDerivation` must be gated on `evidence.steps.length === 0`, not on `waterfallIsConsistent`.",
+   "GroupedCard (CompareSpine.tsx, the third card renderer) does not call EvidenceSection at all -- do not add the button there; grouped rows never show the waterfall panel today and this task does not change that."
+  ],
+  "anti_over_suppression": "asserting the button is ABSENT when a candidate's steps are non-empty (CompareSpine.test.tsx)",
+  "depends_on_lines": [],
+  "gate": "npm --prefix web run lint && npm --prefix web test -- src/components/review/evidence && npm --prefix web test -- src/components/review/ReviewWorkspace && npm --prefix web test -- src/components/review/spine/CompareSpine",
+  "notes": "Shares web/src/components/review/lanes/useMetadataLane.ts with todo_line 90021 (different region of the file -- spineCtx useMemo here vs the fetch call site there); step 9 explicitly tells the implementer to check the file's live version header rather than assume a starting value, in case 90021 lands first in the same worktree. No other file overlap with 90020 part 1/2 or with 90021."
+ },
+ {
+  "todo_line": 90023,
+  "src_id": "REV-EMPTY-4",
+  "title": "OperationActivityPanel: stop re-appending the last SSE log line on every progress tick",
+  "verdict": "actionable",
+  "verdict_evidence": "The SSE-append effect's dependency array includes `op` (`grep -n \"}, \\[latestLogEvent, operationId, op\\]);\" web/src/components/OperationActivityPanel.tsx` -> 1 hit L228), and `op` is a NEW object reference on every store progress tick (useOperationsStore's `op.progress` handler spreads `{ ...existing, progress: ... }` into a fresh object at every tick), so the effect re-runs and re-appends the same `latestLogEvent` once per tick even though the event itself has not changed.",
+  "domain": "web",
+  "exact_files": [
+   "web/src/components/OperationActivityPanel.tsx",
+   "web/src/components/OperationActivityPanel.test.tsx"
+  ],
+  "verified_anchors": [
+   {
+    "claim": "the append effect's deps include `op`, the store-derived object that changes identity every progress tick",
+    "grep_cmd": "grep -n \"}, \\[latestLogEvent, operationId, op\\]);\" web/src/components/OperationActivityPanel.tsx",
+    "expect": "1 hit, L228"
+   },
+   {
+    "claim": "`op` is selected fresh from the store on every render via a `.find()` that returns whatever object identity is currently in `activeOperations`",
+    "grep_cmd": "grep -n \"const op = useOperationsStore\" web/src/components/OperationActivityPanel.tsx",
+    "expect": "1 hit, L171-173: `const op = useOperationsStore((state) => state.activeOperations.find((o) => o.id === operationId));`"
+   },
+   {
+    "claim": "the store's progress handler (op.progress SSE events, which fire repeatedly during a scan) replaces the operation's object with a fresh spread on every tick, which is what makes `op`'s identity change without `latestLogEvent` changing",
+    "grep_cmd": "grep -n \"const updated: ActiveOperation = {\" web/src/stores/useOperationsStore.ts",
+    "expect": "\\u22652 hits; the op.progress handler's is the one directly above `const operations = { ...state.operations, [opId]: updated };` inside the `else if (name === 'op.progress' ...)` branch"
+   },
+   {
+    "claim": "each SSE log event the store records already carries a monotonically increasing `sequence` number, which is a strictly better dedup key than created_at+message (two log lines can share a timestamp; a sequence number cannot repeat)",
+    "grep_cmd": "grep -n \"sequence: ++logEventSequence\" web/src/stores/useOperationsStore.ts",
+    "expect": "1 hit, ~L374, inside the op.log SSE handler's `set({ latestLogEvent: { ... } })` call"
+   },
+   {
+    "claim": "OperationLogEvent's shape confirms `sequence: number` is a real, always-present field on every event, not optional",
+    "grep_cmd": "grep -n \"export interface OperationLogEvent\" -A6 web/src/stores/useOperationsStore.ts",
+    "expect": "1 hit at L43, interface body includes `sequence: number;` as a non-optional field"
+   },
+   {
+    "claim": "a sibling consumer of the exact same store field (ActivityLog.tsx) does NOT have this bug, because its effect's deps are only [latestLogEvent, expandedOpId] -- confirms `op` is the specific defect, not something inherent to using latestLogEvent",
+    "grep_cmd": "grep -n \"}, \\[latestLogEvent, expandedOpId\\]);\" web/src/pages/ActivityLog.tsx",
+    "expect": "1 hit, ~L409"
+   }
+  ],
+  "reuse": [
+   {
+    "name": "OperationLogEvent.sequence -- the monotonic id to dedupe on, already emitted by the store, no new field needed",
+    "file": "web/src/stores/useOperationsStore.ts",
+    "verify_grep": "grep -n \"sequence: number;\" web/src/stores/useOperationsStore.ts"
+   },
+   {
+    "name": "ActivityLog.tsx's simpler effect (no `op` dependency) as the reference for what a correctly-scoped deps array looks like here",
+    "file": "web/src/pages/ActivityLog.tsx",
+    "verify_grep": "grep -n \"if (!latestLogEvent || latestLogEvent.op_id !== expandedOpId) return;\" web/src/pages/ActivityLog.tsx"
+   }
+  ],
+  "polarity": "transform",
+  "effort": "S",
+  "tier": "haiku",
+  "why_tier": "Single-file, single-effect fix with a stable, already-existing dedup key (`sequence`) to use -- no design decision, no new type, no cross-file wiring; owner explicitly tagged this (S, haiku) in the scope brief and the investigation confirms that estimate.",
+  "review_critical": false,
+  "goal": "In OperationActivityPanel.tsx, the SSE-append effect (currently L211-228) must append each distinct `latestLogEvent` exactly once, regardless of how many times the unrelated `op` object (activeOperations lookup) changes identity in between. Track the last-appended event's `sequence` number in a ref and skip when unchanged; stop depending on `op` directly by mirroring it into a ref updated in its own effect, so a progress tick that does not carry a new log event cannot re-trigger the append effect at all.",
+  "background": [
+   "useOperationsStore's SSE handler for `op.progress` events (fired repeatedly while a scan or other long-running op reports progress) always builds a brand-new `ActiveOperation` object via `{ ...existing, progress: ..., total: ..., message: ... }` and a brand-new `operations`/`activeOperations` array, even when only `progress` changed. `op` in OperationActivityPanel.tsx is selected from `activeOperations` via `.find()`, so it gets a new reference on every one of those ticks.",
+   "The append effect's dependency array `[latestLogEvent, operationId, op]` therefore re-runs on every progress tick, not just when a new log line actually arrives over SSE -- and because the effect body unconditionally appends `latestLogEvent` to `entries`, it re-appends the SAME event once per tick. This is what the owner saw as 'the last message repeating forever' during a library scan on 2026-08-21.",
+   "Each `OperationLogEvent` the store emits already carries `sequence: ++logEventSequence` (useOperationsStore.ts, module-level monotonic counter incremented once per real SSE log event) -- this is a strictly reliable dedup key, better than the todo brief's own fallback suggestion of created_at+message (two distinct log lines can legitimately share a timestamp, or even a message, but never a sequence number).",
+   "`op` is only read inside the effect to stamp `operation_type: op?.def_id ?? op?.type ?? ''` onto the newly-appended entry -- it does not need to be a live reactive dependency of THIS effect; reading its current value via a ref at append time is sufficient and correct."
+  ],
+  "steps": [
+   "1. Open web/src/components/OperationActivityPanel.tsx. Directly above the SSE-append effect (currently starting at L211), add two new refs: `const opRef = useRef(op);` and `const lastAppendedSequenceRef = useRef<number | null>(null);`.",
+   "2. Add a small effect right after declaring `opRef` to keep it current without re-running the append effect: `useEffect(() => {\\n  opRef.current = op;\\n}, [op]);`.",
+   "3. Change the SSE-append effect body (L211-228) from:\n```tsx\nuseEffect(() => {\n  if (!latestLogEvent || latestLogEvent.op_id !== operationId) return;\n  const cap = limit ?? 1000;\n  setEntries((prev) => {\n    const next = [\n      ...prev,\n      {\n        timestamp: latestLogEvent.created_at,\n        level: latestLogEvent.level,\n        operation_id: latestLogEvent.op_id,\n        operation_type: op?.def_id ?? op?.type ?? '',\n        message: latestLogEvent.message,\n      },\n    ];\n    return next.length > cap ? next.slice(next.length - cap) : next;\n  });\n  setTotal((prev) => prev + 1);\n}, [latestLogEvent, operationId, op]);\n```\nto:\n```tsx\nuseEffect(() => {\n  if (!latestLogEvent || latestLogEvent.op_id !== operationId) return;\n  // Guards against re-appending the same SSE event when this effect re-runs\n  // for an unrelated reason. `sequence` is a monotonic counter the store\n  // stamps on every real log event, so it is a reliable identity even across\n  // renders that hand back an equal-looking but structurally new event object.\n  if (lastAppendedSequenceRef.current === latestLogEvent.sequence) return;\n  lastAppendedSequenceRef.current = latestLogEvent.sequence;\n  const cap = limit ?? 1000;\n  const currentOp = opRef.current;\n  setEntries((prev) => {\n    const next = [\n      ...prev,\n      {\n        timestamp: latestLogEvent.created_at,\n        level: latestLogEvent.level,\n        operation_id: latestLogEvent.op_id,\n        operation_type: currentOp?.def_id ?? currentOp?.type ?? '',\n        message: latestLogEvent.message,\n      },\n    ];\n    return next.length > cap ? next.slice(next.length - cap) : next;\n  });\n  setTotal((prev) => prev + 1);\n}, [latestLogEvent, operationId]);\n```\n`op` is intentionally removed from this effect's own deps array -- it is now read through `opRef.current`, which the separate ref-mirroring effect from step 2 keeps current without ever re-triggering the append logic.",
+   "4. Add a `// last-edited: YYYY-MM-DD` line (today's date) to the file's header block, immediately after the `// guid:` line -- the header is currently missing this line (only `file`/`version`/`guid` are present), which is out of step with the project's mandatory file-header format; bring it into compliance while this file is touched. Bump `// version: 1.3.3` to `1.3.4`.",
+   "5. In web/src/components/OperationActivityPanel.test.tsx, add `import { act } from '@testing-library/react';` (or use the existing `render`/`waitFor` import's `act` re-export if already available) and `import { useOperationsStore } from '../stores/useOperationsStore';`. Add a `beforeEach`/`afterEach` pair (alongside the existing `afterEach`) that resets the real store between tests: `useOperationsStore.setState({ activeOperations: [], operations: {}, latestLogEvent: null }, false);` -- run this both before and after the new describe block's tests so this file's store mutations cannot leak into other test files that import the same singleton store.",
+   "6. Add a new test 'appends a live SSE log line exactly once, even when the op object changes shape on progress ticks with no new event': mock `fetchOperationActivity` to resolve `{ operation_id: 'op-9', entries: [], total: 0 }`, render `<OperationActivityPanel operationId=\"op-9\" />`, wait for the empty-state text to disappear/load to finish (`await waitFor(() => expect(screen.queryByText(/No activity recorded/)).not.toBeInTheDocument())` is not quite right for an empty list -- instead just `await waitFor(() => expect(activityApi.fetchOperationActivity).toHaveBeenCalled());`). Then, inside `act(() => { ... })`, push one event: `useOperationsStore.setState({ latestLogEvent: { op_id: 'op-9', level: 'info', message: 'Scanning shelf 3', created_at: '2026-08-21T23:47:00Z', sequence: 1 } });`. Assert `await screen.findByText('Scanning shelf 3')` and `expect(screen.getByText('1 entry')).toBeInTheDocument()`.",
+   "7. Continuing the same test: inside `act(() => { ... })`, update the op object TWICE with different progress values but the SAME latestLogEvent still in state (simulating progress ticks with no new log line): `useOperationsStore.setState({ activeOperations: [{ id: 'op-9', type: 'scan', status: 'running', progress: 10, total: 100, message: '' }] }); useOperationsStore.setState({ activeOperations: [{ id: 'op-9', type: 'scan', status: 'running', progress: 20, total: 100, message: '' }] });` (each call creates a fresh array/object, exactly like the real store's progress handler does). Assert the count is STILL exactly 1: `expect(screen.getByText('1 entry')).toBeInTheDocument()` and `expect(screen.getAllByText('Scanning shelf 3')).toHaveLength(1)`.",
+   "8. Continuing the same test: push a second, distinct event: `act(() => { useOperationsStore.setState({ latestLogEvent: { op_id: 'op-9', level: 'info', message: 'Shelf 3 complete', created_at: '2026-08-21T23:48:00Z', sequence: 2 } }); });`. Assert `await screen.findByText('Shelf 3 complete')` and `expect(screen.getByText('2 entries')).toBeInTheDocument()` -- proving the dedup is keyed on the event, not a blanket suppression of all future appends.",
+   "9. Bump the test file's version header (currently 1.0.1) to 1.1.0, and add the missing `// last-edited:` line as in step 4."
+  ],
+  "tests": [
+   "web/src/components/OperationActivityPanel.test.tsx: 'appends a live SSE log line exactly once, even when the op object changes shape on progress ticks with no new event' -- pushes one latestLogEvent, updates the op object twice with new progress values, asserts still exactly 1 entry; then pushes a second distinct event and asserts exactly 2 entries."
+  ],
+  "acceptance": [
+   "`npm --prefix web test -- src/components/OperationActivityPanel` passes, including the new test and all three pre-existing ones.",
+   "`grep -n \"}, \\[latestLogEvent, operationId\\]);\" web/src/components/OperationActivityPanel.tsx` returns 1 hit (op is gone from the deps array) and `grep -n \"lastAppendedSequenceRef\" web/src/components/OperationActivityPanel.tsx` returns \\u22652 hits (ref declaration + the skip check).",
+   "`npm --prefix web run lint` is clean on both changed files (react-hooks/exhaustive-deps must not flag the trimmed deps array, since `op` is now read only through a ref)."
+  ],
+  "edge_cases": [
+   "The second distinct-event assertion (step 8) is the anti-over-suppression case: the fix must not accidentally suppress ALL future appends after the first one -- only true duplicates of the same `sequence` are skipped.",
+   "`latestLogEvent.op_id !== operationId` (events for a DIFFERENT operation, e.g. two panels open for two different ops sharing the same SSE stream) must continue to be ignored exactly as today -- this guard is unchanged, just re-verify it is not accidentally removed.",
+   "If `latestLogEvent` is reset to `null` (e.g. on unmount/remount of the SSE connection) and then a brand-new event arrives with `sequence: 1` again from a fresh session, `lastAppendedSequenceRef` is per-component-instance (a fresh ref on mount), so this is not a concern for a newly-mounted panel; a long-lived panel across an SSE reconnect is out of scope for this fix (sequence is a module-level counter that only increases for the lifetime of the page, per `useOperationsStore.ts`)."
+  ],
+  "anti_over_suppression": "pushes a second distinct event and asserts exactly 2 entries (step 8)",
+  "depends_on_lines": [],
+  "gate": "npm --prefix web run lint && npm --prefix web test -- src/components/OperationActivityPanel",
+  "notes": "No file overlap with any other object in this scope (90020/90021/90022) -- fully independent, safe to run in parallel with all of them. The store reset in step 5 matters: useOperationsStore is a real module-singleton Zustand store, not mocked in this test file, so leaving activeOperations/latestLogEvent set after this test file runs could leak into another test file executed in the same vitest worker."
+ }
+]

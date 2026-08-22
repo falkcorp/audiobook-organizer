@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-156-phase-7-socket-io-for-absorb-deprioritized-by-th.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 0f75f284-94e5-457f-a715-c67159650f84 -->
+<!-- guid: aee818fe-60a2-4a29-ab94-7a9c4f64992a -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-156 — Phase 7 — socket.io for Absorb (deprioritized by the item's own text; still unbuilt) (ABS-SYNC-Phase7)
@@ -96,7 +96,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (``go test ./internal/server/handlers/abs/... -run SocketIO` passes`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -rn 'socket.io\|socketio' internal/server/handlers/abs/*.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

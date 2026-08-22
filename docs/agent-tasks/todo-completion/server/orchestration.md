@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: ee7fe139-a583-41ea-8f65-5f66f302611f -->
+<!-- guid: 017104eb-77a3-44d6-b32c-66ed550ac586 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — server workstream (todo-completion)
@@ -24,22 +24,21 @@ flowchart LR
       TASK140[TASK-140 retire-the-unsafe-cleanup-me]
       TASK141[TASK-141 add-regression-tests-for-the]
       TASK208[TASK-208 migrate-internal-server-test]
-      TASK209[TASK-209 migrate-internal-server-test]
       TASK210[TASK-210 migrate-internal-server-test]
-      TASK211[TASK-211 migrate-internal-server-test]
     end
     subgraph Wave2
       TASK128[TASK-128 fix-enableratelimit-false-no]
       TASK129[TASK-129 fix-wipeactivity-dry-run-cou]
-      TASK130[TASK-130 register-searchindexdroppedc]
       TASK133[TASK-133 regression-test-soft-deletin]
-      TASK207[TASK-207 duplicate-reference-internal]
+      TASK211[TASK-211 migrate-internal-server-test]
     end
     subgraph Wave3
-      TASK131[TASK-131 fix-audiobook-organizer-book]
+      TASK130[TASK-130 register-searchindexdroppedc]
+      TASK139[TASK-139 prune-expired-abs-sess-recor]
+      TASK209[TASK-209 migrate-internal-server-test]
     end
     subgraph Wave4
-      TASK139[TASK-139 prune-expired-abs-sess-recor]
+      TASK131[TASK-131 fix-audiobook-organizer-book]
     end
     subgraph Wave5
       TASK205[TASK-205 replace-testserverstartgrace]
@@ -48,13 +47,14 @@ flowchart LR
     TASK128 --> TASK139
     TASK128 --> TASK205
     TASK130 --> TASK131
-    TASK131 --> TASK139
     TASK131 --> TASK205
     TASK132 --> TASK133
+    TASK132 --> TASK209
+    TASK133 --> TASK209
+    TASK139 --> TASK131
     TASK139 --> TASK205
     TASK204 --> TASK205
-    TASK206 --> TASK207
-    TASK209 --> TASK133
+    TASK206 --> TASK211
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -63,7 +63,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/maintenance/jobs/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/metrics/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/middleware/... -count=1`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/maintenance/jobs/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/metrics/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/... ./internal/server/handlers/... -count=1 ; go build ./... && go vet ./... && go test ./internal/server/middleware/... -count=1`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

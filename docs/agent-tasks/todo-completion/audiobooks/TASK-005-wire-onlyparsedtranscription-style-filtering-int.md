@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-005-wire-onlyparsedtranscription-style-filtering-int.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 7a35bc36-4255-44ef-ac0d-51961cf18060 -->
+<!-- guid: 6fcfe708-3c44-4597-9cfa-f8c543667e83 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-005 — Wire OnlyParsedTranscription-style filtering into the interactive audiobooks list endpoint (TODO.md L10728)
@@ -109,7 +109,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (``grep -n OnlyParsedTranscription internal/audiobooks/service_types.go` returns 1 hit.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — ``grep -n OnlyParsedTranscription internal/audiobooks/service_types.go` returns 1 hit.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

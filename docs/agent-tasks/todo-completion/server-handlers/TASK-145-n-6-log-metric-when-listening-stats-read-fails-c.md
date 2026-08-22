@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-145-n-6-log-metric-when-listening-stats-read-fails-c.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e00b5982-db64-4fd2-8efa-f531d538d596 -->
+<!-- guid: 22723df6-67cb-4607-a914-47f08e27775d -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-145 — N-6: log + metric when listening-stats read fails (currently silent 0) (ABS-N6)
@@ -94,7 +94,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (``go test ./internal/server/handlers/abs/... -run TestListeningStats_ReadFailure -v` passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'ListenedSeconds\|slog.Warn\|metric' internal/server/handlers/abs/stats.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

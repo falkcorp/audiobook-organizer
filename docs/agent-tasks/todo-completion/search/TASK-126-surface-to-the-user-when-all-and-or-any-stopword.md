@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/search/TASK-126-surface-to-the-user-when-all-and-or-any-stopword.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: a8bbd6b3-5203-4023-86b4-3f3fcad0926c -->
+<!-- guid: 65a3a522-91b2-4a62-9454-70006b89e591 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-126 — Surface to the user when 'all'/'and' (or any stopword) is silently dropped from a search query (TODO.md L3369)
@@ -73,7 +73,7 @@ Anti-over-suppression test: `TestReproAllJobsAndClasses (or equivalent) still pa
 ## How to test
 
 ```bash
-go build ./... && go vet ./... && go test ./internal/search/... ./internal/server/handlers/... -count=1
+go build ./... && go vet ./... && go test ./internal/search/... ./internal/server/handlers/... -count=1 && npm --prefix web run lint && npm --prefix web test
 ```
 Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
@@ -83,7 +83,7 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 - [ ] A manual search for 'all jobs' shows both the narrowed results AND a visible note that 'all' was ignored.
 - [ ] Anti-over-suppression test: `TestReproAllJobsAndClasses (or equivalent) still passes, confirming the underlying stopword-drop behavior is unchanged.` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/search/... ./internal/server/handlers/... -count=1` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/search/... ./internal/server/handlers/... -count=1 && npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_search_126.md`.
 
@@ -103,7 +103,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`make ci (Go) and npm --prefix web test both pass.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'func dropStopwordOnlyConjuncts' internal/search/bleve_translator.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

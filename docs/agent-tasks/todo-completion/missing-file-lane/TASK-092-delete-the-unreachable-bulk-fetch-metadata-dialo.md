@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-092-delete-the-unreachable-bulk-fetch-metadata-dialo.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: fc0a5cd2-11d6-4dd4-bd93-e2844a88256a -->
+<!-- guid: 391befaf-0975-4758-bcbd-1c790443e56d -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-092 — Delete the unreachable Bulk Fetch Metadata dialog and its handler (TODO.md L5742)
@@ -45,11 +45,12 @@ Remove the dead Bulk Fetch Metadata dialog (web/src/components/library/LibraryDi
 
 ## Step-by-step
 
-1. In web/src/components/library/LibraryDialogs.tsx, delete the `<Dialog open={bulkFetchDialogOpen} ...>...</Dialog>` block (~L956-1000).
-2. Remove `bulkFetchDialogOpen`, `handleCancelBulkFetch`, `bulkFetchProgress`, `handleBulkFetchMetadata` (and any bulkFetchInProgress prop feeding only this dialog) from the LibraryDialogsProps interface (~L174-178) and from the component's destructured props (~L320-324).
-3. Remove the `getResultLabel` helper if it is used only by this dialog (`grep -n getResultLabel web/src/components/library/LibraryDialogs.tsx` to confirm sole usage before deleting).
-4. In web/src/pages/Library.tsx, remove `bulkFetchDialogOpen`/`setBulkFetchDialogOpen` state (~L391), `bulkFetchProgress`/`setBulkFetchProgress` state (~L394), `handleCancelBulkFetch` (~L1468-1473), `bulkFetchCancelRef` if it is unused elsewhere, and the prop-passing lines to LibraryDialogs (~L2306-2311) — but KEEP `handleBulkFetchMetadata` (~L1445) since it is still called from the working 'Fetch Selected' button.
-5. Grep for `bulkFetchInProgress` and `BulkActionProgress` type usage after the edit to confirm nothing else references the removed state; delete the BulkActionProgress import/type if it becomes unused.
+1. In web/src/components/library/LibraryDialogs.tsx, delete the `<Dialog open={bulkFetchDialogOpen} onClose={handleCancelBulkFetch}>...</Dialog>` block (L956-L1000).
+2. Remove `bulkFetchDialogOpen`, `handleCancelBulkFetch`, `bulkFetchProgress`, `bulkFetchInProgress`, `handleBulkFetchMetadata` from the LibraryDialogsProps interface (L174-178) and from the destructured props (L320-324).
+3. Do NOT delete getResultLabel: `grep -n 'getResultLabel' web/src/components/library/LibraryDialogs.tsx` shows it is imported from '../../pages/libraryTypes' (L51) and still used at L583 by a surviving dialog. Leave the import alone.
+4. In web/src/pages/Library.tsx, delete the prop-passing lines L2306-2311, then delete every symbol that becomes unreferenced as a result: `bulkFetchDialogOpen`/`setBulkFetchDialogOpen` (L391), `bulkFetchInProgress` (L393), `bulkFetchProgress`/`setBulkFetchProgress` (L394), `bulkFetchCancelRef` (L343), `handleCancelBulkFetch` (L1468-1473) AND `handleBulkFetchMetadata` (L1445-1467). Verified at HEAD that handleBulkFetchMetadata's only remaining reference is the L2310 prop pass being deleted — the 'Fetch Selected' button wires to handleFetchReview (Library.tsx:2093), not to it. web/tsconfig.json enables noUnusedLocals, so anything left behind breaks `npm run build`.
+5. Delete the BulkActionProgress import/type from Library.tsx if `grep -n 'BulkActionProgress' web/src/pages/Library.tsx` returns 0 remaining uses after step 4.
+6. Run `npm --prefix web test -- Library` and check web/src/pages/Library.bulkFetch.test.tsx and web/src/pages/Library.fetchOpToast.test.tsx: both mention 'Fetch Selected'. If either asserts the removed dialog, report it rather than editing it — it is out of scope for this brief.
 
 Then, always:
 - Keep the change purely removal — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.

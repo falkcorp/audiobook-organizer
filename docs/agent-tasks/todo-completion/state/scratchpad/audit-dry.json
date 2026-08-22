@@ -110,11 +110,6 @@
   "fails": []
  },
  {
-  "brief": "docs/agent-tasks/todo-completion/config/TASK-021-scan-and-fingerprint-the-assembled-source-downlo.md",
-  "greps": 3,
-  "fails": []
- },
- {
   "brief": "docs/agent-tasks/todo-completion/database/TASK-023-investigate-then-evict-dirty-flag-merged-away-bo.md",
   "greps": 6,
   "fails": []
@@ -275,11 +270,6 @@
   "fails": []
  },
  {
-  "brief": "docs/agent-tasks/todo-completion/dedup/TASK-181-find-the-createbook-path-s-that-copy-a-dangling-.md",
-  "greps": 6,
-  "fails": []
- },
- {
   "brief": "docs/agent-tasks/todo-completion/dedup/TASK-192-clamp-composescore-against-per-kind-confidence-b.md",
   "greps": 8,
   "fails": []
@@ -350,16 +340,6 @@
   "fails": []
  },
  {
-  "brief": "docs/agent-tasks/todo-completion/docs/TASK-194-harden-the-systemd-unit-protectsystem-strict-rea.md",
-  "greps": 4,
-  "fails": []
- },
- {
-  "brief": "docs/agent-tasks/todo-completion/itunes/TASK-061-import-the-224-materialized-playlist-items-smart.md",
-  "greps": 4,
-  "fails": []
- },
- {
   "brief": "docs/agent-tasks/todo-completion/itunes/TASK-062-internal-itunes-backfill-go-backfillexternalids-.md",
   "greps": 3,
   "fails": []
@@ -402,11 +382,6 @@
  {
   "brief": "docs/agent-tasks/todo-completion/maintenance/TASK-068-build-a-report-only-counter-for-book-filepath-co.md",
   "greps": 5,
-  "fails": []
- },
- {
-  "brief": "docs/agent-tasks/todo-completion/maintenance/TASK-069-give-maintenance-jobs-v1-internal-maintenance-pe.md",
-  "greps": 6,
   "fails": []
  },
  {
@@ -546,7 +521,7 @@
  },
  {
   "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-093-audit-remaining-setupmockapi-startswith-catch-al.md",
-  "greps": 2,
+  "greps": 4,
   "fails": []
  },
  {
@@ -600,16 +575,6 @@
   "fails": []
  },
  {
-  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-104-build-the-version-group-acoustic-audit-op-tier-2.md",
-  "greps": 5,
-  "fails": []
- },
- {
-  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-105-build-chapters-backfill-from-a-near-exact-acoust.md",
-  "greps": 3,
-  "fails": []
- },
- {
   "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-106-import-found-playlist-files-m3u-m3u8-pls-cue-xsp.md",
   "greps": 3,
   "fails": []
@@ -646,7 +611,7 @@
  },
  {
   "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-113-missing-input-triggering-enqueue-the-producer-op.md",
-  "greps": 4,
+  "greps": 7,
   "fails": []
  },
  {
@@ -675,11 +640,6 @@
   "fails": []
  },
  {
-  "brief": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-202-wire-per-file-intro-classification-into-first-ai.md",
-  "greps": 2,
-  "fails": []
- },
- {
   "brief": "docs/agent-tasks/todo-completion/operations/TASK-115-distinguish-nothing-to-cancel-from-cancelled-in-.md",
   "greps": 5,
   "fails": []
@@ -702,11 +662,6 @@
  {
   "brief": "docs/agent-tasks/todo-completion/organize/TASK-119-replace-the-size-equality-heuristic-in-organizeb.md",
   "greps": 4,
-  "fails": []
- },
- {
-  "brief": "docs/agent-tasks/todo-completion/organize/TASK-120-route-the-three-organize-rename-paths-through-or.md",
-  "greps": 3,
   "fails": []
  },
  {
@@ -826,12 +781,17 @@
  },
  {
   "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-212-add-get-api-libraries-libraryid-series-seriesid-.md",
-  "greps": 8,
+  "greps": 12,
   "fails": []
  },
  {
   "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-213-replace-the-single-file-organizebook-call-in-fil.md",
   "greps": 5,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/server-handlers/TASK-214-cap-get-api-v1-audiobooks-metadata-cache-review-.md",
+  "greps": 15,
   "fails": []
  },
  {
@@ -856,7 +816,7 @@
  },
  {
   "brief": "docs/agent-tasks/todo-completion/server/TASK-131-fix-audiobook-organizer-books-total-to-report-th.md",
-  "greps": 4,
+  "greps": 7,
   "fails": []
  },
  {
@@ -871,7 +831,7 @@
  },
  {
   "brief": "docs/agent-tasks/todo-completion/server/TASK-134-add-a-wiring-level-test-proving-the-server-actua.md",
-  "greps": 7,
+  "greps": 11,
   "fails": []
  },
  {
@@ -881,7 +841,7 @@
  },
  {
   "brief": "docs/agent-tasks/todo-completion/server/TASK-136-convert-reconcile-apply-from-resumedrop-to-real-.md",
-  "greps": 3,
+  "greps": 6,
   "fails": []
  },
  {
@@ -891,7 +851,7 @@
  },
  {
   "brief": "docs/agent-tasks/todo-completion/server/TASK-138-exempt-the-abs-router-group-from-the-global-basi.md",
-  "greps": 4,
+  "greps": 8,
   "fails": []
  },
  {
@@ -901,7 +861,7 @@
  },
  {
   "brief": "docs/agent-tasks/todo-completion/server/TASK-140-retire-the-unsafe-cleanup-merged-go-handler-as-a.md",
-  "greps": 3,
+  "greps": 4,
   "fails": []
  },
  {
@@ -925,28 +885,23 @@
   "fails": []
  },
  {
-  "brief": "docs/agent-tasks/todo-completion/server/TASK-207-duplicate-reference-internal-server-pkg-stall-st.md",
-  "greps": 2,
-  "fails": []
- },
- {
   "brief": "docs/agent-tasks/todo-completion/server/TASK-208-migrate-internal-server-test-fixtures-to-setupte.md",
-  "greps": 6,
+  "greps": 13,
   "fails": []
  },
  {
   "brief": "docs/agent-tasks/todo-completion/server/TASK-209-migrate-internal-server-test-fixtures-to-setupte.md",
-  "greps": 5,
+  "greps": 11,
   "fails": []
  },
  {
   "brief": "docs/agent-tasks/todo-completion/server/TASK-210-migrate-internal-server-test-fixtures-to-setupte.md",
-  "greps": 6,
+  "greps": 12,
   "fails": []
  },
  {
   "brief": "docs/agent-tasks/todo-completion/server/TASK-211-migrate-internal-server-test-fixtures-to-setupte.md",
-  "greps": 3,
+  "greps": 9,
   "fails": []
  },
  {
@@ -975,16 +930,6 @@
   "fails": []
  },
  {
-  "brief": "docs/agent-tasks/todo-completion/web/TASK-163-find-the-mechanism-behind-the-intermittent-webki.md",
-  "greps": 1,
-  "fails": []
- },
- {
-  "brief": "docs/agent-tasks/todo-completion/web/TASK-164-let-the-owner-combine-merge-duplicate-books-from.md",
-  "greps": 5,
-  "fails": []
- },
- {
   "brief": "docs/agent-tasks/todo-completion/web/TASK-165-review-the-17-apifetch-callers-catch-handlers-fo.md",
   "greps": 4,
   "fails": []
@@ -1001,7 +946,7 @@
  },
  {
   "brief": "docs/agent-tasks/todo-completion/web/TASK-168-make-narrator-publisher-genre-and-release-year-f.md",
-  "greps": 3,
+  "greps": 7,
   "fails": []
  },
  {
@@ -1046,6 +991,26 @@
  },
  {
   "brief": "docs/agent-tasks/todo-completion/web/TASK-189-play-the-first-2-minutes-of-part-1-s-audio-direc.md",
+  "greps": 8,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-215-never-send-batchfetchcandidates-from-the-search-.md",
+  "greps": 9,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-216-show-a-loading-skeleton-not-the-empty-state-whil.md",
+  "greps": 9,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-217-evidence-panel-explain-a-missing-score-derivatio.md",
+  "greps": 15,
+  "fails": []
+ },
+ {
+  "brief": "docs/agent-tasks/todo-completion/web/TASK-218-operationactivitypanel-stop-re-appending-the-las.md",
   "greps": 8,
   "fails": []
  }

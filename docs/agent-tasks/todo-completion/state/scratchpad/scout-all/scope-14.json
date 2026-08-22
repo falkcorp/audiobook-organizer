@@ -386,17 +386,17 @@
    "internal/server/deluge_discovery_test.go: TestHandleDiscoveryImport_HydrateFailure \u2014 asserts failed=1 when hydrate errors.",
    "internal/maintenance/jobs/bulk_deluge_import_test.go: TestBulkDelugeImportJob_HydrateFailure \u2014 asserts the job does not call ImportToLibrary when hydrate fails."
   ],
-  "acceptance": [
-   "`go test ./internal/server/... -run TestHandleDiscoveryImport_HydrateFailure` passes.",
-   "`go test ./internal/maintenance/jobs/... -run TestBulkDelugeImportJob_HydrateFailure` passes."
-  ],
+  "acceptance": "grep -n 'func TestHandleDiscoveryImport_HydrateFailure' internal/server/deluge_discovery_test.go returns 1 hit (0 at HEAD); grep -n 'func TestBulkDelugeImportJob_HydrateFailure' internal/maintenance/jobs/bulk_deluge_import_test.go returns 1 hit (the file does not exist at HEAD); go test ./internal/server/... -run TestHandleDiscoveryImport_HydrateFailure -count=1 -v prints '--- PASS: TestHandleDiscoveryImport_HydrateFailure' (not '[no tests to run]'); same for the jobs package.",
   "edge_cases": [
    "hydrateErr nil but full == nil (book file not found without an error) must also hit the failure path per the existing `if hydrateErr != nil || full == nil` check \u2014 test both nil-error and non-nil-error variants."
   ],
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "TODO item calls this 'optional' \u2014 low priority, small effort, safe for a Haiku-tier agent."
+  "notes": "TODO item calls this 'optional' \u2014 low priority, small effort, safe for a Haiku-tier agent.",
+  "review_notes": [
+   "[verify-8.json] Idempotency polarity is inverted for an additive test task: 'If the first acceptance check below already passes at HEAD (`go test ./internal/server/... -run TestHandleDiscoveryImport_HydrateFailure` passes.), this task is already applied.' `go test -run` with a pattern that matches nothing exits 0. "
+  ]
  },
  {
   "todo_line": 10526,
@@ -924,7 +924,8 @@
   "verdict_evidence": "web/src/components/dedup/DedupEmbeddingTab.tsx:783-788 already renders a 'partial fp N%' Chip when book_sig_coverage_pct < 100, but no test file under web/src/components/dedup exercises this rendering path",
   "domain": "web",
   "exact_files": [
-   "web/src/components/dedup/DedupEmbeddingTab.test.tsx"
+   "web/src/components/dedup/DedupEmbeddingTab.test.tsx",
+   "web/src/components/dedup/__tests__/DedupEmbeddingTab.test.tsx"
   ],
   "verified_anchors": [
    {
@@ -944,9 +945,12 @@
    "The render logic is a conditional: `book.book_sig_coverage_pct != null && book.book_sig_coverage_pct < 100` renders a Tooltip+Chip labeled `partial fp ${pct}%` (DedupEmbeddingTab.tsx:783-788)."
   ],
   "steps": [
-   "Locate or create web/src/components/dedup/DedupEmbeddingTab.test.tsx following this repo's existing Vitest + Testing Library conventions (check a sibling test file in the same directory for the render-with-props pattern).",
-   "Add TestBookSigCoverage_RendersPartialBadge: render DedupEmbeddingTab with a candidate book having book_sig_coverage_pct=62, assert getByText(/partial fp 62%/) is present.",
-   "Add TestBookSigCoverage_HidesBadgeAtFullCoverage: render with book_sig_coverage_pct=100 (and separately with null/undefined), assert the partial-fp text is NOT present."
+   "Create web/src/components/dedup/__tests__/DedupEmbeddingTab.test.tsx \u2014 the dedup directory's tests all live under __tests__/ (BandFilterBar.test.tsx, BulkActionBar.test.tsx, CandidateCompareDrawer.test.tsx, FolderFilesChip.test.tsx, LabelToggle.test.tsx); there are no *.test.tsx files directly beside the components. Mirror CandidateCompareDrawer.test.tsx for the render-with-props and mocking pattern, since it is the closest in size to DedupEmbeddingTab.",
+   "Give the new file a fresh header (version 1.0.0, new guid via `uuidgen | tr A-Z a-z`, last-edited: 2026-08-21).",
+   "Add TestBookSigCoverage_RendersPartialBadge: render DedupEmbeddingTab with a candidate book whose book_sig_coverage_pct is 62, assert getByText(/partial fp 62%/) is present. The badge is gated at web/src/components/dedup/DedupEmbeddingTab.tsx:783 by `book.book_sig_coverage_pct != null && book.book_sig_coverage_pct < 100` and rendered as a Chip labelled `partial fp ${pct}%` at L788.",
+   "Add TestBookSigCoverage_HidesBadgeAtFullCoverage: render with book_sig_coverage_pct=100, and again with null/undefined, asserting the partial-fp text is absent in both \u2014 100 is the boundary the `< 100` check excludes.",
+   "Before writing assertions, read DedupEmbeddingTab.tsx's props and any API calls it makes on mount, and stub them; it is a full tab component, not a leaf, so a bare render will not mount without mocks.",
+   "Add changelog fragment changelog.d/20260821_web_172.md (no file header)."
   ],
   "tests": [
    "web/src/components/dedup/DedupEmbeddingTab.test.tsx: the two tests described above."
@@ -963,7 +967,8 @@
   "gate": "npm --prefix web run lint && npm --prefix web test",
   "notes": "Part 1 of 2 for TODO item 23; Part 2 is the live-prod verification, filed separately as prod_run.",
   "review_notes": [
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n"
+   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
+   "[verify-8.json] The brief's test-file path contradicts the directory's actual convention, and its own step tells the worker to look for a precedent that does not exist. exact_files and the Goal both name web/src/components/dedup/DedupEmbeddingTab.test.tsx (directly beside the component), while step 1 says 'check a "
   ]
  },
  {

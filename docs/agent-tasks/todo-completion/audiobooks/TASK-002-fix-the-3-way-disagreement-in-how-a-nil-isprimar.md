@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-002-fix-the-3-way-disagreement-in-how-a-nil-isprimar.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: a7515fad-2961-42ee-8175-12c9a421a3d1 -->
+<!-- guid: db3db44d-c5b8-4e22-b9a4-16e442b7bedb -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-002 — Fix the 3-way disagreement in how a nil IsPrimaryVersion is treated (matcher vs. pushdown vs. serialized field) (TODO.md L3348)

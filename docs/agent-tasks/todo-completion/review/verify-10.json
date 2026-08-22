@@ -1,0 +1,1326 @@
+[
+ {
+  "task_id": "TASK-066",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Typed-nil trap the brief itself creates. Step 3 prescribes a struct field `s.freshness` of concrete type *freshness.PebbleFreshness returned from an accessor typed freshness.OpFreshness; the edge-case section then requires 'Freshness() must return nil ... never panic' for a non-PebbleStore store, and steps 4-5 guard with `if fresh != nil`. A nil *PebbleFreshness boxed into an OpFreshness interface is NOT nil, so the guard passes and fresh.Stamp() dereferences f.db -> panic on exactly the memdb/test-double path the edge case claims to protect. The brief calls this 'the same pattern as FileProvenanceStore', but that accessor uses a type assertion returning a true nil interface (verified: `sed -n '60,72p' internal/server/server_maintenance_deps.go` -> `if fp, ok := s.store.(database.FileProvenanceStore); ok { return fp }; return nil`). Two reasonable models produce opposite runtime behaviour here."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is incomplete: step 6 and the Tests section both edit internal/plugins/maintenance/chapters_backfill_test.go (verified present: `grep -n 'func TestChaptersBackfill_NoMarkers_WritesNothingAndReprobes' internal/plugins/maintenance/chapters_backfill_test.go` -> L258), but exact_files lists only chapters_backfill.go, deps.go and server_maintenance_deps.go.",
+    "fix": {
+     "exact_files": [
+      "internal/plugins/maintenance/chapters_backfill.go",
+      "internal/plugins/maintenance/chapters_backfill_test.go",
+      "internal/plugins/maintenance/deps.go",
+      "internal/server/server_maintenance_deps.go"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 5,
+    "problem": "Idempotency guard quotes acceptance #1 ('go build ./... succeeds with the new Freshness() method on ServerDeps and *Server'). `go build ./...` already exits 0 at HEAD, so a model that runs the command rather than parsing the sentence concludes 'already applied' and skips the task. Make the guard a symbol grep, e.g. `grep -n 'func (s \\*Server) Freshness()' internal/server/server_maintenance_deps.go` (0 hits at HEAD, verified)."
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "No acceptance checkbox names a command that proves the accessor exists. Acceptance #1 is prose around `go build`; add `grep -n 'Freshness() freshness.OpFreshness' internal/plugins/maintenance/deps.go internal/server/server_maintenance_deps.go` expecting >=2 hits."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-067",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency guard (and acceptance #1) is `go test ./internal/plugins/maintenance/... -run TestMissingFileRepoint passes`. No test matches that pattern at HEAD -- every existing test in the file is named TestRepoint_* (verified: `grep -n '^func Test' internal/plugins/maintenance/missing_file_repoint_test.go` -> 10 hits, TestRepoint_RewritesPathAndPreservesFingerprint ... TestRepoint_WriteReportRoundTrips, zero TestMissingFileRepoint*). `go test -run <no-match>` exits 0, so the brief's own guard tells the agent this REVIEW-CRITICAL task is already applied. The same string is acceptance #1, so acceptance is vacuous too."
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "The Idempotency/Rollback block declares four MANDATORY prod-data requirements -- (2) every mutation journaled through CreateOperationChange, (4) the apply path refuses to start while library.scan is running -- but no Step implements either, the boilerplate says 'keep the change purely additive -- do not touch adjacent code', and neither exists in the file today (verified: `grep -n 'CreateOperationChange\\|OperationChange' internal/plugins/maintenance/missing_file_repoint.go` -> 0 hits; `grep -n 'library.scan\\|ActiveScan' internal/plugins/maintenance/missing_file_repoint.go` -> 0 hits). A weak model either ignores a stated mandatory rule or rewrites the op's whole apply path; both are defensible readings."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is only ['internal/plugins/maintenance/missing_file_repoint.go'] but the Tests section adds two tests to internal/plugins/maintenance/missing_file_repoint_test.go (file exists at HEAD).",
+    "fix": {
+     "exact_files": [
+      "internal/plugins/maintenance/missing_file_repoint.go",
+      "internal/plugins/maintenance/missing_file_repoint_test.go"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "The Idempotency block requires '(3) acceptance includes a test that applies on a fixture and then undoes via internal/undo and asserts the fixture is byte-identical', but no such test appears in Tests or Acceptance criteria."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 2 offers two incompatible designs -- 'Add a bookFilePathFallback bool field (default false) OR simply always attempt it as a second-priority candidate'. Default-off vs always-on changes the op's reported numbers and its params JSON contract."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-068",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency guard (and acceptance #1) is `go test ./internal/plugins/maintenance/... -run TestFilePathCollisionReport passes`. Nothing matches at HEAD (verified: `grep -rn 'FilePathCollision\\|CollisionCount\\|filepath_collision' --include=\"*.go\" .` -> 0 hits), and `go test -run` with no matching test exits 0 with 'no tests to run'. The guard therefore fires on a task that has not been started, and the agent skips it."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files omits internal/plugins/maintenance/filepath_collision_report_test.go, which the Tests section requires (two new tests).",
+    "fix": {
+     "exact_files": [
+      "internal/plugins/maintenance/filepath_collision_report.go",
+      "internal/plugins/maintenance/filepath_collision_report_test.go",
+      "internal/plugins/maintenance/plugin.go"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 2 is not implementable as written: it says to shard a map across N workers 'via registry.RunItems', but RunItems is `func RunItems[T any](ctx, r Reporter, items []T, fn func(ctx, item T) error, opts ...RunItemsOptions)` (verified internal/operations/registry/run_items.go:143) -- it has no shard/partition concept, so 'merge shard maps under a single mutex only at the reduce step' has to be invented. It also offers two enumeration strategies ('GetAllBooksCore in pages (or ListBookIDs + GetBookByID batches)')."
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "Acceptance #2 ('A dry run against a full-library fixture reproduces a collision-rate consistent with the 6.8% figure') is not checkable by any command in the repo -- there is no full-library fixture, and the only way to satisfy it is a run against the production library."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-069",
+  "verdict": "fail",
+  "verdict_override": "needs_design",
+  "reason": "The brief is self-blocking by its own steps. Step 1-2: 'If maintenance_dispatcher.go still exists, recommend to the coordinator that Phase 1 ... lands FIRST ... flag as a sequencing dependency rather than building blind'; step 3 opens 'Once unblocked:'; step 6 says the 37-job body is 'a strong /parallel-sweep candidate -- flag to the coordinator rather than doing all 37 serially'. The blocking condition is TRUE at HEAD (verified: `ls internal/server/maintenance_dispatcher.go` -> file present), so an obedient executor produces a recommendation and zero code. This needs the Phase-1 sequencing decision made by the owner and then a sweep plan, not a single Bucket-1 brief.",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Steps 1-2 and 6 instruct the agent to stop and escalate rather than implement; step 3 is gated on 'Once unblocked'. Two reasonable models split between (a) writing nothing but a sequencing note and (b) refactoring 37 job files. Verified the gate is currently closed: `ls internal/server/maintenance_dispatcher.go internal/server/maintenance_job_op.go` -> both present."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files lists 4 files (job.go, registry.go, maintenance_dispatcher.go, maintenance_job_op.go) but step 4 declares a per-job interface 'in each job's own file' across internal/maintenance/jobs/ -- 41 non-test .go files at HEAD (verified: `ls internal/maintenance/jobs/*.go | grep -v _test | wc -l` -> 41). The Tests section also names internal/maintenance/job_test.go and internal/maintenance/registry_test.go, neither listed."
+   },
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "internal/maintenance/registry_test.go does not exist at HEAD (verified: `ls internal/maintenance/*_test.go` -> only internal/maintenance/job_test.go), yet the Tests section says it 'needs updating for the new All(store) signature'. The '37 jobs' count also does not match the tree (41 non-test files)."
+   },
+   {
+    "severity": "advisory",
+    "check": 8,
+    "problem": "Effort L, ~41 files, plus a judgment call the brief itself flags ('balance DRY against the per-job-narrow goal') -- rated Sonnet-class. If it is kept at all it should be an Opus-class coordinator task or an explicit sweep."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-070",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance criterion 2 is literally `- [ ] make ci passes`, which directly contradicts the brief's own How-to-test paragraph ('Do NOT use `make ci` as the gate: it is red on `main`'). The checkbox is unsatisfiable and a weak model will either burn a long run on it or declare it passed without evidence."
+   },
+   {
+    "severity": "fatal",
+    "check": 7,
+    "problem": "This silently shortens a destructive retention window on prod data at Sonnet tier with review_critical=false. Today an unset/zero compaction value falls back to 14 days (verified: internal/server/server_maintenance_deps.go:238-240 `if compactionDays <= 0 { compactionDays = 14 }`, and internal/config/config.go:2354 `ActivityLogCompactionDays: 14`). Step 1 introduces a NEW key defaulting to 7 and step 5 makes it 'the primary compaction-days argument', so on first deploy the midnight-daily maintenance.cleanup-activity-log op (schedule verified at internal/plugins/maintenance/cleanup.go:133) collapses roughly twice as much activity-log history as before. No step preserves the existing 14-day value for installs that never set the new key, and no acceptance check covers the migration.",
+    "fix": {
+     "review_critical": true
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files omits both test files the Tests section requires and that already exist at HEAD: internal/server/server_maintenance_deps_test.go and web/src/pages/ActivityLog.test.tsx (verified by `ls`).",
+    "fix": {
+     "exact_files": [
+      "internal/config/config.go",
+      "internal/plugins/maintenance/cleanup.go",
+      "internal/plugins/maintenance/deps.go",
+      "internal/server/server_maintenance_deps.go",
+      "internal/server/server_maintenance_deps_test.go",
+      "web/src/pages/ActivityLog.tsx",
+      "web/src/pages/ActivityLog.test.tsx",
+      "web/src/services/activityApi.ts",
+      "web/src/services/api.ts"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 5 leaves the core semantic undecided: pass the new key 'instead of p.deps.ActivityLogCompactionDays() (or thread both through if the coordinator decides ... -- flag this as a sub-decision, not a blocker)'. One model replaces the existing key, another adds a second independent knob; the resulting config surface and the 0=never behaviour differ."
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "Acceptance #3 begins 'Manually:' -- it cannot be checked by a command or grep."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-071",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Step 1 says to export looksLikePersonName and 'update the one internal call site in SplitCompositeAuthorName'. Both facts are wrong at HEAD. `grep -rn 'looksLikePersonName' --include=\"*.go\" .` shows THREE independent unexported definitions with different bodies -- internal/dedup/author.go:210, internal/metadata/metadata.go:900, internal/scanner/scanner.go:1522 -- so a model that greps `func looksLikePersonName` gets 3 hits and must guess which one. Inside internal/dedup/author.go there are three call sites (L289, L345, L353), not one."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['internal/plugins/maintenance/author_title_fragment_report.go','internal/plugins/maintenance/plugin.go'] but step 1 renames a symbol in internal/dedup/author.go and the Tests section edits internal/dedup/author_test.go and adds internal/plugins/maintenance/author_title_fragment_report_test.go.",
+    "fix": {
+     "exact_files": [
+      "internal/dedup/author.go",
+      "internal/dedup/author_test.go",
+      "internal/plugins/maintenance/author_title_fragment_report.go",
+      "internal/plugins/maintenance/author_title_fragment_report_test.go",
+      "internal/plugins/maintenance/plugin.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency guard / acceptance #1 is `go test ./internal/plugins/maintenance/... -run AuthorTitleFragmentScan passes`. No test matches at HEAD (verified: `grep -rn 'TitleFragmentAuthor|title-fragment-author' internal/plugins/maintenance/*.go` -> 0 hits), and `go test -run` with zero matches exits 0, so the guard reports the task as already done."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 1 explicitly leaves the API undecided ('rename in place ... or keep an unexported wrapper -- coordinator's call, note either is fine'), and the skeleton polarity is 'additive' while step 1 is a cross-package rename (transform)."
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "Acceptance #2 ('running the op against a seeded corpus containing 3 known-bad names and 3 known-good names reports exactly 3 flagged') names no fixture and no command."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-072",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency polarity is inverted. The skeleton marks this task polarity='removal' even though it CREATES a new op, so the rendered guard is the removal variant: 'If the removed symbol/file is already ABSENT at HEAD (re-run the re-verify greps above: zero hits = already removed) ... the removal is already done - run acceptance instead.' The re-verify block's third grep is `grep -rn 'author-duplicate-merge|author-merge|merge-author|MergeAuthors\\b' internal/plugins/maintenance` with a documented expectation of 0 hits, and it does return 0 hits at HEAD (verified). A weak model therefore concludes this P1 REVIEW-CRITICAL task is already done on an untouched checkout.",
+    "fix": {
+     "polarity": "additive"
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Step 6 says to register the op by 'mirror[ing] author-conjunction-repair's registration in the same file's init/RegisterOp block'. That block does not exist: `grep -n 'RegisterOp|func init' internal/plugins/maintenance/author_conjunction_repair.go` returns 0 hits. Registration is a `p.authorConjunctionRepairDef()` entry in the defs slice of internal/plugins/maintenance/plugin.go (verified L60, inside `func (p *Plugin) Register`). Followed literally, step 6 produces an op that is never registered and never runs."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "No acceptance criterion can detect the missing registration. Acceptance #2 is `grep -n 'maintenance.author-duplicate-merge' internal/plugins/maintenance/author_duplicate_merge.go` -- it passes even if plugin.go was never touched. It needs a second grep against internal/plugins/maintenance/plugin.go for the new *Def() entry."
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "The prod-data Idempotency block declares it MANDATORY that '(2) every mutation is journaled through the existing undo ledger (CreateOperationChange) ... a mutation without a journal row is a defect' and '(3) acceptance includes a test that applies on a fixture and then undoes via internal/undo'. The reused helper does not journal -- `grep -n 'CreateOperationChange' internal/plugins/maintenance/author_conjunction_repair.go` returns 0 hits -- mergeAuthorInto deletes the losing author row, no step adds journaling, and neither Tests nor Acceptance contains an undo round-trip. On a row-deleting path a weak model has to choose between violating a stated mandatory rule and rewriting a shared helper."
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "Acceptance has no check that DryRun defaults to true; TestAuthorDuplicateMerge_DryRunDefaultTrue is listed in Tests but the acceptance list only runs `-run TestAuthorDuplicateMerge`, which is fine, but nothing asserts the op is dry-run by default at the registration/definition level."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-073",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance #1 is `go test ./internal/plugins/maintenance/... -run OpID passes (or the nearest matching test name after tests are added)`. No test name contains OpID at HEAD (verified: `grep -rn 'func Test.*OpID' internal/plugins/maintenance/*_test.go` -> 0 hits), and `go test -run` with zero matches exits 0. The trailing 'or the nearest matching test name' also makes the checkbox unfalsifiable -- there is no command whose output decides it."
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 3 ('If all 8 are clean, record that finding (which file/line, what was checked) rather than silently doing nothing') names no artifact -- no doc path under docs/audits/, no code comment location, no report file. Since the audit's most likely outcome is 'all 8 clean', the brief's main deliverable is undefined and the commit would be empty. Two reasonable models split between writing an audit doc, adding file comments, and reporting only in chat."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files lists the 7 op source files (cleanup.go, dedup_ops.go, metadata.go, optimize.go, reconcile.go, series.go, write_back.go) but no test file, while the Tests section requires adding a test to 'series_test.go (or nearest existing _test.go for each of the 8 files)'. It also omits any docs/ path for the step-3 record."
+   },
+   {
+    "severity": "advisory",
+    "check": 5,
+    "problem": "The Idempotency section renders BOTH the prod-data mandatory block (dry-run default, undo journaling, scan-guard) AND the symbol-move guard ('If the symbol already lives at its NEW location and is absent from the old one ... the move is already done'). Neither describes a read-through audit; nothing here moves a symbol and the audit itself mutates nothing."
+   },
+   {
+    "severity": "advisory",
+    "check": 8,
+    "problem": "Anchors verify cleanly (`grep -c 'opID := ctxOpID(ctx)'` -> series 1, cleanup 2, dedup_ops 1, write_back 1, optimize 1, reconcile 1, metadata 1 = 8; `grep -rn 'CreateOperationChange' internal/plugins/maintenance/*.go` -> only deps.go:114), so the factual base is sound; the failure is entirely in what the brief asks the agent to produce."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-074",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The Reuse block orders reuse of `Organizer.HasResolvedAuthor` and of the placeholder constant at internal/organizer/organizer.go:375, but neither is reachable from the target package. `const placeholderAuthor = \"Unknown Author\"` is unexported (verified organizer.go:375) and internal/plugins/maintenance imports internal/organizer nowhere (verified: `grep -rln 'internal/organizer' internal/plugins/maintenance/*.go` -> 0 hits; `grep -n 'organizer\\.' internal/plugins/maintenance/deps.go` -> 0 hits). HasResolvedAuthor is a method on *Organizer (organizer.go:402) with no ServerDeps accessor. No step exports the constant or adds a deps accessor, so the brief simultaneously forbids a parallel helper and makes the named reuse uncompilable."
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "The 'resolvable' classifier is defined three different ways in one brief. Goal: 'would pass HasResolvedAuthor after a metadata fetch -- approximate this by checking whether Author is empty/placeholder but Title, Narrator, or external IDs are populated'. Reuse: use HasResolvedAuthor, do NOT write a parallel helper. Step 2: 'Title != \"\" && (has ISBN/ASIN external ID, or non-empty Narrator field, or NormalizedTitle differs from a generic default)'. 'NormalizedTitle differs from a generic default' has no definition anywhere in the brief or the repo. Two models produce materially different census numbers."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['internal/plugins/maintenance/plugin.go','internal/plugins/maintenance/unknown_author_audit.go'] but the Tests section adds internal/plugins/maintenance/unknown_author_audit_test.go, and honouring the Reuse block additionally requires internal/organizer/organizer.go (export the placeholder) and internal/plugins/maintenance/deps.go (accessor).",
+    "fix": {
+     "exact_files": [
+      "internal/plugins/maintenance/plugin.go",
+      "internal/plugins/maintenance/unknown_author_audit.go",
+      "internal/plugins/maintenance/unknown_author_audit_test.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency guard is `go test ./internal/plugins/maintenance/... -run TestUnknownAuthorAudit passes.` -- nothing matches at HEAD (the op does not exist), `go test -run` with no match exits 0, so the guard declares the task already applied before any work starts."
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "Acceptance #2 ('POST /api/v1/operations/v2 ... against a running dev server ... verify via a before/after GetBooksCore diff') is not a command a worktree agent can run and is not gradeable from the repo. Note: I checked and did NOT find the RootDir registration gate here -- internal/server/server.go:629-638 states registration is now UNCONDITIONAL -- so the objection is only that the check needs a live server, not that it is inert."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-075",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['internal/plugins/maintenance/author_purge_empty.go'] only, but the Tests section adds two tests to internal/plugins/maintenance/author_purge_empty_test.go, which exists at HEAD (verified by `ls`).",
+    "fix": {
+     "exact_files": [
+      "internal/plugins/maintenance/author_purge_empty.go",
+      "internal/plugins/maintenance/author_purge_empty_test.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency guard is `go test ./internal/plugins/maintenance/... -run TestPurgeEmptyAuthors_HeldBack passes`. No such test exists at HEAD (verified: `grep -c 'HeldBackSample' internal/plugins/maintenance/author_purge_empty.go` -> 0), and `go test -run` with zero matches exits 0, so the brief reports the task as already applied."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Goal and Step 1 disagree on the report shape. Goal asks for 'author name, file count, and -- if feasible from existing store methods -- whether any book_authors:<bookID> array elsewhere in the library still references this author's ID'; Step 1 defines `type heldBackAuthor struct { Name string; FileCount int }` with no linkage field and no mention of the junction check. The linkage signal is the whole point of the item ('looks more like a book that lost its junction entry'), so dropping it silently changes what the report is for."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Anchors verify (emptyAuthorSampleLimit=50 at author_purge_empty.go:35, ZeroBooksWithFiles at L76/L160/L215, RequireZeroFiles at L54/L65), but the brief cites 'Sample field ... ~L76' for the report struct while ZeroBooksWithFiles is the field at L76 and the Sample append is at L164 -- minor drift, harmless given the re-verify instruction."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-076",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Step 2 and the Reuse block instruct `store.ListNarrators()` from internal/plugins/maintenance, but the maintenance plugin's store surface has no narrator method at all: `grep -n 'Narrator' internal/plugins/maintenance/deps.go` -> 0 hits (the file declares GetAllAuthorBookCounts at L80 and GetAllAuthors at L82 and nothing narrator-side). ListNarrators exists only on *database.PebbleStore (internal/database/pebble_store_authors.go:776) and GetNarratorsByBookIDs only at pebble_store_authors.go:949. The op cannot compile without widening the ServerDeps/OpsStore interface, and no step says to, and deps.go is not in exact_files."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance criterion 2 is `- [ ] make ci passes`, which directly contradicts the brief's own How-to-test paragraph ('Do NOT use `make ci` as the gate: it is red on `main`'). Unsatisfiable checkbox."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['internal/plugins/maintenance/author_narrator_swap_review.go','internal/plugins/maintenance/plugin.go'] but the Tests section defines four tests in internal/plugins/maintenance/author_narrator_swap_review_test.go, and step 2 requires internal/plugins/maintenance/deps.go.",
+    "fix": {
+     "exact_files": [
+      "internal/plugins/maintenance/author_narrator_swap_review.go",
+      "internal/plugins/maintenance/author_narrator_swap_review_test.go",
+      "internal/plugins/maintenance/deps.go",
+      "internal/plugins/maintenance/plugin.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency guard is `go test ./internal/plugins/maintenance/... -run TestDetectAuthorNarratorSwaps passes` -- zero matches at HEAD (verified: `grep -rn 'swap-shaped|AuthorNarratorSwapCandidate' internal/` -> 0 hits), `go test -run` exits 0, so the guard fires on an untouched checkout."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 2 is phrased as an open research question rather than an instruction: '(whatever the equivalent all-authors-with-book-counts call is, e.g. GetAllAuthorBookCounts plus a name lookup)', 'via GetNarratorsByBookIDs or a similar existing lookup -- check for an author-book-count analog on the narrator side; if none exists, count via book_narrators: scan'. The narrator book-count source decides both correctness and cost."
+   },
+   {
+    "severity": "advisory",
+    "check": 10,
+    "problem": "A cross-table scan over the full author table (the brief itself cites 9,320 author rows) with a per-name narrator book-count lookup is exactly the whole-library-scale loop CLAUDE.md mandates a bounded worker pool for, but no step mentions registry.RunItems or any concurrency bound (contrast TASK-068/TASK-074 in the same workstream, which do)."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-077",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance #4 cannot be checked as written: `grep -n 'store maintenance.JobStore' internal/maintenance/jobs/fix_version_groups.go internal/maintenance/jobs/backfill_itunes_positions.go internal/maintenance/jobs/dedup_books.go returns 0 hits`. At HEAD that grep returns 6 hits and after a correct change it still returns 3 -- the Run methods at fix_version_groups.go:39, dedup_books.go:41, backfill_itunes_positions.go:195 (verified), which the criterion's own parenthetical says must remain. The box can never be ticked; it needs a per-function grep such as `grep -n 'func vgFixAuthorDirPath(store maintenance.JobStore' ...` expecting 0."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "The Goal contradicts the Steps on where the new interfaces live: Goal says 'in each function's own file, next to the function, mirroring where bookFileLister/folderLinker/etc. are NOT defined -- check whether store_slices.go is the maintenance/jobs package's convention too, or whether internal/maintenance/jobs has its own local-interface file/pattern'. folderLinker IS defined in internal/plugins/maintenance/store_slices.go:233 (verified), so 'where they are NOT defined' is unresolvable; steps 1-3 do settle it ('near vgFixAuthorDirPath'), but a model reading the Goal first may create a new internal/maintenance/jobs/store_slices.go that is not in exact_files."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "All eight re-verify anchors hold at HEAD (vgFixAuthorDirPath fix_version_groups.go:277, migrateOne backfill_itunes_positions.go:274, ddMergeDuplicateBook dedup_books.go:329, all three still typed `store maintenance.JobStore`; folderLinker store_slices.go:233; both .claude/notes/ files present). This brief is factually the cleanest in the workstream -- not stale_done."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-078",
+  "verdict": "fail",
+  "verdict_override": "stale_done",
+  "reason": "ABS-SYNC-TASK-04 is already shipped. `ls internal/maintenance/jobs/backfill_sync_ids*` -> internal/maintenance/jobs/backfill_sync_ids.go and backfill_sync_ids_test.go both exist. `sed -n '1,45p' internal/maintenance/jobs/backfill_sync_ids.go` shows backfillSyncIDsJob whose doc comment cites the very spec this brief points at ('See docs/agent-tasks/abs-sync/TASK-04-syncid-backfill.md'), mints 'a sync_item syncID per Book and a sync_file syncFileID per BookFile', registers itself with `func init() { maintenance.Register(&backfillSyncIDsJob{}) }`, and exposes `DryRun bool json:\"dry_run\"` in DefaultParams. `grep -n 'errgroup|SetLimit|NumCPU|RunItems' internal/maintenance/jobs/backfill_sync_ids.go` -> L76 `registry.RunItems(ctx, rep, ids, ...)` with RunItemsOptions at L133, i.e. the bounded worker pool the brief calls mandatory. `grep -rn 'BackfillSyncID' --include=\"*.go\" .` -> internal/maintenance/jobs/backfill_sync_ids_test.go already contains TestBackfillSyncIDsJob_Registered, _FreshLibrary, _IdempotentRerun, _PreservesPreExistingIDs, _DryRunMintsNothing, _ConcurrentRaceSanity and TestBackfillSyncIDsConcurrencyIsNotSequential -- the exact three test obligations this brief lists. `git log --oneline -3 -- internal/maintenance/jobs/backfill_sync_ids.go` -> eb81b7dd 'feat(abs-sync): sync-ID + iTunes position backfill jobs (ABS-SYNC-ID-4)'. The brief's own re-verify block missed it because it greps only internal/plugins/maintenance/*.go, and the shipped job lives in internal/maintenance/jobs/.",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The re-verify block is scoped so it cannot see the existing implementation: `grep -rln 'backfill' internal/plugins/maintenance/*.go` never looks at internal/maintenance/jobs/, where backfill_sync_ids.go has lived since commit eb81b7dd. A weak model runs the greps, sees 'no existing maintenance op backfills sync IDs', and builds a second, competing minting path on a prod identity keyspace."
+   },
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Step 4 -- 'Register the op in whatever registry the acoustid backfill registers itself in (grep the acoustid backfill's init/registration call site and mirror it)' -- points at a different plugin. AcoustID registers through its own defs slice in internal/plugins/acoustid/plugin.go (verified L47-53, `p.backfillDef()` at L48). Mirroring that site registers the new op under the acoustid plugin or nowhere; a maintenance op must be appended to internal/plugins/maintenance/plugin.go's defs slice, which is what exact_files actually lists."
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 3 leaves the core primitive unnamed: 'check whether the book already has a sync identity (idempotency check via whatever getter pairs with RepointSyncItem/the abs_sess or sync-identity store ...); if absent, mint one and write it via the store's create/repoint primitive'. Neither Background nor Reuse names a mint/create primitive -- the two named ones, RepointSyncItem (internal/database/pebble_store_syncid.go:249) and RepointSyncFile, REPOINT an existing identity. `grep -n 'func (p \\*PebbleStore) .*SyncItem' internal/database/pebble_store_syncid.go` -> getSyncItem L123, ResolveSyncItem L213, RepointSyncItem L249 only. Two models would invent different key layouts on a production identity keyspace."
+   },
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency guard is ``go test -race ./internal/plugins/maintenance/... -run BackfillSyncID` passes`. No such test exists in that package (verified: `ls internal/plugins/maintenance/ | grep -i sync` -> no match), and `go test -run` with zero matches exits 0 -- so the guard reports 'already applied' for the wrong reason, while the task genuinely IS already done in a package the guard never looks at."
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "The mandatory prod-data block requires dry-run/apply=false default, journaling every mutation through CreateOperationChange, an acceptance-level undo round-trip test, and a refusal to run while library.scan is active. None of the 5 steps and none of the 3 listed tests implement any of the four, on a REVIEW-CRITICAL identity-minting path."
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "Acceptance #2 ('the op appears in the op registry the way other maintenance ops do (verify via the existing operations-listing test/endpoint)') names no test and no endpoint, and step 1 delegates the real acceptance bar to a separate document ('the exact scope/acceptance bar the brief author defined' in docs/agent-tasks/abs-sync/TASK-04-syncid-backfill.md), so the brief is not self-contained."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-195",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The Source pointer is unusable: 'TODO.md line 90013 ... re-find it with `sed -n '90013p' TODO.md`'. TODO.md has 10,879 lines (verified: `wc -l TODO.md` -> 10879), so the command prints nothing. The agent cannot locate or later report the source item, and the brief's own rule ('a zero-hit grep means STOP and report') tells it to halt."
+   },
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The first re-verify anchor greps an absolute scratchpad path that exists in no clone: `grep -n \"book_file|bytes on disk|no bytes\" \"/private/tmp/claude-501/.../dryrun/docs/agent-tasks/todo-completion/maintenance/TASK-074-build-a-report-only-census-of-books-with-a-place.md\"`. It should reference docs/agent-tasks/todo-completion/maintenance/TASK-074-*.md relative to the repo. This is unique to this brief among the 40 in the group (verified: `grep -rl 'private/tmp/claude-501' maintenance itunes ci-tooling config organize` -> only TASK-195). The command errors with 'No such file or directory', which under the brief's STOP rule blocks the task."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 1's stated rationale for enum placement is inverted: it says to insert fileZeroSize after filePresent 'so existing MISSING/UNREADABLE ordinal comparisons (if any exist elsewhere) are unaffected', but inserting inside an iota block is precisely what SHIFTS fileMissing and fileUnreadable; appending at the end is what preserves them. Harmless here -- the enum is only ever compared by equality/switch (verified: hits at missing_file_audit.go:406/409/414/453/460/484 are all `==` or `case`, and the values are never persisted) -- but the reasoning would mislead on a persisted enum."
+   },
+   {
+    "severity": "advisory",
+    "check": 5,
+    "problem": "The rendered Idempotency block is the symbol-move variant ('If the symbol already lives at its NEW location and is absent from the old one ... the move is already done'). Nothing moves in this task; the correct guard is `grep -n 'ZeroSize' internal/plugins/maintenance/missing_file_audit.go` expecting >=3 hits (0 at HEAD, verified)."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Everything else verifies exactly: enum at missing_file_audit.go:288-291, `.Size()` 0 hits, CapLibraryRead at L279, missingFileClassification at L606, missingFileAuditDef() at plugin.go:62, missingFileStatConcurrency=24 at L91, auditMissingFiles at L369. exact_files (missing_file_audit.go + missing_file_audit_test.go) is complete. Apart from the two broken references above this is the strongest brief in the group."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-061",
+  "verdict": "fail",
+  "verdict_override": "needs_design",
+  "reason": "The brief's entry condition and its data model are both undecided. Goal: 'Gated behind part 1's coverage measurement passing a reasonable threshold (owner to set, e.g. >90%)' -- the threshold is explicitly the owner's to set and has not been set, and part 1 (TASK-184) is itself a measurement that cannot run without the owner's library. The storage shape is left open in three places: 'a UserPlaylist with type=smart (or a distinct static/snapshot sub-type if the schema wants to distinguish ...)', step 1 'extend MigrateSmartPlaylists (or add a sibling method)', step 3 'check the UserPlaylist schema for a static-membership field vs. a query field'. Both acceptance criteria are runs against the owner's real iTunes library. This is a design decision plus a prod run, not an executable Bucket-1 brief.",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Neither functional acceptance criterion is checkable from a worktree: #1 'Dry-run against the owner's real XML reports counts matching or exceeding the 224/116,822 figures' and #2 'A non-dry-run import creates UserPlaylist rows; re-reading the DB confirms membership'. #1 is also quoted as the idempotency guard, so the agent has no defined way to decide whether to start."
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Three unresolved design questions in one brief (playlist type/sub-type, extend-vs-sibling method, membership field vs query field), each of which changes the persisted schema. Two reasonable models produce incompatible UserPlaylist rows on a REVIEW-CRITICAL prod-data path."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['internal/itunes/service/playlist_sync.go','internal/plugins/maintenance/itunes_playlist_import.go'] but the Tests section requires a new fixture-backed test in internal/itunes/service/playlist_sync_test.go, which exists at HEAD (verified by `ls`).",
+    "fix": {
+     "exact_files": [
+      "internal/itunes/service/playlist_sync.go",
+      "internal/itunes/service/playlist_sync_test.go",
+      "internal/plugins/maintenance/itunes_playlist_import.go"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 10,
+    "problem": "Step 2 resolves every Playlist Item through GetBookByITunesPersistentID, whose own doc comment reads 'scans all books to find one matching the given iTunes persistent ID. This is O(n) but syncs are infrequent' (internal/database/pebble_store.go:1177-1179). Against the 116,822 track refs the brief cites that is an O(n*m) whole-library loop; CLAUDE.md's concurrency mandate and a pre-built PID index are both unmentioned."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Anchors themselves verify: MigrateSmartPlaylists at internal/itunes/service/playlist_sync.go:112, itunesPlaylistImportDef() at internal/plugins/maintenance/plugin.go:49, op ID at internal/plugins/maintenance/itunes_playlist_import.go:78. The materialized-items field the brief asks the agent to grep for is ITLPlaylist.TrackIDs (internal/itunes/itl_convert.go:73-75, populated from p.Items) -- naming it would remove one of step 1's guesses."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-062",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Step 1's replacement does not compile. BackfillExternalIDs takes `store ExternalIDBackfillStore` (internal/itunes/backfill.go:48) and that interface declares only `GetAllBooksCore(limit, offset int) ([]database.BookCore, error)` (internal/itunes/backfill.go:19-22) -- there is no GetAllBooksFullFrom on it (verified: `grep -rn 'GetAllBooksCore|GetAllBooksFullFrom' internal/itunes/*.go` shows the interface method at L22 and its two call sites at L68/L184, and GetAllBooksFullFrom only on the unrelated rebuild/relocate/cleanup stores). Switching also changes the page element type from database.BookCore to database.Book, which the loop body and the test double MockBackfillStore.GetAllBooksCore (internal/itunes/backfill_test.go:39) both depend on. No step widens the interface or updates the mock."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['internal/itunes/backfill.go'] alone, but the Tests section adds cross-page-mutation coverage to internal/itunes/backfill_test.go (exists at HEAD) and the store double that must gain the new method lives there too.",
+    "fix": {
+     "exact_files": [
+      "internal/itunes/backfill.go",
+      "internal/itunes/backfill_test.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "TASK-062 and TASK-063 contradict each other on how the work is delivered. TASK-062's Coordinator notes: the sibling loop 'should be fixed alongside part 1 rather than left as a sequential duplicate of the same bug.' TASK-063's Coordinator notes: 'Same file/PR as part 1 -- do this as one combined change, not two separate PRs.' Yet each brief has its own START HERE block creating its own worktree and branch, and both edit internal/itunes/backfill.go (offset loops at L60 and L178). Following the briefs guarantees a same-file collision; following the notes means one of the two briefs should not exist."
+   },
+   {
+    "severity": "advisory",
+    "check": 10,
+    "problem": "The interface comment the brief is replacing says GetAllBooksCore 'returns the memdb-slim projection' deliberately (internal/itunes/backfill.go:20-21). GetAllBooksFullFrom returns full database.Book values, so a 10,000-row page becomes materially heavier; every sibling cursor call site uses a `pageSize` constant instead of a 10000 literal (internal/itunes/rebuild.go:74, relocate.go:76, cleanup_merged.go:75). Neither the projection change nor the page size is addressed."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "The mandatory prod-data Idempotency block (dry-run/apply=false default, CreateOperationChange journaling, an undo round-trip acceptance test, a library.scan guard) is boilerplate that does not fit a pure pagination refactor introducing no new mutation, and nothing in Steps/Tests/Acceptance implements any of the four."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-063",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "The brief is not self-contained -- its entire body defers to another brief. Step 1: 'Apply the same transformation described in part 1's steps'. Edge cases: 'Same as part 1.' Tests: 'Extend the same backfill_test.go coverage from part 1.' A cold model holding only this brief has no transformation to apply and must invent one on a REVIEW-CRITICAL path."
+   },
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Same non-compiling call as TASK-062: BackfillITunesTrackPIDs is `func BackfillITunesTrackPIDs(ctx context.Context, store ExternalIDBackfillStore, progress ...) (int, error)` (internal/itunes/backfill.go:161) and its loop is `store.GetAllBooksCore(10000, offset)` at L184; ExternalIDBackfillStore (L19-22) has no GetAllBooksFullFrom."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['internal/itunes/backfill.go'] and omits internal/itunes/backfill_test.go, which the Tests section explicitly extends.",
+    "fix": {
+     "exact_files": [
+      "internal/itunes/backfill.go",
+      "internal/itunes/backfill_test.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance #1 `go test ./internal/itunes/... -run TrackPID passes` already passes at HEAD -- TestBackfillITunesTrackPIDsWithNoConfiguredPath (internal/itunes/backfill_test.go:157) matches the pattern and is green today. The criterion cannot distinguish done from not-done."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "The one anchor verifies exactly: `grep -n 'offset := 0' internal/itunes/backfill.go` -> L60 and L178, as claimed."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-064",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency guard is ``go test ./internal/itunes/service/... -run TestClassifyGroup_PartChapter` passes`. Nothing matches at HEAD (verified: `grep -rn 'TestClassifyGroup_PartChapter|partChapterRe' internal/itunes/service/` -> 0 hits) and `go test -run` with zero matches exits 0, so the brief reports the task as already applied."
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "The output classification is left undecided in the Goal: 'so such folders classify as KindMultidisc (or a new dedicated kind if Part/Chapter shouldn't be conflated with true multi-disc -- this call is left to implementation judgment)'. Reusing KindMultidisc is a two-line change; adding a Kind means touching every consumer switch on the kind plus the review-queue payload. Both satisfy the listed test, which only asserts 'a confident (non-ambiguous) kind', so the divergence is invisible to the acceptance criteria."
+   },
+   {
+    "severity": "fatal",
+    "check": 3,
+    "problem": "The new guard's threshold and its anti-over-suppression test are in direct tension. Step 3 collapses the group 'if a majority of a folder's member filenames match partChapterRe', while TestClassifyGroup_PartChapterNaming_MixedWithOtherFiles_StaysAmbiguous requires that 'a folder where only SOME files match the P#-C# pattern and others don't should NOT be force-collapsed'. A 60/40 mixed folder satisfies 'majority' and would collapse, failing that test. No threshold is specified, so whether the anti-over-suppression test passes depends on a fixture ratio the brief never fixes."
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "Acceptance #2 ('a manual dry-run of maintenance.regroup-shattered-ai against a fixture containing the Mistborn-style folder now reports it as a confident collapse') names no fixture path and no command."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Anchors verify with one drift: classifyGroup at fs_regroup_shape.go:832, assignDiscTrack at L1142, discDirRe at L461, chapterSubdirRe at L466, KindAmbiguous 6 hits, regexp.MustCompile 14 hits (brief says ~12). 'DiscNumber is ALWAYS 0' has 2 hits (L163 and L1132), not the claimed single hit at ~L1131."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-065",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The brief's central factual claim is false because its anchor grep is scoped to internal/. It asserts `grep -rln 'RunRelocateSyncCycle' internal/` -> '1 file: internal/itunes/relocate_sync_cycle.go itself -- it has no caller anywhere in the codebase outside its own file'. Unscoped: `grep -rn 'RunRelocateSyncCycle' --include=\"*.go\" .` -> cmd/pid-census/main.go:61 and cmd/pid-census/main.go:105 already call it, behind operator flags declared at cmd/pid-census/main.go:35-36: `--sync-dry-run` ('P2 relocate sync cycle DRY-RUN (plan + in-memory verify, NO write)') and `--sync-apply` ('P2 relocate sync cycle APPLY -- COMMITS to the --itl file ... The --itl path is the LIVE write target'). Goal item (2), 'an operational entry point ... so an operator can actually invoke it', is therefore already satisfied for the CLI, and an agent following this brief adds a SECOND apply path into the live .itl without knowing the first exists."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance criterion 2 is `- [ ] make ci passes`, contradicting the brief's own gate note that make ci is red on main and must not be the gate."
+   },
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency guard is ``go test ./internal/itunes/... ./internal/server/... -run 'SyncCycle'` passes`. No test name matches SyncCycle at HEAD (verified: `grep -rn \"func Test.*SyncCycle\" --include=\"*_test.go\" internal/` -> 0 hits; the four tests in internal/itunes/relocate_sync_cycle_test.go are TestAcquireSyncWriteLock_SingleFlight L15, TestFileActivityLibraryCheck_ReadVsWrite L39, TestRelocatedPIDSet L67, TestRestoreITLBackup L82), so `go test -run` exits 0 and the guard says 'already applied'."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files lists internal/itunes/relocate_sync_cycle_test.go (the pre-existing helper test file) but the Tests section creates internal/itunes/relocate_sync_cycle_e2e_test.go and internal/server/itl_sync_cycle_test.go; neither is in scope.",
+    "fix": {
+     "exact_files": [
+      "internal/itunes/relocate_sync_cycle_e2e_test.go",
+      "internal/server/itl_sync_cycle.go",
+      "internal/server/itl_sync_cycle_test.go",
+      "internal/server/server_lifecycle.go"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 7,
+    "problem": "The header carries an unresolved gate -- 'External blockers: TODO.md L10383 (prod_run) -- not a task in this package; coordinator confirms it is resolved or explicitly waives it before dispatch' -- yet the brief is dispatchable as written and its step 4 adds an Apply=true test path. Nothing inside the brief stops an executor who never saw the coordinator's waiver."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Other anchors verify: RunRelocateSyncCycle at internal/itunes/relocate_sync_cycle.go:114, SyncCycleConfig at L57, itl_rebuild.go and itl_cleanup.go present, and the itunesGroup registration pattern at internal/server/server_lifecycle.go:1561-1572 (rebuild-full at L1563, relocate at L1569) matches step 3's example."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-184",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "The only functional acceptance criterion is ``go run ./cmd/pid-census --db <copy> --itl <copy> --coverage` runs to completion and prints a resolution percentage with example unresolved PIDs for manual sanity check` -- it needs a copy of the owner's production DB and iTunes library, is not runnable from a worktree, and 'manual sanity check' is not a pass/fail condition. The unit test the Tests section defines (internal/itunes/pid_coverage_test.go) is never promoted into acceptance, so nothing gradeable covers the computation."
+   },
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "The idempotency guard quotes that same un-runnable criterion, so an agent that cannot obtain the owner's library has no defined way to decide whether the task is already applied."
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 2 defers the parser choice to information the agent does not have: 'parse the library via ParseITL(itlPath) (or the XML-specific path if the source is Library.xml rather than the binary .itl -- confirm which format the owner's source file actually is before choosing the parser)'. The task title says 'iTunes XML track Persistent ID coverage' while the named template ComputePIDIntegrity (internal/itunes/pid_integrity.go:96) takes an itlPath, and internal/itunes/plist_parser.go:28/35 is the XML side. Two models write two different readers."
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 3 makes the item's actual purpose conditional -- 'identify which playlists are the 224 materialized items ones and which track IDs they reference, if the playlist-track linkage is exposed by that function's return type' -- and the report field total_referenced_by_224_playlists depends on it. TASK-061 declares itself gated on this measurement's threshold, so an optional field silently un-gates a REVIEW-CRITICAL downstream task."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Anchors verify (GetBookByITunesPersistentID at internal/database/pebble_store.go:1179, plist_parser.go:28 Tracks and :35 Persistent ID, ComputePIDIntegrity at pid_integrity.go:96, cmd/pid-census/main.go:28 func main with flag.Bool at L31-36). But the brief describes the CLI's flags as '--full, --repair etc.'; the file already carries six, including `--sync-apply` which 'COMMITS to the --itl file ... The --itl path is the LIVE write target'. A new flag should be named as strictly read-only next to that."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-185",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "The gate command cannot fail, so the 'Gate green: ... exits 0' checkbox verifies nothing. It is `git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only'` -- the trailing `; echo` makes the shell's status echo's, always 0, whatever git diff --check or grep -L reported. It also has the classic grep-exit-1 problem in reverse (grep -L exits 1 when every file HAS the header, i.e. on success), and if the command substitution expands to nothing grep is invoked with no file operands and reads stdin."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance #1 is a prose judgement -- 'exists and answers all 4 original questions with specific file:line citations, distinguishing not implemented from implemented but unwired from wired but buggy for each of the 4 stages'. Only `test -f docs/audits/2026-08-21-itunes-playback-import-wiring.md` is mechanically checkable, and since the brief's own Goal already contains the answers to questions 1-3 with citations, the checkbox is satisfied by pasting the brief into the file."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Every anchor verifies at HEAD: RecomputeUserBookState internal/readstatus/readstatus.go:62; plist_parser.go:49 'Play Count' and :53 'Bookmark'; PositionSync.Sync internal/itunes/service/position_sync.go:76; internal/plugins/itunes/position_sync.go:23 'Schedule removed 2026-07-17' and :38 'TODO: Implement iTunes position sync operation'; and docs/audits/2026-08-21-itunes-playback-import-wiring.md does not yet exist. The investigation content is sound -- the failure is purely that nothing in acceptance can grade the deliverable."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Steps 1 and 2 ('Confirm question 4 more thoroughly than this rescope's pass did', 'Confirm question 5's frontend half') have no stopping condition -- no list of files to check, no definition of what counts as a confirmation, and step 2's outcome is explicitly allowed to stay open ('should be confirmed by whoever picks up the report')."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-006",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Both functional acceptance criteria are unrunnable by the executing agent. #1 ``gh workflow view auto-revert-backstop.yml` shows the schedule trigger` queries GitHub for a workflow that only exists in the agent's local branch, and the Done block forbids pushing ('Do NOT run `git push`, `gh pr`, or any merge'). #2 requires 'a known-red main (or a fork test)' plus two live workflow runs. #1 is also the idempotency guard, so the agent has no defined way to decide whether the task is already applied."
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "The workstream gate `git diff --check && grep -L 'last-edited: ' $(...) ; echo 'docs/tooling task: header check only'` cannot fail -- the trailing `; echo` makes the exit status echo's. Every ci-tooling brief in this group carries it, so the 'Gate green: ... exits 0' checkbox verifies nothing anywhere in the workstream."
+   },
+   {
+    "severity": "advisory",
+    "check": 10,
+    "problem": "The brief never states this repo's SHA-pinning rule for GitHub Actions. Steps 1-7 happen to use only `run:` + gh CLI, but step 7 ('a step summary block mirroring the existing workflow's Summary step') invites copying from auto-revert.yml, and any `uses:` the agent adds must be SHA-pinned."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Anchors verify: .github/workflows/auto-revert.yml exists with 0 schedule/cron hits, `gh issue create` at L305 and no `gh issue list` anywhere, and .github/workflows/scripts/auto_revert.py has latest_conclusion_by_sha at L154 and select_span at L174."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-007",
+  "verdict": "pass",
+  "findings": [
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "Acceptance #2 ('A CI run's repo-guards job log contains output from scripts/test_check_memory_leaks.py's unittest cases') needs a pushed CI run and cannot be checked locally; acceptance #1 (`grep -n \"discover -s scripts\" .github/workflows/ci.yml` returns 1 hit) does carry the criterion, so this is not disqualifying. The workstream-wide `; echo`-terminated gate command also cannot fail."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Step 3's hedge is wrong and could make an agent skip a required header bump: '.github/workflows/ci.yml ... workflow files in this repo may not carry the standard header -- confirm via head -5'. It does carry one (`head -5 .github/workflows/ci.yml` -> '# file: .github/workflows/ci.yml' / '# version: 3.7.0' / guid / '# last-edited: 2026-08-20')."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Verified the change is actually safe to wire in, which the brief does not check: `python3 -m unittest discover -s scripts -p 'test_*.py'` runs 7 tests and reports OK at HEAD, and scripts/test_check_memory_leaks.py loads its hyphenated subject via importlib.util.spec_from_file_location, so adding the step does not turn repo-guards red. Anchors verify: unittest discover at ci.yml:238 scoped to .github/workflows/scripts, scripts/test_check_memory_leaks.py present, check-memory-leaks.py referenced at Makefile:157 and memory-leak-scan.yml:13/48/110. exact_files ('.github/workflows/ci.yml') is complete, the idempotency grep has the right polarity (0 hits at HEAD), and Haiku tier fits a one-line addition."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-009",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['scripts/abs_capture_fixtures.py'] alone, but step 5 re-runs the harness ('Re-run the harness against the real ABS docker-compose instance ... to confirm at least one regenerated fixture now has a non-empty request_headers.user-agent') and acceptance #1 greps `testdata/abs-fixtures/*.json`. There are 28 such fixture files at HEAD (`ls testdata/abs-fixtures/*.json | wc -l` -> 28); regenerating any of them is an edit outside the brief's declared scope.",
+    "fix": {
+     "exact_files": [
+      "scripts/abs_capture_fixtures.py",
+      "testdata/abs-fixtures/"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance #1 (`grep -c 'request_headers' testdata/abs-fixtures/*.json returns >0 after a re-capture run`) can only be satisfied by standing up the real ABS docker-compose instance and re-capturing. It is also the idempotency guard, so an agent without that instance cannot decide whether to start, and the only other criterion (`grep -n 'REQUEST_HEADERS_TO_KEEP'`) is satisfied by declaring the constant and never using it."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "The anchor verifies: KEPT_HEADERS is at scripts/abs_capture_fixtures.py:38 and its response-header filter at L90, and no request-header capture exists. Naming L38 rather than 'line 37-90' would remove one guess."
+   },
+   {
+    "severity": "advisory",
+    "check": 3,
+    "problem": "An allowlist filter IS being added (REQUEST_HEADERS_TO_KEEP, with an explicit credential-exclusion edge case for Authorization / x-return-tokens / x-refresh-token) but anti_over_suppression is 'N/A'. There is no test proving user-agent survives the filter while the auth headers are dropped -- the one place a mistake here leaks credentials into committed fixtures."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-010",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "All three target workflows are pure callers of reusable workflows in ANOTHER repo, so step 1 is unanswerable from this checkout and the prescribed fix is the standard way to break them. Verified: nightly-burndown.yml's whole jobs block is `uses: falkcorp/github-common/.github/workflows/reusable-burndown.yml@d0c3326b...` + `secrets: inherit` (L26-39); hard-burndown.yml the same (L25-37); triage-poll.yml is `uses: falkcorp/github-common/.github/workflows/reusable-triage-poll.yml@d0c3326b...` + `secrets: inherit` (L20-26). None of the three contains a single `run:` or action step. Step 1 says 'Read .github/workflows/nightly-burndown.yml in full; list every `uses:`/`run: gh ...` step to determine what token scopes it needs' -- those steps live in falkcorp/github-common and are invisible here. A caller's top-level `permissions:` block is the CEILING for the called reusable workflow (a called workflow cannot request more than the caller granted), so step 2's fallback 'or add `contents: read` as a safe baseline if unsure' silently strips issues/pull-requests write from the burndown and triage automation."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Nothing in acceptance can catch that breakage. #1 (`grep -rLn '^permissions:' .github/workflows/*.yml returns 0 lines`) passes for ANY permissions block, correct or crippling -- and note grep -L exits 1 when it prints nothing, so 'returns 0 lines' and a 0 exit status are mutually exclusive. #2 ('The next scheduled/triggered run of each of the 3 workflows completes without a permissions-denied error') is a future live run the agent cannot perform."
+   },
+   {
+    "severity": "advisory",
+    "check": 8,
+    "problem": "Rated Haiku-class as 'mechanical, 3 files, same fix pattern' but the actual decision requires reading a different repository's reusable workflows and reasoning about GitHub's caller/callee permission ceiling. The brief's own edge case ('gh pr comment ... needs pull-requests: write, not just issues: write -- verify the exact gh subcommand used') concedes this is judgment, not mechanics.",
+    "fix": {
+     "tier": "sonnet"
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "The anchor is correct on the file set: `grep -rL '^permissions:' .github/workflows/*.yml` -> exactly hard-burndown.yml, nightly-burndown.yml, triage-poll.yml, matching exact_files."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-011",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "The single functional acceptance criterion is 'docker build . (or make's equivalent target) completes successfully with the new checksum steps in place' -- a full image build, not something an agent can be expected to run, and the criterion the idempotency guard quotes. Its companion grep (`grep -n \"sha256sum -c\" Dockerfile returns 2 hits`) passes on any two hashes, including wrong ones, so nothing gradeable distinguishes a correct pin from a fabricated one."
+   },
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The brief supplies no checksums and instead tells the agent to produce them: step 1 'Download https://github.com/nemtrif/utfcpp/archive/refs/tags/v4.0.6.tar.gz and https://github.com/taglib/taglib/releases/download/v2.0.2/taglib-2.0.2.tar.gz locally, compute sha256sum for each'. A sandboxed agent with no network cannot; worse, a supply-chain pin whose value is whatever the executing agent happened to download is not a pin at all -- the digests must be stated in the brief (or sourced from an upstream signature) so a reviewer can check them."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Anchors verify: Dockerfile:39 `&& curl -sL https://github.com/nemtrif/utfcpp/archive/refs/tags/v4.0.6.tar.gz | tar xz` and Dockerfile:41 the taglib equivalent, and the Dockerfile does carry a file header (`# file: Dockerfile` / `# version: 2.6.0`), so step 3's 'if one exists' hedge resolves to yes."
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "The workstream-wide gate command ends in `; echo ...`, so the 'Gate green: ... exits 0' checkbox always passes regardless of what ran."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-012",
+  "verdict": "pass",
+  "findings": [
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Step 1 dictates the comment text verbatim and it contains an unresolved placeholder: '(checked 2026-08-2x)'. A Haiku-tier agent told to add exactly that line will commit the literal '2026-08-2x' into scripts/setup-prometheus-auth.py. It should read 2026-08-21, matching every other date in the package."
+   },
+   {
+    "severity": "advisory",
+    "check": 5,
+    "problem": "The prescribed comment inverts the brief's own first anchor. Today `grep -n \"index('-')|indent\" scripts/setup-prometheus-auth.py` returns 0 hits (verified, exit 1) and the re-verify block says 'a zero-hit grep means STOP and report'. After the change the comment ('Hardcoded indent ... dead-indentation bug') makes that same grep return hits, so a re-run of the anchors reads as a different repo state. The idempotency guard itself is fine -- it quotes `grep -n \"does not share\"`, which is 0 hits at HEAD, the correct polarity for an additive change."
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "The workstream-wide gate command ends in `; echo ...` so it cannot fail. The task's real acceptance (`grep -n \"does not share\" ... returns 1 hit`) is a genuine grep, which is why this is not disqualifying."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "The second anchor verifies exactly: `grep -n \"job_name: '{JOB_NAME}'\" scripts/setup-prometheus-auth.py` -> L78 (and a second unrelated hit at L260). exact_files (the single script) is complete, Haiku tier fits a one-line comment, and anti_over_suppression N/A is correct because no guard is added."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-013",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['scripts/find_spurious_stranded_book_rows.py'] but the Tests section creates 'scripts/tests/test_find_spurious_stranded_book_rows.py' -- and scripts/tests/ does not exist at HEAD (verified: `ls scripts/tests` -> No such file or directory), so the task also creates a new directory outside its declared scope. Step 6 additionally writes 'a timestamped report file' with no path constraint.",
+    "fix": {
+     "exact_files": [
+      "scripts/find_spurious_stranded_book_rows.py",
+      "scripts/tests/test_find_spurious_stranded_book_rows.py"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "The Tests section is unedited reasoning, not a specification: \"unit-test the two regex heuristics against known-good and known-bad title/path strings (e.g. 'Tarkin - Star Wars - 3' parent + '85' -- wait, verify against the REAL shape: the numeric fragment becomes the Title of a spuriously-created Book, so test with title='85', ...)\". A literal '-- wait,' mid-sentence leaves the fixture shape undecided, and the two heuristics' exact regexes are the entire deliverable."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance #2 ('Running it against a local/dev server ... produces a report file and prints non-negative counts') needs a running server plus the long-lived API key the Background assumes ('assume the key file already exists'). Acceptance #3 (`grep -rn \"DELETE|requests.delete|api.*delete\" ... returns 0 hits`) is self-defeating: the script's own docstring is required by step 7 to say it performs no delete, and any such sentence containing 'delete' makes the grep hit; grep also exits 1 when it correctly finds nothing."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Anchors verify: find_bogus_dirs at scripts/repair_stranded_tracks.py:119 and '85 separate Book records' at internal/organizer/path_format.go:59. The report-only posture is correct and consistent with the owner's never-delete rule."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-014",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 3,
+    "problem": "A commit-blocking guard IS added and the brief's anti_over_suppression field says it is not: 'N/A -- this is a removal/hygiene task, not a filter/guard whose over-suppression would hide real bugs'. Step 3 adds a pre-commit hook that rejects any newly-added file over 5MB, with an explicit LFS carve-out in the edge cases ('.gitattributes has *.m4b/*.m4a/*.mp3/*.flac/*.png/*.webm LFS rules ... must not be blocked'). That is exactly a filter whose over-suppression blocks legitimate commits repo-wide, and declaring it N/A is what lets the happy-path case go unwritten."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['.gitignore','mtls-bridge','scripts/setup-git-hooks.sh'] but the Tests section says 'scripts/test-git-hooks.sh already exists -- extend it with a case for the new size guard' and acceptance #3 runs it (`bash scripts/test-git-hooks.sh` passes including the new size-guard case). The file exists at HEAD (verified by `ls`) and is not in scope.",
+    "fix": {
+     "exact_files": [
+      ".gitignore",
+      "mtls-bridge",
+      "scripts/setup-git-hooks.sh",
+      "scripts/test-git-hooks.sh"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 8,
+    "problem": "Rated Haiku-class as 'git rm + two-line gitignore add + a small size-guard addition ... no ambiguity', but step 3 is a shell size guard written inside a quoted heredoc that must iterate `git diff --cached --name-only --diff-filter=A`, size each staged blob with `git cat-file -s :<path>`, and distinguish an LFS pointer from real content. That is not Haiku-mechanical.",
+    "fix": {
+     "tier": "sonnet"
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 1 leaves the working-tree outcome open ('do not delete the local file if the owner wants to keep it ... or `git rm mtls-bridge` if it should also vanish from the working tree -- prefer `git rm --cached`'). 'Prefer' resolves it, but the two produce different diffs."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Anchors verify: `git ls-files -s mtls-bridge` -> 100755 05891c02... mtls-bridge; Makefile:575-577 `build-mtls-bridge:` with `-o mtls-bridge`; `grep -c mtls-bridge .gitignore` -> 0; scripts/setup-git-hooks.sh:14 HOOK_FILE and L20 the heredoc."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-015",
+  "verdict": "pass",
+  "findings": [
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "Acceptance covers only half the change: `grep -n series_dump.json .gitignore returns 1 hit` says nothing about testdata/series_fix.json, so an agent that gitignores one of the two files passes every checkbox (acceptance #1 does cover both files' untracking). Adding `grep -c 'series_dump.json\\|series_fix.json' .gitignore` expecting 2 would close it. The workstream-wide gate command also ends in `; echo ...` and so cannot fail."
+   },
+   {
+    "severity": "advisory",
+    "check": 5,
+    "problem": "The removal-polarity idempotency guard has the right direction ('zero hits = already removed') but appends 'AND the replacement is present' -- there is no replacement in this task, so the second conjunct is unsatisfiable as written and could stall an agent that reads it literally."
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "Step 3 ('Confirm scripts/series_dedup.py's --apply-fixes flow ... still works locally against a freshly generated (untracked) series_fix.json') needs a running server to generate the file; it is not in acceptance, so it does not block, but it is not performable either."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Every claim verifies: DUMP_FILE at scripts/series_dedup.py:40 and FIX_FILE at L41 (--apply-fixes help text at L556); `grep -rln series_dump --include=\"*.go\" .` -> 0 hits; `git ls-files -s testdata/series_dump.json testdata/series_fix.json` -> both tracked. A wider sweep (`grep -rn 'series_dump|series_fix'` over yml/Makefile/sh/py/md) finds references only in docs/plans/2026-07-10-repo-size-history-rewrite-plan.md, docs/plans/2026-07-12-repo-size-targeted-purge-package.md and the script itself, confirming the brief's 'no live dependency' claim. exact_files, Haiku tier, removal polarity and the N/A anti-over-suppression are all correct."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-191",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 3 orders the agent to do exactly what the Done block forbids. Step 3: 'Merge PR 1, wait for at least one scheduled/nightly run of each of those three workflows to go green.' Done: 'the coordinator owns push/PR/merge. Do NOT run `git push`, `gh pr`, or any merge.' Steps 2 and 4 are likewise framed as two separate PRs with a real-world wait between them, which no single worktree brief can execute."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "The on-disk pin file is missing from scope. `.github/ghcommon-ref.txt` exists and contains the stale SHA d0c3326b96557c8ea9117c1c196b628e5e028186 (verified: `cat .github/ghcommon-ref.txt`). It is not mentioned in any step, is absent from exact_files, and acceptance #2 only greps `.github/workflows/*.yml`, so a 'complete' task leaves the repo's recorded github-common ref pointing at the old commit while the workflows point at a new one.",
+    "fix": {
+     "exact_files": [
+      ".github/ghcommon-ref.txt",
+      ".github/workflows/frontend-ci.yml",
+      ".github/workflows/hard-burndown.yml",
+      ".github/workflows/nightly-burndown.yml",
+      ".github/workflows/nightly.yml",
+      ".github/workflows/prerelease.yml",
+      ".github/workflows/release-prod.yml",
+      ".github/workflows/security.yml",
+      ".github/workflows/triage-poll.yml"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The count is wrong and self-contradictory. The Goal says 'all 7 stale falkcorp/github-common SHA pins' and the anchor says '7 hits', but the same anchor line then names EIGHT files, and the real count is eight: `grep -rl 'd0c3326b96557c8ea9117c1c196b628e5e028186' .github/workflows/*.yml | wc -l` -> 8 (frontend-ci, hard-burndown, nightly-burndown, nightly, prerelease, release-prod, security, triage-poll). PR 1 (3 files) + PR 2 (5 files) = 8, so an agent trusting '7' will believe one file was already done."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Neither acceptance criterion is checkable by the agent. #1 is 'After PR 1 merges: the next scheduled run ... completes with a green status'; #2 is 'After PR 2 merges: grep ... returns 0 hits'. Both are gated on merges the brief forbids, and step 1 makes the deliverable itself nondeterministic -- 'Resolve the current HEAD SHA of falkcorp/github-common's main branch ... this requires a live lookup (gh api or git ls-remote), not something derivable from this repo alone' -- so no reviewer can verify the SHA that lands."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "The second anchor verifies: `grep -n '828afb50d0d18c426c72a6ed1060123677bee674' .github/workflows/ci.yml` -> L45, reusable-ci-minimal.yml pinned to a 2026-08-18 commit, correctly excluded by step 5."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-018",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 3 and acceptance #1 are in direct conflict. Step 3: 'Add a code comment at both sites noting the previous hardcoded value was a specific developer's LAN address and should never be a shipped default again.' Acceptance #1: '`grep -n '192.168.0.20' internal/config/config.go` returns 0 hits.' The natural way to write that comment is to quote the retired value, which makes the grep hit and the acceptance fail; a model that omits the value satisfies acceptance but writes a comment that does not say what was wrong. Verified both current sites: internal/config/config.go:1575 `viper.SetDefault(\"ai_backend.local_base_url\", \"http://192.168.0.20:11434/v1\")` and L2432 `LocalBaseURL: \"http://192.168.0.20:11434/v1\"` inside ResetToDefaults."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['internal/config/config.go'] but the Tests section requires two assertions in internal/config/config_test.go (fresh-install default empty) and in the EffectiveLLMMode test file.",
+    "fix": {
+     "exact_files": [
+      "internal/config/config.go",
+      "internal/config/config_test.go"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 7,
+    "problem": "The brief's own edge case says this silently changes the owner's running deployment: 'The owner's own deployment currently relies on this default being pre-filled; after this change ... local-LLM mode will silently stop being selected on next boot', and the Coordinator note invokes 'never flip a config default that prod silently depends on'. Yet review_critical is false and no step gates the change on confirming the prod snapshot carries an explicit value. internal/config/config.go:577 confirms the mechanism -- `if c.AIBackend.LocalBaseURL != \"\" || c.Embedding.BaseURL != \"\"` is the only mode selector, so emptying the default flips the mode with no error.",
+    "fix": {
+     "review_critical": true
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 5,
+    "problem": "The rendered Idempotency block is the symbol-move variant ('If the symbol already lives at its NEW location and is absent from the old one'), but nothing moves -- this is a value change. The correct guard is acceptance #1's grep (2 hits at HEAD, verified)."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-019",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['internal/config/config.go'] but the Tests section requires 'internal/config/config_test.go -- add an assertion that after calling ResetToDefaults(), AppConfig.ChapterConsolidationThresholdMin == 10'. That file exists at HEAD and already exercises ResetToDefaults (internal/config/config_test.go:380/409).",
+    "fix": {
+     "exact_files": [
+      "internal/config/config.go",
+      "internal/config/config_test.go"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Step 1's landmark is half wrong: 'find the struct-literal block that also sets ScanProgressEvery / CoalesceShatteredSiblings'. Inside ResetToDefaults (internal/config/config.go:2280) only ScanProgressEvery is present (`awk '/^func ResetToDefaults/,/^}$/' internal/config/config.go | grep -n 'ScanProgressEvery|CoalesceShatteredSiblings'` -> one hit, ScanProgressEvery: 20); CoalesceShatteredSiblings is not set there -- which is arguably a second instance of the same omission bug, not a landmark."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "The other anchors verify with one line of drift: the doc comment 'Default 10. Set to 0 to disable consolidation.' is at L763 (brief says L762), the viper default `viper.SetDefault(\"chapter_consolidation_threshold_min\", 10)` is at L1282 as stated, and the awk|grep -c over ResetToDefaults returns 0 as stated. Acceptance #1 is a real, polarity-correct command and Haiku tier fits."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-020",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "The removal-polarity idempotency guard fires on an untouched checkout. It reads 'If the removed symbol/file is already ABSENT at HEAD (re-run the re-verify greps above: zero hits = already removed) AND the replacement is present, the removal is already done -- run acceptance instead.' The third re-verify grep is `grep -rn 'Use(\"migrate-from-sqlite\"|\"migrate-from-sqlite\",' cmd/*.go` with a documented expectation of 0 hits, and it does return 0 at HEAD (verified: `grep -rn 'migrate-from-sqlite' cmd/` -> exit 1, no output). A weak model reading 'zero hits = already removed' skips the task."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance #2 can never pass in this repo. `grep -rn 'enable.sqlite3.i.know.the.risks|EnableSQLite' --include=*.go .` recurses from the repo root into `.worktrees/`, which holds a full second checkout (verified: `ls -d .worktrees` -> present, and the unfiltered grep returns hits from there). The criterion needs `--exclude-dir=.worktrees` or to be scoped to cmd/ and internal/."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is wrong in both directions. It OMITS the two test files that must change: internal/config/config_test.go (EnableSQLite at L207, L222-223, L380, L409-410) and internal/config/config_unit_test.go (L368 `assert.False(t, AppConfig.EnableSQLite)`) -- both break the build the moment the struct field is deleted. And it INCLUDES two files with nothing to change: `grep -c 'EnableSQLite|InitializeStore' internal/database/mock_store.go internal/database/mocks/mock_store.go` -> 0 and 0. Step 7 ('Grep .env.example and docs for any mention of this flag/env var and remove or update') also puts docs/configuration.md:62 and docs/database-architecture.md:115 in scope, neither listed.",
+    "fix": {
+     "exact_files": [
+      "cmd/child_mode.go",
+      "cmd/commands_test.go",
+      "cmd/dedup_bench.go",
+      "cmd/diagnostics.go",
+      "cmd/root.go",
+      "cmd/seed.go",
+      "docs/configuration.md",
+      "docs/database-architecture.md",
+      "internal/config/config.go",
+      "internal/config/config_test.go",
+      "internal/config/config_unit_test.go",
+      "internal/database/store.go"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 2 leaves the replacement error text open ('drop the migrate-from-sqlite mention, or replace it with an actual pointer if one exists elsewhere -- grep first') and the Coordinator note then says to 'flag that specific wording choice for the owner rather than inventing a migration story' -- i.e. the agent is told both to write the string and to escalate it."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "The other anchors verify: internal/database/store.go:1306 `func InitializeStore(dbType, path string, _ bool) (Store, error)` and L1312's error string containing the nonexistent 'audiobook-organizer migrate-from-sqlite' subcommand; cmd/root.go:351 the BoolVar registration and L358 the BindPFlag."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-021",
+  "verdict": "fail",
+  "verdict_override": "needs_design",
+  "reason": "Step 2 is a schema-design assignment, not an implementation step: 'Design a minimal record shape for a reference-corpus file ... WITHOUT reusing the full Book/BookFile schema ... likely a new small table/keyspace, e.g. internal/database keys under a `refcorpus:` prefix.' Step 1 leaves the config surface equally open ('a new config field (e.g. `ReferenceCorpusPaths []string` or a single `SourceCorpusRoot string`)') and self-contradicts on the loading mechanism (see the check-10 finding). Choosing a new persisted keyspace, its key layout, and a second scan-root config surface are owner decisions that cannot be delegated to an executor; the brief should be split into a design note plus an implementation brief once the shape is fixed.",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files bears no relation to the work. It lists internal/config/config.go, internal/plugins/acoustid/backfill.go and internal/scanner/scanner.go -- but backfill.go is named in the Reuse block as a pattern to COPY, not modify, and scanner.go is never mentioned in any step. Meanwhile step 3 creates a new op file under internal/plugins/maintenance/, step 2 creates a new keyspace under internal/database/, the op must be registered in internal/plugins/maintenance/plugin.go (the defs slice in `func (p *Plugin) Register`, the only place a maintenance op ever registers), and the Tests section creates internal/plugins/maintenance/scan_reference_corpus_test.go. None of those four are in scope."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "The gate never runs the new code. `go build ./... && go vet ./... && go test ./internal/config/... ./internal/plugins/acoustid/... ./internal/scanner/... -count=1` omits ./internal/plugins/maintenance/..., where the new op and both required tests live -- including the read-only guard test the brief calls the anti-over-suppression check. Acceptance #3 is also `make ci passes`, which the brief's own gate note forbids, and acceptance #2 ('Running the op against a fixture dir populates fpidx entries queryable via the existing LSH lookup API') names no command."
+   },
+   {
+    "severity": "fatal",
+    "check": 10,
+    "problem": "Step 1 contradicts itself on the repo's config convention within one sentence: add the field 'with its own viper binding (mirroring RootDir's `viper.GetString(\"root_dir\")` at L1635) and its own env var (e.g. AUDIOBOOK_REFERENCE_CORPUS_ROOT, per this repo's os.Getenv-not-viper convention for new env-driven config -- verify which pattern RootDir itself actually uses before copying)'. RootDir uses viper (verified: internal/config/config.go:623 the struct field, L1635 `RootDir: viper.GetString(\"root_dir\")`), while the standing repo rule for new env-driven config is os.Getenv. The brief asks for both and then delegates the choice."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Anchors verify: `grep -n 'RootDir ' internal/config/config.go` -> the single struct field at L623; `grep -rln fpidx internal/database internal/fingerprint internal/plugins/acoustid` -> 7 files (memdb_strip.go, pebble_store.go, pebble_store_lsh.go, pebble_store_lsh_api_test.go, pebble_store_bookfiles.go, internal/fingerprint/lsh.go, internal/plugins/acoustid/lsh_backfill.go). The read-only posture and the anti-over-suppression test (a filesystem wrapper that fails the op on any write under the corpus root) are the strongest-specified parts of the brief."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 5 concedes its own gate is ill-defined -- 'Add a dry-run-first default (apply=false is meaningless here since nothing mutates the corpus itself, but DO gate actually writing into fpidx behind an explicit flag ...)'. Whether the flag defaults to report-only, and what it is called, decides whether a first prod run writes into the shared fpidx index."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-119",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The named replacement does not do what the brief says. scanner.ComputeFileHash is NOT a whole-file content hash for the file sizes this path handles: internal/scanner/scanner.go:2515-2536 documents 'a chunked strategy for large audiobook files' and implements `const threshold = 100 * 1024 * 1024` / `const chunkSize = 10 * 1024 * 1024` with 'For large files (> 100MB), hash first 10MB + last 10MB + size for speed'. Audiobook .m4b files routinely exceed 100MB, so on exactly the population this organize path handles, two same-size files that differ only in the middle still hash equal -- which is the corruption the Goal claims to eliminate ('two different files that happen to share a size are no longer silently treated as the same file'). It also opens with `if activeScanner != nil { return activeScanner.ComputeFileHash(filePath) }`, so the comparison's behaviour depends on package-global scanner state."
+   },
+   {
+    "severity": "fatal",
+    "check": 3,
+    "problem": "The prescribed anti-over-suppression test cannot exercise the production branch. TestOrganizeBookDirectory_DstSameSizeDifferentContent_NotAdopted uses temp fixtures, which will be far under the 100MB threshold and therefore take ComputeFileHash's full-stream path, passing green while every real audiobook takes the first-10MB+last-10MB+size path. The brief needs either a test that forces the chunked branch or an explicit statement that the fix is bounded to sub-100MB files."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['internal/organizer/organizer.go'] but the Tests section extends/adds two cases in internal/organizer/organizer_regression_test.go (TestOrganizeBookDirectory_DstAlreadyExists is at L140, verified).",
+    "fix": {
+     "exact_files": [
+      "internal/organizer/organizer.go",
+      "internal/organizer/organizer_regression_test.go"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 5,
+    "problem": "The rendered Idempotency block is the symbol-move variant; nothing moves. Acceptance #2 (`grep -n 'ComputeFileHash' internal/organizer/organizer.go returns >=2 hits`, 0 at HEAD) is the correct guard."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "The three anchors themselves verify: organizer.go:763 `case srcErr == nil && os.SameFile(srcInfo, dstInfo):`, organizer.go:765 `case srcErr == nil && srcInfo.Size() == dstInfo.Size():`, scanner.go:2517 `func ComputeFileHash`. The import-cycle check also holds -- `grep -rn 'audiobook-organizer/internal/organizer' internal/scanner/*.go` returns nothing."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-120",
+  "verdict": "fail",
+  "verdict_override": "needs_design",
+  "reason": "The brief tells the executor to design rather than implement, in four separate places. Step 3: 'Design (write up before implementing, given effort=L and review_critical=true) how a per-book batch operation adopts MoveBookFile's per-file rollback guarantee'. Step 5: 'confirm with the reviewer whether part 1's hash-based fix should be kept as MoveBookFile's OWN destination-exists check instead of being retired outright'. Edge cases: 'Partial failure mid-book (file 500 of 1,189 fails after 499 succeeded): decide and document whether MoveBookFile's rollback is per-file-only ... this is a real design question, not an implementation detail.' Coordinator notes: 'Given effort=L and review_critical=true, this likely needs its own PLAN.md and worktree per CLAUDE.md's Plan Before Execution rule rather than being done inline.' The rollback semantics for a partially-moved 1,189-file book on the organize path are an owner decision, not something to settle inside a task brief.",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The load-bearing anchor is wrong. It claims `grep -rln 'MoveBookFile(' --include=*.go . | grep -v _test` gives '2 hits: internal/organizer/move.go, internal/server/file_move.go -- MoveBookFile is defined once and has exactly one caller outside its own package'. Excluding the repo's own .worktrees copy it returns ONE file, internal/organizer/move.go. internal/server/file_move.go does not call MoveBookFile; it re-exports it -- L15 `type MoveBookFileResult = organizer.MoveBookFileResult`, L17 `// MoveBookFile forwards to organizer.MoveBookFile`, L18 `var MoveBookFile = organizer.MoveBookFile`. That is a package-level function-valued variable, so a signature change silently changes an exported server symbol's type rather than breaking 'one caller' the compiler would point at."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['internal/metafetch/service_apply.go','internal/organizer/organizer.go'] and misses everything else the steps touch: internal/organizer/move.go (step 5 proposes moving the destination-exists check INTO MoveBookFile), internal/organizer/organizer_regression_test.go and internal/organizer/unit_test.go (Tests: both suites 'must stay green throughout' and will need updating as the ad-hoc paths are retired), plus the 'New integration-style test exercising ensureLibraryCopy' for which no file is named. internal/server/file_move.go is also in scope given the re-export above."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "It conflicts with its own dependency. TASK-119 (Depends-on) adds the ComputeFileHash destination-adoption check to organizer.go, and step 5 here may delete it ('remove the now-dead SameFile/size-or-hash-heuristic duplication ... confirm with the reviewer whether part 1's hash-based fix should be kept'). Two REVIEW-CRITICAL briefs in consecutive waves editing the same lines with the second possibly reverting the first."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "The claims that do hold: `func MoveBookFile(store bookMover, bookID, oldPath, newPath string, extraUpdates *database.Book) error` at internal/organizer/move.go:32 (matching the brief's stated parameter list), ensureLibraryCopy at internal/metafetch/service_apply.go:310, and internal/organizer/unit_test.go present."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-121",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "This brief adds back, on the same prod-data path, the exact heuristic its sibling brief removes as unsafe -- and both are Wave 1, REVIEW-CRITICAL, in the same workstream. TASK-119's Goal: replace `srcInfo.Size() == dstInfo.Size()` (internal/organizer/organizer.go:765) with a content hash 'so two different files that happen to share a size are no longer silently treated as the same file (which currently corrupts pathMap and, downstream, the book's file rows)'. TASK-121 step 2: os.ReadDir(filepath.Dir(dstPath)), 'look for an entry whose size ... matches os.Stat(srcPath)'s size ... If a same-size match is found under a different name in that directory, return that recovered path instead of dstPath' -- and that value is written to book_file.FilePath at internal/organizer/service.go:1515. The stated mitigation only refuses when MORE THAN ONE candidate matches; a single wrong same-size candidate, which is precisely TASK-119's failure mode, is silently adopted. The brief's own Coordinator note concedes the stakes ('a wrong recovery match could point a row at the WRONG file, which is worse than the current status quo')."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance criterion 3 is `- [ ] make ci passes`, which the brief's own How-to-test paragraph forbids ('Do NOT use `make ci` as the gate: it is red on `main`')."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['internal/organizer/service.go'] alone. The Tests section defines four tests in 'internal/organizer/service_test.go (or a new resolveOrganizedFilePath_test.go in the same package)' -- internal/organizer/service_test.go does NOT exist at HEAD (verified: `ls internal/organizer/service_test.go` -> No such file or directory), so the destination file is both unresolved and out of scope -- plus a fifth test in 'whatever existing test file exercises OrganizeOneBook/CreateOrganizedVersion for single-file books', which is named nowhere."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 2 is one run-on sentence with a nested alternative that leaves the control flow undecided: '... matches os.Stat(srcPath)'s size (only if srcPath itself still resolves an on-disk size from an earlier stat you must add, OR skip this size check if srcPath is also gone -- in that case there is nothing to compare against and the branch must fall through ...)'. Whether the extra stat is added, and where, changes which branch fires."
+   },
+   {
+    "severity": "advisory",
+    "check": 5,
+    "problem": "The rendered Idempotency block is the symbol-move variant on a task that moves nothing; acceptance #2 (a new log.Warn inside resolveOrganizedFilePath's final branch) is the real guard. Anchors otherwise verify exactly: internal/organizer/service.go:1325 `func resolveOrganizedFilePath(srcPath string, planned map[string]string, log logger.Logger) string`, L1515 `newBF.FilePath = resolveOrganizedFilePath(bf.FilePath, planned, log)`, L1517 `newBF.FilePath = newPath`, and both cited audit docs exist under docs/audits/."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-122",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency guard is `go test ./internal/organizer/... -run TestBuildPath_EditionSuffix passes`. No such test exists at HEAD (verified: `grep -n 'edition_suffix' internal/organizer/pathbuild.go` -> 0 hits, exit 1), and `go test -run` with zero matches exits 0, so the brief reports this REVIEW-CRITICAL organize-path task as already applied before any work starts. Acceptance #2 (`grep -n 'edition_suffix' internal/organizer/pathbuild.go returns hits`) is the guard it should have quoted."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance criterion 3 is `- [ ] make ci passes`, contradicting the brief's own gate note that make ci is red on main and must not be used."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['internal/organizer/pathbuild.go'] but both required tests go in internal/organizer/pathbuild_test.go, which exists at HEAD (verified by `ls`).",
+    "fix": {
+     "exact_files": [
+      "internal/organizer/pathbuild.go",
+      "internal/organizer/pathbuild_test.go"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Every anchor verifies: `\"{edition}\": v.Edition` at internal/organizer/pathbuild.go:279, the '{series_prefix} is built AFTER the trim pass' comment at L298, `Edition   string` at L198, and the model block `out[\"{series_prefix}\"] = prefix + \" - \"` / `= \"\"` at L308/L310. Step 2's warning (add the key to `out`, not `raw`) is exactly right and is the one thing a weak model would get wrong."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-203",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "The idempotency guard quotes acceptance #1: `go test ./internal/organizer/... ./internal/metrics/... -run TestOrganizeBooks_LogsCollisionWhenTwoBooksShareATargetPath -count=1 exits 0.` That test does not exist at HEAD (verified: `ls internal/organizer/target_path_collision_test.go` -> No such file or directory), and `go test -run` with zero matching tests exits 0, so the brief instructs the agent to treat the task as already applied and run acceptance instead. Acceptance #2 (`grep -n \"organize_target_path_collision_total\" internal/metrics/metrics.go returns >=2 hits`, 0 at HEAD) is the guard that should have been quoted -- swapping the order of the acceptance list would fix this brief."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Every anchor verifies exactly at HEAD: GenerateTargetPath at internal/organizer/organizer.go:301 and generateTargetPath at L321 (both methods on *Organizer, as the brief corrects); organizeBooks at internal/organizer/service.go:943 with `const numWorkers = 8` at L950; `var statsMu sync.Mutex` at L947; `newPath, err = orgSvc.OrganizeOneBook(workerOrg, &book, log)` at L1005; itunesLocationUnmappable CounterVec at internal/metrics/metrics.go:112, `func Register()` at L168, `func RecordITunesLocationUnmappable` at L182; `grep -rn 'prometheus.NewCounter' internal/organizer` -> 0 hits; internal/metrics/metrics_test.go present for the counter-assertion pattern. exact_files (metrics.go, service.go, target_path_collision_test.go) is complete including the new test file, the edge cases correctly cover the check-then-set-under-one-lock race and the oldPath==newPath claim, the label set is deliberately empty to avoid unbounded path cardinality, and the N/A anti-over-suppression is justified in place. Apart from the idempotency polarity this is the best-constructed brief of the 40."
+   }
+  ]
+ }
+]

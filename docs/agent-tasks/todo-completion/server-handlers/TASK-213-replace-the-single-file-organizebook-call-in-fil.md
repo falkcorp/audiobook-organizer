@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-213-replace-the-single-file-organizebook-call-in-fil.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 4e8bc5b6-4e28-43e8-be0d-d8c519ec1ddb -->
+<!-- guid: ad43dbc3-5952-439f-9de8-962ac29de4dd -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-213 — Replace the single-file OrganizeBook call in filesystem.go's auto-organize-after-browse block with OrganizeOneBook + counters (ORGANIZE-4TH-COPY)
 
-**Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · server-handlers subagent · **Why:** small, well-templated fix (copy an already-proven pattern from two sibling files) but touches a file-organize write path, warranting more care than a pure haiku mechanical edit · **Depends on:** none · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P1 · **Effort:** S · **Recommended subagent:** Opus-class · server-handlers subagent · **Why:** small, well-templated fix (copy an already-proven pattern from two sibling files) but touches a file-organize write path, warranting more care than a pure haiku mechanical edit · **Depends on:** none · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 2125 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**ORGANIZE-4TH-COPY**" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-18.json`.
 
@@ -71,12 +71,12 @@ Then, always:
 - internal/server/handlers/filesystem_test.go: a new test seeding a multi-file book (file_path is a directory) alongside a single-file book in the same auto-organize-after-browse scan, asserting the multi-file book organizes successfully (previously it silently failed) and the single-file book's existing behavior is unchanged.
 - A test asserting the completion log line reports correct counts when one book has a DB lookup error, one has no DB row, one organizes successfully, and one fails organize -- covering all four counter branches distinctly (this is the anti-over-suppression check: a bug that collapses two distinct non-events into one counter is exactly what this fix corrects, so the test must prove they stay distinguishable).
 
-Anti-over-suppression test: `the distinct-counter test described above (lookupErrors vs notInDB vs failed vs organized, each independently verifiable) is the anti-over-suppression check for this item` — a known-good input still passes with the new guard active.
+Anti-over-suppression test: `TestFilesystemAutoOrganize_CountersStayDistinct - one book with a DB lookup error, one with no DB row, one that organizes, and one that fails organize; assert lookupErrors/notInDB/organized/failed are each exactly 1 and that the summary line is emitted even when all four are zero.` — a known-good input still passes with the new guard active.
 
 ## How to test
 
 ```bash
-go build ./... && go vet ./... && go test ./internal/server/handlers/... -count=1
+go build ./... && go vet ./... && go test ./internal/server/... ./internal/server/handlers/... -count=1
 ```
 Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
@@ -85,9 +85,9 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 - [ ] go test ./internal/server/handlers/... -run TestFilesystem -count=1 -v passes including the new multi-file-book-in-auto-organize test
 - [ ] a book whose file_path is a directory, scanned through this endpoint with auto-organize enabled, no longer silently fails -- it either organizes correctly or is counted+logged as `failed` with a specific error message, never a bare unlogged continue
 - [ ] go build ./... && go vet ./... exit 0
-- [ ] Anti-over-suppression test: `the distinct-counter test described above (lookupErrors vs notInDB vs failed vs organized, each independently verifiable) is the anti-over-suppression check for this item` — a known-good input still passes with the new guard active.
+- [ ] Anti-over-suppression test: `TestFilesystemAutoOrganize_CountersStayDistinct - one book with a DB lookup error, one with no DB row, one that organizes, and one that fails organize; assert lookupErrors/notInDB/organized/failed are each exactly 1 and that the summary line is emitted even when all four are zero.` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/server/handlers/... -count=1` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/server/... ./internal/server/handlers/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_server-handlers_213.md`.
 

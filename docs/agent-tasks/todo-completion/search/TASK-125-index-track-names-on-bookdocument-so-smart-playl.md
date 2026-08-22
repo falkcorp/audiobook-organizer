@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/search/TASK-125-index-track-names-on-bookdocument-so-smart-playl.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 8ff65908-573f-4a38-b871-70a6a81b3bdb -->
+<!-- guid: 5a55e2ab-3f14-4240-b7da-334ac99541cc -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-125 — Index track names on BookDocument so smart playlists can match them (TODO.md L618)
@@ -112,7 +112,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/search/... passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `grep -n 'TrackNames' internal/search/document.go returns 1 hit.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

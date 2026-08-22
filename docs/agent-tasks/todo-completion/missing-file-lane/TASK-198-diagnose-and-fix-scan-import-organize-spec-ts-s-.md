@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-198-diagnose-and-fix-scan-import-organize-spec-ts-s-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 38c9ebab-7dd4-4b9b-bdf8-0f2863d86e8c -->
+<!-- guid: 18c6f6d0-d3b3-4084-95bb-1cf52fba2c6c -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-198 — Diagnose and fix scan-import-organize.spec.ts's 7 stuck-on-'Add Import Path' failures via DOM snapshot (TODO.md L6394)
@@ -25,7 +25,7 @@ git rebase origin/main
 
 ## Goal
 
-Follow the TODO's own prescribed next step before writing any code: run scan-import-organize.spec.ts in isolation, open the resulting test-results/<dir>/error-context.md (or equivalent Playwright trace/snapshot artifact) for one of the 7 failing tests, and read the actual DOM state at the moment the test times out waiting for getByRole('button', { name: 'Add Import Path' }). Then check the three candidates the TODO already names, in order: (1) does Settings render an error boundary because of an unmocked endpoint the test's fixture setup doesn't stub; (2) does the app redirect away from /settings#paths due to an auth check the test doesn't satisfy; (3) is the tab panel lazily mounted such that the hash-selected tab index is applied AFTER the test's click/wait attempt, i.e. a race between hash-based tab selection and Playwright's assertion timing. Fix whichever candidate the snapshot confirms.
+Diagnose and fix the scan-import-organize.spec.ts failures by reading the Playwright DOM snapshot before writing any code. The spec has 6 tests (web/tests/e2e/scan-import-organize.spec.ts L299/421/439/474/518/570); record the actual chromium failure count from a baseline run FIRST and use that number as the before-count, rather than trusting the TODO's stale '7'. Then check the three candidates the TODO names, in order: (1) an error boundary from an endpoint the test fixture does not stub; (2) an auth redirect away from /settings#paths; (3) a lazy-mount race between hash-based tab selection and Playwright's assertion timing. Fix whichever candidate the snapshot confirms.
 
 ## Background (verify before editing)
 
@@ -78,8 +78,426 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] make test-e2e (or the project's scoped single-spec Playwright command) run against scan-import-organize.spec.ts shows 0 failures where there were previously 7
-- [ ] the fix's root cause is documented in the PR description or a code comment at the fix site, referencing what the DOM snapshot actually showed, so this investigation is not repeated from scratch again
+- [ ] A
+- [ ]  
+- [ ] s
+- [ ] c
+- [ ] o
+- [ ] p
+- [ ] e
+- [ ] d
+- [ ]  
+- [ ] P
+- [ ] l
+- [ ] a
+- [ ] y
+- [ ] w
+- [ ] r
+- [ ] i
+- [ ] g
+- [ ] h
+- [ ] t
+- [ ]  
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] o
+- [ ] f
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] s
+- [ ] p
+- [ ] e
+- [ ] c
+- [ ]  
+- [ ] (
+- [ ] `
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] :
+- [ ] e
+- [ ] 2
+- [ ] e
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ]  
+- [ ] s
+- [ ] c
+- [ ] a
+- [ ] n
+- [ ] -
+- [ ] i
+- [ ] m
+- [ ] p
+- [ ] o
+- [ ] r
+- [ ] t
+- [ ] -
+- [ ] o
+- [ ] r
+- [ ] g
+- [ ] a
+- [ ] n
+- [ ] i
+- [ ] z
+- [ ] e
+- [ ] .
+- [ ] s
+- [ ] p
+- [ ] e
+- [ ] c
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ] `
+- [ ] ,
+- [ ]  
+- [ ] o
+- [ ] r
+- [ ]  
+- [ ] `
+- [ ] n
+- [ ] p
+- [ ] x
+- [ ]  
+- [ ] p
+- [ ] l
+- [ ] a
+- [ ] y
+- [ ] w
+- [ ] r
+- [ ] i
+- [ ] g
+- [ ] h
+- [ ] t
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] -
+- [ ] c
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] e
+- [ ] 2
+- [ ] e
+- [ ] /
+- [ ] p
+- [ ] l
+- [ ] a
+- [ ] y
+- [ ] w
+- [ ] r
+- [ ] i
+- [ ] g
+- [ ] h
+- [ ] t
+- [ ] .
+- [ ] c
+- [ ] o
+- [ ] n
+- [ ] f
+- [ ] i
+- [ ] g
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] o
+- [ ] j
+- [ ] e
+- [ ] c
+- [ ] t
+- [ ]  
+- [ ] c
+- [ ] h
+- [ ] r
+- [ ] o
+- [ ] m
+- [ ] i
+- [ ] u
+- [ ] m
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] e
+- [ ] 2
+- [ ] e
+- [ ] /
+- [ ] s
+- [ ] c
+- [ ] a
+- [ ] n
+- [ ] -
+- [ ] i
+- [ ] m
+- [ ] p
+- [ ] o
+- [ ] r
+- [ ] t
+- [ ] -
+- [ ] o
+- [ ] r
+- [ ] g
+- [ ] a
+- [ ] n
+- [ ] i
+- [ ] z
+- [ ] e
+- [ ] .
+- [ ] s
+- [ ] p
+- [ ] e
+- [ ] c
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ] `
+- [ ]  
+- [ ] f
+- [ ] r
+- [ ] o
+- [ ] m
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] )
+- [ ]  
+- [ ] s
+- [ ] h
+- [ ] o
+- [ ] w
+- [ ] s
+- [ ]  
+- [ ] 0
+- [ ]  
+- [ ] c
+- [ ] h
+- [ ] r
+- [ ] o
+- [ ] m
+- [ ] i
+- [ ] u
+- [ ] m
+- [ ]  
+- [ ] f
+- [ ] a
+- [ ] i
+- [ ] l
+- [ ] u
+- [ ] r
+- [ ] e
+- [ ] s
+- [ ]  
+- [ ] w
+- [ ] h
+- [ ] e
+- [ ] r
+- [ ] e
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] b
+- [ ] a
+- [ ] s
+- [ ] e
+- [ ] l
+- [ ] i
+- [ ] n
+- [ ] e
+- [ ]  
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] c
+- [ ] o
+- [ ] r
+- [ ] d
+- [ ] e
+- [ ] d
+- [ ]  
+- [ ] N
+- [ ] ;
+- [ ]  
+- [ ] A
+- [ ] N
+- [ ] D
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] c
+- [ ] o
+- [ ] n
+- [ ] f
+- [ ] i
+- [ ] r
+- [ ] m
+- [ ] e
+- [ ] d
+- [ ]  
+- [ ] r
+- [ ] o
+- [ ] o
+- [ ] t
+- [ ]  
+- [ ] c
+- [ ] a
+- [ ] u
+- [ ] s
+- [ ] e
+- [ ]  
+- [ ] i
+- [ ] s
+- [ ]  
+- [ ] w
+- [ ] r
+- [ ] i
+- [ ] t
+- [ ] t
+- [ ] e
+- [ ] n
+- [ ]  
+- [ ] a
+- [ ] s
+- [ ]  
+- [ ] a
+- [ ]  
+- [ ] c
+- [ ] o
+- [ ] d
+- [ ] e
+- [ ]  
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] m
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] s
+- [ ] i
+- [ ] t
+- [ ] e
+- [ ] ,
+- [ ]  
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] i
+- [ ] f
+- [ ] i
+- [ ] a
+- [ ] b
+- [ ] l
+- [ ] e
+- [ ]  
+- [ ] w
+- [ ] i
+- [ ] t
+- [ ] h
+- [ ]  
+- [ ] `
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] r
+- [ ] o
+- [ ] o
+- [ ] t
+- [ ]  
+- [ ] c
+- [ ] a
+- [ ] u
+- [ ] s
+- [ ] e
+- [ ] '
+- [ ]  
+- [ ] <
+- [ ] c
+- [ ] h
+- [ ] a
+- [ ] n
+- [ ] g
+- [ ] e
+- [ ] d
+- [ ]  
+- [ ] f
+- [ ] i
+- [ ] l
+- [ ] e
+- [ ] >
+- [ ] `
+- [ ] .
 - [ ] Anti-over-suppression test: `N/A -- this is an e2e test failure diagnosis, not a filter/guard/skip addition` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.

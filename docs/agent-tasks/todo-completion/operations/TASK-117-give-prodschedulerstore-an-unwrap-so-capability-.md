@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/operations/TASK-117-give-prodschedulerstore-an-unwrap-so-capability-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: d67472a0-d061-4a02-a668-df3b74248aa3 -->
+<!-- guid: fc69f295-956b-4b71-9466-32a9f7a91184 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-117 — Give prodSchedulerStore an Unwrap() so capability lookups can see past it (TODO.md L4703)
@@ -78,8 +78,375 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] go build ./internal/operations/registry/... exits 0.
-- [ ] go vet ./internal/operations/registry/... exits 0 (confirms the var _ StoreUnwrapper assertion compiles).
+- [ ] `
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] f
+- [ ] u
+- [ ] n
+- [ ] c
+- [ ]  
+- [ ] (
+- [ ] p
+- [ ]  
+- [ ] \
+- [ ] *
+- [ ] p
+- [ ] r
+- [ ] o
+- [ ] d
+- [ ] S
+- [ ] c
+- [ ] h
+- [ ] e
+- [ ] d
+- [ ] u
+- [ ] l
+- [ ] e
+- [ ] r
+- [ ] S
+- [ ] t
+- [ ] o
+- [ ] r
+- [ ] e
+- [ ] )
+- [ ]  
+- [ ] U
+- [ ] n
+- [ ] w
+- [ ] r
+- [ ] a
+- [ ] p
+- [ ] (
+- [ ] )
+- [ ]  
+- [ ] d
+- [ ] a
+- [ ] t
+- [ ] a
+- [ ] b
+- [ ] a
+- [ ] s
+- [ ] e
+- [ ] .
+- [ ] S
+- [ ] t
+- [ ] o
+- [ ] r
+- [ ] e
+- [ ] '
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] o
+- [ ] p
+- [ ] e
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] s
+- [ ] /
+- [ ] r
+- [ ] e
+- [ ] g
+- [ ] i
+- [ ] s
+- [ ] t
+- [ ] r
+- [ ] y
+- [ ] /
+- [ ] r
+- [ ] e
+- [ ] g
+- [ ] i
+- [ ] s
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] .
+- [ ] g
+- [ ] o
+- [ ] `
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ] ;
+- [ ]  
+- [ ] `
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] v
+- [ ] a
+- [ ] r
+- [ ]  
+- [ ] _
+- [ ]  
+- [ ] d
+- [ ] a
+- [ ] t
+- [ ] a
+- [ ] b
+- [ ] a
+- [ ] s
+- [ ] e
+- [ ] .
+- [ ] S
+- [ ] t
+- [ ] o
+- [ ] r
+- [ ] e
+- [ ] U
+- [ ] n
+- [ ] w
+- [ ] r
+- [ ] a
+- [ ] p
+- [ ] p
+- [ ] e
+- [ ] r
+- [ ]  
+- [ ] =
+- [ ]  
+- [ ] (
+- [ ] \
+- [ ] *
+- [ ] p
+- [ ] r
+- [ ] o
+- [ ] d
+- [ ] S
+- [ ] c
+- [ ] h
+- [ ] e
+- [ ] d
+- [ ] u
+- [ ] l
+- [ ] e
+- [ ] r
+- [ ] S
+- [ ] t
+- [ ] o
+- [ ] r
+- [ ] e
+- [ ] )
+- [ ] (
+- [ ] n
+- [ ] i
+- [ ] l
+- [ ] )
+- [ ] '
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] o
+- [ ] p
+- [ ] e
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] s
+- [ ] /
+- [ ] r
+- [ ] e
+- [ ] g
+- [ ] i
+- [ ] s
+- [ ] t
+- [ ] r
+- [ ] y
+- [ ] /
+- [ ] r
+- [ ] e
+- [ ] g
+- [ ] i
+- [ ] s
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] .
+- [ ] g
+- [ ] o
+- [ ] `
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ] ;
+- [ ]  
+- [ ] `
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] o
+- [ ] p
+- [ ] e
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] s
+- [ ] /
+- [ ] r
+- [ ] e
+- [ ] g
+- [ ] i
+- [ ] s
+- [ ] t
+- [ ] r
+- [ ] y
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] -
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] T
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] P
+- [ ] r
+- [ ] o
+- [ ] d
+- [ ] S
+- [ ] c
+- [ ] h
+- [ ] e
+- [ ] d
+- [ ] u
+- [ ] l
+- [ ] e
+- [ ] r
+- [ ] S
+- [ ] t
+- [ ] o
+- [ ] r
+- [ ] e
+- [ ] U
+- [ ] n
+- [ ] w
+- [ ] r
+- [ ] a
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] c
+- [ ] o
+- [ ] u
+- [ ] n
+- [ ] t
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] -
+- [ ] v
+- [ ] `
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] b
+- [ ] u
+- [ ] i
+- [ ] l
+- [ ] d
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] &
+- [ ] &
+- [ ]  
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] v
+- [ ] e
+- [ ] t
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] e
+- [ ] x
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] 0
+- [ ] .
 - [ ] Anti-over-suppression: N/A
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/operations/registry/... -count=1` exits 0; `go vet`/lint clean.
@@ -102,7 +469,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go build ./internal/operations/registry/... exits 0.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n "type prodSchedulerStore struct" -A 3 internal/operations/registry/register.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

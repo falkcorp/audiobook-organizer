@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-168-make-narrator-publisher-genre-and-release-year-f.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b0435971-2c0a-47b5-bd96-a81e6f1bedba -->
+<!-- guid: a2a020ed-6990-44a6-88ff-b2c86fcbd83b -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-168 — Make Narrator, Publisher, Genre, and Release Year fields link to filtered library views (all four have real filters behind them) (TODO.md L3164)
@@ -25,17 +25,22 @@ npm ci --prefix web   # frontend task: Playwright/vitest must come from the work
 
 ## Goal
 
-In BookDetailInfoTab.tsx, turn Narrator, Publisher, Genre, and Release Year into real <a href> links targeting `/library?filters=[{\"field\":\"narrator\",\"value\":\"<name>\",\"negated\":false}]` (URL-encoded JSON, same shape buildFieldFilters in Library.tsx already produces for the genre/language filters that exist today), one link per narrator if multiple (book.narrators[] array, same multi-value pattern as authors[]). Release Year should filter on the 'year' field using book.audiobook_release_year (the field that most directly means 'released in Y').
+First add incoming ?filters= URL-param parsing to the Library page (it does not exist: zero hits for searchParams.get('filters') anywhere in web/src), then turn Narrator, Publisher, Genre and Release Year in BookDetailInfoTab.tsx into real <a href> links carrying that param. Narrator gets one link per entry in book.narrators[]; Release Year filters on the 'year' field using book.audiobook_release_year. If the owner prefers not to add filters= URL parsing, use the individual params useLibraryFilters ALREADY reads (?genre=, ?language=) for those two fields and file narrator/publisher separately — do not ship links that resolve to an ignored param.
 
 ## Background (verify before editing)
 
-- genre and language already have an existing UI-driven filters= path via Library.tsx's buildFieldFilters (filters.genre, filters.language) — this task reuses that exact mechanism/shape rather than inventing a new URL scheme.
-- narrator and publisher are new to the UI's filter state (buildFieldFilters currently only builds author/series/genre/language) but the backend field-filter matcher already supports them, so no backend work is needed.
+- internal/audiobooks/service_filtering.go implements all four fields as filter cases: narrator L440, genre L446, publisher L450, year L538, and all four appear in allFilterFieldNames (L647-656). The BACKEND is ready.
+- THE BLOCKER: the frontend never reads a filters= URL param. useLibraryFilters.ts seeds state from individual params only (L56-69 and L155-167: author, series, genre, language, state, has_file_errors, fingerprint_status, coverage_percent_min/max, missing_covers, in_import_path, no_isbn, duplicates_flagged). buildFieldFilters (Library.tsx:804) converts that state INTO an outgoing API param at useLibraryQuery.ts:263. There is no inbound path.
+- genre and language are reachable today via ?genre= / ?language=; narrator, publisher and year have no URL param at all.
 
 - **Re-verify these anchors before editing** — line numbers drift; a zero-hit grep means STOP and report:
   ```bash
   grep -n '\"narrator\":\|case \"narrator\"\|case \"genre\"\|case \"publisher\"\|case \"year\"' internal/audiobooks/service_filtering.go   # multiple hits including case statements at ~L440, L446, L450, L538 — narrator, genre, publisher, year are all implemented filter fields
   sed -n '647,656p' internal/audiobooks/service_filtering.go   # allFilterFieldNames includes 'narrator', 'genre', 'publisher', 'year' — all four names are in the canonical, matcher-pinned filter-field list
+  grep -n 'case "narrator"\|case "genre"\|case "publisher"\|case "year"' internal/audiobooks/service_filtering.go   # L440, L446, L450, L538 — all four fields are real backend filter fields
+  grep -rn "searchParams.get('filters')" web/src   # 0 hits — the frontend never reads an incoming filters= URL param
+  grep -n 'fieldFilters' web/src/hooks/useLibraryQuery.ts   # L263: filters: fieldFilters.length > 0 ? JSON.stringify(fieldFilters) : undefined — filters= is an OUTGOING API param only
+  grep -n 'searchParams.get' web/src/hooks/useLibraryFilters.ts   # author/series/genre/language/state/... at L56-69 and L155-167 — no 'filters' — the params the Library page DOES read from the URL
   ```
 
 ### Reuse — don't invent
@@ -101,7 +106,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`npm --prefix web run lint && npm --prefix web test passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `Each of the 4 fields renders as a real anchor, not an onClick-only element.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

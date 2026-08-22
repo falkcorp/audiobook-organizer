@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-054-re-verify-docs-reference-abs-target-client-contr.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 928d4c90-fac1-4217-91c1-2b9d33df477a -->
+<!-- guid: 46ce2c1e-6325-47d0-9f56-b54cc9d5d29a -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-054 — Re-verify docs/reference/abs-target-client-contract.md §11's 'safe to stub' list — playlists AND collections are now both falsified (TODO.md L497)

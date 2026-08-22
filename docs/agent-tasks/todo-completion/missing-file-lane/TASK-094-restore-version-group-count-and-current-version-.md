@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-094-restore-version-group-count-and-current-version-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 741cb4a7-0ff2-4ffd-8c8e-6eb67bc97b45 -->
+<!-- guid: afd55227-c593-4de9-845c-cbb5fde0df31 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-094 — Restore version-group count and current-version marker on Book Detail (TODO.md L6252)
@@ -98,7 +98,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`npm --prefix web test -- BookDetailHeader passes`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -rn 'Part of version group\|(Current)' web/src` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

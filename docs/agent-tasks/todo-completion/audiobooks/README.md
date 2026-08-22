@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 548a8621-fa3f-45f4-a477-35160f67feba -->
+<!-- guid: 5805a782-0b6e-420f-9d41-ecbddcc5f00d -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — audiobooks (todo-completion)
@@ -31,8 +31,11 @@
 
 - `internal/audiobooks/service_filtering.go`: TASK-002, TASK-190, TASK-005, TASK-186 → serialize by wave (TASK-002=w4, TASK-190=w2, TASK-005=w1, TASK-186=w6)
 - `internal/audiobooks/service_query.go`: TASK-001, TASK-002, TASK-190, TASK-003, TASK-005, TASK-186 → serialize by wave (TASK-001=w3, TASK-002=w4, TASK-190=w2, TASK-003=w5, TASK-005=w1, TASK-186=w6)
-- `internal/database/memdb_summaries.go`: TASK-190, TASK-026, TASK-039 → serialize by wave (TASK-190=w2, TASK-026=w1, TASK-039=w3)
-- `internal/server/handlers/audiobooks/handler.go`: TASK-005, TASK-037, TASK-095, TASK-098 → serialize by wave (TASK-005=w1, TASK-037=w6, TASK-095=w2, TASK-098=w3)
+- `internal/audiobooks/service_query_test.go`: TASK-001, TASK-002 → serialize by wave (TASK-001=w3, TASK-002=w4)
+- `internal/database/memdb_summaries.go`: TASK-190, TASK-026, TASK-039 → serialize by wave (TASK-190=w2, TASK-026=w1, TASK-039=w4)
+- `internal/server/handlers/audiobooks/handler.go`: TASK-005, TASK-037, TASK-095, TASK-098 → serialize by wave (TASK-005=w1, TASK-037=w5, TASK-095=w2, TASK-098=w3)
+- `internal/server/handlers/audiobooks/handler_test.go`: TASK-005, TASK-095 → serialize by wave (TASK-005=w1, TASK-095=w2)
+- `internal/server/library_list_warmer.go`: TASK-190, TASK-186 → serialize by wave (TASK-190=w2, TASK-186=w6)
 
 | Wave | Tasks | Prereq | Parallel-safe because |
 |------|-------|--------|-----------------------|

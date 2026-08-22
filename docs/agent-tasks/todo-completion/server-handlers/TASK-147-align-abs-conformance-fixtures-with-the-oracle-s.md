@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-147-align-abs-conformance-fixtures-with-the-oracle-s.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 32a6a591-8746-457f-b32b-09db055768c0 -->
+<!-- guid: 692b5599-15d6-4b2b-9e1d-51e9269fc318 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-147 — Align ABS conformance fixtures with the oracle so CompareValues stays green permanently (TODO.md L127)
 
-**Priority:** P2 · **Effort:** L · **Recommended subagent:** Opus-class · server-handlers subagent · **Why:** 767-line fixture-seeding file, 12 currently-red tests to diagnose one by one (distinguishing genuine fixture drift from real bugs from deliberate divergences), plus two named open design questions (track title source, author ordering) that need an actual decision before the corresponding tests can be written — this is judgment-heavy, not mechanical field renaming. · **Depends on:** TASK-143, TASK-144, TASK-145, TASK-146 · **Wave:** 3
+**Priority:** P2 · **Effort:** L · **Recommended subagent:** Opus-class · server-handlers subagent · **Why:** 767-line fixture-seeding file, 12 currently-red tests to diagnose one by one (distinguishing genuine fixture drift from real bugs from deliberate divergences), plus two named open design questions (track title source, author ordering) that need an actual decision before the corresponding tests can be written — this is judgment-heavy, not mechanical field renaming. · **Depends on:** TASK-143, TASK-144, TASK-145, TASK-146 · **Wave:** 4
 
 Source: `TODO.md` line 127 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**Align the ABS conformance fixtures with the orac" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-01.json`.
 
