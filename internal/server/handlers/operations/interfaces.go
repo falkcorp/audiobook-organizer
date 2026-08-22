@@ -1,15 +1,19 @@
 // file: internal/server/handlers/operations/interfaces.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 37502068-5061-401b-841e-0b191567f0bf
-// last-edited: 2026-08-18
+// last-edited: 2026-08-22
 
 // Narrow dependency interfaces for the operations domain handlers (scan /
 // organize / optimize / transcode triggers, operation status / logs / result /
-// changes / revert, stale-op management, DB optimize, tasks, and the
-// maintenance window). Each interface lists only what the handlers actually
-// call so package operations stays decoupled from the concrete
-// scheduler / registry / pipeline / store implementations and never imports
-// package server (which would create an import cycle).
+// changes / revert, stale-op management, and DB optimize). Each interface
+// lists only what the handlers actually call so package operations stays
+// decoupled from the concrete scheduler / registry / pipeline / store
+// implementations and never imports package server (which would create an
+// import cycle).
+//
+// Tasks and the maintenance window moved to handlers.SchedulerHandler
+// (TODO.md scheduler-config item, 2026-08-22); Scheduler below is kept
+// unused for the same reason resolveScheduler is in handler.go.
 
 package operations
 
@@ -71,8 +75,14 @@ type OperationsRegistry interface {
 	Cancel(opID string) error
 }
 
-// Scheduler is the narrow *scheduler.TaskScheduler subset used by the task and
-// maintenance-window handlers.
+// Scheduler is the narrow *scheduler.TaskScheduler subset the task and
+// maintenance-window handlers used before they moved to
+// handlers.SchedulerHandler (which declares its own structurally-identical
+// copy, since this package cannot import package handlers without a cycle).
+// Unused here since that move; kept only because removing it means narrowing
+// New's getScheduler param, which cascades to every operations.New call
+// site — out of scope for that mechanical extraction. See resolveScheduler's
+// doc comment in handler.go for the fuller reasoning.
 type Scheduler interface {
 	ListTasks() []scheduler.TaskInfo
 	RunTaskManual(name string) (*database.Operation, error)
