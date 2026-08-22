@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
 // last-edited: 2026-08-22
 
@@ -968,6 +968,25 @@ func identityAllowances() map[string]allowance {
 func sourceAllowance() map[string]allowance {
 	return map[string]allowance{
 		"Source": {Reason: "we identify as audiobook-organizer; the oracle was a docker install"},
+	}
+}
+
+// rateLimitAllowance covers the two advertised login-limit fields, which are the
+// only place we deliberately publish OUR policy in a slot the oracle filled with
+// ITS policy. The oracle's docker install ran ABS's defaults (10 per 600000ms);
+// we derive ours from absauth (MaxFailuresPerIP over Window) so the advertisement
+// cannot drift from the throttle that actually issues the 429.
+//
+// This is named here rather than fixed by editing the capture. A fixture is a
+// record of what ABS returned, and scripts/abs_capture_fixtures.py will rewrite
+// any hand-edit on the next recapture -- so an edited number is both false
+// evidence and a test that breaks later for a reason nobody can reconstruct.
+func rateLimitAllowance() map[string]allowance {
+	const reason = "we advertise our own throttle (absauth.MaxFailuresPerIP over " +
+		"absauth.Window), not the oracle's ABS defaults; see dto.go buildServerSettings"
+	return map[string]allowance{
+		"serverSettings.rateLimitLoginRequests": {Reason: reason},
+		"serverSettings.rateLimitLoginWindow":   {Reason: reason},
 	}
 }
 
