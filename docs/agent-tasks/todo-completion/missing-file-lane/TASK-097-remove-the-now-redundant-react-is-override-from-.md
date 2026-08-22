@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-097-remove-the-now-redundant-react-is-override-from-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b21c0726-bffb-49a5-abe4-b2df4fc89fd1 -->
+<!-- guid: d02d91ba-10d6-44fc-83e9-862096c3e3f7 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-097 — Remove the now-redundant react-is override from web/package.json (TODO-MUI-3)

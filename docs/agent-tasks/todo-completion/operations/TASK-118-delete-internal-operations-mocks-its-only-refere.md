@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/operations/TASK-118-delete-internal-operations-mocks-its-only-refere.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 1078db8a-7bd1-4426-9814-f392e4c05950 -->
+<!-- guid: e77f8da8-a227-4174-a7a5-5c31a6eb74df -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-118 — Delete internal/operations/mocks — its only referencer is dead, permanently-untagged, currently-broken test code (TODO.md L4743)

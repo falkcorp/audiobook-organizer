@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-189-play-the-first-2-minutes-of-part-1-s-audio-direc.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 4b3899e6-4bb1-485d-a29e-ffa91faf74b6 -->
+<!-- guid: 9a724df9-9515-4388-8e82-4def72e8f2f8 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-189 — Play the first ~2 minutes of part 1's audio directly from the review metadata panel, reusing the existing bounded audio-sample endpoint (REVIEW-PREVIEW)

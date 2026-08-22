@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-007-wire-scripts-test-check-memory-leaks-py-into-a-c.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 04803c91-7529-49fa-996a-5594e19354ee -->
+<!-- guid: 926a8516-ff6a-45b6-bfd7-85a408b24d14 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-007 — Wire scripts/test_check_memory_leaks.py into a CI job (repo-guards) (TODO.md L50)

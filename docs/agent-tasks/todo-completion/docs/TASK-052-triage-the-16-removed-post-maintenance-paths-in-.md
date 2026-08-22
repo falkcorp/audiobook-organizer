@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-052-triage-the-16-removed-post-maintenance-paths-in-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 2a9b9a53-ac0d-4682-9251-5560be2f499d -->
+<!-- guid: 442d5337-026c-4296-8c6a-f112fc2d92bd -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-052 — Triage the 16 removed POST /maintenance/* paths in openapi.json — delete, or document as ops-API equivalents (TODO.md L296)

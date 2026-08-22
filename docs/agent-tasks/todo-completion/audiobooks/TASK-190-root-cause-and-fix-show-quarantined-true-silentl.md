@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-190-root-cause-and-fix-show-quarantined-true-silentl.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 9a3bbf26-4232-4b0d-b759-5dd0c1cc9141 -->
+<!-- guid: 8322dd9f-d3e9-4155-b46f-a5d2fcd51c92 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-190 — Root-cause and fix: show_quarantined=true silently narrows the audiobook list to is_primary_version=true (TODO.md L3718)

@@ -216,5 +216,10 @@
  "scope-20.json|90020|2|Show a loading skeleton, not the empty state, while the meta": "TASK-216",
  "scope-20.json|90021|None|Cap GET /api/v1/audiobooks/metadata/cache/review to a defaul": "TASK-214",
  "scope-20.json|90022|None|Evidence panel: explain a missing score derivation in plain ": "TASK-217",
- "scope-20.json|90023|None|OperationActivityPanel: stop re-appending the last SSE log l": "TASK-218"
+ "scope-20.json|90023|None|OperationActivityPanel: stop re-appending the last SSE log l": "TASK-218",
+ "scope-21.json|90030|1|metafetch: collapse duplicate book_file rows by cleaned path": "TASK-221",
+ "scope-21.json|90030|2|organizer: collapse duplicate paths in planTargetPaths so to": "TASK-223",
+ "scope-21.json|90031|None|Add a per-book TSV report artifact to the EXISTING dedupe-bo": "TASK-219",
+ "scope-21.json|90032|None|Journal every duplicate-row deletion to the undo ledger and ": "TASK-220",
+ "scope-21.json|90033|None|EnqueueOp: dedupe only on byte-equal params (or an explicit ": "TASK-222"
 }

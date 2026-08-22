@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-179-database-store-40-build-the-ast-go-types-ci-gate.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b61da377-5a66-4123-bc38-6694649670d1 -->
+<!-- guid: 1210aead-f978-4402-91b2-bb28c89d8de8 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-179 — database.Store (40) -- build the AST/go-types CI gate that makes it unreachable in new files (Phase 2 item 2 of the kill-v1-and-narrow plan) (TODO.md L969)

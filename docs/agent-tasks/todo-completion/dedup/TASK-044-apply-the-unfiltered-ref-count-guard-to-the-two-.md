@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-044-apply-the-unfiltered-ref-count-guard-to-the-two-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 8e868ba2-ba3b-4a40-8838-d1ebb2ee61fa -->
+<!-- guid: b7546f64-fa65-455d-b9ba-f04eaddb6b21 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-044 — Apply the unfiltered ref-count guard to the two remaining series deleters (internal/dedup/series_dedup.go, internal/maintenance/jobs/cleanup_series.go) (TODO.md L4288)

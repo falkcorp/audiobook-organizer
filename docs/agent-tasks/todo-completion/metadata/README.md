@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/metadata/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: a911d9cc-1a11-4f55-b89f-3841f77c6718 -->
+<!-- guid: f2b0dba8-d91b-4825-8eec-6c016747959a -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — metadata (todo-completion)
 
-4 tasks projected from the 2026-08-21 TODO-completion skeleton (`../skeleton.json`). Every fact here is a projection of that skeleton — edit the skeleton and regenerate, never this file.
+5 tasks projected from the 2026-08-21 TODO-completion skeleton (`../skeleton.json`). Every fact here is a projection of that skeleton — edit the skeleton and regenerate, never this file.
 
 | Task | TODO id | Title | Priority | Effort | Tier | Wave |
 |------|---------|-------|----------|--------|------|------|
@@ -13,6 +13,7 @@
 | TASK-080 | SEC-CODEQL-BACKLOG | Assess the 2 critical go/request-forgery (SSRF) CodeQL alerts on cover | P1 | M | Opus-class | 1 |
 | TASK-081 | L3517 | Prefix metadata-apply activity summaries with the book title and rende | P2 | S | Haiku-class | 1 |
 | TASK-196 | L4081 | Build an async, fanned-out background operation for metadata matching  | P2 | L | Opus-class | 1 |
+| TASK-221 | DUPROW-1 | metafetch: collapse duplicate book_file rows by cleaned path before wr | P1 | S | Sonnet-class | 1 |
 
 ## Ground rules
 
@@ -30,7 +31,7 @@
 
 | Wave | Tasks | Prereq | Parallel-safe because |
 |------|-------|--------|-----------------------|
-| 1 | TASK-079, TASK-080, TASK-081, TASK-196 | none | disjoint files within the wave (computed collision matrix) |
+| 1 | TASK-079, TASK-080, TASK-081, TASK-196, TASK-221 | none | disjoint files within the wave (computed collision matrix) |
 
 Waves are GLOBAL across the package: a wave-2 task here may be waiting on a wave-1 task in another workstream that shares a file (see `../BREAKDOWN-2026-08-21.md` collision table).
 

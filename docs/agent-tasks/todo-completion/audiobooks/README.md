@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 5805a782-0b6e-420f-9d41-ecbddcc5f00d -->
+<!-- guid: 858e3f23-dcce-40af-855e-90a7145a2e53 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — audiobooks (todo-completion)

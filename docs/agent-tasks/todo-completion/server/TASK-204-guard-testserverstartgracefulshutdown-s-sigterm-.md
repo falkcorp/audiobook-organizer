@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-204-guard-testserverstartgracefulshutdown-s-sigterm-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 08f4f963-9fe5-4eba-8aef-84553d49fb29 -->
+<!-- guid: d788e731-5a6f-440b-95bb-a784d4d42a04 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-204 — Guard TestServerStartGracefulShutdown's SIGTERM against future parallelism (TODO.md L280)

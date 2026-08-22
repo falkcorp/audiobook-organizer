@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-192-clamp-composescore-against-per-kind-confidence-b.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: eff8b110-423e-4114-b84f-2adf11e053e5 -->
+<!-- guid: d26b2ad8-7531-4d8e-9412-e95e4d6ddca8 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-192 — Clamp ComposeScore against per-kind confidence bounds; route calibrate-composite Round 2 through a new apply_confidence param (INIT-1 T05)

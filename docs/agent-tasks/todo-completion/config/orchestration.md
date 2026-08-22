@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/config/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 91b157b4-8361-485c-a172-773b4698f177 -->
+<!-- guid: 4d766779-e6df-4645-8a47-dc103b27eb8d -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — config workstream (todo-completion)

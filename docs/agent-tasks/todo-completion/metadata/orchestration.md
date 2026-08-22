@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/metadata/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: d1f4a2fb-5614-450b-8ea4-f834b620eaa4 -->
+<!-- guid: 5c26e365-61b0-4062-bb38-fbc486114c5e -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — metadata workstream (todo-completion)
@@ -16,6 +16,7 @@ flowchart LR
       TASK080[TASK-080 assess-the-2-critical-go-req]
       TASK081[TASK-081 prefix-metadata-apply-activi]
       TASK196[TASK-196 build-an-async-fanned-out-ba]
+      TASK221[TASK-221 metafetch-collapse-duplicate]
     end
 
 ```

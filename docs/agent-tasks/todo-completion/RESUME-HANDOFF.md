@@ -5,8 +5,8 @@
 
 # Resume handoff — planning package (paused 2026-08-22 ~00:15 EDT by owner's 20-minute shutdown)
 
-Branch `plan/todo-master-plan`, draft PR #2682. Package state: **203 briefs, 958 re-verify greps, 0 audit failures**
-(checkpoint 7 = `3c27f841`). Scratchpad mirrored under `state/scratchpad/`; tools under `tools/`; scout JSON under `scout-json/`;
+Branch `plan/todo-master-plan`, draft PR #2682. Package state: **208 briefs, 1017 re-verify greps, 0 audit failures**
+(checkpoint 8; scope-21 folded: 208 briefs, 1017 greps). Scratchpad mirrored under `state/scratchpad/`; tools under `tools/`; scout JSON under `scout-json/`;
 verifier/judge output under `review/`.
 
 ## Verification coverage
@@ -15,11 +15,11 @@ verifier/judge output under `review/`.
 - Generator fixes landed for every systematic verifier finding: test files auto-join `exact_files`; idempotency quotes a presence check; same-line part deps resolve to earlier parts; cycle guard; Go gate never `make ci`.
 
 ## 🔴 FAST-TRACK FIRST (owner is blocked on applying metadata in prod)
-Live prod incidents 2026-08-21 23:33–23:49, all root-caused, briefs in `scout-json/scope-20.json` (5 objects) and `state/scratchpad/scout/scope-21.json` (see `handoff-scope-21.md` for how far the scout got; scope text in `state/scratchpad/scopes/scope-21-duplicate-bookfile-rows.md`):
+Live prod incidents 2026-08-21 23:33–23:49, all root-caused, briefs in `scout-json/scope-20.json` (5 objects) and `scout-json/scope-21.json` (5 objects, COMPLETE — NOTE: a `dedupe-book-file-rows` op ALREADY EXISTS at internal/plugins/maintenance/dedupe_book_file_rows.go and its comments claim a prior prod run deleted rows unjournaled — VERIFY before the pending-prod-actions entry; scope text in `state/scratchpad/scopes/scope-21-duplicate-bookfile-rows.md`):
 1. **90030** apply pipeline must dedupe `book_file` rows by path — library copy `01KZR9GEH5ZQW9CV1EN130Y7C0` has 42 rows / 21 paths; pipeline wrote every tag twice and raced itself in the rename phase (`stat rename source … no such file`). Sonnet, small.
 2. **90033** `internal/operations/registry/registry.go:612-633` `EnqueueOp` ConcurrencyKey dedup returns the running op's id and DROPS the new params — approving more books during a batch apply applies nothing. Opus. Fix: dedupe only on byte-equal params or explicit def opt-in; otherwise queue (Gate 3 in dispatcher.go:107 already serializes runs).
 3. scope-20: `ReviewWorkspace.tsx:271` sends `batchFetchCandidates({})` → 400; review list shows empty state during a 35 s `limit=0` query; evidence panel "no recorded derivation" needs cause + re-search; `OperationActivityPanel.tsx:208-228` appends the same SSE line on every progress tick (`op` in deps; use the store's `sequence`).
-Order: scout scope-21 to completion if partial → fold (copy into scout-all, regen, audit) → dispatch 90030 + 90033 + scope-20 items as the first execution wave (own worktrees, PRs, CI green, admin-merge) → `make deploy` (prod restart — tell the owner first; never mid-scan).
+Order: dispatch 90030 + 90033 + scope-20 items as the first execution wave (own worktrees, PRs, CI green, admin-merge) → `make deploy` (prod restart — tell the owner first; never mid-scan).
 
 ## Then: normal resume
 1. `cd state/scratchpad`-equivalent: tools are `tools/gen_package.py <scout-all> <out>`, `tools/apply_patches.py <scratchpad>`, `tools/audit_briefs.py <pkg> <repo> --json out`. `tools/task-ids.json` keeps ids stable; `review/applied.json` makes patch application idempotent.

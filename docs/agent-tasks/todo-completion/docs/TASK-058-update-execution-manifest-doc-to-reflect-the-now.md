@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-058-update-execution-manifest-doc-to-reflect-the-now.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 762eeac5-c4d9-476c-9768-ffc2d68262a1 -->
+<!-- guid: 55a7efc3-33b0-4eca-be90-48d2e5d88550 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-058 — Update execution-manifest doc to reflect the now-settled human gates (TODO.md L10635)

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-182-record-the-docs-system-vs-top-level-architecture.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 39c0d0c2-fef7-40b9-a6b4-141ff835d585 -->
+<!-- guid: c35fabc3-7213-4f5f-9abe-92f71bd1a40e -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-182 — Record the docs/system vs top-level architecture classification decision in the docs inventory (TODO.md L101)

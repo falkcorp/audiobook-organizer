@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 40954757-1bdf-4f6d-9f57-6f540b1d2420 -->
+<!-- guid: ce1e64d1-9d15-48ec-ac50-7dd8201a6693 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — audiobooks workstream (todo-completion)

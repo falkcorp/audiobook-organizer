@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-047-narrow-collectduration-s-tagstore-param-from-ded.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 2ab85ec6-e0a6-4422-aef9-add05b7ecf21 -->
+<!-- guid: b0482e86-a7f2-48c7-87b1-6aa1808ad589 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-047 — Narrow CollectDuration's tagStore param from dedup.Store to database.BookTagSingletonStore (TODO.md L4719)

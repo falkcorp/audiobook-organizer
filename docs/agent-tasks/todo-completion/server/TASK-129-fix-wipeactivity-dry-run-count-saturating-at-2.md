@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-129-fix-wipeactivity-dry-run-count-saturating-at-2.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 2e9517a3-84a5-4734-9fc6-c69cdfb0171d -->
+<!-- guid: 9a834dcd-7168-428e-b196-721739895af4 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-129 — Fix wipeActivity dry-run count saturating at 2 (TODO.md L1957)

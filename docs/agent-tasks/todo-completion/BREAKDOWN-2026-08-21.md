@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/BREAKDOWN-2026-08-21.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 62396d8b-645e-4863-83c3-204fa7831203 -->
+<!-- guid: 4a66d949-70d2-43b1-8b9a-fee6fa845a21 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Agent-Task Breakdown & Fan-Out Plan — 2026-08-21 (todo-completion)
@@ -9,9 +9,9 @@ This document turns the TODO-completion master plan ([`../../plans/2026-08-21-to
 
 ## Method
 
-473 scoped items (16 read-only scouts, 2026-08-21) were verified against HEAD and sorted into buckets. **Only Bucket 1 becomes agent briefs.** Owner decisions of 2026-08-21 (see `docs/plans/DECISIONS-PENDING.md`) are applied: parked tracks are excluded, prod runs go to `docs/operations/pending-prod-actions.md`.
+478 scoped items (16 read-only scouts, 2026-08-21) were verified against HEAD and sorted into buckets. **Only Bucket 1 becomes agent briefs.** Owner decisions of 2026-08-21 (see `docs/plans/DECISIONS-PENDING.md`) are applied: parked tracks are excluded, prod runs go to `docs/operations/pending-prod-actions.md`.
 
-Counts: Bucket 1 = **203** briefs (Sonnet-class 108, Opus-class 58, Haiku-class 37) · Bucket 2 = 77 · Bucket 3 = 39 · stale/done = 112 · parked = 14 · not-a-task = 28.
+Counts: Bucket 1 = **208** briefs (Sonnet-class 111, Opus-class 60, Haiku-class 37) · Bucket 2 = 77 · Bucket 3 = 39 · stale/done = 112 · parked = 14 · not-a-task = 28.
 
 ---
 
@@ -28,6 +28,7 @@ Counts: Bucket 1 = **203** briefs (Sonnet-class 108, Opus-class 58, Haiku-class 
 | `.github/workflows/triage-poll.yml` | TASK-191, TASK-010 | serialize: wave1=TASK-010, wave2=TASK-191 |
 | `.gitignore` | TASK-014, TASK-015 | serialize: wave1=TASK-014, wave2=TASK-015 |
 | `.mockery.yaml` | TASK-118, TASK-123 | serialize: wave1=TASK-118, wave2=TASK-123 |
+| `docs/operations/pending-prod-actions.md` | TASK-060, TASK-220 | serialize: wave1=TASK-060, wave3=TASK-220 |
 | `internal/audiobooks/service_filtering.go` | TASK-002, TASK-190, TASK-005, TASK-186 | serialize: wave1=TASK-005, wave2=TASK-190, wave4=TASK-002, wave6=TASK-186 |
 | `internal/audiobooks/service_query.go` | TASK-001, TASK-002, TASK-190, TASK-003, TASK-005, TASK-186 | serialize: wave1=TASK-005, wave2=TASK-190, wave3=TASK-001, wave4=TASK-002, wave5=TASK-003, wave6=TASK-186 |
 | `internal/audiobooks/service_query_test.go` | TASK-001, TASK-002 | serialize: wave3=TASK-001, wave4=TASK-002 |
@@ -58,15 +59,18 @@ Counts: Bucket 1 = **203** briefs (Sonnet-class 108, Opus-class 58, Haiku-class 
 | `internal/merge/service_test.go` | TASK-040, TASK-042, TASK-046, TASK-048 | serialize: wave1=TASK-040, wave3=TASK-042, wave4=TASK-046, wave5=TASK-048 |
 | `internal/metrics/metrics.go` | TASK-085, TASK-095, TASK-203, TASK-130, TASK-131 | serialize: wave1=TASK-085, wave2=TASK-095, wave3=TASK-130, wave4=TASK-131, wave5=TASK-203 |
 | `internal/metrics/metrics_test.go` | TASK-085, TASK-203, TASK-130, TASK-131 | serialize: wave1=TASK-085, wave3=TASK-130, wave4=TASK-131, wave5=TASK-203 |
-| `internal/operations/registry/registry.go` | TASK-096, TASK-113, TASK-115 | serialize: wave1=TASK-113, wave2=TASK-115, wave3=TASK-096 |
-| `internal/operations/registry/registry_test.go` | TASK-096, TASK-115 | serialize: wave2=TASK-115, wave3=TASK-096 |
+| `internal/operations/registry/registry.go` | TASK-096, TASK-113, TASK-115, TASK-222 | serialize: wave1=TASK-113, wave2=TASK-115, wave3=TASK-096, wave4=TASK-222 |
+| `internal/operations/registry/registry_test.go` | TASK-096, TASK-115, TASK-222 | serialize: wave2=TASK-115, wave3=TASK-096, wave4=TASK-222 |
+| `internal/operations/registry/types.go` | TASK-096, TASK-222 | serialize: wave3=TASK-096, wave4=TASK-222 |
 | `internal/organizer/service.go` | TASK-186, TASK-121, TASK-203 | serialize: wave1=TASK-121, wave5=TASK-203, wave6=TASK-186 |
 | `internal/plugins/acoustid/lsh_backfill.go` | TASK-197, TASK-088 | serialize: wave1=TASK-088, wave2=TASK-197 |
 | `internal/plugins/dedup/calibrate_composite.go` | TASK-192, TASK-193 | serialize: wave1=TASK-192, wave7=TASK-193 |
 | `internal/plugins/dedup/calibrate_composite_test.go` | TASK-192, TASK-193 | serialize: wave1=TASK-192, wave7=TASK-193 |
 | `internal/plugins/maintenance/chapters_backfill.go` | TASK-066, TASK-197 | serialize: wave1=TASK-066, wave2=TASK-197 |
 | `internal/plugins/maintenance/cleanup.go` | TASK-070, TASK-073 | serialize: wave1=TASK-073, wave6=TASK-070 |
-| `internal/plugins/maintenance/deps.go` | TASK-066, TASK-070, TASK-076 | serialize: wave1=TASK-066, wave2=TASK-076, wave6=TASK-070 |
+| `internal/plugins/maintenance/dedupe_book_file_rows.go` | TASK-219, TASK-220, TASK-197 | serialize: wave2=TASK-197, wave3=TASK-220, wave4=TASK-219 |
+| `internal/plugins/maintenance/dedupe_book_file_rows_test.go` | TASK-219, TASK-220 | serialize: wave3=TASK-220, wave4=TASK-219 |
+| `internal/plugins/maintenance/deps.go` | TASK-066, TASK-070, TASK-076, TASK-220 | serialize: wave1=TASK-066, wave2=TASK-076, wave3=TASK-220, wave6=TASK-070 |
 | `internal/plugins/maintenance/intro_migrate_single_file.go` | TASK-197, TASK-200 | serialize: wave1=TASK-200, wave2=TASK-197 |
 | `internal/plugins/maintenance/intro_transcribe.go` | TASK-197, TASK-200 | serialize: wave1=TASK-200, wave2=TASK-197 |
 | `internal/plugins/maintenance/missing_file_audit.go` | TASK-195, TASK-197 | serialize: wave1=TASK-195, wave2=TASK-197 |
@@ -99,7 +103,7 @@ Counts: Bucket 1 = **203** briefs (Sonnet-class 108, Opus-class 58, Haiku-class 
 | `internal/server/reconcile_ops.go` | TASK-096, TASK-136 | serialize: wave1=TASK-136, wave3=TASK-096 |
 | `internal/server/server.go` | TASK-026, TASK-205 | serialize: wave1=TASK-026, wave5=TASK-205 |
 | `internal/server/server_lifecycle.go` | TASK-026, TASK-065, TASK-205, TASK-128, TASK-131, TASK-139 | serialize: wave1=TASK-026, wave2=TASK-128, wave3=TASK-139, wave4=TASK-131, wave5=TASK-205, wave6=TASK-065 |
-| `internal/server/server_maintenance_deps.go` | TASK-066, TASK-070 | serialize: wave1=TASK-066, wave6=TASK-070 |
+| `internal/server/server_maintenance_deps.go` | TASK-066, TASK-070, TASK-220 | serialize: wave1=TASK-066, wave3=TASK-220, wave6=TASK-070 |
 | `internal/server/server_more_test.go` | TASK-204, TASK-205 | serialize: wave1=TASK-204, wave5=TASK-205 |
 | `internal/server/server_ops_store.go` | TASK-131, TASK-139 | serialize: wave3=TASK-139, wave4=TASK-131 |
 | `internal/server/server_test.go` | TASK-206, TASK-211 | serialize: wave1=TASK-206, wave2=TASK-211 |
@@ -131,7 +135,7 @@ Counts: Bucket 1 = **203** briefs (Sonnet-class 108, Opus-class 58, Haiku-class 
 | `web/src/services/api.ts` | TASK-037, TASK-070, TASK-214 | serialize: wave1=TASK-214, wave5=TASK-037, wave6=TASK-070 |
 | `web/tests/e2e/utils/test-helpers.ts` | TASK-093, TASK-198 | serialize: wave1=TASK-093, wave2=TASK-198 |
 
-Waves: wave 1: 128, wave 2: 38, wave 3: 15, wave 4: 7, wave 5: 8, wave 6: 5, wave 7: 2.
+Waves: wave 1: 130, wave 2: 38, wave 3: 16, wave 4: 9, wave 5: 8, wave 6: 5, wave 7: 2.
 
 #### Soft collisions (append-only hub files — NOT wave-serialized; resolved by the per-merge sibling rebase + conflict ladder)
 
@@ -267,7 +271,7 @@ Execution mode: `/parallel-sweep` — trigger: 12 tasks (≥3 threshold) with di
 
 Execution mode: `/parallel-sweep` — trigger: 6 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
 
-### WS — maintenance · 13 tasks
+### WS — maintenance · 15 tasks
 
 | Task | TODO id | Title | Tier | Why tier | Wave |
 |------|---------|-------|------|----------|------|
@@ -284,10 +288,12 @@ Execution mode: `/parallel-sweep` — trigger: 6 tasks (≥3 threshold) with dis
 | TASK-077 | L5424 | Narrow the 3 remaining maintenance-jobs callees off maintenance.JobSto | **Sonnet-class** | Mechanical interface-narrowing with a clear, already-demonstrated pattern in the same file | 1 |
 | TASK-078 | ABS-SYNC-TASK-04 | TASK-04: build the idempotent sync-ID backfill over the existing libra | **Opus-class** | Full-library maintenance op with a mandatory bounded worker pool (CLAUDE.md concurrency ru | 1 |
 | TASK-195 | DEC-13 | Add a zero-size bucket to maintenance.missing-file-audit (the delta TA | **Sonnet-class** | Small, additive extension to an already-well-tested report-only op; no prod-data mutation, | 1 |
+| TASK-219 | DUPROW-2 | Add a per-book TSV report artifact to the EXISTING dedupe-book-file-ro | **Sonnet-class** | Additive report emission on an existing op, but the row collection happens inside a parall | 4 |
+| TASK-220 | DUPROW-3 | Journal every duplicate-row deletion to the undo ledger and refuse to  | **Opus-class** | Row deletion on a prod data path with an owner decision still open; the journal must be co | 3 |
 
-Execution mode: `/parallel-sweep` — trigger: 13 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
+Execution mode: `/parallel-sweep` — trigger: 15 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
 
-### WS — metadata · 4 tasks
+### WS — metadata · 5 tasks
 
 | Task | TODO id | Title | Tier | Why tier | Wave |
 |------|---------|-------|------|----------|------|
@@ -295,8 +301,9 @@ Execution mode: `/parallel-sweep` — trigger: 13 tasks (≥3 threshold) with di
 | TASK-080 | SEC-CODEQL-BACKLOG | Assess the 2 critical go/request-forgery (SSRF) CodeQL alerts on cover | **Opus-class** | Critical-severity SSRF finding on a path that fetches a URL sourced from third-party metad | 1 |
 | TASK-081 | L3517 | Prefix metadata-apply activity summaries with the book title and rende | **Haiku-class** | single-file, single-function, mechanical string-formatting change with no new types | 1 |
 | TASK-196 | L4081 | Build an async, fanned-out background operation for metadata matching  | **Opus-class** | new background operation touching an operations-registry op definition, a worker pool with | 1 |
+| TASK-221 | DUPROW-1 | metafetch: collapse duplicate book_file rows by cleaned path before wr | **Sonnet-class** | One new pure helper plus four mechanical call-site insertions, but the keeper-choice rule  | 1 |
 
-Execution mode: `/parallel-sweep` — trigger: 4 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
+Execution mode: `/parallel-sweep` — trigger: 5 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
 
 ### WS — misc-go · 9 tasks
 
@@ -349,7 +356,7 @@ Execution mode: `/parallel-sweep` — trigger: 9 tasks (≥3 threshold) with dis
 
 Execution mode: `/parallel-sweep` — trigger: 28 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
 
-### WS — operations · 4 tasks
+### WS — operations · 5 tasks
 
 | Task | TODO id | Title | Tier | Why tier | Wave |
 |------|---------|-------|------|----------|------|
@@ -357,10 +364,11 @@ Execution mode: `/parallel-sweep` — trigger: 28 tasks (≥3 threshold) with di
 | TASK-116 | L4586 | Forward IsCanceled() through reporterLogger to the ops registry's canc | **Opus-class** | The code change itself is a 4-line method override, but the item explicitly requires READI | 1 |
 | TASK-117 | L4703 | Give prodSchedulerStore an Unwrap() so capability lookups can see past | **Sonnet-class** | Needs a design call the item itself doesn't spell out: prodSchedulerStore only holds the n | 1 |
 | TASK-118 | L4743 | Delete internal/operations/mocks — its only referencer is dead, perman | **Sonnet-class** | The deletion itself is mechanical, but deciding what to do with the one (broken, dead) ref | 1 |
+| TASK-222 | ENQ-DEDUP-1 | EnqueueOp: dedupe only on byte-equal params (or an explicit opt-in), n | **Opus-class** | One conditional, but it changes enqueue semantics for ~146 operation definitions across ev | 4 |
 
-Execution mode: `/parallel-sweep` — trigger: 4 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
+Execution mode: `/parallel-sweep` — trigger: 5 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
 
-### WS — organize · 4 tasks
+### WS — organize · 5 tasks
 
 | Task | TODO id | Title | Tier | Why tier | Wave |
 |------|---------|-------|------|----------|------|
@@ -368,8 +376,9 @@ Execution mode: `/parallel-sweep` — trigger: 4 tasks (≥3 threshold) with dis
 | TASK-121 | L4919 | Make resolveOrganizedFilePath's plan-on-faith fallback loud and verify | **Opus-class** | Prod-data path (organize writes book_file rows from this) with a subtle three-way branch a | 1 |
 | TASK-122 | L5021 | Add an {edition_suffix} folder-pattern token | **Sonnet-class** | Small, well-scoped addition with an exact model to copy, but touches the organize target-p | 1 |
 | TASK-203 | DEC-11 | Add a detection-only counter + structured log for generateTargetPath p | **Sonnet-class** | Small, well-scoped, but touches the concurrent whole-library organize worker pool (8 worke | 5 |
+| TASK-223 | DUPROW-1 | organizer: collapse duplicate paths in planTargetPaths so totalTracks  | **Sonnet-class** | Small edit, but it changes totalTracks and therefore the track numbers every organize run  | 1 |
 
-Execution mode: `/parallel-sweep` — trigger: 4 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
+Execution mode: `/parallel-sweep` — trigger: 5 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
 
 ### WS — scanner · 2 tasks
 
@@ -735,7 +744,7 @@ Route these to `docs/operations/pending-prod-actions.md`. ⚠️ A running scan 
 
 ## Cost / efficiency strategy (fan-out)
 
-- **Tier split:** Haiku-class for mechanical edits; Sonnet-class default; Opus-class only for review-critical / cross-cutting. Actual: Sonnet-class 108, Opus-class 58, Haiku-class 37.
+- **Tier split:** Haiku-class for mechanical edits; Sonnet-class default; Opus-class only for review-critical / cross-cutting. Actual: Sonnet-class 111, Opus-class 60, Haiku-class 37.
 - **Coordinator owns git/gh:** workers stay in their worktree and report done; only the coordinator merges + rebases siblings. PRs merge on green CI; review-critical PRs stay open for the owner.
 - **Concurrency cap: 4 workers at a time on this machine.** 16 concurrent agents crashed the session on 2026-08-21.
 - **Waves respect the collision table** — never co-schedule two tasks touching the same file.

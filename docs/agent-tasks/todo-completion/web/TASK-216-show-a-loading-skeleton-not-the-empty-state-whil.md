@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-216-show-a-loading-skeleton-not-the-empty-state-whil.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f6178aa1-2cbe-41ac-a5e5-5f86fd185710 -->
+<!-- guid: cbe7adad-2266-4de4-babb-fe74238c1f6c -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-216 — Show a loading skeleton, not the empty state, while the metadata review list is still fetching (REV-EMPTY-1)

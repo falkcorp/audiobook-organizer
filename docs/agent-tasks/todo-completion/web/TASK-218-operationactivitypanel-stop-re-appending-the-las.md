@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-218-operationactivitypanel-stop-re-appending-the-las.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: a6027183-2807-4de8-8984-d0812b9039a7 -->
+<!-- guid: d3c35262-ca33-4b37-955a-dd2052b45bd1 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-218 — OperationActivityPanel: stop re-appending the last SSE log line on every progress tick (REV-EMPTY-4)

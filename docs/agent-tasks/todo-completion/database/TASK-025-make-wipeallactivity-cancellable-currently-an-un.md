@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-025-make-wipeallactivity-cancellable-currently-an-un.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 6a428d4d-3922-49fd-bf83-f74618744f93 -->
+<!-- guid: 45ab6b11-c5a2-445e-b4b2-3c9751ea142b -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-025 — Make WipeAllActivity cancellable (currently an uncancellable full scan reachable from a request path) (TODO.md L1970)

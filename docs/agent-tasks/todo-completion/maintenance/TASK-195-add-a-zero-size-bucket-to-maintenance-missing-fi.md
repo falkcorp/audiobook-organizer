@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-195-add-a-zero-size-bucket-to-maintenance-missing-fi.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b7b8bedd-807a-48b0-aae2-f6de9c1a4213 -->
+<!-- guid: 90097b91-3688-4f5e-8757-7a8e40fb590d -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-195 — Add a zero-size bucket to maintenance.missing-file-audit (the delta TASK-074 does not cover) (DEC-13)

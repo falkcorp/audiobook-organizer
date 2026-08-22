@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-206-split-or-speed-up-the-internal-server-test-packa.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e8cbf2cf-a479-439d-b9ac-6b1eebee891a -->
+<!-- guid: 791c34cb-1733-43c6-8202-c450c775b5bb -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-206 — Split or speed up the internal/server test package -- migrate call sites to a lighter newTestServer helper (TODO-SRVTIMEOUT)

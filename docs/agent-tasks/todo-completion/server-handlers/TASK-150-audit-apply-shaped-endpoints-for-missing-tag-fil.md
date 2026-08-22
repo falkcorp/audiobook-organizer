@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-150-audit-apply-shaped-endpoints-for-missing-tag-fil.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b543054e-1d6e-4dfa-ad41-7992402aa8c5 -->
+<!-- guid: ca05b348-ed6e-4beb-bf4d-dd3892c76e41 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-150 — Audit apply-shaped endpoints for missing tag/file-I/O writeback (TODO.md L2481)

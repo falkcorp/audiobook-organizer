@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/config/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 54ec24ea-0850-4df9-a4e2-c8662f7948e3 -->
+<!-- guid: b252cdc4-0aa4-4c51-a1a5-030ec77169d5 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — config (todo-completion)

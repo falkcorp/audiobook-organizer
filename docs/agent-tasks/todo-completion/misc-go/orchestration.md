@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 14979f53-b1c7-48c8-af07-1f6dbd3b9816 -->
+<!-- guid: 53077d80-593e-43a6-8557-c5927173d424 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — misc-go workstream (todo-completion)

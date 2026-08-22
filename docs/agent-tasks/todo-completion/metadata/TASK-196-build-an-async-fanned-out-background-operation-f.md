@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/metadata/TASK-196-build-an-async-fanned-out-background-operation-f.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 14850689-5b92-44e2-b822-0fc16575b041 -->
+<!-- guid: 14ed5e5e-3c28-453e-addc-16962a57ca47 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-196 — Build an async, fanned-out background operation for metadata matching -- the bulk dialog is a human-driven one-book-at-a-time loop today (TODO.md L4081)

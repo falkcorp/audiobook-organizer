@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-096-require-every-mutating-operation-to-declare-and-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e5937233-94ea-4820-90f3-cc41c63abb4f -->
+<!-- guid: 8c1da393-4b0b-4e65-8ac9-d004ccc1b808 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-096 — Require every mutating operation to declare and enforce dry_run support at the registry (TODO.md L7435)

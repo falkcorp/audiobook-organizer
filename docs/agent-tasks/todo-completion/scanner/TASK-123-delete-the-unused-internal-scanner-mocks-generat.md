@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/scanner/TASK-123-delete-the-unused-internal-scanner-mocks-generat.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 51c47f8e-164a-4c32-ab22-2ddc070257a1 -->
+<!-- guid: b950b369-c774-4471-903f-4fecbe112415 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-123 — Delete the unused internal/scanner/mocks generated package (TODO.md L4739)

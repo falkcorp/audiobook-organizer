@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-156-phase-7-socket-io-for-absorb-deprioritized-by-th.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: aee818fe-60a2-4a29-ab94-7a9c4f64992a -->
+<!-- guid: a86e465a-fab7-4bff-99ee-dcc434e742ca -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-156 — Phase 7 — socket.io for Absorb (deprioritized by the item's own text; still unbuilt) (ABS-SYNC-Phase7)

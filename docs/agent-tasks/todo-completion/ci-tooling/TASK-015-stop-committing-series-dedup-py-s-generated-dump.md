@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-015-stop-committing-series-dedup-py-s-generated-dump.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 150e8696-9660-4723-9056-5e97f515d484 -->
+<!-- guid: 85a62f96-9a32-47ab-9bdf-c38f7811b758 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-015 — Stop committing series_dedup.py's generated dump/fix cache files (REPO-SIZE-1)

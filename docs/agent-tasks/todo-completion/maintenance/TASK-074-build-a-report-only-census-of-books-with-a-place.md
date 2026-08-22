@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-074-build-a-report-only-census-of-books-with-a-place.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 4b64db79-b3b7-4c28-8935-be656138073c -->
+<!-- guid: 2c0e3e1e-46fc-4085-ae11-880265be483e -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-074 — Build a report-only census of books with a placeholder author already baked into their organizer-tree path but resolvable metadata (TODO.md L4144)

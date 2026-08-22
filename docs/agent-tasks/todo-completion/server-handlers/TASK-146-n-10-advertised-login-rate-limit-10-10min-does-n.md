@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-146-n-10-advertised-login-rate-limit-10-10min-does-n.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 3316e711-7ac8-4332-bd0c-473c5ec3eae4 -->
+<!-- guid: 610fc300-ac37-4a6c-9803-118373571b93 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-146 — N-10: advertised login rate limit (10/10min) does not match the real throttle (15/15min) (ABS-N10)

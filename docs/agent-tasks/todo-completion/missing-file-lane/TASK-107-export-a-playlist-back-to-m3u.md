@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-107-export-a-playlist-back-to-m3u.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 676794b3-10cd-474f-b3f1-c23da8868b5c -->
+<!-- guid: 0f643f68-50af-459a-81b4-1d7143698055 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-107 — Export a playlist back to .m3u (TODO.md L8646)

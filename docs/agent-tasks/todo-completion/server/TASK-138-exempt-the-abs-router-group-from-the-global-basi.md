@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-138-exempt-the-abs-router-group-from-the-global-basi.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 081c4c7e-8ef5-467d-abaa-7ef6bbfbe27d -->
+<!-- guid: 35c6082c-b812-497b-8a05-ddb8fd6f5c0c -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-138 — Exempt the ABS router group from the global BasicAuth() middleware (ABS-SYNC)

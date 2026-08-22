@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: a89db503-dbca-4e92-a1cc-60ef057dd08e -->
+<!-- guid: 93aff14d-cda0-4f94-9e92-c375e234f792 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — maintenance (todo-completion)
 
-13 tasks projected from the 2026-08-21 TODO-completion skeleton (`../skeleton.json`). Every fact here is a projection of that skeleton — edit the skeleton and regenerate, never this file.
+15 tasks projected from the 2026-08-21 TODO-completion skeleton (`../skeleton.json`). Every fact here is a projection of that skeleton — edit the skeleton and regenerate, never this file.
 
 | Task | TODO id | Title | Priority | Effort | Tier | Wave |
 |------|---------|-------|----------|--------|------|------|
@@ -22,6 +22,8 @@
 | TASK-077 | L5424 | Narrow the 3 remaining maintenance-jobs callees off maintenance.JobSto | P2 | M | Sonnet-class | 1 |
 | TASK-078 | ABS-SYNC-TASK-04 | TASK-04: build the idempotent sync-ID backfill over the existing libra | P1 | M | Opus-class | 1 |
 | TASK-195 | DEC-13 | Add a zero-size bucket to maintenance.missing-file-audit (the delta TA | P2 | S | Sonnet-class | 1 |
+| TASK-219 | DUPROW-2 | Add a per-book TSV report artifact to the EXISTING dedupe-book-file-ro | P2 | M | Sonnet-class | 4 |
+| TASK-220 | DUPROW-3 | Journal every duplicate-row deletion to the undo ledger and refuse to  | P1 | M | Opus-class | 3 |
 
 ## Ground rules
 
@@ -35,13 +37,16 @@
 
 ## Collision / wave note
 
+- `docs/operations/pending-prod-actions.md`: TASK-060, TASK-220 → serialize by wave (TASK-060=w1, TASK-220=w3)
 - `internal/config/config.go`: TASK-016, TASK-017, TASK-018, TASK-019, TASK-020, TASK-193, TASK-070 → serialize by wave (TASK-016=w4, TASK-017=w1, TASK-018=w5, TASK-019=w2, TASK-020=w3, TASK-193=w7, TASK-070=w6)
 - `internal/plugins/maintenance/chapters_backfill.go`: TASK-066, TASK-197 → serialize by wave (TASK-066=w1, TASK-197=w2)
 - `internal/plugins/maintenance/cleanup.go`: TASK-070, TASK-073 → serialize by wave (TASK-070=w6, TASK-073=w1)
-- `internal/plugins/maintenance/deps.go`: TASK-066, TASK-070, TASK-076 → serialize by wave (TASK-066=w1, TASK-070=w6, TASK-076=w2)
+- `internal/plugins/maintenance/dedupe_book_file_rows.go`: TASK-219, TASK-220, TASK-197 → serialize by wave (TASK-219=w4, TASK-220=w3, TASK-197=w2)
+- `internal/plugins/maintenance/dedupe_book_file_rows_test.go`: TASK-219, TASK-220 → serialize by wave (TASK-219=w4, TASK-220=w3)
+- `internal/plugins/maintenance/deps.go`: TASK-066, TASK-070, TASK-076, TASK-220 → serialize by wave (TASK-066=w1, TASK-070=w6, TASK-076=w2, TASK-220=w3)
 - `internal/plugins/maintenance/missing_file_audit.go`: TASK-195, TASK-197 → serialize by wave (TASK-195=w1, TASK-197=w2)
 - `internal/plugins/maintenance/missing_file_repoint.go`: TASK-067, TASK-197 → serialize by wave (TASK-067=w3, TASK-197=w2)
-- `internal/server/server_maintenance_deps.go`: TASK-066, TASK-070 → serialize by wave (TASK-066=w1, TASK-070=w6)
+- `internal/server/server_maintenance_deps.go`: TASK-066, TASK-070, TASK-220 → serialize by wave (TASK-066=w1, TASK-070=w6, TASK-220=w3)
 - `web/src/pages/ActivityLog.tsx`: TASK-070, TASK-174 → serialize by wave (TASK-070=w6, TASK-174=w1)
 - `web/src/services/api.ts`: TASK-037, TASK-070, TASK-214 → serialize by wave (TASK-037=w5, TASK-070=w6, TASK-214=w1)
 
@@ -49,7 +54,8 @@
 |------|-------|--------|-----------------------|
 | 1 | TASK-066, TASK-068, TASK-071, TASK-073, TASK-074, TASK-075, TASK-077, TASK-078, TASK-195 | none | disjoint files within the wave (computed collision matrix) |
 | 2 | TASK-072, TASK-076 | wave 1 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
-| 3 | TASK-067 | wave 2 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
+| 3 | TASK-067, TASK-220 | wave 2 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
+| 4 | TASK-219 | wave 3 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
 | 6 | TASK-070 | wave 5 merged + siblings rebased | disjoint files within the wave (computed collision matrix) |
 
 Waves are GLOBAL across the package: a wave-2 task here may be waiting on a wave-1 task in another workstream that shares a file (see `../BREAKDOWN-2026-08-21.md` collision table).

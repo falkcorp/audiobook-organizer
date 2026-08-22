@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-067-extend-the-repoint-repair-to-recover-bookfile-ro.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 5d5343a3-5ec6-4962-876d-9b357b1835ff -->
+<!-- guid: 80b1e845-1807-4437-827b-d50e174ca069 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-067 — Extend the REPOINT repair to recover BookFile rows via Book.FilePath (the #2372 fallback shape), not just the padded-filename shape (TODO.md L642)

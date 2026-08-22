@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/operations/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: a50f398d-4ec3-4509-88bb-d01bfc2ecdcb -->
+<!-- guid: c3920ad2-cbd5-4621-aa54-db68f8b390c1 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — operations workstream (todo-completion)
@@ -19,7 +19,10 @@ flowchart LR
     subgraph Wave2
       TASK115[TASK-115 distinguish-nothing-to-cance]
     end
-
+    subgraph Wave4
+      TASK222[TASK-222 enqueueop-dedupe-only-on-byt]
+    end
+    TASK115 --> TASK222
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.

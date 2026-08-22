@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f0afe3ad-930a-4878-9b61-8f2a8f586002 -->
+<!-- guid: cff40549-0d69-49fd-a527-ae69ed645bbf -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — missing-file-lane (todo-completion)
@@ -54,8 +54,9 @@
 - `internal/itunes/service/fs_regroup_shape.go`: TASK-064, TASK-201 → serialize by wave (TASK-064=w2, TASK-201=w3)
 - `internal/itunes/service/fs_regroup_shape_test.go`: TASK-064, TASK-101, TASK-201 → serialize by wave (TASK-064=w2, TASK-101=w1, TASK-201=w3)
 - `internal/metrics/metrics.go`: TASK-085, TASK-095, TASK-203, TASK-130, TASK-131 → serialize by wave (TASK-085=w1, TASK-095=w2, TASK-203=w5, TASK-130=w3, TASK-131=w4)
-- `internal/operations/registry/registry.go`: TASK-096, TASK-113, TASK-115 → serialize by wave (TASK-096=w3, TASK-113=w1, TASK-115=w2)
-- `internal/operations/registry/registry_test.go`: TASK-096, TASK-115 → serialize by wave (TASK-096=w3, TASK-115=w2)
+- `internal/operations/registry/registry.go`: TASK-096, TASK-113, TASK-115, TASK-222 → serialize by wave (TASK-096=w3, TASK-113=w1, TASK-115=w2, TASK-222=w4)
+- `internal/operations/registry/registry_test.go`: TASK-096, TASK-115, TASK-222 → serialize by wave (TASK-096=w3, TASK-115=w2, TASK-222=w4)
+- `internal/operations/registry/types.go`: TASK-096, TASK-222 → serialize by wave (TASK-096=w3, TASK-222=w4)
 - `internal/plugins/maintenance/intro_migrate_single_file.go`: TASK-197, TASK-200 → serialize by wave (TASK-197=w2, TASK-200=w1)
 - `internal/plugins/maintenance/intro_transcribe.go`: TASK-197, TASK-200 → serialize by wave (TASK-197=w2, TASK-200=w1)
 - `internal/plugins/maintenance/regroup_shattered_ai.go`: TASK-197, TASK-200, TASK-201 → serialize by wave (TASK-197=w2, TASK-200=w1, TASK-201=w3)

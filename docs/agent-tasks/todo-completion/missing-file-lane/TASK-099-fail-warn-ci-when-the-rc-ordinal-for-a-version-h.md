@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-099-fail-warn-ci-when-the-rc-ordinal-for-a-version-h.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 0123cf64-f9ae-46c7-9df6-3dfd680f4242 -->
+<!-- guid: 60c1333c-9bec-4933-b62d-ba33672b1ebd -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-099 — Fail/warn CI when the RC ordinal for a version hits 10 (TODO.md L8044)

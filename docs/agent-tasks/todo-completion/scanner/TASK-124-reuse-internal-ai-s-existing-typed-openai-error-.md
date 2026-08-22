@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/scanner/TASK-124-reuse-internal-ai-s-existing-typed-openai-error-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: fc4c67da-1706-414b-99eb-1c98bdec1a12 -->
+<!-- guid: 3fd5deec-0a8c-4b8a-a4de-c474c09db312 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-124 — Reuse internal/ai's existing typed OpenAI error classification in scanner.isPermanentAIFailure instead of re-parsing error text (TODO.md L4852)

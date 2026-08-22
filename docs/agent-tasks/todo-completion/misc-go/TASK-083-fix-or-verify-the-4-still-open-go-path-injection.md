@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-083-fix-or-verify-the-4-still-open-go-path-injection.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: bce02550-02df-47da-a8c0-983469d5859c -->
+<!-- guid: 935ef220-7739-4aed-a9b3-42a761c667dc -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-083 — Fix or verify the 4 still-open go/path-injection findings (1 of the original 5 is already suppressed) (SEC-CODEQL-BACKLOG)

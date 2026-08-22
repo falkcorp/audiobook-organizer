@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-103-build-a-report-only-op-categorizing-the-transcri.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 26bea1fb-35cd-4a3b-9687-e9f970f40e75 -->
+<!-- guid: f32dac67-3a5d-44dd-9a66-8b6be3828499 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-103 — Build a report-only op categorizing the transcribe_status vs IntroTranscription drift (79.3% whisper_error-with-transcript sample) (TODO.md L8433)

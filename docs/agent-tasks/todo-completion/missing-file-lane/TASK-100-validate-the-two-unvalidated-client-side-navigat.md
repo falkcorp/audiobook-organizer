@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-100-validate-the-two-unvalidated-client-side-navigat.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b2219750-63cb-4267-85a1-32a9a364af68 -->
+<!-- guid: 19898d12-34a2-499d-a975-7d8591f89509 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-100 — Validate the two unvalidated client-side navigation sinks (Login.tsx from-state, BookDetail.tsx library_return_url) the way the Go side already does (TODO.md L8177)

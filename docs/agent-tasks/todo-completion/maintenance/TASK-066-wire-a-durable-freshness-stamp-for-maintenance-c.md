@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-066-wire-a-durable-freshness-stamp-for-maintenance-c.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: bafad512-b7e3-4b39-876f-8a9b643b885d -->
+<!-- guid: 96b8a671-429f-4bcb-8f74-e26a2d0a5eae -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-066 — Wire a durable freshness stamp for maintenance.chapters-backfill before it is ever scheduled (TODO.md L606)

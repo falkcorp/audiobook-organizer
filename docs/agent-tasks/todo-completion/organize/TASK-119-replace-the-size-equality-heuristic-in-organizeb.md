@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/organize/TASK-119-replace-the-size-equality-heuristic-in-organizeb.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 88c3b5d1-ff8f-46bd-b0e4-e79e3c4a436a -->
+<!-- guid: 919f5b2a-f84a-41e1-951d-0ff7479a4d72 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-119 — Replace the size-equality heuristic in OrganizeBookDirectory's destination-adoption check with a content hash (F5)

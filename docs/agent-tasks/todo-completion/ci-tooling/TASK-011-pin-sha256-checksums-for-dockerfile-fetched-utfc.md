@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-011-pin-sha256-checksums-for-dockerfile-fetched-utfc.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 393cf5d1-e864-4d54-abf5-7d6e05c404bf -->
+<!-- guid: 31e9b170-ae6f-4119-b7db-f6a60150791d -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-011 — Pin SHA256 checksums for Dockerfile-fetched utfcpp/taglib tarballs (SEC-8)

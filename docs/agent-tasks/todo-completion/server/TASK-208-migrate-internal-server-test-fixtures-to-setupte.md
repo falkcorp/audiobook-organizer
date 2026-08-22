@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-208-migrate-internal-server-test-fixtures-to-setupte.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 5069b9be-7110-49d1-b5f4-605f1b3ee9f6 -->
+<!-- guid: d10bf777-e7b7-47e0-beb1-1be8958fb4f5 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-208 — Migrate internal/server test fixtures to setupTestServerWithStore — itunes_error_test.go, version_lifecycle_test.go (DEC-6)

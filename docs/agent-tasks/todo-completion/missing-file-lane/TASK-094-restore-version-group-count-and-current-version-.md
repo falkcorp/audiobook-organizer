@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-094-restore-version-group-count-and-current-version-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: afd55227-c593-4de9-845c-cbb5fde0df31 -->
+<!-- guid: 31630b9f-033f-40a5-8577-1ff345774d79 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-094 — Restore version-group count and current-version marker on Book Detail (TODO.md L6252)

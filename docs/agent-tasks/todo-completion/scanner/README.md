@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/scanner/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: d2aab36e-1ba1-420c-862f-f6c0114a085b -->
+<!-- guid: 6352e261-081f-4f3b-8120-86425b07f6e8 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — scanner (todo-completion)
