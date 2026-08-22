@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.22.0
+// version: 3.23.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-08-19
+// last-edited: 2026-08-22
 
 package server
 
@@ -239,9 +239,21 @@ func (s *Server) resumeLegacyOp(opID, opType string) {
 			_ = store.UpdateOperationError(opID, "operation registry not available")
 		}
 	case "itunes_path_repair":
-		// Migrated to UOS (itunes.path-repair); re-enqueue via registry on resume.
+		// New runs no longer create a v1 row, so this branch only ever sees
+		// rows minted before that change. It must still be safe for them.
+		//
+		// DO NOT pass nil params here. EnqueueOp normalizes nil to "{}", which
+		// decodes to the zero itunesPathRepairOpParams — and its DryRun is
+		// FALSE. This branch therefore used to turn an interrupted DRY RUN into
+		// a real APPLY that rewrites locations in the live iTunes library, with
+		// nothing in the original request asking for it.
+		//
+		// The v1 row does not record which mode the run was in, so the mode
+		// cannot be recovered — resume in the safe one and let an operator
+		// re-trigger with ?apply=true if they meant to write.
 		if s.opRegistry != nil {
-			_, _ = s.opRegistry.EnqueueOp(context.Background(), "itunes.path-repair", nil)
+			_, _ = s.opRegistry.EnqueueOp(context.Background(), "itunes.path-repair",
+				itunesPathRepairOpParams{DryRun: true})
 		} else {
 			_ = store.UpdateOperationError(opID, "operation registry not available")
 		}
