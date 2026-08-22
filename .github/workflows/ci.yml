@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.7.0
+# version: 3.7.1
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-08-20
+# last-edited: 2026-08-21
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -232,10 +232,14 @@ jobs:
 
       # The auto-revert selector decides which commits get reverted off main, so
       # it gets tested somewhere that actually runs. Stdlib unittest, no pip step
-      # -- scripts/test_check_memory_leaks.py sits in this repo executed by
-      # nothing, which is the failure mode being avoided here.
-      - name: Test the auto-revert span selector
-        run: python3 -m unittest discover -s .github/workflows/scripts -p 'test_*.py' -v
+      # -- scripts/test_check_memory_leaks.py is wired in below alongside it,
+      # since check-memory-leaks.py itself is actively used (Makefile
+      # check-memory-leaks target, memory-leak-scan.yml) and its regression
+      # test should not sit dead.
+      - name: Test the auto-revert span selector and repo scripts
+        run: |
+          python3 -m unittest discover -s .github/workflows/scripts -p 'test_*.py' -v
+          python3 -m unittest discover -s scripts -p 'test_*.py' -v
 
   # Project-specific: verify mockery mocks are not stale
   mocks-check:
