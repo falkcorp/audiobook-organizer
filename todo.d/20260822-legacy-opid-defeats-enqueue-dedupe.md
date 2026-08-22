@@ -1,19 +1,31 @@
-### 🐛 Maintenance jobs have no `ConcurrencyKey`, so nothing dedupes or serializes them
+### 🐛 `LegacyOpID` defeats `EnqueueOp`'s dedupe for maintenance jobs (serialization fixed 2026-08-22)
 
-- [ ] **Decide whether the 37 maintenance jobs should serialize against themselves**, and if so
+- [x] ~~**Decide whether the 37 maintenance jobs should serialize against themselves**, and if so
       give each def a per-job `ConcurrencyKey` (the op ID is the natural key) **plus**
-      `DedupeQueuedRuns: true`.
+      `DedupeQueuedRuns: true`.~~ — **decided and shipped 2026-08-22 (PR #2709).**
+      `registerMaintenanceJobOp` now derives `ConcurrencyKey` from the job's own op ID when the
+      job's policy leaves it empty (a job that declares its own key keeps it, so the field stays
+      meaningful). `DedupeQueuedRuns` was deliberately **NOT** set: `maintenanceJobOpParams`
+      carries `DryRun`, so "run for real" clicked during a dry run would be silently dropped —
+      the exact bug #2688 fixed. Mutation-verified: with the key reverted, two enqueues overlap
+      (`maxOverlap == 2`); with it, they run sequentially.
+
+- [ ] **Still open from this fragment:** `LegacyOpID` (below) continues to defeat `EnqueueOp`'s
+      byte-equality dedupe, because every request mints a fresh ULID. That is now the *only*
+      remaining blocker to same-params merge for this family, and it disappears with
+      `maintenance_dispatcher.go` in the v1 kill — so **re-measure after the v1 kill lands**
+      rather than building a consolidator for it.
 
   **Where:** `internal/server/maintenance_job_op.go` — `registerMaintenanceJobOp` is the single
   factory for all 37 defs, so both fields are set in one place. `internal/maintenance/job.go:131`
   (`DefaultPolicy`) is where `ConcurrencyKey: ""` is hardcoded, and `job.go:123` explicitly defers
   per-job keys to "PR-2".
 
-  **The actual state of things.** Two gates both test `def.ConcurrencyKey != ""`:
-  `EnqueueOp`'s dedupe block (`registry.go`) and dispatcher Gate 3 (`dispatcher.go:107`). Every
-  maintenance job uses `DefaultPolicy()`, whose `ConcurrencyKey` is `""`. So **neither gate has
-  ever applied to a maintenance job**: a double-click starts two runs, and they run
-  *concurrently*, not serialized.
+  **The state of things as originally found (fixed by #2709).** Two gates both test
+  `def.ConcurrencyKey != ""`: `EnqueueOp`'s dedupe block (`registry.go`) and dispatcher Gate 3
+  (`dispatcher.go:107`). Every maintenance job used `DefaultPolicy()`, whose `ConcurrencyKey` is
+  `""`. So **neither gate had ever applied to a maintenance job**: a double-click started two runs,
+  and they ran *concurrently*, not serialized. Both gates now apply.
 
   **Correction to an earlier note (2026-08-22).** A previous version of this fragment claimed
   PR #2688 (params-aware `EnqueueOp` dedupe) turned a silently-swallowed double-click into two

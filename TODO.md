@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.33.1 -->
+<!-- version: 10.34.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-22 -->
 
@@ -10771,10 +10771,20 @@ Companion docs:
     demoted the winner to non-primary with no soft-delete; fixed defensively in
     `Service.MergeBooks` itself), CombineBooks file-transfer/author-override error paths,
     and the merge-family serialization lock helpers.
-42. **2026-05-01 re-audit block close-out pass** (H1:3137-3177) — TEST-2, DEP-1a-e,
-    DEAD-1, CTX-4, LOG-5, R-9, R-10 mostly stale: DEP-1 0 non-test hits, DEP-1e moot
-    (post-SQLite removal), PERF-1 OBSOLETE as scoped (Jul-16 truncation fix made
-    whole-library ops deliberately unbounded). Needs a checkbox-level close-out.
+42. ~~**2026-05-01 re-audit block close-out pass**~~ (H1:3137-3177) — closed 2026-08-22:
+    re-verified at HEAD `629d5fa79`. TEST-2 resolved (`TestStoreAdditionalCoverageSQLite`
+    exists and is PebbleStore-backed via `setupTestDB`, no longer SQLite). DEAD-1 resolved
+    (0 hits for `legacySaveConfigToDatabase_REMOVED`/`bookTagKeyspace`/
+    `bookSummarySelectColumnsQualified`). CTX-4 resolved (10 hits — every `ActivityStore`
+    impl takes `ctx` on `Summarize`/`CompactByDay`). LOG-5 resolved (0 `fmt.Printf`/
+    `log.Printf` in database/playlist/organizer; `sqlite_store.go` gone). R-10 resolved
+    (0 capitalized error strings across the 6 metadata providers). R-9 and PERF-1 obsolete
+    as scoped (PERF-1 via `19e129d4`, whole-library ops deliberately unbounded).
+    **Correction:** the prior note called DEP-1e "moot (post-SQLite removal)" — it is not.
+    `Book.ITunesPath` is still declared and still round-tripped at HEAD; spun out as its own
+    item via a `todo.d/` fragment rather than closed. DEP-1a-d are genuinely resolved: the
+    field has no production reader (measured by `gopls findReferences`, not a name grep —
+    the receiver-name grep in the scout package cannot see `b.`/`c.` call sites).
 43. **WaitForWarmup hazard note** (H1:3118) — latent create-then-read-memdb test
     hazard; document or fix.
 44. **GFO-4 — graceful-file-ops sub-op phase tracking** — last open graceful-file-ops
