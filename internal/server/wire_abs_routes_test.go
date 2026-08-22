@@ -1,12 +1,14 @@
 // file: internal/server/wire_abs_routes_test.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 3ea1d764-95c8-4b02-8f31-6d70a5be2c49
-// last-edited: 2026-08-16
+// last-edited: 2026-08-22
 
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -669,5 +671,78 @@ func TestCollectionsNativeTwinRoutesStillRedirect(t *testing.T) {
 					"(enabled=%v): on, ABS answers it; off, nothing did and the "+
 					"redirect is the only way to the /api/v1 twin", r.method, r.path, absOn)
 		}
+	}
+}
+
+// testLogHandler captures slog records for testing.
+type testLogHandler struct {
+	records []slog.Record
+}
+
+func (h *testLogHandler) Handle(_ context.Context, record slog.Record) error {
+	h.records = append(h.records, record)
+	return nil
+}
+
+func (h *testLogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return h
+}
+
+func (h *testLogHandler) WithGroup(name string) slog.Handler {
+	return h
+}
+
+func (h *testLogHandler) Enabled(_ context.Context, level slog.Level) bool {
+	return true
+}
+
+// TestWireABSRoutes_LogsStateEvenWhenDisabled verifies that wireABSRoutes logs the
+// ABS enabled/disabled state unconditionally at boot, not just when enabled. This
+// ensures that journalctl/log-grepping for 'abs:' on a running instance always
+// answers the ABS_API_ENABLED question definitively.
+func TestWireABSRoutes_LogsStateEvenWhenDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := &Server{router: gin.New()}
+
+	// Capture slog output using a test handler
+	handler := &testLogHandler{}
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	defer slog.SetDefault(oldLogger)
+
+	// Force ABS off through Mutate, not a bare field write: Snapshot() reads
+	// AppConfig under an RLock and config.go requires every write site to take
+	// the write lock. Restore afterwards so this does not leak into siblings.
+	prev := config.Snapshot().ABSAPIEnabled
+	config.Mutate(func(c *config.Config) { c.ABSAPIEnabled = false })
+	defer config.Mutate(func(c *config.Config) { c.ABSAPIEnabled = prev })
+
+	s.wireABSRoutes()
+
+	var found bool
+	for _, record := range handler.records {
+		if record.Message != "abs: Audiobookshelf-compatible surface" {
+			continue
+		}
+		found = true
+		var enabled bool
+		var sawAttr bool
+		record.Attrs(func(a slog.Attr) bool {
+			if a.Key == "enabled" {
+				enabled, sawAttr = a.Value.Bool(), true
+			}
+			return true
+		})
+		if !sawAttr {
+			t.Error("the abs boot log line carries no 'enabled' attribute, so it does not answer the question it exists to answer")
+		}
+		if enabled {
+			t.Error("abs boot log reported enabled=true while ABSAPIEnabled is false")
+		}
+		break
+	}
+
+	if !found {
+		t.Error("wireABSRoutes logged nothing when ABS is disabled; the whole point is that the line is unconditional")
 	}
 }

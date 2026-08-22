@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-08-20
+// last-edited: 2026-08-22
 
 package server
 
@@ -323,6 +323,7 @@ func absReservedPath(path string) bool {
 // When the flag is off (the default) this registers nothing and returns immediately.
 func (s *Server) wireABSRoutes() {
 	snap := config.Snapshot()
+	slog.Info("abs: Audiobookshelf-compatible surface", "enabled", snap.ABSAPIEnabled)
 	if !snap.ABSAPIEnabled {
 		return
 	}
