@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
 // last-edited: 2026-08-22
 
@@ -571,7 +571,7 @@ func TestLogin_PasswordSuccessConformsToFixture(t *testing.T) {
 	h := newConformanceHarness(t)
 	body := h.login(t, "oracle", "pw-pw-pw-pw")
 	assertConformantExcept(t, "post_login.json", body,
-		mergeAllowances(t, identityAllowances(), sourceAllowance()))
+		mergeAllowances(t, identityAllowances(), sourceAllowance(), rateLimitAllowance()))
 }
 
 // TestLogin_UserDefaultLibraryIdIsNonNullString is a LOGIN BLOCKER (§1.8.2):
@@ -928,7 +928,7 @@ func TestRefresh_RotatesAndConformsToFixture(t *testing.T) {
 		t.Fatalf("got %d: %s", w.Code, w.Body.String())
 	}
 	assertConformantExcept(t, "post_auth_refresh.json", body,
-		mergeAllowances(t, identityAllowances(), sourceAllowance()))
+		mergeAllowances(t, identityAllowances(), sourceAllowance(), rateLimitAllowance()))
 
 	u := userObj(t, body)
 	newAccess := str(t, u, "accessToken")

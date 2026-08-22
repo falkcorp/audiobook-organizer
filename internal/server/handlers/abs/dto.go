@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/dto.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4a8f30c7-1b56-49e2-8d70-63c1e9b28a5f
 // last-edited: 2026-08-22
 
@@ -230,8 +230,17 @@ func (h *Handler) buildServerSettings() serverSettings {
 		MaxBackupSize:                   1,
 		MetadataFileFormat:              "json",
 		PodcastEpisodeSchedule:          "0 * * * *",
-		// Advertised login limits. They describe our own throttle so a client can
-		// pace itself instead of discovering the limit by getting 429'd.
+		// Advertised login limits, derived from the throttle itself so the two cannot
+		// drift apart again (they had: 10/600000 advertised against a real 15/15min).
+		//
+		// Two caveats the field names hide, both worth knowing before trusting these:
+		// absauth charges only FAILED attempts, so this is a failure budget, not a
+		// request budget -- a client that logs in successfully, however often, spends
+		// none of it. And the budget is per source IP across BOTH /login and
+		// /auth/refresh, which share one Throttle (handler.go), so an expired refresh
+		// token burns login attempts. That makes this an upper bound: a client can
+		// hit the 429 before its Nth login. The names say "requests" because they are
+		// an upstream ABS wire contract we do not control.
 		RateLimitLoginRequests: absauth.MaxFailuresPerIP,
 		RateLimitLoginWindow:   absauth.Window.Milliseconds(),
 		ScannerCoverProvider:   "google",
