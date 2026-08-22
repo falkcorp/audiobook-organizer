@@ -1,7 +1,7 @@
 // file: internal/organizer/pipeline.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-07-17
+// last-edited: 2026-08-22
 
 package organizer
 
@@ -97,11 +97,32 @@ func planTargetPaths(rootDir, folderPattern, filePattern string, files []databas
 	// A row with no path is not a file, so it is dropped outright. Rows flagged
 	// Missing are NOT dropped: see the totalTracks note below.
 	sorted := make([]database.BookFile, 0, len(files))
+	seenPath := make(map[string]struct{}, len(files))
+	dupes := 0
 	for _, f := range files {
 		if f.FilePath == "" {
 			continue
 		}
+		// Collapse duplicate book_file rows for ONE path. Planning both gives
+		// two entries with the same SourcePath: the first rename moves the
+		// file and the second fails ENOENT. It also inflates totalTracks,
+		// which renumbered a 21-file book as 42 tracks in production on
+		// 2026-08-21. This runs BEFORE the sort.Slice below, so "first wins"
+		// means first in the caller's order, not first by track number --
+		// the sort is not stable with respect to equal (TrackNumber,
+		// FilePath) pairs, so deduping after it would make the survivor
+		// non-deterministic.
+		key := filepath.Clean(strings.TrimSpace(f.FilePath))
+		if _, ok := seenPath[key]; ok {
+			dupes++
+			continue
+		}
+		seenPath[key] = struct{}{}
 		sorted = append(sorted, f)
+	}
+	if dupes > 0 {
+		slog.Warn("duplicate book_file paths collapsed while planning target paths",
+			"title", vars.Title, "rows", len(files), "distinct", len(sorted), "collapsed", dupes)
 	}
 	if len(sorted) == 0 {
 		return nil, nil

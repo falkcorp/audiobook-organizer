@@ -1,7 +1,7 @@
 // file: internal/organizer/path_builder_characterization_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d8e2a41-9b73-4c06-8f15-6e39a2c7b048
-// last-edited: 2026-08-15
+// last-edited: 2026-08-22
 
 // Characterization tests for the TWO target-path builders, written while both
 // still exist, so that unifying them is a measurement rather than a promise.
@@ -40,6 +40,7 @@
 package organizer
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -543,8 +544,15 @@ func TestChar_MultiFileBookNamesEveryFileDistinctly(t *testing.T) {
 	files := make([]database.BookFile, 0, 12)
 	for i := 1; i <= 12; i++ {
 		files = append(files, database.BookFile{
-			ID:          "f" + string(rune('a'+i-1)),
-			FilePath:    "/src/foundation/ch" + string(rune('0'+i%10)) + ".mp3",
+			ID: "f" + string(rune('a'+i-1)),
+			// Zero-padded to 2 digits so all 12 paths are distinct. The prior
+			// "ch"+string(rune('0'+i%10))+".mp3" form wrapped mod 10, so i=1
+			// and i=11 both produced "ch1.mp3" and i=2/i=12 both produced
+			// "ch2.mp3" -- an accidental duplicate-FilePath fixture that
+			// planTargetPaths's new duplicate-row collapse (DUPROW-1) now
+			// collapses to 10 entries, which is a correct response to a
+			// fixture bug, not a regression. See TASK-223.
+			FilePath:    fmt.Sprintf("/src/foundation/ch%02d.mp3", i),
 			Format:      "mp3",
 			TrackNumber: i,
 		})
