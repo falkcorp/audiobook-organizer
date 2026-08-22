@@ -1,7 +1,7 @@
 <!-- file: docs/dedup/STATUS.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 09dc17af-0c96-4f15-bc27-e5f48edb9e74 -->
-<!-- last-edited: 2026-07-18 -->
+<!-- last-edited: 2026-08-22 -->
 
 # Dedup — Status & Architecture (single source of truth)
 
@@ -10,9 +10,16 @@ sections of `docs/dedup-import-pipeline-audit.md` (both now under
 [`docs/archive/2026-07-consolidation/`](../archive/2026-07-consolidation/)).
 If a number here conflicts with an older doc, **this doc wins**.
 
-## Real numbers (2026-07-17)
+## Real numbers — the 2026-07-17 BASELINE (historical, not current state)
 
-- **15,269** pending dedup candidates total; **9,074** exact-layer pending.
+> **Every figure in this section is the 2026-07-17 baseline**, i.e. the state
+> *before* the 2026-07-18 drain. It is kept as the reference point the drain is
+> measured against; it is **not** a description of the library today. For where
+> the backlog stood most recently, see
+> [Current state](#current-state--as-of-2026-08-12) below.
+
+- 2026-07-17 baseline: **15,269** pending dedup candidates total; **9,074**
+  exact-layer pending.
 - Every older 380K / 384K / 387K figure is **obsolete** — that was the
   chapter-shatter + title-leak explosion, since healed (PR #1548 removed 20,247
   chapter-junk records) and prevented at the emitters.
@@ -56,34 +63,98 @@ genuine-duplicate review signal:
 4. **Rescan** — `dedup.purge-stale` + `dedup.full-scan` on the cleaned corpus;
    the review UI drains what genuinely remains.
 
-### Sandbox validation results (2026-07-18, full-fidelity prod replica, 0 errors)
+### Sandbox validation (2026-07-18, full-fidelity prod replica, 0 errors) — steps 1–2 + classify ONLY
 
-Ran the full chain on a fresh ZFS clone + copy of the production Pebble DB
-(baseline identical to prod: **9,074 exact-pending / 10,319 total-pending**):
+> ⚠️ **Provenance correction (2026-08-22, T13 docs truth-up).** This section
+> previously carried a five-stage table headed "Sandbox validation results" whose
+> purge-apply row read `purgeable=7,891, keep=278, review=2,150 → dismissed 7,891`
+> over a scanned population of `10,319`. **Those are production's figures**, not the
+> sandbox's — they match the prod journal line transcribed at
+> [`docs/audits/2026-08-11-docs-inventory.md`](../audits/2026-08-11-docs-inventory.md)
+> §1.3.1 exactly, and the sandbox purge-apply wave (**T03**) has never run
+> (`grep -n '\*\*T03\*\*' TODO.md` → still `- [ ]`). The table has been split: the
+> production run keeps its own numbers under
+> [EXECUTED ON PRODUCTION](#-executed-on-production-2026-07-18-human-gated-go-ahead)
+> below, and the sandbox rows that depend on T03 are marked **PENDING** rather than
+> back-filled with the prod number.
+>
+> The two populations are **not** a drift and must not be merged into one number:
+> sandbox scanned **10,304**, prod scanned **10,319** — the replica held 15 fewer
+> candidates, and both runs' buckets sum exactly to their own totals
+> (7,878+278+392+1,756 = 10,304; 7,891+278+2,150 = 10,319). A 2026-08-11 docs audit
+> first reported this as a contradiction and then corrected itself in §1.3.2 of the
+> same file. Note that `keep = 278` is identical in both runs, so it does **not**
+> discriminate between them — only the scanned total and the purgeable count do.
 
-| Stage | exact-pending | total-pending | dismissed |
-|---|---|---|---|
-| baseline | 9,074 | 10,319 | 1,351 |
-| after title-repair + breakdown-backfill | 9,074 | 10,319 | 1,351 |
-| **after triage purge-apply** (classified purgeable=**7,891**, keep=278, review=2,150 → dismissed 7,891) | **1,183** | 2,428 | 9,242 |
-| after purge-stale | 1,181 | 2,426 | 9,242 |
-| **final** after full-scan (embedding re-emission) | **1,311** | 2,554 | 9,242 |
+Ran the chain on a fresh ZFS clone + copy of the production Pebble DB. What the
+sandbox actually measured:
 
-**Net: exact-pending 9,074 → 1,311 (−85.5%); total-pending 10,319 → 2,554 (−75%);
-7,891 title-leak/stub junk candidates dismissed, 0 errors.** The remaining ~1,300
-are genuine plausible duplicates + review-band + a small full-scan embedding
-re-emission — the real review backlog that *should* remain. This validates the
-whole title-repair → backfill → relaxed-triage → purge design predicted at 76%.
+| Stage | Sandbox-measured result | Source |
+|---|---|---|
+| baseline | the 2026-07-17 baseline figures (**9,074** exact-pending / **10,319** total-pending) as recorded 2026-07-18 — see the caveat below | this doc, 2026-07-18 |
+| 1. title-repair | **556** books retitled, 0 errors | `TODO.md` T02 |
+| 2. breakdown-backfill | **~9,419** candidates backfilled, 0 errors | `TODO.md` T02 |
+| 3a. triage **classify** | purgeable **7,878** (title-leak) / genuine **278** / fragment **392** / unknown **1,756**, **of 10,304 scanned** (was purgeable=1, unknown=9,950 pre-work) | `TODO.md` T02 |
+| 3b. triage **purge-apply** (`{"apply":true}`) | **PENDING — awaiting T03 sandbox purge wave** (`grep -n '\*\*T03\*\*' TODO.md`) | — |
+| 4a. `dedup.purge-stale` | **PENDING — awaiting T03 sandbox purge wave** | — |
+| 4b. `dedup.full-scan` (embedding re-emission) | **PENDING — awaiting T03 sandbox purge wave** | — |
+
+> **Caveat on the baseline row.** The recorded sandbox baseline (`10,319`
+> total-pending) is the same figure as prod's, while the sandbox triage scanned
+> `10,304`. Whether the replica's total-pending was genuinely 10,319 and the triage
+> scanned a 10,304-row subset, or the baseline row simply copied prod's number, is
+> **not resolvable from the repo at HEAD** and is left unresolved here rather than
+> guessed at. T03 will settle it.
+
+The classify pass proves the title-repair → backfill → relaxed-triage chain works
+on a replica (purgeable 1 → 7,878, i.e. the ~76% title-leak share this doc
+projected). What is still missing is sandbox-side **apply** parity: prod went ahead
+and ran without it, so this is a validation-parity gap, not a correctness gap.
 
 ### ✅ EXECUTED ON PRODUCTION 2026-07-18 (human-gated go-ahead)
 
 After the build was deployed to prod (`v0.217.8-rc.80-2-g0b474707`) and the prod
 **dry-run matched the sandbox within 0.1%** (would_retitle 558 vs 556,
-would_backfill 9,416 vs 9,419), the same sequence was applied live under explicit
-human sign-off. **Prod result is identical to the sandbox:** title-repair 555,
-backfill 9,421, triage dismissed **7,891**, and **exact-pending 9,074 → 1,311
-(−85.5%), total-pending 10,319 → 2,554, dismissed 1,351 → 9,242, 0 errors.** Prod
-healthy post-run. The dismissals are reversible; no books or files were deleted.
+would_backfill 9,416 vs 9,419 — note this comparison covers steps 1–2 only; there
+is no sandbox *apply* to compare against, see above), the same sequence was applied
+live under explicit human sign-off.
+
+**Production stage table** (2026-07-18; figures as recorded here on 2026-07-18 and
+corroborated 2026-08-12 against the prod journal, transcribed at
+[`docs/audits/2026-08-11-docs-inventory.md`](../audits/2026-08-11-docs-inventory.md)
+§1.3.1 — `scanned=10319 purgeable=7891 keep=278 review=2150 lookup_errors=0
+apply=true dismissed=7891 dismiss_errors=0`, `outcome=completed`. **Not
+re-measured since; do not read as current state.**):
+
+| Stage | exact-pending | total-pending | dismissed |
+|---|---|---|---|
+| baseline (2026-07-17 baseline figures) | 9,074 | 10,319 | 1,351 |
+| after title-repair (555) + breakdown-backfill (9,421) | 9,074 | 10,319 | 1,351 |
+| **after triage purge-apply** (classified purgeable=**7,891**, keep=278, review=2,150 → **dismissed=7,891**, `dismiss_errors=0`) | **1,183** | 2,428 | 9,242 |
+| after purge-stale | 1,181 | 2,426 | 9,242 |
+| **final** after full-scan (embedding re-emission) | **1,311** | 2,554 | 9,242 |
+
+**Net on prod, 2026-07-18: exact-pending 9,074 → 1,311 (−85.5%); total-pending
+10,319 → 2,554 (−75%); 7,891 title-leak/stub junk candidates dismissed, 0 errors.**
+Prod healthy post-run. The dismissals are reversible; no books or files were
+deleted.
+
+### Current state — as of 2026-08-12
+
+The 1,311 above is a **2026-07-18** figure and has not held. Measured on prod
+2026-08-12 via `GET /api/v1/dedup/stats` and recorded at
+[`docs/audits/2026-08-11-docs-inventory.md`](../audits/2026-08-11-docs-inventory.md)
+§1.3.3:
+
+| | post-run 2026-07-18 | 2026-08-12 |
+|---|---|---|
+| exact **pending** | 1,311 | **5,947** |
+| exact **dismissed** | 9,242 | 8,258 |
+
+The drain did what it claimed, but exact-pending regrew **~4.5×** in 3.5 weeks — so
+the source that produces these candidates still needs a fix; a repeat drain would
+only be a re-drain. **Nothing newer than 2026-08-12 has been measured**, so treat
+even 5,947 as an as-of figure rather than today's count.
 
 High-risk steps validated on **the dedup sandbox** first — a disposable replica of
 prod; isolation is proven (a destructive test at the prod path left prod
