@@ -36,80 +36,6 @@ func (_m *MockITunesStore) EXPECT() *MockITunesStore_Expecter {
 	return &MockITunesStore_Expecter{mock: &_m.Mock}
 }
 
-// CreateOperation provides a mock function for the type MockITunesStore
-func (_mock *MockITunesStore) CreateOperation(id string, opType string, folderPath *string) (*database.Operation, error) {
-	ret := _mock.Called(id, opType, folderPath)
-
-	if len(ret) == 0 {
-		panic("no return value specified for CreateOperation")
-	}
-
-	var r0 *database.Operation
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, string, *string) (*database.Operation, error)); ok {
-		return returnFunc(id, opType, folderPath)
-	}
-	if returnFunc, ok := ret.Get(0).(func(string, string, *string) *database.Operation); ok {
-		r0 = returnFunc(id, opType, folderPath)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Operation)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(string, string, *string) error); ok {
-		r1 = returnFunc(id, opType, folderPath)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockITunesStore_CreateOperation_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CreateOperation'
-type MockITunesStore_CreateOperation_Call struct {
-	*mock.Call
-}
-
-// CreateOperation is a helper method to define mock.On call
-//   - id string
-//   - opType string
-//   - folderPath *string
-func (_e *MockITunesStore_Expecter) CreateOperation(id any, opType any, folderPath any) *MockITunesStore_CreateOperation_Call {
-	return &MockITunesStore_CreateOperation_Call{Call: _e.mock.On("CreateOperation", id, opType, folderPath)}
-}
-
-func (_c *MockITunesStore_CreateOperation_Call) Run(run func(id string, opType string, folderPath *string)) *MockITunesStore_CreateOperation_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		var arg2 *string
-		if args[2] != nil {
-			arg2 = args[2].(*string)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockITunesStore_CreateOperation_Call) Return(operation *database.Operation, err error) *MockITunesStore_CreateOperation_Call {
-	_c.Call.Return(operation, err)
-	return _c
-}
-
-func (_c *MockITunesStore_CreateOperation_Call) RunAndReturn(run func(id string, opType string, folderPath *string) (*database.Operation, error)) *MockITunesStore_CreateOperation_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // GetAuthorByID provides a mock function for the type MockITunesStore
 func (_mock *MockITunesStore) GetAuthorByID(id int) (*database.Author, error) {
 	ret := _mock.Called(id)
@@ -296,24 +222,24 @@ func (_c *MockITunesStore_GetLibraryFingerprint_Call) RunAndReturn(run func(path
 	return _c
 }
 
-// GetOperationByID provides a mock function for the type MockITunesStore
-func (_mock *MockITunesStore) GetOperationByID(id string) (*database.Operation, error) {
+// GetOperationV2 provides a mock function for the type MockITunesStore
+func (_mock *MockITunesStore) GetOperationV2(id string) (*database.OperationV2Row, error) {
 	ret := _mock.Called(id)
 
 	if len(ret) == 0 {
-		panic("no return value specified for GetOperationByID")
+		panic("no return value specified for GetOperationV2")
 	}
 
-	var r0 *database.Operation
+	var r0 *database.OperationV2Row
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.Operation, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) (*database.OperationV2Row, error)); ok {
 		return returnFunc(id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.Operation); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) *database.OperationV2Row); ok {
 		r0 = returnFunc(id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Operation)
+			r0 = ret.Get(0).(*database.OperationV2Row)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -324,18 +250,18 @@ func (_mock *MockITunesStore) GetOperationByID(id string) (*database.Operation, 
 	return r0, r1
 }
 
-// MockITunesStore_GetOperationByID_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetOperationByID'
-type MockITunesStore_GetOperationByID_Call struct {
+// MockITunesStore_GetOperationV2_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetOperationV2'
+type MockITunesStore_GetOperationV2_Call struct {
 	*mock.Call
 }
 
-// GetOperationByID is a helper method to define mock.On call
+// GetOperationV2 is a helper method to define mock.On call
 //   - id string
-func (_e *MockITunesStore_Expecter) GetOperationByID(id any) *MockITunesStore_GetOperationByID_Call {
-	return &MockITunesStore_GetOperationByID_Call{Call: _e.mock.On("GetOperationByID", id)}
+func (_e *MockITunesStore_Expecter) GetOperationV2(id any) *MockITunesStore_GetOperationV2_Call {
+	return &MockITunesStore_GetOperationV2_Call{Call: _e.mock.On("GetOperationV2", id)}
 }
 
-func (_c *MockITunesStore_GetOperationByID_Call) Run(run func(id string)) *MockITunesStore_GetOperationByID_Call {
+func (_c *MockITunesStore_GetOperationV2_Call) Run(run func(id string)) *MockITunesStore_GetOperationV2_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
@@ -348,12 +274,12 @@ func (_c *MockITunesStore_GetOperationByID_Call) Run(run func(id string)) *MockI
 	return _c
 }
 
-func (_c *MockITunesStore_GetOperationByID_Call) Return(operation *database.Operation, err error) *MockITunesStore_GetOperationByID_Call {
-	_c.Call.Return(operation, err)
+func (_c *MockITunesStore_GetOperationV2_Call) Return(operationV2Row *database.OperationV2Row, err error) *MockITunesStore_GetOperationV2_Call {
+	_c.Call.Return(operationV2Row, err)
 	return _c
 }
 
-func (_c *MockITunesStore_GetOperationByID_Call) RunAndReturn(run func(id string) (*database.Operation, error)) *MockITunesStore_GetOperationByID_Call {
+func (_c *MockITunesStore_GetOperationV2_Call) RunAndReturn(run func(id string) (*database.OperationV2Row, error)) *MockITunesStore_GetOperationV2_Call {
 	_c.Call.Return(run)
 	return _c
 }

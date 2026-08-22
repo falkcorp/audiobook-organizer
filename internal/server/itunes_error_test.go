@@ -1,7 +1,7 @@
 // file: internal/server/itunes_error_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8901-2345-678901abcdef
-// last-edited: 2026-07-07
+// last-edited: 2026-08-22
 
 package server
 
@@ -53,9 +53,12 @@ func TestITunesImport_CorruptXML(t *testing.T) {
 	resp := respBody.Data
 	testutil.WaitForOp(t, env.Store, resp.OperationID, 15*time.Second)
 
-	// Verify operation failed
-	op, err := env.Store.GetOperationByID(resp.OperationID)
+	// Verify operation failed. itunes.import is v2-native — the id the handler
+	// returned names a v2 row, and no v1 operations row is created at all, so
+	// asserting via GetOperationByID here would read a nil row.
+	op, err := env.Store.GetOperationV2(resp.OperationID)
 	require.NoError(t, err)
+	require.NotNil(t, op)
 	assert.Equal(t, "failed", op.Status)
 }
 
@@ -302,7 +305,8 @@ func TestITunesImport_RealTestLibrary(t *testing.T) {
 	testutil.WaitForOp(t, env.Store, resp.OperationID, 15*time.Second)
 
 	// Operation should complete (files don't exist, so tracks will fail with "file does not exist")
-	op, err := env.Store.GetOperationByID(resp.OperationID)
+	op, err := env.Store.GetOperationV2(resp.OperationID)
 	require.NoError(t, err)
+	require.NotNil(t, op)
 	assert.Equal(t, "completed", op.Status, "import should complete even with missing files")
 }

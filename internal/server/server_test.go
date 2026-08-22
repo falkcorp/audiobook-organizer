@@ -2429,11 +2429,18 @@ func TestHandleITunesImportStatus(t *testing.T) {
 		{
 			name: "success - queued operation",
 			setup: func() string {
-				libPath := "/fake/library.xml"
+				// itunes.import is v2-native: the import-status endpoint reads
+				// the v2 row, so seed one. A v1 operations row would 404 here.
 				opID := ulid.Make().String()
-				op, err := database.GetGlobalStore().CreateOperation(opID, "itunes_import", &libPath)
-				require.NoError(t, err)
-				return op.ID
+				require.NoError(t, database.GetGlobalStore().InsertOperationV2(database.OperationV2Row{
+					ID:       opID,
+					DefID:    "itunes.import",
+					Plugin:   "itunes",
+					Status:   "queued",
+					Params:   `{"request":{"library_path":"/fake/library.xml"}}`,
+					QueuedAt: time.Now(),
+				}))
+				return opID
 			},
 			expectedStatus: http.StatusOK,
 			validateFunc: func(t *testing.T, body []byte) {

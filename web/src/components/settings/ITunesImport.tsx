@@ -1,7 +1,7 @@
 // file: web/src/components/settings/ITunesImport.tsx
-// version: 1.20.2
+// version: 1.21.0
 // guid: 4eb9b74d-7192-497b-849a-092833ae63a4
-// last-edited: 2026-08-19
+// last-edited: 2026-08-22
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
@@ -75,6 +75,7 @@ import {
   writeBackITunesLibrary,
 } from '../../services/api';
 import { useOperationsStore } from '../../stores/useOperationsStore';
+import { isTerminal } from '../../utils/operationPolling';
 import { useToast } from '../toast/ToastProvider';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
 
@@ -242,10 +243,11 @@ export function ITunesImport() {
     const detectRunningImport = async () => {
       const ops = useOperationsStore.getState().activeOperations;
       if (cancelled) return;
-      const running = ops.find(
-        (op) =>
-          op.type === 'itunes_import' && !['completed', 'failed', 'canceled'].includes(op.status)
-      );
+      // Match on def_id, not type. The store is fed from operations v2, where
+      // `type` is the def_id's TAIL segment ("itunes.import" → "import"), so
+      // the old `op.type === 'itunes_import'` compared against a v1 type string
+      // that this store never produces and silently never matched.
+      const running = ops.find((op) => op.def_id === 'itunes.import' && !isTerminal(op.status));
       if (running) {
         setImporting(true);
         await pollImportStatus(running.id);
@@ -455,7 +457,11 @@ export function ITunesImport() {
           setImportStatus(status);
         }
 
-        if (status.status === 'completed' || status.status === 'failed') {
+        // Must cover every terminal status, not just completed/failed: the
+        // panel offers a Cancel button, and an interrupted server leaves the op
+        // at one of the interrupted_* statuses. Either one used to fall through
+        // and re-arm the 2s timer forever on an op that had already finished.
+        if (isTerminal(status.status)) {
           if (!pollingUnmountedRef.current) {
             setImporting(false);
           }
