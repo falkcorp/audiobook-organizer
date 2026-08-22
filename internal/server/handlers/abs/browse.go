@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-08-22
 
@@ -1336,7 +1336,7 @@ func (h *Handler) LibrarySearch(c *gin.Context) {
 	if narrators, err := h.library.ListNarrators(); err == nil {
 		for _, n := range narrators {
 			if strings.Contains(strings.ToLower(n.Name), lower) {
-				resp.Narrators = append(resp.Narrators, gin.H{"name": n.Name, "numBooks": 0})
+				resp.Narrators = append(resp.Narrators, gin.H{"name": n.Name})
 			}
 		}
 	}
