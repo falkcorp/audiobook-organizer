@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/play_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3e5c9b17-84d0-4f26-a1b9-70c8de4531f5
-// last-edited: 2026-08-12
+// last-edited: 2026-08-22
 
 package abs_test
 
@@ -502,6 +502,50 @@ func TestSessionSync_OtherUsersSessionIsRejected(t *testing.T) {
 	pos, _ := seed.lib.GetUserPosition("u1", seed.multiID)
 	if pos != nil && pos.PositionSeconds == 9999 {
 		t.Fatal("another user's sync wrote our progress")
+	}
+}
+
+// ── POST /api/session/local ─────────────────────────────────────────────────
+
+// TestSessionLocal_ReturnsOK pins §1.8.8 item 1: ShelfPlayer POSTs this path after
+// every play/pause with maxAttempts:1 and reads a 404 as "the connection is offline",
+// so the ONLY thing this endpoint owes a client is a 2xx with a non-empty body. The
+// body assertion is not decoration — an empty 200 is fatal to these decoders (§1.8.6),
+// which is why /sync and /close answer a bare "OK" rather than nothing.
+//
+// There is no captured oracle for this path (it is absent from the fixture set), so
+// this asserts the contract the spec states rather than comparing to a recording.
+func TestSessionLocal_ReturnsOK(t *testing.T) {
+	h, _, tok := newBrowseHarness(t)
+
+	// The real client sends a session object here; the stub persists nothing, so the
+	// body is sent only to prove a populated payload does not change the answer.
+	w, _ := h.do(t, request{
+		method: http.MethodPost, path: "/api/session/local",
+		body: map[string]any{
+			"id":            "00000000-0000-4000-8000-000000000000",
+			"currentTime":   42.5,
+			"timeListening": 60,
+		},
+		headers: bearer(tok),
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/session/local: got %d want 200 — a 404 here marks the whole "+
+			"connection offline for ShelfPlayer (§1.8.8 item 1)", w.Code)
+	}
+	if w.Body.Len() == 0 {
+		t.Fatal("an empty 200 body is fatal to these decoders (§1.8.6)")
+	}
+
+	// Idempotent by construction: the spec's offline-replay rule (§1.7.3 item 2) is
+	// that a repeat must never turn into a 4xx and wedge the replay queue.
+	w2, _ := h.do(t, request{
+		method: http.MethodPost, path: "/api/session/local",
+		headers: bearer(tok),
+	})
+	if w2.Code != http.StatusOK || w2.Body.Len() == 0 {
+		t.Fatalf("replay with an empty body: got %d/%d bytes, want 200 with a body",
+			w2.Code, w2.Body.Len())
 	}
 }
 
