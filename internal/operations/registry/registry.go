@@ -1,11 +1,12 @@
 // file: internal/operations/registry/registry.go
-// version: 3.13.0
+// version: 3.14.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-08-20
+// last-edited: 2026-08-22
 
 package registry
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -578,23 +579,29 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 		return "", fmt.Errorf("registry: unknown defID %q", defID)
 	}
 
+	// Marshal params. This runs FIRST — above both the batchable branch and the
+	// ConcurrencyKey dedupe — because all three need the same bytes: the batch
+	// branch to extract a subject, the dedupe to compare this request against
+	// the active op's stored params, and the insert below to persist them. Nil
+	// params normalize to "{}" HERE, before any comparison, so a nil caller and
+	// an empty-struct caller are byte-identical rather than spuriously distinct.
+	var rawParams json.RawMessage
+	if params != nil {
+		b, err := json.Marshal(params)
+		if err != nil {
+			return "", fmt.Errorf("registry: marshal params: %w", err)
+		}
+		rawParams = b
+	} else {
+		rawParams = json.RawMessage("{}")
+	}
+
 	// --- M3 Batching: intercept before ConcurrencyKey dedupe ---
 	// For Batchable ops we bucket the subject and return early.
 	// Per-enqueue WithRequires options cannot be journaled and are therefore
 	// ignored for batchable ops (requirements must be on OperationDef.Requires).
 	if def.Batchable {
-		// Marshal params to extract the subject (same logic as the non-batch path).
-		var rawParamsForSubject json.RawMessage
-		if params != nil {
-			b, err := json.Marshal(params)
-			if err != nil {
-				return "", fmt.Errorf("registry: batchable marshal params: %w", err)
-			}
-			rawParamsForSubject = b
-		} else {
-			rawParamsForSubject = json.RawMessage("{}")
-		}
-		sub := subjectFromParams(rawParamsForSubject)
+		sub := subjectFromParams(rawParams)
 		if sub.ID == "" {
 			// No subject derivable — fall through to normal non-batched path so
 			// no-subject batchable ops are not silently dropped.
@@ -633,23 +640,32 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 						"op_id", op.ID, "def_id", defID)
 					continue
 				}
+				// ConcurrencyKey serializes RUNS (dispatcher Gate 3); it was never
+				// meant to drop QUEUE entries carrying different work. Only reuse
+				// the active op when this request asks for the SAME thing.
+				//
+				// Comparison is byte-equality on the marshalled params, NOT
+				// semantic equality: differing key order, whitespace, or an
+				// omitempty field present as its zero value all compare UNEQUAL
+				// and therefore QUEUE a second run. That is deliberate and is the
+				// safe direction — a spurious extra queued row is a redundant run
+				// that Gate 3 serializes, whereas canonicalizing the JSON would
+				// reintroduce a path that silently discards a caller's request.
+				sameWork := def.DedupeQueuedRuns ||
+					def.Schedule != nil || // cron tick: the pile-up case this dedup was written for
+					bytes.Equal(rawParams, []byte(op.Params))
+				if !sameWork {
+					r.logger.Info("registry: active op exists but params differ — queueing a second run",
+						"op_id", op.ID, "def_id", defID, "status", op.Status)
+					// `continue`, not `break`: another active row for the same def
+					// may still match this request byte-for-byte.
+					continue
+				}
 				r.logger.Info("registry: enqueue deduped — active op exists",
 					"op_id", op.ID, "def_id", defID, "status", op.Status)
 				return op.ID, nil
 			}
 		}
-	}
-
-	// Marshal params.
-	var rawParams json.RawMessage
-	if params != nil {
-		b, err := json.Marshal(params)
-		if err != nil {
-			return "", fmt.Errorf("registry: marshal params: %w", err)
-		}
-		rawParams = b
-	} else {
-		rawParams = json.RawMessage("{}")
 	}
 
 	// Apply options.
