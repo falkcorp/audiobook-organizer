@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion/WAVE-1-STATE.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5b3c9e21-8f47-4a6d-b0c2-71e4d8a35f90 -->
 <!-- last-edited: 2026-08-22 -->
 
@@ -22,21 +22,29 @@
 | TASK-012 | #2694 | record why setup-prometheus-auth.py has no indent bug |
 | TASK-127 | #2695 | log `ABS_API_ENABLED`'s boot-time value unconditionally |
 
-**NOT YET DEPLOYED.** Every one of these is on `main` only. Prod still runs the
-2026-08-21 11:07 build. `make deploy` restarts prod — ask the owner, never mid-scan.
-The apply-path fixes (221, 223, 222) do nothing for the live metadata-apply problem
-until that deploy happens.
+Plus **#2689 (TASK-223)** organizer `planTargetPaths` dedupe and **#2688 (TASK-222)**
+params-aware `EnqueueOp` — 14 in total. Deployed to prod by the owner on 2026-08-22
+via `make deploy-debug`.
 
-## Open PRs (2 task + 1 plan)
+## Correction: the "LegacyOpID" follow-up was mis-diagnosed
 
-- **#2689 — TASK-223** organizer: collapse duplicate paths in `planTargetPaths`.
-  CI green (SUCCESS:26). Review-critical, part 2 of the DUPROW pair whose part 1
-  (#2690) is already merged. Also fixed a fixture bug it surfaced in
-  `TestChar_MultiFileBookNamesEveryFileDistinctly`.
-- **#2688 — TASK-222** `EnqueueOp`: dedupe only on byte-equal params. CI green
-  (SUCCESS:26). **Holds the LegacyOpID issue below — read it before merging.**
-- **#2682** the planning package itself. Still based on `46628240`; needs a rebase
-  onto main and to be marked ready.
+The TASK-222 agent reported, and this coordinator repeated in #2688's body and in an
+earlier version of `todo.d/20260822-legacy-opid-defeats-enqueue-dedupe.md`, that the
+params-aware dedupe turned a swallowed double-click into two *serialized* maintenance
+runs. **That is wrong.** Both `EnqueueOp`'s dedupe block and dispatcher Gate 3
+(`dispatcher.go:107`) are gated on `def.ConcurrencyKey != ""`, and all 37 maintenance
+jobs use `DefaultPolicy()`, which hardcodes `ConcurrencyKey: ""`
+(`internal/maintenance/job.go:131`). Neither gate has ever applied to a maintenance
+job; a double-click has always started two *concurrent* runs, before and after #2688.
+
+The `LegacyOpID`-defeats-byte-equality observation is still true — it just is not
+reachable for this family yet. The real question, and the reason it now needs an owner
+decision rather than a one-line patch, is whether the 37 jobs should serialize against
+themselves at all. See the todo.d fragment.
+
+**Process note:** the claim was written into a PR body and a TODO fragment before
+anyone checked the gate condition it depended on. A subagent's finding is a lead, not
+a result.
 
 ## Not started
 
