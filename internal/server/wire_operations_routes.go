@@ -1,7 +1,7 @@
 // file: internal/server/wire_operations_routes.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f6a7b8c9-d0e1-2345-fabc-678901234567
-// last-edited: 2026-06-23
+// last-edited: 2026-08-22
 
 package server
 
@@ -18,6 +18,7 @@ func (s *Server) wireOperationsRoutes(
 	protected *gin.RouterGroup,
 	opsV2H *handlers.OperationsV2Handler,
 	operationsH *operations.Handler,
+	schedulerH *handlers.SchedulerHandler,
 ) {
 	// Operations v2 (UOS-06)
 	protected.GET("/operations/timeline", s.perm(auth.PermLibraryView), opsV2H.GetOperationTimeline)
@@ -81,10 +82,15 @@ func (s *Server) wireOperationsRoutes(
 	protected.GET("/operations/:id/changes", s.perm(auth.PermLibraryView), operationsH.GetOperationChanges)
 	protected.GET("/operations/:id/undo/preflight", s.perm(auth.PermLibraryView), operationsH.UndoPreflightHandler)
 	protected.POST("/operations/:id/revert", s.perm(auth.PermLibraryOrganize), operationsH.RevertOperation)
-	protected.GET("/tasks", s.perm(auth.PermSettingsManage), operationsH.ListTasks)
-	protected.POST("/tasks/:name/run", s.perm(auth.PermSettingsManage), operationsH.RunTask)
-	protected.PUT("/tasks/:name", s.perm(auth.PermSettingsManage), operationsH.UpdateTaskConfig)
-	protected.POST("/maintenance-window/run", s.perm(auth.PermSettingsManage), operationsH.RunMaintenanceWindowNow)
-	protected.GET("/maintenance-window/status", s.perm(auth.PermSettingsManage), operationsH.GetMaintenanceWindowStatus)
-	protected.PUT("/maintenance-window/config", s.perm(auth.PermSettingsManage), operationsH.UpdateMaintenanceWindowConfig)
+
+	// Task-scheduler and maintenance-window routes: scheduler configuration and
+	// control, not v1 operation records, so they live on their own
+	// SchedulerHandler (TODO.md scheduler-config item) rather than operationsH.
+	// Paths, methods, and permission guards are unchanged from before the move.
+	protected.GET("/tasks", s.perm(auth.PermSettingsManage), schedulerH.ListTasks)
+	protected.POST("/tasks/:name/run", s.perm(auth.PermSettingsManage), schedulerH.RunTask)
+	protected.PUT("/tasks/:name", s.perm(auth.PermSettingsManage), schedulerH.UpdateTaskConfig)
+	protected.POST("/maintenance-window/run", s.perm(auth.PermSettingsManage), schedulerH.RunMaintenanceWindowNow)
+	protected.GET("/maintenance-window/status", s.perm(auth.PermSettingsManage), schedulerH.GetMaintenanceWindowStatus)
+	protected.PUT("/maintenance-window/config", s.perm(auth.PermSettingsManage), schedulerH.UpdateMaintenanceWindowConfig)
 }

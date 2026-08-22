@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.23.0
+// version: 2.24.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-08-17
+// last-edited: 2026-08-22
 
 package server
 
@@ -230,6 +230,22 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// getSystemLogs (system handler) delegates its operation_id branch to
 	// operationsH.GetOperationLogs; stash it on the Server for that call.
 	s.operationsHandler = operationsH
+
+	// Task-scheduler and maintenance-window handler (TODO.md scheduler-config
+	// item, split out of operationsH). Same lazy scheduler-provider shape as
+	// above -- a separate closure literal because handlers.Scheduler and
+	// operations.Scheduler are distinct (structurally identical) types, so a
+	// func() operations.Scheduler value cannot be passed where
+	// func() handlers.Scheduler is expected.
+	schedulerH := handlers.NewSchedulerHandler(
+		s.storeForWiring(),
+		func() handlers.Scheduler {
+			if s.scheduler == nil {
+				return nil
+			}
+			return s.scheduler
+		},
+	)
 
 	// System domain handler (health/status/announcements/storage/logs/
 	// activity-log/reset/factory-reset/config/SSE events/backups/dashboard/
@@ -672,7 +688,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	s.wireLibraryRoutes(protected, cacheH, activityH, splitBookH, filesystemH, organizeH, metaCacheH, readingH, playlistH, collectionH, userH, versionsH)
 	s.wireMediaRoutes(protected, itunesH, aiH, diagH, toolsH, aiBackendsH, pluginsH)
 	s.wireEntitiesRoutes(protected, entitiesH)
-	s.wireOperationsRoutes(protected, opsV2H, operationsH)
+	s.wireOperationsRoutes(protected, opsV2H, operationsH, schedulerH)
 	s.wireSystemRoutes(protected, systemH)
 	s.wireDedupRoutes(protected, dedupH, duplicatesH)
 	s.wireReviewRoutes(protected, reviewH)
