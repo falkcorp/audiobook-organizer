@@ -1,7 +1,7 @@
 <!-- file: CLAUDE.md -->
-<!-- version: 4.14.0 -->
+<!-- version: 4.14.1 -->
 <!-- guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f -->
-<!-- last-edited: 2026-08-18 -->
+<!-- last-edited: 2026-08-22 -->
 
 # CLAUDE.md
 
@@ -284,6 +284,16 @@ the entire sequence:
   month's** summary in `docs/executive-summaries/` in the SAME PR as the CHANGELOG/TODO edit —
   not a follow-up PR, not "later." If it doesn't qualify (a typo fix, a single small change),
   skip it — that's what CHANGELOG/TODO are for.
+- **If the work had a `todo.d` fragment, "update TODO" means grepping `TODO.md`, not just
+  filing another fragment.** A fragment can be **assembled between** the PR that files it
+  and the PR that finishes it: `scripts/assemble_todo.py` runs daily and `git rm`s each
+  fragment as it folds it into `TODO.md`. So before merging, grep `TODO.md` for the
+  fragment's title or text and check the entry off by hand if assembly got there first.
+  Your PR's own deletion of the fragment proves nothing — the collector always deletes on
+  fold-in, so a missing fragment looks the same whether the task was assembled or never
+  existed. Hit for real on 2026-08-10: #2272 filed it, the collect job folded it in 26
+  minutes later, #2273 did the work, and the stale unchecked entry was cleaned up by hand
+  in #2274. Details in `todo.d/README.md`.
 - When editing release notes, PREPEND to existing auto-generated content; never replace the body wholesale.
 
 
