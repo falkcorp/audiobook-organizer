@@ -1,7 +1,7 @@
 // file: internal/server/handlers_integration_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-08-17
+// last-edited: 2026-08-21
 
 package server
 
@@ -382,6 +382,60 @@ func TestListAuthors_Success(t *testing.T) {
 	resp := envelope.Data
 	if resp.Count != 2 {
 		t.Errorf("expected count 2, got %d", resp.Count)
+	}
+}
+
+// TestListAuthors_BookCountOverride proves MockStore.GetAllAuthorBookCountsFunc
+// is both present and actually wired through the real ListAuthors handler
+// path (via AuthorSeriesService.ListAuthorsWithCounts). Without this the
+// mock's GetAllAuthorBookCounts is silently hardwired to `map[int]int{},
+// nil`, so every author's BookCount reads 0 no matter what a test's fixture
+// intends — see TODO.md's mock_store.go test-quality item (TASK-034).
+func TestListAuthors_BookCountOverride(t *testing.T) {
+	const authorID = 1
+	mockDB := &database.MockStore{
+		GetAllAuthorsFunc: func() ([]database.Author, error) {
+			return []database.Author{{ID: authorID, Name: "Author With Books"}}, nil
+		},
+		GetAllAuthorBookCountsFunc: func() (map[int]int, error) {
+			return map[int]int{authorID: 7}, nil
+		},
+	}
+
+	oldStore := database.GetGlobalStore()
+	database.SetGlobalStore(mockDB)
+	t.Cleanup(func() {
+		database.SetGlobalStore(oldStore)
+	})
+
+	srv := NewServer(mockDB)
+	t.Cleanup(srv.fileIOPool.Stop)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/authors", nil)
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+
+	h := newEntitiesHandler(srv)
+	h.ListAuthors(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+
+	var envelope struct {
+		Data AuthorWithCountListResponse `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	items := envelope.Data.Items
+	if len(items) != 1 {
+		t.Fatalf("expected 1 author, got %d", len(items))
+	}
+	if items[0].BookCount != 7 {
+		t.Errorf("expected BookCount 7 from GetAllAuthorBookCountsFunc override, got %d", items[0].BookCount)
 	}
 }
 
