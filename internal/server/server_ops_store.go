@@ -1,5 +1,5 @@
 // file: internal/server/server_ops_store.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
 // last-edited: 2026-08-22
 
@@ -252,6 +252,7 @@ type serverUserStore interface {
 type serverCredentialStore interface {
 	CreateAPIKey(key *database.APIKey) (*database.APIKey, error)
 	CreateSession(userID string, ip string, userAgent string, ttl time.Duration) (*database.Session, error)
+	DeleteExpiredABSSessions(now time.Time) (int, error)
 	DeleteExpiredSessions(now time.Time) (int, error)
 	ListAllAPIKeys() ([]database.APIKey, error)
 }

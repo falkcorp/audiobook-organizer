@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.88.0
+// version: 1.88.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-08-22
 
@@ -331,6 +331,7 @@ type MockStore struct {
 	CreateOAuthIdentityFunc               func(identity *OAuthIdentity) (*OAuthIdentity, error)
 	GetOAuthIdentityByProviderSubjectFunc func(provider, subject string) (*OAuthIdentity, error)
 	GetOAuthIdentitiesForUserFunc         func(userID string) ([]OAuthIdentity, error)
+	DeleteExpiredABSSessionsFunc          func(now time.Time) (int, error)
 	DeleteExpiredSessionsFunc             func(now time.Time) (int, error)
 	CountUsersFunc                        func() (int, error)
 
@@ -1575,6 +1576,13 @@ func (m *MockStore) ListUserSessions(userID string) ([]Session, error) {
 		return m.ListUserSessionsFunc(userID)
 	}
 	return nil, nil
+}
+
+func (m *MockStore) DeleteExpiredABSSessions(now time.Time) (int, error) {
+	if m.DeleteExpiredABSSessionsFunc != nil {
+		return m.DeleteExpiredABSSessionsFunc(now)
+	}
+	return 0, nil
 }
 
 func (m *MockStore) DeleteExpiredSessions(now time.Time) (int, error) {
