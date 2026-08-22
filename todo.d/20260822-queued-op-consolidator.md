@@ -59,3 +59,30 @@ data-loss bug wearing a convenience feature's clothes.
 - Interaction with `ConcurrencyKey` from B: consolidation operates on the queue that Gate 3 builds
   up, so B is a prerequisite, not merely "first" — without a key there is no queue to consolidate,
   because everything dispatches immediately.
+
+#### Update, same day: scope this down — most of it already exists
+
+Owner refinement: consolidate only ops whose **parameters are identical**, and otherwise just
+block so they run sequentially. That is a different, much smaller feature than the one sketched
+above, and **`EnqueueOp` already implements it** as of #2688: it reuses an active op when
+`bytes.Equal(rawParams, op.Params)`, and queues a second row otherwise, which Gate 3 then
+serializes. Identical params also dissolves the merge-function problem — if the params are the
+same, the merged op's params *are* the params; nothing needs merging.
+
+The only reason this does not work today is `LegacyOpID`: a fresh ULID per request that makes
+"same parameters" never true. That field exists solely to bridge back to v1, and
+`docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md` **Phase 1 step 3 deletes
+`maintenance_dispatcher.go`**, the only thing that writes it. That plan is IN PROGRESS (step 1
+landed as #2551).
+
+**Revised plan:**
+
+1. `ConcurrencyKey` per maintenance def (item B above) — still needed; without it nothing queues.
+2. Finish v1 retirement, Phase 1 steps 2–3. `LegacyOpID` disappears with the dispatcher.
+3. Re-measure. Same-params dedupe and different-params serialization should both work with no new
+   code.
+
+Only build a consolidator if step 3 shows a real gap. The `superseded_by` redirect and the per-def
+merge function above are **not** needed for the same-params-only version — do not build them
+speculatively. Keep the notes: they apply if a general merge is ever wanted, and they record why
+"just OR the booleans" is unsafe.
