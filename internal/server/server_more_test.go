@@ -1,7 +1,7 @@
 // file: internal/server/server_more_test.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 18a6b0a3-7e78-4e0f-8b8e-0e4c1dbde6de
-// last-edited: 2026-08-20
+// last-edited: 2026-08-21
 
 //go:build !windows
 
@@ -306,6 +306,10 @@ func TestAddImportPathFallbackScan(t *testing.T) {
 	require.Equal(t, http.StatusCreated, w.Code)
 }
 
+// TestServerStartGracefulShutdown tests Server.Start's graceful shutdown behavior.
+// WARNING: This test sends SIGTERM to the entire test binary process (not a subprocess).
+// Do not add t.Parallel() to this test OR to any other test in package server.
+// See the warning comment on the syscall.Kill call below for the full rationale.
 func TestServerStartGracefulShutdown(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
@@ -334,6 +338,12 @@ func TestServerStartGracefulShutdown(t *testing.T) {
 	}()
 
 	time.Sleep(6 * time.Second)
+	// WARNING: This sends SIGTERM to the ENTIRE test binary process, not a subprocess.
+	// If ANY test in package server (this file or any sibling _test.go) is ever marked
+	// with t.Parallel(), it will receive this process-wide SIGTERM mid-run as an
+	// unexpected event. Its outcome will then depend on what it happens to be doing
+	// when the signal lands, making the test suite non-deterministic and fragile.
+	// Do not add t.Parallel() to any test in the server package while this test exists.
 	_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
 
 	// The budget must exceed the shutdown path's OWN designed waits, or the test
