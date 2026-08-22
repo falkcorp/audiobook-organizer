@@ -1,12 +1,13 @@
 // file: web/src/components/common/PathLinks.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 19ec3b3a-a184-4122-953f-32ebd321116c
-// last-edited: 2026-08-21
+// last-edited: 2026-08-22
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { PathLinks, usePathAliases } from './PathLinks';
+import { PathLinks, usePathAliases, __resetPathAliasesCacheForTests } from './PathLinks';
+import { __resetPathVarsCacheForTests } from '../../utils/formatPath';
 import { getConfig, type Config, type PathAlias } from '../../services/api';
 
 // A real root_dir so usePathVars (via the shared config fetch) abbreviates
@@ -34,6 +35,12 @@ const ALIASES: PathAlias[] = [
 const P = '/library/books/Author/Title/x.m4b';
 
 beforeEach(() => {
+  // First, before any mock setup: drop the module-scope config-fetch promises
+  // both usePathAliases and usePathVars memoize, so each test below starts
+  // from a fresh fetch instead of inheriting whatever the first test in this
+  // file happened to seed.
+  __resetPathAliasesCacheForTests();
+  __resetPathVarsCacheForTests();
   toastSpy.mockClear();
   Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
 });
@@ -128,5 +135,50 @@ describe('usePathAliases', () => {
     // Two mounted consumers, one shared cached fetch -- not a second network
     // call per consumer.
     expect(configMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Two alias sets that share no root, so a probe rendering one cannot be
+// mistaken for a probe rendering the other.
+const ALIASES_A: PathAlias[] = [
+  { root: '/vol/alpha', windows: 'A:', unc: '\\\\host\\alpha', smb_url: 'smb://host/alpha' },
+];
+const ALIASES_B: PathAlias[] = [
+  { root: '/vol/beta', windows: 'B:', unc: '\\\\host\\beta', smb_url: 'smb://host/beta' },
+];
+
+// A cross-test pair, deliberately not a reset-then-re-render inside one test
+// body. A single test would only prove the exported function is callable; this
+// pair proves the beforeEach call above is load-bearing. The second test can
+// see its own alias set ONLY because beforeEach cleared the module-scope
+// promise the first test left cached -- delete __resetPathAliasesCacheForTests()
+// from the beforeEach and the second test fails with '/vol/alpha' where it
+// expects '/vol/beta'.
+describe('__resetPathAliasesCacheForTests', () => {
+  it('lets a test seed its own alias set (first of the pair)', async () => {
+    vi.mocked(getConfig).mockResolvedValueOnce({
+      root_dir: '/library/books/audiobooks',
+      path_aliases: ALIASES_A,
+    } as unknown as Config);
+
+    render(<AliasesProbe />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('aliases').textContent).toContain('/vol/alpha');
+    });
+  });
+
+  it('lets the next test seed a different one, not the previous test’s cache', async () => {
+    vi.mocked(getConfig).mockResolvedValueOnce({
+      root_dir: '/library/books/audiobooks',
+      path_aliases: ALIASES_B,
+    } as unknown as Config);
+
+    render(<AliasesProbe />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('aliases').textContent).toContain('/vol/beta');
+    });
+    expect(screen.getByTestId('aliases').textContent).not.toContain('/vol/alpha');
   });
 });
