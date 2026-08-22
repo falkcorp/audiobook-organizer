@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/lsh_backfill.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2c4d6e80-3b5a-4f9c-9b1d-7e8f0a2b4c6d
-// last-edited: 2026-07-06
+// last-edited: 2026-08-21
 
 package acoustid
 
@@ -83,7 +83,7 @@ func (p *Plugin) runLSHBackfill(ctx context.Context, _ json.RawMessage, reporter
 
 	// Optional fast-skip check: if the store exposes HasLSHIndex we skip
 	// rows that already have an index entry, otherwise we re-write.
-	checker, _ := p.store.(lshIndexChecker)
+	checker, _ := database.AsCapability[lshIndexChecker](p.store)
 	hasChecker := checker != nil
 
 	// Frame 0: loading. Real N comes once we've listed the rows.
