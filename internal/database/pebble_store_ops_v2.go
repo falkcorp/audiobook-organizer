@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.9.0
+// version: 3.10.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-16
+// last-edited: 2026-08-22
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -280,6 +280,37 @@ func (p *PebbleStore) UpdateOperationV2Status(id, status string, startedAt, comp
 		}
 	}
 	return batch.Commit(pebble.Sync)
+}
+
+// SetOperationV2Result stores an operation's final result payload on its v2 row.
+//
+// Read-modify-write under opsMu, mirroring UpdateOperationV2Status. Unlike that
+// method this touches no secondary index — result data does not participate in the
+// queue or active sets — so it is a plain Set rather than a batch.
+//
+// A missing row is an error, not a no-op. The v1 twin of this method
+// (UpdateOperationResultData) behaves the same way, and roughly half its callers
+// discard the error; do not repeat that here.
+func (p *PebbleStore) SetOperationV2Result(id string, resultData string) (err error) {
+	defer recoverPebbleClosed("SetOperationV2Result", &err)
+	p.opsMu.Lock()
+	defer p.opsMu.Unlock()
+
+	var row OperationV2Row
+	if err := p.pebbleGetJSON(opv2OpKey(id), &row); err != nil {
+		return err
+	}
+	if row.ID == "" {
+		return fmt.Errorf("opv2: operation not found: %s", id)
+	}
+
+	row.ResultData = &resultData
+
+	data, err := json.Marshal(&row)
+	if err != nil {
+		return err
+	}
+	return p.db.Set(opv2OpKey(id), data, pebble.Sync)
 }
 
 // SetOperationV2StatusIfQueued atomically transitions status only when current status is 'queued'.

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-08-17
+// last-edited: 2026-08-22
 
 package registry
 
@@ -13,6 +13,7 @@ package registry
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 )
 
@@ -50,4 +51,35 @@ func ReporterOpID(rep Reporter) string {
 		return r.OpID()
 	}
 	return ""
+}
+
+// ResultSetter is implemented by reporters that can persist an operation's final
+// result payload onto its v2 row.
+//
+// It is separate from Reporter for the same reason OpID is: widening Reporter costs
+// twenty-four edits (see above) for a concern most ops do not have. Only ops that
+// produce a payload a caller reads back — reconcile previews, diagnostic exports,
+// AI suggestion sets — need this.
+type ResultSetter interface {
+	SetResult(v any) error
+}
+
+// ReporterSetResult persists v as the operation's result payload.
+//
+// UNLIKE ReporterOpID, THIS FAILS LOUDLY when the reporter cannot comply. That
+// asymmetry is deliberate. ReporterOpID returns "" on absence because an untagged
+// activity entry is merely uncorrelated — no worse than before there was an id to
+// give it. A dropped result is not benign in the same way: the payload IS the
+// operation's output, and the caller that later reads it back finds nothing, with
+// no record that anything went wrong.
+//
+// That silent shape is exactly what stranded 1,737 v1 operation rows at "pending"
+// (fixed 2026-08-22): a write nobody checked, failing quietly for months. An error
+// here means the op fails and says why.
+func ReporterSetResult(rep Reporter, v any) error {
+	rs, ok := rep.(ResultSetter)
+	if !ok {
+		return fmt.Errorf("registry: reporter %T cannot persist results", rep)
+	}
+	return rs.SetResult(v)
 }

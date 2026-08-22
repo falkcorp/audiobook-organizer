@@ -1,7 +1,7 @@
 // file: internal/operations/registry/teststore_test.go
-// version: 2.8.1
+// version: 2.9.0
 // guid: c9d0e1f2-a3b4-5c6d-7e8f-9a0b1c2d3e4f
-// last-edited: 2026-07-12
+// last-edited: 2026-08-22
 
 package registry_test
 
@@ -217,6 +217,23 @@ func (f *fakeStore) IncrementResumeCountV2(id string) error {
 		return nil
 	}
 	op.ResumeCount++
+	f.ops[id] = op
+	return nil
+}
+
+// SetOperationV2Result stores the payload for real rather than returning nil, so a
+// test can assert what was written. Unlike UpdateOperationV2Status above it returns
+// an error for an unknown id instead of shrugging: the production store does, and a
+// fake that quietly accepted a write to a nonexistent row would hide exactly the
+// failure ReporterSetResult exists to surface.
+func (f *fakeStore) SetOperationV2Result(id string, resultData string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	op, ok := f.ops[id]
+	if !ok {
+		return fmt.Errorf("op %s not found", id)
+	}
+	op.ResultData = &resultData
 	f.ops[id] = op
 	return nil
 }
