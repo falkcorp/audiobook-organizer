@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
-// last-edited: 2026-08-19
+// last-edited: 2026-08-22
 
 // entities_ops registers the UOS-02 OperationDefs for author entity
 // operations: author-merge and resolve-production-author. Each def is
@@ -29,16 +29,14 @@ import (
 
 // authorMergeOpParams holds the parameters for the entities.author-merge op.
 type authorMergeOpParams struct {
-	LegacyOpID string `json:"legacy_op_id"`
-	KeepID     int    `json:"keep_id"`
-	MergeIDs   []int  `json:"merge_ids"`
-	KeepName   string `json:"keep_name"`
+	KeepID   int    `json:"keep_id"`
+	MergeIDs []int  `json:"merge_ids"`
+	KeepName string `json:"keep_name"`
 }
 
 // resolveProductionAuthorOpParams holds the parameters for the
 // entities.resolve-production-author op.
 type resolveProductionAuthorOpParams struct {
-	LegacyOpID     string `json:"legacy_op_id"`
 	AuthorID       int    `json:"author_id"`
 	ProdAuthorName string `json:"prod_author_name"`
 }
@@ -68,7 +66,10 @@ func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 			}
 
 			store := s.Ops()
-			opID := p.LegacyOpID
+			// The op change ledger (opchange:<opID>:<changeID>) keys by this id.
+			// It is an independent prefix keyspace with no parent row, and undo
+			// reads it per-book, so moving both sides to the v2 id is safe.
+			opID := opsregistry.ReporterOpID(reporter)
 			keepID := p.KeepID
 			mergeIDs := p.MergeIDs
 			keepName := p.KeepName

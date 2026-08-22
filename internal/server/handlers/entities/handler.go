@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
-// last-edited: 2026-08-14
+// last-edited: 2026-08-22
 
 // Package entities hosts the entity-domain HTTP handlers extracted from the
 // server package: works, authors, series, and narrators — CRUD plus merges,
@@ -25,7 +25,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/gin-gonic/gin"
-	ulid "github.com/oklog/ulid/v2"
 )
 
 // authorMergeOpParams holds the parameters for the entities.author-merge op. It
@@ -33,16 +32,14 @@ import (
 // params immediately, so the server-side Run func unmarshals by these json
 // tags. The tags MUST stay identical to the server-package definition.
 type authorMergeOpParams struct {
-	LegacyOpID string `json:"legacy_op_id"`
-	KeepID     int    `json:"keep_id"`
-	MergeIDs   []int  `json:"merge_ids"`
-	KeepName   string `json:"keep_name"`
+	KeepID   int    `json:"keep_id"`
+	MergeIDs []int  `json:"merge_ids"`
+	KeepName string `json:"keep_name"`
 }
 
 // resolveProductionAuthorOpParams holds the parameters for the
 // entities.resolve-production-author op. Mirrors the server-package type.
 type resolveProductionAuthorOpParams struct {
-	LegacyOpID     string `json:"legacy_op_id"`
 	AuthorID       int    `json:"author_id"`
 	ProdAuthorName string `json:"prod_author_name"`
 }
@@ -554,25 +551,37 @@ func (h *Handler) MergeAuthors(c *gin.Context) {
 		return
 	}
 
-	opID := ulid.Make().String()
-	detail := fmt.Sprintf("merge-authors:keep=%d,merge=%v", req.KeepID, req.MergeIDs)
-	op, err := h.store.CreateOperation(opID, "author-merge", &detail)
-	if err != nil {
-		httputil.InternalError(c, "failed to create operation", err)
-		return
-	}
-
 	params := authorMergeOpParams{
-		LegacyOpID: op.ID,
-		KeepID:     req.KeepID,
-		MergeIDs:   req.MergeIDs,
-		KeepName:   keepAuthor.Name,
+		KeepID:   req.KeepID,
+		MergeIDs: req.MergeIDs,
+		KeepName: keepAuthor.Name,
 	}
-	if _, enqErr := h.registry.EnqueueOp(c.Request.Context(), "entities.author-merge", params); enqErr != nil {
+	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), "entities.author-merge", params)
+	if enqErr != nil {
 		httputil.InternalError(c, "failed to enqueue operation", enqErr)
 		return
 	}
-	httputil.RespondWithSuccess(c, 202, op)
+	httputil.RespondWithSuccess(c, 202, entityOpResponse{
+		ID:     opID,
+		Type:   "entities.author-merge",
+		Status: "queued",
+	})
+}
+
+// entityOpResponse is what the async entity handlers return.
+//
+// They used to respond with the whole v1 database.Operation row. There is no
+// such row now, and returning it was actively broken: the id in it named a v1
+// operation, while the UI feeds that id straight to getOperationStatus, which
+// reads /operations/v2/:id. The v2 row has a different id, so the lookup 404'd
+// and DedupAuthorTab reported "Failed to merge" for merges that had in fact
+// succeeded. The id here is the v2 run's own, so polling resolves.
+//
+// Field names match what the frontend Operation type reads.
+type entityOpResponse struct {
+	ID     string `json:"id"`
+	Type   string `json:"type"`
+	Status string `json:"status"`
 }
 
 // DeleteAuthor implements DELETE /authors/:id.
@@ -833,23 +842,20 @@ func (h *Handler) ResolveProductionAuthor(c *gin.Context) {
 		return
 	}
 
-	opID := ulid.Make().String()
-	op, err := h.store.CreateOperation(opID, "resolve-production-author", nil)
-	if err != nil {
-		httputil.InternalError(c, "failed to create operation", err)
-		return
-	}
-
 	params := resolveProductionAuthorOpParams{
-		LegacyOpID:     op.ID,
 		AuthorID:       authorID,
 		ProdAuthorName: author.Name,
 	}
-	if _, enqErr := h.registry.EnqueueOp(c.Request.Context(), "entities.resolve-production-author", params); enqErr != nil {
+	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), "entities.resolve-production-author", params)
+	if enqErr != nil {
 		httputil.InternalError(c, "failed to enqueue operation", enqErr)
 		return
 	}
-	httputil.RespondWithSuccess(c, 202, gin.H{"operation": op})
+	httputil.RespondWithSuccess(c, 202, gin.H{"operation": entityOpResponse{
+		ID:     opID,
+		Type:   "entities.resolve-production-author",
+		Status: "queued",
+	}})
 }
 
 // --- Series ---
