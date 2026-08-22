@@ -106,6 +106,17 @@ func New(
 
 // resolveScheduler returns the live scheduler via the lazy provider, or nil if
 // no provider was supplied (e.g. some unit tests) or the provider yields nil.
+//
+// Unused since the six task/maintenance-window methods that called it moved to
+// handlers.SchedulerHandler (TODO.md scheduler-config item, 2026-08-22).
+// Removing it would mean narrowing New's getScheduler param too, which
+// cascades to every operations.New call site (wire_handlers.go,
+// handlers_integration_test.go) -- out of scope for this mechanical
+// extraction per the task brief. Follow-up: drop getScheduler/resolveScheduler/
+// Scheduler from this package when the v1-operations-record retirement work
+// elsewhere in this backlog touches New's signature anyway.
+//
+//lint:ignore U1000 kept for constructor signature compatibility, see doc above (2026-08-22)
 func (h *Handler) resolveScheduler() Scheduler {
 	if h.getScheduler == nil {
 		return nil
