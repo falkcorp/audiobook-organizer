@@ -1,3 +1,8 @@
+<!-- file: docs/superpowers/fleet-tasks/035-arch-7-9-itunes-rebuild.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: da2f5332-ecb5-444b-89eb-9a3769ed5d8d -->
+<!-- last-edited: 2026-08-22 -->
+
 # Task 035: 7.9 — Full iTunes library rebuild from scratch
 
 **Depends on:** none

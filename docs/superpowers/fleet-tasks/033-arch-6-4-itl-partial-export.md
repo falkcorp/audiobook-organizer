@@ -1,3 +1,8 @@
+<!-- file: docs/superpowers/fleet-tasks/033-arch-6-4-itl-partial-export.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: d1b039e9-60ce-4229-a2da-76babf19b968 -->
+<!-- last-edited: 2026-08-22 -->
+
 # Task 033: 6.4 — ITL partial export
 
 **Depends on:** 7.9 (full iTunes library rebuild — needed for partial export to make sense)

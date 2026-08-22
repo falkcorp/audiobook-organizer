@@ -1,3 +1,8 @@
+<!-- file: docs/superpowers/fleet-tasks/028-acoustid-dedup-1.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: a8f394f0-7022-4d9e-a09c-5d64d8c0580c -->
+<!-- last-edited: 2026-08-22 -->
+
 # Task 028: ACOUSTID-DEDUP-1 — Fingerprint-similarity duplicate detection
 
 **Depends on:** none (independent of stats tasks)

@@ -1,3 +1,8 @@
+<!-- file: docs/superpowers/fleet-tasks/031-arch-4-12-isp-interfaces.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: bac4b039-7823-432e-be76-2f2b05ce168f -->
+<!-- last-edited: 2026-08-22 -->
+
 # Task 031: 4.12 — Narrow extracted service deps to ISP sub-interfaces
 
 **Depends on:** none (4.11 is already complete)

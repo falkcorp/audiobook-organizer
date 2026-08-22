@@ -1,3 +1,8 @@
+<!-- file: docs/superpowers/fleet-tasks/036-fe-1-16-resizable-columns.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: 5456a0dd-444f-4fcf-a477-853dd1d3a7f3 -->
+<!-- last-edited: 2026-08-22 -->
+
 # Task 036: 1.16 — Resizable + dynamically-sortable columns everywhere
 
 **Depends on:** none

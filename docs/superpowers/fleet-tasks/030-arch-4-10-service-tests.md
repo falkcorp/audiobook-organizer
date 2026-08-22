@@ -1,3 +1,8 @@
+<!-- file: docs/superpowers/fleet-tasks/030-arch-4-10-service-tests.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: aac23aaf-b7fd-4324-9404-fcc77c0111a8 -->
+<!-- last-edited: 2026-08-22 -->
+
 # Task 030: 4.10 — Service-layer unit tests with mock stores
 
 **Depends on:** none
