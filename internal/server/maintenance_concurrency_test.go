@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_concurrency_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 14d07753-3a82-4678-8982-e488eef8a7e3
 // last-edited: 2026-08-22
 
@@ -146,17 +146,25 @@ func TestMaintenanceJobEnqueuedTwiceRunsSequentially(t *testing.T) {
 	require.NoError(t, reg.RegisterOp(def))
 	reg.Start(ctx)
 
-	// Distinct params on purpose. maintenanceJobOpParams carries a fresh
-	// LegacyOpID per request, so a real double-click never byte-matches and never
-	// dedupes; the second request must QUEUE and then run after the first, not
-	// collapse into it and not overlap with it.
-	id1, err := reg.EnqueueOp(ctx, def.ID, maintenanceJobOpParams{LegacyOpID: "legacy-1", JobID: jobs[0].ID()})
+	// Distinct params on purpose — and DryRun is what makes them distinct.
+	//
+	// This used to vary LegacyOpID, back when a fresh one per request meant a real
+	// double-click never byte-matched and never deduped. That is no longer true:
+	// LegacyOpID is bookkeeping rather than work identity and is excluded from the
+	// comparison (registry.sameParamsIgnoringLegacyID), so varying it now MERGES
+	// and there would be only one run to serialize — this test would pass
+	// vacuously with maxOverlap stuck at 1 for want of a second run.
+	//
+	// A differing dry_run is genuinely different work, so it still queues a second
+	// op. The claim under test is unchanged: two runs of the same job must not
+	// overlap.
+	id1, err := reg.EnqueueOp(ctx, def.ID, maintenanceJobOpParams{LegacyOpID: "legacy-1", JobID: jobs[0].ID(), DryRun: true})
 	require.NoError(t, err)
 	<-started // only enqueue the second once the first is actually running
-	id2, err := reg.EnqueueOp(ctx, def.ID, maintenanceJobOpParams{LegacyOpID: "legacy-2", JobID: jobs[0].ID()})
+	id2, err := reg.EnqueueOp(ctx, def.ID, maintenanceJobOpParams{LegacyOpID: "legacy-2", JobID: jobs[0].ID(), DryRun: false})
 	require.NoError(t, err)
 	require.NotEqual(t, id1, id2, "the second enqueue was deduped into the first; it "+
-		"should have queued a separate run because the params differ")
+		"should have queued a separate run because dry_run differs")
 
 	require.Eventually(t, func() bool { return finished.Load() == 2 }, 10*time.Second, 10*time.Millisecond,
 		"both runs should complete")

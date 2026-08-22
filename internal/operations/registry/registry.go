@@ -1,12 +1,11 @@
 // file: internal/operations/registry/registry.go
-// version: 3.14.0
+// version: 3.15.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-08-22
 
 package registry
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -651,9 +650,13 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 				// safe direction — a spurious extra queued row is a redundant run
 				// that Gate 3 serializes, whereas canonicalizing the JSON would
 				// reintroduce a path that silently discards a caller's request.
+				//
+				// The ONE exception is legacy_op_id, handled in
+				// sameParamsIgnoringLegacyID below. See that function for why it
+				// does not weaken the rule above.
 				sameWork := def.DedupeQueuedRuns ||
 					def.Schedule != nil || // cron tick: the pile-up case this dedup was written for
-					bytes.Equal(rawParams, []byte(op.Params))
+					sameParamsIgnoringLegacyID(rawParams, []byte(op.Params))
 				if !sameWork {
 					r.logger.Info("registry: active op exists but params differ — queueing a second run",
 						"op_id", op.ID, "def_id", defID, "status", op.Status)

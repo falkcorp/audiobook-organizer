@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_dispatcher.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 55555555-5555-5555-5555-555555555555
-// last-edited: 2026-08-17
+// last-edited: 2026-08-22
 
 package server
 
@@ -186,15 +186,69 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 			"opID", opID, "jobID", jobID, "dryRun", dryRun, "err", err)
 	}
 
-	if _, err := s.opRegistry.EnqueueOp(c.Request.Context(), maintenanceOpID(jobID), maintenanceJobOpParams{
+	v2OpID, err := s.opRegistry.EnqueueOp(c.Request.Context(), maintenanceOpID(jobID), maintenanceJobOpParams{
 		LegacyOpID: opID,
 		JobID:      jobID,
 		DryRun:     dryRun,
-	}); err != nil {
+	})
+	if err != nil {
 		httputil.RespondWithConflict(c, err.Error())
 		return
 	}
+
+	// EnqueueOp merges a request into an already-active run when it asks for the
+	// same work (same job, same dry_run). That is the point — a double-clicked
+	// job should not run twice over the same rows — but it leaves THIS request's
+	// v1 row twinned to nothing: propagateLegacyOpStatus only ever mirrors onto
+	// the winner's legacy id, so ours would sit at "pending" forever and be
+	// re-resumed by resumeInterruptedOperations on every restart. That is exactly
+	// the stuck-row pathology the bridge was written to end, so the row is
+	// deleted rather than left behind or parked in a new "superseded" status.
+	//
+	// The row is still created BEFORE the enqueue, not after. Enqueueing first
+	// and creating only on a win would avoid the orphan outright, but the op can
+	// be dispatched and reach a terminal status the instant it is queued — and
+	// propagateLegacyOpStatus would then look for a v1 row that does not exist
+	// yet. Deleting a row we know we do not need has no such window.
+	if winner := s.mergedIntoLegacyOpID(v2OpID, opID); winner != "" {
+		if delErr := store.DeleteOperationWithLogs(opID); delErr != nil {
+			slog.Warn("maintenance job enqueue merged into an active run, but its now-orphaned v1 row could not be deleted; it will sit at pending",
+				"opID", opID, "jobID", jobID, "winnerOpID", winner, "err", delErr)
+		}
+		// Answer with the run the caller is actually waiting on.
+		opID = winner
+	}
+
 	httputil.RespondWithSuccess(c, http.StatusAccepted, struct {
 		OperationID string `json:"operation_id"`
 	}{OperationID: opID})
+}
+
+// mergedIntoLegacyOpID reports the legacy op id of the run that absorbed this
+// enqueue, or "" when this request started a run of its own.
+//
+// The registry returns the winning v2 op id either way and does not say which
+// happened, so the answer is read back from the winner's params: if its
+// legacy_op_id is some OTHER row, this request was merged. A read failure
+// reports "" — that keeps the caller's own row, which is the recoverable
+// direction (a stale row an operator can clear, rather than a deleted row for a
+// run that is genuinely ours).
+func (s *Server) mergedIntoLegacyOpID(v2OpID, ourLegacyOpID string) string {
+	if v2OpID == "" {
+		return ""
+	}
+	row, err := s.Ops().GetOperationV2(v2OpID)
+	if err != nil || row == nil || row.Params == "" {
+		return ""
+	}
+	var p struct {
+		LegacyOpID string `json:"legacy_op_id"`
+	}
+	if err := json.Unmarshal([]byte(row.Params), &p); err != nil {
+		return ""
+	}
+	if p.LegacyOpID == "" || p.LegacyOpID == ourLegacyOpID {
+		return ""
+	}
+	return p.LegacyOpID
 }

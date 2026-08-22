@@ -1,7 +1,7 @@
 // file: internal/server/server_ops_store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-08-19
+// last-edited: 2026-08-22
 
 package server
 
@@ -198,6 +198,12 @@ type serverOperationWriter interface {
 	CreateOperation(id string, opType string, folderPath *string) (*database.Operation, error)
 	CreateOperationChange(change *database.OperationChange) error
 	CreateOperationResult(result *database.OperationResult) error
+	// DeleteOperationWithLogs removes a v1 row this server created and then found
+	// it did not need — see runMaintenanceJob, where an enqueue that merges into
+	// an already-active run leaves its freshly-created row twinned to nothing.
+	// Deleting it is what keeps that row from sitting at "pending" forever and
+	// being re-resumed on every restart.
+	DeleteOperationWithLogs(id string) error
 	SaveOperationParams(opID string, params []byte) error
 	UpdateOperationError(id string, errorMessage string) error
 	UpdateOperationResultData(id string, resultData string) error

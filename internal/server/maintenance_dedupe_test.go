@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_dedupe_test.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 9f2b6c41-7e30-4a58-b1d6-2c8e05f37a94
 // last-edited: 2026-08-22
 
@@ -16,34 +16,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMaintenanceDedupe_LegacyOpIDIsTheSoleDiscriminator measures WHY a
-// double-clicked maintenance job queues two runs instead of collapsing into one.
+// TestMaintenanceDedupe pins what a double-clicked maintenance job does.
 //
-// EnqueueOp already implements same-params merge: it compares the marshalled
-// params of an incoming request against every active op for the same def and
-// returns the existing id on a byte-for-byte match. internal/operations/registry
-// has ten tests pinning that behaviour. The open question was never whether the
-// merge works — it is whether the MAINTENANCE path ever reaches it.
+// #2717 first used this test to MEASURE the bug: it showed that two enqueues
+// differing only in LegacyOpID produced two ops, isolating that field as the
+// sole reason the merge never fired. LegacyOpID is per-request bookkeeping, not
+// work identity, so it is now excluded from the comparison
+// (registry.sameParamsIgnoringLegacyID) and that arm asserts the opposite.
 //
-// This is a dose-response pair. Both arms enqueue the same def twice, with the
-// same job id, into a registry that is never started, so both rows sit "queued"
-// and the comparison is decided entirely by params with no dispatch timing in
-// play. The arms differ in exactly one byte-range:
+// The arms are kept as a set because each one alone proves very little:
 //
-//	Arm A — params identical            -> the two enqueues MUST collapse to one op
-//	Arm B — params differ ONLY in       -> the two enqueues MUST produce two ops
-//	        LegacyOpID
+//	identical params           -> merge   (re-proves the registry's own dedupe)
+//	differ ONLY in LegacyOpID  -> merge   (the fix; was two ops before)
+//	differ in dry_run          -> TWO ops (the over-merge guard)
 //
-// A alone would only re-prove the registry's own dedupe. B alone would only show
-// that something differs. Together they isolate LegacyOpID as the sole reason a
-// real double-click misses the merge: hold it constant and the merge fires; vary
-// only it and the merge stops. Nothing else about the request changes.
+// The third arm is the load-bearing one. A comparison that stripped too much
+// would pass both merge arms and still be badly wrong: for cleanup-series, whose
+// first phase deletes every single-book series, absorbing an operator's real
+// apply into an already-running preview would silently discard the apply. The
+// merge arms cannot detect that; only the dry_run arm can.
 //
-// What this measurement settles for the v1 kill (docs/plans/2026-08-17-...):
-// dedupe needs the LegacyOpID stamp gone from the ENQUEUE params, which is one
-// line (maintenance_dispatcher.go:189). It does not need the field deleted, the
-// dispatcher file deleted, or a consolidator built.
-func TestMaintenanceDedupe_LegacyOpIDIsTheSoleDiscriminator(t *testing.T) {
+// All three enqueue into a registry that is never started, so both rows sit
+// "queued" and the outcome is decided entirely by params, with no dispatch
+// timing in play.
+func TestMaintenanceDedupe(t *testing.T) {
 	const jobID = "dedupe-probe-job"
 
 	// enqueueTwice returns the two op ids produced by enqueueing p1 then p2
@@ -63,8 +59,9 @@ func TestMaintenanceDedupe_LegacyOpIDIsTheSoleDiscriminator(t *testing.T) {
 		require.True(t, ok)
 
 		// Precondition, not decoration: EnqueueOp's whole dedupe block is behind
-		// `def.ConcurrencyKey != ""`. With an empty key both arms would queue two
-		// ops and Arm B would "pass" for the wrong reason.
+		// `def.ConcurrencyKey != ""`. With an empty key every arm would queue two
+		// ops — silently turning both merge arms red and letting the dry_run arm
+		// pass for entirely the wrong reason.
 		require.NotEmpty(t, def.ConcurrencyKey,
 			"precondition: an empty ConcurrencyKey skips the dedupe block entirely")
 
@@ -94,7 +91,7 @@ func TestMaintenanceDedupe_LegacyOpIDIsTheSoleDiscriminator(t *testing.T) {
 				"EnqueueOp's same-params dedupe is not reached on this path")
 	})
 
-	t.Run("differing only in LegacyOpID queues a second op", func(t *testing.T) {
+	t.Run("differing only in LegacyOpID still merges", func(t *testing.T) {
 		base := maintenanceJobOpParams{JobID: jobID}
 		p1, p2 := base, base
 		p1.LegacyOpID = "legacy-1"
@@ -102,10 +99,24 @@ func TestMaintenanceDedupe_LegacyOpIDIsTheSoleDiscriminator(t *testing.T) {
 
 		id1, id2 := enqueueTwice(t, p1, p2)
 
+		require.Equal(t, id1, id2,
+			"two requests for the same job differ only in the v1 row each is twinned "+
+				"to, which is bookkeeping and not work identity; they must collapse to "+
+				"one run rather than running the same job over the same rows twice")
+	})
+
+	t.Run("differing in dry_run queues a second op", func(t *testing.T) {
+		base := maintenanceJobOpParams{JobID: jobID}
+		preview, apply := base, base
+		preview.LegacyOpID, preview.DryRun = "legacy-1", true
+		apply.LegacyOpID, apply.DryRun = "legacy-2", false
+
+		id1, id2 := enqueueTwice(t, preview, apply)
+
 		require.NotEqual(t, id1, id2,
-			"a differing LegacyOpID no longer defeats the params merge; if the stamp "+
-				"was removed from the enqueue path, delete this arm and the dose-response "+
-				"claim in this test's doc comment along with it")
+			"a real apply was absorbed into an active dry run. These are different "+
+				"work: the preview changes nothing and the apply mutates rows, so "+
+				"merging them silently discards what the operator asked for")
 	})
 }
 
