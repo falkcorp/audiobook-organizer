@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-08-16
+// last-edited: 2026-08-21
 
 package metafetch
 
@@ -1311,6 +1311,38 @@ func TestGenerateSegmentTitles(t *testing.T) {
 		assert.NoError(t, err)
 		require.Len(t, updatedFiles, 1)
 		assert.Equal(t, "My Book", updatedFiles[0].Title, "single file should have title without numbering")
+	})
+
+	// Regression for the 2026-08-21 prod incident (DUPROW-1): book
+	// 01KZR9GEH5ZQW9CV1EN130Y7C0 had 42 book_file rows for 21 distinct paths,
+	// and generateSegmentTitles stamped every row with TrackCount = 42. This is
+	// that symptom reproduced at the DB level, scaled down to 4 rows / 2 paths.
+	t.Run("duplicate_rows_do_not_inflate_track_count", func(t *testing.T) {
+		var updatedFiles []database.BookFile
+		mock := &database.MockStore{
+			GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
+				return []database.BookFile{
+					{ID: "f1", BookID: bookID, FilePath: "/a/1.m4b"},
+					{ID: "f2", BookID: bookID, FilePath: "/a/2.m4b"},
+					{ID: "f1dup", BookID: bookID, FilePath: "/a/1.m4b"},
+					{ID: "f2dup", BookID: bookID, FilePath: "/a/2.m4b"},
+				}, nil
+			},
+			UpdateBookFileFunc: func(id string, file *database.BookFile) error {
+				updatedFiles = append(updatedFiles, *file)
+				return nil
+			},
+		}
+		svc := NewService(mock)
+
+		err := svc.generateSegmentTitles("book-1", "My Book")
+
+		assert.NoError(t, err)
+		require.Len(t, updatedFiles, 2, "one write per distinct path, not per row")
+		for i, f := range updatedFiles {
+			assert.Equal(t, 2, f.TrackCount, "file %d: track count is the distinct-path count", i)
+			assert.Equal(t, i+1, f.TrackNumber, "file %d: track numbers stay contiguous", i)
+		}
 	})
 }
 
