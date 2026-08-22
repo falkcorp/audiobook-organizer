@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-08-18
+// last-edited: 2026-08-22
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -533,6 +533,11 @@ func (h *Handler) Register(r gin.IRouter) {
 	r.HEAD("/api/items/:id/file/:ino/download", auth, h.ItemFileDownload)
 	r.POST("/api/session/:id/sync", auth, h.SessionSync)
 	r.POST("/api/session/:id/close", auth, h.SessionClose)
+	// Offline upload, single-session half. Registered purely so it cannot 404:
+	// ShelfPlayer sends it after every play/pause with maxAttempts:1 and treats a
+	// 404 as "connection offline" (§1.8.8 item 1). Static segment deliberately
+	// sits alongside the ":id" sibling above — gin prefers the literal match.
+	r.POST("/api/session/local", auth, h.SessionLocal)
 
 	// UNAUTHENTICATED by protocol requirement (§1.8.3). AudioBooth has no
 	// contentUrl field at all (zero repo-wide hits) and streams exclusively from
