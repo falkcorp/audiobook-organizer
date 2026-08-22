@@ -301,11 +301,16 @@ func TestSplitCompositeAuthor_NotComposite(t *testing.T) {
 func TestMergeAuthors(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().GetAuthorByID(1).Return(&database.Author{ID: 1, Name: "Keep"}, nil)
-	d.store.EXPECT().CreateOperation(mock.Anything, "author-merge", mock.Anything).Return(&database.Operation{ID: "op1"}, nil)
-	d.registry.EXPECT().EnqueueOp(mock.Anything, "entities.author-merge", mock.Anything).Return("op1", nil)
+	d.registry.EXPECT().EnqueueOp(mock.Anything, "entities.author-merge", mock.Anything).Return("v2op1", nil)
 	c, w := newCtx(http.MethodPost, "/authors/merge", `{"keep_id":1,"merge_ids":[2,3]}`, nil)
 	h.MergeAuthors(c)
 	assert.Equal(t, http.StatusAccepted, w.Code)
+
+	// The id in the body must be the id EnqueueOp returned. The UI feeds it
+	// straight to getOperationStatus, which reads /operations/v2/:id — returning
+	// anything else 404s there and surfaces as "Failed to merge" for a merge
+	// that actually succeeded.
+	assert.Contains(t, w.Body.String(), `"id":"v2op1"`)
 }
 
 func TestMergeAuthors_EmptyMergeIDs(t *testing.T) {

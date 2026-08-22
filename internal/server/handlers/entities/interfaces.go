@@ -88,13 +88,6 @@ type WorkEntityStore interface {
 	GetBooksByWorkID(workID string) ([]database.Book, error)
 }
 
-// OperationCreator records an operation for an entity mutation.
-type OperationCreator interface {
-	// Operations (legacy operation row creation for author-merge /
-	// resolve-production-author).
-	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
-}
-
 // EntitiesStore is the narrow database.Store subset the entities handlers
 // require. The concrete database.Store implementations satisfy it.
 //
@@ -109,7 +102,6 @@ type EntitiesStore interface {
 	NarratorEntityStore
 	SeriesEntityStore
 	WorkEntityStore
-	OperationCreator
 }
 
 // WorkService is the narrow audiobook *work.WorkService subset used by the work
