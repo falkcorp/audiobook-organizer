@@ -1,15 +1,68 @@
 // file: internal/server/maintenance_orphan_row_test.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 2d6a14f8-9c05-4e73-b8a1-3f70e2d54c69
 // last-edited: 2026-08-22
 
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
+
+// blockingProbeJob is a maintenance job whose Run parks until the test releases
+// it, so an op built from it is guaranteed to still be ACTIVE when the next
+// request arrives.
+//
+// v1 of this test used the fast-returning dryRunProbeJob and simply hoped the
+// first op had not finished yet. It passed locally and failed in CI, where the
+// first run completed between the two POSTs: with nothing active to merge into,
+// the second request legitimately started its own run and there was no orphan to
+// clean up. The precondition caught it rather than letting the test pass
+// vacuously, but "caught by a guard" is not the same as deterministic — hence
+// this job.
+type blockingProbeJob struct {
+	id      string
+	release chan struct{}
+}
+
+func (j *blockingProbeJob) ID() string          { return j.id }
+func (j *blockingProbeJob) Name() string        { return "Blocking Probe " + j.id }
+func (j *blockingProbeJob) Description() string { return "Test probe; parks until released." }
+func (j *blockingProbeJob) Category() string    { return "test" }
+func (j *blockingProbeJob) DefaultParams() any  { return struct{}{} }
+func (j *blockingProbeJob) CanResume() bool     { return false }
+
+func (j *blockingProbeJob) Policy() maintenance.ExecutionPolicy {
+	return maintenance.DefaultPolicy()
+}
+
+// Run parks until released or the run context is cancelled. The ctx case is what
+// keeps a blocked run from outliving the test's store: cleanup shuts the registry
+// down, which cancels the context.
+func (j *blockingProbeJob) Run(ctx context.Context, _ maintenance.JobStore, _ maintenance.ProgressReporter, _ bool) error {
+	select {
+	case <-j.release:
+	case <-ctx.Done():
+	}
+	return nil
+}
+
+var probeBlocking = &blockingProbeJob{
+	id:      "orphan-row-blocking-probe",
+	release: make(chan struct{}),
+}
+
+func init() {
+	// maintenance.Register panics on a duplicate ID and has no Unregister, so
+	// this is registered exactly once for the package's whole test run — the same
+	// arrangement the dry-run probes use.
+	maintenance.Register(probeBlocking)
+}
 
 // TestRunMaintenanceJob_MergedRequestLeavesNoOrphanRow covers the row that
 // enqueue-dedupe would otherwise strand.
@@ -31,18 +84,21 @@ import (
 func TestRunMaintenanceJob_MergedRequestLeavesNoOrphanRow(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	// Deferred AFTER cleanup so it runs BEFORE it (LIFO): a parked run must be
+	// let go before the store beneath it closes.
+	defer close(probeBlocking.release)
 
-	jobID := probeAdvertisesTrue.ID()
+	jobID := probeBlocking.ID()
 
 	before := countOperationRows(t, server)
 
 	first := postMaintenanceJobExpectingAccepted(t, server, jobID)
 	second := postMaintenanceJobExpectingAccepted(t, server, jobID)
 
-	// Precondition. The registry is not started in this harness, so the first
-	// op is still queued and therefore still ACTIVE when the second request
-	// arrives. If that ever stops holding, the second enqueue starts its own run
-	// legitimately and the orphan assertion below would be checking nothing.
+	// Precondition. The first op is either still queued (registry not started) or
+	// parked inside Run (registry started); both count as ACTIVE, so the second
+	// request must merge. If this ever fires, the test is not exercising the
+	// orphan path and the count assertion below would be checking nothing.
 	if first != second {
 		t.Fatalf("the second request did not merge into the first (%q vs %q); "+
 			"without a merge there is no orphan row to clean up and this test "+
