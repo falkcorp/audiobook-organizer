@@ -126,9 +126,10 @@
   "verdict_evidence": "internal/operations/freshness/freshness.go provides Stamp/StampBatch/ClearStamps (freshness.go:97,102,119) but has zero non-test callers: grep -rln 'freshness.Stamp\\|freshness.ClearStamps' --include=*.go . | grep -v _test -> 0 hits. chapters_backfill.go:46-47 itself documents the gap: 'the only durable marker available is internal/operations/freshness, which today has ZERO non-test callers and would need a new ServerDeps accessor plus server wiring to reach an op.'",
   "domain": "internal/plugins/maintenance",
   "exact_files": [
+   "internal/plugins/maintenance/chapters_backfill.go",
+   "internal/plugins/maintenance/chapters_backfill_test.go",
    "internal/plugins/maintenance/deps.go",
-   "internal/server/server_maintenance_deps.go",
-   "internal/plugins/maintenance/chapters_backfill.go"
+   "internal/server/server_maintenance_deps.go"
   ],
   "verified_anchors": [
    {
@@ -215,7 +216,10 @@
   "anti_over_suppression": "TestChaptersBackfill_Force_ReprobesDespiteFreshStamp -- proves a fresh stamp does not permanently suppress re-probing when the caller explicitly asks.",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "This is explicitly a PREREQUISITE, not a request to add Schedule to the op -- chapters_backfill.go:49-52 says schedule-adding is a separate, larger decision ('If this op is ever given a Schedule, wire the freshness stamp FIRST'). Do not add sdk.Schedule in this change."
+  "notes": "This is explicitly a PREREQUISITE, not a request to add Schedule to the op -- chapters_backfill.go:49-52 says schedule-adding is a separate, larger decision ('If this op is ever given a Schedule, wire the freshness stamp FIRST'). Do not add sdk.Schedule in this change.",
+  "review_notes": [
+   "[verify-10.json] exact_files is incomplete: step 6 and the Tests section both edit internal/plugins/maintenance/chapters_backfill_test.go (verified present: `grep -n 'func TestChaptersBackfill_NoMarkers_WritesNothingAndReprobes' internal/plugins/maintenance/chapters_backfill_test.go` -> L258), but exact_files lists "
+  ]
  },
  {
   "todo_line": 618,
@@ -365,7 +369,8 @@
   "verdict_evidence": "maintenance.missing-file-repoint already exists (internal/plugins/maintenance/missing_file_repoint.go, apply=false default, never deletes -- matches owner decision #12) but its candidate derivation ONLY string-transforms the row's own broken path (the 'track-slash flattened into padded filename' shape, e.g. 'Corruption - 2/35.mp3' -> 'Corruption - 02.mp3'): grep -n 'book.FilePath\\|Book.FilePath\\|GetBookByID' internal/plugins/maintenance/missing_file_repoint.go -> 0 hits. It never falls back to the OWNING BOOK's Book.FilePath, which is the specific recovery path this TODO item describes (86 of 88 sampled unresolvable BookFile.FilePath rows have a Book.FilePath that IS a real file on disk) and which chapters_backfill.go already implements for its own narrow purpose (chapters_backfill.go:370-394, 'recoveredViaBook' counter).",
   "domain": "internal/plugins/maintenance",
   "exact_files": [
-   "internal/plugins/maintenance/missing_file_repoint.go"
+   "internal/plugins/maintenance/missing_file_repoint.go",
+   "internal/plugins/maintenance/missing_file_repoint_test.go"
   ],
   "verified_anchors": [
    {
@@ -437,7 +442,10 @@
    670
   ],
   "gate": "make ci",
-  "notes": "Owner decision #12 ('build the REPOINT repair with apply=false default; owner runs apply; the 16,265 fully-broken books stay untouched/parked') is satisfied in SHAPE by the existing op but not in POPULATION -- this item is the gap between the op that exists and the specific recovery path the TODO and decision #12 were actually written about."
+  "notes": "Owner decision #12 ('build the REPOINT repair with apply=false default; owner runs apply; the 16,265 fully-broken books stay untouched/parked') is satisfied in SHAPE by the existing op but not in POPULATION -- this item is the gap between the op that exists and the specific recovery path the TODO and decision #12 were actually written about.",
+  "review_notes": [
+   "[verify-10.json] exact_files is only ['internal/plugins/maintenance/missing_file_repoint.go'] but the Tests section adds two tests to internal/plugins/maintenance/missing_file_repoint_test.go (file exists at HEAD)."
+  ]
  },
  {
   "todo_line": 665,
@@ -496,6 +504,7 @@
   "domain": "internal/plugins/maintenance",
   "exact_files": [
    "internal/plugins/maintenance/filepath_collision_report.go",
+   "internal/plugins/maintenance/filepath_collision_report_test.go",
    "internal/plugins/maintenance/plugin.go"
   ],
   "verified_anchors": [
@@ -560,7 +569,8 @@
   "gate": "make ci",
   "notes": "This is a small, self-contained prerequisite for L642 and for L665's eventual authority decision -- keep it decoupled from those two rather than folding it into either PR, since it has independent value as a standing library-health report.",
   "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re",
+   "[verify-10.json] exact_files omits internal/plugins/maintenance/filepath_collision_report_test.go, which the Tests section requires (two new tests)."
   ]
  },
  {
@@ -944,7 +954,8 @@
   "verdict_evidence": "The size-only heuristic is still live: grep -n 'srcInfo.Size() == dstInfo.Size()' internal/organizer/organizer.go -> 1 hit L765, adopting a same-sized-but-different-content destination file as if it were the same file (pathMap[srcPath] = dstPath) with only a comment ('Interrupted copy/reflink from an earlier run: same content, different inode. Adopt it rather than re-copying') justifying the assumption. scanner.ComputeFileHash already exists and is unused here: grep -n 'func ComputeFileHash' internal/scanner/scanner.go -> 1 hit L2517.",
   "domain": "internal/organizer",
   "exact_files": [
-   "internal/organizer/organizer.go"
+   "internal/organizer/organizer.go",
+   "internal/organizer/organizer_regression_test.go"
   ],
   "verified_anchors": [
    {
@@ -1003,7 +1014,8 @@
   "gate": "make ci",
   "notes": "This is part 1 of 2 for TODO.md L872 (F5) -- part 2 covers the larger, separately-scoped 'route the three rename paths through MoveBookFile' refactor the TODO calls out as 'Also worth doing'.",
   "review_notes": [
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
+   "[verify-10.json] exact_files is ['internal/organizer/organizer.go'] but the Tests section extends/adds two cases in internal/organizer/organizer_regression_test.go (TestOrganizeBookDirectory_DstAlreadyExists is at L140, verified)."
   ]
  },
  {
@@ -1011,8 +1023,8 @@
   "part": 2,
   "src_id": "F5",
   "title": "Route the three organize/rename paths through organizer.MoveBookFile's verify-move-DB-update-rollback pattern",
-  "verdict": "actionable",
-  "verdict_evidence": "MoveBookFile (internal/organizer/move.go:32) already implements the correct pattern (verify source, verify destination absent, move, DB-update, roll back the file move if the DB write fails) but is used by exactly one caller today: grep -rln 'organizer.MoveBookFile\\|MoveBookFile(' --include=*.go . | grep -v _test -> internal/organizer/move.go (definition) and internal/server/file_move.go (its only caller). None of the three organize/rename paths this TODO section audits (OrganizeBookDirectory, OrganizeBook single-file, ensureLibraryCopy) call it.",
+  "verdict": "needs_design",
+  "verdict_evidence": "[verify-10.json] The brief tells the executor to design rather than implement, in four separate places. Step 3: 'Design (write up before implementing, given effort=L and review_critical=true) how a per-book batch operation adopts MoveBookFile's per-file rollback guarantee'. Step 5: 'confirm with the reviewer whether part 1's hash-based fix should be kept as MoveBookFile's OWN destination-exists check instead of being retired outright'. Edge cases: 'Partial failure mid-book (file 500 of 1,189 fails after 499 succeeded): decide and document whether MoveBookFile's rollback is per-file-only ... this is a real design question, not an implementation detail.' Coordinator notes: 'Given effort=L and review_critical=true, this likely needs its own PLAN.md and worktree per CLAUDE.md's Plan Before Execution rule rather than being done inline.' The rollback semantics for a partially-moved 1,189-file book on the organize path are an owner decision, not something to settle inside a task brief. | MoveBookFile (internal/organizer/move.go:32) already implements the correct pattern (verify source, verify destination absent, move, DB-update, roll back the file move if the DB write fails) but is used by exactly one caller today: grep -rln 'organizer.MoveBookFile\\|MoveBookFile(' --include=*.go . | grep -v _test -> internal/organizer/move.go (definition) and internal/server/file_move.go (its only caller). None of the three organize/rename paths this TODO section audits (OrganizeBookDirectory, OrganizeBook single-file, ensureLibraryCopy) call it.",
   "domain": "internal/organizer",
   "exact_files": [
    "internal/organizer/organizer.go",
@@ -1074,7 +1086,8 @@
   "gate": "make ci",
   "notes": "Part 2 of 2 for TODO.md L872 (F5). Given effort=L and review_critical=true, this likely needs its own PLAN.md and worktree per CLAUDE.md's Plan Before Execution rule rather than being done inline -- flagging that explicitly for the coordinator rather than assuming a single PR.",
   "review_notes": [
-   "[ops-rollback.json] Routing the three organize/rename paths through organizer.MoveBookFile moves the DB write INTO the mover, but MoveBookFile records no operation_change row, while the current callers do. The refactor can therefore silently delete the organize undo trail - the rollback property the task is nominally s"
+   "[ops-rollback.json] Routing the three organize/rename paths through organizer.MoveBookFile moves the DB write INTO the mover, but MoveBookFile records no operation_change row, while the current callers do. The refactor can therefore silently delete the organize undo trail - the rollback property the task is nominally s",
+   "[verify-10.json] "
   ]
  },
  {
@@ -1218,14 +1231,15 @@
   "verdict_evidence": "Confirmed the month-apart split the TODO describes: 7 of 8 workflow files pin falkcorp/github-common at SHA d0c3326b (comment '# main 2026-07-05'), while .github/workflows/ci.yml's reusable-ci-minimal.yml pins a different, newer SHA 828afb50 (comment '# main 2026-08-18 (adds go-lint + advisory super-linter jobs)'). grep -rn 'falkcorp/github-common/.github/workflows/' .github/workflows/*.yml confirms all 9 reference lines across 8 files.",
   "domain": "ci/scripts",
   "exact_files": [
+   ".github/ghcommon-ref.txt",
+   ".github/workflows/frontend-ci.yml",
    ".github/workflows/hard-burndown.yml",
    ".github/workflows/nightly-burndown.yml",
-   ".github/workflows/triage-poll.yml",
-   ".github/workflows/frontend-ci.yml",
    ".github/workflows/nightly.yml",
-   ".github/workflows/security.yml",
+   ".github/workflows/prerelease.yml",
    ".github/workflows/release-prod.yml",
-   ".github/workflows/prerelease.yml"
+   ".github/workflows/security.yml",
+   ".github/workflows/triage-poll.yml"
   ],
   "verified_anchors": [
    {
@@ -1269,7 +1283,10 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "n/a (ci/scripts -- verified by the workflow runs themselves, not make ci)",
-  "notes": "This is process/sequencing work as much as a code change -- flag to the coordinator that PR 1 and PR 2 must NOT be dispatched in parallel (they are explicitly sequenced with a real-world wait between them), unlike most items in this scope."
+  "notes": "This is process/sequencing work as much as a code change -- flag to the coordinator that PR 1 and PR 2 must NOT be dispatched in parallel (they are explicitly sequenced with a real-world wait between them), unlike most items in this scope.",
+  "review_notes": [
+   "[verify-10.json] The on-disk pin file is missing from scope. `.github/ghcommon-ref.txt` exists and contains the stale SHA d0c3326b96557c8ea9117c1c196b628e5e028186 (verified: `cat .github/ghcommon-ref.txt`). It is not mentioned in any step, is absent from exact_files, and acceptance #2 only greps `.github/workflows/*"
+  ]
  },
  {
   "todo_line": 970,
@@ -1524,8 +1541,8 @@
   "todo_line": 1009,
   "src_id": null,
   "title": "Give maintenance jobs (v1, internal/maintenance) per-job store interfaces instead of the shared JobStore",
-  "verdict": "actionable",
-  "verdict_evidence": "JobStore (internal/maintenance/job.go:293-301) is still a single shared 7-group composition used by all jobs via the package-level registry: grep -n 'func All(' internal/maintenance/registry.go -> 1 hit L51, signature `func All() []MaintenanceJob` (no store parameter, confirming the structural blocker the TODO describes -- jobs register at init() with no store in scope). The two call sites the TODO names both still exist: internal/server/maintenance_job_op.go and internal/server/maintenance_dispatcher.go (find . -name 'maintenance_dispatcher.go' -> internal/server/maintenance_dispatcher.go). Phase 1 (kill the v1 maintenance stack, which would delete maintenance_dispatcher.go) has NOT completed: the file still exists at HEAD, confirming this item's own stated blocker ('cheaper to do after the v1 retirement... deleted by phase 1') is still live.",
+  "verdict": "needs_design",
+  "verdict_evidence": "[verify-10.json] The brief is self-blocking by its own steps. Step 1-2: 'If maintenance_dispatcher.go still exists, recommend to the coordinator that Phase 1 ... lands FIRST ... flag as a sequencing dependency rather than building blind'; step 3 opens 'Once unblocked:'; step 6 says the 37-job body is 'a strong /parallel-sweep candidate -- flag to the coordinator rather than doing all 37 serially'. The blocking condition is TRUE at HEAD (verified: `ls internal/server/maintenance_dispatcher.go` -> file present), so an obedient executor produces a recommendation and zero code. This needs the Phase-1 sequencing decision made by the owner and then a sweep plan, not a single Bucket-1 brief. | JobStore (internal/maintenance/job.go:293-301) is still a single shared 7-group composition used by all jobs via the package-level registry: grep -n 'func All(' internal/maintenance/registry.go -> 1 hit L51, signature `func All() []MaintenanceJob` (no store parameter, confirming the structural blocker the TODO describes -- jobs register at init() with no store in scope). The two call sites the TODO names both still exist: internal/server/maintenance_job_op.go and internal/server/maintenance_dispatcher.go (find . -name 'maintenance_dispatcher.go' -> internal/server/maintenance_dispatcher.go). Phase 1 (kill the v1 maintenance stack, which would delete maintenance_dispatcher.go) has NOT completed: the file still exists at HEAD, confirming this item's own stated blocker ('cheaper to do after the v1 retirement... deleted by phase 1') is still live.",
   "domain": "internal/maintenance",
   "exact_files": [
    "internal/maintenance/job.go",
@@ -1608,7 +1625,8 @@
   "review_notes": [
    "[correctness.json] 17 depends_on_lines edges point at TODO lines that resolve to NO Bucket-1 task \u2014 they land in stale_done, parked, prod_run, needs_design or not_a_task. The generator never converted any of them into depends_on, so the wave scheduler sees no constraint and a cold agent gets no explanation. Two are lo",
    "[correctness.json] The package's own source plan says the shared gate cannot pass, and 128 tasks are gated on it anyway. docs/plans/2026-08-17-kill-v1-and-narrow-store-interfaces.md:143-145 states `make ci` currently CANNOT pass on main (10 staticcheck findings, none introduced by that work) and instructs readers not ",
-   "[simplicity-scope.json] TASK-069's gate field concedes that the package-wide gate is red on main \u2014 'make ci is known-red on main per the plan doc; do not read a red make ci as a signal from this work' \u2014 which directly contradicts the coordinator protocol printed in every orchestration.md: 'A wave MUST NOT start while ... t"
+   "[simplicity-scope.json] TASK-069's gate field concedes that the package-wide gate is red on main \u2014 'make ci is known-red on main per the plan doc; do not read a red make ci as a signal from this work' \u2014 which directly contradicts the coordinator protocol printed in every orchestration.md: 'A wave MUST NOT start while ... t",
+   "[verify-10.json] "
   ]
  }
 ]

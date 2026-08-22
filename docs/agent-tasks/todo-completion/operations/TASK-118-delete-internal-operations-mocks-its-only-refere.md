@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/operations/TASK-118-delete-internal-operations-mocks-its-only-refere.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 88ac92a6-3f55-49df-9e33-71648cec2308 -->
+<!-- guid: 1078db8a-7bd1-4426-9814-f392e4c05950 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-118 — Delete internal/operations/mocks — its only referencer is dead, permanently-untagged, currently-broken test code (TODO.md L4743)
@@ -81,10 +81,235 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] test -d internal/operations/mocks returns non-zero.
-- [ ] go build ./... exits 0.
-- [ ] go vet -tags mocks ./... exits 0 (no more orphaned broken references anywhere under that tag).
-- [ ] grep -rn "queuemocks" --include="*.go" . returns 0 hits.
+- [ ] `
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] -
+- [ ] d
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] o
+- [ ] p
+- [ ] e
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] s
+- [ ] /
+- [ ] m
+- [ ] o
+- [ ] c
+- [ ] k
+- [ ] s
+- [ ] `
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] n
+- [ ] o
+- [ ] n
+- [ ] -
+- [ ] z
+- [ ] e
+- [ ] r
+- [ ] o
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] b
+- [ ] u
+- [ ] i
+- [ ] l
+- [ ] d
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] e
+- [ ] x
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] 0
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] v
+- [ ] e
+- [ ] t
+- [ ]  
+- [ ] -
+- [ ] t
+- [ ] a
+- [ ] g
+- [ ] s
+- [ ]  
+- [ ] m
+- [ ] o
+- [ ] c
+- [ ] k
+- [ ] s
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] e
+- [ ] x
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] 0
+- [ ] ;
+- [ ]  
+- [ ] `
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] r
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] q
+- [ ] u
+- [ ] e
+- [ ] u
+- [ ] e
+- [ ] m
+- [ ] o
+- [ ] c
+- [ ] k
+- [ ] s
+- [ ] '
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] i
+- [ ] n
+- [ ] c
+- [ ] l
+- [ ] u
+- [ ] d
+- [ ] e
+- [ ] =
+- [ ] '
+- [ ] *
+- [ ] .
+- [ ] g
+- [ ] o
+- [ ] '
+- [ ]  
+- [ ] .
+- [ ] `
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] 0
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ] ;
+- [ ]  
+- [ ] `
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] P
+- [ ] r
+- [ ] o
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] s
+- [ ] s
+- [ ] R
+- [ ] e
+- [ ] p
+- [ ] o
+- [ ] r
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] '
+- [ ]  
+- [ ] .
+- [ ] m
+- [ ] o
+- [ ] c
+- [ ] k
+- [ ] e
+- [ ] r
+- [ ] y
+- [ ] .
+- [ ] y
+- [ ] a
+- [ ] m
+- [ ] l
+- [ ] `
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] 0
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ] .
 - [ ] Anti-over-suppression: N/A
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/operations/mocks/... ./internal/server/... -count=1` exits 0; `go vet`/lint clean.

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-201-wire-per-file-intro-classification-into-the-regr.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 91aba34b-bbca-4666-92fa-3ddcc6a5fa3f -->
+<!-- guid: 08a8a21a-4926-4f3d-989b-5a7de7c5af01 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-201 — Wire per-file intro classification into the regroup-shattered-books classifier, outranking runtime (TODO.md L8316)
@@ -62,16 +62,793 @@ Then, always:
 
 ## Tests
 
-- internal/plugins/maintenance/regroup_shattered_ai_test.go: TestRegroupClassifier_IntroOutranksRuntimeWhenBothPresent -- a book where duration says 'not shattered' but a mid-book file's intro classifies as credits, assert the classifier now flags it (previously would not have).
-- TestRegroupClassifier_FallsBackToRuntimeWhenIntroAbsent -- a book with no per-file transcript yet, assert behavior is byte-identical to the pre-change classifier (regression/anti-suppression check).
-- TestRegroupClassifier_356HoldBaselineDiff -- run against the recorded 356-hold set (or a representative fixture derived from it) and assert every changed verdict is one where new intro evidence justifies the change.
+- i
+- n
+- t
+- e
+- r
+- n
+- a
+- l
+- /
+- i
+- t
+- u
+- n
+- e
+- s
+- /
+- s
+- e
+- r
+- v
+- i
+- c
+- e
+- /
+- f
+- s
+- _
+- r
+- e
+- g
+- r
+- o
+- u
+- p
+- _
+- s
+- h
+- a
+- p
+- e
+- _
+- t
+- e
+- s
+- t
+- .
+- g
+- o
+- :
+-  
+- T
+- e
+- s
+- t
+- C
+- l
+- a
+- s
+- s
+- i
+- f
+- y
+- S
+- h
+- a
+- t
+- t
+- e
+- r
+- e
+- d
+- F
+- o
+- l
+- d
+- e
+- r
+- s
+- _
+- I
+- n
+- t
+- r
+- o
+- O
+- u
+- t
+- r
+- a
+- n
+- k
+- s
+- R
+- u
+- n
+- t
+- i
+- m
+- e
+- W
+- h
+- e
+- n
+- B
+- o
+- t
+- h
+- P
+- r
+- e
+- s
+- e
+- n
+- t
+-  
+- -
+-  
+- a
+-  
+- S
+- h
+- a
+- t
+- t
+- e
+- r
+- B
+- o
+- o
+- k
+-  
+- w
+- h
+- e
+- r
+- e
+-  
+- D
+- u
+- r
+- a
+- t
+- i
+- o
+- n
+- S
+- e
+- c
+-  
+- s
+- a
+- y
+- s
+-  
+- '
+- n
+- o
+- t
+-  
+- s
+- h
+- a
+- t
+- t
+- e
+- r
+- e
+- d
+- '
+-  
+- b
+- u
+- t
+-  
+- a
+-  
+- m
+- i
+- d
+- -
+- b
+- o
+- o
+- k
+-  
+- f
+- i
+- l
+- e
+- '
+- s
+-  
+- i
+- n
+- t
+- r
+- o
+-  
+- c
+- l
+- a
+- s
+- s
+- i
+- f
+- i
+- e
+- s
+-  
+- a
+- s
+-  
+- c
+- r
+- e
+- d
+- i
+- t
+- s
+- ;
+-  
+- a
+- s
+- s
+- e
+- r
+- t
+-  
+- t
+- h
+- e
+-  
+- g
+- r
+- o
+- u
+- p
+-  
+- i
+- s
+-  
+- f
+- l
+- a
+- g
+- g
+- e
+- d
+- .
+-  
+- T
+- e
+- s
+- t
+- C
+- l
+- a
+- s
+- s
+- i
+- f
+- y
+- S
+- h
+- a
+- t
+- t
+- e
+- r
+- e
+- d
+- F
+- o
+- l
+- d
+- e
+- r
+- s
+- _
+- F
+- a
+- l
+- l
+- s
+- B
+- a
+- c
+- k
+- T
+- o
+- R
+- u
+- n
+- t
+- i
+- m
+- e
+- W
+- h
+- e
+- n
+- I
+- n
+- t
+- r
+- o
+- A
+- b
+- s
+- e
+- n
+- t
+-  
+- -
+-  
+- w
+- i
+- t
+- h
+-  
+- n
+- o
+-  
+- p
+- e
+- r
+- -
+- f
+- i
+- l
+- e
+-  
+- t
+- r
+- a
+- n
+- s
+- c
+- r
+- i
+- p
+- t
+- ,
+-  
+- a
+- s
+- s
+- e
+- r
+- t
+-  
+- t
+- h
+- e
+-  
+- v
+- e
+- r
+- d
+- i
+- c
+- t
+-  
+- i
+- s
+-  
+- i
+- d
+- e
+- n
+- t
+- i
+- c
+- a
+- l
+-  
+- t
+- o
+-  
+- t
+- h
+- e
+-  
+- p
+- r
+- e
+- -
+- c
+- h
+- a
+- n
+- g
+- e
+-  
+- c
+- l
+- a
+- s
+- s
+- i
+- f
+- i
+- e
+- r
+-  
+- f
+- o
+- r
+-  
+- t
+- h
+- e
+-  
+- e
+- x
+- i
+- s
+- t
+- i
+- n
+- g
+-  
+- t
+- a
+- b
+- l
+- e
+- -
+- d
+- r
+- i
+- v
+- e
+- n
+-  
+- c
+- a
+- s
+- e
+- s
+- .
+-  
+- D
+- o
+-  
+- N
+- O
+- T
+-  
+- w
+- r
+- i
+- t
+- e
+-  
+- a
+-  
+- 3
+- 5
+- 6
+- -
+- h
+- o
+- l
+- d
+-  
+- b
+- a
+- s
+- e
+- l
+- i
+- n
+- e
+-  
+- t
+- e
+- s
+- t
+- :
+-  
+- n
+- o
+-  
+- p
+- e
+- r
+- -
+- h
+- o
+- l
+- d
+-  
+- v
+- e
+- r
+- d
+- i
+- c
+- t
+-  
+- d
+- a
+- t
+- a
+- s
+- e
+- t
+-  
+- e
+- x
+- i
+- s
+- t
+- s
+-  
+- i
+- n
+-  
+- t
+- h
+- e
+-  
+- r
+- e
+- p
+- o
+-  
+- (
+- t
+- h
+- e
+-  
+- n
+- u
+- m
+- b
+- e
+- r
+-  
+- a
+- p
+- p
+- e
+- a
+- r
+- s
+-  
+- o
+- n
+- l
+- y
+-  
+- a
+- s
+-  
+- p
+- r
+- o
+- s
+- e
+-  
+- i
+- n
+-  
+- T
+- O
+- D
+- O
+- .
+- m
+- d
+- :
+- 8
+- 3
+- 8
+- 3
+-  
+- a
+- n
+- d
+-  
+- d
+- o
+- c
+- s
+- /
+- c
+- o
+- n
+- t
+- i
+- n
+- u
+- a
+- t
+- i
+- o
+- n
+- /
+- 2
+- 0
+- 2
+- 6
+- -
+- 0
+- 8
+- -
+- 0
+- 6
+- -
+- p
+- e
+- r
+- -
+- f
+- i
+- l
+- e
+- -
+- i
+- n
+- t
+- r
+- o
+- -
+- c
+- o
+- n
+- t
+- i
+- n
+- u
+- a
+- t
+- i
+- o
+- n
+- .
+- m
+- d
+- :
+- 1
+- 2
+- 4
+- )
+- .
+-  
+- I
+- n
+- s
+- t
+- e
+- a
+- d
+- ,
+-  
+- e
+- x
+- t
+- e
+- n
+- d
+-  
+- t
+- h
+- e
+-  
+- e
+- x
+- i
+- s
+- t
+- i
+- n
+- g
+-  
+- t
+- a
+- b
+- l
+- e
+-  
+- i
+- n
+-  
+- f
+- s
+- _
+- r
+- e
+- g
+- r
+- o
+- u
+- p
+- _
+- s
+- h
+- a
+- p
+- e
+- _
+- t
+- e
+- s
+- t
+- .
+- g
+- o
+-  
+- a
+- n
+- d
+-  
+- a
+- s
+- s
+- e
+- r
+- t
+-  
+- z
+- e
+- r
+- o
+-  
+- v
+- e
+- r
+- d
+- i
+- c
+- t
+-  
+- c
+- h
+- a
+- n
+- g
+- e
+- s
+-  
+- o
+- n
+-  
+- e
+- v
+- e
+- r
+- y
+-  
+- c
+- a
+- s
+- e
+-  
+- t
+- h
+- a
+- t
+-  
+- h
+- a
+- s
+-  
+- n
+- o
+-  
+- i
+- n
+- t
+- r
+- o
+-  
+- d
+- a
+- t
+- a
+- .
 
 Anti-over-suppression test: `TestRegroupClassifier_FallsBackToRuntimeWhenIntroAbsent` — a known-good input still passes with the new guard active.
 
 ## How to test
 
 ```bash
-go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1
+go build ./... && go vet ./... && go test ./internal/itunes/service/... ./internal/plugins/maintenance/... -count=1
 ```
 Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
@@ -82,7 +859,7 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 - [ ] go build ./... && go vet ./... exit 0
 - [ ] Anti-over-suppression test: `TestRegroupClassifier_FallsBackToRuntimeWhenIntroAbsent` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/itunes/service/... ./internal/plugins/maintenance/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_missing-file-lane_201.md`.
 

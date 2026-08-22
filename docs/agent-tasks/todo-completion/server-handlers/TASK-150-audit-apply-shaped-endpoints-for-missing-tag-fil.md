@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-150-audit-apply-shaped-endpoints-for-missing-tag-fil.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 47366b63-62fa-4789-9bb3-6579c2b9eff8 -->
+<!-- guid: b543054e-1d6e-4dfa-ad41-7992402aa8c5 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-150 — Audit apply-shaped endpoints for missing tag/file-I/O writeback (TODO.md L2481)
 
-**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · server-handlers subagent · **Why:** Multi-file investigation across handler packages requiring judgment about which paths mutate on-disk-relevant state; no novel design. · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · server-handlers subagent · **Why:** Multi-file investigation across handler packages requiring judgment about which paths mutate on-disk-relevant state; no novel design. · **Depends on:** none · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 2481 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**Consider the same file-I/O audit for the remaini" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-04.json`.
 
@@ -104,7 +104,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 **This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: (1) the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; (2) every mutation is journaled through the existing undo ledger (`CreateOperationChange` — verify: `grep -rn "func.*CreateOperationChange" internal/database/*.go`) so `internal/undo` can replay it — a mutation without a journal row is a defect; (3) acceptance includes a test that applies on a fixture and then undoes via `internal/undo` and asserts the fixture is byte-identical; (4) the apply path refuses to start while a `library.scan` operation is running or queued (check the registry for an active scan before mutating — a running scan clobbers applied metadata). Idempotency: re-running in dry-run must report 0 pending changes after a successful apply. Rollback of the CODE = `git revert`; rollback of the DATA = the undo ledger, which is why (2) is not optional. PR stays open for the owner — the coordinator never admin-merges it.
 
-If the first acceptance check below already passes at HEAD (`docs/audits/2026-08-21-apply-endpoint-fileio-audit.md exists with >=5 '## ' subsections, one per audited endpoint.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `docs/audits/2026-08-21-apply-endpoint-fileio-audit.md exists with >=5 '## ' subsections, one per audited endpoint.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

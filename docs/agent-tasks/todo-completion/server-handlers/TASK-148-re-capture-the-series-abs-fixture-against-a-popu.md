@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-148-re-capture-the-series-abs-fixture-against-a-popu.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e525e236-1ad3-4c84-a105-4f783a797d07 -->
+<!-- guid: bc88100d-d7e2-428a-b0fb-ca533bb72d80 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-148 — Re-capture the series ABS fixture against a populated library (it currently contains zero series) (TODO.md L491)
 
-**Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · server-handlers subagent · **Why:** Requires actually running a real capture (hitting a populated library's /api/libraries/:id/series endpoint against a live server, presumably real ABS or this server itself pointed at a populated library) and hand-curating the result into fixture format — not a pure code edit, needs an environment with real data. · **Depends on:** TASK-147 · **Wave:** 4
+**Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · server-handlers subagent · **Why:** Requires actually running a real capture (hitting a populated library's /api/libraries/:id/series endpoint against a live server, presumably real ABS or this server itself pointed at a populated library) and hand-curating the result into fixture format — not a pure code edit, needs an environment with real data. · **Depends on:** TASK-147 · **Wave:** 5
 
 Source: `TODO.md` line 491 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**`testdata/abs-fixtures/get_api_libraries_id_seri" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-01.json`.
 

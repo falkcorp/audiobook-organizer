@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 6c6bf86c-5ee4-45a7-8989-3807f9212bc2 -->
+<!-- guid: 415518ef-4c56-4b66-b693-58b4591373a9 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — database workstream (todo-completion)
@@ -33,14 +33,15 @@ flowchart LR
       TASK033[TASK-033 repoint-store-go-17-s-broken]
       TASK036[TASK-036 fix-deleteauthor-s-junction-]
     end
-    subgraph Wave3
+    subgraph Wave4
       TASK039[TASK-039 add-transcribe-status-to-the]
     end
-    subgraph Wave6
+    subgraph Wave5
       TASK037[TASK-037 omnibus-anthology-book-type-]
     end
     TASK005 --> TASK039
     TASK026 --> TASK039
+    TASK028 --> TASK029
     TASK029 --> TASK039
     TASK031 --> TASK033
     TASK031 --> TASK037
@@ -50,7 +51,9 @@ flowchart LR
     TASK035 --> TASK036
     TASK039 --> TASK037
     TASK043 --> TASK029
+    TASK177 --> TASK039
     TASK177 --> TASK178
+    TASK178 --> TASK039
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -59,7 +62,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/audiobooks/... ./internal/database/... ./internal/database/mocks/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/dedup/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/server/handlers/audiobooks/... -count=1 && npm --prefix web run lint && npm --prefix web test ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/server/handlers/entities/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/server/... ./internal/server/handlers/system/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/merge/... ./internal/search/... -count=1 ; go build ./... && go vet ./... && go test ./tools/cmd/reconcile-book-counts/... -count=1 ; go build ./... && go vet ./... && go test ./tools/cmd/storewidthgate/... -count=1`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/audiobooks/... ./internal/database/... ./internal/database/mocks/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... -count=1 && npm --prefix web run lint && npm --prefix web test ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/dedup/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/server/handlers/audiobooks/... -count=1 && npm --prefix web run lint && npm --prefix web test ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/server/handlers/entities/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/server/... ./internal/server/handlers/system/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/server/handlers/abs/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/merge/... ./internal/search/... -count=1 ; go build ./... && go vet ./... && go test ./tools/cmd/reconcile-book-counts/... -count=1 ; go build ./... && go vet ./... && go test ./tools/cmd/storewidthgate/... -count=1`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

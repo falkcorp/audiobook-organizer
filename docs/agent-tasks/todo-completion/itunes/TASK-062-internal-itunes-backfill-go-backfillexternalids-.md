@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/TASK-062-internal-itunes-backfill-go-backfillexternalids-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 5bfb8921-9cb5-4813-bb8b-0e2c4f436c39 -->
+<!-- guid: 2a86a85e-0da5-48d7-a75a-5b522a1c931b -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-062 — internal/itunes/backfill.go BackfillExternalIDs: replace offset pagination with GetAllBooksFullFrom cursor (PERF-5)
@@ -66,7 +66,7 @@ Anti-over-suppression: N/A
 ## How to test
 
 ```bash
-go build ./... && go vet ./... && go test ./internal/itunes/... -count=1
+go build ./... && go vet ./... && go test ./internal/database/... ./internal/itunes/... -count=1
 ```
 Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
@@ -75,7 +75,7 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 - [ ] go test ./internal/itunes/... -run Backfill passes.
 - [ ] Anti-over-suppression: N/A
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/itunes/... -count=1` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/database/... ./internal/itunes/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_itunes_062.md`.
 

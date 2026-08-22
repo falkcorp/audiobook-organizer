@@ -1,0 +1,20 @@
+# scope-20 — review screen "no metadata" false empty state + dead "Search providers…" action (owner-reported 2026-08-21 23:33)
+
+Evidence from prod logs (<the server>):
+- POST /api/v1/metadata/batch-fetch-candidates → 400 "book_ids or selection is required" — the UI sent an empty body.
+  Source: web/src/components/review/ReviewWorkspace.tsx:269-271 — `run: startJob('Provider search', () => api.batchFetchCandidates({}))`.
+  The working variant at :280 passes `{ book_ids: [...metadata.selectedIds] }`.
+- GET /api/v1/audiobooks/metadata/cache/review?limit=0&offset=0 → 200 in 34.8 s, then 18.4 s, while a full library.scan was running.
+  The UI showed the "no metadata — search providers" empty state during the wait, then the books appeared.
+
+## todo_line 90020 — (web) never call batchFetchCandidates with {} ; loading state instead of empty state while pending
+Deliverable: the "Search providers…" action either requires a selection (disabled/hidden when none) or sends an explicit selection object for the current filter; the review list shows a loading skeleton while the cache/review request is in flight and only shows the empty state on a resolved empty result. Vitest in web/src/components/review/ (extend ReviewWorkspace.refetchStale.test.tsx or add a sibling) asserting batchFetchCandidates is never called with {} and the empty state is not rendered while loading. Test cmd: `npm --prefix web test -- src/components/review/ReviewWorkspace`.
+
+## todo_line 90021 — (server) review cache endpoint: default page size instead of limit=0 (= all), and measure the 35 s
+Deliverable: find the handler for /api/v1/audiobooks/metadata/cache/review; when limit is 0/absent, apply a default page size (e.g. 200) and return total count so the UI can page; keep limit=0 only behind an explicit `all=true` if something depends on it (grep web/src for `limit=0`/`limit: 0` callers and list them). Add a timing log line at WARN when the handler exceeds 5 s, including whether a library.scan op is active. Go test in the handler package. Gate: `go build ./... && go vet ./... && go test ./internal/server/handlers/<pkg>/... -count=1`.
+
+## todo_line 90022 — (web) evidence panel: "no recorded derivation" must say why and offer re-search
+Source: web/src/components/review/evidence/adapters.ts:92 (`metadataEvidence`, emptyReason string). Candidates cached before 2026-08-20 (commit cf3aeb9b added internal/metafetch/score_breakdown.go) have no score_breakdown; fresh searches attach one (internal/metafetch/service_search.go:619 and :702). Deliverable: the emptyReason explains the cause in plain language ("this candidate was cached before score derivations were recorded — re-search this book to get one"), and the panel renders the existing per-book re-search action next to it (reuse the selectedIds path at ReviewWorkspace.tsx:280 — do not add a new API call). Vitest for adapters.ts (existing test file if present: `ls web/src/components/review/evidence/*.test.ts*`) plus a render test for the action. Test cmd: `npm --prefix web test -- src/components/review/evidence`.
+
+## todo_line 90023 — (web, S, haiku) OperationActivityPanel repeats the last log line endlessly
+Source: web/src/components/OperationActivityPanel.tsx:208-228. The SSE-append effect has `[latestLogEvent, operationId, op]` as deps; `op` is the store's operation object which is replaced on every progress tick, so the SAME latestLogEvent is appended once per tick. Owner saw the last message repeating forever in the job status view during a library scan (2026-08-21 23:47). Fix: keep the last appended event identity (created_at + message, or an event id if the SSE payload has one — grep latestLogEvent in web/src/store) in a useRef and skip when unchanged; read `op` through a ref (or derive operation_type once) so it is not an effect dependency. Vitest: render the panel, push one latestLogEvent, then update the op object twice (progress change) → exactly one appended line; push a second distinct event → two lines. Test file: existing `ls web/src/components/OperationActivityPanel*.test.tsx` or create one. Test cmd: `npm --prefix web test -- src/components/OperationActivityPanel`.

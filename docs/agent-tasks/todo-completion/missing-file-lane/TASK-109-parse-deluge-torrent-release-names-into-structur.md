@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-109-parse-deluge-torrent-release-names-into-structur.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 8c0b75c7-e8ba-4387-b6de-80654d72e4f0 -->
+<!-- guid: 5c6027b6-1650-413b-8385-b62079c967ae -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-109 — Parse Deluge torrent release names into structured candidate metadata (author/series/volume/narrator/edition/year) as a scored candidate for the existing matcher (TODO.md L8707)
@@ -100,7 +100,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/deluge/... -run ParseTorrentNameMetadata passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'func ParseTorrentNameCandidates' -A 5 internal/deluge/discovery.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

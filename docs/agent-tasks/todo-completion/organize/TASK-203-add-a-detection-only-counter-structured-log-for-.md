@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/organize/TASK-203-add-a-detection-only-counter-structured-log-for-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 86133805-cc8a-4574-89eb-bd565b300e7a -->
+<!-- guid: 8ce8f9b5-2eac-4eaf-ac72-eea45b4fe2b7 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-203 — Add a detection-only counter + structured log for generateTargetPath path collisions within one organize run (DEC-11)
 
-**Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · organize subagent · **Why:** Small, well-scoped, but touches the concurrent whole-library organize worker pool (8 workers), so the shared collision map needs correct locking — not a haiku-safe mechanical change, but far short of opus-level risk since it is detection-only with zero behavior change. · **Depends on:** none · **Wave:** 4
+**Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · organize subagent · **Why:** Small, well-scoped, but touches the concurrent whole-library organize worker pool (8 workers), so the shared collision map needs correct locking — not a haiku-safe mechanical change, but far short of opus-level risk since it is detection-only with zero behavior change. · **Depends on:** none · **Wave:** 5
 
 Source: `TODO.md` line 90011 as of commit 46628240 (later edits shift lines) — re-find it with `sed -n '90011p' TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-19.json`.
 
@@ -111,7 +111,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/organizer/... ./internal/metrics/... -run TestOrganizeBooks_LogsCollisionWhenTwoBooksShareATargetPath -count=1 exits 0.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `grep -n "organize_target_path_collision_total" internal/metrics/metrics.go returns >=2 hits (declaration + Register wiring).` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

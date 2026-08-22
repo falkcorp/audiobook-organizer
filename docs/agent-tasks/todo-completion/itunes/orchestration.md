@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 1c425f8f-bd9a-4ad8-b853-95f6a2a46e1a -->
+<!-- guid: b720cae9-0272-4ec1-b7cd-2337e1fd654f -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — itunes workstream (todo-completion)
@@ -15,17 +15,15 @@ flowchart LR
       TASK184[TASK-184 measure-itunes-xml-track-per]
       TASK185[TASK-185 report-the-itunes-listened-i]
       TASK062[TASK-062 internal-itunes-backfill-go-]
-      TASK064[TASK-064 add-a-part-disc-chapter-trac]
     end
     subgraph Wave2
-      TASK061[TASK-061 import-the-224-materialized-]
       TASK063[TASK-063 internal-itunes-backfill-go-]
+      TASK064[TASK-064 add-a-part-disc-chapter-trac]
     end
     subgraph Wave6
       TASK065[TASK-065 p2-relocate-only-sync-cycle-]
     end
     TASK062 --> TASK063
-    TASK184 --> TASK061
 ```
 
 An edge `A --> B` means B waits for A's merge (shared file or explicit dependency). No edge = parallel-safe.
@@ -34,7 +32,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only' ; go build ./... && go vet ./... && go test ./cmd/pid-census/... ./internal/itunes/... -count=1 ; go build ./... && go vet ./... && go test ./internal/itunes/... -count=1 ; go build ./... && go vet ./... && go test ./internal/itunes/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/itunes/service/... -count=1 ; go build ./... && go vet ./... && go test ./internal/itunes/service/... ./internal/plugins/maintenance/... -count=1`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only' ; go build ./... && go vet ./... && go test ./cmd/pid-census/... ./internal/itunes/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/itunes/... -count=1 ; go build ./... && go vet ./... && go test ./internal/itunes/... -count=1 ; go build ./... && go vet ./... && go test ./internal/itunes/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/itunes/service/... -count=1`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

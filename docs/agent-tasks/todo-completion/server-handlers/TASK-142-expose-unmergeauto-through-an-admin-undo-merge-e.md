@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-142-expose-unmergeauto-through-an-admin-undo-merge-e.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 26871c01-7987-423a-b528-2db933ce1c4e -->
+<!-- guid: a5e85463-156f-4d33-b01a-7677b8f9c93b -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-142 — Expose UnmergeAuto through an admin undo-merge endpoint (list + invoke) (MERGE-UNDO)
@@ -109,7 +109,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 **This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: (1) the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; (2) every mutation is journaled through the existing undo ledger (`CreateOperationChange` — verify: `grep -rn "func.*CreateOperationChange" internal/database/*.go`) so `internal/undo` can replay it — a mutation without a journal row is a defect; (3) acceptance includes a test that applies on a fixture and then undoes via `internal/undo` and asserts the fixture is byte-identical; (4) the apply path refuses to start while a `library.scan` operation is running or queued (check the registry for an active scan before mutating — a running scan clobbers applied metadata). Idempotency: re-running in dry-run must report 0 pending changes after a successful apply. Rollback of the CODE = `git revert`; rollback of the DATA = the undo ledger, which is why (2) is not optional. PR stays open for the owner — the coordinator never admin-merges it.
 
-If the first acceptance check below already passes at HEAD (``go test ./internal/server/handlers/dedup/... -run Undo -v` passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — ``grep -n "UndoMerge\|ListMergeJournal" internal/server/handlers/dedup/handler.go` returns both new handler funcs.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

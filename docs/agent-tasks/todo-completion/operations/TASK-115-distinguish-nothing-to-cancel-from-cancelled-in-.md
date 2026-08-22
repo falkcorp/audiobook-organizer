@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/operations/TASK-115-distinguish-nothing-to-cancel-from-cancelled-in-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 369bc86c-50bd-4af1-a5b6-8dfe8c60f4ca -->
+<!-- guid: 3a74c85e-3e13-410e-a64b-35b294ee6627 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-115 — Distinguish 'nothing to cancel' from 'cancelled' in registry.Cancel so unknown-id cancels 404 instead of lying 204 (TODO.md L4477)
 
-**Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · operations subagent · **Why:** Touches a shared registry method with 3 call sites across 2 packages, needs a sentinel-error design and careful test updates across both the wired and (currently dead) duplicate handler; not a one-line fix. · **Depends on:** none · **Wave:** 1
+**Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · operations subagent · **Why:** Touches a shared registry method with 3 call sites across 2 packages, needs a sentinel-error design and careful test updates across both the wired and (currently dead) duplicate handler; not a one-line fix. · **Depends on:** none · **Wave:** 2
 
 Source: `TODO.md` line 4477 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**Cancelling an operation the registry has never h" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-08.json`.
 
@@ -84,8 +84,398 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] `go test ./internal/operations/registry/... ./internal/server/... -run 'Cancel'` passes with the new 404 expectation.
-- [ ] `grep -rn 'handleCancelOperationV2' internal/server/` shows either zero hits (deleted) or a call site that is now actually wired into production routing (fixed, not merely left dead).
+- [ ] `
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] o
+- [ ] p
+- [ ] e
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] s
+- [ ] /
+- [ ] r
+- [ ] e
+- [ ] g
+- [ ] i
+- [ ] s
+- [ ] t
+- [ ] r
+- [ ] y
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] -
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] C
+- [ ] a
+- [ ] n
+- [ ] c
+- [ ] e
+- [ ] l
+- [ ] `
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ]  
+- [ ] w
+- [ ] i
+- [ ] t
+- [ ] h
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] n
+- [ ] e
+- [ ] w
+- [ ]  
+- [ ] 4
+- [ ] 0
+- [ ] 4
+- [ ]  
+- [ ] e
+- [ ] x
+- [ ] p
+- [ ] e
+- [ ] c
+- [ ] t
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] ;
+- [ ]  
+- [ ] `
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] r
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] h
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ] l
+- [ ] e
+- [ ] C
+- [ ] a
+- [ ] n
+- [ ] c
+- [ ] e
+- [ ] l
+- [ ] O
+- [ ] p
+- [ ] e
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] V
+- [ ] 2
+- [ ] '
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] /
+- [ ] `
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] Z
+- [ ] E
+- [ ] R
+- [ ] O
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] (
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] d
+- [ ] e
+- [ ] a
+- [ ] d
+- [ ]  
+- [ ] d
+- [ ] u
+- [ ] p
+- [ ] l
+- [ ] i
+- [ ] c
+- [ ] a
+- [ ] t
+- [ ] e
+- [ ]  
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ]  
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] t
+- [ ] w
+- [ ] o
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] e
+- [ ] r
+- [ ] e
+- [ ] n
+- [ ] c
+- [ ] e
+- [ ] s
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] o
+- [ ] p
+- [ ] e
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] s
+- [ ] _
+- [ ] v
+- [ ] 2
+- [ ] _
+- [ ] h
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ] l
+- [ ] e
+- [ ] r
+- [ ] s
+- [ ] _
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] .
+- [ ] g
+- [ ] o
+- [ ] :
+- [ ] 2
+- [ ] 7
+- [ ] 0
+- [ ] /
+- [ ] 2
+- [ ] 8
+- [ ] 3
+- [ ]  
+- [ ] a
+- [ ] r
+- [ ] e
+- [ ]  
+- [ ] d
+- [ ] e
+- [ ] l
+- [ ] e
+- [ ] t
+- [ ] e
+- [ ] d
+- [ ]  
+- [ ] -
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] t
+- [ ] c
+- [ ] h
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ]  
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ]  
+- [ ] p
+- [ ] l
+- [ ] a
+- [ ] c
+- [ ] e
+- [ ]  
+- [ ] i
+- [ ] s
+- [ ]  
+- [ ] n
+- [ ] o
+- [ ] t
+- [ ]  
+- [ ] a
+- [ ] n
+- [ ]  
+- [ ] a
+- [ ] c
+- [ ] c
+- [ ] e
+- [ ] p
+- [ ] t
+- [ ] e
+- [ ] d
+- [ ]  
+- [ ] o
+- [ ] u
+- [ ] t
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] e
+- [ ] ,
+- [ ]  
+- [ ] s
+- [ ] i
+- [ ] n
+- [ ] c
+- [ ] e
+- [ ]  
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] s
+- [ ] t
+- [ ] a
+- [ ] y
+- [ ] s
+- [ ]  
+- [ ] u
+- [ ] n
+- [ ] r
+- [ ] e
+- [ ] a
+- [ ] c
+- [ ] h
+- [ ] a
+- [ ] b
+- [ ] l
+- [ ] e
+- [ ]  
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ]  
+- [ ] w
+- [ ] i
+- [ ] l
+- [ ] l
+- [ ]  
+- [ ] d
+- [ ] i
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] g
+- [ ] e
+- [ ]  
+- [ ] a
+- [ ] g
+- [ ] a
+- [ ] i
+- [ ] n
+- [ ] )
+- [ ] .
 - [ ] Anti-over-suppression test: `N/A — this is an error-code fix, not a filter/guard.` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/operations/registry/... ./internal/server/... ./internal/server/handlers/... -count=1` exits 0; `go vet`/lint clean.

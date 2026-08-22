@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-209-migrate-internal-server-test-fixtures-to-setupte.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 528954e9-22bb-4d65-8268-8db90a3afe0d -->
+<!-- guid: a348ebd0-9bf5-4fa5-9fbb-b0650d90b6b6 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-209 — Migrate internal/server test fixtures to setupTestServerWithStore — itunes_integration_test.go, indexed_store_test.go, similar_books_test.go, e2e_workflow_test.go (DEC-6)
 
-**Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · server subagent · **Why:** Mechanical, but indexed_store_test.go and similar_books_test.go have multiple sites per file (possibly in table-driven subtests) that need per-site defer placement judged correctly. · **Depends on:** none · **Wave:** 1
+**Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · server subagent · **Why:** Mechanical, but indexed_store_test.go and similar_books_test.go have multiple sites per file (possibly in table-driven subtests) that need per-site defer placement judged correctly. · **Depends on:** none · **Wave:** 3
 
 Source: `TODO.md` line 90006 as of commit 46628240 (later edits shift lines) — re-find it with `sed -n '90006p' TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-19.json`.
 
@@ -29,8 +29,10 @@ Same transformation as Part 1, applied to itunes_integration_test.go (5 sites), 
 
 ## Background (verify before editing)
 
-- Same base facts as Part 1's background — setupTestServerWithStore (server_test.go:151) is the real shared fixture; it does not start the operations registry.
-- Before editing each site, read the ~15 surrounding lines (grep -n -B5 -A10 "NewServer(" <file>) to check for a manual opRegistry.Start/Shutdown pair (as seen in itunes_error_test.go in Part 1) or other custom wiring that must be preserved rather than deleted.
+- setupTestServerWithStore (internal/server/server_test.go:151) sets gin.TestMode, PINS config.AppConfig.RootDir="" (L160-161), calls allowOpDefinitionUpserts, database.SetGlobalStore(store) and NewServer(store); it does NOT start the operations registry and does NOT restore the previous global store.
+- itunes_integration_test.go AND e2e_workflow_test.go both build their env via testutil.SetupIntegration(t), which deliberately sets a non-empty RootDir. Both must re-pin config.AppConfig.RootDir after each setupTestServerWithStore call, or be left unmigrated — an empty RootDir also nils the iTunes plugin (internal/plugins/itunes/register.go:52).
+- indexed_store_test.go (4 sites) and similar_books_test.go (2 sites) use a plain store with no SetupIntegration and no RootDir dependence — these are the safe, purely mechanical sites in this part.
+- Before editing each site, read the ~15 surrounding lines (grep -n -B5 -A10 'NewServer(' <file>) to check for a manual opRegistry.Start/Shutdown pair or other custom wiring that must be preserved rather than deleted.
 
 - **Re-verify these anchors before editing** — line numbers drift; a zero-hit grep means STOP and report:
   ```bash
@@ -38,6 +40,12 @@ Same transformation as Part 1, applied to itunes_integration_test.go (5 sites), 
   grep -n "NewServer(" internal/server/indexed_store_test.go   # 4 hits at L51,99,144,183 — indexed_store_test.go has 4 direct NewServer(store) sites
   grep -n "NewServer(" internal/server/similar_books_test.go   # 2 hits at L42,136 — similar_books_test.go has 2 direct NewServer(store) sites
   grep -n "NewServer(" internal/server/e2e_workflow_test.go   # 1 hit at L49 — e2e_workflow_test.go has 1 direct NewServer(env.Store) site
+  grep -n 'NewServer(' internal/server/itunes_integration_test.go   # 5 hits at L56,124,172,222,256 — 5 sites in itunes_integration_test.go
+  grep -n 'NewServer(' internal/server/indexed_store_test.go   # 4 hits at L51,99,144,183 — 4 sites in indexed_store_test.go
+  grep -n 'NewServer(' internal/server/similar_books_test.go   # 2 hits at L42,136 — 2 sites in similar_books_test.go
+  grep -n 'NewServer(' internal/server/e2e_workflow_test.go   # 1 hit at L49 — 1 site in e2e_workflow_test.go
+  grep -ln 'SetupIntegration' internal/server/*_test.go   # includes e2e_workflow_test.go, itunes_integration_test.go, itunes_error_test.go, organize_integration_test.go — itunes_integration_test.go and e2e_workflow_test.go both come from SetupIntegration, which sets a non-empty RootDir that the fixture blanks
+  grep -n 'origCfg := config.AppConfig\|config.AppConfig.RootDir = ""' internal/server/server_test.go   # hits at L160 `origCfg := config.AppConfig` and L161 `config.AppConfig.RootDir = ""` inside setupTestServerWithStore (plus the other fixture's origCfg capture) — the fixture's RootDir pin
   ```
 
 ### Reuse — don't invent
@@ -60,8 +68,10 @@ Then, always:
 
 ### Edge-case semantics (conservative defaults — treat unknown as unknown, never as disqualifying)
 
-- indexed_store_test.go's 4 sites (L51,99,144,183) are likely 4 separate Test functions, not one table loop — verify with grep -n "^func Test" internal/server/indexed_store_test.go before assuming a shared-loop pattern; if they are indeed 4 separate functions, each gets its own straightforward defer cleanup() with no loop-scoping concern.
-- e2e_workflow_test.go likely exercises a longer end-to-end flow — confirm its single site's surrounding context doesn't rely on a specific NewServer(...) side effect (e.g. a particular initial config.AppConfig.RootDir) that setupTestServerWithStore's config-pinning (RootDir="", server_test.go:161) would change; if the test needs a non-empty RootDir, keep a manual override line after the setupTestServerWithStore call rather than silently dropping the requirement.
+- Any site fed by testutil.SetupIntegration (itunes_integration_test.go x5, e2e_workflow_test.go x1) loses its RootDir to setupTestServerWithStore's pin. Re-pin it immediately after the call rather than silently dropping the requirement.
+- setupTestServerWithStore calls database.SetGlobalStore(store) and its cleanup never restores the prior global store — do not migrate a test that manages the global store itself.
+- indexed_store_test.go's 4 sites are 4 separate Test functions, not a table loop (verify with grep -n '^func Test'), so each gets a straightforward defer cleanup().
+- Capture a per-test PASS/FAIL baseline before editing and diff it after — 'the package still exits 0' is not the same as 'the same tests still pass'.
 
 ## Tests
 

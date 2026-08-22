@@ -322,6 +322,26 @@
     "claim": "a real *aiscan.PipelineManager can be constructed with a fake narrow Store and a real *database.AIScanStore for a test",
     "grep_cmd": "grep -n 'func NewPipelineManager' internal/aiscan/pipeline.go",
     "expect": "1 hit at L47, params (scanStore *database.AIScanStore, mainStore Store, parser *ai.OpenAIParser)"
+   },
+   {
+    "claim": "the wiring line the new test must guard exists",
+    "grep_cmd": "grep -n 'v2Pipeline\\|v2ScanStore\\|WithAIScanCancellation' internal/server/wire_handlers.go",
+    "expect": "hits at L164,166,168,170,176"
+   },
+   {
+    "claim": "the narrow interfaces already exist",
+    "grep_cmd": "grep -n 'type ScanCanceler interface\\|type AIScanLister interface' internal/server/handlers/operations_v2.go",
+    "expect": "L73 and L79"
+   },
+   {
+    "claim": "no test file exists yet, so the -run acceptance must be replaced by a file-existence + named-test grep",
+    "grep_cmd": "ls internal/server/wire_handlers_test.go",
+    "expect": "No such file or directory (exit 1)"
+   },
+   {
+    "claim": "no existing test constructs a Server with a real pipelineManager/aiScanStore",
+    "grep_cmd": "grep -rn 'pipelineManager\\s*=\\|aiScanStore\\s*=' internal/server/*_test.go",
+    "expect": "0 hits"
    }
   ],
   "reuse": [
@@ -353,14 +373,15 @@
    "internal/aiscan.PipelineManager.CancelScan (internal/aiscan/pipeline.go:57) cancels via a stored context.CancelFunc keyed by scan id (pm.cancels map), so a real PipelineManager needs an actual in-flight cancel func registered for the scan id under test \u2014 or the test can assert on the *aiscan.Store's UpdateOperationStatus call chain instead of a running goroutine, whichever is simpler to wire."
   ],
   "steps": [
-   "1. Create internal/server/wire_handlers_test.go (package server) with the standard file header (version 1.0.0, new guid, today's date).",
-   "2. Define a minimal fake implementing internal/aiscan.Store's 7 methods (CreateOperation, UpdateOperationStatus, UpdateOperationError, GetAllAuthors, GetAuthorByID, GetAllAuthorBookCounts, GetBooksByAuthorIDWithRoleCore) \u2014 a struct recording UpdateOperationStatus calls is enough since that is what CancelScan ultimately drives (internal/aiscan/pipeline.go:103).",
-   "3. In the test: `scanStore, err := database.NewAIScanStore(t.TempDir())`; create a scan via `scanStore.CreateScan(...)`; call `scanStore.UpdateScanOperationID(scan.ID, \"op-under-test\")`.",
-   "4. Construct `pm := aiscan.NewPipelineManager(scanStore, fakeStore, nil)` (parser can be nil if CancelScan does not dereference it \u2014 verify with `grep -n 'parser' internal/aiscan/pipeline.go` around CancelScan; if it does, pass a zero-value/no-op *ai.OpenAIParser).",
-   "5. Build `srv := &Server{router: gin.New(), store: mockStore, pipelineManager: pm, aiScanStore: scanStore, opRegistry: <a MockOperationsRegistry with no expectations, to prove the AI-scan branch is what handled the request>}`; call `srv.setupRoutes()`.",
-   "6. Issue `DELETE /api/v1/operations/v2/op-under-test` through `srv.router.ServeHTTP`.",
-   "7. Assert the response is 204, AND assert scanStore.GetScan(scan.ID) (or the fake mainStore's recorded UpdateOperationStatus call) shows the scan was actually acted on \u2014 the failure mode this test exists to catch is '204 returned but nothing was signalled'.",
-   "8. Bump internal/server/wire_handlers.go's version header only if you also add a defensive comment there pointing at the new test; otherwise leave it untouched since no production code changes."
+   "Create internal/server/wire_handlers_test.go (package server) with a fresh file header (version 1.0.0, new guid from `uuidgen | tr A-Z a-z`, last-edited: 2026-08-21).",
+   "Define a minimal fake implementing internal/aiscan.Store's 7 methods (CreateOperation, UpdateOperationStatus, UpdateOperationError, GetAllAuthors, GetAuthorByID, GetAllAuthorBookCounts, GetBooksByAuthorIDWithRoleCore); record UpdateOperationStatus calls.",
+   "scanStore, err := database.NewAIScanStore(t.TempDir()) (internal/database/ai_scan_store.go:91); create a scan; call scanStore.UpdateScanOperationID(scan.ID, \"op-under-test\") \u2014 note the signature is UpdateScanOperationID(id int, operationID string) (ai_scan_store.go:257), so scan.ID is an int, not a string.",
+   "pm := aiscan.NewPipelineManager(scanStore, fakeStore, nil) (internal/aiscan/pipeline.go:47); confirm CancelScan does not dereference the parser before passing nil.",
+   "Build srv := &Server{router: gin.New(), store: mockStore, pipelineManager: pm, aiScanStore: scanStore, opRegistry: <mock registry with no expectations>} and call srv.setupRoutes(), mirroring TestCancelOperationV2_NilRegistry (internal/server/server_queue_test.go:27).",
+   "Issue DELETE /api/v1/operations/v2/op-under-test via srv.router.ServeHTTP.",
+   "Assert BOTH the 204 status AND that the fake recorded the cancellation \u2014 the failure this test exists to catch is '204 returned but nothing was signalled'.",
+   "Do NOT edit internal/server/wire_handlers.go \u2014 this brief is test-only. Verify the test really guards the wiring by temporarily deleting handlers.WithAIScanCancellation(...) at wire_handlers.go:176, confirming the new test goes red, then restoring it.",
+   "Add changelog fragment changelog.d/20260821_server_134.md (no file header)."
   ],
   "tests": [
    {
@@ -379,7 +400,11 @@
   "anti_over_suppression": "N/A \u2014 this is a coverage-gap fix, not a filter/guard.",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "The TODO item's stated root cause (concrete types blocking substitution) is already resolved; only reword this when folding into the assembled backlog so the next reader doesn't waste time re-narrowing interfaces that are already narrow."
+  "notes": "The TODO item's stated root cause (concrete types blocking substitution) is already resolved; only reword this when folding into the assembled backlog so the next reader doesn't waste time re-narrowing interfaces that are already narrow.",
+  "review_notes": [
+   "[verify-8.json] Idempotency polarity is inverted for an additive test task: 'If the first acceptance check below already passes at HEAD (`go test ./internal/server/... -run TestWireHandlers_CancelOperationV2ReachesAIScanPipeline` passes.), this task is already applied.' `go test -run <pattern>` with no matching tes",
+   "[verify-8.json] Step 8 authorises editing internal/server/wire_handlers.go ('Bump internal/server/wire_handlers.go's version header only if you also add a defensive comment there'). exact_files is only ['internal/server/wire_handlers_test.go'], so that edit falls outside the brief's commit scope, and wire_handlers."
+  ]
  },
  {
   "todo_line": 4463,
@@ -450,11 +475,13 @@
   "domain": "internal/operations/registry",
   "exact_files": [
    "internal/operations/registry/registry.go",
-   "internal/server/handlers/operations_v2.go",
+   "internal/operations/registry/registry_test.go",
    "internal/server/handlers/interfaces.go",
+   "internal/server/handlers/operations_v2.go",
+   "internal/server/handlers/operations_v2_test.go",
    "internal/server/operations_v2_handlers.go",
-   "internal/server/server_extra_test.go",
-   "internal/server/handlers/operations_v2_test.go"
+   "internal/server/operations_v2_handlers_test.go",
+   "internal/server/server_extra_test.go"
   ],
   "verified_anchors": [
    {
@@ -523,10 +550,7 @@
     "asserts": "DELETE /api/v1/operations/v2/bad-id now returns 404, not 204"
    }
   ],
-  "acceptance": [
-   "`go test ./internal/operations/registry/... ./internal/server/... -run 'Cancel'` passes with the new 404 expectation.",
-   "`grep -rn 'handleCancelOperationV2' internal/server/` shows either zero hits (deleted) or a call site that is now actually wired into production routing (fixed, not merely left dead)."
-  ],
+  "acceptance": "`go test ./internal/operations/registry/... ./internal/server/... -run Cancel` passes with the new 404 expectation; `grep -rn 'handleCancelOperationV2' internal/server/` returns ZERO hits (the dead duplicate and its two test references at operations_v2_handlers_test.go:270/283 are deleted - patching it in place is not an accepted outcome, since it stays unreachable and will diverge again).",
   "edge_cases": [
    "A genuinely running op with a stub handle (claimed by dispatcher, not yet picked up by a worker) must still return nil, not ErrOpNotFound \u2014 this is branch (2), untouched by this change; add a regression test asserting this stays 204.",
    "The legacy DELETE /operations/:id route's fallback-to-force-update behavior must be unaffected: it already tolerates any Cancel error (including the new ErrOpNotFound) by falling through, so no change needed there, but add a comment noting why it is left alone."
@@ -534,7 +558,11 @@
   "anti_over_suppression": "N/A \u2014 this is an error-code fix, not a filter/guard.",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Check whether the frontend UI shows a 'cancelled' confirmation toast on the old 204 that would now need to become an error toast on 404 \u2014 web/src/services/api.ts:2119 is the fetch wrapper; find its caller for the actual UI behavior before considering this fully done."
+  "notes": "Check whether the frontend UI shows a 'cancelled' confirmation toast on the old 204 that would now need to become an error toast on 404 \u2014 web/src/services/api.ts:2119 is the fetch wrapper; find its caller for the actual UI behavior before considering this fully done.",
+  "review_notes": [
+   "[verify-7.json] Two test files the steps directly modify are missing from exact_files (registry.go, handlers/interfaces.go, handlers/operations_v2.go, handlers/operations_v2_test.go, operations_v2_handlers.go, server_extra_test.go). The Tests section's first bullet targets internal/operations/registry/registry_test",
+   "[verify-7.json] Acceptance box 2 cannot be satisfied by the branch step 4 recommends first. The box requires `grep -rn 'handleCancelOperationV2' internal/server/` to show 'either zero hits (deleted) or a call site that is now actually wired into production routing (fixed, not merely left dead)'. Step 4 offers only "
+  ]
  },
  {
   "todo_line": 4491,
@@ -1153,7 +1181,8 @@
   "verdict_evidence": "internal/server/batch_apply_op.go:69-71 confirms `Timeout: 4 * time.Hour, ResumePolicy: opsregistry.ResumeDrop` on metadata.batch-apply-cached today, and the item explicitly names this op as one of the three ('metadata.batch-apply-cached, reconcile.apply and the full-library sweeps') to convert first. A working template for exactly this conversion already exists in the codebase: internal/plugins/maintenance/chapters_backfill.go uses ResumePolicy=ResumeRestart + RunItemsOptions{ResumeFrom, CheckpointEvery, CheckpointStateFn} against the SAME registry.RunItems generic (internal/operations/registry/run_items.go) that batch_apply_op.go already calls without those three fields.",
   "domain": "internal/server",
   "exact_files": [
-   "internal/server/batch_apply_op.go"
+   "internal/server/batch_apply_op.go",
+   "internal/server/batch_apply_op_test.go"
   ],
   "verified_anchors": [
    {
@@ -1235,7 +1264,8 @@
   "review_notes": [
    "[ops-rollback.json] Both tasks convert production APPLY ops from ResumeDrop to ResumeRestart. ResumeRestart is resumed automatically and unattended at server startup - no operator action, no gate. That directly collides with the standing rule that a running scan clobbers applied metadata and applies must never run duri",
    "[ops-rollback.json] resumeRestart is fail-OPEN when the checkpoint is missing, unreadable, or schema_version=1: it logs and dispatches the op with the ORIGINAL params, i.e. ResumeFrom absent => 0 => the entire book list is re-applied from the start. For metadata.batch-apply-cached with WriteBack=true that re-writes tag",
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
+   "[verify-8.json] Both required tests are specified in internal/server/batch_apply_op_test.go, including the named anti-over-suppression test TestBatchApplyOp_Checkpoint_CarriesWriteBackFlag. That file does not exist at HEAD (`ls internal/server/batch_apply_op_test.go` \u2192 No such file or directory), so it is a NEW fil"
   ]
  },
  {
@@ -1247,7 +1277,9 @@
   "verdict_evidence": "internal/server/reconcile_ops.go:78-91 registers reconcile.apply; confirmed it exists and is one of the three ops the item names explicitly for first conversion. Same template applies as part 1 (metadata.batch-apply-cached): chapters_backfill.go's ResumeRestart + RunItemsOptions{ResumeFrom, CheckpointEvery, CheckpointStateFn} pattern, and opsregistry.Reporter.Checkpoint is available identically.",
   "domain": "internal/server",
   "exact_files": [
-   "internal/server/reconcile_ops.go"
+   "internal/reconcile/",
+   "internal/server/reconcile_ops.go",
+   "internal/server/reconcile_ops_test.go"
   ],
   "verified_anchors": [
    {
@@ -1259,6 +1291,21 @@
     "claim": "reconcile.apply is invoked with a LegacyOpID + Matches params shape today",
     "grep_cmd": "grep -n 'reconcileApplyOpParams' internal/server/reconcile.go internal/server/reconcile_ops.go",
     "expect": ">=2 hits"
+   },
+   {
+    "claim": "reconcile.apply is registered in reconcile_ops.go and is currently ResumeDrop",
+    "grep_cmd": "grep -n 'RegisterReconcileApplyOp\\|\"reconcile.apply\"\\|ResumePolicy' internal/server/reconcile_ops.go",
+    "expect": "ID \"reconcile.apply\" at L81, ResumePolicy: opsregistry.ResumeDrop at L90 \u2014 and a SECOND ResumeDrop at L50 belonging to reconcile.scan"
+   },
+   {
+    "claim": "reconcile_ops.go contains no per-item loop and no RunItems call \u2014 the work is delegated out of the package",
+    "grep_cmd": "grep -n 'RunItems' internal/server/reconcile_ops.go",
+    "expect": "0 hits; the Run body instead calls reconcile.ExecuteReconcile(ctx, store, p.LegacyOpID, p.Matches, log)"
+   },
+   {
+    "claim": "reconcile.apply moves files and writes the library, so any resume must be item-idempotent",
+    "grep_cmd": "grep -n 'CapFilesWrite\\|Description:' internal/server/reconcile_ops.go",
+    "expect": "Description 'Apply a set of file-to-book reconcile matches, moving files and updating the database.' with Capabilities including CapLibraryWrite and CapFilesWrite"
    }
   ],
   "reuse": [
@@ -1311,7 +1358,8 @@
   "review_notes": [
    "[ops-rollback.json] Both tasks convert production APPLY ops from ResumeDrop to ResumeRestart. ResumeRestart is resumed automatically and unattended at server startup - no operator action, no gate. That directly collides with the standing rule that a running scan clobbers applied metadata and applies must never run duri",
    "[ops-rollback.json] resumeRestart is fail-OPEN when the checkpoint is missing, unreadable, or schema_version=1: it logs and dispatches the op with the ORIGINAL params, i.e. ResumeFrom absent => 0 => the entire book list is re-applied from the start. For metadata.batch-apply-cached with WriteBack=true that re-writes tag",
-   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-"
+   "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
+   "[verify-8.json] Steps 1-2 hedge on whether reconcile.apply already uses RunItems and tell the worker to convert its 'Matches-processing loop' to opsregistry.RunItems if not. There is no such loop in this file: `grep -n 'RunItems\\|ResumePolicy' internal/server/reconcile_ops.go` returns only two ResumePolicy hits (L5"
   ]
  },
  {
@@ -1322,7 +1370,9 @@
   "verdict_evidence": "internal/operations/progress.go:104-114 confirms reporterLogger.IsCanceled() is not overridden and therefore delegates to the embedded logger.StandardLogger (via logger.New(\"operation\")), which unconditionally returns false \u2014 the file's own comment documents this exact gap and names all four call sites, which still exist (with drifted line numbers): internal/scanner/service.go:227, internal/organizer/service.go:968 and :1153, internal/reconcile/reconcile.go:622.",
   "domain": "internal/operations",
   "exact_files": [
-   "internal/operations/progress.go"
+   "internal/operations/progress.go",
+   "internal/operations/progress_test.go",
+   "internal/scanner/service_test.go"
   ],
   "verified_anchors": [
    {
@@ -1361,12 +1411,11 @@
    "internal/organizer/service.go:1153 and internal/reconcile/reconcile.go:622 are separate, single IsCanceled() guards \u2014 read each independently; they may have different exit-safety properties."
   ],
   "steps": [
-   "1. Read internal/scanner/service.go around line 227, internal/organizer/service.go around lines 968 and 1153, and internal/reconcile/reconcile.go around line 622 \u2014 for EACH, determine what state the function leaves behind when that branch is taken (in-progress work abandoned? DB rows left half-written? files left half-moved?) and note whether that is safe now vs. needs its own guard/cleanup first.",
-   "2. If any guard is found unsafe to enable as-is, scope a SEPARATE follow-up fix for that guard specifically rather than blocking this whole item \u2014 flip the ones that are safe, leave a TODO comment on the ones that are not, citing the specific unsafe state found.",
-   "3. In internal/operations/progress.go, add: `func (l *reporterLogger) IsCanceled() bool { if l.reporter == nil { return false }; return l.reporter.IsCanceled() }` immediately after the existing With method (around line 102).",
-   "4. Update the existing doc comment at lines 104-114 (currently explaining why IsCanceled deliberately does NOT forward) to instead explain that it NOW forwards, and reference this change's date/rationale, replacing the stale 'Tracked in todo.d/20260816-logger-iscanceled-forwarding.md' pointer if that fragment no longer exists.",
-   "5. Bump internal/operations/progress.go's version header.",
-   "6. Ship this behind careful monitoring of the first production scan/organize/reconcile run afterward \u2014 per the file's own stated concern, this activates 4 previously-dead branches simultaneously in code that runs at library scale."
+   "Read internal/scanner/service.go around L227, internal/organizer/service.go around L968 and L1153, and internal/reconcile/reconcile.go around L622. For EACH, determine what state the function leaves behind when that branch is taken (in-progress work abandoned? DB rows left half-written? files left half-moved?).",
+   "If ANY of the four is unsafe to enable as-is, STOP and report - do not land the override. Forwarding IsCanceled is all-or-nothing: the single reporterLogger method arms all four guards simultaneously and there is no per-guard opt-out, so a 'flip the safe ones' outcome does not exist. The follow-up fix for the unsafe guard must land FIRST, in its own PR, before this one.",
+   "Only if all four are safe: in internal/operations/progress.go, add `func (l *reporterLogger) IsCanceled() bool { if l.reporter == nil { return false }; return l.reporter.IsCanceled() }` immediately after the existing With method (progress.go:100).",
+   "Update the doc comment above it (currently explaining why IsCanceled deliberately does NOT forward) to state that it now forwards and why. The pointer it names, todo.d/20260816-logger-iscanceled-forwarding.md, no longer exists (`ls` -> No such file) - drop it rather than re-creating it.",
+   "Bump internal/operations/progress.go's version header."
   ],
   "tests": [
    {
@@ -1388,10 +1437,15 @@
    "A ProgressReporter whose IsCanceled() itself panics or is nil must not crash the caller \u2014 the nil-reporter guard already matches the existing UpdateProgress override's pattern (line 84-86); no reporter-panics-internally guard is needed beyond what ProgressReporter implementations already guarantee.",
    "The scanner's dual-channel check (ctx.Err() AND log.IsCanceled()) must remain BOTH checks after this change \u2014 do not simplify to just log.IsCanceled() now that it works, since ctx.Err() catches request-level cancellation that may arrive without ever going through the reporter."
   ],
-  "anti_over_suppression": "N/A \u2014 this restores a suppressed guard rather than adding a new filter.",
+  "anti_over_suppression": "TestScanDirectory_NotCancelled_ProcessesEveryFolder - with a reporter whose IsCanceled() returns false throughout, assert the scan visits and commits every seeded folder and takes the service.go:227 branch zero times, proving the newly-armed guard does not over-fire on a normal run.",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "review_critical=true and effort intentionally kept at M rather than S: the code diff is trivial, but the safety review of 4 previously-dead exit paths in organize/scan/reconcile is the real work and must not be skipped or rubber-stamped."
+  "notes": "review_critical=true and effort intentionally kept at M rather than S: the code diff is trivial, but the safety review of 4 previously-dead exit paths in organize/scan/reconcile is the real work and must not be skipped or rubber-stamped.",
+  "review_notes": [
+   "[verify-7.json] Step 2 describes a partial rollout that the change cannot express. The entire diff is one override on reporterLogger (internal/operations/progress.go), so forwarding IsCanceled switches on ALL FOUR dormant guards at once - internal/scanner/service.go:227, internal/organizer/service.go:968 and :1153,",
+   "[verify-7.json] anti_over_suppression is 'N/A - this restores a suppressed guard rather than adding a new filter', which is exactly backwards. Arming IsCanceled turns on a cancellation SKIP path in four library-scale loops; a spuriously-true IsCanceled silently aborts a scan/organize/reconcile mid-run and reports s",
+   "[verify-7.json] exact_files is internal/operations/progress.go alone. The Tests section names internal/operations/progress_test.go (does NOT exist at HEAD - `ls internal/operations/progress_test.go` -> No such file) and internal/scanner/service_test.go (exists), and step 2 requires leaving TODO comments in internal"
+  ]
  },
  {
   "todo_line": 4605,

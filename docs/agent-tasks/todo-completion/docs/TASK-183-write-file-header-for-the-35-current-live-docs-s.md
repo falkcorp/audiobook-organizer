@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-183-write-file-header-for-the-35-current-live-docs-s.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: c0b846c4-0b61-43c6-a9ec-f4b152682e31 -->
+<!-- guid: 24918e9d-736e-495c-8a63-9a1f58aafaf6 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-183 — Write file-header for the 35 current live docs still missing one (TODO.md L101)
@@ -99,7 +99,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (``find docs -maxdepth 4 -iname '*.md' -not -path '*/archive/*' | xargs grep -L '^<!-- file:' | wc -l` returns 0.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — ``find docs -maxdepth 4 -iname '*.md' -not -path '*/archive/*' | xargs grep -L '^<!-- file:' | wc -l` returns 0.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

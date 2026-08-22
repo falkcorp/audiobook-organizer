@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-154-implement-post-api-session-local-all-batch-local.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 90ac7898-23f2-4063-b3af-0731bc2a1812 -->
+<!-- guid: babf4b7d-d8d7-42c4-8d32-41481b4fd59b -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-154 — Implement POST /api/session/local-all (batch local-session sync, accept both body shapes) (TODO.md L4507)
@@ -109,7 +109,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (``go test ./internal/server/handlers/abs/... -run TestSessionLocalAll` passes for all four new tests.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `Neither new route ever returns a 4xx or 5xx for any request body shape, verified by the malformed-body test.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

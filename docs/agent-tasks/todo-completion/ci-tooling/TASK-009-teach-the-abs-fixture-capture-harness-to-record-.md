@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-009-teach-the-abs-fixture-capture-harness-to-record-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b49ef6d6-f483-4d5d-ad23-5aeae3e74359 -->
+<!-- guid: fc0ebe43-d639-4b3c-8f4d-370cfe63badd -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-009 — Teach the ABS fixture-capture harness to record request headers (TODO.md L2568)
@@ -98,7 +98,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`grep -c 'request_headers' testdata/abs-fixtures/*.json returns >0 after a re-capture run.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `grep -c 'request_headers' testdata/abs-fixtures/*.json returns >0 after a re-capture run.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

@@ -422,6 +422,7 @@
   "verdict_evidence": "Confirmed still true at HEAD: the row's Box (web/src/components/ChangeLog.tsx:139-166) has an onClick but no role, tabIndex, or aria-label: `grep -n 'onClick={() => {' web/src/components/ChangeLog.tsx` -> 1 hit ~L163, and `grep -n 'role=\"button\"' web/src/components/ChangeLog.tsx` -> 0 hits.",
   "domain": "web (frontend)",
   "exact_files": [
+   "web/src/components/ChangeLog.test.tsx",
    "web/src/components/ChangeLog.tsx"
   ],
   "verified_anchors": [
@@ -471,7 +472,10 @@
   "anti_over_suppression": "test: 'pressing Enter on the Revert button does not double-fire onCompareSnapshot'",
   "depends_on_lines": [],
   "gate": "npm --prefix web run lint && npm --prefix web test (web)",
-  "notes": "The item leaves 'restore a visible link/button' as an alternative; this brief picks the row-becomes-keyboard-accessible option since it needs no additional product decision and preserves current visual design. If the owner prefers a visible link/button instead, that changes step 2-3 into adding a small IconButton/Link inside the row (also fine, similar test shape)."
+  "notes": "The item leaves 'restore a visible link/button' as an alternative; this brief picks the row-becomes-keyboard-accessible option since it needs no additional product decision and preserves current visual design. If the owner prefers a visible link/button instead, that changes step 2-3 into adding a small IconButton/Link inside the row (also fine, similar test shape).",
+  "review_notes": [
+   "[verify-7.json] Tests section says 'Add a Vitest test in web/src/components/ChangeLog.test.tsx (create if absent)' but exact_files is only ['web/src/components/ChangeLog.tsx']. Verified the test file does not exist at HEAD: `ls web/src/components/ChangeLog.test.tsx` -> No such file. The worker creates a file outsid"
+  ]
  },
  {
   "todo_line": 5736,
@@ -481,6 +485,7 @@
   "verdict_evidence": "Confirmed at HEAD: `grep -n \"useState(true)\" web/src/components/TagComparison.tsx` -> 1 hit ~L75 with comment 'Always show table when tray is open'; setExpanded is only ever called with `true` (`grep -n 'setExpanded(' web/src/components/TagComparison.tsx` -> 2 hits, both `setExpanded(true)`), never false, so `<Collapse in={expanded}>` at L276 is always open. The e2e testid the item mentions is gone: `grep -rn \"tag-comparison-toggle\" web/` -> 0 hits, confirming no test depends on a toggle existing.",
   "domain": "web (frontend)",
   "exact_files": [
+   "web/src/components/TagComparison.test.tsx",
    "web/src/components/TagComparison.tsx"
   ],
   "verified_anchors": [
@@ -528,7 +533,10 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "npm --prefix web run lint && npm --prefix web test (web)",
-  "notes": "Low risk, self-contained single-file cleanup."
+  "notes": "Low risk, self-contained single-file cleanup.",
+  "review_notes": [
+   "[verify-7.json] Tests section: 'Update/add a Vitest test in web/src/components/TagComparison.test.tsx' and acceptance `npm --prefix web test -- TagComparison passes`, but exact_files is only ['web/src/components/TagComparison.tsx'] and `ls web/src/components/TagComparison*` returns only TagComparison.tsx \u2014 the test"
+  ]
  },
  {
   "todo_line": 5742,
@@ -570,11 +578,12 @@
    "Five e2e tests covering the old dialog were already deleted 2026-08-09 per the item; no test coverage will be lost by this removal."
   ],
   "steps": [
-   "1. In web/src/components/library/LibraryDialogs.tsx, delete the `<Dialog open={bulkFetchDialogOpen} ...>...</Dialog>` block (~L956-1000).",
-   "2. Remove `bulkFetchDialogOpen`, `handleCancelBulkFetch`, `bulkFetchProgress`, `handleBulkFetchMetadata` (and any bulkFetchInProgress prop feeding only this dialog) from the LibraryDialogsProps interface (~L174-178) and from the component's destructured props (~L320-324).",
-   "3. Remove the `getResultLabel` helper if it is used only by this dialog (`grep -n getResultLabel web/src/components/library/LibraryDialogs.tsx` to confirm sole usage before deleting).",
-   "4. In web/src/pages/Library.tsx, remove `bulkFetchDialogOpen`/`setBulkFetchDialogOpen` state (~L391), `bulkFetchProgress`/`setBulkFetchProgress` state (~L394), `handleCancelBulkFetch` (~L1468-1473), `bulkFetchCancelRef` if it is unused elsewhere, and the prop-passing lines to LibraryDialogs (~L2306-2311) \u2014 but KEEP `handleBulkFetchMetadata` (~L1445) since it is still called from the working 'Fetch Selected' button.",
-   "5. Grep for `bulkFetchInProgress` and `BulkActionProgress` type usage after the edit to confirm nothing else references the removed state; delete the BulkActionProgress import/type if it becomes unused."
+   "In web/src/components/library/LibraryDialogs.tsx, delete the `<Dialog open={bulkFetchDialogOpen} onClose={handleCancelBulkFetch}>...</Dialog>` block (L956-L1000).",
+   "Remove `bulkFetchDialogOpen`, `handleCancelBulkFetch`, `bulkFetchProgress`, `bulkFetchInProgress`, `handleBulkFetchMetadata` from the LibraryDialogsProps interface (L174-178) and from the destructured props (L320-324).",
+   "Do NOT delete getResultLabel: `grep -n 'getResultLabel' web/src/components/library/LibraryDialogs.tsx` shows it is imported from '../../pages/libraryTypes' (L51) and still used at L583 by a surviving dialog. Leave the import alone.",
+   "In web/src/pages/Library.tsx, delete the prop-passing lines L2306-2311, then delete every symbol that becomes unreferenced as a result: `bulkFetchDialogOpen`/`setBulkFetchDialogOpen` (L391), `bulkFetchInProgress` (L393), `bulkFetchProgress`/`setBulkFetchProgress` (L394), `bulkFetchCancelRef` (L343), `handleCancelBulkFetch` (L1468-1473) AND `handleBulkFetchMetadata` (L1445-1467). Verified at HEAD that handleBulkFetchMetadata's only remaining reference is the L2310 prop pass being deleted \u2014 the 'Fetch Selected' button wires to handleFetchReview (Library.tsx:2093), not to it. web/tsconfig.json enables noUnusedLocals, so anything left behind breaks `npm run build`.",
+   "Delete the BulkActionProgress import/type from Library.tsx if `grep -n 'BulkActionProgress' web/src/pages/Library.tsx` returns 0 remaining uses after step 4.",
+   "Run `npm --prefix web test -- Library` and check web/src/pages/Library.bulkFetch.test.tsx and web/src/pages/Library.fetchOpToast.test.tsx: both mention 'Fetch Selected'. If either asserts the removed dialog, report it rather than editing it \u2014 it is out of scope for this brief."
   ],
   "tests": [
    "Run `npm --prefix web run build` (tsc noUnusedLocals-style errors will surface any leftover references) and `npm --prefix web test -- Library` to confirm no existing test asserted the dialog's presence (if one does, it is itself dead and should be deleted alongside)."
@@ -592,7 +601,8 @@
   "gate": "npm --prefix web run lint && npm --prefix web test (web)",
   "notes": "Split from a design/product decision (none needed \u2014 the item states this cleanup is 'a separate change... deliberately not bundled with' the e2e repair, i.e. already cleared).",
   "review_notes": [
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
+   "[verify-7.json] Consequence of the above: following step 4 literally ('KEEP handleBulkFetchMetadata') leaves a 55-line unreferenced const in Library.tsx. web/tsconfig.json:27-28 sets `noUnusedLocals: true` / `noUnusedParameters: true`, so the brief's own acceptance `npm --prefix web run build` FAILS. Two reasonable"
   ]
  },
  {
@@ -615,6 +625,16 @@
     "claim": "10 startsWith() prefix catch-alls remain in the dispatcher",
     "grep_cmd": "grep -c '\\.startsWith(' web/tests/e2e/utils/test-helpers.ts",
     "expect": "10"
+   },
+   {
+    "claim": "the /audiobooks/batch shadowing hazard is already fixed and carries an explanatory comment",
+    "grep_cmd": "grep -n 'audiobooks/batch' web/tests/e2e/utils/test-helpers.ts",
+    "expect": "2 hits: L1623 comment, L1626 `if (pathname === '/api/v1/audiobooks/batch' && method === 'POST')`"
+   },
+   {
+    "claim": "the 10 sites are at the line numbers the Background lists",
+    "grep_cmd": "grep -n '\\.startsWith(' web/tests/e2e/utils/test-helpers.ts",
+    "expect": "L762, L1571, L1603, L1618, L1636, L1646, L1683, L1715, L1745, L1750"
    }
   ],
   "reuse": [],
@@ -644,7 +664,10 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "npm --prefix web run lint && npm --prefix web test (web)",
-  "notes": "This is a confirmatory audit \u2014 the two most likely-to-bite cases in the original report are already fixed; expect this to mostly find nothing further, but the task should still be done to close the item honestly rather than assume."
+  "notes": "This is a confirmatory audit \u2014 the two most likely-to-bite cases in the original report are already fixed; expect this to mostly find nothing further, but the task should still be done to close the item honestly rather than assume.",
+  "review_notes": [
+   "[verify-7.json] The first line of the 'Re-verify these anchors' block is a mangled, unrunnable shell command with unbalanced quotes: `grep -n 'startsWith' \\''(\\'\\''/api/v1/audiobooks/\\'\\'')' \\'\\''and .audiobooks/batch. below below above' web/tests/e2e/utils/test-helpers.ts || grep -n audiobooks/batch ...`. Pasted i"
+  ]
  },
  {
   "todo_line": 5904,
@@ -895,7 +918,9 @@
   "verdict_evidence": "Confirmed still missing at HEAD: `grep -rn 'Part of version group' web/src` -> 0 hits and `grep -rn '(Current)' web/src` -> 0 hits. BookDetailHeader.tsx's chip is still bare: `grep -n \"label=\\\"Version Group Linked\\\"\" web/src/components/bookdetail/BookDetailHeader.tsx` -> 1 hit ~L198, with no count. isCurrent is computed in BookDetailVersionGroup.tsx (`grep -n 'const isCurrent = version.id === book.id' web/src/components/bookdetail/BookDetailVersionGroup.tsx` -> 1 hit ~L299) but only drives conditional rendering, never a visible '(Current)' label.",
   "domain": "web (frontend)",
   "exact_files": [
+   "web/src/components/bookdetail/BookDetailHeader.test.tsx",
    "web/src/components/bookdetail/BookDetailHeader.tsx",
+   "web/src/components/bookdetail/BookDetailVersionGroup.test.tsx",
    "web/src/components/bookdetail/BookDetailVersionGroup.tsx"
   ],
   "verified_anchors": [
@@ -950,7 +975,10 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "npm --prefix web run lint && npm --prefix web test (web)",
-  "notes": "This is a straightforward restoration, not a product question \u2014 no owner decision blocks it, unlike the sibling L5972/L5904 items."
+  "notes": "This is a straightforward restoration, not a product question \u2014 no owner decision blocks it, unlike the sibling L5972/L5904 items.",
+  "review_notes": [
+   "[verify-7.json] Tests require Vitest tests for BOTH components and acceptance names `npm --prefix web test -- BookDetailHeader` and `-- BookDetailVersionGroup`, but exact_files is only the two .tsx components. `ls web/src/components/bookdetail/` at HEAD shows the only test file in that directory is BookDetailStatus"
+  ]
  },
  {
   "todo_line": 6258,
@@ -1060,7 +1088,9 @@
   "verdict_evidence": "No instrumentation exists today: `grep -rn 'sort_by' internal/server/handlers/audiobooks/handler.go` -> 1 hit ~L519 (parsing only, `httputil.ParseQueryString(c, \"sort_by\")`), with no accompanying slog call nearby; `grep -rn \"slog.*sort_by\\|sort_by.*slog\" internal/` -> 0 hits confirms no logging of the value exists anywhere.",
   "domain": "internal/server/handlers",
   "exact_files": [
-   "internal/server/handlers/audiobooks/handler.go"
+   "internal/metrics/metrics.go",
+   "internal/server/handlers/audiobooks/handler.go",
+   "internal/server/handlers/audiobooks/handler_test.go"
   ],
   "verified_anchors": [
    {
@@ -1082,7 +1112,7 @@
   "reuse": [],
   "polarity": "additive",
   "effort": "S",
-  "tier": "haiku",
+  "tier": "sonnet",
   "why_tier": "One log line at an existing, well-understood call site.",
   "review_critical": false,
   "goal": "Add a low-cardinality log/metric of sort_by values actually requested by clients, over a representative window, to replace guesswork with real usage data before deciding which of the nine indexed sort fields (option 2 in the item) to enable \u2014 per the item's cheapest-first option list.",
@@ -1090,8 +1120,10 @@
    "EnabledSortIndexes defaults to empty ([]string), matching option 1 (enable none for now) as the current behavior (`grep -n 'Empty (the default) reproduces' internal/config/config.go` confirms this comment exists ~L1022)."
   ],
   "steps": [
-   "1. In internal/server/handlers/audiobooks/handler.go near the SortBy parsing (~L519), add a low-cardinality counter/log, e.g. `slog.Debug(\"audiobooks: sort_by requested\", \"sort_by\", filter.SortBy)` \u2014 or, if the project has a metrics counter pattern already (check internal/metrics/ for an existing Prometheus counter helper), prefer incrementing a `sort_by_requested_total{field=...}` counter over a log line, since /metrics gaps are a known project issue (see project memory: Prometheus gap) and a log line risks being as unobserved as the GetAllSeriesBookCounts silent-zero case elsewhere in this scope.",
-   "2. If using a counter, register it near other request-scoped metrics in the same package; keep the label cardinality bounded to known sort field names (reject/bucket unknown values as \"other\")."
+   "Add a Prometheus counter (internal/metrics/ already exists \u2014 `ls internal/metrics` -> metrics.go, metrics_test.go \u2014 so use that package's existing registration pattern, NOT a slog line). Name it sort_by_requested_total with a single label `field`.",
+   "Bound the label cardinality: build the allowed set from the same list CanPushDownSort consults (`grep -n 'func CanPushDownSort' internal/database/memdb_sort_indexers.go` -> L336) plus the empty/default value, and bucket anything else as \"other\". Never pass a raw client string as a label value.",
+   "In internal/server/handlers/audiobooks/handler.go at the SortBy parse site (`grep -n 'ParseQueryString(c, \"sort_by\")' internal/server/handlers/audiobooks/handler.go` -> L519), increment the counter once per request, including when SortBy is empty (record it as the explicit default, not as a skipped increment).",
+   "Add the assertion to the existing internal/server/handlers/audiobooks/handler_test.go (it exists at HEAD): one request with sort_by=title and one with no sort_by both increment, and an unknown sort_by lands in the \"other\" bucket rather than creating a new label value."
   ],
   "tests": [
    "internal/server/handlers/audiobooks/handler_test.go: assert the instrumentation fires (metric increments, or a captured log record) once per request with the requested SortBy value, including for the default/empty case."
@@ -1103,10 +1135,14 @@
   "edge_cases": [
    "Empty/default sort_by (title, the always-streamed field) should still be counted, as a baseline to compare other fields against."
   ],
-  "anti_over_suppression": "N/A",
+  "anti_over_suppression": "TestSortByMetric_KnownFieldsAreNotBucketedAsOther - assert every field CanPushDownSort accepts (internal/database/memdb_sort_indexers.go:336) increments its OWN label value and none of them lands in the \"other\" bucket, so the cardinality guard cannot quietly absorb a valid sort field.",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "This is the item's own recommended cheapest-first option (#2, 'instrument first'); it does not itself decide which fields to enable \u2014 see part 2 for that separate design decision."
+  "notes": "This is the item's own recommended cheapest-first option (#2, 'instrument first'); it does not itself decide which fields to enable \u2014 see part 2 for that separate design decision.",
+  "review_notes": [
+   "[verify-7.json] Step 1 offers two mutually exclusive implementations in one sentence: 'add a low-cardinality counter/log, e.g. slog.Debug(...) \u2014 or, if the project has a metrics counter pattern already (check internal/metrics/ ...), prefer incrementing a sort_by_requested_total{field=...} counter'. internal/metrics",
+   "[verify-7.json] anti_over_suppression is declared N/A, but step 2 adds a filter: it tells the agent to 'reject/bucket unknown values as \"other\"' before the label is emitted. That is a classification guard on hostile client input, and an over-broad 'other' bucket silently swallows a legitimate sort field the moment "
+  ]
  },
  {
   "todo_line": 6701,
@@ -1265,6 +1301,7 @@
   "domain": "internal/operations/registry",
   "exact_files": [
    "internal/operations/registry/registry.go",
+   "internal/operations/registry/registry_test.go",
    "internal/operations/registry/types.go",
    "internal/scheduler/extra_ops.go",
    "internal/server/ai_ops.go",
@@ -1351,7 +1388,8 @@
    "[ops-rollback.json] TASK-107 adds a new rejection rule to ValidateOpDef, which is the server BOOT contract - a def it rejects makes the server refuse to start - and then explicitly authorises leaving non-compliant ops non-compliant: step 3 says to flag write-capable ops without dry_run support 'as a follow-up per-op ta",
    "[ops-rollback.json] The task title says 'declare AND enforce dry_run support at the registry', but every step only implements DECLARE. SupportsDryRun is a self-asserted bool with nothing tying it to the op actually honouring a dry_run/apply param; step 3 tells the agent to set it true on ops that 'already implement a d",
    "[simplicity-scope.json] The wave barrier is a hard global gate ('A wave MUST NOT start while any of: the previous wave has an unmerged PR ...') over a wave-1 population of 107 tasks, against a stated concurrency cap of 4 workers. That is ~27 strictly serial 4-wide rounds \u2014 every one of them including the slowest task in th",
-   "[simplicity-scope.json] Every brief points at a package-level protocol document that does not exist. 212 files in the package reference `docs/agent-tasks/ORCHESTRATION.md` (as `../ORCHESTRATION.md` / `../../ORCHESTRATION.md`), including the line in each brief '(Protocol also in `docs/agent-tasks/ORCHESTRATION.md` \u2014 the inl"
+   "[simplicity-scope.json] Every brief points at a package-level protocol document that does not exist. 212 files in the package reference `docs/agent-tasks/ORCHESTRATION.md` (as `../ORCHESTRATION.md` / `../../ORCHESTRATION.md`), including the line in each brief '(Protocol also in `docs/agent-tasks/ORCHESTRATION.md` \u2014 the inl",
+   "[verify-7.json] exact_files lists 17 files but omits internal/operations/registry/registry_test.go, which the Tests section requires ('internal/operations/registry/registry_test.go: TestValidateOpDef_RejectsWriteCapabilityWithoutDryRun'). Verified the file exists at HEAD (`ls internal/operations/registry/registry_t"
   ]
  },
  {

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/metadata/TASK-196-build-an-async-fanned-out-background-operation-f.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b4f753d1-af97-409d-b5a5-8a8263895acc -->
+<!-- guid: 14850689-5b92-44e2-b822-0fc16575b041 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-196 — Build an async, fanned-out background operation for metadata matching -- the bulk dialog is a human-driven one-book-at-a-time loop today (TODO.md L4081)
@@ -47,11 +47,11 @@ Build a new background operation (registered in the operations registry, alongsi
 
 ## Step-by-step
 
-1. In internal/server/metadata_ops.go, following the pattern of the plugin/maintenance ops already registered there (grep the file for an existing sdk.OperationDef-returning function as a template), define a new op (e.g. metadata.bulk-search-fetch) whose Params include a filter for which books to search (reuse whatever book-selection filter shape other bulk ops in this file already accept) and a dry_run/apply-style gate matching the report-then-confirm convention used elsewhere in this file if the op ends up writing anything (a pure SEARCH-and-cache op may not need an apply gate at all if it only populates a review queue rather than mutating book records directly -- confirm which by checking what BulkMetadataSearchDialog's apply flow actually persists today).
-2. Implement the op body using registry.RunItems over the filtered book set, calling mfs.searchMetadataForBook (or SearchMetadataForBookWithOptions) per item inside the RunItems fn closure -- reuse the existing per-source rate limiter and circuit breaker in the chain (BuildSourceChain), do not build a second rate-limiting layer that could conflict with it.
-3. Add explicit per-item jitter: before each item's search call, sleep a small randomized delay (e.g. 0-2s, tunable) so registry.RunItems' concurrent workers do not all fire their first request in the same instant -- this is the 'staggered start delays/jitter' the owner's correction specifically calls for, distinct from the existing per-source token-bucket limiter which paces steady-state throughput but does not prevent a burst on worker-pool startup.
-4. Store each book's search RESULTS somewhere an operator can review afterward (likely the same place/shape BulkMetadataSearchDialog already expects, so the interactive dialog and the new background op produce compatible data -- check MetadataCandidate's existing persistence, if any, or whether results need a new lightweight cache/table).
-5. Register the op with the operations registry (follow the exact registration call other ops in this file use) and confirm it appears in the ops UI/API the same way other maintenance/dedup ops do.
+1. In internal/server/metadata_ops.go, following the existing opsregistry.OperationDef registration at metadata_ops.go:547 as the template, define a new op metadata.bulk-search-fetch whose Params carry the book-selection filter and an Apply bool defaulting to FALSE (report-then-confirm, matching internal/plugins/maintenance/missing_file_repoint.go:52). Search-only runs must never mutate book records.
+2. Implement the op body with registry.RunItems (internal/operations/registry/run_items.go:143) over the filtered book set, calling the EXPORTED metafetch method SearchMetadataForBookWithOptions (internal/metafetch/service_search.go:230) per item inside the RunItems closure. Do NOT call searchMetadataForBook (service_search.go:243) - it is unexported and takes its own *rate.Limiter, which would create the second rate-limiting layer this step forbids. The per-source limiter and circuit breaker already live behind BuildSourceChain (service_search.go:91).
+3. Add explicit per-item jitter before each search call - a small randomized delay (0-2s, tunable via a Params field) - so RunItems' concurrent workers do not all fire their first request in the same instant. This is distinct from waitForLimiter (service_search.go:108), which paces steady state but does not prevent a worker-pool startup burst.
+4. Persist each book's search RESULTS in the existing metadata-candidate shape the interactive dialog already reads, so the background op and BulkMetadataSearchDialog.tsx produce compatible data. If that requires a new store method or table, STOP and report - a schema addition is out of scope for this brief.
+5. Register the op through the same reg.RegisterOp call other ops in internal/server/metadata_ops.go use, and assert registration in a test rather than by eyeballing the ops UI.
 
 Then, always:
 - Keep the change purely additive — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
@@ -82,9 +82,417 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] go test ./internal/server/... -run TestBulkSearchFetch -count=1 -v passes
-- [ ] the new op appears in the operations registry listing and can be started/monitored through the same UI/API surface as other maintenance/dedup ops
-- [ ] go build ./... && go vet ./... exit 0
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] -
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] T
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] B
+- [ ] u
+- [ ] l
+- [ ] k
+- [ ] S
+- [ ] e
+- [ ] a
+- [ ] r
+- [ ] c
+- [ ] h
+- [ ] F
+- [ ] e
+- [ ] t
+- [ ] c
+- [ ] h
+- [ ]  
+- [ ] -
+- [ ] c
+- [ ] o
+- [ ] u
+- [ ] n
+- [ ] t
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] -
+- [ ] v
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] ;
+- [ ]  
+- [ ] `
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] m
+- [ ] e
+- [ ] t
+- [ ] a
+- [ ] d
+- [ ] a
+- [ ] t
+- [ ] a
+- [ ] .
+- [ ] b
+- [ ] u
+- [ ] l
+- [ ] k
+- [ ] -
+- [ ] s
+- [ ] e
+- [ ] a
+- [ ] r
+- [ ] c
+- [ ] h
+- [ ] -
+- [ ] f
+- [ ] e
+- [ ] t
+- [ ] c
+- [ ] h
+- [ ] '
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] /
+- [ ] m
+- [ ] e
+- [ ] t
+- [ ] a
+- [ ] d
+- [ ] a
+- [ ] t
+- [ ] a
+- [ ] _
+- [ ] o
+- [ ] p
+- [ ] s
+- [ ] .
+- [ ] g
+- [ ] o
+- [ ] `
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ] ;
+- [ ]  
+- [ ] a
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] g
+- [ ] i
+- [ ] s
+- [ ] t
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] o
+- [ ] p
+- [ ]  
+- [ ] I
+- [ ] D
+- [ ]  
+- [ ] i
+- [ ] s
+- [ ]  
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] s
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] g
+- [ ] i
+- [ ] s
+- [ ] t
+- [ ] r
+- [ ] y
+- [ ]  
+- [ ] a
+- [ ] f
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ]  
+- [ ] w
+- [ ] i
+- [ ] r
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ]  
+- [ ] (
+- [ ] m
+- [ ] i
+- [ ] r
+- [ ] r
+- [ ] o
+- [ ] r
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] e
+- [ ] x
+- [ ] i
+- [ ] s
+- [ ] t
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] g
+- [ ] i
+- [ ] s
+- [ ] t
+- [ ] r
+- [ ] y
+- [ ] _
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] .
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] t
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] `
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] A
+- [ ] p
+- [ ] p
+- [ ] l
+- [ ] y
+- [ ]  
+- [ ] b
+- [ ] o
+- [ ] o
+- [ ] l
+- [ ] '
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] /
+- [ ] m
+- [ ] e
+- [ ] t
+- [ ] a
+- [ ] d
+- [ ] a
+- [ ] t
+- [ ] a
+- [ ] _
+- [ ] o
+- [ ] p
+- [ ] s
+- [ ] .
+- [ ] g
+- [ ] o
+- [ ] `
+- [ ]  
+- [ ] s
+- [ ] h
+- [ ] o
+- [ ] w
+- [ ] s
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] a
+- [ ] p
+- [ ] p
+- [ ] l
+- [ ] y
+- [ ]  
+- [ ] g
+- [ ] a
+- [ ] t
+- [ ] e
+- [ ]  
+- [ ] d
+- [ ] e
+- [ ] f
+- [ ] a
+- [ ] u
+- [ ] l
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] f
+- [ ] a
+- [ ] l
+- [ ] s
+- [ ] e
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] b
+- [ ] u
+- [ ] i
+- [ ] l
+- [ ] d
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] &
+- [ ] &
+- [ ]  
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] v
+- [ ] e
+- [ ] t
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] e
+- [ ] x
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] 0
+- [ ] .
 - [ ] Anti-over-suppression test: `N/A -- this is a new capability, not a filter/guard/skip` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/metafetch/... ./internal/server/... -count=1 && npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.
@@ -107,7 +515,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/server/... -run TestBulkSearchFetch -count=1 -v passes`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run sed -n '91,102p' internal/metafetch/service_search.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

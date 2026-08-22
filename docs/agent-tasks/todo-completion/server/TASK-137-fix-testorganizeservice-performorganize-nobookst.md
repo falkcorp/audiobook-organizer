@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-137-fix-testorganizeservice-performorganize-nobookst.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 3384ccc6-0a32-47db-bf7e-cf38c1dd2800 -->
+<!-- guid: b682d8bc-9b6c-4932-84d8-15ea8c314dc4 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-137 — Fix TestOrganizeService_PerformOrganize_NoBooksToOrganize to mock the method PerformOrganize actually calls (TODO.md L4732)
 
-**Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · server subagent · **Why:** Swap one mock field name for the correct one and add a real assertion; mechanical once the right field is identified (already identified above). · **Depends on:** none · **Wave:** 1
+**Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · server subagent · **Why:** Swap one mock field name for the correct one and add a real assertion; mechanical once the right field is identified (already identified above). · **Depends on:** none · **Wave:** 1
 
 Source: `TODO.md` line 4732 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "⚠ `internal/server/organize_service_test.go:34` — " TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-09.json`.
 
@@ -47,9 +47,12 @@ Fix TestOrganizeService_PerformOrganize_NoBooksToOrganize to mock GetAllBooksCor
 ## Step-by-step
 
 1. Open internal/server/organize_service_test.go.
-2. In TestOrganizeService_PerformOrganize_NoBooksToOrganize (~L33-48), replace `GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) { return []database.Book{}, nil }` with `GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) { return []database.BookCore{}, nil }` (matching MockStore's actual GetAllBooksCoreFunc signature — verify the exact param/return types via `grep -n "GetAllBooksCoreFunc " internal/database/mock_store.go` before writing this).
-3. Add a second test, TestOrganizeService_PerformOrganize_WithBooks, that sets GetAllBooksCoreFunc to return a non-empty []database.BookCore slice (1-2 books with a FilePath needing organization) plus whatever other MockStore Funcs PerformOrganize's happy path touches (check organizer/service.go's other orgSvc.db.* calls in the non-BookIDs branch — e.g. UpdateBook, snapshot/backup calls — and stub each with a Func that records it was called), then assert PerformOrganize returns nil error AND that the recorded calls happened — this is the anti-over-suppression twin so the suite cannot silently regress back to a vacuous 'zero books, err==nil' pass.
-4. Bump the file's version header and last-edited date.
+2. In TestOrganizeService_PerformOrganize_NoBooksToOrganize (L33-49), replace the `GetAllBooksFunc: func(limit, offset int) ([]database.Book, error)` stub at L35 with `GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) { return []database.BookCore{}, nil }` — the exact field and signature are at internal/database/mock_store.go:44. PerformOrganize pages through GetAllBooksCore (internal/organizer/service.go:265 and :312), never GetAllBooks, so the current stub is inert and the test passes vacuously.
+3. Add TestOrganizeService_PerformOrganize_WithBooks in the same file. FIRST pin the filesystem: `origCfg := config.AppConfig; config.AppConfig.RootDir = t.TempDir(); t.Cleanup(func() { config.AppConfig = origCfg })` — PerformOrganize reaches orgSvc.organizeBooks (internal/organizer/service.go:335) and does real file I/O under RootDir, so an unsandboxed run writes outside the test.
+4. Populate GetAllBooksCoreFunc with 1-2 BookCore rows whose FilePath points at files created under that same t.TempDir(), and stub every other MockStore Func PerformOrganize's non-BookIDs branch reaches, recording that each was called.
+5. Assert PerformOrganize returns nil AND that the recorded calls fired — this is the anti-over-suppression twin that stops the suite regressing to a vacuous 'zero books, err==nil' pass.
+6. Bump the file header (version + last-edited: 2026-08-21) on internal/server/organize_service_test.go.
+7. Add changelog fragment changelog.d/20260821_server_137.md (no file header).
 
 Then, always:
 - Keep the change purely transform — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
@@ -59,7 +62,8 @@ Then, always:
 
 ### Edge-case semantics (conservative defaults — treat unknown as unknown, never as disqualifying)
 
-- PerformOrganize's paging loop (service.go ~L257-278) breaks when `len(page) < fetchPageSize` (1000) — a 1-2 book fake page satisfies this on the first iteration, so the new WithBooks test does not need to simulate pagination across multiple pages.
+- PerformOrganize's paging loop breaks when len(page) < fetchPageSize (1000), so a 1-2 book fake page terminates on the first iteration — no multi-page simulation needed.
+- config.AppConfig is process-global and shared across the whole internal/server test binary: the WithBooks test MUST snapshot and restore it, or it leaks a RootDir into every sibling test that runs after it.
 
 ## Tests
 

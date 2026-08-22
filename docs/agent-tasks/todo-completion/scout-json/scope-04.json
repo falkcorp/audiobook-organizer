@@ -156,10 +156,7 @@
    "web/src/pages/BookDetail.test.tsx (or nearest existing test file per component) \u2014 add a case that mocks the API call to reject with an ApiAuthRedirectError instance and asserts the session-expired message is shown, not the generic failure message.",
    "Happy-path anti-over-suppression: existing tests asserting the ORIGINAL generic failure message on a non-auth error (e.g. a 500) must still pass \u2014 do not let the new branch swallow real failures."
   ],
-  "acceptance": [
-   "npm --prefix web run lint && npm --prefix web test passes.",
-   "grep -c 'isAuthRedirectError' across exact_files increases from 1 to 17 call-site checks performed (not all 17 necessarily need a code change \u2014 some may already be fine)."
-  ],
+  "acceptance": "Produce a written per-function table in the final report covering all 17 names (quarantineBook ... revokeAPIKey), each marked CHANGED or OK-AS-IS with its file:line; every CHANGED site must show an isAuthRedirectError branch (grep -n 'isAuthRedirectError' <file>); grep -rl 'isAuthRedirectError' web/src --include='*.ts' --include='*.tsx' | grep -v test | grep -v apiFetch.ts lists every CHANGED file (only web/src/components/review/lanes/useMetadataLane.ts at HEAD); npm --prefix web run lint && npm --prefix web test exits 0.",
   "edge_cases": [
    "A caller with no user-visible error surface at all (e.g. a fire-and-forget background save) should get a console.warn distinguishing session-expiry from a genuine save failure, not silently do nothing differently.",
    "mergeDedupCandidate/dismissDedupCandidate are on the dedup-apply path \u2014 a session-expiry there must not be mistaken for 'merge failed, data unchanged' when in fact the request never reached the server in a way the UI can distinguish without this fix."
@@ -171,7 +168,8 @@
   "review_notes": [
    "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
    "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
-   "[simplicity-scope.json] Over-scoped, and it is the hub that serializes the back half of the web workstream. TASK-165 lists 18 files ('Review the 17 apiFetch-callers' catch handlers for session-expiry messaging') and sits at web wave 4, where it collides with Library.tsx, BookDetail.tsx and DedupAcousticTab.tsx and therefor"
+   "[simplicity-scope.json] Over-scoped, and it is the hub that serializes the back half of the web workstream. TASK-165 lists 18 files ('Review the 17 apiFetch-callers' catch handlers for session-expiry messaging') and sits at web wave 4, where it collides with Library.tsx, BookDetail.tsx and DedupAcousticTab.tsx and therefor",
+   "[verify-8.json] Acceptance box 2 is \"grep -c 'isAuthRedirectError' across exact_files increases from 1 to 17 call-site checks performed (not all 17 necessarily need a code change \u2014 some may already be fine).\" A grep count cannot measure 'checks performed', and the parenthetical concedes the count will NOT reach 17."
   ]
  },
  {
@@ -239,7 +237,8 @@
   "verdict_evidence": "scripts/abs_capture_fixtures.py only preserves RESPONSE headers today: 'KEPT_HEADERS' filter is applied to `resp.headers` at line 89-90 (`k.lower(): v for k, v in resp.headers.items() if k.lower() in KEPT_HEADERS`); no code path reads or stores `req.headers` / the outgoing request's headers anywhere in the 265-line file.",
   "domain": "ci/scripts",
   "exact_files": [
-   "scripts/abs_capture_fixtures.py"
+   "scripts/abs_capture_fixtures.py",
+   "testdata/abs-fixtures/"
   ],
   "verified_anchors": [
    {
@@ -279,7 +278,10 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "n/a (docs)",
-  "notes": "This unblocks part 2 (deriving the UA->deviceType mapping) but is independently useful as harness hygiene even if part 2 never happens."
+  "notes": "This unblocks part 2 (deriving the UA->deviceType mapping) but is independently useful as harness hygiene even if part 2 never happens.",
+  "review_notes": [
+   "[verify-10.json] exact_files is ['scripts/abs_capture_fixtures.py'] alone, but step 5 re-runs the harness ('Re-run the harness against the real ABS docker-compose instance ... to confirm at least one regenerated fixture now has a non-empty request_headers.user-agent') and acceptance #1 greps `testdata/abs-fixtures/*"
+  ]
  },
  {
   "todo_line": 2568,
@@ -744,7 +746,7 @@
   ],
   "polarity": "additive",
   "effort": "S",
-  "tier": "haiku",
+  "tier": "sonnet",
   "why_tier": "Mechanical, 3 files, same fix pattern each time \u2014 add a minimal top-level permissions block scoped to what the workflow's steps actually need.",
   "review_critical": false,
   "goal": "For each of the 3 workflow files, read what GITHUB_TOKEN-consuming actions the workflow's jobs actually use (checkout, gh CLI calls, PR/issue comments, etc.), and add a top-level `permissions:` block granting only those scopes (e.g. `contents: read`, `issues: write`, `pull-requests: write` as actually needed) instead of the implicit default (often broader than necessary).",
@@ -770,7 +772,10 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "n/a (docs)",
-  "notes": "Cheapest, most mechanical part of the whole CodeQL backlog item \u2014 good haiku-tier task."
+  "notes": "Cheapest, most mechanical part of the whole CodeQL backlog item \u2014 good haiku-tier task.",
+  "review_notes": [
+   "[verify-10.json] Rated Haiku-class as 'mechanical, 3 files, same fix pattern' but the actual decision requires reading a different repository's reusable workflows and reasoning about GitHub's caller/callee permission ceiling. The brief's own edge case ('gh pr comment ... needs pull-requests: write, not just issues: "
+  ]
  },
  {
   "todo_line": 2595,
@@ -896,9 +901,11 @@
   "verdict_evidence": "Author is rendered as plain text today: web/src/components/bookdetail/BookDetailInfoTab.tsx builds `authorVal = book.authors.map(a => a.name).join(' & ')` (or book.author_name fallback) and renders it via `<Typography variant=\\\"body1\\\">{item.value}</Typography>` with no <a>/Link. The backend already supports the target: internal/server/handlers/audiobooks/handler.go:345 `authorID := httputil.ParseQueryIntPtr(c, \\\"author_id\\\")`. Neither web/src/pages/Library.tsx nor web/src/hooks/useLibraryQuery.ts currently read an author_id URL param at all (grep for it returns 0 hits in both files), so this needs new frontend wiring, not just a link.",
   "domain": "web",
   "exact_files": [
+   "web/src/components/bookdetail/BookDetailInfoTab.test.tsx",
    "web/src/components/bookdetail/BookDetailInfoTab.tsx",
-   "web/src/pages/Library.tsx",
-   "web/src/hooks/useLibraryQuery.ts"
+   "web/src/hooks/useLibraryQuery.test.ts",
+   "web/src/hooks/useLibraryQuery.ts",
+   "web/src/pages/Library.tsx"
   ],
   "verified_anchors": [
    {
@@ -947,10 +954,7 @@
    "web/src/hooks/useLibraryQuery.test.ts: assert a URL with ?author_id=42 results in the API call including author_id=42.",
    "Playwright E2E (test-e2e or webapp-testing skill): click an author link on a book detail page, land on Library, assert only that author's books are shown."
   ],
-  "acceptance": [
-   "npm --prefix web run lint && npm --prefix web test passes.",
-   "A book fixture with 2+ authors renders 2+ separate <a> elements, not one joined string."
-  ],
+  "acceptance": "grep -n 'author_id' web/src/hooks/useLibraryQuery.ts returns >=1 hit (0 at HEAD); grep -n 'author_id' web/src/components/bookdetail/BookDetailInfoTab.tsx returns >=1 hit (0 at HEAD); a 2-author fixture in web/src/components/bookdetail/BookDetailInfoTab.test.tsx renders 2 separate <a href> elements; npm --prefix web test -- BookDetailInfoTab and npm --prefix web test -- useLibraryQuery both pass; npm --prefix web run lint passes.",
   "edge_cases": [
    "A book with author_name set but no authors[] array (legacy data) must still render something sensible \u2014 either a plain-text fallback with no link, or a link using author_name as a text-match filter field instead of author_id.",
    "Empty/unknown author (no authors[], no author_name) must render nothing linkable, not a link to author_id=undefined."
@@ -961,7 +965,9 @@
   "notes": "Prefer real <a href> per the item's own notes (middle-clickable, shareable). Pairs naturally with todo_line 3161 (series link) since both need the same new URL-param plumbing in useLibraryQuery.ts \u2014 consider doing them in the same PR to avoid touching that hook twice.",
   "review_notes": [
    "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
+   "[verify-8.json] Idempotency check is a green-gate assertion, not a check for this task's artifact: 'If the first acceptance check below already passes at HEAD (`npm --prefix web run lint && npm --prefix web test passes.`), this task is already applied.' Both pass on main regardless of whether author links exist, so",
+   "[verify-8.json] exact_files is ['web/src/components/bookdetail/BookDetailInfoTab.tsx','web/src/hooks/useLibraryQuery.ts','web/src/pages/Library.tsx'] but both required test files are outside it: web/src/components/bookdetail/BookDetailInfoTab.test.tsx does NOT exist (new file) and web/src/hooks/useLibraryQuery.test"
   ]
  },
  {
@@ -1014,9 +1020,7 @@
    "web/src/components/bookdetail/BookDetailInfoTab.test.tsx: assert the Series field renders as an anchor with the correct href.",
    "web/src/hooks/useLibraryQuery.test.ts: assert ?series_id=7 narrows the API call to series_id=7."
   ],
-  "acceptance": [
-   "npm --prefix web run lint && npm --prefix web test passes."
-  ],
+  "acceptance": "grep -n 'series_id' web/src/hooks/useLibraryQuery.ts returns >=1 hit (0 at HEAD); grep -n 'series_id' web/src/components/bookdetail/BookDetailInfoTab.tsx returns >=1 hit (0 at HEAD); npm --prefix web test -- BookDetailInfoTab and npm --prefix web test -- useLibraryQuery pass; npm --prefix web run lint passes.",
   "edge_cases": [
    "A standalone book with no series (series_name empty) must render nothing linkable.",
    "series_id present but series_name empty (data inconsistency) should still link correctly using the id, not silently fail."
@@ -1029,7 +1033,8 @@
   "notes": "Do in the same PR as todo_line 3156 if practical \u2014 both need the identical new author_id/series_id URL-param plumbing added to useLibraryQuery.ts, so splitting them risks touching the same hook twice with overlapping diffs.",
   "review_notes": [
    "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
+   "[verify-8.json] Same inverted idempotency as TASK-166: 'If the first acceptance check below already passes at HEAD (`npm --prefix web run lint && npm --prefix web test passes.`), this task is already applied.' Green on main either way; the task's own artifact is never checked. Verified absent: grep -c 'series_id' w"
   ]
  },
  {
@@ -1040,7 +1045,9 @@
   "verdict_evidence": "All four are confirmed real, working filter fields in the field-filter matcher: internal/audiobooks/service_filtering.go has case statements for \\\"narrator\\\" (L440), \\\"genre\\\" (L446), \\\"publisher\\\" (L450), and \\\"year\\\" (L538, which combines print+release year), and all four names are present in allFilterFieldNames (L647-655) which is pinned to the matcher by TestFilterFieldNames_MatchTheMatcher \u2014 so, unlike version_group_id before its recent fix, none of these four is a silently-ignored filter.",
   "domain": "web",
   "exact_files": [
+   "web/src/components/bookdetail/BookDetailInfoTab.test.tsx",
    "web/src/components/bookdetail/BookDetailInfoTab.tsx",
+   "web/src/hooks/useLibraryFilters.ts",
    "web/src/pages/Library.tsx"
   ],
   "verified_anchors": [
@@ -1053,6 +1060,26 @@
     "claim": "all four names are in the canonical, matcher-pinned filter-field list",
     "grep_cmd": "sed -n '647,656p' internal/audiobooks/service_filtering.go",
     "expect": "allFilterFieldNames includes 'narrator', 'genre', 'publisher', 'year'"
+   },
+   {
+    "claim": "all four fields are real backend filter fields",
+    "grep_cmd": "grep -n 'case \"narrator\"\\|case \"genre\"\\|case \"publisher\"\\|case \"year\"' internal/audiobooks/service_filtering.go",
+    "expect": "L440, L446, L450, L538"
+   },
+   {
+    "claim": "the frontend never reads an incoming filters= URL param",
+    "grep_cmd": "grep -rn \"searchParams.get('filters')\" web/src",
+    "expect": "0 hits"
+   },
+   {
+    "claim": "filters= is an OUTGOING API param only",
+    "grep_cmd": "grep -n 'fieldFilters' web/src/hooks/useLibraryQuery.ts",
+    "expect": "L263: filters: fieldFilters.length > 0 ? JSON.stringify(fieldFilters) : undefined"
+   },
+   {
+    "claim": "the params the Library page DOES read from the URL",
+    "grep_cmd": "grep -n 'searchParams.get' web/src/hooks/useLibraryFilters.ts",
+    "expect": "author/series/genre/language/state/... at L56-69 and L155-167 \u2014 no 'filters'"
    }
   ],
   "reuse": [
@@ -1067,10 +1094,11 @@
   "tier": "sonnet",
   "why_tier": "Unlike author_id/series_id (dedicated int params needing new plumbing), these four go through the EXISTING filters=JSON field-filter mechanism (buildFieldFilters already handles author/series/genre/language as text filters) \u2014 narrower, more reuse-driven change.",
   "review_critical": false,
-  "goal": "In BookDetailInfoTab.tsx, turn Narrator, Publisher, Genre, and Release Year into real <a href> links targeting `/library?filters=[{\\\"field\\\":\\\"narrator\\\",\\\"value\\\":\\\"<name>\\\",\\\"negated\\\":false}]` (URL-encoded JSON, same shape buildFieldFilters in Library.tsx already produces for the genre/language filters that exist today), one link per narrator if multiple (book.narrators[] array, same multi-value pattern as authors[]). Release Year should filter on the 'year' field using book.audiobook_release_year (the field that most directly means 'released in Y').",
+  "goal": "First add incoming ?filters= URL-param parsing to the Library page (it does not exist: zero hits for searchParams.get('filters') anywhere in web/src), then turn Narrator, Publisher, Genre and Release Year in BookDetailInfoTab.tsx into real <a href> links carrying that param. Narrator gets one link per entry in book.narrators[]; Release Year filters on the 'year' field using book.audiobook_release_year. If the owner prefers not to add filters= URL parsing, use the individual params useLibraryFilters ALREADY reads (?genre=, ?language=) for those two fields and file narrator/publisher separately \u2014 do not ship links that resolve to an ignored param.",
   "background": [
-   "genre and language already have an existing UI-driven filters= path via Library.tsx's buildFieldFilters (filters.genre, filters.language) \u2014 this task reuses that exact mechanism/shape rather than inventing a new URL scheme.",
-   "narrator and publisher are new to the UI's filter state (buildFieldFilters currently only builds author/series/genre/language) but the backend field-filter matcher already supports them, so no backend work is needed."
+   "internal/audiobooks/service_filtering.go implements all four fields as filter cases: narrator L440, genre L446, publisher L450, year L538, and all four appear in allFilterFieldNames (L647-656). The BACKEND is ready.",
+   "THE BLOCKER: the frontend never reads a filters= URL param. useLibraryFilters.ts seeds state from individual params only (L56-69 and L155-167: author, series, genre, language, state, has_file_errors, fingerprint_status, coverage_percent_min/max, missing_covers, in_import_path, no_isbn, duplicates_flagged). buildFieldFilters (Library.tsx:804) converts that state INTO an outgoing API param at useLibraryQuery.ts:263. There is no inbound path.",
+   "genre and language are reachable today via ?genre= / ?language=; narrator, publisher and year have no URL param at all."
   ],
   "steps": [
    "1. In BookDetailInfoTab.tsx, for Narrator: build one <Link> per entry in book.narrators[] (mirroring the multi-author pattern from todo_line 3156), hrefing to a URL-encoded `filters=[{\\\"field\\\":\\\"narrator\\\",\\\"value\\\":\\\"<name>\\\",\\\"negated\\\":false}]`.",
@@ -1097,7 +1125,8 @@
   "notes": "The item's own caution \u2014 'check each has a real filter behind it before making it a link' \u2014 is satisfied by the verified_anchors above: all four are real, unlike version_group_id was before its recent fix (see todo_line 3168/3356). library_state and tags were named by the item as 'good candidates' with existing filter support but are not book-detail-page fields in scope here.",
   "review_notes": [
    "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
+   "[verify-8.json] The whole feature is built on a URL parameter the app never reads. The Goal targets `/library?filters=[{\"field\":\"narrator\",...}]` and the Background asserts 'genre and language already have an existing UI-driven filters= path via Library.tsx's buildFieldFilters (filters.genre, filters.language)'. Th"
   ]
  },
  {
@@ -1108,7 +1137,9 @@
   "verdict_evidence": "The item's own blocking condition ('do not link until the filter works') is now satisfied: commit b0ebccb0 'feat(audiobooks): promote version_group_id to a filter field' added version_group_id to allFilterFieldNames (internal/audiobooks/service_filtering.go:654) and a matching case in bookFieldValue (L529 'case \\\"version_group_id\\\": bookValue = derefStr(book.VersionGroupID)'), verified merged to HEAD (git merge-base --is-ancestor b0ebccb0 8f6d0d99 succeeds) and covered by TestVersionGroupIDFilter_MatchesMembersOnly, which pins member/other/ungrouped semantics including 'a nil VersionGroupID must not match any group filter'.",
   "domain": "web",
   "exact_files": [
+   "web/src/components/bookdetail/BookDetailVersionGroup.test.tsx",
    "web/src/components/bookdetail/BookDetailVersionGroup.tsx",
+   "web/src/hooks/useLibraryFilters.ts",
    "web/src/pages/Library.tsx"
   ],
   "verified_anchors": [
@@ -1170,7 +1201,8 @@
   "notes": "This item's own blocking condition is resolved \u2014 cross-reference todo_line 3356 in this same scope, which is separately marked stale_done for the exact fix that unblocks this one. Downgrade any earlier assumption that this stays 'parked'.",
   "review_notes": [
    "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
+   "[verify-8.json] Same dead-parameter defect as TASK-168, which this brief explicitly inherits ('using the same filters=JSON mechanism as the narrator/publisher/genre links in todo_line 3164'). `/library?filters=[{\"field\":\"version_group_id\",...}]` resolves to nothing: `grep -rn \"searchParams.get('filters')\" web/src` "
   ]
  },
  {
@@ -1870,8 +1902,10 @@
   "verdict_evidence": "The gauge (internal/metrics/metrics.go:45-48, Help: 'Current total number of books in library') is fed exclusively by CountPrimaryBooks(): internal/server/server_lifecycle.go:499 `if bc, err := s.Ops().CountPrimaryBooks(); err == nil { bookCount = bc }` then :508 `metrics.SetBooks(bookCount)` \u2014 confirmed still true at HEAD. A true-total counterpart, CountAllBooks(), already exists on the same store interface (internal/database/pebble_store.go:3028) and is simply not the one wired to this metric.",
   "domain": "internal/server",
   "exact_files": [
+   "internal/metrics/metrics.go",
+   "internal/metrics/metrics_test.go",
    "internal/server/server_lifecycle.go",
-   "internal/metrics/metrics.go"
+   "internal/server/server_ops_store.go"
   ],
   "verified_anchors": [
    {
@@ -1888,6 +1922,21 @@
     "claim": "the gauge's Help text claims it is the true total",
     "grep_cmd": "sed -n '45,49p' internal/metrics/metrics.go",
     "expect": "Help: 'Current total number of books in library'"
+   },
+   {
+    "claim": "the metric is fed by CountPrimaryBooks, not a true total",
+    "grep_cmd": "grep -n 'CountPrimaryBooks()\\|metrics.SetBooks(' internal/server/server_lifecycle.go",
+    "expect": "2 hits: L499 `if bc, err := s.Ops().CountPrimaryBooks(); err == nil {` and L508 `metrics.SetBooks(bookCount)`"
+   },
+   {
+    "claim": "CountAllBooks exists on PebbleStore but is NOT on the ServerOpsStore interface s.Ops() returns",
+    "grep_cmd": "grep -n 'CountAllBooks' internal/database/pebble_store.go internal/server/server_ops_store.go",
+    "expect": "hit at pebble_store.go:3028; ZERO hits in server_ops_store.go"
+   },
+   {
+    "claim": "booksGauge's Help text falsely claims a true total",
+    "grep_cmd": "grep -n 'Name: *\"books_total\"\\|Current total number of books in library' internal/metrics/metrics.go",
+    "expect": "2 hits: L47 `Name: \"books_total\"` and L48 `Help: \"Current total number of books in library\"`"
    }
   ],
   "reuse": [
@@ -1907,10 +1956,13 @@
    "Live production value: 40,841 (primary count) against 67,824 live books in the store \u2014 under-reporting the library by ~40%. Any dashboard built on the current metric is currently wrong about library size."
   ],
   "steps": [
-   "1. In internal/metrics/metrics.go, add a second gauge (e.g. `booksTotalAllGauge`) with Name: 'books_total_all' (or the owner's preferred final name) and Help: 'Current total number of books in library, all versions' \u2014 following the exact same NewGauge/MustRegister/setter pattern as booksGauge.",
-   "2. In internal/server/server_lifecycle.go's metrics-gathering loop (~line 495-509), add a second call: `if bc, err := s.Ops().CountAllBooks(); err == nil { metrics.SetBooksTotalAll(bc) }` alongside the existing CountPrimaryBooks call.",
-   "3. Update booksGauge's Help text (internal/metrics/metrics.go:48) to explicitly say 'primary-version books' rather than the current ambiguous 'total number of books', since it will continue to report the primary-only count.",
-   "4. Add a CHANGELOG fragment noting the metric's Help text was corrected and a new true-total metric was added, since any existing dashboard reading the OLD Help text's claim was wrong and should be flagged."
+   "In internal/server/server_ops_store.go, add `CountAllBooks() (int, error)` to the `serverStatsReader` sub-interface (declared at internal/server/server_ops_store.go:128, the one that already declares `CountPrimaryBooks() (int, error)` at L129), immediately after that line \u2014 verify placement with `grep -n 'CountPrimaryBooks' internal/server/server_ops_store.go`. PebbleStore already satisfies it (internal/database/pebble_store.go:3028) so `var _ ServerOpsStore = (*database.PebbleStore)(nil)` at server_ops_store.go:262 keeps compiling; both MockStores already implement CountAllBooks (internal/database/mock_store.go:957, internal/database/mocks/mock_store.go).",
+   "In internal/metrics/metrics.go, add a second gauge `booksTotalAllGauge` with Name 'books_total_all' and Help 'Current total number of books in library, all versions', following the exact NewGauge/MustRegister/setter pattern used by booksGauge (metrics.go:45-49), plus a `SetBooksTotalAll(n int)` setter mirroring SetBooks.",
+   "In internal/metrics/metrics.go, change booksGauge's Help text (L48) from 'Current total number of books in library' to 'Current total number of PRIMARY-version books in library'. Do NOT rename its Name ('books_total') \u2014 existing dashboards key on it.",
+   "In internal/server/server_lifecycle.go, inside the existing `if s.Ops() != nil {` block at L498-505, add `if bc, err := s.Ops().CountAllBooks(); err == nil { metrics.SetBooksTotalAll(bc) }` alongside the existing CountPrimaryBooks call at L499. Guard each independently so one error does not suppress the other.",
+   "Add internal/metrics/metrics_test.go coverage asserting the two gauges hold DIFFERENT values when primary != total.",
+   "Bump the file header (version + last-edited: 2026-08-21) on internal/metrics/metrics.go, internal/metrics/metrics_test.go, internal/server/server_lifecycle.go and internal/server/server_ops_store.go.",
+   "Add changelog fragment changelog.d/20260821_server_131.md (no file header)."
   ],
   "tests": [
    "internal/metrics/metrics_test.go: assert both gauges reflect the correct, DIFFERENT values when primary and total book counts differ in a test fixture."
@@ -1924,7 +1976,10 @@
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci (Go)",
-  "notes": "Do together with todo_line 3433/3384 if practical \u2014 all three touch internal/metrics/metrics.go's registration block and internal/server/server_lifecycle.go's same periodic metrics-gathering loop."
+  "notes": "Do together with todo_line 3433/3384 if practical \u2014 all three touch internal/metrics/metrics.go's registration block and internal/server/server_lifecycle.go's same periodic metrics-gathering loop.",
+  "review_notes": [
+   "[verify-8.json] Step 2 tells the agent to write `s.Ops().CountAllBooks()`. CountAllBooks is NOT a member of ServerOpsStore: `grep -n 'CountAllBooks\\|CountPrimaryBooks' internal/server/server_ops_store.go` returns exactly one hit, `129: CountPrimaryBooks() (int, error)`. The brief's only verification was `grep -n 'f"
+  ]
  },
  {
   "todo_line": 3449,

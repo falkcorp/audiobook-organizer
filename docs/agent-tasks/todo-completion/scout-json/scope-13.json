@@ -282,6 +282,26 @@
     "claim": "BasicAuth()'s current exemption list is health endpoints + static assets only",
     "grep_cmd": "grep -n 'Exempt' internal/server/middleware/basicauth.go",
     "expect": "2 hits ~L28, L34"
+   },
+   {
+    "claim": "BasicAuth is applied globally to s.router",
+    "grep_cmd": "grep -n 'BasicAuth()' internal/server/server.go",
+    "expect": "1 hit at L469: router.Use(servermiddleware.BasicAuth())"
+   },
+   {
+    "claim": "the ABS group inherits it with no exemption",
+    "grep_cmd": "grep -n 'absGroup := s.router.Group' internal/server/wire_abs_routes.go",
+    "expect": "1 hit at L504"
+   },
+   {
+    "claim": "six ABS routes have NO ABS auth middleware and rely on BasicAuth as their only gate",
+    "grep_cmd": "grep -n 'r.GET(\"/ping\"\\|r.GET(\"/status\"\\|r.POST(\"/login\"\\|r.GET(\"/auth/openid\"\\|ABSRequireAuth(h.resolver)' internal/server/handlers/abs/handler.go",
+    "expect": "/ping L433, /status L434, /login L436, /auth/openid L443 \u2014 all registered BEFORE `auth := servermiddleware.ABSRequireAuth(h.resolver)` at L446, so BasicAuth is their only gate"
+   },
+   {
+    "claim": "the existing exemption style to mirror",
+    "grep_cmd": "grep -n 'Exempt\\|HasPrefix' internal/server/middleware/basicauth.go",
+    "expect": "comments at L28 and L34, strings.HasPrefix(path, \"/assets/\") at L35"
    }
   ],
   "reuse": [
@@ -298,9 +318,10 @@
   "review_critical": true,
   "goal": "In internal/server/middleware/basicauth.go's BasicAuth(), add an ABS-path exemption alongside the existing health/static-asset exemptions so that when config.AppConfig.BasicAuthEnabled is true, requests under the ABS surface (paths registered on absGroup: /api/authorize, /api/me*, /api/libraries*, /api/items*, /api/session*, /public/session*, /api/playlists/:id, /login, /logout, /auth/*, /status, /ping \u2014 see internal/server/handlers/abs/handler.go:432 Register for the full list) skip HTTP Basic Auth entirely, since ABS clients authenticate via their own bearer/session/CF-assertion scheme (internal/server/middleware/absauth.go ABSRequireAuth) and cannot also send Authorization: Basic on the same header.",
   "background": [
-   "BasicAuth() gin middleware currently exempts only /api/health, /api/v1/health, and static asset extensions (basicauth.go:28-44).",
-   "The ABS handler group is mounted at absGroup := s.router.Group(\"\") (wire_abs_routes.go:504) as a direct child of the globally-BasicAuth()'d router, so it inherits BasicAuth() with no override today.",
-   "ABS's own auth middleware (ABSRequireAuth, internal/server/middleware/absauth.go:467) already enforces its own scheme (CF assertion / bearer / API key) and must be the ONLY auth gate on that surface, or a device sending Authorization: Basic per RFC would collide with ABS's own use of the Authorization header for its bearer token."
+   "internal/server/middleware/basicauth.go's BasicAuth() exempts only /api/health, /api/v1/health (L28-32) and static assets (L34-45); everything else on s.router is gated.",
+   "internal/server/handlers/abs/handler.go:432 Register mounts the ABS surface. CRITICAL: the ABSRequireAuth middleware is not constructed until L446 \u2014 /ping (L433), /status (L434), /login (L436), /auth/refresh (L437), /auth/openid (L442) and /auth/openid/callback (L443) are registered with NO app-layer auth, and /api/items/:id/cover is deliberately auth-free. For those paths BasicAuth is currently the only gate, so they MUST NOT be added to the exemption list.",
+   "Only the routes that carry the `auth` middleware may be exempted: /logout, /api/authorize, /api/me*, /api/libraries*, /api/collections*, /api/playlists/:id, /api/items/:id (but NOT /api/items/:id/cover), /api/items/:id/play, /api/items/:id/file*.",
+   "internal/server/server.go:469 applies servermiddleware.BasicAuth() globally; internal/server/wire_abs_routes.go:504 mounts absGroup := s.router.Group(\"\") as a child, so it inherits BasicAuth with no override."
   ],
   "steps": [
    "1. Read internal/server/handlers/abs/handler.go's Register method (func (h *Handler) Register(r gin.IRouter), ~L432) to enumerate every literal path prefix it registers, so the exemption is precise rather than a blanket '/api' prefix (which would also exempt the real /api/v1 app surface \u2014 NOT wanted).",
@@ -320,12 +341,13 @@
    "A path like /api/libraries that ALSO happens to prefix-match an app-API route must not be exempted if app-API and ABS ever share a literal path \u2014 verify by diffing against internal/server (app API) route registrations, not just ABS's.",
    "BasicAuthEnabled=false (the default) must remain a full no-op \u2014 the exemption branch should never even be reached in that case, matching the existing early-return at the top of BasicAuth()."
   ],
-  "anti_over_suppression": "TestBasicAuth_NonABSPathStillEnforced (or equivalent) \u2014 proves the exemption is scoped to ABS paths only, not a blanket bypass",
+  "anti_over_suppression": "TestBasicAuth_UnauthenticatedABSRoutesStillEnforced \u2014 with BasicAuthEnabled=true, GET /ping, GET /status, POST /login and GET /auth/openid must STILL be challenged with 401 by BasicAuth, because ABSRequireAuth is not on those routes (abs/handler.go:433-443). Plus TestBasicAuth_NonABSPathStillEnforced for a plain /api/v1/... path.",
   "depends_on_lines": [],
   "gate": "make ci",
   "notes": "basic_auth_enabled is off by default in prod per the item text, so this is a latent bug, not an active incident \u2014 still worth fixing before anyone turns basic auth on.",
   "review_notes": [
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
+   "[verify-8.json] The Background states as fact that ABS's own middleware 'already enforces its own scheme ... and must be the ONLY auth gate on that surface'. That is false for a third of the ABS surface. Reading internal/server/handlers/abs/handler.go:432-445, these routes are registered WITHOUT the `auth := server"
   ]
  },
  {
@@ -336,10 +358,11 @@
   "verdict_evidence": "PebbleStore.DeleteExpiredABSSessions exists and is tested but has zero non-test callers: `grep -rn 'DeleteExpiredABSSessions' internal/database/pebble_store_abssession.go` shows only the definition (L308) and its own doc comment; nothing outside _test.go calls it. Meanwhile DeleteExpiredSessions (browser keyspace) IS on a 10-minute ticker: `grep -n 's.Ops().DeleteExpiredSessions(time.Now())' internal/server/server_lifecycle.go` -> 1 hit at L619, inside the sweep block starting L608.",
   "domain": "internal/server",
   "exact_files": [
-   "internal/server/server_lifecycle.go",
-   "internal/server/server_ops_store.go",
    "internal/database/mock_store.go",
-   "internal/database/mocks/mock_store.go"
+   "internal/database/mocks/mock_store.go",
+   "internal/server/server_lifecycle.go",
+   "internal/server/server_lifecycle_abssession_test.go",
+   "internal/server/server_ops_store.go"
   ],
   "verified_anchors": [
    {
@@ -388,11 +411,7 @@
    "internal/server/server_lifecycle_test.go (or a new focused test file): assert that the session-cleanup goroutine calls both DeleteExpiredSessions and DeleteExpiredABSSessions on tick \u2014 use a mock/fake Ops() store that records calls, advance a fake/injected ticker (or reduce the ticker interval via a test hook if one already exists for the sibling test), and assert both methods were invoked.",
    "internal/database/pebble_store_abssession_test.go: confirm the existing DeleteExpiredABSSessions unit tests still pass unchanged (no signature change to the underlying PebbleStore method, only wiring it into a new caller)."
   ],
-  "acceptance": [
-   "`grep -n 'DeleteExpiredABSSessions' internal/server/server_lifecycle.go` shows a call inside the session-cleanup ticker block",
-   "`go build ./...` succeeds with the new interface method (proves PebbleStore already satisfies it structurally, since pebble_store_abssession.go:308 has the matching signature)",
-   "`make ci` passes"
-  ],
+  "acceptance": "grep -n 'DeleteExpiredABSSessions' internal/server/server_lifecycle.go shows a call inside the session-cleanup ticker block (0 hits at HEAD); grep -n 'DeleteExpiredABSSessions' internal/server/server_ops_store.go shows the new interface method next to DeleteExpiredSessions (currently the only hit is L227 DeleteExpiredSessions); go build ./... succeeds, proving PebbleStore already satisfies the widened interface (internal/database/pebble_store_abssession.go:308); go test ./internal/database/... ./internal/database/mocks/... ./internal/server/... -count=1 exits 0.",
   "edge_cases": [
    "ABS may not always be enabled/wired (s.Ops() can be nil per the existing `if s.Ops() != nil` guard at L609) \u2014 the new call must live inside that same existing guard, not add a second one.",
    "If DeleteExpiredABSSessions errors independently of DeleteExpiredSessions, both must be logged and neither should abort the other's cleanup for that tick."
@@ -402,7 +421,8 @@
   "gate": "make ci",
   "notes": "Low risk, additive-only change; no data migration needed since DeleteExpiredABSSessions already exists and is tested standalone.",
   "review_notes": [
-   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA"
+   "[simplicity-scope.json] internal/database/mock_store.go is used as a wave-ordering chokepoint: 7 tasks (8 once TASK-029's omission is fixed) are serialized across waves 1-7 on a test double. That single file drives most of the database workstream's depth (6 waves for 18 tasks) and reaches across workstreams into server (TA",
+   "[verify-8.json] Acceptance box 3 is literally '- [ ] `make ci` passes'. The same brief's How-to-test section says 'Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task.' The box therefore cannot be checked, and it directly contradicts the brief's own"
   ]
  },
  {
@@ -662,7 +682,9 @@
   "notes": "Must use a bounded worker pool per CLAUDE.md's MANDATORY concurrency rule \u2014 this is exactly the whole-library-scale, per-item-DB-write shape that rule targets.",
   "review_notes": [
    "[ops-rollback.json] A whole-library MUTATING backfill (mints/repoints a sync identity on every book lacking one) is briefed with no dry_run/apply parameter, no report-first mode, and no preview - while sibling new-op tasks in the same package all default to preview (TASK-125 step 7 'Default apply=false', TASK-022 step ",
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re",
+   "[verify-10.json] REVIEWER CLAIMS DONE WITHOUT GREP \u2014 NOT APPLIED: ",
+   "[verify-10.json] "
   ]
  },
  {
@@ -1097,6 +1119,11 @@
     "claim": "the removal criterion the handler relies on is IsPrimaryVersion==false, which the owner separately flagged unsafe (see TODO L10435)",
     "grep_cmd": "grep -n 'IsPrimaryVersion' internal/itunes/cleanup_merged.go",
     "expect": "1 hit ~L87"
+   },
+   {
+    "claim": "the three branch anchors step 1 depends on, and the IsEmpty body that step 1 and the edge case disagree about",
+    "grep_cmd": "grep -n 'ops.IsEmpty()\\|c.Query(\"dry_run\")\\|SafeWriteITL(itlPath\\|RespondWithOK' internal/server/itl_cleanup.go",
+    "expect": "dry_run branch L40 returning RespondWithOK at L41; ops.IsEmpty() L45 returning RespondWithOK(gin.H{\"applied\": true, ...}) at L46; SafeWriteITL(itlPath, *ops) at L53; final RespondWithOK applied:true at L60"
    }
   ],
   "reuse": [],
@@ -1121,18 +1148,26 @@
    "internal/server/itl_cleanup_test.go: TestCleanupMergedHandler_Apply_RefusesAndNeverWrites \u2014 dry_run=false (or omitted) returns the retirement error, and (via a spy/mock on SafeWriteITL or by asserting the .itl fixture file's bytes are unchanged on disk after the call) proves no write occurred."
   ],
   "acceptance": [
-   "`go test ./internal/server/... -run TestCleanupMergedHandler` passes both new tests",
-   "a manual curl of `POST /api/v1/itunes/cleanup-merged?dry_run=false` against a test server returns the retirement message and the target .itl file's mtime/bytes are unchanged"
+   "A dry_run=true request returns 200 with the preview payload, including when the computed ops set is empty.",
+   "A dry_run=false request AND a request with the dry_run param omitted BOTH return HTTP 410 with `applied: false` and the retirement message \u2014 asserted for a non-empty ops fixture and for an empty ops fixture (the deleted IsEmpty branch's case).",
+   "`grep -n 'ops.IsEmpty()' internal/server/itl_cleanup.go` returns ZERO hits.",
+   "`grep -n 'SafeWriteITL' internal/server/itl_cleanup.go` returns ZERO hits.",
+   "The .itl fixture's bytes are byte-identical before and after the dry_run=false call.",
+   "File header bumped: `grep -n 'last-edited: 2026-08-21' internal/server/itl_cleanup.go` hits.",
+   "Changelog fragment present: `test -f changelog.d/20260821_server_140.md`."
   ],
   "edge_cases": [
-   "ops.IsEmpty() (line 45 today) becomes unreachable/irrelevant once apply always refuses \u2014 remove or repurpose that branch rather than leaving dead code."
+   "The `if ops.IsEmpty()` branch at internal/server/itl_cleanup.go:45 MUST be deleted, not repurposed: after the retirement there is exactly one success path (dry_run=true) and one refusal path (everything else). An empty-ops apply request is an apply request and must get the same 410 refusal as any other \u2014 it must NOT keep returning 200 `applied: true`, which would report a successful apply on a path that no longer applies anything.",
+   "The refusal must be returned before any ITL path resolution or file access, so a missing/unreadable .itl file cannot turn the refusal into a 500 \u2014 treat unknown iTunes state as 'refused', never as 'failed'.",
+   "dry_run=true must keep returning 200 with the preview even when ops is empty (an empty preview is a valid measurement, not an error)."
   ],
   "anti_over_suppression": "TestCleanupMergedHandler_DryRun_StillReturnsPreview is the anti-over-suppression check \u2014 proves the retirement did not also kill the harmless measurement path",
   "depends_on_lines": [],
   "gate": "make ci",
   "notes": "This is a live prod data-loss path today (an operator or a stale UI button could still trigger a real removal via an unsafe criterion) \u2014 treat as review-critical and prioritize over the lower-urgency ABS-SYNC items in this scope.",
   "review_notes": [
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
+   "[verify-8.json] Step 1 and the edge-case section prescribe two different, observable API contracts for the empty-ops apply request, and the brief never picks one. Step 1 says to replace `lines 44-60, the apply path` with an unconditional refusal \u2014 that range includes the `if ops.IsEmpty()` branch (verified: `grep -"
   ]
  },
  {
@@ -1206,8 +1241,10 @@
   "verdict_evidence": "The exact 5-step composition the item describes (PLAN/GUARD/VERIFY/QUIESCE/COMMIT) is already implemented, using the same section names: `grep -n 'func RunRelocateSyncCycle' internal/itunes/relocate_sync_cycle.go` -> 1 hit ~L114, with the file's own top-of-file comment enumerating the same 5 steps the TODO item lists almost verbatim. HOWEVER it has zero callers anywhere in the codebase (`grep -rln 'RunRelocateSyncCycle' internal/` matches only its own defining file) and its own test file (internal/itunes/relocate_sync_cycle_test.go) only exercises its small helper functions (acquireSyncWriteLock, FileActivityLibraryCheck, relocatedPIDSet, restoreITLBackup) \u2014 RunRelocateSyncCycle itself has NO test invoking it end-to-end. So the composition function exists but is neither wired to any operational entry point (CLI/op/handler) nor covered by its own test.",
   "domain": "internal/itunes",
   "exact_files": [
-   "internal/server/itl_sync_cycle.go",
+   "internal/itunes/relocate_sync_cycle_e2e_test.go",
    "internal/itunes/relocate_sync_cycle_test.go",
+   "internal/server/itl_sync_cycle.go",
+   "internal/server/itl_sync_cycle_test.go",
    "internal/server/server_lifecycle.go"
   ],
   "verified_anchors": [
@@ -1269,7 +1306,10 @@
    10383
   ],
   "gate": "make ci",
-  "notes": "Depends conceptually on L10383's byte-preservation proof being run first (the PRE-APPLY VERIFICATION comment in relocate_sync_cycle.go effectively says the same thing) before this is ever pointed at prod with Apply=true."
+  "notes": "Depends conceptually on L10383's byte-preservation proof being run first (the PRE-APPLY VERIFICATION comment in relocate_sync_cycle.go effectively says the same thing) before this is ever pointed at prod with Apply=true.",
+  "review_notes": [
+   "[verify-10.json] exact_files lists internal/itunes/relocate_sync_cycle_test.go (the pre-existing helper test file) but the Tests section creates internal/itunes/relocate_sync_cycle_e2e_test.go and internal/server/itl_sync_cycle_test.go; neither is in scope."
+  ]
  },
  {
   "todo_line": 10406,

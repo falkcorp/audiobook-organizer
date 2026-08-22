@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-136-convert-reconcile-apply-from-resumedrop-to-real-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b5205494-5c02-4147-a512-2a2815a0759b -->
+<!-- guid: f19875d7-73d3-4feb-a373-4e3bad8ad5ed -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-136 — Convert reconcile.apply from ResumeDrop to real checkpoint/resume (TODO.md L4575)
@@ -36,6 +36,9 @@ Convert reconcile.apply (internal/server/reconcile_ops.go) from ResumePolicy=Res
   ```bash
   grep -n 'RegisterReconcileApplyOp\|"reconcile.apply"' internal/server/reconcile_ops.go   # hits at L78 and L81 — reconcile.apply is registered in internal/server/reconcile_ops.go
   grep -n 'reconcileApplyOpParams' internal/server/reconcile.go internal/server/reconcile_ops.go   # >=2 hits — reconcile.apply is invoked with a LegacyOpID + Matches params shape today
+  grep -n 'RegisterReconcileApplyOp\|"reconcile.apply"\|ResumePolicy' internal/server/reconcile_ops.go   # ID "reconcile.apply" at L81, ResumePolicy: opsregistry.ResumeDrop at L90 — and a SECOND ResumeDrop at L50 belonging to reconcile.scan — reconcile.apply is registered in reconcile_ops.go and is currently ResumeDrop
+  grep -n 'RunItems' internal/server/reconcile_ops.go   # 0 hits; the Run body instead calls reconcile.ExecuteReconcile(ctx, store, p.LegacyOpID, p.Matches, log) — reconcile_ops.go contains no per-item loop and no RunItems call — the work is delegated out of the package
+  grep -n 'CapFilesWrite\|Description:' internal/server/reconcile_ops.go   # Description 'Apply a set of file-to-book reconcile matches, moving files and updating the database.' with Capabilities including CapLibraryWrite and CapFilesWrite — reconcile.apply moves files and writes the library, so any resume must be item-idempotent
   ```
 
 ### Reuse — don't invent

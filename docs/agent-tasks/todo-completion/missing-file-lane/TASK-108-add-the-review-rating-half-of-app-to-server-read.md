@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-108-add-the-review-rating-half-of-app-to-server-read.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 5086d4be-bffe-4cb6-bd67-1be9ea63a0c0 -->
+<!-- guid: 07662bef-26a0-4f09-ba1f-fea9f6668106 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-108 — Add the review/rating half of app-to-server reading-state sync (reading status half already exists) (TODO.md L8675)
 
-**Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · missing-file-lane subagent · **Why:** extends an existing, well-understood merge-semantics endpoint with one more field; needs real-client verification before finalizing the shape · **Depends on:** none · **Wave:** 1
+**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · missing-file-lane subagent · **Why:** extends an existing, well-understood merge-semantics endpoint with one more field; needs real-client verification before finalizing the shape · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 8675 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**Reading status and review/rating must sync from " TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-12.json`.
 
@@ -101,7 +101,9 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/server/handlers/abs/... -run MediaProgress_Rating passes both cases.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+**This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: (1) the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; (2) every mutation is journaled through the existing undo ledger (`CreateOperationChange` — verify: `grep -rn "func.*CreateOperationChange" internal/database/*.go`) so `internal/undo` can replay it — a mutation without a journal row is a defect; (3) acceptance includes a test that applies on a fixture and then undoes via `internal/undo` and asserts the fixture is byte-identical; (4) the apply path refuses to start while a `library.scan` operation is running or queued (check the registry for an active scan before mutating — a running scan clobbers applied metadata). Idempotency: re-running in dry-run must report 0 pending changes after a successful apply. Rollback of the CODE = `git revert`; rollback of the DATA = the undo ledger, which is why (2) is not optional. PR stays open for the owner — the coordinator never admin-merges it.
+
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'IsFinished' internal/server/handlers/abs/progress.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

@@ -1,0 +1,663 @@
+{
+ "TASK-066": {
+  "ws": "maintenance",
+  "file": "maintenance/TASK-066-wire-a-durable-freshness-stamp-for-maintenance-c.md",
+  "title": "Wire a durable freshness stamp for maintenance.chapters-backfill before it is ever scheduled",
+  "exact_files": [
+   "internal/plugins/maintenance/chapters_backfill.go",
+   "internal/plugins/maintenance/deps.go",
+   "internal/server/server_maintenance_deps.go"
+  ],
+  "tier": "sonnet",
+  "rc": false,
+  "pol": "additive",
+  "eff": "M",
+  "domain": "internal/plugins/maintenance",
+  "src": null,
+  "line": 606
+ },
+ "TASK-067": {
+  "ws": "maintenance",
+  "file": "maintenance/TASK-067-extend-the-repoint-repair-to-recover-bookfile-ro.md",
+  "title": "Extend the REPOINT repair to recover BookFile rows via Book.FilePath (the #2372 fallback shape), not just the padded-filename shape",
+  "exact_files": [
+   "internal/plugins/maintenance/missing_file_repoint.go"
+  ],
+  "tier": "sonnet",
+  "rc": true,
+  "pol": "additive",
+  "eff": "M",
+  "domain": "internal/plugins/maintenance",
+  "src": null,
+  "line": 642
+ },
+ "TASK-068": {
+  "ws": "maintenance",
+  "file": "maintenance/TASK-068-build-a-report-only-counter-for-book-filepath-co.md",
+  "title": "Build a REPORT-ONLY counter for Book.FilePath collisions (rows sharing the same path across different books)",
+  "exact_files": [
+   "internal/plugins/maintenance/filepath_collision_report.go",
+   "internal/plugins/maintenance/plugin.go"
+  ],
+  "tier": "sonnet",
+  "rc": false,
+  "pol": "additive",
+  "eff": "S",
+  "domain": "internal/plugins/maintenance",
+  "src": null,
+  "line": 670
+ },
+ "TASK-069": {
+  "ws": "maintenance",
+  "file": "maintenance/TASK-069-give-maintenance-jobs-v1-internal-maintenance-pe.md",
+  "title": "Give maintenance jobs (v1, internal/maintenance) per-job store interfaces instead of the shared JobStore",
+  "exact_files": [
+   "internal/maintenance/job.go",
+   "internal/maintenance/registry.go",
+   "internal/server/maintenance_dispatcher.go",
+   "internal/server/maintenance_job_op.go"
+  ],
+  "tier": "sonnet",
+  "rc": false,
+  "pol": "transform",
+  "eff": "L",
+  "domain": "internal/maintenance",
+  "src": null,
+  "line": 1009
+ },
+ "TASK-070": {
+  "ws": "maintenance",
+  "file": "maintenance/TASK-070-add-a-user-configurable-activity-log-retention-w.md",
+  "title": "Add a user-configurable activity-log retention window (default 7 days, 0=never)",
+  "exact_files": [
+   "internal/config/config.go",
+   "internal/plugins/maintenance/cleanup.go",
+   "internal/plugins/maintenance/deps.go",
+   "internal/server/server_maintenance_deps.go",
+   "web/src/pages/ActivityLog.tsx",
+   "web/src/services/activityApi.ts",
+   "web/src/services/api.ts"
+  ],
+  "tier": "sonnet",
+  "rc": false,
+  "pol": "additive",
+  "eff": "M",
+  "domain": "internal/plugins/maintenance",
+  "src": null,
+  "line": 3488
+ },
+ "TASK-071": {
+  "ws": "maintenance",
+  "file": "maintenance/TASK-071-build-a-detection-only-report-of-other-title-fra.md",
+  "title": "Build a detection-only report of other title-fragment author rows (the 57 rows beginning with '-')",
+  "exact_files": [
+   "internal/plugins/maintenance/author_title_fragment_report.go",
+   "internal/plugins/maintenance/plugin.go"
+  ],
+  "tier": "sonnet",
+  "rc": false,
+  "pol": "additive",
+  "eff": "M",
+  "domain": "internal/plugins/maintenance",
+  "src": null,
+  "line": 3602
+ },
+ "TASK-072": {
+  "ws": "maintenance",
+  "file": "maintenance/TASK-072-new-maintenance-op-merge-an-operator-confirmed-l.md",
+  "title": "New maintenance op: merge an operator-confirmed list of duplicate real-author rows",
+  "exact_files": [
+   "internal/plugins/maintenance/author_duplicate_merge.go",
+   "internal/plugins/maintenance/author_duplicate_merge_test.go",
+   "internal/plugins/maintenance/plugin.go"
+  ],
+  "tier": "sonnet",
+  "rc": true,
+  "pol": "removal",
+  "eff": "M",
+  "domain": "internal/plugins/maintenance",
+  "src": null,
+  "line": 3795
+ },
+ "TASK-073": {
+  "ws": "maintenance",
+  "file": "maintenance/TASK-073-read-through-audit-of-the-8-ctxopid-consumer-cal.md",
+  "title": "Read-through audit of the 8 ctxOpID consumer call sites now that op IDs actually arrive",
+  "exact_files": [
+   "internal/plugins/maintenance/cleanup.go",
+   "internal/plugins/maintenance/dedup_ops.go",
+   "internal/plugins/maintenance/metadata.go",
+   "internal/plugins/maintenance/optimize.go",
+   "internal/plugins/maintenance/reconcile.go",
+   "internal/plugins/maintenance/series.go",
+   "internal/plugins/maintenance/write_back.go"
+  ],
+  "tier": "sonnet",
+  "rc": true,
+  "pol": "transform",
+  "eff": "M",
+  "domain": "internal/plugins/maintenance",
+  "src": null,
+  "line": 4137
+ },
+ "TASK-074": {
+  "ws": "maintenance",
+  "file": "maintenance/TASK-074-build-a-report-only-census-of-books-with-a-place.md",
+  "title": "Build a report-only census of books with a placeholder author already baked into their organizer-tree path but resolvable metadata",
+  "exact_files": [
+   "internal/plugins/maintenance/plugin.go",
+   "internal/plugins/maintenance/unknown_author_audit.go"
+  ],
+  "tier": "sonnet",
+  "rc": false,
+  "pol": "additive",
+  "eff": "M",
+  "domain": "internal/plugins/maintenance",
+  "src": null,
+  "line": 4144
+ },
+ "TASK-075": {
+  "ws": "maintenance",
+  "file": "maintenance/TASK-075-extend-purge-empty-authors-report-to-categorize-.md",
+  "title": "Extend purge-empty-authors' report to categorize the 822 zero-book-but-has-files authors",
+  "exact_files": [
+   "internal/plugins/maintenance/author_purge_empty.go"
+  ],
+  "tier": "sonnet",
+  "rc": false,
+  "pol": "additive",
+  "eff": "S",
+  "domain": "internal/plugins/maintenance",
+  "src": null,
+  "line": 5275
+ },
+ "TASK-076": {
+  "ws": "maintenance",
+  "file": "maintenance/TASK-076-author-narrator-swap-repair-routed-through-the-r.md",
+  "title": "Author-narrator swap repair, routed through the review queue (cross-table population, distinct from the existing per-book fix-author-narrator-swap job)",
+  "exact_files": [
+   "internal/plugins/maintenance/author_narrator_swap_review.go",
+   "internal/plugins/maintenance/plugin.go"
+  ],
+  "tier": "opus",
+  "rc": true,
+  "pol": "additive",
+  "eff": "L",
+  "domain": "internal/plugins/maintenance",
+  "src": null,
+  "line": 5281
+ },
+ "TASK-077": {
+  "ws": "maintenance",
+  "file": "maintenance/TASK-077-narrow-the-3-remaining-maintenance-jobs-callees-.md",
+  "title": "Narrow the 3 remaining maintenance-jobs callees off maintenance.JobStore (vgFixAuthorDirPath, migrateOne, ddMergeDuplicateBook)",
+  "exact_files": [
+   "internal/maintenance/jobs/backfill_itunes_positions.go",
+   "internal/maintenance/jobs/dedup_books.go",
+   "internal/maintenance/jobs/fix_version_groups.go"
+  ],
+  "tier": "sonnet",
+  "rc": false,
+  "pol": "transform",
+  "eff": "M",
+  "domain": "internal/maintenance/jobs",
+  "src": null,
+  "line": 5424
+ },
+ "TASK-078": {
+  "ws": "maintenance",
+  "file": "maintenance/TASK-078-task-04-build-the-idempotent-sync-id-backfill-ov.md",
+  "title": "TASK-04: build the idempotent sync-ID backfill over the existing library (bounded worker pool required) (ABS-SYNC-TASK-04)",
+  "exact_files": [
+   "internal/plugins/maintenance/backfill_sync_id.go",
+   "internal/plugins/maintenance/backfill_sync_id_test.go",
+   "internal/plugins/maintenance/plugin.go"
+  ],
+  "tier": "opus",
+  "rc": true,
+  "pol": "additive",
+  "eff": "M",
+  "domain": "internal/plugins/maintenance",
+  "src": "ABS-SYNC-TASK-04",
+  "line": 10333
+ },
+ "TASK-195": {
+  "ws": "maintenance",
+  "file": "maintenance/TASK-195-add-a-zero-size-bucket-to-maintenance-missing-fi.md",
+  "title": "Add a zero-size bucket to maintenance.missing-file-audit (the delta TASK-074 does not cover) (DEC-13)",
+  "exact_files": [
+   "internal/plugins/maintenance/missing_file_audit.go",
+   "internal/plugins/maintenance/missing_file_audit_test.go"
+  ],
+  "tier": "sonnet",
+  "rc": false,
+  "pol": "transform",
+  "eff": "S",
+  "domain": "internal/plugins/maintenance",
+  "src": "DEC-13",
+  "line": 90013
+ },
+ "TASK-061": {
+  "ws": "itunes",
+  "file": "itunes/TASK-061-import-the-224-materialized-playlist-items-smart.md",
+  "title": "Import the 224 materialized-Playlist-Items smart playlists as static snapshots (no criteria parsing needed) (ITUNES-SMARTCRIT-PARSE)",
+  "exact_files": [
+   "internal/itunes/service/playlist_sync.go",
+   "internal/plugins/maintenance/itunes_playlist_import.go"
+  ],
+  "tier": "sonnet",
+  "rc": true,
+  "pol": "additive",
+  "eff": "M",
+  "domain": "internal/itunes",
+  "src": "ITUNES-SMARTCRIT-PARSE",
+  "line": 1517
+ },
+ "TASK-062": {
+  "ws": "itunes",
+  "file": "itunes/TASK-062-internal-itunes-backfill-go-backfillexternalids-.md",
+  "title": "internal/itunes/backfill.go BackfillExternalIDs: replace offset pagination with GetAllBooksFullFrom cursor (PERF-5)",
+  "exact_files": [
+   "internal/itunes/backfill.go"
+  ],
+  "tier": "sonnet",
+  "rc": true,
+  "pol": "transform",
+  "eff": "M",
+  "domain": "internal/itunes",
+  "src": "PERF-5",
+  "line": 4208
+ },
+ "TASK-063": {
+  "ws": "itunes",
+  "file": "itunes/TASK-063-internal-itunes-backfill-go-backfillitunestrackp.md",
+  "title": "internal/itunes/backfill.go BackfillITunesTrackPIDs: same offset-pagination bug, not named in the TODO but identical pattern in the same file (PERF-5)",
+  "exact_files": [
+   "internal/itunes/backfill.go"
+  ],
+  "tier": "sonnet",
+  "rc": true,
+  "pol": "transform",
+  "eff": "S",
+  "domain": "internal/itunes",
+  "src": "PERF-5",
+  "line": 4208
+ },
+ "TASK-064": {
+  "ws": "itunes",
+  "file": "itunes/TASK-064-add-a-part-disc-chapter-track-filename-parser-so.md",
+  "title": "Add a Part->disc / Chapter->track filename parser so 'P0-C0'-style folders stop falling to ambiguous (REGROUP-PARTCHAPTER-PARSER)",
+  "exact_files": [
+   "internal/itunes/service/fs_regroup_shape.go",
+   "internal/itunes/service/fs_regroup_shape_test.go"
+  ],
+  "tier": "opus",
+  "rc": true,
+  "pol": "additive",
+  "eff": "M",
+  "domain": "internal/itunes/service",
+  "src": "REGROUP-PARTCHAPTER-PARSER",
+  "line": 10366
+ },
+ "TASK-065": {
+  "ws": "itunes",
+  "file": "itunes/TASK-065-p2-relocate-only-sync-cycle-the-composed-cycle-a.md",
+  "title": "P2 relocate-only sync cycle \u2014 the composed cycle already exists (RunRelocateSyncCycle); wire it to a caller and add an end-to-end test",
+  "exact_files": [
+   "internal/itunes/relocate_sync_cycle_test.go",
+   "internal/server/itl_sync_cycle.go",
+   "internal/server/server_lifecycle.go"
+  ],
+  "tier": "opus",
+  "rc": true,
+  "pol": "additive",
+  "eff": "M",
+  "domain": "internal/itunes",
+  "src": null,
+  "line": 10390
+ },
+ "TASK-184": {
+  "ws": "itunes",
+  "file": "itunes/TASK-184-measure-itunes-xml-track-persistent-id-coverage-.md",
+  "title": "Measure iTunes XML track Persistent ID coverage against the local DB before promising a Playlist-Items snapshot import (ITUNES-SMARTCRIT-PARSE)",
+  "exact_files": [
+   "cmd/pid-census/main.go",
+   "internal/itunes/pid_coverage.go",
+   "internal/itunes/pid_coverage_test.go"
+  ],
+  "tier": "sonnet",
+  "rc": false,
+  "pol": "additive",
+  "eff": "S",
+  "domain": "internal/itunes",
+  "src": "ITUNES-SMARTCRIT-PARSE",
+  "line": 1517
+ },
+ "TASK-185": {
+  "ws": "itunes",
+  "file": "itunes/TASK-185-report-the-itunes-listened-in-progress-status-pi.md",
+  "title": "Report the iTunes listened/in-progress status pipeline's actual wiring gap: PositionSync is fully built but its maintenance op is an unimplemented stub (PLAYBACK-IMPORT)",
+  "exact_files": [
+   "docs/audits/2026-08-21-itunes-playback-import-wiring.md"
+  ],
+  "tier": "sonnet",
+  "rc": false,
+  "pol": "additive",
+  "eff": "S",
+  "domain": "internal/itunes",
+  "src": "PLAYBACK-IMPORT",
+  "line": 2181
+ },
+ "TASK-006": {
+  "ws": "ci-tooling",
+  "file": "ci-tooling/TASK-006-add-a-scheduled-detect-only-backstop-workflow-fo.md",
+  "title": "Add a scheduled detect-only backstop workflow for auto-revert.yml",
+  "exact_files": [
+   ".github/workflows/auto-revert-backstop.yml"
+  ],
+  "tier": "sonnet",
+  "rc": false,
+  "pol": "additive",
+  "eff": "M",
+  "domain": "ci/scripts",
+  "src": null,
+  "line": 46
+ },
+ "TASK-007": {
+  "ws": "ci-tooling",
+  "file": "ci-tooling/TASK-007-wire-scripts-test-check-memory-leaks-py-into-a-c.md",
+  "title": "Wire scripts/test_check_memory_leaks.py into a CI job (repo-guards)",
+  "exact_files": [
+   ".github/workflows/ci.yml"
+  ],
+  "tier": "haiku",
+  "rc": false,
+  "pol": "additive",
+  "eff": "S",
+  "domain": "ci/scripts",
+  "src": null,
+  "line": 50
+ },
+ "TASK-009": {
+  "ws": "ci-tooling",
+  "file": "ci-tooling/TASK-009-teach-the-abs-fixture-capture-harness-to-record-.md",
+  "title": "Teach the ABS fixture-capture harness to record request headers",
+  "exact_files": [
+   "scripts/abs_capture_fixtures.py"
+  ],
+  "tier": "sonnet",
+  "rc": false,
+  "pol": "additive",
+  "eff": "S",
+  "domain": "ci/scripts",
+  "src": null,
+  "line": 2568
+ },
+ "TASK-010": {
+  "ws": "ci-tooling",
+  "file": "ci-tooling/TASK-010-add-top-level-permissions-blocks-to-the-3-workfl.md",
+  "title": "Add top-level `permissions:` blocks to the 3 workflows flagged by actions/missing-workflow-permissions (SEC-CODEQL-BACKLOG)",
+  "exact_files": [
+   ".github/workflows/hard-burndown.yml",
+   ".github/workflows/nightly-burndown.yml",
+   ".github/workflows/triage-poll.yml"
+  ],
+  "tier": "haiku",
+  "rc": false,
+  "pol": "additive",
+  "eff": "S",
+  "domain": "ci/scripts",
+  "src": "SEC-CODEQL-BACKLOG",
+  "line": 2595
+ },
+ "TASK-011": {
+  "ws": "ci-tooling",
+  "file": "ci-tooling/TASK-011-pin-sha256-checksums-for-dockerfile-fetched-utfc.md",
+  "title": "Pin SHA256 checksums for Dockerfile-fetched utfcpp/taglib tarballs (SEC-8)",
+  "exact_files": [
+   "Dockerfile"
+  ],
+  "tier": "haiku",
+  "rc": false,
+  "pol": "additive",
+  "eff": "S",
+  "domain": "ci/scripts",
+  "src": "SEC-8",
+  "line": 4206
+ },
+ "TASK-012": {
+  "ws": "ci-tooling",
+  "file": "ci-tooling/TASK-012-scripts-setup-prometheus-auth-py-does-not-share-.md",
+  "title": "scripts/setup-prometheus-auth.py does NOT share the server-side shell script's dead-indentation bug",
+  "exact_files": [
+   "scripts/setup-prometheus-auth.py"
+  ],
+  "tier": "haiku",
+  "rc": false,
+  "pol": "additive",
+  "eff": "S",
+  "domain": "ci/scripts",
+  "src": null,
+  "line": 4312
+ },
+ "TASK-013": {
+  "ws": "ci-tooling",
+  "file": "ci-tooling/TASK-013-build-a-report-only-scan-for-book-rows-that-may-.md",
+  "title": "Build a report-only scan for book rows that may have been spuriously created by the .tmp-rename bug",
+  "exact_files": [
+   "scripts/find_spurious_stranded_book_rows.py"
+  ],
+  "tier": "sonnet",
+  "rc": false,
+  "pol": "additive",
+  "eff": "M",
+  "domain": "scripts",
+  "src": null,
+  "line": 4844
+ },
+ "TASK-014": {
+  "ws": "ci-tooling",
+  "file": "ci-tooling/TASK-014-remove-committed-mtls-bridge-build-artifact-and-.md",
+  "title": "Remove committed mtls-bridge build artifact and gitignore it (REPO-SIZE-1)",
+  "exact_files": [
+   ".gitignore",
+   "mtls-bridge",
+   "scripts/setup-git-hooks.sh"
+  ],
+  "tier": "haiku",
+  "rc": false,
+  "pol": "removal",
+  "eff": "S",
+  "domain": "ci/scripts",
+  "src": "REPO-SIZE-1",
+  "line": 10632
+ },
+ "TASK-015": {
+  "ws": "ci-tooling",
+  "file": "ci-tooling/TASK-015-stop-committing-series-dedup-py-s-generated-dump.md",
+  "title": "Stop committing series_dedup.py's generated dump/fix cache files (REPO-SIZE-1)",
+  "exact_files": [
+   ".gitignore",
+   "testdata/series_dump.json",
+   "testdata/series_fix.json"
+  ],
+  "tier": "haiku",
+  "rc": false,
+  "pol": "removal",
+  "eff": "S",
+  "domain": "ci/scripts",
+  "src": "REPO-SIZE-1",
+  "line": 10632
+ },
+ "TASK-191": {
+  "ws": "ci-tooling",
+  "file": "ci-tooling/TASK-191-bump-the-github-common-reusable-workflow-pins-in.md",
+  "title": "Bump the github-common reusable-workflow pins in at least two PRs, low-consequence first",
+  "exact_files": [
+   ".github/workflows/frontend-ci.yml",
+   ".github/workflows/hard-burndown.yml",
+   ".github/workflows/nightly-burndown.yml",
+   ".github/workflows/nightly.yml",
+   ".github/workflows/prerelease.yml",
+   ".github/workflows/release-prod.yml",
+   ".github/workflows/security.yml",
+   ".github/workflows/triage-poll.yml"
+  ],
+  "tier": "sonnet",
+  "rc": false,
+  "pol": "transform",
+  "eff": "M",
+  "domain": "ci/scripts",
+  "src": null,
+  "line": 921
+ },
+ "TASK-018": {
+  "ws": "config",
+  "file": "config/TASK-018-fix-ai-backend-local-base-url-hardcoded-develope.md",
+  "title": "Fix ai_backend.local_base_url hardcoded developer LAN IP default (CFG-AUDIT)",
+  "exact_files": [
+   "internal/config/config.go"
+  ],
+  "tier": "sonnet",
+  "rc": false,
+  "pol": "transform",
+  "eff": "S",
+  "domain": "internal/config",
+  "src": "CFG-AUDIT",
+  "line": 1317
+ },
+ "TASK-019": {
+  "ws": "config",
+  "file": "config/TASK-019-fix-chapterconsolidationthresholdmin-omitted-fro.md",
+  "title": "Fix ChapterConsolidationThresholdMin omitted from ResetToDefaults (factory reset silently disables consolidation) (CFG-AUDIT)",
+  "exact_files": [
+   "internal/config/config.go"
+  ],
+  "tier": "haiku",
+  "rc": false,
+  "pol": "transform",
+  "eff": "S",
+  "domain": "internal/config",
+  "src": "CFG-AUDIT",
+  "line": 1317
+ },
+ "TASK-020": {
+  "ws": "config",
+  "file": "config/TASK-020-delete-the-fully-inert-enable-sqlite3-i-know-the.md",
+  "title": "Delete the fully inert --enable-sqlite3-i-know-the-risks flag and EnableSQLite config option (CFG-AUDIT)",
+  "exact_files": [
+   "cmd/child_mode.go",
+   "cmd/commands_test.go",
+   "cmd/dedup_bench.go",
+   "cmd/diagnostics.go",
+   "cmd/root.go",
+   "cmd/seed.go",
+   "internal/config/config.go",
+   "internal/database/mock_store.go",
+   "internal/database/mocks/mock_store.go",
+   "internal/database/store.go"
+  ],
+  "tier": "sonnet",
+  "rc": false,
+  "pol": "removal",
+  "eff": "M",
+  "domain": "internal/config",
+  "src": "CFG-AUDIT",
+  "line": 1317
+ },
+ "TASK-021": {
+  "ws": "config",
+  "file": "config/TASK-021-scan-and-fingerprint-the-assembled-source-downlo.md",
+  "title": "Scan and fingerprint the assembled-source download root as a read-only reference corpus",
+  "exact_files": [
+   "internal/config/config.go",
+   "internal/plugins/acoustid/backfill.go",
+   "internal/scanner/scanner.go"
+  ],
+  "tier": "opus",
+  "rc": true,
+  "pol": "additive",
+  "eff": "L",
+  "domain": "internal/config",
+  "src": null,
+  "line": 10750
+ },
+ "TASK-119": {
+  "ws": "organize",
+  "file": "organize/TASK-119-replace-the-size-equality-heuristic-in-organizeb.md",
+  "title": "Replace the size-equality heuristic in OrganizeBookDirectory's destination-adoption check with a content hash (F5)",
+  "exact_files": [
+   "internal/organizer/organizer.go"
+  ],
+  "tier": "sonnet",
+  "rc": true,
+  "pol": "transform",
+  "eff": "S",
+  "domain": "internal/organizer",
+  "src": "F5",
+  "line": 872
+ },
+ "TASK-120": {
+  "ws": "organize",
+  "file": "organize/TASK-120-route-the-three-organize-rename-paths-through-or.md",
+  "title": "Route the three organize/rename paths through organizer.MoveBookFile's verify-move-DB-update-rollback pattern (F5)",
+  "exact_files": [
+   "internal/metafetch/service_apply.go",
+   "internal/organizer/organizer.go"
+  ],
+  "tier": "opus",
+  "rc": true,
+  "pol": "transform",
+  "eff": "L",
+  "domain": "internal/organizer",
+  "src": "F5",
+  "line": 872
+ },
+ "TASK-121": {
+  "ws": "organize",
+  "file": "organize/TASK-121-make-resolveorganizedfilepath-s-plan-on-faith-fa.md",
+  "title": "Make resolveOrganizedFilePath's plan-on-faith fallback loud and verify-before-write",
+  "exact_files": [
+   "internal/organizer/service.go"
+  ],
+  "tier": "opus",
+  "rc": true,
+  "pol": "transform",
+  "eff": "M",
+  "domain": "internal/organizer",
+  "src": null,
+  "line": 4919
+ },
+ "TASK-122": {
+  "ws": "organize",
+  "file": "organize/TASK-122-add-an-edition-suffix-folder-pattern-token.md",
+  "title": "Add an {edition_suffix} folder-pattern token",
+  "exact_files": [
+   "internal/organizer/pathbuild.go"
+  ],
+  "tier": "sonnet",
+  "rc": true,
+  "pol": "additive",
+  "eff": "S",
+  "domain": "internal/organizer",
+  "src": null,
+  "line": 5021
+ },
+ "TASK-203": {
+  "ws": "organize",
+  "file": "organize/TASK-203-add-a-detection-only-counter-structured-log-for-.md",
+  "title": "Add a detection-only counter + structured log for generateTargetPath path collisions within one organize run (DEC-11)",
+  "exact_files": [
+   "internal/metrics/metrics.go",
+   "internal/organizer/service.go",
+   "internal/organizer/target_path_collision_test.go"
+  ],
+  "tier": "sonnet",
+  "rc": false,
+  "pol": "additive",
+  "eff": "S",
+  "domain": "internal/organizer",
+  "src": "DEC-11",
+  "line": 90011
+ }
+}

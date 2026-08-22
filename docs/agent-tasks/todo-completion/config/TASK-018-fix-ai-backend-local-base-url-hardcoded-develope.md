@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/config/TASK-018-fix-ai-backend-local-base-url-hardcoded-develope.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 88482b0e-beb9-4cd4-88ad-dd5e6f1774d3 -->
+<!-- guid: 30ca2fd5-3d5b-44d2-b5b1-ff17bc391120 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-018 — Fix ai_backend.local_base_url hardcoded developer LAN IP default (CFG-AUDIT)
 
-**Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · config subagent · **Why:** Straightforward default-value fix, but needs to check EffectiveLLMMode's fallback behavior doesn't silently break for people relying on the current default resolving locally on THIS owner's LAN (unlikely to be relied upon by anyone else, but verify). · **Depends on:** none · **Wave:** 2
+**Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · config subagent · **Why:** Straightforward default-value fix, but needs to check EffectiveLLMMode's fallback behavior doesn't silently break for people relying on the current default resolving locally on THIS owner's LAN (unlikely to be relied upon by anyone else, but verify). · **Depends on:** none · **Wave:** 5 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 1317 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**CFG-AUDIT**" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-03.json`.
 
@@ -97,6 +97,8 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n — ...` / `BLOCKED: n — ...`); the coordinator owns push/PR/merge. Do NOT run `git push`, `gh pr`, or any merge.
 
 ## Idempotency / Rollback
+
+**This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: (1) the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; (2) every mutation is journaled through the existing undo ledger (`CreateOperationChange` — verify: `grep -rn "func.*CreateOperationChange" internal/database/*.go`) so `internal/undo` can replay it — a mutation without a journal row is a defect; (3) acceptance includes a test that applies on a fixture and then undoes via `internal/undo` and asserts the fixture is byte-identical; (4) the apply path refuses to start while a `library.scan` operation is running or queued (check the registry for an active scan before mutating — a running scan clobbers applied metadata). Idempotency: re-running in dry-run must report 0 pending changes after a successful apply. Rollback of the CODE = `git revert`; rollback of the DATA = the undo ledger, which is why (2) is not optional. PR stays open for the owner — the coordinator never admin-merges it.
 
 If the symbol already lives at its NEW location and is absent from the old one (re-run the re-verify greps above), the move is already done — run acceptance instead. Rollback = `git revert` the commit; behaviour at the old site is restored.
 

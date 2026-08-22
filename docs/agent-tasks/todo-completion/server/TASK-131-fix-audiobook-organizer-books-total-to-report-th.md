@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-131-fix-audiobook-organizer-books-total-to-report-th.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e8b715e9-3d30-4646-8a17-f426b2a7393d -->
+<!-- guid: b07ad2e7-6b95-47b7-be8f-f5b65dc0b29a -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-131 — Fix audiobook_organizer_books_total to report the true total, not just primary books (or rename it) (TODO.md L3443)
 
-**Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · server subagent · **Why:** Small, precisely located fix — either swap one function call or add a second gauge; the only judgment needed is which resolution the owner prefers. · **Depends on:** none · **Wave:** 3
+**Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · server subagent · **Why:** Small, precisely located fix — either swap one function call or add a second gauge; the only judgment needed is which resolution the owner prefers. · **Depends on:** none · **Wave:** 4
 
 Source: `TODO.md` line 3443 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**`audiobook_organizer_books_total` reports the PR" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-04.json`.
 
@@ -36,6 +36,9 @@ Either (preferred, since it's the smaller footprint and preserves the existing m
   sed -n '495,509p' internal/server/server_lifecycle.go   # 'if bc, err := s.Ops().CountPrimaryBooks(); err == nil { bookCount = bc }' ... 'metrics.SetBooks(bookCount)' — the metric is fed by CountPrimaryBooks, not a true total
   grep -n 'func (p \*PebbleStore) CountAllBooks' internal/database/pebble_store.go   # 1 hit at L3028 — a true-total counter already exists and is unused for this metric
   sed -n '45,49p' internal/metrics/metrics.go   # Help: 'Current total number of books in library' — the gauge's Help text claims it is the true total
+  grep -n 'CountPrimaryBooks()\|metrics.SetBooks(' internal/server/server_lifecycle.go   # 2 hits: L499 `if bc, err := s.Ops().CountPrimaryBooks(); err == nil {` and L508 `metrics.SetBooks(bookCount)` — the metric is fed by CountPrimaryBooks, not a true total
+  grep -n 'CountAllBooks' internal/database/pebble_store.go internal/server/server_ops_store.go   # hit at pebble_store.go:3028; ZERO hits in server_ops_store.go — CountAllBooks exists on PebbleStore but is NOT on the ServerOpsStore interface s.Ops() returns
+  grep -n 'Name: *"books_total"\|Current total number of books in library' internal/metrics/metrics.go   # 2 hits: L47 `Name: "books_total"` and L48 `Help: "Current total number of books in library"` — booksGauge's Help text falsely claims a true total
   ```
 
 ### Reuse — don't invent
@@ -44,10 +47,13 @@ Either (preferred, since it's the smaller footprint and preserves the existing m
 
 ## Step-by-step
 
-1. In internal/metrics/metrics.go, add a second gauge (e.g. `booksTotalAllGauge`) with Name: 'books_total_all' (or the owner's preferred final name) and Help: 'Current total number of books in library, all versions' — following the exact same NewGauge/MustRegister/setter pattern as booksGauge.
-2. In internal/server/server_lifecycle.go's metrics-gathering loop (~line 495-509), add a second call: `if bc, err := s.Ops().CountAllBooks(); err == nil { metrics.SetBooksTotalAll(bc) }` alongside the existing CountPrimaryBooks call.
-3. Update booksGauge's Help text (internal/metrics/metrics.go:48) to explicitly say 'primary-version books' rather than the current ambiguous 'total number of books', since it will continue to report the primary-only count.
-4. Add a CHANGELOG fragment noting the metric's Help text was corrected and a new true-total metric was added, since any existing dashboard reading the OLD Help text's claim was wrong and should be flagged.
+1. In internal/server/server_ops_store.go, add `CountAllBooks() (int, error)` to the `serverStatsReader` sub-interface (declared at internal/server/server_ops_store.go:128, the one that already declares `CountPrimaryBooks() (int, error)` at L129), immediately after that line — verify placement with `grep -n 'CountPrimaryBooks' internal/server/server_ops_store.go`. PebbleStore already satisfies it (internal/database/pebble_store.go:3028) so `var _ ServerOpsStore = (*database.PebbleStore)(nil)` at server_ops_store.go:262 keeps compiling; both MockStores already implement CountAllBooks (internal/database/mock_store.go:957, internal/database/mocks/mock_store.go).
+2. In internal/metrics/metrics.go, add a second gauge `booksTotalAllGauge` with Name 'books_total_all' and Help 'Current total number of books in library, all versions', following the exact NewGauge/MustRegister/setter pattern used by booksGauge (metrics.go:45-49), plus a `SetBooksTotalAll(n int)` setter mirroring SetBooks.
+3. In internal/metrics/metrics.go, change booksGauge's Help text (L48) from 'Current total number of books in library' to 'Current total number of PRIMARY-version books in library'. Do NOT rename its Name ('books_total') — existing dashboards key on it.
+4. In internal/server/server_lifecycle.go, inside the existing `if s.Ops() != nil {` block at L498-505, add `if bc, err := s.Ops().CountAllBooks(); err == nil { metrics.SetBooksTotalAll(bc) }` alongside the existing CountPrimaryBooks call at L499. Guard each independently so one error does not suppress the other.
+5. Add internal/metrics/metrics_test.go coverage asserting the two gauges hold DIFFERENT values when primary != total.
+6. Bump the file header (version + last-edited: 2026-08-21) on internal/metrics/metrics.go, internal/metrics/metrics_test.go, internal/server/server_lifecycle.go and internal/server/server_ops_store.go.
+7. Add changelog fragment changelog.d/20260821_server_131.md (no file header).
 
 Then, always:
 - Keep the change purely additive — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
@@ -97,7 +103,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`A /metrics scrape shows both the (corrected-Help) primary-books gauge and the new true-total gauge, with the true-total gauge's value equal to a direct CountAllBooks() call in a test.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run sed -n '495,509p' internal/server/server_lifecycle.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

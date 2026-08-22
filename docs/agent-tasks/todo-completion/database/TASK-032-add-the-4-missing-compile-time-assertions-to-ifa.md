@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-032-add-the-4-missing-compile-time-assertions-to-ifa.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: c82c7544-d2d0-45a0-b30a-2a9ddb15a69b -->
+<!-- guid: f40746ff-be9f-4bc4-b9d4-331c9cab8ddd -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-032 — Add the 4 missing compile-time assertions to iface_assert.go (TODO.md L4694)
@@ -102,7 +102,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go build ./internal/database/... exits 0.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `grep -c "_ .* = (\*PebbleStore)(nil)" internal/database/iface_assert.go returns 40.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

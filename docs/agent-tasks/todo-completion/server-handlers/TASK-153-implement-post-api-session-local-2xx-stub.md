@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-153-implement-post-api-session-local-2xx-stub.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 79c68c67-9d91-44b6-8043-9724fe5dc24a -->
+<!-- guid: 233a19eb-da9f-4159-9d73-093faf832abe -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-153 — Implement POST /api/session/local (2xx stub) (TODO.md L4507)
@@ -101,7 +101,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (``curl -X POST /api/session/local` (authenticated) returns 2xx, not 404.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — ``curl -X POST /api/session/local` (authenticated) returns 2xx, not 404.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

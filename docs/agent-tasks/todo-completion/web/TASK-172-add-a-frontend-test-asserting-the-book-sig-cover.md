@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-172-add-a-frontend-test-asserting-the-book-sig-cover.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: ca20ab27-078e-4058-8e2e-5fcc8c6af54e -->
+<!-- guid: ae8272be-f513-4ccf-b71f-0b1145927567 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-172 — Add a frontend test asserting the book-sig coverage % badge renders (TODO.md L10586)
@@ -42,9 +42,12 @@ Add/extend web/src/components/dedup/DedupEmbeddingTab.test.tsx with a test that 
 
 ## Step-by-step
 
-1. Locate or create web/src/components/dedup/DedupEmbeddingTab.test.tsx following this repo's existing Vitest + Testing Library conventions (check a sibling test file in the same directory for the render-with-props pattern).
-2. Add TestBookSigCoverage_RendersPartialBadge: render DedupEmbeddingTab with a candidate book having book_sig_coverage_pct=62, assert getByText(/partial fp 62%/) is present.
-3. Add TestBookSigCoverage_HidesBadgeAtFullCoverage: render with book_sig_coverage_pct=100 (and separately with null/undefined), assert the partial-fp text is NOT present.
+1. Create web/src/components/dedup/__tests__/DedupEmbeddingTab.test.tsx — the dedup directory's tests all live under __tests__/ (BandFilterBar.test.tsx, BulkActionBar.test.tsx, CandidateCompareDrawer.test.tsx, FolderFilesChip.test.tsx, LabelToggle.test.tsx); there are no *.test.tsx files directly beside the components. Mirror CandidateCompareDrawer.test.tsx for the render-with-props and mocking pattern, since it is the closest in size to DedupEmbeddingTab.
+2. Give the new file a fresh header (version 1.0.0, new guid via `uuidgen | tr A-Z a-z`, last-edited: 2026-08-21).
+3. Add TestBookSigCoverage_RendersPartialBadge: render DedupEmbeddingTab with a candidate book whose book_sig_coverage_pct is 62, assert getByText(/partial fp 62%/) is present. The badge is gated at web/src/components/dedup/DedupEmbeddingTab.tsx:783 by `book.book_sig_coverage_pct != null && book.book_sig_coverage_pct < 100` and rendered as a Chip labelled `partial fp ${pct}%` at L788.
+4. Add TestBookSigCoverage_HidesBadgeAtFullCoverage: render with book_sig_coverage_pct=100, and again with null/undefined, asserting the partial-fp text is absent in both — 100 is the boundary the `< 100` check excludes.
+5. Before writing assertions, read DedupEmbeddingTab.tsx's props and any API calls it makes on mount, and stub them; it is a full tab component, not a leaf, so a bare render will not mount without mocks.
+6. Add changelog fragment changelog.d/20260821_web_172.md (no file header).
 
 Then, always:
 - Keep the change purely additive — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
@@ -95,7 +98,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (``npm --prefix web run test -- DedupEmbeddingTab` passes with both new tests green.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n "book_sig_coverage_pct" web/src/components/dedup/DedupEmbeddingTab.tsx` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

@@ -1800,7 +1800,7 @@
   ],
   "polarity": "transform",
   "effort": "M",
-  "tier": "sonnet",
+  "tier": "opus",
   "why_tier": "A small, well-scoped new backend endpoint plus a frontend call-site swap \u2014 standard proxy-validation pattern, not architecturally tricky, but touches both Go and TS so worth sonnet over haiku for the cross-stack coordination.",
   "review_critical": false,
   "goal": "Add a POST /api/v1/setup/validate-openai-key (or similarly-named) backend endpoint that receives the user's typed OpenAI key in the request body, calls https://api.openai.com/v1/models server-side with it, and returns {\"valid\": true/false} \u2014 then change WelcomeWizard.tsx to call this new backend endpoint instead of api.openai.com directly, so the raw key never appears in the browser's network log, an extension's request-access hooks, or a corporate TLS-inspecting proxy.",
@@ -1815,15 +1815,8 @@
    "4. In WelcomeWizard.tsx, replace the direct `fetch('https://api.openai.com/v1/models', ...)` call with a call to the new backend endpoint (using this repo's existing API client pattern rather than a raw fetch, if one exists \u2014 check for an apiClient/axios wrapper already used elsewhere in web/src).",
    "5. Never log the raw key server-side; ensure the new Go handler does not slog.Info/Debug the key value itself."
   ],
-  "tests": [
-   "Go: internal/server/handlers/<file>_test.go \u2014 TestValidateOpenAIKey_ValidKey (mock the OpenAI call via an httptest server, assert valid:true) and TestValidateOpenAIKey_InvalidKey (mock a 401, assert valid:false) and TestValidateOpenAIKey_NetworkError (mock a timeout/5xx, assert a distinguishable error, not silently valid:false).",
-   "Web: web/src/components/wizard/WelcomeWizard.test.tsx (or wherever this repo's wizard tests live) \u2014 assert the component now calls the local backend endpoint, not api.openai.com, using a network mock/spy."
-  ],
-  "acceptance": [
-   "`grep -n 'api.openai.com' web/src/components/wizard/WelcomeWizard.tsx` returns 0 hits.",
-   "`go test ./internal/server/handlers/... -run ValidateOpenAIKey -v` passes.",
-   "`npm --prefix web test -- WelcomeWizard` passes."
-  ],
+  "tests": "internal/server/handlers/openai_validate_test.go (new): TestValidateOpenAIKey_ValidKey (httptest server returning 200, assert valid:true), TestValidateOpenAIKey_InvalidKey (401 -> valid:false), TestValidateOpenAIKey_NetworkError (5xx/timeout -> a distinguishable error, NOT a silent valid:false), and TestValidateOpenAIKey_DoesNotLogKey (assert the raw key never reaches the log sink). web/src/components/wizard/WelcomeWizard.test.tsx (new): mock the network layer and assert the component calls the local backend path and never api.openai.com.",
+  "acceptance": "grep -n 'api.openai.com' web/src/components/wizard/WelcomeWizard.tsx returns 0 hits (1 hit at HEAD, L160); go build ./... && go vet ./... && go test ./internal/server/handlers/... -run ValidateOpenAIKey -count=1 exits 0; npm --prefix web test -- WelcomeWizard passes; npm --prefix web run lint passes.",
   "edge_cases": [
    "Rate limiting from OpenAI on repeated validation attempts during setup (user retyping a key several times): the server-side endpoint inherits whatever OpenAI's own rate limit does; no special handling needed beyond passing through OpenAI's error faithfully.",
    "A key that is syntactically well-formed but revoked: OpenAI's /v1/models call itself already distinguishes this (401), no extra client-side format-checking needed."
@@ -1835,7 +1828,9 @@
   "review_notes": [
    "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
    "[simplicity-scope.json] unparseable verdict_override ignored: hold TASK-160 until the scout resolves the server-side file",
-   "[simplicity-scope.json] exact_files contains a prose sentence instead of a path: 'internal/server/handlers/setup.go (or wherever the setup-wizard's other server-side calls live \u2014 confirm exact file)'. Any mechanical consumer of exact_files (the collision matrix, the wave computation, the coordinator's rebase/conflict check"
+   "[simplicity-scope.json] exact_files contains a prose sentence instead of a path: 'internal/server/handlers/setup.go (or wherever the setup-wizard's other server-side calls live \u2014 confirm exact file)'. Any mechanical consumer of exact_files (the collision matrix, the wave computation, the coordinator's rebase/conflict check",
+   "[verify-8.json] exact_files is ['web/src/components/wizard/WelcomeWizard.tsx'] \u2014 a single .tsx file \u2014 but the task builds a new Go HTTP endpoint (step 2), registers a route (step 3), adds Go tests (Tests: 'internal/server/handlers/<file>_test.go'), and adds a web test (Tests: 'web/src/components/wizard/WelcomeWizar",
+   "[verify-8.json] Two acceptance boxes cannot be reached by the brief's own gate. The gate is `npm --prefix web run lint && npm --prefix web test`, which never compiles or runs Go; box 2 is '`go test ./internal/server/handlers/... -run ValidateOpenAIKey -v` passes'. And the Tests section names the target file as the "
   ]
  },
  {

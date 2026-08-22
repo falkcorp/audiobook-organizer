@@ -35,7 +35,9 @@ for path in sorted(glob.glob(os.path.join(PKG, "*", "TASK-*.md"))):
     zero = []
     for c, exp in cmds:
         exp = exp.split(" — ", 1)[0]
-        expect_zero = not re.match(r"\s*(≥|>=|[1-9]\d*|one|two|three|\d+\+)\b", exp, re.I) and bool(re.search(r"\b(0|zero|no)\s*(hits?|matches?|results?)|absent|does not exist|not (yet )?(present|exist|implemented)|should (not|be empty)|expected: 0|— 0\b", exp, re.I))
+        _neg = bool(re.search(r"\b(0|zero|no)\s*(hits?|matches?|results?)|absent|does not exist|no such file|not (yet )?(present|exist|implemented)|should (not|be empty)|expected: 0|— 0\b|exit 1", exp, re.I))
+        _pos = bool(re.search(r"(^|\s)(≥|>=|[1-9]\d*|one|two|three)\s*(hits?|matches?|results?)|\bhit at\b", exp, re.I)) or bool(re.match(r"\s*(≥|>=|[1-9]\d*|one|two|three|\d+\+)\b", exp, re.I))
+        expect_zero = _neg and not _pos   # a mixed expect ("hit at X; ZERO in Y") is a positive anchor: the command as a whole hits
         cc = c
         # strip trailing comment
         cc = re.sub(r"\s{2,}#.*$", "", cc)   # only the brief's "   #" comment separator, never a '#123' inside a pattern

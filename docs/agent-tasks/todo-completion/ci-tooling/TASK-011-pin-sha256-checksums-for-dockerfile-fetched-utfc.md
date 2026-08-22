@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-011-pin-sha256-checksums-for-dockerfile-fetched-utfc.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e3fce1bf-660a-4f76-a191-bd02038624de -->
+<!-- guid: 393cf5d1-e864-4d54-abf5-7d6e05c404bf -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-011 — Pin SHA256 checksums for Dockerfile-fetched utfcpp/taglib tarballs (SEC-8)
@@ -95,7 +95,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`docker build . (or make's equivalent target) completes successfully with the new checksum steps in place; grep -n "sha256sum -c" Dockerfile returns 2 hits.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `docker build . (or make's equivalent target) completes successfully with the new checksum steps in place; grep -n "sha256sum -c" Dockerfile returns 2 hits.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/TASK-180-measure-whether-dedup-duration-abridged-3-573-is.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: a95cffa0-78af-4d91-98a5-72e4047d60d8 -->
+<!-- guid: d7f448da-39f6-41d2-8ed5-75cf063db75d -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-180 — Measure whether dedup:duration-abridged (3,573) is over-firing before touching its display (TODO.md L1350)
@@ -101,7 +101,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`The report, run against the current library, outputs a total count and a sampled confirmation rate with specific book IDs/titles for manual spot-check.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'dedup:duration-abridged\|pct >= 0.10' internal/dedup/collectors_metadata.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

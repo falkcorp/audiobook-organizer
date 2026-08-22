@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/TASK-064-add-a-part-disc-chapter-track-filename-parser-so.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e355dc5d-7aa5-453d-bec5-59f17ca067ea -->
+<!-- guid: 8a6a9566-54f4-4533-8649-4e4bfaf4bba3 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-064 — Add a Part->disc / Chapter->track filename parser so 'P0-C0'-style folders stop falling to ambiguous (REGROUP-PARTCHAPTER-PARSER)
 
-**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · itunes subagent · **Why:** Adds a new pattern into a dense, carefully evidence-ranked classification decision tree (classifyGroup, ~L832-1075) where ordering and guard interactions with existing rules (anthology markers, generic-title guard, edition markers) matter — a naive regex add risks reclassifying folders that should stay ambiguous for other reasons · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · itunes subagent · **Why:** Adds a new pattern into a dense, carefully evidence-ranked classification decision tree (classifyGroup, ~L832-1075) where ordering and guard interactions with existing rules (anthology markers, generic-title guard, edition markers) matter — a naive regex add risks reclassifying folders that should stay ambiguous for other reasons · **Depends on:** none · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 10366 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**REGROUP-PARTCHAPTER-PARSER**" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-13.json`.
 
@@ -106,7 +106,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 **This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: (1) the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; (2) every mutation is journaled through the existing undo ledger (`CreateOperationChange` — verify: `grep -rn "func.*CreateOperationChange" internal/database/*.go`) so `internal/undo` can replay it — a mutation without a journal row is a defect; (3) acceptance includes a test that applies on a fixture and then undoes via `internal/undo` and asserts the fixture is byte-identical; (4) the apply path refuses to start while a `library.scan` operation is running or queued (check the registry for an active scan before mutating — a running scan clobbers applied metadata). Idempotency: re-running in dry-run must report 0 pending changes after a successful apply. Rollback of the CODE = `git revert`; rollback of the DATA = the undo ledger, which is why (2) is not optional. PR stays open for the owner — the coordinator never admin-merges it.
 
-If the first acceptance check below already passes at HEAD (``go test ./internal/itunes/service/... -run TestClassifyGroup_PartChapter` passes`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'regexp.MustCompile' internal/itunes/service/fs_regroup_shape.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

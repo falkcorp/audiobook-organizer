@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-127-log-abs-api-enabled-s-actual-boot-time-value-unc.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: c472f390-6d8b-448b-925c-c1b213e8ef10 -->
+<!-- guid: 55af06aa-f68d-4138-ab7a-fb8077d161b5 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-127 — Log ABS_API_ENABLED's actual boot-time value unconditionally (currently silent when disabled) (N-11)
@@ -96,7 +96,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (``go test ./internal/server/... -run LogsStateEvenWhenDisabled -v` passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'if !snap.ABSAPIEnabled' -A 3 internal/server/wire_abs_routes.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

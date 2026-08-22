@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/TASK-184-measure-itunes-xml-track-persistent-id-coverage-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: c3840994-ad33-48ca-b587-d860a8729b50 -->
+<!-- guid: f1c03ea3-e916-4540-82a0-92662fc1d9c7 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-184 — Measure iTunes XML track Persistent ID coverage against the local DB before promising a Playlist-Items snapshot import (ITUNES-SMARTCRIT-PARSE)
@@ -102,7 +102,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (``go run ./cmd/pid-census --db <copy> --itl <copy> --coverage` runs to completion and prints a resolution percentage with example unresolved PIDs for manual sanity check.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'func (p \*PebbleStore) GetBookByITunesPersistentID' internal/database/pebble_store.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

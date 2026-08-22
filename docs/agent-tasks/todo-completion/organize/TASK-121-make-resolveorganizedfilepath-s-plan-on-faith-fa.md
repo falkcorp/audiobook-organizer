@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/organize/TASK-121-make-resolveorganizedfilepath-s-plan-on-faith-fa.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: d7e46626-08e4-4564-a842-c8ae04b45b19 -->
+<!-- guid: 9242cd4f-37aa-4c5e-8f42-6eb65da54193 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-121 — Make resolveOrganizedFilePath's plan-on-faith fallback loud and verify-before-write (TODO.md L4919)

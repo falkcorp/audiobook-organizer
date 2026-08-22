@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: a0637008-5e7e-434c-b936-e5d52c1b309d -->
+<!-- guid: 2b7ef4c4-f431-4d64-99be-d27bd2af16f3 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — misc-go (todo-completion)
@@ -33,18 +33,19 @@
 
 - `internal/audiobooks/service_filtering.go`: TASK-002, TASK-190, TASK-005, TASK-186 → serialize by wave (TASK-002=w4, TASK-190=w2, TASK-005=w1, TASK-186=w6)
 - `internal/audiobooks/service_query.go`: TASK-001, TASK-002, TASK-190, TASK-003, TASK-005, TASK-186 → serialize by wave (TASK-001=w3, TASK-002=w4, TASK-190=w2, TASK-003=w5, TASK-005=w1, TASK-186=w6)
-- `internal/database/pebble_store.go`: TASK-029, TASK-039, TASK-186 → serialize by wave (TASK-029=w2, TASK-039=w3, TASK-186=w6)
-- `internal/metrics/metrics.go`: TASK-085, TASK-203, TASK-130, TASK-131 → serialize by wave (TASK-085=w1, TASK-203=w4, TASK-130=w2, TASK-131=w3)
-- `internal/organizer/service.go`: TASK-186, TASK-121, TASK-203 → serialize by wave (TASK-186=w6, TASK-121=w1, TASK-203=w4)
-- `internal/plugins/acoustid/backfill.go`: TASK-021, TASK-197 → serialize by wave (TASK-021=w7, TASK-197=w2)
+- `internal/database/pebble_store.go`: TASK-029, TASK-039, TASK-186 → serialize by wave (TASK-029=w2, TASK-039=w4, TASK-186=w6)
+- `internal/metrics/metrics.go`: TASK-085, TASK-095, TASK-203, TASK-130, TASK-131 → serialize by wave (TASK-085=w1, TASK-095=w2, TASK-203=w5, TASK-130=w3, TASK-131=w4)
+- `internal/metrics/metrics_test.go`: TASK-085, TASK-203, TASK-130, TASK-131 → serialize by wave (TASK-085=w1, TASK-203=w5, TASK-130=w3, TASK-131=w4)
+- `internal/organizer/service.go`: TASK-186, TASK-121, TASK-203 → serialize by wave (TASK-186=w6, TASK-121=w1, TASK-203=w5)
 - `internal/plugins/acoustid/lsh_backfill.go`: TASK-197, TASK-088 → serialize by wave (TASK-197=w2, TASK-088=w1)
 - `internal/plugins/maintenance/chapters_backfill.go`: TASK-066, TASK-197 → serialize by wave (TASK-066=w1, TASK-197=w2)
 - `internal/plugins/maintenance/intro_migrate_single_file.go`: TASK-197, TASK-200 → serialize by wave (TASK-197=w2, TASK-200=w1)
 - `internal/plugins/maintenance/intro_transcribe.go`: TASK-197, TASK-200 → serialize by wave (TASK-197=w2, TASK-200=w1)
-- `internal/plugins/maintenance/missing_file_audit.go`: TASK-195, TASK-197, TASK-202 → serialize by wave (TASK-195=w1, TASK-197=w2, TASK-202=w4)
+- `internal/plugins/maintenance/missing_file_audit.go`: TASK-195, TASK-197 → serialize by wave (TASK-195=w1, TASK-197=w2)
 - `internal/plugins/maintenance/missing_file_repoint.go`: TASK-067, TASK-197 → serialize by wave (TASK-067=w3, TASK-197=w2)
-- `internal/plugins/maintenance/regroup_shattered_ai.go`: TASK-197, TASK-201 → serialize by wave (TASK-197=w2, TASK-201=w3)
+- `internal/plugins/maintenance/regroup_shattered_ai.go`: TASK-197, TASK-200, TASK-201 → serialize by wave (TASK-197=w2, TASK-200=w1, TASK-201=w3)
 - `internal/server/handlers/filesystem.go`: TASK-083, TASK-213 → serialize by wave (TASK-083=w1, TASK-213=w2)
+- `internal/server/library_list_warmer.go`: TASK-190, TASK-186 → serialize by wave (TASK-190=w2, TASK-186=w6)
 
 | Wave | Tasks | Prereq | Parallel-safe because |
 |------|-------|--------|-----------------------|

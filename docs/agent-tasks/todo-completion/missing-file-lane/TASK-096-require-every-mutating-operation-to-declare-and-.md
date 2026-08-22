@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-096-require-every-mutating-operation-to-declare-and-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: aba416a3-f586-403c-b25b-5f93bfbe85b9 -->
+<!-- guid: e5937233-94ea-4820-90f3-cc41c63abb4f -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-096 — Require every mutating operation to declare and enforce dry_run support at the registry (TODO.md L7435)
 
-**Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · missing-file-lane subagent · **Why:** Cross-cutting registry contract change touching every mutating OperationDef; needs careful design of the shared param-embedding mechanism and a migration plan for existing ops that lack it. · **Depends on:** none · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · missing-file-lane subagent · **Why:** Cross-cutting registry contract change touching every mutating OperationDef; needs careful design of the shared param-embedding mechanism and a migration plan for existing ops that lack it. · **Depends on:** none · **Wave:** 3 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 7435 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**Require every operation to support `dry_run`, an" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-11.json`.
 
@@ -103,7 +103,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 **This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: (1) the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; (2) every mutation is journaled through the existing undo ledger (`CreateOperationChange` — verify: `grep -rn "func.*CreateOperationChange" internal/database/*.go`) so `internal/undo` can replay it — a mutation without a journal row is a defect; (3) acceptance includes a test that applies on a fixture and then undoes via `internal/undo` and asserts the fixture is byte-identical; (4) the apply path refuses to start while a `library.scan` operation is running or queued (check the registry for an active scan before mutating — a running scan clobbers applied metadata). Idempotency: re-running in dry-run must report 0 pending changes after a successful apply. Rollback of the CODE = `git revert`; rollback of the DATA = the undo ledger, which is why (2) is not optional. PR stays open for the owner — the coordinator never admin-merges it.
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/operations/registry/... passes`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -c 'DryRun' internal/operations/registry/types.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

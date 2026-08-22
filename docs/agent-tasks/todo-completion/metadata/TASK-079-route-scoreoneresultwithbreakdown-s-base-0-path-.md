@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/metadata/TASK-079-route-scoreoneresultwithbreakdown-s-base-0-path-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 30f9c42b-5508-48c6-86c7-4d5e3a031df8 -->
+<!-- guid: f8e5f851-ac69-4fc7-8ec7-7288b47ae38d -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-079 — Route ScoreOneResultWithBreakdown's base==0 path through scoreRecorder instead of a hand-built ScoreStep (SCORE-REC)

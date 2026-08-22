@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-056-consolidate-the-august-executive-summary-roundup.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 7f7f1057-8e69-4229-8f43-32111d7ac1e1 -->
+<!-- guid: fbf6cc15-022e-4a5f-ab5a-00e4cdc84d15 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-056 — Consolidate the August executive-summary roundup through 2026-08-19 (TODO.md L4463)

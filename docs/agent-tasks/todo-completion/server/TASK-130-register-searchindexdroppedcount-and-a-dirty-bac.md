@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-130-register-searchindexdroppedcount-and-a-dirty-bac.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 8fae9baf-5984-44ac-a996-15383e130a52 -->
+<!-- guid: 68a5667b-78d9-4579-bd84-6186e728e8c8 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-130 — Register SearchIndexDroppedCount (and a dirty-backlog gauge) as Prometheus metrics (TODO.md L3384)
 
-**Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · server subagent · **Why:** Mechanical addition following an existing, well-established gauge-registration pattern in the same file (booksGauge/foldersGauge/SetBooks). · **Depends on:** none · **Wave:** 2
+**Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · server subagent · **Why:** Mechanical addition following an existing, well-established gauge-registration pattern in the same file (booksGauge/foldersGauge/SetBooks). · **Depends on:** none · **Wave:** 3
 
 Source: `TODO.md` line 3384 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**`SearchIndexDroppedCount` is not actually expose" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-04.json`.
 
@@ -98,7 +98,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`A local /metrics scrape after the change includes 'audiobook_organizer_search_index_dropped_total' and 'audiobook_organizer_search_index_dirty_backlog'.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'func SearchIndexDroppedCount' internal/server/search_reconciler.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

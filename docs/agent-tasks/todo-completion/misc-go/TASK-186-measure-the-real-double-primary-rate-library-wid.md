@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-186-measure-the-real-double-primary-rate-library-wid.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 60ebc4ce-f428-47d6-a045-7aeda47f5924 -->
+<!-- guid: 91bfb857-b700-4b33-b96e-ca67d01fe7e6 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-186 — Measure the real double-primary rate library-wide, then build the demote-extras sibling of ElectMissingPrimaries (VG-DOUBLE-PRIMARY)
@@ -110,7 +110,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 **This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: (1) the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; (2) every mutation is journaled through the existing undo ledger (`CreateOperationChange` — verify: `grep -rn "func.*CreateOperationChange" internal/database/*.go`) so `internal/undo` can replay it — a mutation without a journal row is a defect; (3) acceptance includes a test that applies on a fixture and then undoes via `internal/undo` and asserts the fixture is byte-identical; (4) the apply path refuses to start while a `library.scan` operation is running or queued (check the registry for an active scan before mutating — a running scan clobbers applied metadata). Idempotency: re-running in dry-run must report 0 pending changes after a successful apply. Rollback of the CODE = `git revert`; rollback of the DATA = the undo ledger, which is why (2) is not optional. PR stays open for the owner — the coordinator never admin-merges it.
 
-If the first acceptance check below already passes at HEAD (`The measurement report shows the real library-wide count (superseding the '10 of 15 at one offset' sampled figure).`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — ``grep -n 'DeleteBook' internal/reconcile/elect_primaries.go` returns 0 hits -- confirms the never-delete constraint.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

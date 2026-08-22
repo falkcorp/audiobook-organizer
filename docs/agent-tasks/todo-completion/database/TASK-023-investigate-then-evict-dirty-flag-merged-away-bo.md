@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-023-investigate-then-evict-dirty-flag-merged-away-bo.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 5e718e52-54d0-4e76-a8be-893d31f3cd8e -->
+<!-- guid: 5a001b57-ebba-44a4-a120-e2c92c21a6e6 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-023 — Investigate then evict/dirty-flag merged-away book/file IDs from every read cache so losers stop appearing after a merge (MERGE-CACHE-EVICT)

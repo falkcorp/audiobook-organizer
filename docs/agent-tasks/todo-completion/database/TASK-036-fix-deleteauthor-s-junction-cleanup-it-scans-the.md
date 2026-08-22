@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-036-fix-deleteauthor-s-junction-cleanup-it-scans-the.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 57bb1a1e-6f42-402a-aeda-e3b934f3013c -->
+<!-- guid: acfe9cff-a51a-4c5d-8650-89fb4a51219f -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-036 — Fix DeleteAuthor's junction cleanup: it scans the dead book_author: keyspace instead of book_authors: (TODO.md L5290)

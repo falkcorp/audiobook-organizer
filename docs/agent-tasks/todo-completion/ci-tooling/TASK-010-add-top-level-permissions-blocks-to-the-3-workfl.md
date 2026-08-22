@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-010-add-top-level-permissions-blocks-to-the-3-workfl.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 7d8cdd30-5711-4aca-98ed-d3ba4973b12d -->
+<!-- guid: b11e7190-3b61-4c6f-851f-6c2d0dd48916 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-010 — Add top-level `permissions:` blocks to the 3 workflows flagged by actions/missing-workflow-permissions (SEC-CODEQL-BACKLOG)
 
-**Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · ci-tooling subagent · **Why:** Mechanical, 3 files, same fix pattern each time — add a minimal top-level permissions block scoped to what the workflow's steps actually need. · **Depends on:** none · **Wave:** 1
+**Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · ci-tooling subagent · **Why:** Mechanical, 3 files, same fix pattern each time — add a minimal top-level permissions block scoped to what the workflow's steps actually need. · **Depends on:** none · **Wave:** 1
 
 Source: `TODO.md` line 2595 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**SEC-CODEQL-BACKLOG**" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-04.json`.
 
@@ -96,7 +96,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`grep -rLn '^permissions:' .github/workflows/*.yml returns 0 lines (down from 3) after the change.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `grep -rLn '^permissions:' .github/workflows/*.yml returns 0 lines (down from 3) after the change.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

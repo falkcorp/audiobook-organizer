@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-133-regression-test-soft-deleting-an-indexed-book-mu.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 938da9f4-30bd-48b3-8014-a255f2f8de1c -->
+<!-- guid: 6f5b2820-fd37-4c2c-ae02-c7af4e768107 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-133 — Regression test: soft-deleting an indexed book must be unsearchable without a boot reconcile (TODO.md L4334)
 
-**Priority:** P1 · **Effort:** S · **Recommended subagent:** Sonnet-class · server subagent · **Why:** must be written to FAIL against the current buggy UpdateBook (proving the bug) and then PASS after L4329's fix — sequencing matters · **Depends on:** TASK-132 · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · server subagent · **Why:** must be written to FAIL against the current buggy UpdateBook (proving the bug) and then PASS after L4329's fix — sequencing matters · **Depends on:** TASK-132 · **Wave:** 2
 
 Source: `TODO.md` line 4334 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "Regression test: soft-delete an indexed book, asse" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-07.json`.
 
@@ -96,9 +96,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-**This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: (1) the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; (2) every mutation is journaled through the existing undo ledger (`CreateOperationChange` — verify: `grep -rn "func.*CreateOperationChange" internal/database/*.go`) so `internal/undo` can replay it — a mutation without a journal row is a defect; (3) acceptance includes a test that applies on a fixture and then undoes via `internal/undo` and asserts the fixture is byte-identical; (4) the apply path refuses to start while a `library.scan` operation is running or queued (check the registry for an active scan before mutating — a running scan clobbers applied metadata). Idempotency: re-running in dry-run must report 0 pending changes after a successful apply. Rollback of the CODE = `git revert`; rollback of the DATA = the undo ledger, which is why (2) is not optional. PR stays open for the owner — the coordinator never admin-merges it.
-
-If the first acceptance check below already passes at HEAD (`Before L4329's fix: this new test FAILS (search still finds the soft-deleted book).`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `Before L4329's fix: this new test FAILS (search still finds the soft-deleted book).` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

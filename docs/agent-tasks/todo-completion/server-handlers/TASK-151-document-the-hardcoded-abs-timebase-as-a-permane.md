@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-151-document-the-hardcoded-abs-timebase-as-a-permane.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 5f4c983a-530a-49ad-97ea-2eef58c5be76 -->
+<!-- guid: 8f0db9ae-2021-4765-bf6e-21ee1bfabb54 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-151 — Document the hardcoded ABS timeBase as a permanent, owner-approved allowance (TODO.md L2589)

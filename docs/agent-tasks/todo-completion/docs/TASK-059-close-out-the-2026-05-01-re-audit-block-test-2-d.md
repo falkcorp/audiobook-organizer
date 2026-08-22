@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-059-close-out-the-2026-05-01-re-audit-block-test-2-d.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f8378e74-b1b4-40c8-afde-2e4ce214c18f -->
+<!-- guid: 4a0558d0-c46e-4437-888a-5eb60df6fb38 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-059 — Close out the 2026-05-01 re-audit block (TEST-2/DEP-1/DEAD-1/CTX-4/LOG-5/R-9/R-10) (TODO.md L10706)

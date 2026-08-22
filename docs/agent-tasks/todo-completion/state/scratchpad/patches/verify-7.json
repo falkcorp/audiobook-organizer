@@ -1,0 +1,1529 @@
+[
+ {
+  "task_id": "TASK-090",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Tests section says 'Add a Vitest test in web/src/components/ChangeLog.test.tsx (create if absent)' but exact_files is only ['web/src/components/ChangeLog.tsx']. Verified the test file does not exist at HEAD: `ls web/src/components/ChangeLog.test.tsx` -> No such file. The worker creates a file outside its declared commit scope.",
+    "fix": {
+     "exact_files": [
+      "web/src/components/ChangeLog.tsx",
+      "web/src/components/ChangeLog.test.tsx"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance checkbox \"web/tests/e2e/files-history.spec.ts's existing snapshot-comparison-banner assertion (L334) still passes unmodified\" cannot be checked by the stated gate `npm --prefix web run lint && npm --prefix web test` (Vitest only). That spec is Playwright (`npm run test:e2e`), which the brief never tells the worker to run. Verified the assertion is at web/tests/e2e/files-history.spec.ts:334 (`await expect(page.getByTestId('snapshot-comparison-banner').first()).toBeVisible();`), so the reference is real but unrunnable under the gate."
+   },
+   {
+    "severity": "advisory",
+    "check": 5,
+    "problem": "Idempotency section is move-shaped ('If the symbol already lives at its NEW location and is absent from the old one ... the move is already done') on a task that adds a11y attributes and moves nothing. The correct idempotency probe is the brief's own `grep -c 'role=\"button\"' web/src/components/ChangeLog.tsx` (0 at HEAD, verified; 1+ = already done)."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-091",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Re-verify block states `grep -n 'setExpanded(' web/src/components/TagComparison.tsx  # 2 hits, both setExpanded(true)`. Ran it at HEAD: exactly 1 hit (L109). The declaration at L75 is `const [expanded, setExpanded] = useState(true);` which does not match the pattern `setExpanded(`. The brief's stated expectation is wrong, so a worker that honours 'expectation mismatch = STOP' halts, and one that doesn't may hunt for a second phantom call site."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Tests section: 'Update/add a Vitest test in web/src/components/TagComparison.test.tsx' and acceptance `npm --prefix web test -- TagComparison passes`, but exact_files is only ['web/src/components/TagComparison.tsx'] and `ls web/src/components/TagComparison*` returns only TagComparison.tsx \u2014 the test file must be created and is out of declared scope.",
+    "fix": {
+     "exact_files": [
+      "web/src/components/TagComparison.tsx",
+      "web/src/components/TagComparison.test.tsx"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-092",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The Goal, step 4 and the Edge-case bullet all assert handleBulkFetchMetadata 'is still called from the working Fetch Selected button' in Library.tsx and must be KEPT. False at HEAD: `grep -rn 'handleBulkFetchMetadata' web/src` returns only web/src/pages/Library.tsx:1445 (definition), :2310 (the prop pass this task deletes), and LibraryDialogs.tsx:178/324/994 (inside the dead dialog). The 'Fetch Selected' button (BatchToolbar.tsx:75 -> onFetchReviewClick -> LibraryToolbar.tsx:159 onFetchReview -> Library.tsx:2093 handleFetchReview) calls handleFetchReview, NOT handleBulkFetchMetadata."
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Consequence of the above: following step 4 literally ('KEEP handleBulkFetchMetadata') leaves a 55-line unreferenced const in Library.tsx. web/tsconfig.json:27-28 sets `noUnusedLocals: true` / `noUnusedParameters: true`, so the brief's own acceptance `npm --prefix web run build` FAILS. Two reasonable workers diverge: one keeps it and reports a red gate, one deletes it and violates the explicit 'do NOT remove' instruction. bulkFetchCancelRef (L343) and bulkFetchInProgress (L393) fall into the same trap once handleCancelBulkFetch goes.",
+    "fix": {
+     "steps": [
+      "In web/src/components/library/LibraryDialogs.tsx, delete the `<Dialog open={bulkFetchDialogOpen} onClose={handleCancelBulkFetch}>...</Dialog>` block (L956-L1000).",
+      "Remove `bulkFetchDialogOpen`, `handleCancelBulkFetch`, `bulkFetchProgress`, `bulkFetchInProgress`, `handleBulkFetchMetadata` from the LibraryDialogsProps interface (L174-178) and from the destructured props (L320-324).",
+      "Do NOT delete getResultLabel: `grep -n 'getResultLabel' web/src/components/library/LibraryDialogs.tsx` shows it is imported from '../../pages/libraryTypes' (L51) and still used at L583 by a surviving dialog. Leave the import alone.",
+      "In web/src/pages/Library.tsx, delete the prop-passing lines L2306-2311, then delete every symbol that becomes unreferenced as a result: `bulkFetchDialogOpen`/`setBulkFetchDialogOpen` (L391), `bulkFetchInProgress` (L393), `bulkFetchProgress`/`setBulkFetchProgress` (L394), `bulkFetchCancelRef` (L343), `handleCancelBulkFetch` (L1468-1473) AND `handleBulkFetchMetadata` (L1445-1467). Verified at HEAD that handleBulkFetchMetadata's only remaining reference is the L2310 prop pass being deleted \u2014 the 'Fetch Selected' button wires to handleFetchReview (Library.tsx:2093), not to it. web/tsconfig.json enables noUnusedLocals, so anything left behind breaks `npm run build`.",
+      "Delete the BulkActionProgress import/type from Library.tsx if `grep -n 'BulkActionProgress' web/src/pages/Library.tsx` returns 0 remaining uses after step 4.",
+      "Run `npm --prefix web test -- Library` and check web/src/pages/Library.bulkFetch.test.tsx and web/src/pages/Library.fetchOpToast.test.tsx: both mention 'Fetch Selected'. If either asserts the removed dialog, report it rather than editing it \u2014 it is out of scope for this brief."
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 9,
+    "problem": "web/src/pages/Library.bulkFetch.test.tsx exists at HEAD and exercises the bulk-fetch flow; it is not in exact_files, so a worker that finds it asserting the removed dialog has nowhere in scope to fix it."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-093",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The first line of the 'Re-verify these anchors' block is a mangled, unrunnable shell command with unbalanced quotes: `grep -n 'startsWith' \\''(\\'\\''/api/v1/audiobooks/\\'\\'')' \\'\\''and .audiobooks/batch. below below above' web/tests/e2e/utils/test-helpers.ts || grep -n audiobooks/batch ...`. Pasted into zsh/bash it is a syntax error or an open quote that hangs the shell. The intended check is just `grep -n 'audiobooks/batch' web/tests/e2e/utils/test-helpers.ts` (verified: 2 hits, L1623 comment + L1626 exact-match branch).",
+    "fix": {
+     "verified_anchors": [
+      {
+       "claim": "the /audiobooks/batch shadowing hazard is already fixed and carries an explanatory comment",
+       "grep_cmd": "grep -n 'audiobooks/batch' web/tests/e2e/utils/test-helpers.ts",
+       "expect": "2 hits: L1623 comment, L1626 `if (pathname === '/api/v1/audiobooks/batch' && method === 'POST')`"
+      },
+      {
+       "claim": "10 startsWith() prefix catch-alls remain in the dispatcher",
+       "grep_cmd": "grep -c '\\.startsWith(' web/tests/e2e/utils/test-helpers.ts",
+       "expect": "10"
+      },
+      {
+       "claim": "the 10 sites are at the line numbers the Background lists",
+       "grep_cmd": "grep -n '\\.startsWith(' web/tests/e2e/utils/test-helpers.ts",
+       "expect": "L762, L1571, L1603, L1618, L1636, L1646, L1683, L1715, L1745, L1750"
+      }
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance checkbox 1 is 'Manual audit table (prefix -> shadowed exact match found: yes/no) attached to the PR description' \u2014 not checkable by any command or grep. Its second half, `npm --prefix web run test:e2e`, is also not the declared gate (`npm --prefix web run lint && npm --prefix web test`), so neither half of the box is verifiable by the gate the brief tells the worker to run."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Tests section: 'if any shadowing IS found and fixed, add/adjust an e2e assertion in the spec exercising that specific endpoint'. exact_files is only ['web/tests/e2e/utils/test-helpers.ts'] and the spec is never named, so any actual finding forces an edit outside the declared scope to an unspecified file."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "The task is conditional ('if none are found shadowed, no code change is needed') yet the always-do block still requires a header version bump and a changelog fragment. A zero-finding run produces a changelog fragment for a no-op and no changed source file, so the header-bump acceptance box ('grep -n \"last-edited: 2026-08-21\" <file> hits for each') has no file to check."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-094",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Tests require Vitest tests for BOTH components and acceptance names `npm --prefix web test -- BookDetailHeader` and `-- BookDetailVersionGroup`, but exact_files is only the two .tsx components. `ls web/src/components/bookdetail/` at HEAD shows the only test file in that directory is BookDetailStatusAlerts.test.tsx \u2014 neither BookDetailHeader.test.tsx nor BookDetailVersionGroup.test.tsx exists, so both must be created outside declared scope.",
+    "fix": {
+     "exact_files": [
+      "web/src/components/bookdetail/BookDetailHeader.tsx",
+      "web/src/components/bookdetail/BookDetailHeader.test.tsx",
+      "web/src/components/bookdetail/BookDetailVersionGroup.tsx",
+      "web/src/components/bookdetail/BookDetailVersionGroup.test.tsx"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 1 says 'thread a versionCount (or versions.length) prop into the component' but never says WHERE the value comes from. BookDetailHeader.tsx has no versions data at HEAD (`grep -n 'Version Group Linked' web/src/components/bookdetail/BookDetailHeader.tsx` -> single hit L198, a static label), and the count source `allVersions` lives in the sibling BookDetailVersionGroup.tsx. The caller that must pass the new prop (web/src/pages/BookDetail.tsx) is named nowhere in the brief and is not in exact_files. Step 3 compounds this by demanding the header and list counts agree without saying which component owns the number."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-096",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files lists 17 files but omits internal/operations/registry/registry_test.go, which the Tests section requires ('internal/operations/registry/registry_test.go: TestValidateOpDef_RejectsWriteCapabilityWithoutDryRun'). Verified the file exists at HEAD (`ls internal/operations/registry/registry_test.go`), so this is an in-repo edit outside declared scope.",
+    "fix": {
+     "exact_files": [
+      "internal/operations/registry/registry.go",
+      "internal/operations/registry/registry_test.go",
+      "internal/operations/registry/types.go",
+      "internal/scheduler/extra_ops.go",
+      "internal/server/ai_ops.go",
+      "internal/server/batch_apply_op.go",
+      "internal/server/batch_save_op.go",
+      "internal/server/duplicates_ops.go",
+      "internal/server/entities_ops.go",
+      "internal/server/folder_autoscan_op.go",
+      "internal/server/itunes_ops.go",
+      "internal/server/itunes_path_ops.go",
+      "internal/server/library_core_ops.go",
+      "internal/server/library_writeback_op.go",
+      "internal/server/metadata_candidate_op.go",
+      "internal/server/openlibrary_ops.go",
+      "internal/server/reconcile_ops.go",
+      "internal/server/scheduler_maintenance_window_op.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Step 3 instructs the worker to 'Audit every existing OperationDef with a write capability (grep -rln CapLibraryWrite internal/plugins/) and set SupportsDryRun: true on those'. Ran it: 20+ files match under internal/plugins/ alone (acoustid/reset_all.go, acoustid/backfill.go, deluge/centralization.go, maintenance/author_purge_empty.go, maintenance/missing_file_audit.go, maintenance/regroup_shattered_ai.go, ...). NONE of internal/plugins/ is in exact_files, yet without editing them the new ValidateOpDef check rejects their registration and the brief's own acceptance `go build ./... && go test ./internal/server/...` fails at server boot. This is also a wave-collision hazard: internal/plugins/maintenance/missing_file_audit.go and regroup_shattered_ai.go are already claimed by TASK-195/197/201/202 in the same package's collision table."
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 4 is 'Optionally introduce a shared DryRunParams struct ... (some ops use `apply` inverted, some use `dry_run` \u2014 pick one canonical name and document the other as deprecated per-op)'. 'Optionally' plus 'pick one canonical name' is exactly the two-workers-diverge case: one worker adds only the bool field, another normalizes ~20 op param structs from `apply` to `dry_run`, changing the public JSON API of every maintenance op. The repo's own hard rule is apply=false-default for repair ops (missing_file_repoint.go:424 `if !params.Apply`), so inverting the polarity of `apply` to `dry_run` on those ops silently flips the safe default if a worker gets the inversion wrong."
+   },
+   {
+    "severity": "advisory",
+    "check": 3,
+    "problem": "The new ValidateOpDef check is a registration-time guard whose over-suppression failure mode is catastrophic and has precedent in this repo (a gate on the maintenance plugin already causes 0/105 ops to register when its precondition is unmet). The stated anti-over-suppression test only covers a synthetic positive OperationDef; there is no test asserting the REAL registered op count is unchanged after the guard lands. Add one: assert len(registry.All()) at boot equals the pre-change count."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-097",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Step 2 says 'delete the line `\"react-is\": \"^19.0.0\",`' \u2014 with a trailing comma. At HEAD that comma does not exist: `sed -n '35,39p' web/package.json` shows react-is is the LAST key in the overrides object (`\"react-is\": \"^19.0.0\"` at L38, followed by `}`). A literal-string-match worker finds no such line; a sloppier one deletes L38 and leaves `\"brace-expansion\": \"^5.0.7\",` with a dangling comma, producing invalid JSON that breaks `npm install`.",
+    "fix": {
+     "steps": [
+      "Open web/package.json. Verify the shape first: `sed -n '35,39p' web/package.json` shows the overrides object as minimatch, brace-expansion, then `\"react-is\": \"^19.0.0\"` at L38 as the LAST key with NO trailing comma.",
+      "Delete the react-is entry AND the trailing comma on the now-last key: after the edit the object must read `\"overrides\": { \"minimatch\": \">=10.2.1\", \"brace-expansion\": \"^5.0.7\" }` with valid JSON. Confirm with `python3 -m json.tool web/package.json > /dev/null`.",
+      "Run `npm --prefix web install` to regenerate web/package-lock.json without the override.",
+      "Run `npm --prefix web run build` and `npm --prefix web test` to confirm react-is resolving naturally does not regress anything.",
+      "Do NOT attempt a file-header bump on web/package.json or web/package-lock.json \u2014 both are strict JSON with no comment syntax and neither carries a header at HEAD (`head -3 web/package.json` shows the bare `{`)."
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 'File headers bumped on every changed file (grep -n \"last-edited: 2026-08-21\" <file> hits for each)' is unsatisfiable for BOTH files in exact_files. Verified: `head -3 web/package.json` and `head -3 web/package-lock.json` show bare JSON with no `// file:` header \u2014 JSON permits no comments, so the box can never be ticked and a rule-following worker will either fail the gate or corrupt the manifest trying."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-098",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Step 2 says 'Add applied_filters to the response gin.H built in buildListResponse'. buildListResponse is NOT a function in this package \u2014 `grep -rn 'buildListResponse' internal/` shows it is an injected closure field (internal/server/handlers/audiobooks/handler.go:119) whose implementation is `(*Server).buildAudiobookListResponse` at internal/server/audiobooks_helpers.go:52, wired at internal/server/wire_handlers.go:547. That file is not in exact_files, so following step 2 literally edits a file outside declared scope."
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 2's parenthetical '(or wrap its result)' makes the two branches equally sanctioned and they are not equivalent. Editing buildAudiobookListResponse also changes what the startup cache warmer produces \u2014 `grep -rn 'buildAudiobookListResponse' internal/` shows internal/server/library_list_warmer.go:560 and :756 call it directly \u2014 so applied_filters gets baked into warmed cache entries under the warmer's own filter set. Wrapping in the handler avoids that. The brief does not say which, so two workers ship different behaviour on a cached path."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "handler.go:601-602 caches the built response (`h.listCache.Set(cacheKey, resp)`) and :590 serves it back (`httputil.RespondWithOK(c, cached)`). The brief never says whether applied_filters must be recomputed per request or may be served from the cache entry, so a cache key that does not encode every echoed param can echo another request's filters back to the client. Name the required behaviour explicitly."
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "Acceptance box 1 is a `curl` against a running server with no instruction on how to start one and no port/host given; the declared gate is `go test ./internal/server/handlers/audiobooks/...`. Restate it as an httptest assertion inside applied_filters_test.go so the box is checkable by the gate."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-099",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "The declared gate is `git diff --check && grep -L 'last-edited: ' $(...) ; echo 'docs/tooling task: header check only'`. Because the final `echo` follows a `;`, the pipeline's exit status is always 0 \u2014 the acceptance box 'Gate green: <gate> exits 0' can never fail, including when `git diff --check` reports whitespace errors or grep -L names a header-less file. The gate is vacuous as written.",
+    "fix": {
+     "acceptance": [
+      "`git diff --check` exits 0 (run it as its own command, not chained before an echo).",
+      "`grep -L 'last-edited: ' .github/workflows/prerelease.yml` prints nothing (the header is present and bumped) \u2014 verified the file has a header block at HEAD: `head -6 .github/workflows/prerelease.yml` shows `# file:`/`# version: 2.10.4`/`# last-edited: 2026-07-06`.",
+      "`grep -n 'rc' .github/workflows/prerelease.yml` matches the new counting step.",
+      "`bash .github/scripts/check-rc-ordinal.sh testdata/gh-release-list-10rc.json v0.217` exits 1 and names the base version; the same script against testdata/gh-release-list-1rc.json exits 0 (the anti-vacuous case).",
+      "Changelog fragment present: `test -f changelog.d/20260821_missing-file-lane_099.md`."
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 1 \u2014 'A state with 10 or more existing -rc.N releases for the current base version causes the new step to fail' \u2014 is not checkable by any command the worker can run; it describes a GitHub release state that does not exist and that the worker is explicitly forbidden from creating (workers never push). The Idempotency section then reuses this same unrunnable string as the already-done probe."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "The Tests section requires 'dry-running the new step's shell against a captured `gh release list` JSON fixture containing 10+ fake -rc entries for one base version and fewer for another'. That fixture file and the extracted shell script are new files, and exact_files is only ['.github/workflows/prerelease.yml'] \u2014 the counting logic as written lives inline in YAML and cannot be dry-run at all without extracting it to a script."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 2 offers 'a new job (or a final step in the existing `prerelease` job, `needs: prerelease`)' \u2014 these are different YAML shapes with different failure semantics (a separate job with `needs:` still lets the reusable release publish first; an inline step does not). Step 3 also says to derive the base version from 'the tag the reusable workflow just minted' but prerelease.yml is a 50-line wrapper (`wc -l` -> 50) that does not surface that tag as an output, so the worker must invent how to obtain it."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-100",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Tests section requires 'A Login.test.tsx case: malicious location.state.from (\"//evil.com\") falls back to \"/dashboard\"'. `ls web/src/pages/Login.test.tsx` -> No such file at HEAD, and it is not in exact_files (which lists BookDetail.tsx, Login.tsx, safeReturn.ts, safeReturn.test.ts). The worker must create a test file outside its declared commit scope.",
+    "fix": {
+     "exact_files": [
+      "web/src/pages/BookDetail.tsx",
+      "web/src/pages/Login.tsx",
+      "web/src/pages/Login.test.tsx",
+      "web/src/utils/safeReturn.test.ts",
+      "web/src/utils/safeReturn.ts"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 2 \u2014 'Setting sessionStorage.library_return_url to \"//evil.com\" then triggering BookDetail's return-to-library action navigates to \"/library\", not evil.com' \u2014 is a manual browser interaction. No command in the declared gate (`npm --prefix web run lint && npm --prefix web test`) checks it, and no BookDetail test file is named or in scope to encode it."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Background claims 'abs/openid.go:246-257 does the same validation for redirect_uri on the Go side \u2014 a second reference implementation'. It does not: `sed -n '240,262p' internal/server/handlers/abs/openid.go` shows an allowlist check `if !oidcRedirectAllowed(redirectURI)`, a registered-URI lookup with a completely different algorithm from oauth_login.go:262's four string checks. A worker that consults the 'second reference' when the first seems ambiguous will port the wrong guard. Also note the path is written as 'abs/openid.go', not the real repo path internal/server/handlers/abs/openid.go."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-101",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The whole brief points at the wrong file. Step 1 says 'Read internal/plugins/maintenance/regroup_shattered_ai.go to find the recommender's entry point'. It has none: `grep -n 'func.*[Rr]ecommend' internal/plugins/maintenance/regroup_shattered_ai.go` -> 0 hits; the 11 matches for 'Recommend' are struct FIELDS (RecommendedAction L93, RecommendationReason L97, RecommendationEvidence L101) that are merely copied through at L432-434, above a comment that says 'classifyGroup owns the rule'. The actual recommender is `func classifyGroup(members []memberInfo) (RegroupGroup, bool)` at internal/itunes/service/fs_regroup_shape.go:832."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Consequence: the test cannot be written where the brief puts it. classifyGroup and its input type memberInfo are both unexported members of package `service` (internal/itunes/service), so a test in package `maintenance` (internal/plugins/maintenance/regroup_shattered_ai_test.go \u2014 the sole entry in exact_files) cannot call it or construct its input. The declared gate `go test ./internal/plugins/maintenance/...` would never execute the recommender either. The correct location is internal/itunes/service/fs_regroup_shape_test.go, which exists at HEAD and is not in scope.",
+    "fix": {
+     "exact_files": [
+      "internal/itunes/service/fs_regroup_shape_test.go"
+     ],
+     "gate": "go build ./... && go vet ./... && go test ./internal/itunes/service/... -count=1"
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 4 asks for a companion fixture with a large duration gap 'proving the test isn't vacuously true \u2014 the recommender must be able to emit something different when the evidence differs'. classifyGroup at fs_regroup_shape.go:832 keys on folder/structure/prefix/author signals (fpVotes, discCount, prefixVotes, anthology and version markers), not on duration at all, so a duration-only companion fixture may well return the identical verdict and the step becomes unsatisfiable. The brief must name which input actually moves the verdict before demanding an anti-vacuous case built from durations."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-102",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 3 requires `npm --prefix web run test:e2e` to exit 0, but the brief's own Background says in red: 'Do not attempt any of this until the e2e suite is fixed ... TREAT AS A HARD BLOCKER until independently verified fixed', and step 1 forbids proceeding until confirmed. By the brief's own statement the box cannot be ticked, and nothing in the brief tells the worker what 'fixed' looks like. (The script is real: web/package.json:12 `test:e2e` = check-spec-discovery.mjs + playwright.)"
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Step 3 says 'Run npx tsc --noEmit and npm run build to surface every new type error; fix the underlying type issue' and step 6 says 'Bump file headers on every file actually edited to fix a type error'. exact_files is only ['web/package-lock.json','web/package.json','web/tsconfig.json','web/tsconfig.node.json'] \u2014 by construction every type-error fix edits a .ts/.tsx source file outside declared scope, and the number of such files is unknown up front. This also silently collides with the whole web/ lane (Library.tsx, BookDetail.tsx, Sidebar.tsx are claimed by TASK-092/094/100/199 in the same package)."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 'File headers bumped on every changed file (grep -n \"last-edited: 2026-08-21\" <file> hits for each)' is unsatisfiable for 2 of the 4 exact_files. Verified `head -3 web/package.json` and `head -3 web/package-lock.json` are bare JSON with no header (JSON has no comment syntax); web/tsconfig.json DOES carry one (`head -3 web/tsconfig.json` -> `// file: web/tsconfig.json`). The box needs to be scoped to the files that can actually hold a header."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "The declared hard blocker is not encoded in the dependency graph. missing-file-lane/orchestration.md shows only `TASK097 --> TASK102`; the e2e-repair task in the same workstream (TASK-198) is in the SAME wave 2, so the coordinator may dispatch TASK-102 before TASK-198 lands. Either add the dependency or state which TODO item [[e2e-suite-broken-on-main]] maps to.",
+    "fix": {
+     "depends_on_lines": [
+      "L6394 (TASK-198, scan-import-organize.spec.ts e2e repair) \u2014 TASK-102's own Background declares the e2e suite a HARD BLOCKER; it must be verified green first",
+      "TODO-MUI-3 (TASK-097, react-is override removal \u2014 shared web/package.json)"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-103",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Step 4 tells the worker to 'Bucket by TranscribeStatus (ok/whisper_error/unparsed/empty/other)'. 'unparsed' is not a value this field ever takes. internal/database/store.go:346-352 documents the closed set: \"ok\", \"source_file_missing\", \"no_audio\", \"ffmpeg_error\", \"whisper_error\", \"empty\". A worker following step 4 produces a report with a bucket that is always zero and silently loses the three real failure statuses (source_file_missing, no_audio, ffmpeg_error) into 'other' \u2014 which is exactly the drill-down the item wants (source_file_missing is the stale-FilePath-after-organize signal the field doc calls out).",
+    "fix": {
+     "steps": [
+      "Re-locate the outcome-application function in internal/plugins/maintenance/intro_transcribe.go (`grep -n '^func ' internal/plugins/maintenance/intro_transcribe.go`) and confirm which field-write is conditional on outcome type before citing any name in a comment. The TODO item's cited 'applyOutcome' does not exist at HEAD.",
+      "Add internal/plugins/maintenance/transcribe_status_drift_report.go modeled on missing_file_repoint.go: sdk.OperationDef with `Liveness: sdk.LivenessRunItems` and `Capabilities: []sdk.Capability{sdk.CapLibraryRead}` ONLY \u2014 this op never writes. (Both symbols verified in use at internal/plugins/acoustid/lsh_backfill.go:59,69.)",
+      "Load books with the store's GetAllBooksCore accessor \u2014 name it explicitly, because `grep -oE 'GetAllBooks[A-Za-z]*' internal/database/*.go` shows FOUR distinct bulk-book accessors (GetAllBooks, GetAllBooksCore, GetAllBooksFullFrom, plus their Func variants). BookCore carries IntroTranscription (internal/database/bookcore.go:140, copied at :257), so the core projection is sufficient; do not reach for GetAllBooksFullFrom. Filter to non-empty IntroTranscription.",
+      "Bucket by TranscribeStatus using the EXACT closed set documented at internal/database/store.go:346-352: \"ok\", \"source_file_missing\", \"no_audio\", \"ffmpeg_error\", \"whisper_error\", \"empty\", plus a nil/unset bucket and an \"other\" bucket for any future value. Do NOT invent an \"unparsed\" status \u2014 it does not exist.",
+      "Within the whisper_error bucket, sub-bucket on whether TranscribeAttemptedAt is more than 1h later than IntroTranscribedAt -> 'stale-drift' vs 'recent-failure'; a book with EITHER timestamp nil lands in 'unknown-timing' and is never compared against a zero time.Time.",
+      "Write a TSV report (bucket, book_id, transcribe_status, transcribed_at, attempted_at) before the summary, mirroring `writeRepointReport` (verified at internal/plugins/maintenance/missing_file_repoint.go:497), plus a JSON summary log line with bucket counts.",
+      "Register the op in internal/plugins/maintenance/plugin.go's op list next to `p.missingFileRepointDef()` (L64) and `p.probeDirectoryBooksDef()` (L101)."
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 2 \u2014 'Running the op against a fixture DB with N qualifying books produces a TSV with exactly N data rows plus header' \u2014 names no fixture DB, no N, and no command. Nothing in exact_files creates such a fixture. As written no one can tick it; the equivalent assertion belongs inside transcribe_status_drift_report_test.go where the gate can run it."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 3's 'the store's existing bulk-book accessor' is unnamed and the choice is not neutral: `grep -oE 'GetAllBooks[A-Za-z]*' internal/database/*.go` returns GetAllBooks, GetAllBooksCore, GetAllBooksFullFrom (+Func variants). Two workers will pick differently and get different memory profiles over a ~45k-book library."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-104",
+  "verdict": "fail",
+  "verdict_override": "needs_design",
+  "reason": "The op's auto-apply path clears VersionGroupID and rewrites IsPrimaryVersion on production rows, but three inputs that decide WHETHER to write are left for the worker to invent: the transcript quality filter ('after filtering unparsed/low-quality per whatever quality signal the intro-transcribe parser already emits' \u2014 no such signal is named and none was found), the acoustic similarity function ('find existing similarity code in internal/plugins/acoustid before writing a new distance function'), and the confidence threshold (a param with no value or units). An owner decision is required on all three before this is executable; it is not a Bucket-1 task.",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 3 gates the whole classification on 'after filtering unparsed/low-quality per whatever quality signal the intro-transcribe parser already emits'. No such quality signal is named, and the closed TranscribeStatus set (internal/database/store.go:346-352) has no 'unparsed' value. Two workers will build two different quality filters, and the filter directly decides which groups get auto-ungrouped."
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 1 asks for 'a confidence threshold param' with no default, no scale and no units, and step 5 applies writes to 'refuted groups above the confidence threshold'. A threshold with no defined value is the single decision separating a no-op from a mass-ungroup across the version-grouped population."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Step 5 says to use 'the store's existing update path (find the exact accessor used by ApplyVersionGroup or manual ungroup)'. `grep -rn 'ApplyVersionGroup' internal/` finds it only via internal/plugins/maintenance/regroup_apply_test.go:198 (`apply := ApplyVersionGroup(store)`) \u2014 the brief never names the production symbol or its file, so the worker must reverse-engineer it from a test."
+   },
+   {
+    "severity": "advisory",
+    "check": 7,
+    "problem": "Step 5 'restore IsPrimaryVersion' touches the one field this repo has an open, unresolved divergence on (is_primary_version disagrees across read paths). The brief gives no rule for what value to restore it to when the members disagree, and the tests do not cover it. review_critical=true and tier=opus are correctly set, so the tier requirement of check 7 is met \u2014 this is about the missing semantics, not the tier."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-105",
+  "verdict": "fail",
+  "verdict_override": "needs_design",
+  "reason": "Step 4 is 'Find or add the M4B chapter-atom write function (search internal/audioutil, internal/mediainfo for existing atom-writing code first)'. Verified there is none: `grep -rn 'func.*Chapter' internal/audioutil internal/mediainfo` returns only ProbeChapters (chapters.go:52, read-only ffprobe), SynthesizeChapters (timeline.go:54) and ShiftChapters (timeline.go:78) \u2014 all read-only or pure. So the task silently requires inventing an in-place MP4/M4B atom mutator that rewrites the user's library files, with no library named, no fixture, and no rollback story, in a repo whose own note calls bare write-back the dominant data-loss incident class. That is an owner design decision, not a Bucket-1 implementation task.",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "The M4B atom writer step 4 requires would live in internal/audioutil or internal/mediainfo; exact_files is only ['internal/plugins/maintenance/chapters_backfill_from_duplicate.go','..._test.go','internal/plugins/maintenance/plugin.go']. The single most dangerous file in the task is outside the declared commit scope."
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Every gate in the Goal is unquantified: 'an AcoustID match score well above the ordinary dedup threshold' (no number, and the ordinary threshold is not cited), 'reject on ANY duration mismatch beyond a small tolerance' (no tolerance), 'reconcile summed chapter durations against the target's total runtime' (no tolerance). TestChaptersFromDuplicate_RejectsOnDurationMismatch and _RejectsBelowFingerprintThreshold cannot be written without inventing these numbers, and inventing them decides how many of the user's files get rewritten."
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Steps 1 and 6 are open research, not steps: 'Check whether any existing metadata-provider client already exposes chapter title+offset data ... if so, prefer that path entirely and treat steps 2-3 as fallback only' and 'Depends on L8583's chapters-served verification being usable as the which-books-lack-chapters input query \u2014 confirm that population is queryable before wiring candidate-selection'. Whether the task builds path (1) or path (2) is decided mid-task by the worker, so two workers ship entirely different features."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "The Reuse block says to use 'chapters_backfill.go's SaveChaptersForBook / DeleteChaptersForBook write path'. `grep -n 'SaveChaptersForBook\\|DeleteChaptersForBook' internal/plugins/maintenance/chapters_backfill.go` hits only L9, L41, L57 \u2014 all of them COMMENTS, not call sites. The named write path is not demonstrated in the file the brief points at."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-106",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 7,
+    "problem": "The op creates production rows on every scan (step 3: 'calls CreateUserPlaylist with Type: static'), and there is no apply/dry-run gate anywhere in the brief and no idempotency rule. Re-scanning the library re-runs step 4 for every playlist file already imported, so a second scan creates a second copy of every playlist. `grep -n 'func (p \\*PebbleStore) GetUserPlaylistByName' internal/database/pebble_store_playlists.go` -> L219 exists and is the obvious guard, but the brief never mentions it. review_critical is false and there is no apply=false default, so this fails the prod-data-write rule.",
+    "fix": {
+     "review_critical": true,
+     "steps": [
+      "Add internal/playlist/import.go with one parser per format. ParseM3U/ParsePLS/ParseXSPF return ([]string, error); ParseCue returns its own type (one referenced audio file plus per-track offsets) \u2014 it does NOT fit the []string shape and must not be forced into it.",
+      "Add ResolveEntriesToBookFiles(store, paths []string) returning matched book_file IDs AND the list of unresolved paths. Name the store lookup explicitly rather than 'the store's existing file-path lookup'.",
+      "Add ImportPlaylistFile(store, path string) (*database.UserPlaylist, error) that dispatches by extension and calls CreateUserPlaylist (internal/database/pebble_store_playlists.go:142) with Type: static. Before creating, call GetUserPlaylistByName (pebble_store_playlists.go:219) and SKIP if a playlist with the derived name already exists \u2014 a scan runs repeatedly and must not create a duplicate playlist each time. Assert this with TestImportPlaylistFile_SecondScanCreatesNoDuplicate.",
+      "Decide and hard-code the empty-playlist rule: a playlist file with 0 resolvable entries is a no-op and creates NO row (do not leave this to the worker).",
+      "Hook into internal/scanner/scanner.go as a POST-scan pass (not inline in the per-file walk), so a partially-complete scan cannot create a playlist whose members have not been imported yet. Note the owner rule that a running scan must not mutate applied metadata \u2014 this pass creates playlist rows only and touches no Book row.",
+      "Add file headers to all new files."
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 1 declares four parsers with one signature \u2014 'ParseM3U(path) ([]string, error) ..., ParsePLS, ParseCue (track offsets + one referenced audio file), ParseXSPF' \u2014 but ParseCue's described output (offsets + a single file) is not a []string of entry paths, and step 3 then says ImportPlaylistFile 'dispatches by extension, resolves entries, and calls CreateUserPlaylist with ... BookIDs from the resolved set'. What a .cue import produces (one member? N members?) is undefined, so two workers ship different behaviour for .cue."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Edge-case bullet 1 explicitly defers a decision to the worker: 'Empty playlist file (0 entries) \u2014 decide and document whether that's a no-op or an empty static playlist.' A brief must not hand a persistence decision to a Haiku-class executor."
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "Acceptance box 2 ('Importing a fixture .m3u with 3 known-good paths and 1 unknown path creates a static playlist with 3 members and logs/reports the 1 unresolved entry') names no fixture and no command. Restate it as a named test in internal/playlist/import_test.go so the gate can run it."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-107",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Step 4 is 'Wire the route alongside ReorderPlaylist's route'. That route is registered in internal/server/wire_library_routes.go:85 (`protected.POST(\"/playlists/:id/reorder\", playlistH.ReorderPlaylist)`), NOT in internal/server/handlers/playlists.go (which only defines the handler at :396). wire_library_routes.go is absent from exact_files ['internal/server/handlers/playlists.go','internal/server/handlers/playlists_export_test.go'], so the endpoint the whole task exists to add cannot be reached without an out-of-scope edit.",
+    "fix": {
+     "exact_files": [
+      "internal/server/handlers/playlists.go",
+      "internal/server/handlers/playlists_export_test.go",
+      "internal/server/wire_library_routes.go"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "Acceptance box 2 \u2014 'GET the endpoint for a real 3-book static playlist returns valid #EXTM3U text with 3 path lines' \u2014 requires a running server with real data; the declared gate is `go test ./internal/server/handlers/... -run ExportPlaylistM3U`. Fold it into TestExportPlaylistM3U_HappyPath via httptest so it is checkable."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Background cites 'the read-mostly convention playlistDTO already uses in abs/playlists.go' \u2014 the real path is internal/server/handlers/abs/playlists.go (verified present); the abbreviated path does not resolve from the repo root and a literal-minded worker greps for a nonexistent file."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-108",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is ['internal/server/handlers/abs/progress.go','internal/server/handlers/abs/progress_test.go'], but the struct step 2 says to extend is not in either. Verified: the merge type is `progress.Progress` at internal/syncapi/progress/policy.go:33 with `MergeExplicit` at policy.go:200 (imported at progress.go:15), and the persisted record is `database.UserBookState` at internal/database/store.go:964. Adding a Rating field requires editing BOTH of those out-of-scope files, and the declared gate `go test ./internal/server/handlers/abs/...` compiles neither package's tests."
+   },
+   {
+    "severity": "fatal",
+    "check": 7,
+    "problem": "Adding a persisted Rating field to database.UserBookState (internal/database/store.go:964) is a schema change on a live user-data record, but the brief is tier=sonnet with review_critical=false. Per the prod-data rule this must be Opus-class AND review_critical so the PR stays open for the owner.",
+    "fix": {
+     "tier": "opus",
+     "review_critical": true
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Three decisions are explicitly deferred to the executing worker: step 2 'Add a Rating field (type TBD by step 1 \u2014 likely *float64 or *int)'; edge case 1 'A rating outside whatever range the client expects \u2014 decide reject vs clamp vs pass-through'; edge case 2 'If a client sends written-review text alongside a numeric rating, decide whether to store it or ignore it'. Step 1 ('Check what real clients actually send ... and any captured request logs') has no named fixture to consult. Two workers produce two incompatible wire formats for a field that then persists."
+   },
+   {
+    "severity": "advisory",
+    "check": 9,
+    "problem": "Step 5 says 'Extend an internal/syncapi/conformance fixture so field-presence is checked automatically'. That directory exists (`ls -d internal/syncapi/conformance`) but no file under it is in exact_files."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-109",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Step 3 says 'Wire a new op or extend an existing torrent-processing path to call this on each Deluge torrent name and submit the result to the matcher found in step 1'. exact_files is only ['internal/deluge/metadata_candidate.go','internal/deluge/metadata_candidate_test.go'] \u2014 both new. Registering an op or extending an existing path necessarily edits an existing file (an op registry, a plugin op list, or discovery.go/import.go) that is not in scope, and the brief names none of them."
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 1 is 'Locate the existing book-identity/metadata matcher this should feed (search for where multiple candidate metadata sources already get scored and merged) \u2014 reuse its candidate shape rather than inventing a new one.' No symbol, file or package is named, and the Goal's whole safety property ('feed as a SCORED CANDIDATE ... never as an authoritative overwrite') depends on which matcher is picked. Step 3's 'a new op OR extend an existing path' compounds it \u2014 those are different deliverables."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 2 \u2014 'A confidently-wrong parse of a nonsense release name scores below the matcher's normal acceptance threshold' \u2014 cannot be checked: the matcher is unidentified (step 1) and its 'normal acceptance threshold' is never given a value or a place to look it up."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Anchors themselves verify: ParseTorrentNameCandidates at internal/deluge/discovery.go:329, NormalizeTitle at :373, core.get_torrent_status at internal/deluge/client.go:200. The claim that these anchors are fine is not in dispute \u2014 the failure is entirely in the unnamed downstream matcher."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-110",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The Reuse block and step 2 both name `Client.GetTorrentStatus with a fields param for the torrent's file list`. No such method exists. `grep -n '^func (c \\*Client)' internal/deluge/client.go` lists call, Login, ListTorrents, ListTorrentsByLabel, ListLabels, GetTorrent (L195), MoveStorage, Connected \u2014 the single-torrent accessor is GetTorrent, and its fields slice is HARDCODED at client.go:199 as []string{\"hash\",\"name\",\"save_path\",\"state\",\"progress\"} with no parameter to extend it. There is no file-list field and no way to ask for one."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Consequence: the task cannot start without editing internal/deluge/client.go \u2014 adding a `Files` field to TorrentStatus (verified at client.go:42-51: Hash, Name, SavePath, State, Progress, Label, TotalSize \u2014 no Files) and either extending GetTorrent's hardcoded fields list or adding a new accessor. client.go is not in exact_files ['internal/deluge/grouping_audit.go','internal/deluge/grouping_audit_test.go'].",
+    "fix": {
+     "exact_files": [
+      "internal/deluge/client.go",
+      "internal/deluge/grouping_audit.go",
+      "internal/deluge/grouping_audit_test.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 4 says 'Apply the duration-guard-equivalent check (find it in internal/linkintegrity or internal/plugins/maintenance)' \u2014 two different packages offered, no symbol named, and this guard is the ONE thing preventing the series-pack-is-not-one-book false positive that TestGroupingAudit_SeriesPackDoesNotFlagAsMerge asserts. Step 2's 'matching on size+content hash' is equally unspecified: no hash field on book_file is named, and TorrentStatus exposes only TotalSize (per-torrent, not per-file), so 'match by size+content' has no data source at HEAD."
+   },
+   {
+    "severity": "advisory",
+    "check": 9,
+    "problem": "Step 6 says 'Register as a new read-only maintenance-style op' with CapLibraryRead. Registration happens in a plugin op list (e.g. internal/plugins/maintenance/plugin.go or internal/plugins/deluge/), none of which is in exact_files."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-111",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 2 \u2014 'Running the snapshot against the current pending regroup.multidisc holds produces one TSV row per member across all holds' \u2014 requires the production database (the 138 pending holds are prod state). A worker in a fresh worktree has no such data and the declared gate is `go test ./internal/plugins/maintenance/...`. The Idempotency section then reuses the first acceptance line as its already-done probe, so that is unrunnable too."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "The Goal says the tool 'writes a TSV/JSON snapshot to disk' but never says WHERE, nor whether TSV or JSON (or both). Step 3 then specifies only TSV columns. A pre-image whose location is undefined is not a usable pre-image; name the output path convention (missing_file_repoint.go's report path is the obvious model, `grep -n 'func writeRepointReport' internal/plugins/maintenance/missing_file_repoint.go` -> L497)."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Step 1 says 'Find the accessor that lists pending regroup.multidisc review holds and their members (grep -rn regroup.multidisc|ReviewKind internal/database/review_store.go)'. Ran it: the only hits are the Kind field's example comment at review_store.go:62 and the unrelated ReviewKindStat type/method at :101/:416 \u2014 the grep does NOT surface a lister. The accessor the task depends on is neither named nor findable by the grep the brief supplies."
+   },
+   {
+    "severity": "advisory",
+    "check": 3,
+    "problem": "anti_over_suppression is 'N/A \u2014 report-only, no filter/skip logic to over-suppress', but the edge case DOES add a skip-vs-flag branch ('A hold whose member book was deleted/changed since the hold was created should still snapshot whatever current data exists, flagging the discrepancy rather than erroring out and skipping the whole hold'). That branch decides whether a hold silently vanishes from the pre-image before a hard-delete apply \u2014 it needs its own test, not N/A."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-112",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "exact_files lists web/src/pages/SystemMaintenance.tsx and step 7 says to 'follow the existing System > Maintenance panel's op-trigger UI convention', but that file does not exist at HEAD: `ls web/src/pages/SystemMaintenance.tsx` -> No such file or directory. The real page is web/src/pages/System.tsx (`grep -c 'Maintenance' web/src/pages/System.tsx` -> 3). A cold model creates a brand-new, unrouted SystemMaintenance.tsx and ships a First Aid button nothing renders.",
+    "fix": {
+     "exact_files": [
+      "internal/plugins/maintenance/first_aid_orchestrator.go",
+      "internal/plugins/maintenance/first_aid_orchestrator_test.go",
+      "internal/plugins/maintenance/plugin.go",
+      "web/src/pages/System.tsx"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 3 tells the agent to 'verify which of duration-reextract/file-integrity-check/malformed-m4b-remux still need building'. duration_reextract.go and integrity_check.go exist, but no remux op exists: `grep -rl 'remux\\|Remux' internal/plugins/maintenance/` -> deps.go, plugin.go, backfill.go, backfill_ops_test.go, title_backfill_test.go only, no remux op file. One weak model builds a whole new malformed-m4b-remux op inside an already-L orchestrator task; another skips it. Name the tier-2 roster explicitly and put remux out of scope.",
+    "fix": {
+     "steps": [
+      "Read .claude/notes/2026-08-05-first-aid-architecture.md in full before writing any code.",
+      "Build a sequencer that runs the tier-1 ops (relink-unlinked-books, reconcile-scan, orphan-book-files-cleanup, dedupe-book-file-rows, purge-millisecond-durations, booksig-recovery-audit) over the whole library; all six exist as files in internal/plugins/maintenance/.",
+      "Collect each op's flagged output and hand it to the tier-2 ops that ALREADY EXIST: probe-directory-books (probe_directory_books.go), duration-reextract (duration_reextract.go), file-integrity-check (integrity_check.go). malformed-m4b-remux does NOT exist and is explicitly OUT OF SCOPE for this task: do not build it, record it as a gap in the final report.",
+      "Hand tier-2's escalated verdicts to tier-3 fixers (duration-backfill, repair-junk-titles, title-repair, title-backfill, series-denumber, regroup-shattered-ai), all of which already exist.",
+      "After a fixer pass, RE-RUN tier-1 investigation on the affected set and loop until a pass finds nothing actionable (convergence), rather than hardcoding a fixed relink-then-regroup order. Cap iterations at a named constant maxFirstAidIterations.",
+      "Do NOT wire 'missing-input triggering' - that behavior is the sibling brief TASK-113 and is not yet merged. Keep the current waiting_deps parking behavior unchanged.",
+      "Add the frontend trigger button to the existing System > Maintenance panel in web/src/pages/System.tsx (do NOT create a new page); it calls the orchestrator with apply=false (dry-run) by default. Do NOT add a cron Schedule to the op def.",
+      "Exclude the janitorial ops list verbatim from the sequence."
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 2 - 'A dry run against a fixture library with one deliberately-broken book converges within a bounded number of iterations, logging each iteration's flagged count trending toward zero' - names no fixture, no command, and 'trending toward zero' has no machine-checkable predicate.",
+    "fix": {
+     "acceptance": "go test ./internal/plugins/maintenance/... -run FirstAid passes all three cases; TestFirstAid_ConvergesAfterFixerPass asserts the orchestrator terminates with iterations <= maxFirstAidIterations and a non-increasing flagged count per iteration; `grep -n 'maxFirstAidIterations' internal/plugins/maintenance/first_aid_orchestrator.go` hits."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 6 makes behavior conditional on 'the sibling item (part 4, same todo_line) is done first' - that sibling is TASK-113 - but skeleton has depends_on none for TASK-112 and puts BOTH at wave 1. Two Wave-1 agents run concurrently, so the condition is unevaluable at execution time and each agent guesses.",
+    "fix": {
+     "wave": 2
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "The re-verify block's first grep is expected to return 0 hits ('grep -rln FirstAid... # 0 hits') while the block header says 'a zero-hit grep means STOP and report'. A literal cold model stops before step 1. Annotate zero-expected greps as such."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-113",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Step 3 says 'Call this from wherever a new op transitions into waiting_deps'. That site is internal/operations/registry/registry.go:701 (status = \"waiting_deps\") and registry.go:754-755 (the 'registry: parked op (waiting_deps)' log), verified with `grep -n 'waiting_deps' internal/operations/registry/registry.go`. registry.go is NOT in exact_files (only deps.go, deps_scheduler.go, deps_scheduler_test.go), so the brief's commit scope excludes the one file step 3 must edit.",
+    "fix": {
+     "exact_files": [
+      "internal/operations/registry/deps.go",
+      "internal/operations/registry/deps_scheduler.go",
+      "internal/operations/registry/deps_scheduler_test.go",
+      "internal/operations/registry/registry.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Step 2 says to enqueue 'via the same path normal op submission uses' but names no symbol. That path is (*Registry).EnqueueOp at internal/operations/registry/registry.go:573, and the Reuse block omits it entirely. Worse, the third re-verify grep is scoped to the wrong file - `grep -n 'func.*Enqueue' internal/operations/registry/deps_scheduler.go` -> 0 hits, annotated 'no Enqueue-producer function exists' - which a cold model reads as 'write your own enqueue', when DepsScheduler already holds reg *Registry (deps_scheduler.go:55) and can call EnqueueOp directly.",
+    "fix": {
+     "verified_anchors": [
+      {
+       "claim": "the real op-submission path the producer must reuse is Registry.EnqueueOp",
+       "grep_cmd": "grep -n 'func (r \\*Registry) EnqueueOp' internal/operations/registry/registry.go",
+       "expect": "1 hit at L573"
+      },
+      {
+       "claim": "DepsScheduler already holds a *Registry, so it can call EnqueueOp without a new interface",
+       "grep_cmd": "grep -n 'reg    \\*Registry' internal/operations/registry/deps_scheduler.go",
+       "expect": "1 hit at L55"
+      },
+      {
+       "claim": "the park-into-waiting_deps site that must call the new method lives in registry.go, not deps*.go",
+       "grep_cmd": "grep -n 'waiting_deps' internal/operations/registry/registry.go",
+       "expect": "hits at L701 (status assignment) and L754-755 (parked log)"
+      }
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Re-entrancy is unspecified. EnqueueOp is itself the function that parks ops (registry.go:701), so calling EnsureProducerEnqueued from the park site re-enters EnqueueOp; a producer whose own requirements are unmet parks and re-triggers the same path. Step 4's guard only covers 'producer ALREADY queued/running for the subject' and says nothing about a producer that parks, nor about depth. Separately, step 2's precondition ('checks whether opType has ANY run (queued/running/completed) for the subject') has no method on SchedulerStore (internal/operations/registry/deps_scheduler.go:39-47 = DepStore + ListWaitingDepsOps + RecordOpCompletion + UpdateOperationV2Status + PromoteToQueued), so the agent must widen a store interface - unnamed in the brief and against the repo's store-narrowing discipline. Two weak models produce materially different code.",
+    "fix": {
+     "edge_cases": "A producer op that ITSELF parks in waiting_deps must not re-trigger enqueue-the-producer recursively - bound the chain (do not enqueue a producer from within a producer-triggered park) and assert it with a test. A producer op type that is not registered must fail loudly (log + leave the dependent parked with a clear reason), not silently enqueue nothing. The 'has this opType ANY run for the subject' lookup needs a named store method - add it to SchedulerStore explicitly rather than reaching for database.Store."
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Background cites deps.go's evalOpCompleted (L196); at HEAD it is internal/operations/registry/deps.go:199 (`grep -n 'func evalOpCompleted' internal/operations/registry/deps.go`)."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-114",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 7,
+    "problem": "OWNER RULE VIOLATION (REPOINT, never delete). Step 3 mandates 'reusing whatever CombineBooks-style function regroup_apply.go's ApplyMultidisc/ApplyDuplicateOf already call'. That combiner is the bookCombiner interface (internal/plugins/maintenance/regroup_apply.go:85-88) over merge.Service, and merge.Service.CombineBooks HARD-DELETES rows: internal/merge/serialize.go:15 documents it verbatim as 'merge.Service.CombineBooks (multi-file combine; hard-deletes shells)', corroborated by internal/merge/service_b3_fault_test.go:306 TestB3_CombineBooks_DeleteBookError and :278 TestB3_CombineBooks_FilesRemainingAfterMove_AbortsDelete. Step 3 (reuse the combiner) and step 5 ('NEVER call a row-delete function anywhere in this file') are mutually unsatisfiable, and TestCombineByTemplate_NeverDeletesARow cannot pass against the mandated reuse. A cold model resolves the contradiction by following step 3 and hard-deleting debris book rows on a prod data path.",
+    "fix": {
+     "steps": [
+      "Find the 'group's tracks map onto a better-assembled sibling' detector. Do NOT invent one: use the existing candidate grouping in internal/plugins/dedup (enumerate with `grep -rn '^func ' internal/plugins/dedup/*.go` and name the chosen function in your report before writing code). If no suitable scorer exists, STOP and report - do not write a new similarity scorer inside this op.",
+      "Build the template-matching function: given the template's ordered track durations and the debris group's file durations, assign each debris file to the template slot whose duration it matches within a tolerance; files with no matching slot are reported as gaps, not silently dropped; multiple debris files matching one slot are reported as a collision needing a documented tie-break rule.",
+      "On apply=true only: MOVE the debris books' book_file rows onto the template book with the store's book-file reassignment call and leave every debris BOOK row in place (empty but present). Do NOT call merge.Service.CombineBooks or anything behind regroup_apply.go's bookCombiner - internal/merge/serialize.go:15 documents CombineBooks as hard-deleting shells, which violates the never-delete rule this op exists to honor.",
+      "Version-group the result: primary = most complete book, ties broken by earliest ULID, reusing pickPrimary's exact convention (internal/plugins/maintenance/regroup_apply.go:391) rather than reimplementing tie-breaking.",
+      "NEVER call a row-delete function anywhere in this file - mirror missing_file_repoint.go's structural (not just documented) never-delete guarantee, and assert it with TestCombineByTemplate_NeverDeletesARow.",
+      "Write a full per-group report (every debris file's outcome: matched-slot / gap / collision) before any apply-mode write, mirroring missing_file_repoint.go's report-before-summary ordering.",
+      "Default apply=false; register the op in internal/plugins/maintenance/plugin.go."
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 1 is 'Find or build the ... detector - likely reuses existing dedup/similarity scoring (search internal/plugins/dedup or wherever candidate grouping lives)'. 'Find or build', 'likely', and 'or wherever' each fork the implementation: one model reuses a dedup scorer, another writes a fresh similarity pass inside the maintenance op. internal/plugins/dedup exists (`ls -d internal/plugins/dedup` -> present) but no dedup file is in exact_files, so the reuse branch also silently escapes commit scope."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "The first re-verify anchor's annotation cites the path token 'fs_regroup_shape.go/_test.go', which is not a path. The real files are internal/itunes/service/fs_regroup_shape.go and internal/itunes/service/fs_regroup_shape_test.go."
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "Acceptance box 2 ('a fixture modeling the Successors shape (11 rows/17 files, 12 of 13 tracks, 5 redundant) ... produces a report with exactly one gap row and five collision-flagged files') is prose, not a command. Restate it as a named test in internal/plugins/maintenance/combine_by_template_test.go, which IS in exact_files: TestCombineByTemplate_SuccessorsFixture_OneGapFiveCollisions."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-198",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The failure count is wrong three ways and the brief contradicts itself. Title/Goal/acceptance say 7 failing tests ('shows 0 failures where there were previously 7'); Background bullet 3 says '3 failures here vs 12 in library-browser'; and the spec contains only SIX tests at HEAD: `grep -n \"^\\s*test(\" web/tests/e2e/scan-import-organize.spec.ts` -> L299, 421, 439, 474, 518, 570 (plus one test.describe at 289 and a beforeEach at 294). A cold model cannot tell what 'all 7 currently-failing tests' means and has no way to know when it is done.",
+    "fix": {
+     "goal": "Diagnose and fix the scan-import-organize.spec.ts failures by reading the Playwright DOM snapshot before writing any code. The spec has 6 tests (web/tests/e2e/scan-import-organize.spec.ts L299/421/439/474/518/570); record the actual chromium failure count from a baseline run FIRST and use that number as the before-count, rather than trusting the TODO's stale '7'. Then check the three candidates the TODO names, in order: (1) an error boundary from an endpoint the test fixture does not stub; (2) an auth redirect away from /settings#paths; (3) a lazy-mount race between hash-based tab selection and Playwright's assertion timing. Fix whichever candidate the snapshot confirms."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is web/src/components/settings/PathsSettingsTab.tsx, web/src/pages/Settings.tsx, web/tests/e2e/scan-import-organize.spec.ts. But step 6 explicitly permits 'a test-fixture fix (mock the unstubbed endpoint, satisfy the auth precondition)', and the Coordinator notes tell the agent to 'check global-setup.ts and any shared page-object helpers before changing them'. Both files exist (`ls web/tests/e2e/global-setup.ts web/tests/e2e/utils/test-helpers.ts` -> both present) and neither is in scope, so two of the three named candidates resolve outside the brief's commit scope.",
+    "fix": {
+     "exact_files": [
+      "web/src/components/settings/PathsSettingsTab.tsx",
+      "web/src/pages/Settings.tsx",
+      "web/tests/e2e/scan-import-organize.spec.ts",
+      "web/tests/e2e/global-setup.ts",
+      "web/tests/e2e/utils/test-helpers.ts"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 2 - 'the fix's root cause is documented in the PR description or a code comment at the fix site' - is not checkable by command or grep: the PR-description branch is outside the repo entirely, and 'or' lets the agent satisfy it without any greppable artifact.",
+    "fix": {
+     "acceptance": "A scoped Playwright run of the spec (`npm --prefix web run test:e2e -- scan-import-organize.spec.ts`, or `npx playwright test -c tests/e2e/playwright.config.ts --project chromium tests/e2e/scan-import-organize.spec.ts` from web/) shows 0 chromium failures where the baseline run recorded N; AND the confirmed root cause is written as a code comment at the fix site, verifiable with `grep -n 'root cause' <changed file>`."
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "The declared gate (`npm --prefix web run lint && npm --prefix web test`) is Vitest and never executes Playwright, so 'Gate green' can pass with every targeted test still failing. The only check that exercises the fix is acceptance box 1."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Step 1 tells the agent to go find the invocation ('check package.json/playwright.config.ts in web/ for the exact npx playwright test command pattern this repo uses') instead of giving it. It exists: web/package.json:12 defines test:e2e as `node tests/e2e/check-spec-discovery.mjs && playwright test -c tests/e2e/playwright.config.ts --project chromium --project webkit`. Note the default runs BOTH chromium and webkit, which doubles the failure count a cold model will compare against."
+   },
+   {
+    "severity": "advisory",
+    "check": 5,
+    "problem": "The Idempotency section is the generic move-shaped boilerplate ('If the symbol already lives at its NEW location and is absent from the old one ... the move is already done'). Nothing moves in this task; the correct idempotency check is 'the spec already passes at HEAD'."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-199",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The Tests section names 'the existing Sidebar.test.tsx 11-case suite from #2193' and both test bullets target web/src/components/layout/Sidebar.test.tsx - that file does not exist at HEAD: `ls web/src/components/layout/` -> MainLayout.tsx, OperationsIndicator.tsx, Sidebar.tsx, sidebarSelection.test.ts, sidebarSelection.ts, TopBar.tsx, UserMenu.tsx. The real #2193 suite is web/src/components/layout/sidebarSelection.test.ts and it does have exactly 11 cases (`grep -c 'it(\\|test(' web/src/components/layout/sidebarSelection.test.ts` -> 11), but it is a pure-function test over isSubItemSelected, NOT a component render suite. There is no existing render harness for Sidebar to extend, so 'reuse the 11-case suite for the collapsed variant' is not executable as written.",
+    "fix": {
+     "tests": "web/src/components/layout/Sidebar.test.tsx (NEW FILE - no component render test for Sidebar exists today; the 11-case #2193 suite is web/src/components/layout/sidebarSelection.test.ts, a pure-function test over isSubItemSelected, and cannot simply be extended). Render <Sidebar open onClose={...} drawerWidth={240} collapsed /> (SidebarProps is declared at web/src/components/layout/Sidebar.tsx:42-48 and `collapsed` defaults to false at L104), open the Library menu, assert 'In Progress' and 'Finished' are present and each click navigates to the expected path. Add a second case asserting collapsed-mode selection highlighting agrees with expanded-mode highlighting for the same URL, driven by the same isSubItemSelected import."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 2 says to render 'one MenuItem per librarySubItems entry (plus \"All Books\" navigating to /library?reset=1)'. librarySubItems ALREADY contains an All Books entry with exactly that path - web/src/components/layout/Sidebar.tsx:51 declares the array and its first element is {text: 'All Books', path: '/library?reset=1', matchPath: '/library', matchSearch: ''}. Following step 2 literally produces a duplicated 'All Books' menu item.",
+    "fix": {
+     "steps": [
+      "Read librarySubItems' declaration at web/src/components/layout/Sidebar.tsx:51 to get its exact shape (text/icon/path/matchPath/matchSearch). NOTE: it already contains an 'All Books' entry pointing at /library?reset=1 - do NOT add a second one.",
+      "In the isCollapsed branch (Sidebar.tsx:173-191), replace the single static Tooltip+ListItemButton with a stateful menu: track an anchorEl (const [libraryMenuAnchor, setLibraryMenuAnchor] = useState<null | HTMLElement>(null)), open it on click of the Library icon instead of navigating immediately, and render an MUI Menu with exactly one MenuItem per librarySubItems entry, each calling handleNavigation(item.path) and then closing the menu.",
+      "Drive each MenuItem's selected state with the imported isSubItemSelected(item, location.pathname, location.search) - it is imported from './sidebarSelection' at Sidebar.tsx:39 and already used by the expanded branch at Sidebar.tsx:219. Do not reimplement it and never compare raw pathname/search strings.",
+      "LOCKED UX (do not re-decide): in collapsed mode a single click on the Library icon OPENS THE MENU; it does not navigate. The existing Tooltip('Library') stays for hover. The icon's broader selected= state (Sidebar.tsx:177-182, matching /library, /fingerprints, /series, /authors) is preserved unchanged."
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 4 re-opens the product decision the Goal had already made, and offers three mutually exclusive designs in one sentence: 'single click -> /library (all books), a small chevron/secondary icon or long-press opens the submenu -- pick whichever matches how MUI's own existing patterns in this file already indicate submenus elsewhere, since the file may already have a precedent'. 'may already have a precedent' is a guess; the only submenu precedent in the file is the expanded-mode Collapse block (Sidebar.tsx:213-219), which is not a click-vs-long-press pattern at all. Two reasonable weak models ship click-to-open, hover-to-open, and long-press respectively - three different components."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 2 is 'manual interactive check ... with the sidebar collapsed, In Progress and Finished are each reachable and correctly highlight when active, both when arriving fresh (hard refresh) and when navigating from Dashboard' - explicitly manual, not checkable by any command or grep. Box 3 ('npx tsc --noEmit (or the project's equivalent)') also hedges instead of naming the command."
+   },
+   {
+    "severity": "advisory",
+    "check": 9,
+    "problem": "exact_files lists web/src/components/layout/Sidebar.test.tsx and Sidebar.tsx only. The selection helper the brief mandates reusing lives in web/src/components/layout/sidebarSelection.ts (imported at Sidebar.tsx:39); it needs no edit, so scope is adequate, but the brief's prose implies the helper is in Sidebar.tsx and a cold model may copy it there instead of importing."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-200",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 7,
+    "problem": "OWNER RULE / prod-write path. The Idempotency block mandates four things for this ~284,000-file GPU backfill: (1) apply=false / dry-run default, (2) every mutation journaled via CreateOperationChange so internal/undo can replay it, (3) an apply-then-undo fixture test asserting byte-identity, (4) the apply path refuses to start while a library.scan is running or queued. NONE of the 7 steps, NONE of the 4 tests, and NONE of the acceptance boxes implement or check any of the four. A cold model implements the steps verbatim and ships a full-corpus transcript writer with no apply flag, no undo journal, and no scan guard - directly against 'never apply metadata during a scan' (scheduled.library_scan runs unattended every 6h).",
+    "fix": {
+     "acceptance": "go test ./internal/plugins/maintenance/... -run TestTieredBackfill -count=1 -v passes; `grep -n 'Apply bool' internal/plugins/maintenance/intro_tiered_backfill.go` hits (apply=false default, mirroring internal/plugins/maintenance/missing_file_repoint.go:52); `grep -n 'CreateOperationChange' internal/plugins/maintenance/intro_tiered_backfill.go` hits for every mutation path; TestTieredBackfill_RefusesWhileLibraryScanActive asserts the apply path returns without writing when a library.scan op is running or queued; TestTieredBackfill_ApplyThenUndoIsByteIdentical applies on a fixture, undoes via internal/undo, and asserts the fixture is unchanged; go build ./... && go vet ./... exit 0."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is intro_migrate_single_file.go, intro_tiered_backfill_test.go, intro_transcribe.go, plugin.go, classify.go - it lists the TEST file intro_tiered_backfill_test.go but not the implementation file it tests. `ls internal/plugins/maintenance/intro_tiered_backfill.go` -> No such file or directory, and it is absent from scope, so the brief's commit scope contains a test with no subject.",
+    "fix": {
+     "exact_files": [
+      "internal/plugins/maintenance/intro_tiered_backfill.go",
+      "internal/plugins/maintenance/intro_tiered_backfill_test.go",
+      "internal/plugins/maintenance/intro_migrate_single_file.go",
+      "internal/plugins/maintenance/intro_transcribe.go",
+      "internal/plugins/maintenance/plugin.go",
+      "internal/plugins/maintenance/regroup_shattered_ai.go",
+      "internal/transcribe/classify.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 1 is guess-shaped in two places: 'In internal/plugins/maintenance/ (likely a new file, or extending intro_transcribe.go)' and 'Reuse intro_migrate_single_file.go if it already does exactly this (its name suggests it might -- verify before writing new code)'. One weak model extends the existing intro-transcribe OperationDef (same op ID, changed prod behavior for an already-registered op); another registers a brand-new op. Those are materially different prod surfaces, and only the second is compatible with the new-file test name the brief itself supplies."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Step 4 says Tier 2 must 'reuse whatever existing query/filter identifies this set -- check the review-queue and regroup_shattered_ai.go's existing selection logic'. regroup_shattered_ai.go is not in exact_files, and the review-queue selection lives in internal/database/review_store.go, also not in scope. Either the reuse happens outside commit scope or the agent reimplements the selection."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 2 - 'a dry run against a small fixture library completes all 5 tiers without a full-corpus GPU cost for the single-file majority' - names no fixture, no command, and 'without a full-corpus GPU cost' has no machine-checkable predicate."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Anchor 3 says `grep -n 'registry.RunItems' internal/plugins/maintenance/intro_transcribe.go` -> '1 hit'; at HEAD it is 2 hits (L217 the call, L265 RunItemsOptions). Harmless here, but the brief's own block says a mismatch means STOP."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-201",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "regroup_shattered_ai.go does not classify anything, so step 3 ('let it outrank the duration-based verdict for that book's classification decision') cannot be performed in the file the brief targets. At HEAD that file only BUILDS input views - `itunesservice.ShatterBook{... DurationSec: durationSec}` at internal/plugins/maintenance/regroup_shattered_ai.go:178-183 - and then delegates the verdict at :235 with `groups, st := itunesservice.ClassifyShatteredFolders(views)`. The classifier itself is internal/itunes/service/fs_regroup_shape.go:716 (per-group logic in classifyGroup at :832) and ShatterBook is declared at internal/itunes/service/fs_regroup_shape.go:136. `grep -n 'ClassifyIntro' internal/plugins/maintenance/regroup_shattered_ai.go` -> 0 hits is true but for the wrong reason: no classification of any kind lives there."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is regroup_shattered_ai.go + regroup_shattered_ai_test.go only. Carrying an intro signal at all requires a new field on `type ShatterBook` (internal/itunes/service/fs_regroup_shape.go:136) and the ranking change lands in ClassifyShatteredFolders/classifyGroup (same file, :716/:832) plus its test internal/itunes/service/fs_regroup_shape_test.go. None of those are in scope, so the entire behavioral change happens outside the brief's commit scope.",
+    "fix": {
+     "exact_files": [
+      "internal/plugins/maintenance/regroup_shattered_ai.go",
+      "internal/plugins/maintenance/regroup_shattered_ai_test.go",
+      "internal/itunes/service/fs_regroup_shape.go",
+      "internal/itunes/service/fs_regroup_shape_test.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "TestRegroupClassifier_356HoldBaselineDiff has no dataset to run against, and acceptance box 2 ('the 356-hold baseline diff is reviewed and each change is individually explainable, not a blanket verdict shift') is a human-review step, not a command. The number appears in the repo only as prose: TODO.md:8383, docs/continuation/2026-08-06-per-file-intro-continuation.md:124, and docs/specs/2026-08-05-review-queue-recommendations-design.md:59 ('review queue moved 357 -> 356 holds'). No per-hold verdict fixture or reference file exists anywhere, so step 1's 'search docs/handoffs, docs/plans, or the regroup test fixtures for a dataset' sends the agent after something that is not in the repo.",
+    "fix": {
+     "tests": "internal/itunes/service/fs_regroup_shape_test.go: TestClassifyShatteredFolders_IntroOutranksRuntimeWhenBothPresent - a ShatterBook where DurationSec says 'not shattered' but a mid-book file's intro classifies as credits; assert the group is flagged. TestClassifyShatteredFolders_FallsBackToRuntimeWhenIntroAbsent - with no per-file transcript, assert the verdict is identical to the pre-change classifier for the existing table-driven cases. Do NOT write a 356-hold baseline test: no per-hold verdict dataset exists in the repo (the number appears only as prose in TODO.md:8383 and docs/continuation/2026-08-06-per-file-intro-continuation.md:124). Instead, extend the existing table in fs_regroup_shape_test.go and assert zero verdict changes on every case that has no intro data."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 7,
+    "problem": "Step 5 ('Re-run the classifier against the 356-hold baseline set found above and diff the verdicts') can only be satisfied against the live prod review queue, since no fixture of those holds exists in the repo. That makes a prod-data run a required step of a brief whose declared gate is `go build && go vet && go test ./internal/plugins/maintenance/...`, which cannot perform it."
+   },
+   {
+    "severity": "advisory",
+    "check": 5,
+    "problem": "The Idempotency section carries BOTH the prod-data block and the generic move-shaped boilerplate ('If the symbol already lives at its NEW location and is absent from the old one ... the move is already done'). Nothing moves in this task; the two paragraphs contradict each other."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-202",
+  "verdict": "fail",
+  "verdict_override": "needs_design",
+  "reason": "The brief does not know which module it is supposed to change and says so twice - Goal: 'Locate the actual First Aid diagnostic system ... do not assume missing_file_audit.go is correct without verifying'; Coordinator notes: 'this scout could not fully confirm the target file within budget and flags missing_file_audit.go only as the closest candidate found, not a confirmed match' - while exact_files contains only internal/plugins/maintenance/missing_file_audit.go. Resolving it externally shows the target does not exist yet: the locked First Aid design is .claude/notes/2026-08-05-first-aid-architecture.md (`ls` -> present, 7598 bytes) and the orchestrator it specifies is built by sibling brief TASK-112 as internal/plugins/maintenance/first_aid_orchestrator.go, which is unwritten at HEAD (`grep -rln 'FirstAid\\|first-aid\\|first_aid' internal` -> 0 hits). TASK-202's depends_on is TASK-200, TASK-201 and omits TASK-112 entirely, so at its wave-4 slot the module it must extend may still not exist. Step 2 also hands an open product question to the executing agent ('confirm with the owner or the TODO text whether First Aid's combination rule should be identical to the regroup classifier's, or independently designed for this different decision context'). This needs the First Aid target and the combination rule locked before it can be a Bucket 1 task.",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The single re-verify anchor is `grep -n 'registry.RunItems' internal/plugins/maintenance/missing_file_audit.go` (2 hits at HEAD: L403 and L690), annotated as confirming 'First Aid's probe/duration-signal machinery'. That grep proves only that the file uses a worker pool - every RunItems-using maintenance op would satisfy it. It does not establish that missing_file_audit.go is First Aid, and the annotation admits as much ('the closest match found ... among the RunItems-using maintenance ops'). This is the anchor doing no verification work while reading as verification."
+   },
+   {
+    "severity": "fatal",
+    "check": 3,
+    "problem": "anti_over_suppression is 'N/A -- covered by the regression test asserting absent-intro-data leaves fixer selection unchanged', which contradicts itself: the sentence names a covering regression test, so it is not N/A. And a guard IS added - the change gates which repair fixer runs for a book on a new signal. Worse, the named regression test appears nowhere in the Tests section, which has exactly one unnamed bullet ('A new or extended test in the correct module's test file'), so the covering test the aos field points at does not exist in the brief.",
+    "fix": {
+     "anti_over_suppression": "TestFirstAid_AbsentIntroDataLeavesFixerSelectionUnchanged - a book with no per-file transcript yet must select exactly the same fixer as before the change (absent transcript reads as 'cannot verify', never as a negative signal)."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "No acceptance box can be checked against this change. Box 1 (`go build ./... && go vet ./... exit 0`) is already true at HEAD with zero work done. Box 2 ('the relevant test suite for the confirmed First Aid module passes with the new tier-2 signal wired in') names neither module nor command. And the Idempotency section's already-applied test is literally box 1 - 'If the first acceptance check below already passes at HEAD (go build ./... && go vet ./... exit 0), this task is already applied' - so a cold model can correctly conclude the task is done before starting."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "The Tests section names no file ('A new or extended test in the correct module's test file') and exact_files contains no test file at all. internal/plugins/maintenance/missing_file_audit_test.go exists on disk but is not in scope, so the brief's own test deliverable falls outside its commit scope whichever module turns out to be right."
+   },
+   {
+    "severity": "advisory",
+    "check": 7,
+    "problem": "The Idempotency block mandates apply=false default, CreateOperationChange journaling, an apply-then-undo fixture test, and a refuse-while-library.scan-active guard, but the task as written only READS a signal and changes fixer selection; no step implements or needs any of the four. The mismatch trains a cold model to treat the whole block as boilerplate, which matters because sibling TASK-200 in the same lane genuinely does need it."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-194",
+  "verdict": "fail",
+  "verdict_override": "needs_design",
+  "reason": "Two of the brief's own inputs are unresolved and it says so: (a) the Whisper egress port is contradictory and step 6 FORBIDS picking either value ('reconcile the TODO's :19847 against local.conf.example's :8000 placeholder with the owner before committing to one -- do not silently pick either'), with edge-case bullet 3 repeating that it 'must be resolved with the owner before the allowlist is written'; and (b) the header declares 'External blockers: TODO.md L10077 (needs_design) \u2014 not a task in this package; coordinator confirms it is resolved or explicitly waives it before dispatch', which shares both target files. Step 6 additionally leaves the whole allowlist strategy open (a per-provider CIDR allowlist vs inverting to IPAddressAllow=any minus RFC1918). An agent cannot write IPAddressAllow lines without those decisions, and a wrong one silently takes down transcription and metadata in prod with no CI signal.",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "deploy/systemd/audiobook-organizer.service is a SYMLINK, not a duplicate file: `ls -la deploy/systemd/audiobook-organizer.service` -> 'audiobook-organizer.service -> ../audiobook-organizer.service', and `git ls-files -s` shows mode 120000 for it vs 100644 for deploy/audiobook-organizer.service. The brief asserts the opposite throughout - Background: 'The two unit files ... are confirmed byte-identical ... whether one is a stale duplicate that should be removed instead of dual-maintained'; anchor 3: `diff ...` '# empty (byte-identical) \u2014 the two unit files are exact duplicates and both need the same edit'; step 7: 'Apply the identical edit to deploy/systemd/audiobook-organizer.service so the two files stay in sync'. Both diff and grep follow symlinks, which is exactly why the scout concluded 'duplicate'. A cold model doing step 7 either writes through the link and DOUBLE-APPLIES every directive (two ProtectSystem=strict / IPAddressDeny=any lines in one unit) or replaces the symlink with a regular file, silently converting a 120000 blob to 100644 and breaking the deploy layout. Corroborating tell already visible in the repo: `head -6 deploy/systemd/audiobook-organizer.service` prints '# file: deploy/audiobook-organizer.service' - the header names the other path because there is only one file.",
+    "fix": {
+     "exact_files": [
+      "deploy/audiobook-organizer.service"
+     ],
+     "background": [
+      "There is only ONE unit file. deploy/systemd/audiobook-organizer.service is a symlink to ../audiobook-organizer.service (git mode 120000; verify with `git ls-files -s deploy/systemd/audiobook-organizer.service`). Edit deploy/audiobook-organizer.service ONLY - do not touch, rewrite, or 'sync' the symlink, and do not trust diff/grep to tell them apart since both follow symlinks.",
+      "The unit already has User=audiobook (L60), NoNewPrivileges=yes (L94), ProtectKernelTunables=yes (L95), ProtectControlGroups=yes (L96), PrivateTmp=yes (L97).",
+      "deploy/local.conf.example documents WHISPER_REMOTE_URL (L39) and OLLAMA_BASE_URL (L40) as the two outbound AI-service dependencies, using an explicitly-labeled placeholder address; the real production values live in the gitignored server-side deploy/local.conf drop-in."
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 8,
+    "problem": "Tier mismatch between the brief and the skeleton: the brief header says 'Recommended subagent: Opus-class' and 'REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier', but skeleton.json has tier 'sonnet' for TASK-194. Since review_critical is true and an over-tight SystemCallFilter/IPAddressAllow takes prod down with no CI signal, the skeleton value is the wrong one.",
+    "fix": {
+     "tier": "opus"
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "The gate cannot fail and does not look at the changed files. `git diff --check && grep -L 'last-edited: ' $(git diff --name-only origin/main -- '*.md' '*.yml' '*.py' '*.sh') ; echo 'docs/tooling task: header check only'` ends in `; echo`, so the pipeline's exit status is always 0. The glob is '*.md' '*.yml' '*.py' '*.sh' - a .service file matches none of them, so the header check never inspects the one file this task edits. And when that command substitution is empty (the normal case here), `grep -L` gets no file operands and blocks reading stdin.",
+    "fix": {
+     "gate": "grep -c 'ProtectSystem=strict' deploy/audiobook-organizer.service && grep -c 'IPAddressDeny=any' deploy/audiobook-organizer.service && systemd-analyze verify deploy/audiobook-organizer.service"
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance boxes 2 and 3 can only be run on the production/test host: 'systemctl daemon-reload && systemctl restart audiobook-organizer succeeds ... on a test host' and 'a metadata fetch (OpenLibrary/AcoustID), a Whisper transcription call, and an Ollama AI-scan call each succeed after the restart'. The Tests section confirms there is no in-repo check at all ('No Go test applies ... Verification is operational'). Nothing in this brief is checkable from a worktree, so a cold model has no way to know it is done."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "The standard 'File headers bumped on every changed file (`grep -n \"last-edited: 2026-08-21\" <file>` hits for each)' box cannot pass: neither unit file carries a last-edited line today (`grep -n 'last-edited' deploy/audiobook-organizer.service deploy/systemd/audiobook-organizer.service` -> no output), the header is `# file:` / `# version: 4.4.0` / `# guid:` only, and step 8 tells the agent to bump only the version line. The symlink has no header of its own to bump at all."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Anchor 4 says `grep -n 'WHISPER_REMOTE_URL\\|OLLAMA_BASE_URL' deploy/local.conf.example` -> '2 hits, L39-40'; at HEAD it is 3 hits (L17 in a comment, L39, L40). The brief's own block says a mismatch means STOP."
+   },
+   {
+    "severity": "advisory",
+    "check": 7,
+    "problem": "The Idempotency block is the prod-DATA template - 'the op/endpoint defaults to dry-run / apply=false', 'every mutation is journaled through the existing undo ledger (CreateOperationChange)', 'the apply path refuses to start while a library.scan operation is running or queued' - applied to a systemd unit file edit that has no op, no endpoint, and no mutations. None of the four are implementable here, which trains a cold model to ignore the block wholesale."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-176",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 7,
+    "problem": "The deliverable cannot be produced without prod data. Step 2: 'Run it against a snapshot/copy of the store data (never write) to get the actual list of book IDs (expect ~41, confirming or correcting the sampled figure)', and acceptance box 1 requires the report to 'name all books matching the anomaly's exact criteria and, ideally, a common writer/job correlated with their CreatedAt/UpdatedAt'. Nothing in the repo supplies that store, and the brief provides no fixture and no way to obtain a snapshot. The census RESULT, not the tool, is what the acceptance measures."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Neither of the two checks that matter can fail. Acceptance box 1 is prose containing 'ideally', so it has no pass/fail predicate. The gate `go test ./tools/cmd/orphan-nonprimary-census/... -count=1` is vacuous by construction: the Tests section says 'N/A for the diagnostic itself (read-only report, similar to reconcile-paths which has no dedicated test file)', and `go test` on a package with no _test.go files exits 0 with 'no test files'. A cold model can create an empty main.go that compiles and pass the entire gate.",
+    "fix": {
+     "tests": "tools/cmd/orphan-nonprimary-census/main_test.go: TestSelectsOnlyExplicitlyNonPrimaryUngrouped - table-driven over in-memory book rows, asserting the predicate matches ONLY (VersionGroupID nil/empty AND IsPrimaryVersion != nil AND *IsPrimaryVersion == false) and in particular does NOT match a book with IsPrimaryVersion == nil (which internal/audiobooks/service_filtering.go:864 treats as primary) nor one that has a version group. Extract the predicate into a testable function so the census logic is verifiable without a live store."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is only tools/cmd/orphan-nonprimary-census/main.go, but step 4 says 'Write findings to a new docs/audits/ file or todo.d fragment describing the root cause'. Neither docs/audits/ nor todo.d/ appears in scope, and no test file is listed either (see the check-4 fix above).",
+    "fix": {
+     "exact_files": [
+      "tools/cmd/orphan-nonprimary-census/main.go",
+      "tools/cmd/orphan-nonprimary-census/main_test.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "polarity is 'transform' and the commit message is 'refactor(audiobooks): ...', but the task's entire deliverable is one brand-new file that does not exist at HEAD (`ls tools/cmd/orphan-nonprimary-census` -> No such file or directory). The consequence is the wrong idempotency text: 'If the symbol already lives at its NEW location and is absent from the old one (re-run the re-verify greps above), the move is already done'. Nothing moves and there is no old location, so a cold model has no valid already-done check.",
+    "fix": {
+     "polarity": "additive"
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Re-verify anchor 2 is `bfs 2>/dev/null; ls internal/ledger 2>&1` - 'bfs' is a stray token with no meaning in this repo and will print 'command not found' before the real check runs. The `ls internal/ledger` half is correct (internal/ledger genuinely does not exist; the provenance work is internal/database/file_provenance.go, verified present)."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-190",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 1 is satisfied by a test that never reproduced anything. The brief's own Why says 'the obvious candidate code paths were read in full and do NOT reproduce the reported divergence', and step 3 is written conditionally ('If it instead returns only the IsPrimaryVersion=true book (reproducing the reported bug), the test now fails deterministically'). If the 4-book fixture test passes on first write - the likely outcome - then `go test ./internal/audiobooks/... -run TestGetAudiobooksWithTotal_ShowQuarantinedDoesNotNarrowByPrimary -count=1 -v passes` is already green, every other acceptance box is green too, and a cold model correctly reports DONE having fixed nothing. The brief gives no instruction at all for the not-reproduced branch.",
+    "fix": {
+     "acceptance": "The reproduction test must FAIL before the fix and pass after: record `go test ./internal/audiobooks/... -run ShowQuarantinedDoesNotNarrowByPrimary -count=1` failing at the parent commit and passing at HEAD, and paste both outputs in the report. If the fixture test passes at the parent commit, the bug does NOT reproduce at fixture scale - STOP and report that as the finding rather than committing a green test; do not proceed to a fix. go test ./internal/audiobooks/... ./internal/database/... -count=1 passes with no new failures."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The brief's headline hypothesis is disproved by the very lines it cites. Background bullet 3 and step 5 point the largest investigative effort at a listCache key collision between internal/server/library_list_warmer.go's warmed entries (`grep -c 'IsPrimaryVersion: &primaryTrue' internal/server/library_list_warmer.go` -> 15, as claimed) and an incoming nil-IsPrimaryVersion request. But internal/audiobooks/service_query.go:183-189 renders the *bool as a literal token ('nil' when unset, else strconv.FormatBool) into `primaryKey`, and service_query.go:195-196 bakes BOTH primaryKey AND `noq=%v` (f.ExcludeQuarantined) into the cache key. A warmed primary=true page keys on 'true'; the request under test keys on 'nil'; the two show_quarantined states key differently from each other. Collision is structurally impossible, so step 5's main branch is dead on arrival and the brief spends its biggest step there.",
+    "fix": {
+     "background": [
+      "Measured on production 2026-08-14: the default query returned 63,869 books; the SAME query with only show_quarantined=true added returned 41,319 = 41,317 (the is_primary_version=true population) + 2 quarantined rows - adding a filter that can only WIDEN the set instead narrowed it to primary-only.",
+      "RULED OUT before you start, do not re-investigate: a listCache key collision with library_list_warmer.go's warmed IsPrimaryVersion=&primaryTrue entries. internal/audiobooks/service_query.go:183-189 renders IsPrimaryVersion as the literal token 'nil'/'true'/'false' into primaryKey, and service_query.go:195-196 includes both primaryKey and noq=<ExcludeQuarantined> in the key, so a nil-primary request can never address a primary=true warmed page.",
+      "ALSO RULED OUT by static reading: hasHeavyPostFilters/hasPostFilters (internal/audiobooks/service_query.go:77-78) do not key on ExcludeQuarantined, and the memdb index-selection switches (internal/database/memdb_summaries.go:132 and :281) default to the unrestricted memIdxID whenever IsPrimaryVersion is nil, independent of ExcludeQuarantined.",
+      "Since every in-repo candidate is ruled out, the first deliverable is the fixture reproduction itself. If it does not reproduce at fixture scale, the divergence is data- or index-shaped (Bleve/search-backed counts, or the prod store) and this brief's scope is wrong - report that instead of forcing a fix."
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is service_filtering.go, service_query.go, service_query_primary_quarantine_test.go, memdb_summaries.go, audiobooks_helpers.go. Step 5 sends the agent into internal/server/library_list_warmer.go, and edge-case bullet 1 explicitly contemplates the FIX landing there ('the fix must not simply stop warming those entries ... the cache KEY must be made collision-proof instead') - the warmer constructs the other half of every warmed key. library_list_warmer.go is not in scope.",
+    "fix": {
+     "exact_files": [
+      "internal/audiobooks/service_filtering.go",
+      "internal/audiobooks/service_query.go",
+      "internal/audiobooks/service_query_primary_quarantine_test.go",
+      "internal/database/memdb_summaries.go",
+      "internal/server/audiobooks_helpers.go",
+      "internal/server/library_list_warmer.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 3 - 'the fix is accompanied by a comment at the actual root-cause location explaining the mechanism (cache-key collision, index-selection default, or whatever is found)' - names no file and no grep, and cannot name one because the root-cause location is unknown by construction. Not checkable by command."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Steps 2 and 3 pass limit=0 to GetAudiobooksWithTotal as though it meant 'no limit'. internal/audiobooks/service_query.go:46-48 normalizes `if limit <= 0 || limit > 100000 { limit = 50 }`. Harmless for a 4-book fixture but the brief's framing is wrong, and a cold model scaling the fixture up would silently truncate at 50."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Anchors 2 and 3 claim hits 'at L132-135' and 'at L281-284'; at HEAD `grep -n 'case f.IsPrimaryVersion != nil:' internal/database/memdb_summaries.go` returns exactly L132 and L281 (the -A2 window ends at 134/283, not 135/284). The substance of both claims is correct."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-196",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Step 2 tells the agent to call `mfs.searchMetadataForBook` from the new op, which is defined in internal/server/metadata_ops.go (package server). That method is UNEXPORTED and lives in package metafetch: `grep -n 'func (mfs \\*Service) searchMetadataForBook' internal/metafetch/service_search.go` -> L243 (lowercase s). It is not callable across the package boundary and the code will not compile. The exported alternative is mentioned only as a parenthetical afterthought ('or SearchMetadataForBookWithOptions', internal/metafetch/service_search.go:230). Worse, the unexported one takes a `limiter *rate.Limiter` parameter (service_search.go:245), so a cold model that exports or copies it must then supply its own limiter - the exact 'second rate-limiting layer' step 2's next clause forbids.",
+    "fix": {
+     "steps": [
+      "In internal/server/metadata_ops.go, following the existing opsregistry.OperationDef registration at metadata_ops.go:547 as the template, define a new op metadata.bulk-search-fetch whose Params carry the book-selection filter and an Apply bool defaulting to FALSE (report-then-confirm, matching internal/plugins/maintenance/missing_file_repoint.go:52). Search-only runs must never mutate book records.",
+      "Implement the op body with registry.RunItems (internal/operations/registry/run_items.go:143) over the filtered book set, calling the EXPORTED metafetch method SearchMetadataForBookWithOptions (internal/metafetch/service_search.go:230) per item inside the RunItems closure. Do NOT call searchMetadataForBook (service_search.go:243) - it is unexported and takes its own *rate.Limiter, which would create the second rate-limiting layer this step forbids. The per-source limiter and circuit breaker already live behind BuildSourceChain (service_search.go:91).",
+      "Add explicit per-item jitter before each search call - a small randomized delay (0-2s, tunable via a Params field) - so RunItems' concurrent workers do not all fire their first request in the same instant. This is distinct from waitForLimiter (service_search.go:108), which paces steady state but does not prevent a worker-pool startup burst.",
+      "Persist each book's search RESULTS in the existing metadata-candidate shape the interactive dialog already reads, so the background op and BulkMetadataSearchDialog.tsx produce compatible data. If that requires a new store method or table, STOP and report - a schema addition is out of scope for this brief.",
+      "Register the op through the same reg.RegisterOp call other ops in internal/server/metadata_ops.go use, and assert registration in a test rather than by eyeballing the ops UI."
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files includes web/src/components/audiobooks/BulkMetadataSearchDialog.tsx, but no step edits it and edge-case bullet 2 forbids editing it ('The existing interactive BulkMetadataSearchDialog.tsx flow must keep working unmodified'). The scope therefore contains a file the brief prohibits changing, and it drags the whole frontend suite (`npm --prefix web run lint && npm --prefix web test`) into the gate for a backend-only change. Conversely, step 4's storage target ('check MetadataCandidate's existing persistence, if any, or whether results need a new lightweight cache/table') lands in internal/database, which is NOT in scope.",
+    "fix": {
+     "exact_files": [
+      "internal/metafetch/service_search.go",
+      "internal/server/metadata_ops.go",
+      "internal/server/metadata_ops_bulk_search_test.go"
+     ],
+     "gate": "go build ./... && go vet ./... && go test ./internal/metafetch/... ./internal/server/... -count=1"
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Two open design decisions are handed to the executing agent in hedged prose. Step 1: 'a dry_run/apply-style gate matching the report-then-confirm convention used elsewhere in this file IF the op ends up writing anything (a pure SEARCH-and-cache op may not need an apply gate at all if it only populates a review queue rather than mutating book records directly -- confirm which by checking what BulkMetadataSearchDialog's apply flow actually persists today)'. Step 4: results go 'likely the same place/shape BulkMetadataSearchDialog already expects ... or whether results need a new lightweight cache/table'. One weak model ships an op with no apply gate writing straight through; another ships an apply gate plus a new table. The first is a metadata-writing op with no apply=false default on an unattended background path."
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 2 - 'the new op appears in the operations registry listing and can be started/monitored through the same UI/API surface as other maintenance/dedup ops' - has no command and no grep. Box 3 (`go build && go vet exit 0`) is already true at HEAD.",
+    "fix": {
+     "acceptance": "go test ./internal/server/... -run TestBulkSearchFetch -count=1 -v passes; `grep -n 'metadata.bulk-search-fetch' internal/server/metadata_ops.go` hits; a registration test asserts the op ID is present in the registry after wiring (mirroring the existing registry_test.go pattern); `grep -n 'Apply bool' internal/server/metadata_ops.go` shows the apply gate defaults false; go build ./... && go vet ./... exit 0."
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Anchor 2 claims `currentBook = filteredBooks[currentIndex]` at L159; at HEAD it is web/src/components/audiobooks/BulkMetadataSearchDialog.tsx:160 (api.searchMetadataForBook at L174 is correct). The brief's own block says a mismatch means STOP."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-212",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 6 tells the agent to emit 'books, totalDuration, numBooks' but steps 4-5 only produce two of the three, and the brief never says where totalDuration comes from. h.seriesPageBooks returns map[int][]any (internal/server/handlers/abs/browse.go:663-667) - books only. LibrarySeries gets the other two from elsewhere: `built := bySeries[s.ID]` then `items, total := enriched[s.ID], built.totalDuration` (browse.go:600-601), i.e. totalDuration comes off the seriesBooksCached entry, and numBooks is `len(items)` (browse.go:631), NOT a store count. The 12-line comment at browse.go:620-630 exists precisely because using a store count is a production bug ('Measured on production 2026-08-16, 9 of 50 series on page 0 claimed numBooks >= 1 while carrying books: [] and totalDuration: 0'). A cold model following step 6 literally has no source for totalDuration and will reach for a count query for numBooks - reintroducing that exact bug in the new route. Step 6 also drops the counts[s.ID] mismatch check and h.logSeriesBookCountMismatch call that LibrarySeries performs at browse.go:633-635.",
+    "fix": {
+     "steps": [
+      "In internal/server/handlers/abs/browse.go, add a new method after LibrarySeries returns (~L649): `func (h *Handler) LibrarySeriesDetail(c *gin.Context)`.",
+      "Call `if !h.knownLibrary(c) { return }` first (browse.go:117), the same guard every sibling handler uses.",
+      "Parse `seriesID, err := strconv.Atoi(c.Param(\"seriesId\"))`; on error respondError(c, http.StatusNotFound, \"series not found\") and return - series IDs are numeric internally, so a malformed id is indistinguishable from unknown.",
+      "Call `byID, err := h.library.GetSeriesByIDs([]int{seriesID})` (declared internal/server/handlers/abs/handler.go:164); on err respondError 500 'could not load series'; if byID has no entry for seriesID respondError 404 'series not found'.",
+      "Get `bySeries, berr := h.seriesBooksCached()` (browse.go:759, called by LibrarySeries at browse.go:521) and `enriched := h.seriesPageBooks(c.Request.Context(), []database.Series{*byID[seriesID]}, bySeries)` (browse.go:663, called by LibrarySeries at browse.go:597). seriesPageBooks returns map[int][]any and gives you ONLY the books.",
+      "Derive the other two numbers exactly as LibrarySeries does at browse.go:600-601 and browse.go:631: `built := bySeries[seriesID]`, `items, total := enriched[seriesID], built.totalDuration`, `if items == nil { items = []any{} }`, and numBooks = len(items). Do NOT take numBooks from a store count - browse.go:620-630 documents that as a measured production bug (9 of 50 series claimed numBooks >= 1 while carrying books: []). totalDuration must stay an int, never a float (browse.go:608-610).",
+      "Return the single object with respondJSON(c, http.StatusOK, gin.H{...}) carrying the same field set LibrarySeries emits per series (browse.go:606-632): id via strconv.Itoa, name, nameIgnorePrefix via ignorePrefix (internal/server/handlers/abs/mapper.go:487), libraryId via h.libraryID(), addedAt/updatedAt via msEpoch (internal/server/handlers/abs/dto.go:36), books, totalDuration, numBooks - NOT wrapped in pageResponse.",
+      "In internal/server/handlers/abs/handler.go, add the registration directly after L465: `r.GET(\"/api/libraries/:libraryId/series/:seriesId\", auth, h.LibrarySeriesDetail)`.",
+      "In internal/server/wire_abs_routes.go, add `\"GET /api/libraries/:libraryId/series/:seriesId\",` directly after L619 inside absRouteList()."
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Re-verify anchor 3 does not match HEAD. It claims `grep -n \"GET /api/playlists/:id\" internal/server/wire_abs_routes.go` -> '2 hits (absRouteList doc entry L624 + absCollisionDetailRoutes L142)'. Actual at HEAD: 3 hits, at L104 and L113 (both inside the explanatory comment block) and L624 (the absRouteList entry). There is NO hit at L142: absCollisionDetailRoutes begins at wire_abs_routes.go:141 and its playlists element is `{Method: http.MethodGet, Pattern: \"/api/playlists/:id\"}`, which does not contain the literal 'GET /api/playlists/:id'. The brief's own block says a mismatch means STOP and report, so a cold model halts on an anchor whose only purpose is background context.",
+    "fix": {
+     "verified_anchors": [
+      {
+       "claim": "only the series LIST route is registered today, not a detail route",
+       "grep_cmd": "grep -n 'libraries/:libraryId/series' internal/server/handlers/abs/handler.go",
+       "expect": "1 hit at L465: r.GET(\"/api/libraries/:libraryId/series\", auth, h.LibrarySeries)"
+      },
+      {
+       "claim": "/api/libraries/ is already unconditionally reserved, so no absCollisionDetailRoutes entry is needed",
+       "grep_cmd": "grep -n '\"/api/libraries/\"' internal/server/wire_abs_routes.go",
+       "expect": "1 hit at L68 inside absReservedPathPrefixes"
+      },
+      {
+       "claim": "the same detail-route-missing defect was already fixed for playlists, which DID need a collision entry because /api/playlists/ has a live /api/v1 twin",
+       "grep_cmd": "grep -n 'Pattern: \"/api/playlists/:id\"' internal/server/wire_abs_routes.go",
+       "expect": "1 hit at L142 inside absCollisionDetailRoutes (which starts at L141)"
+      },
+      {
+       "claim": "GetSeriesByIDs exists on the ABS library interface but is not yet called in browse.go, making it the fetch-one method to reuse",
+       "grep_cmd": "grep -n 'GetSeriesByIDs' internal/server/handlers/abs/handler.go internal/server/handlers/abs/browse.go",
+       "expect": "1 hit only, handler.go:164 (interface declaration); 0 hits in browse.go"
+      }
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 4,
+    "problem": "Acceptance box 1 - 'curl (or httptest) GET /api/libraries/1/series/<real-id> with a valid auth token returns 200 ...' - has a placeholder id and, in its curl form, needs a running server. The httptest alternative makes it satisfiable, but the box as written is not a runnable command; box 2 (`go test -run TestLibrarySeriesDetail`) already covers it."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-213",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "The replacement call cannot be written inside the brief's scope. FilesystemHandler (internal/server/handlers/filesystem.go:77-85) has NO organize-service field - `grep -rn 'organizeService' internal/server/handlers/*.go` returns ZERO hits; organizeService exists only on the Server type in package server (e.g. internal/server/batch_save_op.go:128, internal/server/duplicates_ops.go:682). Step 4 acknowledges this as a fallback ('if no such field exists yet, it needs to be added via the handler's constructor'), which is in fact the only path: it means changing the FilesystemHandler struct AND NewFilesystemHandler's signature (filesystem.go:91-98) AND its call site in internal/server/wire_handlers.go, plus adding an internal/organizer dependency to package handlers. exact_files is filesystem.go + filesystem_test.go only, so the constructor call site is out of scope and the change will not compile as scoped.",
+    "fix": {
+     "exact_files": [
+      "internal/server/handlers/filesystem.go",
+      "internal/server/handlers/filesystem_test.go",
+      "internal/server/wire_handlers.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Step 4's replacement line `newPath, err := h.organizeService.OrganizeOneBook(org, dbBook, log)` passes a `log` that does not exist. OrganizeOneBook's third parameter is a logger.Logger (internal/organizer/service.go:1220: `func (orgSvc *Service) OrganizeOneBook(org *Organizer, book *database.Book, log logger.Logger) (string, error)`), but filesystem.go has no logger at all - `grep -n 'logger.Logger\\|log logger\\|log :=' internal/server/handlers/filesystem.go` -> 0 hits; the file logs with package-level slog directly (filesystem.go:297 `slog.Warn(...)`). Step 7 then compounds it by telling the agent to check 'whether this file's existing logger convention is slog directly or a passed-in logger.Logger like folder_autoscan_op.go's scanLog' - the answer determines a constructor change, and the brief leaves it open."
+   },
+   {
+    "severity": "fatal",
+    "check": 7,
+    "problem": "Tier mismatch on a file-move prod path. This edits the auto-organize block that renames/moves audiobook files on disk (internal/server/handlers/filesystem.go:270-300, org.OrganizeBook -> OrganizeOneBook), the brief is marked 'REVIEW-CRITICAL (prod-data path) ... never weak-tier', and skeleton review_critical is true - but skeleton tier is 'sonnet'. Per the organize/rename rule this must be Opus-class.",
+    "fix": {
+     "tier": "opus"
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 3,
+    "problem": "anti_over_suppression is a prose description ('the distinct-counter test described above (lookupErrors vs notInDB vs failed vs organized, each independently verifiable)') rather than a test name, and the second Tests bullet that describes it is also unnamed. Nothing in the acceptance criteria can be grepped for it.",
+    "fix": {
+     "anti_over_suppression": "TestFilesystemAutoOrganize_CountersStayDistinct - one book with a DB lookup error, one with no DB row, one that organizes, and one that fails organize; assert lookupErrors/notInDB/organized/failed are each exactly 1 and that the summary line is emitted even when all four are zero."
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 2 says 'keeping the existing implicit `organized` tracking (or add an explicit `organized` counter if the loop does not already track it cleanly)'. The loop at filesystem.go:280-295 tracks nothing at all - there is no organized counter, implicit or otherwise - so the parenthetical is the only real branch and the hedge just costs the agent a read."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-115",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Two test files the steps directly modify are missing from exact_files (registry.go, handlers/interfaces.go, handlers/operations_v2.go, handlers/operations_v2_test.go, operations_v2_handlers.go, server_extra_test.go). The Tests section's first bullet targets internal/operations/registry/registry_test.go (exists at HEAD), and step 4 says to delete handleCancelOperationV2's 'two references in internal/server/operations_v2_handlers_test.go' - verified live at internal/server/operations_v2_handlers_test.go:270 and :283 (`grep -rn 'handleCancelOperationV2' internal/server/`). Neither file is in scope, and deleting the handler without them breaks the build.",
+    "fix": {
+     "exact_files": [
+      "internal/operations/registry/registry.go",
+      "internal/operations/registry/registry_test.go",
+      "internal/server/handlers/interfaces.go",
+      "internal/server/handlers/operations_v2.go",
+      "internal/server/handlers/operations_v2_test.go",
+      "internal/server/operations_v2_handlers.go",
+      "internal/server/operations_v2_handlers_test.go",
+      "internal/server/server_extra_test.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 2 cannot be satisfied by the branch step 4 recommends first. The box requires `grep -rn 'handleCancelOperationV2' internal/server/` to show 'either zero hits (deleted) or a call site that is now actually wired into production routing (fixed, not merely left dead)'. Step 4 offers only two options: patch handleCancelOperationV2 in place, or delete it. The patch-in-place branch leaves it dead (it is registered only inside internal/server/operations_v2_handlers_test.go:270/283, never in wire_operations_routes.go), so grep shows hits AND no production wiring - the box fails. Wiring it into production routing is a third option the steps never authorize, and it would conflict with the already-wired opsV2H.CancelOperationV2.",
+    "fix": {
+     "acceptance": "`go test ./internal/operations/registry/... ./internal/server/... -run Cancel` passes with the new 404 expectation; `grep -rn 'handleCancelOperationV2' internal/server/` returns ZERO hits (the dead duplicate and its two test references at operations_v2_handlers_test.go:270/283 are deleted - patching it in place is not an accepted outcome, since it stays unreachable and will diverge again)."
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 9,
+    "problem": "Step 6 sends the agent into web/src/services/api.ts's cancelOperation to check that the new 404 does not surface as an unhandled rejection, but no web/ file is in exact_files and the gate (`go build && go vet && go test ...`) runs no frontend command. A 204 -> 404 contract change reaches the UI with nothing verifying it."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Anchor 3 claims `grep -n \"observed contract, not an endorsement\" internal/server/server_extra_test.go` -> '1 hit at L288'. At HEAD the hit is at L287. Step 5 then cites 'server_extra_test.go:289-292' for the lines to edit, which inherits the same one-line drift."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-116",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 2 describes a partial rollout that the change cannot express. The entire diff is one override on reporterLogger (internal/operations/progress.go), so forwarding IsCanceled switches on ALL FOUR dormant guards at once - internal/scanner/service.go:227, internal/organizer/service.go:968 and :1153, internal/reconcile/reconcile.go:622. Step 6 says exactly this ('this activates 4 previously-dead branches simultaneously'). Yet step 2 instructs: 'If any guard is found unsafe to enable as-is ... flip the ones that are safe, leave a TODO comment on the ones that are not.' There is no per-guard switch; a comment does not keep a branch dormant. A cold model that finds one guard unsafe has no executable action and will either ship all four anyway or block the whole item.",
+    "fix": {
+     "steps": [
+      "Read internal/scanner/service.go around L227, internal/organizer/service.go around L968 and L1153, and internal/reconcile/reconcile.go around L622. For EACH, determine what state the function leaves behind when that branch is taken (in-progress work abandoned? DB rows left half-written? files left half-moved?).",
+      "If ANY of the four is unsafe to enable as-is, STOP and report - do not land the override. Forwarding IsCanceled is all-or-nothing: the single reporterLogger method arms all four guards simultaneously and there is no per-guard opt-out, so a 'flip the safe ones' outcome does not exist. The follow-up fix for the unsafe guard must land FIRST, in its own PR, before this one.",
+      "Only if all four are safe: in internal/operations/progress.go, add `func (l *reporterLogger) IsCanceled() bool { if l.reporter == nil { return false }; return l.reporter.IsCanceled() }` immediately after the existing With method (progress.go:100).",
+      "Update the doc comment above it (currently explaining why IsCanceled deliberately does NOT forward) to state that it now forwards and why. The pointer it names, todo.d/20260816-logger-iscanceled-forwarding.md, no longer exists (`ls` -> No such file) - drop it rather than re-creating it.",
+      "Bump internal/operations/progress.go's version header."
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 3,
+    "problem": "anti_over_suppression is 'N/A - this restores a suppressed guard rather than adding a new filter', which is exactly backwards. Arming IsCanceled turns on a cancellation SKIP path in four library-scale loops; a spuriously-true IsCanceled silently aborts a scan/organize/reconcile mid-run and reports success. Both named tests exercise only the cancelled case (TestReporterLogger_IsCanceled_ForwardsToReporter and TestScanDirectory_CancelledViaReporter_StopsCleanly). Nothing asserts the happy path - that a live, NON-cancelled reporter still walks every folder to completion with zero early exits - which is precisely the anti-over-suppression test this change needs.",
+    "fix": {
+     "anti_over_suppression": "TestScanDirectory_NotCancelled_ProcessesEveryFolder - with a reporter whose IsCanceled() returns false throughout, assert the scan visits and commits every seeded folder and takes the service.go:227 branch zero times, proving the newly-armed guard does not over-fire on a normal run."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is internal/operations/progress.go alone. The Tests section names internal/operations/progress_test.go (does NOT exist at HEAD - `ls internal/operations/progress_test.go` -> No such file) and internal/scanner/service_test.go (exists), and step 2 requires leaving TODO comments in internal/organizer/service.go and/or internal/reconcile/reconcile.go. None of those are in scope.",
+    "fix": {
+     "exact_files": [
+      "internal/operations/progress.go",
+      "internal/operations/progress_test.go",
+      "internal/scanner/service_test.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Both re-verify anchors state counts that do not match HEAD, and the block's own rule is that a mismatch means STOP. Anchor 1: `grep -n 'func (l \\*reporterLogger)' internal/operations/progress.go` is claimed as '3 hits (UpdateProgress, With)' - it is 2 hits (L83 UpdateProgress, L100 With); the parenthetical already contradicts the number. Anchor 2: `grep -n 'IsCanceled' internal/scanner/service.go internal/organizer/service.go internal/reconcile/reconcile.go` is claimed as '4 hits' - it returns 6 lines (scanner/service.go:214 comment and :227; organizer/service.go:966 comment, :968, :1153; reconcile/reconcile.go:622). The four GUARD sites are right; the hit counts are not."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 6 - 'Ship this behind careful monitoring of the first production scan/organize/reconcile run afterward' - is not an action the executing agent can take; the Done section forbids push, PR, and merge. It belongs in coordinator notes, not in the step list."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-117",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "The acceptance set is satisfied by making no change at all. Box 1 is `go build ./internal/operations/registry/... exits 0` and box 2 is `go vet ./internal/operations/registry/... exits 0` - both already true at HEAD. Nothing greps for the Unwrap method or the `var _ database.StoreUnwrapper` assertion, and TestProdSchedulerStoreUnwrap (named in Tests) never appears in acceptance. Box 2's parenthetical ('confirms the var _ StoreUnwrapper assertion compiles') is only meaningful if the assertion exists; the box passes either way.",
+    "fix": {
+     "acceptance": "`grep -n 'func (p \\*prodSchedulerStore) Unwrap() database.Store' internal/operations/registry/register.go` hits; `grep -n 'var _ database.StoreUnwrapper = (\\*prodSchedulerStore)(nil)' internal/operations/registry/register.go` hits; `go test ./internal/operations/registry/... -run TestProdSchedulerStoreUnwrap -count=1 -v` passes; go build ./... && go vet ./... exit 0."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 2's `full := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)` resolves the WIDEST possible view of the store and can crash the process at boot. internal/serviceregistry/container.go:244-262 does `instance, ok := c.built[name]` then a plain `instance.(T)` and PANICS on failure ('serviceregistry: service %q is %T, not %T') - so if the built KeyStore value does not satisfy the full database.Store interface, this is a startup panic, not a build error. Every other KeyStore consumer deliberately resolves a NARROW view instead: internal/server/registry_wire.go:52 Get[sysinfo.SystemServiceStore], :153 Get[dedup.Store], :64 and :119 Get[any]. Widening here runs against the codebase's store-narrowing direction with no note explaining why this call site is the exception."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Tests names 'internal/operations/registry/register_test.go (or a new file)' for TestProdSchedulerStoreUnwrap. That file does not exist at HEAD (`ls internal/operations/registry/register_test.go` -> No such file) and exact_files is internal/operations/registry/register.go only, so the test deliverable is outside the brief's commit scope. '(or a new file)' also leaves the filename to the agent.",
+    "fix": {
+     "exact_files": [
+      "internal/operations/registry/register.go",
+      "internal/operations/registry/register_test.go"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "The edge case makes the whole item conditional on an unanswered question - 'confirm serviceregistry.Get is not itself constructing a new value per call ... if it constructs fresh per-type wrappers ... the item becomes needs_design'. It is answerable in one read and the answer is favorable: internal/serviceregistry/container.go:253-260 looks up a single built instance from c.built[name] and type-asserts it, so both views are the same object. The brief should state that instead of handing the agent a needs_design trip-wire."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-118",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "The gate is guaranteed to FAIL the moment the task is done correctly. The gate and the 'Gate green ... exits 0' acceptance box are `go build ./... && go vet ./... && go test ./internal/operations/mocks/... ./internal/server/... -count=1`, but step 5 deletes internal/operations/mocks/ - the very package the gate tests. Measured on this repo: `go test ./internal/operations/definitely-not-a-real-dir/... -count=1; echo $?` -> exit 1 ('pattern ...: lstat ...: no such file or directory'), and `go build` on such a pattern also exits 1. So a correct implementation cannot produce a green gate, and a cold model will either restore the directory or report BLOCKED.",
+    "fix": {
+     "gate": "go build ./... && go vet ./... && go vet -tags mocks ./... && go test ./internal/server/... -count=1",
+     "acceptance": "`test -d internal/operations/mocks` returns non-zero; go build ./... exits 0; go vet -tags mocks ./... exits 0; `grep -rn 'queuemocks' --include='*.go' .` returns 0 hits; `grep -n 'ProgressReporter' .mockery.yaml` returns 0 hits."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is .mockery.yaml, internal/operations/mocks/mock_progress_reporter.go, internal/server/server_import_file_mocks_test.go. Step 4's port branch writes into 'a new or existing non-tag-gated test file' - unnamed and out of scope - and the edge case sends the agent into internal/server/scan_edge_cases_test.go. Whichever branch step 2's grep selects, half of them land outside the brief's commit scope."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "The edge case implies a class of tagged-and-broken tests that does not exist: 'internal/server/scan_edge_cases_test.go and other *_test.go files may ALSO carry //go:build mocks'. At HEAD `grep -rln 'go:build mocks' --include='*_test.go' .` returns exactly ONE file, internal/server/server_import_file_mocks_test.go; scan_edge_cases_test.go is not tagged. Naming a specific innocent file sends the agent looking for a problem that is already known not to exist."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Anchor 2 misreads its own output. `grep -rln 'operations/mocks\\\"' --include=\"*.go\" .` lists FILES that import the path - at HEAD internal/server/server_import_file_mocks_test.go and internal/server/handlers/operations/handler_test.go - but the annotation describes the second hit as '(a different, unrelated package) internal/server/handlers/operations/mocks', which is the package being imported, not the hit. The conclusion (different import path, do not touch) is correct; the description of what the grep returns is not."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-095",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 1 offers two mutually exclusive implementations in one sentence: 'add a low-cardinality counter/log, e.g. slog.Debug(...) \u2014 or, if the project has a metrics counter pattern already (check internal/metrics/ ...), prefer incrementing a sort_by_requested_total{field=...} counter'. internal/metrics/ DOES exist at HEAD (`ls internal/metrics` -> metrics.go, metrics_test.go), so the conditional resolves to 'prefer a Prometheus counter' \u2014 but step 1's own example is a slog line and the Tests section accepts either ('metric increments, or a captured log record'). Two reasonable workers ship materially different code (a debug log vs a registered Prometheus collector with an 'other' bucket).",
+    "fix": {
+     "steps": [
+      "Add a Prometheus counter (internal/metrics/ already exists \u2014 `ls internal/metrics` -> metrics.go, metrics_test.go \u2014 so use that package's existing registration pattern, NOT a slog line). Name it sort_by_requested_total with a single label `field`.",
+      "Bound the label cardinality: build the allowed set from the same list CanPushDownSort consults (`grep -n 'func CanPushDownSort' internal/database/memdb_sort_indexers.go` -> L336) plus the empty/default value, and bucket anything else as \"other\". Never pass a raw client string as a label value.",
+      "In internal/server/handlers/audiobooks/handler.go at the SortBy parse site (`grep -n 'ParseQueryString(c, \"sort_by\")' internal/server/handlers/audiobooks/handler.go` -> L519), increment the counter once per request, including when SortBy is empty (record it as the explicit default, not as a skipped increment).",
+      "Add the assertion to the existing internal/server/handlers/audiobooks/handler_test.go (it exists at HEAD): one request with sort_by=title and one with no sort_by both increment, and an unknown sort_by lands in the \"other\" bucket rather than creating a new label value."
+     ],
+     "exact_files": [
+      "internal/metrics/metrics.go",
+      "internal/server/handlers/audiobooks/handler.go",
+      "internal/server/handlers/audiobooks/handler_test.go"
+     ],
+     "tier": "sonnet"
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 3,
+    "problem": "anti_over_suppression is declared N/A, but step 2 adds a filter: it tells the agent to 'reject/bucket unknown values as \"other\"' before the label is emitted. That is a classification guard on hostile client input, and an over-broad 'other' bucket silently swallows a legitimate sort field the moment a new one is added to CanPushDownSort - which is the exact failure this instrumentation exists to detect. A happy-path test is required.",
+    "fix": {
+     "anti_over_suppression": "TestSortByMetric_KnownFieldsAreNotBucketedAsOther - assert every field CanPushDownSort accepts (internal/database/memdb_sort_indexers.go:336) increments its OWN label value and none of them lands in the \"other\" bucket, so the cardinality guard cannot quietly absorb a valid sort field."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance checkbox 2 is 'A week of prod logs/metrics shows a distribution of sort_by values' \u2014 no command or grep can check this in the PR; it is a post-merge observation over a week of production. The brief's Idempotency section then compounds it by pointing at 'the first acceptance check' as the already-done probe."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Tests section names internal/server/handlers/audiobooks/handler_test.go (exists at HEAD) and step 2 says 'register it near other request-scoped metrics in the same package', but exact_files is only ['internal/server/handlers/audiobooks/handler.go']. Neither the test file nor internal/metrics/metrics.go is in scope."
+   },
+   {
+    "severity": "advisory",
+    "check": 8,
+    "problem": "Tier is haiku, but the task requires choosing between a log and a Prometheus counter, enumerating the allowed sort-field label set, and bounding cardinality against hostile client input \u2014 judgment work, not mechanical."
+   }
+  ]
+ }
+]

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-177-add-a-per-test-deadline-context-withtimeout-to-i.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 02d550f6-e495-4a5c-983c-769c9c804292 -->
+<!-- guid: 0e69c508-5b7e-4df7-8cfd-5cff64ef3bea -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-177 — Add a per-test deadline (context.WithTimeout) to internal/database's riskiest unbounded-wait test helpers (TODO.md L235)
@@ -100,7 +100,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (``go test ./internal/database/... -short -v` completes with no individual test exceeding its new bound; a deliberately-broken wait (temporarily reintroduced for verification, then reverted) fails within the bound rather than stalling.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — ``go test ./internal/database/... -short -v` completes with no individual test exceeding its new bound; a deliberately-broken wait (temporarily reintroduced for verification, then reverted) fails within the bound rather than stalling.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

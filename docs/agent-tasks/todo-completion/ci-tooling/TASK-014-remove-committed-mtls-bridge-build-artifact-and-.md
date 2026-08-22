@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-014-remove-committed-mtls-bridge-build-artifact-and-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 9b0fba50-a850-488e-bdc8-b29ef9ea3a85 -->
+<!-- guid: 7e5c5e43-b24c-4427-aaa7-d57cf1fa9ef7 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-014 — Remove committed mtls-bridge build artifact and gitignore it (REPO-SIZE-1)
 
-**Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · ci-tooling subagent · **Why:** git rm + two-line gitignore add + a small size-guard addition to an existing hook script; no ambiguity · **Depends on:** none · **Wave:** 1
+**Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · ci-tooling subagent · **Why:** git rm + two-line gitignore add + a small size-guard addition to an existing hook script; no ambiguity · **Depends on:** none · **Wave:** 1
 
 Source: `TODO.md` line 10632 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**REPO-SIZE-1 decision**" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-15.json`.
 

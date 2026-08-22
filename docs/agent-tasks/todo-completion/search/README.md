@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/search/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 5bd50768-79c4-40f1-967d-3f1e7b8ddffc -->
+<!-- guid: ee66e22e-85b6-4c90-a436-108d439a3ef9 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — search (todo-completion)
@@ -17,7 +17,7 @@
 - Worktree per task (the ⛔ START HERE block in each brief). Never edit `main`.
 - Gate for every task in this workstream:
   ```bash
-  go build ./... && go vet ./... && go test ./internal/search/... -count=1 ; go build ./... && go vet ./... && go test ./internal/search/... ./internal/server/handlers/... -count=1
+  go build ./... && go vet ./... && go test ./internal/search/... -count=1 ; go build ./... && go vet ./... && go test ./internal/search/... ./internal/server/handlers/... -count=1 && npm --prefix web run lint && npm --prefix web test
   ```
 - **Verify every file:line anchor with `grep` before editing** — line numbers in each brief are a starting point, not a guarantee.
 - Review-critical tasks (prod-data paths) are Opus-class and their PRs stay open for the owner.
@@ -26,6 +26,7 @@
 
 - `internal/search/bleve_index.go`: TASK-023, TASK-125 → serialize by wave (TASK-023=w2, TASK-125=w1)
 - `internal/search/index_builder.go`: TASK-023, TASK-125 → serialize by wave (TASK-023=w2, TASK-125=w1)
+- `web/src/pages/Library.test.tsx`: TASK-126, TASK-168 → serialize by wave (TASK-126=w1, TASK-168=w5)
 
 | Wave | Tasks | Prereq | Parallel-safe because |
 |------|-------|--------|-----------------------|

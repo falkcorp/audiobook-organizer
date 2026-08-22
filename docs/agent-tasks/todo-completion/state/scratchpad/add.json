@@ -1,0 +1,206 @@
+[
+ {
+  "task_id": "TASK-115",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Two test files the steps directly modify are missing from exact_files (registry.go, handlers/interfaces.go, handlers/operations_v2.go, handlers/operations_v2_test.go, operations_v2_handlers.go, server_extra_test.go). The Tests section's first bullet targets internal/operations/registry/registry_test.go (exists at HEAD), and step 4 says to delete handleCancelOperationV2's 'two references in internal/server/operations_v2_handlers_test.go' - verified live at internal/server/operations_v2_handlers_test.go:270 and :283 (`grep -rn 'handleCancelOperationV2' internal/server/`). Neither file is in scope, and deleting the handler without them breaks the build.",
+    "fix": {
+     "exact_files": [
+      "internal/operations/registry/registry.go",
+      "internal/operations/registry/registry_test.go",
+      "internal/server/handlers/interfaces.go",
+      "internal/server/handlers/operations_v2.go",
+      "internal/server/handlers/operations_v2_test.go",
+      "internal/server/operations_v2_handlers.go",
+      "internal/server/operations_v2_handlers_test.go",
+      "internal/server/server_extra_test.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance box 2 cannot be satisfied by the branch step 4 recommends first. The box requires `grep -rn 'handleCancelOperationV2' internal/server/` to show 'either zero hits (deleted) or a call site that is now actually wired into production routing (fixed, not merely left dead)'. Step 4 offers only two options: patch handleCancelOperationV2 in place, or delete it. The patch-in-place branch leaves it dead (it is registered only inside internal/server/operations_v2_handlers_test.go:270/283, never in wire_operations_routes.go), so grep shows hits AND no production wiring - the box fails. Wiring it into production routing is a third option the steps never authorize, and it would conflict with the already-wired opsV2H.CancelOperationV2.",
+    "fix": {
+     "acceptance": "`go test ./internal/operations/registry/... ./internal/server/... -run Cancel` passes with the new 404 expectation; `grep -rn 'handleCancelOperationV2' internal/server/` returns ZERO hits (the dead duplicate and its two test references at operations_v2_handlers_test.go:270/283 are deleted - patching it in place is not an accepted outcome, since it stays unreachable and will diverge again)."
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 9,
+    "problem": "Step 6 sends the agent into web/src/services/api.ts's cancelOperation to check that the new 404 does not surface as an unhandled rejection, but no web/ file is in exact_files and the gate (`go build && go vet && go test ...`) runs no frontend command. A 204 -> 404 contract change reaches the UI with nothing verifying it."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Anchor 3 claims `grep -n \"observed contract, not an endorsement\" internal/server/server_extra_test.go` -> '1 hit at L288'. At HEAD the hit is at L287. Step 5 then cites 'server_extra_test.go:289-292' for the lines to edit, which inherits the same one-line drift."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-116",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 2 describes a partial rollout that the change cannot express. The entire diff is one override on reporterLogger (internal/operations/progress.go), so forwarding IsCanceled switches on ALL FOUR dormant guards at once - internal/scanner/service.go:227, internal/organizer/service.go:968 and :1153, internal/reconcile/reconcile.go:622. Step 6 says exactly this ('this activates 4 previously-dead branches simultaneously'). Yet step 2 instructs: 'If any guard is found unsafe to enable as-is ... flip the ones that are safe, leave a TODO comment on the ones that are not.' There is no per-guard switch; a comment does not keep a branch dormant. A cold model that finds one guard unsafe has no executable action and will either ship all four anyway or block the whole item.",
+    "fix": {
+     "steps": [
+      "Read internal/scanner/service.go around L227, internal/organizer/service.go around L968 and L1153, and internal/reconcile/reconcile.go around L622. For EACH, determine what state the function leaves behind when that branch is taken (in-progress work abandoned? DB rows left half-written? files left half-moved?).",
+      "If ANY of the four is unsafe to enable as-is, STOP and report - do not land the override. Forwarding IsCanceled is all-or-nothing: the single reporterLogger method arms all four guards simultaneously and there is no per-guard opt-out, so a 'flip the safe ones' outcome does not exist. The follow-up fix for the unsafe guard must land FIRST, in its own PR, before this one.",
+      "Only if all four are safe: in internal/operations/progress.go, add `func (l *reporterLogger) IsCanceled() bool { if l.reporter == nil { return false }; return l.reporter.IsCanceled() }` immediately after the existing With method (progress.go:100).",
+      "Update the doc comment above it (currently explaining why IsCanceled deliberately does NOT forward) to state that it now forwards and why. The pointer it names, todo.d/20260816-logger-iscanceled-forwarding.md, no longer exists (`ls` -> No such file) - drop it rather than re-creating it.",
+      "Bump internal/operations/progress.go's version header."
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 3,
+    "problem": "anti_over_suppression is 'N/A - this restores a suppressed guard rather than adding a new filter', which is exactly backwards. Arming IsCanceled turns on a cancellation SKIP path in four library-scale loops; a spuriously-true IsCanceled silently aborts a scan/organize/reconcile mid-run and reports success. Both named tests exercise only the cancelled case (TestReporterLogger_IsCanceled_ForwardsToReporter and TestScanDirectory_CancelledViaReporter_StopsCleanly). Nothing asserts the happy path - that a live, NON-cancelled reporter still walks every folder to completion with zero early exits - which is precisely the anti-over-suppression test this change needs.",
+    "fix": {
+     "anti_over_suppression": "TestScanDirectory_NotCancelled_ProcessesEveryFolder - with a reporter whose IsCanceled() returns false throughout, assert the scan visits and commits every seeded folder and takes the service.go:227 branch zero times, proving the newly-armed guard does not over-fire on a normal run."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is internal/operations/progress.go alone. The Tests section names internal/operations/progress_test.go (does NOT exist at HEAD - `ls internal/operations/progress_test.go` -> No such file) and internal/scanner/service_test.go (exists), and step 2 requires leaving TODO comments in internal/organizer/service.go and/or internal/reconcile/reconcile.go. None of those are in scope.",
+    "fix": {
+     "exact_files": [
+      "internal/operations/progress.go",
+      "internal/operations/progress_test.go",
+      "internal/scanner/service_test.go"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Both re-verify anchors state counts that do not match HEAD, and the block's own rule is that a mismatch means STOP. Anchor 1: `grep -n 'func (l \\*reporterLogger)' internal/operations/progress.go` is claimed as '3 hits (UpdateProgress, With)' - it is 2 hits (L83 UpdateProgress, L100 With); the parenthetical already contradicts the number. Anchor 2: `grep -n 'IsCanceled' internal/scanner/service.go internal/organizer/service.go internal/reconcile/reconcile.go` is claimed as '4 hits' - it returns 6 lines (scanner/service.go:214 comment and :227; organizer/service.go:966 comment, :968, :1153; reconcile/reconcile.go:622). The four GUARD sites are right; the hit counts are not."
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "Step 6 - 'Ship this behind careful monitoring of the first production scan/organize/reconcile run afterward' - is not an action the executing agent can take; the Done section forbids push, PR, and merge. It belongs in coordinator notes, not in the step list."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-117",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "The acceptance set is satisfied by making no change at all. Box 1 is `go build ./internal/operations/registry/... exits 0` and box 2 is `go vet ./internal/operations/registry/... exits 0` - both already true at HEAD. Nothing greps for the Unwrap method or the `var _ database.StoreUnwrapper` assertion, and TestProdSchedulerStoreUnwrap (named in Tests) never appears in acceptance. Box 2's parenthetical ('confirms the var _ StoreUnwrapper assertion compiles') is only meaningful if the assertion exists; the box passes either way.",
+    "fix": {
+     "acceptance": "`grep -n 'func (p \\*prodSchedulerStore) Unwrap() database.Store' internal/operations/registry/register.go` hits; `grep -n 'var _ database.StoreUnwrapper = (\\*prodSchedulerStore)(nil)' internal/operations/registry/register.go` hits; `go test ./internal/operations/registry/... -run TestProdSchedulerStoreUnwrap -count=1 -v` passes; go build ./... && go vet ./... exit 0."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 2's `full := serviceregistry.Get[database.Store](c, serviceregistry.KeyStore)` resolves the WIDEST possible view of the store and can crash the process at boot. internal/serviceregistry/container.go:244-262 does `instance, ok := c.built[name]` then a plain `instance.(T)` and PANICS on failure ('serviceregistry: service %q is %T, not %T') - so if the built KeyStore value does not satisfy the full database.Store interface, this is a startup panic, not a build error. Every other KeyStore consumer deliberately resolves a NARROW view instead: internal/server/registry_wire.go:52 Get[sysinfo.SystemServiceStore], :153 Get[dedup.Store], :64 and :119 Get[any]. Widening here runs against the codebase's store-narrowing direction with no note explaining why this call site is the exception."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Tests names 'internal/operations/registry/register_test.go (or a new file)' for TestProdSchedulerStoreUnwrap. That file does not exist at HEAD (`ls internal/operations/registry/register_test.go` -> No such file) and exact_files is internal/operations/registry/register.go only, so the test deliverable is outside the brief's commit scope. '(or a new file)' also leaves the filename to the agent.",
+    "fix": {
+     "exact_files": [
+      "internal/operations/registry/register.go",
+      "internal/operations/registry/register_test.go"
+     ]
+    }
+   },
+   {
+    "severity": "advisory",
+    "check": 6,
+    "problem": "The edge case makes the whole item conditional on an unanswered question - 'confirm serviceregistry.Get is not itself constructing a new value per call ... if it constructs fresh per-type wrappers ... the item becomes needs_design'. It is answerable in one read and the answer is favorable: internal/serviceregistry/container.go:253-260 looks up a single built instance from c.built[name] and type-asserts it, so both views are the same object. The brief should state that instead of handing the agent a needs_design trip-wire."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-118",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "The gate is guaranteed to FAIL the moment the task is done correctly. The gate and the 'Gate green ... exits 0' acceptance box are `go build ./... && go vet ./... && go test ./internal/operations/mocks/... ./internal/server/... -count=1`, but step 5 deletes internal/operations/mocks/ - the very package the gate tests. Measured on this repo: `go test ./internal/operations/definitely-not-a-real-dir/... -count=1; echo $?` -> exit 1 ('pattern ...: lstat ...: no such file or directory'), and `go build` on such a pattern also exits 1. So a correct implementation cannot produce a green gate, and a cold model will either restore the directory or report BLOCKED.",
+    "fix": {
+     "gate": "go build ./... && go vet ./... && go vet -tags mocks ./... && go test ./internal/server/... -count=1",
+     "acceptance": "`test -d internal/operations/mocks` returns non-zero; go build ./... exits 0; go vet -tags mocks ./... exits 0; `grep -rn 'queuemocks' --include='*.go' .` returns 0 hits; `grep -n 'ProgressReporter' .mockery.yaml` returns 0 hits."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is .mockery.yaml, internal/operations/mocks/mock_progress_reporter.go, internal/server/server_import_file_mocks_test.go. Step 4's port branch writes into 'a new or existing non-tag-gated test file' - unnamed and out of scope - and the edge case sends the agent into internal/server/scan_edge_cases_test.go. Whichever branch step 2's grep selects, half of them land outside the brief's commit scope."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "The edge case implies a class of tagged-and-broken tests that does not exist: 'internal/server/scan_edge_cases_test.go and other *_test.go files may ALSO carry //go:build mocks'. At HEAD `grep -rln 'go:build mocks' --include='*_test.go' .` returns exactly ONE file, internal/server/server_import_file_mocks_test.go; scan_edge_cases_test.go is not tagged. Naming a specific innocent file sends the agent looking for a problem that is already known not to exist."
+   },
+   {
+    "severity": "advisory",
+    "check": 2,
+    "problem": "Anchor 2 misreads its own output. `grep -rln 'operations/mocks\\\"' --include=\"*.go\" .` lists FILES that import the path - at HEAD internal/server/server_import_file_mocks_test.go and internal/server/handlers/operations/handler_test.go - but the annotation describes the second hit as '(a different, unrelated package) internal/server/handlers/operations/mocks', which is the package being imported, not the hit. The conclusion (different import path, do not touch) is correct; the description of what the grep returns is not."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-095",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 1 offers two mutually exclusive implementations in one sentence: 'add a low-cardinality counter/log, e.g. slog.Debug(...) — or, if the project has a metrics counter pattern already (check internal/metrics/ ...), prefer incrementing a sort_by_requested_total{field=...} counter'. internal/metrics/ DOES exist at HEAD (`ls internal/metrics` -> metrics.go, metrics_test.go), so the conditional resolves to 'prefer a Prometheus counter' — but step 1's own example is a slog line and the Tests section accepts either ('metric increments, or a captured log record'). Two reasonable workers ship materially different code (a debug log vs a registered Prometheus collector with an 'other' bucket).",
+    "fix": {
+     "steps": [
+      "Add a Prometheus counter (internal/metrics/ already exists — `ls internal/metrics` -> metrics.go, metrics_test.go — so use that package's existing registration pattern, NOT a slog line). Name it sort_by_requested_total with a single label `field`.",
+      "Bound the label cardinality: build the allowed set from the same list CanPushDownSort consults (`grep -n 'func CanPushDownSort' internal/database/memdb_sort_indexers.go` -> L336) plus the empty/default value, and bucket anything else as \"other\". Never pass a raw client string as a label value.",
+      "In internal/server/handlers/audiobooks/handler.go at the SortBy parse site (`grep -n 'ParseQueryString(c, \"sort_by\")' internal/server/handlers/audiobooks/handler.go` -> L519), increment the counter once per request, including when SortBy is empty (record it as the explicit default, not as a skipped increment).",
+      "Add the assertion to the existing internal/server/handlers/audiobooks/handler_test.go (it exists at HEAD): one request with sort_by=title and one with no sort_by both increment, and an unknown sort_by lands in the \"other\" bucket rather than creating a new label value."
+     ],
+     "exact_files": [
+      "internal/metrics/metrics.go",
+      "internal/server/handlers/audiobooks/handler.go",
+      "internal/server/handlers/audiobooks/handler_test.go"
+     ],
+     "tier": "sonnet"
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 3,
+    "problem": "anti_over_suppression is declared N/A, but step 2 adds a filter: it tells the agent to 'reject/bucket unknown values as \"other\"' before the label is emitted. That is a classification guard on hostile client input, and an over-broad 'other' bucket silently swallows a legitimate sort field the moment a new one is added to CanPushDownSort - which is the exact failure this instrumentation exists to detect. A happy-path test is required.",
+    "fix": {
+     "anti_over_suppression": "TestSortByMetric_KnownFieldsAreNotBucketedAsOther - assert every field CanPushDownSort accepts (internal/database/memdb_sort_indexers.go:336) increments its OWN label value and none of them lands in the \"other\" bucket, so the cardinality guard cannot quietly absorb a valid sort field."
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Acceptance checkbox 2 is 'A week of prod logs/metrics shows a distribution of sort_by values' — no command or grep can check this in the PR; it is a post-merge observation over a week of production. The brief's Idempotency section then compounds it by pointing at 'the first acceptance check' as the already-done probe."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "Tests section names internal/server/handlers/audiobooks/handler_test.go (exists at HEAD) and step 2 says 'register it near other request-scoped metrics in the same package', but exact_files is only ['internal/server/handlers/audiobooks/handler.go']. Neither the test file nor internal/metrics/metrics.go is in scope."
+   },
+   {
+    "severity": "advisory",
+    "check": 8,
+    "problem": "Tier is haiku, but the task requires choosing between a log and a Prometheus counter, enumerating the allowed sort-field label set, and bounding cardinality against hostile client input — judgment work, not mechanical."
+   }
+  ]
+ }
+]

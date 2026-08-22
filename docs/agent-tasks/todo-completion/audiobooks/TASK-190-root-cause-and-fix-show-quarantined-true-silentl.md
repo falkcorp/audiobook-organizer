@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/audiobooks/TASK-190-root-cause-and-fix-show-quarantined-true-silentl.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 985c66e9-a386-4975-9003-328c179c4fa1 -->
+<!-- guid: 9a3bbf26-4232-4b0d-b759-5dd0c1cc9141 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-190 — Root-cause and fix: show_quarantined=true silently narrows the audiobook list to is_primary_version=true (TODO.md L3718)
@@ -29,9 +29,10 @@ Reproduce the reported divergence with a deterministic, fixture-seeded Go test (
 
 ## Background (verify before editing)
 
-- Measured on production 2026-08-14: default query (no is_primary_version, no show_quarantined) returned 63,869 books; the SAME query with only show_quarantined=true added returned 41,319 = 41,317 (the known is_primary_version=true population) + 2 (the quarantined rows) -- i.e. adding show_quarantined=true, which can only WIDEN the set, instead silently narrowed it to primary-only and dropped the 22,552-book nil-flag population.
-- This is filed as the 'same family' as the known nil/false is_primary_version divergence tracked separately in project memory (project_is_primary_version_nil_divergence, marked STILL LIVE, #2449 masks but does not fix it) -- so this specific show_quarantined interaction may be a second symptom of that same underlying root cause rather than an independent bug.
-- internal/server/library_list_warmer.go pre-warms svc.listCache with ~15+ distinct filter combinations, all using IsPrimaryVersion: &primaryTrue (verified: grep -c 'IsPrimaryVersion: &primaryTrue' internal/server/library_list_warmer.go returns multiple hits) -- this is a plausible but NOT YET CONFIRMED culprit: if any warmed cache key can be reached by a request that did not explicitly ask for primary=true, the cache would silently serve the narrower warmed page. The cache key construction at service_query.go:195-196 needs to be checked against every warmer variant to rule this in or out.
+- Measured on production 2026-08-14: the default query returned 63,869 books; the SAME query with only show_quarantined=true added returned 41,319 = 41,317 (the is_primary_version=true population) + 2 quarantined rows - adding a filter that can only WIDEN the set instead narrowed it to primary-only.
+- RULED OUT before you start, do not re-investigate: a listCache key collision with library_list_warmer.go's warmed IsPrimaryVersion=&primaryTrue entries. internal/audiobooks/service_query.go:183-189 renders IsPrimaryVersion as the literal token 'nil'/'true'/'false' into primaryKey, and service_query.go:195-196 includes both primaryKey and noq=<ExcludeQuarantined> in the key, so a nil-primary request can never address a primary=true warmed page.
+- ALSO RULED OUT by static reading: hasHeavyPostFilters/hasPostFilters (internal/audiobooks/service_query.go:77-78) do not key on ExcludeQuarantined, and the memdb index-selection switches (internal/database/memdb_summaries.go:132 and :281) default to the unrestricted memIdxID whenever IsPrimaryVersion is nil, independent of ExcludeQuarantined.
+- Since every in-repo candidate is ruled out, the first deliverable is the fixture reproduction itself. If it does not reproduce at fixture scale, the divergence is data- or index-shaped (Bleve/search-backed counts, or the prod store) and this brief's scope is wrong - report that instead of forcing a fix.
 
 - **Re-verify these anchors before editing** — line numbers drift; a zero-hit grep means STOP and report:
   ```bash
@@ -84,9 +85,540 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] go test ./internal/audiobooks/... -run TestGetAudiobooksWithTotal_ShowQuarantinedDoesNotNarrowByPrimary -count=1 -v passes
-- [ ] go test ./internal/audiobooks/... ./internal/database/... -count=1 passes with no new failures
-- [ ] the fix is accompanied by a comment at the actual root-cause location explaining the mechanism (cache-key collision, index-selection default, or whatever is found) so this does not require re-discovery next time
+- [ ] T
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ] r
+- [ ] o
+- [ ] d
+- [ ] u
+- [ ] c
+- [ ] t
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] m
+- [ ] u
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] F
+- [ ] A
+- [ ] I
+- [ ] L
+- [ ]  
+- [ ] b
+- [ ] e
+- [ ] f
+- [ ] o
+- [ ] r
+- [ ] e
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ]  
+- [ ] a
+- [ ] f
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] :
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] c
+- [ ] o
+- [ ] r
+- [ ] d
+- [ ]  
+- [ ] `
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] a
+- [ ] u
+- [ ] d
+- [ ] i
+- [ ] o
+- [ ] b
+- [ ] o
+- [ ] o
+- [ ] k
+- [ ] s
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] -
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] S
+- [ ] h
+- [ ] o
+- [ ] w
+- [ ] Q
+- [ ] u
+- [ ] a
+- [ ] r
+- [ ] a
+- [ ] n
+- [ ] t
+- [ ] i
+- [ ] n
+- [ ] e
+- [ ] d
+- [ ] D
+- [ ] o
+- [ ] e
+- [ ] s
+- [ ] N
+- [ ] o
+- [ ] t
+- [ ] N
+- [ ] a
+- [ ] r
+- [ ] r
+- [ ] o
+- [ ] w
+- [ ] B
+- [ ] y
+- [ ] P
+- [ ] r
+- [ ] i
+- [ ] m
+- [ ] a
+- [ ] r
+- [ ] y
+- [ ]  
+- [ ] -
+- [ ] c
+- [ ] o
+- [ ] u
+- [ ] n
+- [ ] t
+- [ ] =
+- [ ] 1
+- [ ] `
+- [ ]  
+- [ ] f
+- [ ] a
+- [ ] i
+- [ ] l
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] r
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ]  
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] m
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] ,
+- [ ]  
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] t
+- [ ] e
+- [ ]  
+- [ ] b
+- [ ] o
+- [ ] t
+- [ ] h
+- [ ]  
+- [ ] o
+- [ ] u
+- [ ] t
+- [ ] p
+- [ ] u
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ] o
+- [ ] r
+- [ ] t
+- [ ] .
+- [ ]  
+- [ ] I
+- [ ] f
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] e
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] r
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ]  
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] m
+- [ ] i
+- [ ] t
+- [ ] ,
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] b
+- [ ] u
+- [ ] g
+- [ ]  
+- [ ] d
+- [ ] o
+- [ ] e
+- [ ] s
+- [ ]  
+- [ ] N
+- [ ] O
+- [ ] T
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ] r
+- [ ] o
+- [ ] d
+- [ ] u
+- [ ] c
+- [ ] e
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] e
+- [ ]  
+- [ ] s
+- [ ] c
+- [ ] a
+- [ ] l
+- [ ] e
+- [ ]  
+- [ ] -
+- [ ]  
+- [ ] S
+- [ ] T
+- [ ] O
+- [ ] P
+- [ ]  
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ] o
+- [ ] r
+- [ ] t
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] a
+- [ ] s
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] f
+- [ ] i
+- [ ] n
+- [ ] d
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ]  
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ] r
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] a
+- [ ] n
+- [ ]  
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] m
+- [ ] i
+- [ ] t
+- [ ] t
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ]  
+- [ ] a
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] e
+- [ ] n
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] ;
+- [ ]  
+- [ ] d
+- [ ] o
+- [ ]  
+- [ ] n
+- [ ] o
+- [ ] t
+- [ ]  
+- [ ] p
+- [ ] r
+- [ ] o
+- [ ] c
+- [ ] e
+- [ ] e
+- [ ] d
+- [ ]  
+- [ ] t
+- [ ] o
+- [ ]  
+- [ ] a
+- [ ]  
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ] .
+- [ ]  
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] a
+- [ ] u
+- [ ] d
+- [ ] i
+- [ ] o
+- [ ] b
+- [ ] o
+- [ ] o
+- [ ] k
+- [ ] s
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] d
+- [ ] a
+- [ ] t
+- [ ] a
+- [ ] b
+- [ ] a
+- [ ] s
+- [ ] e
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] -
+- [ ] c
+- [ ] o
+- [ ] u
+- [ ] n
+- [ ] t
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ]  
+- [ ] w
+- [ ] i
+- [ ] t
+- [ ] h
+- [ ]  
+- [ ] n
+- [ ] o
+- [ ]  
+- [ ] n
+- [ ] e
+- [ ] w
+- [ ]  
+- [ ] f
+- [ ] a
+- [ ] i
+- [ ] l
+- [ ] u
+- [ ] r
+- [ ] e
+- [ ] s
+- [ ] .
 - [ ] Anti-over-suppression test: `TestGetAudiobooksWithTotal_ShowQuarantinedDoesNotNarrowByPrimary itself is the anti-suppression check: it specifically asserts the WIDER filter set (show_quarantined=true) never returns FEWER books than a narrower one on the same request shape` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/audiobooks/... ./internal/database/... ./internal/server/... -count=1` exits 0; `go vet`/lint clean.

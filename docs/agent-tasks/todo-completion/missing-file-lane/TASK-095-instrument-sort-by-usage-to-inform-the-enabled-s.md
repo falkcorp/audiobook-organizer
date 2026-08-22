@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-095-instrument-sort-by-usage-to-inform-the-enabled-s.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 8208758e-4dcb-4b9e-97e1-45865b74335f -->
+<!-- guid: 3e5eb266-f558-4bd6-a1bb-cf8f16f4de34 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-095 — Instrument sort_by usage to inform the enabled_sort_indexes decision (TODO.md L6701)
 
-**Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · missing-file-lane subagent · **Why:** One log line at an existing, well-understood call site. · **Depends on:** none · **Wave:** 2
+**Priority:** P2 · **Effort:** S · **Recommended subagent:** Sonnet-class · missing-file-lane subagent · **Why:** One log line at an existing, well-understood call site. · **Depends on:** none · **Wave:** 2
 
 Source: `TODO.md` line 6701 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**⚖️ DECIDE which sort indexes to enable — the des" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-11.json`.
 
@@ -44,8 +44,10 @@ Add a low-cardinality log/metric of sort_by values actually requested by clients
 
 ## Step-by-step
 
-1. In internal/server/handlers/audiobooks/handler.go near the SortBy parsing (~L519), add a low-cardinality counter/log, e.g. `slog.Debug("audiobooks: sort_by requested", "sort_by", filter.SortBy)` — or, if the project has a metrics counter pattern already (check internal/metrics/ for an existing Prometheus counter helper), prefer incrementing a `sort_by_requested_total{field=...}` counter over a log line, since /metrics gaps are a known project issue (see project memory: Prometheus gap) and a log line risks being as unobserved as the GetAllSeriesBookCounts silent-zero case elsewhere in this scope.
-2. If using a counter, register it near other request-scoped metrics in the same package; keep the label cardinality bounded to known sort field names (reject/bucket unknown values as "other").
+1. Add a Prometheus counter (internal/metrics/ already exists — `ls internal/metrics` -> metrics.go, metrics_test.go — so use that package's existing registration pattern, NOT a slog line). Name it sort_by_requested_total with a single label `field`.
+2. Bound the label cardinality: build the allowed set from the same list CanPushDownSort consults (`grep -n 'func CanPushDownSort' internal/database/memdb_sort_indexers.go` -> L336) plus the empty/default value, and bucket anything else as "other". Never pass a raw client string as a label value.
+3. In internal/server/handlers/audiobooks/handler.go at the SortBy parse site (`grep -n 'ParseQueryString(c, "sort_by")' internal/server/handlers/audiobooks/handler.go` -> L519), increment the counter once per request, including when SortBy is empty (record it as the explicit default, not as a skipped increment).
+4. Add the assertion to the existing internal/server/handlers/audiobooks/handler_test.go (it exists at HEAD): one request with sort_by=title and one with no sort_by both increment, and an unknown sort_by lands in the "other" bucket rather than creating a new label value.
 
 Then, always:
 - Keep the change purely additive — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
@@ -61,12 +63,12 @@ Then, always:
 
 - internal/server/handlers/audiobooks/handler_test.go: assert the instrumentation fires (metric increments, or a captured log record) once per request with the requested SortBy value, including for the default/empty case.
 
-Anti-over-suppression: N/A
+Anti-over-suppression test: `TestSortByMetric_KnownFieldsAreNotBucketedAsOther - assert every field CanPushDownSort accepts (internal/database/memdb_sort_indexers.go:336) increments its OWN label value and none of them lands in the "other" bucket, so the cardinality guard cannot quietly absorb a valid sort field.` — a known-good input still passes with the new guard active.
 
 ## How to test
 
 ```bash
-go build ./... && go vet ./... && go test ./internal/server/handlers/audiobooks/... -count=1
+go build ./... && go vet ./... && go test ./internal/metrics/... ./internal/server/handlers/audiobooks/... -count=1
 ```
 Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
@@ -74,9 +76,9 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 - [ ] go test ./internal/server/handlers/audiobooks/... passes
 - [ ] A week of prod logs/metrics shows a distribution of sort_by values, closing the 'nobody has measured which sorts real users pick' gap the item cites.
-- [ ] Anti-over-suppression: N/A
+- [ ] Anti-over-suppression test: `TestSortByMetric_KnownFieldsAreNotBucketedAsOther - assert every field CanPushDownSort accepts (internal/database/memdb_sort_indexers.go:336) increments its OWN label value and none of them lands in the "other" bucket, so the cardinality guard cannot quietly absorb a valid sort field.` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/server/handlers/audiobooks/... -count=1` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/metrics/... ./internal/server/handlers/audiobooks/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_missing-file-lane_095.md`.
 
@@ -96,7 +98,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/server/handlers/audiobooks/... passes`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'ParseQueryString(c, "sort_by")' internal/server/handlers/audiobooks/handler.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-141-add-regression-tests-for-the-2-untested-deluge-h.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 27683d63-1fdd-46f3-836e-ea0823cb38ec -->
+<!-- guid: b30efc70-07ec-4eea-91d6-05c748ee8f1b -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-141 — Add regression tests for the 2 untested deluge hydrate sites (TODO.md L10525)
@@ -76,8 +76,487 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] `go test ./internal/server/... -run TestHandleDiscoveryImport_HydrateFailure` passes.
-- [ ] `go test ./internal/maintenance/jobs/... -run TestBulkDelugeImportJob_HydrateFailure` passes.
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] f
+- [ ] u
+- [ ] n
+- [ ] c
+- [ ]  
+- [ ] T
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] H
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ] l
+- [ ] e
+- [ ] D
+- [ ] i
+- [ ] s
+- [ ] c
+- [ ] o
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] y
+- [ ] I
+- [ ] m
+- [ ] p
+- [ ] o
+- [ ] r
+- [ ] t
+- [ ] _
+- [ ] H
+- [ ] y
+- [ ] d
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] e
+- [ ] F
+- [ ] a
+- [ ] i
+- [ ] l
+- [ ] u
+- [ ] r
+- [ ] e
+- [ ] '
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] /
+- [ ] d
+- [ ] e
+- [ ] l
+- [ ] u
+- [ ] g
+- [ ] e
+- [ ] _
+- [ ] d
+- [ ] i
+- [ ] s
+- [ ] c
+- [ ] o
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] y
+- [ ] _
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] .
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] (
+- [ ] 0
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] f
+- [ ] u
+- [ ] n
+- [ ] c
+- [ ]  
+- [ ] T
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] B
+- [ ] u
+- [ ] l
+- [ ] k
+- [ ] D
+- [ ] e
+- [ ] l
+- [ ] u
+- [ ] g
+- [ ] e
+- [ ] I
+- [ ] m
+- [ ] p
+- [ ] o
+- [ ] r
+- [ ] t
+- [ ] J
+- [ ] o
+- [ ] b
+- [ ] _
+- [ ] H
+- [ ] y
+- [ ] d
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] e
+- [ ] F
+- [ ] a
+- [ ] i
+- [ ] l
+- [ ] u
+- [ ] r
+- [ ] e
+- [ ] '
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] m
+- [ ] a
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] n
+- [ ] a
+- [ ] n
+- [ ] c
+- [ ] e
+- [ ] /
+- [ ] j
+- [ ] o
+- [ ] b
+- [ ] s
+- [ ] /
+- [ ] b
+- [ ] u
+- [ ] l
+- [ ] k
+- [ ] _
+- [ ] d
+- [ ] e
+- [ ] l
+- [ ] u
+- [ ] g
+- [ ] e
+- [ ] _
+- [ ] i
+- [ ] m
+- [ ] p
+- [ ] o
+- [ ] r
+- [ ] t
+- [ ] _
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] .
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] (
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] f
+- [ ] i
+- [ ] l
+- [ ] e
+- [ ]  
+- [ ] d
+- [ ] o
+- [ ] e
+- [ ] s
+- [ ]  
+- [ ] n
+- [ ] o
+- [ ] t
+- [ ]  
+- [ ] e
+- [ ] x
+- [ ] i
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] -
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] T
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] H
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ] l
+- [ ] e
+- [ ] D
+- [ ] i
+- [ ] s
+- [ ] c
+- [ ] o
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] y
+- [ ] I
+- [ ] m
+- [ ] p
+- [ ] o
+- [ ] r
+- [ ] t
+- [ ] _
+- [ ] H
+- [ ] y
+- [ ] d
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] e
+- [ ] F
+- [ ] a
+- [ ] i
+- [ ] l
+- [ ] u
+- [ ] r
+- [ ] e
+- [ ]  
+- [ ] -
+- [ ] c
+- [ ] o
+- [ ] u
+- [ ] n
+- [ ] t
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] -
+- [ ] v
+- [ ]  
+- [ ] p
+- [ ] r
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] '
+- [ ] -
+- [ ] -
+- [ ] -
+- [ ]  
+- [ ] P
+- [ ] A
+- [ ] S
+- [ ] S
+- [ ] :
+- [ ]  
+- [ ] T
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] H
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ] l
+- [ ] e
+- [ ] D
+- [ ] i
+- [ ] s
+- [ ] c
+- [ ] o
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] y
+- [ ] I
+- [ ] m
+- [ ] p
+- [ ] o
+- [ ] r
+- [ ] t
+- [ ] _
+- [ ] H
+- [ ] y
+- [ ] d
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] e
+- [ ] F
+- [ ] a
+- [ ] i
+- [ ] l
+- [ ] u
+- [ ] r
+- [ ] e
+- [ ] '
+- [ ]  
+- [ ] (
+- [ ] n
+- [ ] o
+- [ ] t
+- [ ]  
+- [ ] '
+- [ ] [
+- [ ] n
+- [ ] o
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] t
+- [ ] o
+- [ ]  
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ] ]
+- [ ] '
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] s
+- [ ] a
+- [ ] m
+- [ ] e
+- [ ]  
+- [ ] f
+- [ ] o
+- [ ] r
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] j
+- [ ] o
+- [ ] b
+- [ ] s
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] c
+- [ ] k
+- [ ] a
+- [ ] g
+- [ ] e
+- [ ] .
 - [ ] Anti-over-suppression: N/A
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/maintenance/jobs/... ./internal/server/... -count=1` exits 0; `go vet`/lint clean.
@@ -100,7 +579,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (``go test ./internal/server/... -run TestHandleDiscoveryImport_HydrateFailure` passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n "GetBookFileByID" internal/server/deluge_discovery_test.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

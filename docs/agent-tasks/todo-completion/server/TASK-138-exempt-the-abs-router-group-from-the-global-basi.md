@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-138-exempt-the-abs-router-group-from-the-global-basi.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e5317efd-d561-4e36-bc50-2a355f51d34a -->
+<!-- guid: 081c4c7e-8ef5-467d-abaa-7ef6bbfbe27d -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-138 — Exempt the ABS router group from the global BasicAuth() middleware (ABS-SYNC)
@@ -29,15 +29,20 @@ In internal/server/middleware/basicauth.go's BasicAuth(), add an ABS-path exempt
 
 ## Background (verify before editing)
 
-- BasicAuth() gin middleware currently exempts only /api/health, /api/v1/health, and static asset extensions (basicauth.go:28-44).
-- The ABS handler group is mounted at absGroup := s.router.Group("") (wire_abs_routes.go:504) as a direct child of the globally-BasicAuth()'d router, so it inherits BasicAuth() with no override today.
-- ABS's own auth middleware (ABSRequireAuth, internal/server/middleware/absauth.go:467) already enforces its own scheme (CF assertion / bearer / API key) and must be the ONLY auth gate on that surface, or a device sending Authorization: Basic per RFC would collide with ABS's own use of the Authorization header for its bearer token.
+- internal/server/middleware/basicauth.go's BasicAuth() exempts only /api/health, /api/v1/health (L28-32) and static assets (L34-45); everything else on s.router is gated.
+- internal/server/handlers/abs/handler.go:432 Register mounts the ABS surface. CRITICAL: the ABSRequireAuth middleware is not constructed until L446 — /ping (L433), /status (L434), /login (L436), /auth/refresh (L437), /auth/openid (L442) and /auth/openid/callback (L443) are registered with NO app-layer auth, and /api/items/:id/cover is deliberately auth-free. For those paths BasicAuth is currently the only gate, so they MUST NOT be added to the exemption list.
+- Only the routes that carry the `auth` middleware may be exempted: /logout, /api/authorize, /api/me*, /api/libraries*, /api/collections*, /api/playlists/:id, /api/items/:id (but NOT /api/items/:id/cover), /api/items/:id/play, /api/items/:id/file*.
+- internal/server/server.go:469 applies servermiddleware.BasicAuth() globally; internal/server/wire_abs_routes.go:504 mounts absGroup := s.router.Group("") as a child, so it inherits BasicAuth with no override.
 
 - **Re-verify these anchors before editing** — line numbers drift; a zero-hit grep means STOP and report:
   ```bash
   grep -n 'router.Use(servermiddleware.BasicAuth())' internal/server/server.go   # 1 hit ~L469 — BasicAuth() is applied globally to s.router
   grep -n 'absGroup := s.router.Group' internal/server/wire_abs_routes.go   # 1 hit ~L504 — the ABS group is a child of s.router with no BasicAuth exemption
   grep -n 'Exempt' internal/server/middleware/basicauth.go   # 2 hits ~L28, L34 — BasicAuth()'s current exemption list is health endpoints + static assets only
+  grep -n 'BasicAuth()' internal/server/server.go   # 1 hit at L469: router.Use(servermiddleware.BasicAuth()) — BasicAuth is applied globally to s.router
+  grep -n 'absGroup := s.router.Group' internal/server/wire_abs_routes.go   # 1 hit at L504 — the ABS group inherits it with no exemption
+  grep -n 'r.GET("/ping"\|r.GET("/status"\|r.POST("/login"\|r.GET("/auth/openid"\|ABSRequireAuth(h.resolver)' internal/server/handlers/abs/handler.go   # /ping L433, /status L434, /login L436, /auth/openid L443 — all registered BEFORE `auth := servermiddleware.ABSRequireAuth(h.resolver)` at L446, so BasicAuth is their only gate — six ABS routes have NO ABS auth middleware and rely on BasicAuth as their only gate
+  grep -n 'Exempt\|HasPrefix' internal/server/middleware/basicauth.go   # comments at L28 and L34, strings.HasPrefix(path, "/assets/") at L35 — the existing exemption style to mirror
   ```
 
 ### Reuse — don't invent
@@ -67,7 +72,7 @@ Then, always:
 - internal/server/middleware/basicauth_test.go: add TestBasicAuth_ABSPathsExempt — set config.AppConfig.BasicAuthEnabled=true, hit an ABS path (e.g. GET /api/me with no Basic Auth header, no ABS credential either) through the middleware alone, and assert it is NOT aborted with 401 by BasicAuth specifically (i.e. c.Next() was reached) — this test should stub/skip the downstream ABS auth check or assert only on the BasicAuth layer's behavior.
 - internal/server/middleware/basicauth_test.go: keep/extend the existing non-exempt-path test (a plain /api/v1/... path) to prove BasicAuth STILL enforces basic auth outside the new ABS exemption — this is the anti-over-suppression check: the fix must not accidentally exempt the whole /api prefix.
 
-Anti-over-suppression test: `TestBasicAuth_NonABSPathStillEnforced (or equivalent) — proves the exemption is scoped to ABS paths only, not a blanket bypass` — a known-good input still passes with the new guard active.
+Anti-over-suppression test: `TestBasicAuth_UnauthenticatedABSRoutesStillEnforced — with BasicAuthEnabled=true, GET /ping, GET /status, POST /login and GET /auth/openid must STILL be challenged with 401 by BasicAuth, because ABSRequireAuth is not on those routes (abs/handler.go:433-443). Plus TestBasicAuth_NonABSPathStillEnforced for a plain /api/v1/... path.` — a known-good input still passes with the new guard active.
 
 ## How to test
 
@@ -80,7 +85,7 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 - [ ] `go test ./internal/server/middleware/... -run TestBasicAuth` passes, including the new ABS-exemption test and the existing non-ABS enforcement test
 - [ ] `grep -n 'ABS' internal/server/middleware/basicauth.go` shows the new exemption block with a comment explaining the mutual-exclusion rationale
-- [ ] Anti-over-suppression test: `TestBasicAuth_NonABSPathStillEnforced (or equivalent) — proves the exemption is scoped to ABS paths only, not a blanket bypass` — a known-good input still passes with the new guard active.
+- [ ] Anti-over-suppression test: `TestBasicAuth_UnauthenticatedABSRoutesStillEnforced — with BasicAuthEnabled=true, GET /ping, GET /status, POST /login and GET /auth/openid must STILL be challenged with 401 by BasicAuth, because ABSRequireAuth is not on those routes (abs/handler.go:433-443). Plus TestBasicAuth_NonABSPathStillEnforced for a plain /api/v1/... path.` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/server/middleware/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).

@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/config/TASK-020-delete-the-fully-inert-enable-sqlite3-i-know-the.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: af7eea9a-3840-4012-bb51-c3243c6418f9 -->
+<!-- guid: 9470f681-213b-4db3-9a88-ce6ed3b84889 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-020 — Delete the fully inert --enable-sqlite3-i-know-the-risks flag and EnableSQLite config option (CFG-AUDIT)
 
-**Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · config subagent · **Why:** Pure removal but touches ~8 files (flag registration, config struct, 5 call sites passing the dead param, a test that stubs the function) — needs care to not break the initializeStore signature for its remaining real use (dbType, path). · **Depends on:** none · **Wave:** 4
+**Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · config subagent · **Why:** Pure removal but touches ~8 files (flag registration, config struct, 5 call sites passing the dead param, a test that stubs the function) — needs care to not break the initializeStore signature for its remaining real use (dbType, path). · **Depends on:** none · **Wave:** 3
 
 Source: `TODO.md` line 1317 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**CFG-AUDIT**" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-03.json`.
 

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-107-export-a-playlist-back-to-m3u.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 8d83ea3e-0647-44fc-9dff-9e3d382602d2 -->
+<!-- guid: 676794b3-10cd-474f-b3f1-c23da8868b5c -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-107 — Export a playlist back to .m3u (TODO.md L8646)
@@ -68,7 +68,7 @@ Anti-over-suppression: N/A
 ## How to test
 
 ```bash
-go build ./... && go vet ./... && go test ./internal/server/handlers/... -count=1
+go build ./... && go vet ./... && go test ./internal/server/... ./internal/server/handlers/... -count=1
 ```
 Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
@@ -78,7 +78,7 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 - [ ] GET the endpoint for a real 3-book static playlist returns valid #EXTM3U text with 3 path lines.
 - [ ] Anti-over-suppression: N/A
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/server/handlers/... -count=1` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/server/... ./internal/server/handlers/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_missing-file-lane_107.md`.
 
@@ -98,7 +98,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/server/handlers/... -run ExportPlaylistM3U passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `GET the endpoint for a real 3-book static playlist returns valid #EXTM3U text with 3 path lines.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

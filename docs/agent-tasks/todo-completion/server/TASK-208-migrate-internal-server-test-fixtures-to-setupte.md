@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-208-migrate-internal-server-test-fixtures-to-setupte.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 3c56c35e-39d9-41da-af66-010464e3ef24 -->
+<!-- guid: 5069b9be-7110-49d1-b5f4-605f1b3ee9f6 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-208 — Migrate internal/server test fixtures to setupTestServerWithStore — itunes_error_test.go, version_lifecycle_test.go (DEC-6)
@@ -29,9 +29,10 @@ Replace every ad-hoc `server := NewServer(env.Store)` / `srv := NewServer(store)
 
 ## Background (verify before editing)
 
-- internal/server/server_test.go:151 defines setupTestServerWithStore(t, store) (*Server, func()) — sets gin.TestMode, calls allowOpDefinitionUpserts(store), database.SetGlobalStore(store), NewServer(store), and returns a cleanup that stops fileIOPool/writeBackBatcher and restores config.AppConfig.
-- itunes_error_test.go builds its env via testutil.SetupIntegration(t) (grep -n "testutil.SetupIntegration" internal/server/itunes_error_test.go), then at 11 separate TestITunesImport_* functions calls `server := NewServer(env.Store)` directly followed by a manual opRegistry.Start/Shutdown pair — that manual pair is NOT something setupTestServerWithStore performs, so it must be kept.
-- version_lifecycle_test.go's single call site at L37 constructs from a plain store with no such extra wiring, per a quick read of its surrounding function (verify before editing: grep -n -B5 -A5 "NewServer(" internal/server/version_lifecycle_test.go).
+- internal/server/server_test.go:151 defines setupTestServerWithStore(t, store) (*Server, func()). It sets gin.TestMode, PINS config.AppConfig.RootDir="" (L160-161), calls allowOpDefinitionUpserts(store), database.SetGlobalStore(store), NewServer(store), and returns a cleanup that stops fileIOPool/writeBackBatcher and restores config.AppConfig. It does NOT start the operations registry and does NOT restore the previous global store.
+- CRITICAL for this part: itunes_error_test.go builds its env via testutil.SetupIntegration(t), which sets a NON-EMPTY config RootDir (internal/testutil/integration.go, `RootDir: rootDir` inside config.Mutate). setupTestServerWithStore blanks it. An empty RootDir makes internal/plugins/itunes/register.go:52 return a typed-nil plugin, so the iTunes plugin registers nothing. Every one of the 11 sites in this file must therefore re-pin RootDir to env.TempDir/env.RootDir immediately after the setupTestServerWithStore call, or be left unmigrated.
+- itunes_error_test.go's 11 sites each follow NewServer(env.Store) with a manual `if server.opRegistry != nil { server.opRegistry.Start(...); defer Shutdown }` pair (L35-40, L84-89, L131-136, L284-289). setupTestServerWithStore does NOT start the registry, so those pairs must be kept verbatim.
+- version_lifecycle_test.go's single site at L37 constructs from a plain store with no SetupIntegration and no extra wiring.
 
 - **Re-verify these anchors before editing** — line numbers drift; a zero-hit grep means STOP and report:
   ```bash
@@ -39,6 +40,13 @@ Replace every ad-hoc `server := NewServer(env.Store)` / `srv := NewServer(store)
   grep -n "func setupTestServerWithStore" internal/server/server_test.go   # 1 hit at L151 — setupTestServerWithStore is the real, already-heavily-reused shared fixture
   grep -n "NewServer(" internal/server/itunes_error_test.go   # 11 hits at L34,66,83,130,162,175,201,217,233,259,283 — itunes_error_test.go has 11 direct NewServer(env.Store) construction sites
   grep -n "NewServer(" internal/server/version_lifecycle_test.go   # 1 hit at L37 — version_lifecycle_test.go has 1 direct NewServer(store) construction site
+  grep -n 'config.AppConfig.RootDir = ""' internal/server/server_test.go   # exactly 1 hit, L161, inside setupTestServerWithStore — the side effect the brief omits — setupTestServerWithStore also blanks config.AppConfig.RootDir before NewServer — the fact the original brief omitted
+  grep -n 'allowOpDefinitionUpserts(store)\|database.SetGlobalStore' internal/server/server_test.go   # allowOpDefinitionUpserts(store) at L167 and database.SetGlobalStore(store) at L170 (plus L84/L123 belonging to the other fixture) — the fixture's other two side effects, in order, after the RootDir pin
+  grep -n 'RootDir' internal/testutil/integration.go   # rootDir := filepath.Join(tmpBase, "library") and RootDir: rootDir inside the config.Mutate block — testutil.SetupIntegration deliberately sets a non-empty RootDir
+  grep -n 'if cfg.RootDir == ""' internal/plugins/itunes/register.go   # exactly 1 hit at L52 — `if cfg.RootDir == "" { return (*Plugin)(nil), nil }`: an empty RootDir returns a nil plugin, disabling iTunes entirely — an empty RootDir disables the iTunes plugin entirely
+  grep -n 'NewServer(' internal/server/itunes_error_test.go   # 11 hits at L34,66,83,130,162,175,201,217,233,259,283 — 11 direct NewServer(env.Store) sites in itunes_error_test.go
+  grep -n 'NewServer(' internal/server/version_lifecycle_test.go   # 1 hit at L37 — 1 direct NewServer(store) site in version_lifecycle_test.go
+  grep -n 'opRegistry' internal/server/itunes_error_test.go   # Start/Shutdown pairs at L35-39, L84-88, L131-135, L284-288 — the manual opRegistry pairs that must survive the migration
   ```
 
 ### Reuse — don't invent
@@ -48,12 +56,14 @@ Replace every ad-hoc `server := NewServer(env.Store)` / `srv := NewServer(store)
 
 ## Step-by-step
 
-1. Open internal/server/itunes_error_test.go. For each of the 11 lines (34,66,83,130,162,175,201,217,233,259,283), replace `server := NewServer(env.Store)` with `server, cleanup := setupTestServerWithStore(t, env.Store)` followed immediately by `defer cleanup()`.
-2. Immediately after each replacement, keep the existing `if server.opRegistry != nil { server.opRegistry.Start(context.Background()); defer func() { _ = server.opRegistry.Shutdown(context.Background()) }() }` block UNCHANGED — setupTestServerWithStore does not start the registry, so this remains necessary. Do not delete it.
-3. Confirm no line in the same test function duplicates gin.SetMode/database.SetGlobalStore/allowOpDefinitionUpserts already covered by setupTestServerWithStore — remove only exact duplicates, nothing else (grep -n -A3 -B3 each construction site before editing to check).
-4. Repeat for internal/server/version_lifecycle_test.go:37 — replace the construction with setupTestServerWithStore(t, store), add defer cleanup(), and verify (by reading the surrounding ~15 lines) whether any manual opRegistry wiring exists there too; if none, no extra step is needed.
-5. Bump the version header and last-edited date on both files (per CLAUDE.md file-header rule).
-6. Run: go build ./... && go vet ./... && go test ./internal/server/... -run 'TestITunesImport|TestServerVersionLifecycle' -count=1 (adjust the -run pattern to the actual Test function names in these two files if they differ — list them first with grep -n "^func Test" internal/server/itunes_error_test.go internal/server/version_lifecycle_test.go).
+1. Open internal/server/itunes_error_test.go. For each of the 11 sites (L34,66,83,130,162,175,201,217,233,259,283) replace `server := NewServer(env.Store)` with `server, cleanup := setupTestServerWithStore(t, env.Store)` followed immediately by `defer cleanup()`.
+2. IMMEDIATELY after each setupTestServerWithStore call, restore the root dir the fixture blanked: `config.AppConfig.RootDir = env.RootDir` (use whatever field testutil.IntegrationEnv exposes — verify with `grep -n 'RootDir\|TempDir' internal/testutil/integration.go`). Without this the iTunes plugin build guard at internal/plugins/itunes/register.go:52 sees an empty RootDir and registers nothing, and the import tests fail. Do NOT skip this step even though the tests may appear to pass locally.
+3. Keep each existing `if server.opRegistry != nil { server.opRegistry.Start(context.Background()); defer func() { _ = server.opRegistry.Shutdown(context.Background()) }() }` block UNCHANGED — setupTestServerWithStore does not start the registry.
+4. Remove only lines that EXACTLY duplicate what setupTestServerWithStore performs (gin.SetMode(gin.TestMode), database.SetGlobalStore(store), allowOpDefinitionUpserts(store)). Never remove a config.AppConfig assignment — that is the hazard above, not duplication.
+5. Repeat for internal/server/version_lifecycle_test.go:37 (plain store, no SetupIntegration, no opRegistry wiring): replace with setupTestServerWithStore(t, store) + defer cleanup().
+6. Run a BASELINE `go test ./internal/server/... -run 'TestITunesImport' -count=1 -v` BEFORE editing and diff the per-test PASS/FAIL list against the post-change run — an identical list is the acceptance, not merely 'exit 0'.
+7. Bump the version header and last-edited: 2026-08-21 on both files.
+8. Add changelog fragment changelog.d/20260821_server_208.md (no file header).
 
 Then, always:
 - Keep the change purely transform — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
@@ -63,8 +73,9 @@ Then, always:
 
 ### Edge-case semantics (conservative defaults — treat unknown as unknown, never as disqualifying)
 
-- A construction site inside a subtest table loop (none in these two files per the anchors above, but verify before editing) would need its defer cleanup() inside the loop body, not once outside — check the immediate surrounding braces of each site before applying the mechanical replacement.
-- If env.Store is ever nil in a given test (unlikely given testutil.SetupIntegration's contract, but verify), setupTestServerWithStore must be given the same nil-safety it already has for MockStore-typed stores — the type assertion in allowOpDefinitionUpserts (`ms, ok := store.(*mocks.MockStore)`) simply fails the assertion and is a no-op for a non-mock, non-nil store, which is the expected path here.
+- setupTestServerWithStore pins config.AppConfig.RootDir="" and its cleanup restores config.AppConfig wholesale. Any test in scope that depends on a real RootDir (everything built by testutil.SetupIntegration) must re-pin it after the call.
+- setupTestServerWithStore calls database.SetGlobalStore(store) but its cleanup never restores the previous global store. Do not migrate a test that saves/restores the global store itself.
+- A construction site inside a subtest table loop needs its defer cleanup() inside the loop body — none in these two files, but check the enclosing braces before applying the replacement.
 
 ## Tests
 

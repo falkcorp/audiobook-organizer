@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-159-add-and-use-a-test-reset-hook-for-the-module-sco.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f0a52412-4cff-4bb8-b13f-3ca69193b19c -->
+<!-- guid: c02b9d0e-3544-4b9f-bfa7-9bc6244b67f0 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-159 — Add and use a test-reset hook for the module-scope path-alias/path-var promise caches (2026-08-20-dual-path-settings-panel.md#3)
@@ -75,9 +75,435 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] npm --prefix web run lint passes.
-- [ ] npm --prefix web test -- PathLinks passes including the new re-fetch-after-reset test.
-- [ ] npm --prefix web test (full run) shows the same pass/fail counts as before this change for ReviewWorkspace.test.tsx, ReviewWorkspace.refetchStale.test.tsx, RegroupSpine.test.tsx, DupesSpine.test.tsx, CompareSpine.test.tsx -- i.e. this is a no-op for existing assertions, proven by an unchanged test count/result.
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] _
+- [ ] _
+- [ ] r
+- [ ] e
+- [ ] s
+- [ ] e
+- [ ] t
+- [ ] P
+- [ ] a
+- [ ] t
+- [ ] h
+- [ ] A
+- [ ] l
+- [ ] i
+- [ ] a
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] C
+- [ ] a
+- [ ] c
+- [ ] h
+- [ ] e
+- [ ] F
+- [ ] o
+- [ ] r
+- [ ] T
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] s
+- [ ] '
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] s
+- [ ] r
+- [ ] c
+- [ ] /
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] p
+- [ ] o
+- [ ] n
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] m
+- [ ] o
+- [ ] n
+- [ ] /
+- [ ] P
+- [ ] a
+- [ ] t
+- [ ] h
+- [ ] L
+- [ ] i
+- [ ] n
+- [ ] k
+- [ ] s
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ] x
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] 1
+- [ ]  
+- [ ] e
+- [ ] x
+- [ ] p
+- [ ] o
+- [ ] r
+- [ ] t
+- [ ]  
+- [ ] (
+- [ ] 0
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] _
+- [ ] _
+- [ ] r
+- [ ] e
+- [ ] s
+- [ ] e
+- [ ] t
+- [ ] P
+- [ ] a
+- [ ] t
+- [ ] h
+- [ ] V
+- [ ] a
+- [ ] r
+- [ ] s
+- [ ] C
+- [ ] a
+- [ ] c
+- [ ] h
+- [ ] e
+- [ ] F
+- [ ] o
+- [ ] r
+- [ ] T
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] s
+- [ ] '
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] s
+- [ ] r
+- [ ] c
+- [ ] /
+- [ ] u
+- [ ] t
+- [ ] i
+- [ ] l
+- [ ] s
+- [ ] /
+- [ ] f
+- [ ] o
+- [ ] r
+- [ ] m
+- [ ] a
+- [ ] t
+- [ ] P
+- [ ] a
+- [ ] t
+- [ ] h
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] 1
+- [ ]  
+- [ ] e
+- [ ] x
+- [ ] p
+- [ ] o
+- [ ] r
+- [ ] t
+- [ ]  
+- [ ] (
+- [ ] 0
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] r
+- [ ] l
+- [ ]  
+- [ ] '
+- [ ] _
+- [ ] _
+- [ ] r
+- [ ] e
+- [ ] s
+- [ ] e
+- [ ] t
+- [ ] P
+- [ ] a
+- [ ] t
+- [ ] h
+- [ ] .
+- [ ] *
+- [ ] C
+- [ ] a
+- [ ] c
+- [ ] h
+- [ ] e
+- [ ] F
+- [ ] o
+- [ ] r
+- [ ] T
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] s
+- [ ] '
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] s
+- [ ] r
+- [ ] c
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] i
+- [ ] n
+- [ ] c
+- [ ] l
+- [ ] u
+- [ ] d
+- [ ] e
+- [ ] =
+- [ ] '
+- [ ] *
+- [ ] .
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ] x
+- [ ] '
+- [ ]  
+- [ ] l
+- [ ] i
+- [ ] s
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] a
+- [ ] l
+- [ ] l
+- [ ]  
+- [ ] 6
+- [ ]  
+- [ ] t
+- [ ] a
+- [ ] r
+- [ ] g
+- [ ] e
+- [ ] t
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] f
+- [ ] i
+- [ ] l
+- [ ] e
+- [ ] s
+- [ ] ;
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ]  
+- [ ] P
+- [ ] a
+- [ ] t
+- [ ] h
+- [ ] L
+- [ ] i
+- [ ] n
+- [ ] k
+- [ ] s
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] c
+- [ ] l
+- [ ] u
+- [ ] d
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] n
+- [ ] e
+- [ ] w
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] -
+- [ ] f
+- [ ] e
+- [ ] t
+- [ ] c
+- [ ] h
+- [ ] -
+- [ ] a
+- [ ] f
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] -
+- [ ] r
+- [ ] e
+- [ ] s
+- [ ] e
+- [ ] t
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] ;
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] l
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] .
 - [ ] Anti-over-suppression: N/A
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.
@@ -100,7 +526,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`npm --prefix web run lint passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n "cachedAliasesPromise" web/src/components/common/PathLinks.tsx` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

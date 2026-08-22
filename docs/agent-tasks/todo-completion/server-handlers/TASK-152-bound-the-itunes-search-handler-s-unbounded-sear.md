@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server-handlers/TASK-152-bound-the-itunes-search-handler-s-unbounded-sear.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 942cc394-7bdb-420f-a8e3-34da19f8590d -->
+<!-- guid: fc989549-09cd-4790-8048-761a2c6a540b -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-152 — Bound the iTunes search handler's unbounded SearchBooks(search, 0, 0) call (PERF-4)

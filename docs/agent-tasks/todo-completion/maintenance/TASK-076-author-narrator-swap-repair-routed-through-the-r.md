@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-076-author-narrator-swap-repair-routed-through-the-r.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 1b2bfdb1-1e05-42c0-8428-eb6541975784 -->
+<!-- guid: 09ee4dad-6cec-4f6f-9e7e-566b74d91125 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-076 — Author-narrator swap repair, routed through the review queue (cross-table population, distinct from the existing per-book fix-author-narrator-swap job) (TODO.md L5281)
 
-**Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · maintenance subagent · **Why:** New cross-table detection heuristic plus review-queue integration on a prod-data path (author/narrator identity) — requires careful design of the DedupKey/Payload shape and of what a human reviewer sees to approve/reject, not mechanical. · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · maintenance subagent · **Why:** New cross-table detection heuristic plus review-queue integration on a prod-data path (author/narrator identity) — requires careful design of the DedupKey/Payload shape and of what a human reviewer sees to approve/reject, not mechanical. · **Depends on:** none · **Wave:** 2 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 5281 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**Author↔narrator swap repair.** Measured lower bo" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-10.json`.
 
@@ -113,7 +113,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 **This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: (1) the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; (2) every mutation is journaled through the existing undo ledger (`CreateOperationChange` — verify: `grep -rn "func.*CreateOperationChange" internal/database/*.go`) so `internal/undo` can replay it — a mutation without a journal row is a defect; (3) acceptance includes a test that applies on a fixture and then undoes via `internal/undo` and asserts the fixture is byte-identical; (4) the apply path refuses to start while a `library.scan` operation is running or queued (check the registry for an active scan before mutating — a running scan clobbers applied metadata). Idempotency: re-running in dry-run must report 0 pending changes after a successful apply. Rollback of the CODE = `git revert`; rollback of the DATA = the undo ledger, which is why (2) is not optional. PR stays open for the owner — the coordinator never admin-merges it.
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/plugins/maintenance/... -run TestDetectAuthorNarratorSwaps passes`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `grep -n 'maintenance.detect-author-narrator-swaps' internal/plugins/maintenance/plugin.go returns 1 hit (registered)` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

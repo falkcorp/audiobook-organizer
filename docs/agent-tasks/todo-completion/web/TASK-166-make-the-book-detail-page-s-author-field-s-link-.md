@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-166-make-the-book-detail-page-s-author-field-s-link-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 4949344e-8d2d-46b9-8f6e-6b8d5bcf1c2f -->
+<!-- guid: 0b7e8c9e-94d5-415f-a529-b17c9e8f446f -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-166 — Make the book-detail page's Author field(s) link to a library view filtered by that author (TODO.md L3156)
@@ -80,8 +80,438 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] npm --prefix web run lint && npm --prefix web test passes.
-- [ ] A book fixture with 2+ authors renders 2+ separate <a> elements, not one joined string.
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] a
+- [ ] u
+- [ ] t
+- [ ] h
+- [ ] o
+- [ ] r
+- [ ] _
+- [ ] i
+- [ ] d
+- [ ] '
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] s
+- [ ] r
+- [ ] c
+- [ ] /
+- [ ] h
+- [ ] o
+- [ ] o
+- [ ] k
+- [ ] s
+- [ ] /
+- [ ] u
+- [ ] s
+- [ ] e
+- [ ] L
+- [ ] i
+- [ ] b
+- [ ] r
+- [ ] a
+- [ ] r
+- [ ] y
+- [ ] Q
+- [ ] u
+- [ ] e
+- [ ] r
+- [ ] y
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] >
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] (
+- [ ] 0
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] a
+- [ ] u
+- [ ] t
+- [ ] h
+- [ ] o
+- [ ] r
+- [ ] _
+- [ ] i
+- [ ] d
+- [ ] '
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] s
+- [ ] r
+- [ ] c
+- [ ] /
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] p
+- [ ] o
+- [ ] n
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] b
+- [ ] o
+- [ ] o
+- [ ] k
+- [ ] d
+- [ ] e
+- [ ] t
+- [ ] a
+- [ ] i
+- [ ] l
+- [ ] /
+- [ ] B
+- [ ] o
+- [ ] o
+- [ ] k
+- [ ] D
+- [ ] e
+- [ ] t
+- [ ] a
+- [ ] i
+- [ ] l
+- [ ] I
+- [ ] n
+- [ ] f
+- [ ] o
+- [ ] T
+- [ ] a
+- [ ] b
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ] x
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] >
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] (
+- [ ] 0
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] a
+- [ ]  
+- [ ] 2
+- [ ] -
+- [ ] a
+- [ ] u
+- [ ] t
+- [ ] h
+- [ ] o
+- [ ] r
+- [ ]  
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] e
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] s
+- [ ] r
+- [ ] c
+- [ ] /
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] p
+- [ ] o
+- [ ] n
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] b
+- [ ] o
+- [ ] o
+- [ ] k
+- [ ] d
+- [ ] e
+- [ ] t
+- [ ] a
+- [ ] i
+- [ ] l
+- [ ] /
+- [ ] B
+- [ ] o
+- [ ] o
+- [ ] k
+- [ ] D
+- [ ] e
+- [ ] t
+- [ ] a
+- [ ] i
+- [ ] l
+- [ ] I
+- [ ] n
+- [ ] f
+- [ ] o
+- [ ] T
+- [ ] a
+- [ ] b
+- [ ] .
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ] x
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] n
+- [ ] d
+- [ ] e
+- [ ] r
+- [ ] s
+- [ ]  
+- [ ] 2
+- [ ]  
+- [ ] s
+- [ ] e
+- [ ] p
+- [ ] a
+- [ ] r
+- [ ] a
+- [ ] t
+- [ ] e
+- [ ]  
+- [ ] <
+- [ ] a
+- [ ]  
+- [ ] h
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] >
+- [ ]  
+- [ ] e
+- [ ] l
+- [ ] e
+- [ ] m
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] s
+- [ ] ;
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ]  
+- [ ] B
+- [ ] o
+- [ ] o
+- [ ] k
+- [ ] D
+- [ ] e
+- [ ] t
+- [ ] a
+- [ ] i
+- [ ] l
+- [ ] I
+- [ ] n
+- [ ] f
+- [ ] o
+- [ ] T
+- [ ] a
+- [ ] b
+- [ ]  
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ]  
+- [ ] u
+- [ ] s
+- [ ] e
+- [ ] L
+- [ ] i
+- [ ] b
+- [ ] r
+- [ ] a
+- [ ] r
+- [ ] y
+- [ ] Q
+- [ ] u
+- [ ] e
+- [ ] r
+- [ ] y
+- [ ]  
+- [ ] b
+- [ ] o
+- [ ] t
+- [ ] h
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] ;
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] l
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] .
 - [ ] Anti-over-suppression test: `N/A — not a filter/guard task.` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.
@@ -104,7 +534,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`npm --prefix web run lint && npm --prefix web test passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run sed -n '213,226p' web/src/components/bookdetail/BookDetailInfoTab.tsx` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

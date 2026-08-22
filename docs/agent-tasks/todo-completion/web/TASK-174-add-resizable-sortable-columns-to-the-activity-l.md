@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-174-add-resizable-sortable-columns-to-the-activity-l.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 88cbc210-3504-4ff3-9ce8-f5dfcf84ed46 -->
+<!-- guid: a1500320-9f93-49c2-8447-928e7a8f4871 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-174 — Add resizable/sortable columns to the Activity Log table (TODO.md L10660)
@@ -78,8 +78,446 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] `npm --prefix web run lint` passes.
-- [ ] Manual: Activity Log page — resize a column by dragging its edge, reload the page, confirm the width persisted; click 'Type' header, confirm rows re-sort without breaking digest-entry expand/collapse.
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] u
+- [ ] s
+- [ ] e
+- [ ] C
+- [ ] o
+- [ ] n
+- [ ] f
+- [ ] i
+- [ ] g
+- [ ] u
+- [ ] r
+- [ ] a
+- [ ] b
+- [ ] l
+- [ ] e
+- [ ] T
+- [ ] a
+- [ ] b
+- [ ] l
+- [ ] e
+- [ ] '
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] s
+- [ ] r
+- [ ] c
+- [ ] /
+- [ ] p
+- [ ] a
+- [ ] g
+- [ ] e
+- [ ] s
+- [ ] /
+- [ ] A
+- [ ] c
+- [ ] t
+- [ ] i
+- [ ] v
+- [ ] i
+- [ ] t
+- [ ] y
+- [ ] L
+- [ ] o
+- [ ] g
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ] x
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] >
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] (
+- [ ] 0
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] "
+- [ ] s
+- [ ] t
+- [ ] o
+- [ ] r
+- [ ] a
+- [ ] g
+- [ ] e
+- [ ] K
+- [ ] e
+- [ ] y
+- [ ] :
+- [ ]  
+- [ ] '
+- [ ] a
+- [ ] c
+- [ ] t
+- [ ] i
+- [ ] v
+- [ ] i
+- [ ] t
+- [ ] y
+- [ ] -
+- [ ] l
+- [ ] o
+- [ ] g
+- [ ] '
+- [ ] "
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] t
+- [ ] a
+- [ ] b
+- [ ] l
+- [ ] e
+- [ ] .
+- [ ] s
+- [ ] o
+- [ ] r
+- [ ] t
+- [ ] R
+- [ ] o
+- [ ] w
+- [ ] s
+- [ ] (
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] r
+- [ ] i
+- [ ] e
+- [ ] s
+- [ ] )
+- [ ] '
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] (
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] r
+- [ ] i
+- [ ] e
+- [ ] s
+- [ ] .
+- [ ] m
+- [ ] a
+- [ ] p
+- [ ] (
+- [ ] (
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] r
+- [ ] y
+- [ ] )
+- [ ]  
+- [ ] =
+- [ ] >
+- [ ]  
+- [ ] i
+- [ ] s
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] L
+- [ ] 2
+- [ ] 1
+- [ ] 0
+- [ ] 5
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] <
+- [ ] T
+- [ ] a
+- [ ] b
+- [ ] l
+- [ ] e
+- [ ] C
+- [ ] e
+- [ ] l
+- [ ] l
+- [ ] >
+- [ ] T
+- [ ] i
+- [ ] m
+- [ ] e
+- [ ] <
+- [ ] /
+- [ ] T
+- [ ] a
+- [ ] b
+- [ ] l
+- [ ] e
+- [ ] C
+- [ ] e
+- [ ] l
+- [ ] l
+- [ ] >
+- [ ] '
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] 0
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] (
+- [ ] 1
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] ,
+- [ ]  
+- [ ] L
+- [ ] 2
+- [ ] 0
+- [ ] 9
+- [ ] 5
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ]  
+- [ ] A
+- [ ] c
+- [ ] t
+- [ ] i
+- [ ] v
+- [ ] i
+- [ ] t
+- [ ] y
+- [ ] L
+- [ ] o
+- [ ] g
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] c
+- [ ] l
+- [ ] u
+- [ ] d
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] d
+- [ ] i
+- [ ] g
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] e
+- [ ] x
+- [ ] p
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ] /
+- [ ] c
+- [ ] o
+- [ ] l
+- [ ] l
+- [ ] a
+- [ ] p
+- [ ] s
+- [ ] e
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] s
+- [ ] s
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] ;
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] l
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] .
 - [ ] Anti-over-suppression test: `test: 'digest-entry expand/collapse still works after entries are sorted by a resizable-column header click'` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.
@@ -102,7 +540,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (``npm --prefix web run lint` passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'TableContainer\|<TableCell>Time' web/src/pages/ActivityLog.tsx` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

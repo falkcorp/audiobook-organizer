@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-173-add-resizable-sortable-columns-to-the-acoustic-d.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 8da365cd-928d-41f5-ba9e-fd5087aa886b -->
+<!-- guid: 64fb5fcd-9cc3-4b81-8d22-35349ff99ab4 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-173 — Add resizable/sortable columns to the acoustic dedup candidates table (TODO.md L10660)
@@ -80,8 +80,490 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] `npm --prefix web run lint` passes with no new errors in DedupAcousticTab.tsx.
-- [ ] Manual: load the Dedup > Acoustic tab, drag a column header edge, confirm the column resizes and the width persists across a page reload (localStorage).
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] u
+- [ ] s
+- [ ] e
+- [ ] C
+- [ ] o
+- [ ] n
+- [ ] f
+- [ ] i
+- [ ] g
+- [ ] u
+- [ ] r
+- [ ] a
+- [ ] b
+- [ ] l
+- [ ] e
+- [ ] T
+- [ ] a
+- [ ] b
+- [ ] l
+- [ ] e
+- [ ] '
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] s
+- [ ] r
+- [ ] c
+- [ ] /
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] p
+- [ ] o
+- [ ] n
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] d
+- [ ] e
+- [ ] d
+- [ ] u
+- [ ] p
+- [ ] /
+- [ ] D
+- [ ] e
+- [ ] d
+- [ ] u
+- [ ] p
+- [ ] A
+- [ ] c
+- [ ] o
+- [ ] u
+- [ ] s
+- [ ] t
+- [ ] i
+- [ ] c
+- [ ] T
+- [ ] a
+- [ ] b
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ] x
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] >
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] (
+- [ ] 0
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] "
+- [ ] s
+- [ ] t
+- [ ] o
+- [ ] r
+- [ ] a
+- [ ] g
+- [ ] e
+- [ ] K
+- [ ] e
+- [ ] y
+- [ ] :
+- [ ]  
+- [ ] '
+- [ ] d
+- [ ] e
+- [ ] d
+- [ ] u
+- [ ] p
+- [ ] -
+- [ ] a
+- [ ] c
+- [ ] o
+- [ ] u
+- [ ] s
+- [ ] t
+- [ ] i
+- [ ] c
+- [ ] -
+- [ ] c
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ] i
+- [ ] d
+- [ ] a
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] '
+- [ ] "
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] R
+- [ ] e
+- [ ] s
+- [ ] i
+- [ ] z
+- [ ] a
+- [ ] b
+- [ ] l
+- [ ] e
+- [ ] H
+- [ ] e
+- [ ] a
+- [ ] d
+- [ ] e
+- [ ] r
+- [ ] C
+- [ ] e
+- [ ] l
+- [ ] l
+- [ ] '
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] s
+- [ ] r
+- [ ] c
+- [ ] /
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] p
+- [ ] o
+- [ ] n
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] d
+- [ ] e
+- [ ] d
+- [ ] u
+- [ ] p
+- [ ] /
+- [ ] D
+- [ ] e
+- [ ] d
+- [ ] u
+- [ ] p
+- [ ] A
+- [ ] c
+- [ ] o
+- [ ] u
+- [ ] s
+- [ ] t
+- [ ] i
+- [ ] c
+- [ ] T
+- [ ] a
+- [ ] b
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ] x
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] >
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] t
+- [ ] a
+- [ ] b
+- [ ] l
+- [ ] e
+- [ ] .
+- [ ] s
+- [ ] o
+- [ ] r
+- [ ] t
+- [ ] R
+- [ ] o
+- [ ] w
+- [ ] s
+- [ ] (
+- [ ] c
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ] i
+- [ ] d
+- [ ] a
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] )
+- [ ] '
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] (
+- [ ] c
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ] i
+- [ ] d
+- [ ] a
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] .
+- [ ] m
+- [ ] a
+- [ ] p
+- [ ] (
+- [ ] (
+- [ ] c
+- [ ] )
+- [ ]  
+- [ ] =
+- [ ] >
+- [ ]  
+- [ ] i
+- [ ] s
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] L
+- [ ] 1
+- [ ] 1
+- [ ] 6
+- [ ] 3
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ]  
+- [ ] D
+- [ ] e
+- [ ] d
+- [ ] u
+- [ ] p
+- [ ] A
+- [ ] c
+- [ ] o
+- [ ] u
+- [ ] s
+- [ ] t
+- [ ] i
+- [ ] c
+- [ ] T
+- [ ] a
+- [ ] b
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] c
+- [ ] l
+- [ ] u
+- [ ] d
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] s
+- [ ] e
+- [ ] l
+- [ ] e
+- [ ] c
+- [ ] t
+- [ ] -
+- [ ] a
+- [ ] l
+- [ ] l
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] s
+- [ ] s
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] ;
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] l
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] .
 - [ ] Anti-over-suppression test: `test: 'select-all checkbox still selects all visible rows after ConfigurableTable conversion'` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.
@@ -104,7 +586,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (``npm --prefix web run lint` passes with no new errors in DedupAcousticTab.tsx.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'TableContainer\|ConfigurableTable' web/src/components/dedup/DedupAcousticTab.tsx` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

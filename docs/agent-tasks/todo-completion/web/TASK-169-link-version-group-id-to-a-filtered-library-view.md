@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-169-link-version-group-id-to-a-filtered-library-view.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f4448032-e14b-45fb-9d02-f4befb9e85f5 -->
+<!-- guid: 795ec7e5-3201-477f-a5aa-fbd637381643 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-169 — Link version_group_id to a filtered library view (now unblocked — the filter works as of commit b0ebccb0) (TODO.md L3168)
@@ -100,7 +100,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`npm --prefix web run lint && npm --prefix web test passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `grep -n 'version_group_id' web/src/components/bookdetail/BookDetailVersionGroup.tsx returns >0 hits after the change.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

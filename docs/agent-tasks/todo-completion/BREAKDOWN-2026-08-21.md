@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/BREAKDOWN-2026-08-21.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 1ec67939-4ac0-41cb-a41a-eb40c4705fa2 -->
+<!-- guid: 62396d8b-645e-4863-83c3-204fa7831203 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Agent-Task Breakdown & Fan-Out Plan — 2026-08-21 (todo-completion)
@@ -9,9 +9,9 @@ This document turns the TODO-completion master plan ([`../../plans/2026-08-21-to
 
 ## Method
 
-468 scoped items (16 read-only scouts, 2026-08-21) were verified against HEAD and sorted into buckets. **Only Bucket 1 becomes agent briefs.** Owner decisions of 2026-08-21 (see `docs/plans/DECISIONS-PENDING.md`) are applied: parked tracks are excluded, prod runs go to `docs/operations/pending-prod-actions.md`.
+473 scoped items (16 read-only scouts, 2026-08-21) were verified against HEAD and sorted into buckets. **Only Bucket 1 becomes agent briefs.** Owner decisions of 2026-08-21 (see `docs/plans/DECISIONS-PENDING.md`) are applied: parked tracks are excluded, prod runs go to `docs/operations/pending-prod-actions.md`.
 
-Counts: Bucket 1 = **210** briefs (Sonnet-class 106, Opus-class 65, Haiku-class 39) · Bucket 2 = 66 · Bucket 3 = 39 · stale/done = 112 · parked = 14 · not-a-task = 27.
+Counts: Bucket 1 = **203** briefs (Sonnet-class 108, Opus-class 58, Haiku-class 37) · Bucket 2 = 77 · Bucket 3 = 39 · stale/done = 112 · parked = 14 · not-a-task = 28.
 
 ---
 
@@ -30,77 +30,108 @@ Counts: Bucket 1 = **210** briefs (Sonnet-class 106, Opus-class 65, Haiku-class 
 | `.mockery.yaml` | TASK-118, TASK-123 | serialize: wave1=TASK-118, wave2=TASK-123 |
 | `internal/audiobooks/service_filtering.go` | TASK-002, TASK-190, TASK-005, TASK-186 | serialize: wave1=TASK-005, wave2=TASK-190, wave4=TASK-002, wave6=TASK-186 |
 | `internal/audiobooks/service_query.go` | TASK-001, TASK-002, TASK-190, TASK-003, TASK-005, TASK-186 | serialize: wave1=TASK-005, wave2=TASK-190, wave3=TASK-001, wave4=TASK-002, wave5=TASK-003, wave6=TASK-186 |
-| `internal/config/config.go` | TASK-016, TASK-017, TASK-018, TASK-019, TASK-020, TASK-021, TASK-193, TASK-070 | serialize: wave1=TASK-017, wave2=TASK-018, wave3=TASK-019, wave4=TASK-020, wave5=TASK-070, wave6=TASK-016, wave7=TASK-021, wave8=TASK-193 |
-| `internal/database/bookcore.go` | TASK-037, TASK-039 | serialize: wave3=TASK-039, wave6=TASK-037 |
-| `internal/database/memdb_summaries.go` | TASK-190, TASK-026, TASK-039 | serialize: wave1=TASK-026, wave2=TASK-190, wave3=TASK-039 |
-| `internal/database/pebble_store.go` | TASK-029, TASK-039, TASK-186 | serialize: wave2=TASK-029, wave3=TASK-039, wave6=TASK-186 |
+| `internal/audiobooks/service_query_test.go` | TASK-001, TASK-002 | serialize: wave3=TASK-001, wave4=TASK-002 |
+| `internal/config/config.go` | TASK-016, TASK-017, TASK-018, TASK-019, TASK-020, TASK-193, TASK-070 | serialize: wave1=TASK-017, wave2=TASK-019, wave3=TASK-020, wave4=TASK-016, wave5=TASK-018, wave6=TASK-070, wave7=TASK-193 |
+| `internal/config/config_test.go` | TASK-017, TASK-018, TASK-019, TASK-020 | serialize: wave1=TASK-017, wave2=TASK-019, wave3=TASK-020, wave5=TASK-018 |
+| `internal/config/config_unit_test.go` | TASK-016, TASK-020 | serialize: wave3=TASK-020, wave4=TASK-016 |
+| `internal/database/author_getter_conformance_test.go` | TASK-028, TASK-029 | serialize: wave1=TASK-028, wave2=TASK-029 |
+| `internal/database/bookcore.go` | TASK-037, TASK-039 | serialize: wave4=TASK-039, wave5=TASK-037 |
+| `internal/database/memdb_summaries.go` | TASK-190, TASK-026, TASK-039 | serialize: wave1=TASK-026, wave2=TASK-190, wave4=TASK-039 |
+| `internal/database/pebble_store.go` | TASK-029, TASK-039, TASK-186 | serialize: wave2=TASK-029, wave4=TASK-039, wave6=TASK-186 |
 | `internal/database/pebble_store_authors.go` | TASK-035, TASK-036 | serialize: wave1=TASK-035, wave2=TASK-036 |
-| `internal/database/pebble_store_test.go` | TASK-177, TASK-178 | serialize: wave1=TASK-177, wave2=TASK-178 |
-| `internal/database/store.go` | TASK-020, TASK-031, TASK-033, TASK-037, TASK-039 | serialize: wave1=TASK-031, wave2=TASK-033, wave3=TASK-039, wave4=TASK-020, wave6=TASK-037 |
-| `internal/dedup/auto_resolve.go` | TASK-040, TASK-049, TASK-193 | serialize: wave1=TASK-040, wave2=TASK-049, wave8=TASK-193 |
+| `internal/database/pebble_store_authors_test.go` | TASK-035, TASK-036 | serialize: wave1=TASK-035, wave2=TASK-036 |
+| `internal/database/pebble_store_test.go` | TASK-177, TASK-178, TASK-039 | serialize: wave1=TASK-177, wave2=TASK-178, wave4=TASK-039 |
+| `internal/database/store.go` | TASK-020, TASK-031, TASK-033, TASK-037, TASK-039 | serialize: wave1=TASK-031, wave2=TASK-033, wave3=TASK-020, wave4=TASK-039, wave5=TASK-037 |
+| `internal/dedup/auto_resolve.go` | TASK-040, TASK-049, TASK-193 | serialize: wave1=TASK-040, wave2=TASK-049, wave7=TASK-193 |
+| `internal/dedup/auto_resolve_test.go` | TASK-040, TASK-049, TASK-193 | serialize: wave1=TASK-040, wave2=TASK-049, wave7=TASK-193 |
 | `internal/dedup/collectors_metadata.go` | TASK-041, TASK-047 | serialize: wave1=TASK-041, wave2=TASK-047 |
 | `internal/dedup/series_dedup.go` | TASK-029, TASK-043, TASK-044 | serialize: wave1=TASK-043, wave2=TASK-029, wave3=TASK-044 |
-| `internal/dedup/unified/compose.go` | TASK-192, TASK-193 | serialize: wave1=TASK-192, wave8=TASK-193 |
-| `internal/dedup/unified/compose_test.go` | TASK-192, TASK-193 | serialize: wave1=TASK-192, wave8=TASK-193 |
-| `internal/dedup/unified/config.go` | TASK-192, TASK-193 | serialize: wave1=TASK-192, wave8=TASK-193 |
+| `internal/dedup/series_dedup_test.go` | TASK-029, TASK-043, TASK-044 | serialize: wave1=TASK-043, wave2=TASK-029, wave3=TASK-044 |
+| `internal/dedup/unified/compose.go` | TASK-192, TASK-193 | serialize: wave1=TASK-192, wave7=TASK-193 |
+| `internal/dedup/unified/compose_test.go` | TASK-192, TASK-193 | serialize: wave1=TASK-192, wave7=TASK-193 |
+| `internal/dedup/unified/config.go` | TASK-192, TASK-193 | serialize: wave1=TASK-192, wave7=TASK-193 |
 | `internal/itunes/backfill.go` | TASK-062, TASK-063 | serialize: wave1=TASK-062, wave2=TASK-063 |
+| `internal/itunes/backfill_test.go` | TASK-062, TASK-063 | serialize: wave1=TASK-062, wave2=TASK-063 |
+| `internal/itunes/service/fs_regroup_shape.go` | TASK-064, TASK-201 | serialize: wave2=TASK-064, wave3=TASK-201 |
+| `internal/itunes/service/fs_regroup_shape_test.go` | TASK-064, TASK-101, TASK-201 | serialize: wave1=TASK-101, wave2=TASK-064, wave3=TASK-201 |
 | `internal/merge/service.go` | TASK-023, TASK-040, TASK-042, TASK-046, TASK-048 | serialize: wave1=TASK-040, wave2=TASK-023, wave3=TASK-042, wave4=TASK-046, wave5=TASK-048 |
-| `internal/metafetch/service_apply.go` | TASK-081, TASK-120 | serialize: wave1=TASK-081, wave2=TASK-120 |
-| `internal/metrics/metrics.go` | TASK-085, TASK-203, TASK-130, TASK-131 | serialize: wave1=TASK-085, wave2=TASK-130, wave3=TASK-131, wave4=TASK-203 |
-| `internal/operations/registry/registry.go` | TASK-096, TASK-115 | serialize: wave1=TASK-115, wave2=TASK-096 |
-| `internal/organizer/organizer.go` | TASK-119, TASK-120 | serialize: wave1=TASK-119, wave2=TASK-120 |
-| `internal/organizer/service.go` | TASK-186, TASK-121, TASK-203 | serialize: wave1=TASK-121, wave4=TASK-203, wave6=TASK-186 |
-| `internal/plugins/acoustid/backfill.go` | TASK-021, TASK-197 | serialize: wave2=TASK-197, wave7=TASK-021 |
+| `internal/merge/service_test.go` | TASK-040, TASK-042, TASK-046, TASK-048 | serialize: wave1=TASK-040, wave3=TASK-042, wave4=TASK-046, wave5=TASK-048 |
+| `internal/metrics/metrics.go` | TASK-085, TASK-095, TASK-203, TASK-130, TASK-131 | serialize: wave1=TASK-085, wave2=TASK-095, wave3=TASK-130, wave4=TASK-131, wave5=TASK-203 |
+| `internal/metrics/metrics_test.go` | TASK-085, TASK-203, TASK-130, TASK-131 | serialize: wave1=TASK-085, wave3=TASK-130, wave4=TASK-131, wave5=TASK-203 |
+| `internal/operations/registry/registry.go` | TASK-096, TASK-113, TASK-115 | serialize: wave1=TASK-113, wave2=TASK-115, wave3=TASK-096 |
+| `internal/operations/registry/registry_test.go` | TASK-096, TASK-115 | serialize: wave2=TASK-115, wave3=TASK-096 |
+| `internal/organizer/service.go` | TASK-186, TASK-121, TASK-203 | serialize: wave1=TASK-121, wave5=TASK-203, wave6=TASK-186 |
 | `internal/plugins/acoustid/lsh_backfill.go` | TASK-197, TASK-088 | serialize: wave1=TASK-088, wave2=TASK-197 |
-| `internal/plugins/dedup/calibrate_composite.go` | TASK-192, TASK-193 | serialize: wave1=TASK-192, wave8=TASK-193 |
-| `internal/plugins/dedup/calibrate_composite_test.go` | TASK-192, TASK-193 | serialize: wave1=TASK-192, wave8=TASK-193 |
+| `internal/plugins/dedup/calibrate_composite.go` | TASK-192, TASK-193 | serialize: wave1=TASK-192, wave7=TASK-193 |
+| `internal/plugins/dedup/calibrate_composite_test.go` | TASK-192, TASK-193 | serialize: wave1=TASK-192, wave7=TASK-193 |
 | `internal/plugins/maintenance/chapters_backfill.go` | TASK-066, TASK-197 | serialize: wave1=TASK-066, wave2=TASK-197 |
-| `internal/plugins/maintenance/cleanup.go` | TASK-070, TASK-073 | serialize: wave1=TASK-073, wave5=TASK-070 |
-| `internal/plugins/maintenance/deps.go` | TASK-066, TASK-070 | serialize: wave1=TASK-066, wave5=TASK-070 |
+| `internal/plugins/maintenance/cleanup.go` | TASK-070, TASK-073 | serialize: wave1=TASK-073, wave6=TASK-070 |
+| `internal/plugins/maintenance/deps.go` | TASK-066, TASK-070, TASK-076 | serialize: wave1=TASK-066, wave2=TASK-076, wave6=TASK-070 |
 | `internal/plugins/maintenance/intro_migrate_single_file.go` | TASK-197, TASK-200 | serialize: wave1=TASK-200, wave2=TASK-197 |
 | `internal/plugins/maintenance/intro_transcribe.go` | TASK-197, TASK-200 | serialize: wave1=TASK-200, wave2=TASK-197 |
-| `internal/plugins/maintenance/missing_file_audit.go` | TASK-195, TASK-197, TASK-202 | serialize: wave1=TASK-195, wave2=TASK-197, wave4=TASK-202 |
+| `internal/plugins/maintenance/missing_file_audit.go` | TASK-195, TASK-197 | serialize: wave1=TASK-195, wave2=TASK-197 |
 | `internal/plugins/maintenance/missing_file_repoint.go` | TASK-067, TASK-197 | serialize: wave2=TASK-197, wave3=TASK-067 |
-| `internal/plugins/maintenance/regroup_shattered_ai.go` | TASK-197, TASK-201 | serialize: wave2=TASK-197, wave3=TASK-201 |
+| `internal/plugins/maintenance/regroup_shattered_ai.go` | TASK-197, TASK-200, TASK-201 | serialize: wave1=TASK-200, wave2=TASK-197, wave3=TASK-201 |
 | `internal/plugins/maintenance/regroup_shattered_ai_test.go` | TASK-101, TASK-201 | serialize: wave1=TASK-101, wave3=TASK-201 |
-| `internal/scanner/scanner.go` | TASK-021, TASK-181, TASK-106 | serialize: wave1=TASK-106, wave2=TASK-181, wave7=TASK-021 |
 | `internal/search/bleve_index.go` | TASK-023, TASK-125 | serialize: wave1=TASK-125, wave2=TASK-023 |
 | `internal/search/index_builder.go` | TASK-023, TASK-125 | serialize: wave1=TASK-125, wave2=TASK-023 |
-| `internal/server/batch_apply_op.go` | TASK-096, TASK-135 | serialize: wave1=TASK-135, wave2=TASK-096 |
-| `internal/server/duplicates_ops.go` | TASK-043, TASK-096 | serialize: wave1=TASK-043, wave2=TASK-096 |
+| `internal/server/batch_apply_op.go` | TASK-096, TASK-135 | serialize: wave1=TASK-135, wave3=TASK-096 |
+| `internal/server/duplicates_ops.go` | TASK-043, TASK-096 | serialize: wave1=TASK-043, wave3=TASK-096 |
+| `internal/server/handlers/abs/abs_test.go` | TASK-143, TASK-144, TASK-146 | serialize: wave1=TASK-143, wave2=TASK-144, wave3=TASK-146 |
 | `internal/server/handlers/abs/browse.go` | TASK-089, TASK-144, TASK-212 | serialize: wave1=TASK-089, wave2=TASK-144, wave3=TASK-212 |
-| `internal/server/handlers/abs/dto.go` | TASK-143, TASK-146 | serialize: wave1=TASK-143, wave2=TASK-146 |
+| `internal/server/handlers/abs/dto.go` | TASK-143, TASK-146 | serialize: wave1=TASK-143, wave3=TASK-146 |
 | `internal/server/handlers/abs/handler.go` | TASK-212, TASK-153, TASK-154 | serialize: wave1=TASK-153, wave2=TASK-154, wave3=TASK-212 |
-| `internal/server/handlers/abs/library_fake_test.go` | TASK-089, TASK-147 | serialize: wave1=TASK-089, wave3=TASK-147 |
+| `internal/server/handlers/abs/library_fake_test.go` | TASK-089, TASK-147 | serialize: wave1=TASK-089, wave4=TASK-147 |
 | `internal/server/handlers/abs/mapper.go` | TASK-149, TASK-151 | serialize: wave1=TASK-149, wave2=TASK-151 |
 | `internal/server/handlers/abs/play.go` | TASK-153, TASK-154 | serialize: wave1=TASK-153, wave2=TASK-154 |
-| `internal/server/handlers/audiobooks/handler.go` | TASK-005, TASK-037, TASK-095, TASK-098 | serialize: wave1=TASK-005, wave2=TASK-095, wave3=TASK-098, wave6=TASK-037 |
+| `internal/server/handlers/abs/play_test.go` | TASK-153, TASK-154 | serialize: wave1=TASK-153, wave2=TASK-154 |
+| `internal/server/handlers/audiobooks/handler.go` | TASK-005, TASK-037, TASK-095, TASK-098 | serialize: wave1=TASK-005, wave2=TASK-095, wave3=TASK-098, wave5=TASK-037 |
+| `internal/server/handlers/audiobooks/handler_test.go` | TASK-005, TASK-095 | serialize: wave1=TASK-005, wave2=TASK-095 |
 | `internal/server/handlers/dedup/handler.go` | TASK-142, TASK-157 | serialize: wave1=TASK-142, wave2=TASK-157 |
+| `internal/server/handlers/dedup/handler_test.go` | TASK-142, TASK-157 | serialize: wave1=TASK-142, wave2=TASK-157 |
 | `internal/server/handlers/filesystem.go` | TASK-083, TASK-213 | serialize: wave1=TASK-083, wave2=TASK-213 |
-| `internal/server/indexed_store_test.go` | TASK-133, TASK-209 | serialize: wave1=TASK-209, wave2=TASK-133 |
+| `internal/server/handlers/metadata_cache.go` | TASK-150, TASK-214 | serialize: wave1=TASK-214, wave2=TASK-150 |
+| `internal/server/handlers/metadata_cache_test.go` | TASK-150, TASK-214 | serialize: wave1=TASK-214, wave2=TASK-150 |
+| `internal/server/handlers/operations_v2_test.go` | TASK-115, TASK-134 | serialize: wave1=TASK-134, wave2=TASK-115 |
+| `internal/server/indexed_store_test.go` | TASK-132, TASK-133, TASK-209 | serialize: wave1=TASK-132, wave2=TASK-133, wave3=TASK-209 |
+| `internal/server/library_list_warmer.go` | TASK-190, TASK-186 | serialize: wave2=TASK-190, wave6=TASK-186 |
 | `internal/server/maintenance_fixups.go` | TASK-025, TASK-129 | serialize: wave1=TASK-025, wave2=TASK-129 |
-| `internal/server/reconcile_ops.go` | TASK-096, TASK-136 | serialize: wave1=TASK-136, wave2=TASK-096 |
+| `internal/server/reconcile_ops.go` | TASK-096, TASK-136 | serialize: wave1=TASK-136, wave3=TASK-096 |
 | `internal/server/server.go` | TASK-026, TASK-205 | serialize: wave1=TASK-026, wave5=TASK-205 |
-| `internal/server/server_lifecycle.go` | TASK-026, TASK-065, TASK-205, TASK-128, TASK-131, TASK-139 | serialize: wave1=TASK-026, wave2=TASK-128, wave3=TASK-131, wave4=TASK-139, wave5=TASK-205, wave6=TASK-065 |
-| `internal/server/server_maintenance_deps.go` | TASK-066, TASK-070 | serialize: wave1=TASK-066, wave5=TASK-070 |
+| `internal/server/server_lifecycle.go` | TASK-026, TASK-065, TASK-205, TASK-128, TASK-131, TASK-139 | serialize: wave1=TASK-026, wave2=TASK-128, wave3=TASK-139, wave4=TASK-131, wave5=TASK-205, wave6=TASK-065 |
+| `internal/server/server_maintenance_deps.go` | TASK-066, TASK-070 | serialize: wave1=TASK-066, wave6=TASK-070 |
 | `internal/server/server_more_test.go` | TASK-204, TASK-205 | serialize: wave1=TASK-204, wave5=TASK-205 |
-| `internal/server/server_test.go` | TASK-206, TASK-207 | serialize: wave1=TASK-206, wave2=TASK-207 |
+| `internal/server/server_ops_store.go` | TASK-131, TASK-139 | serialize: wave3=TASK-139, wave4=TASK-131 |
+| `internal/server/server_test.go` | TASK-206, TASK-211 | serialize: wave1=TASK-206, wave2=TASK-211 |
 | `internal/server/wire_abs_routes.go` | TASK-127, TASK-212, TASK-156 | serialize: wave1=TASK-127, wave2=TASK-156, wave3=TASK-212 |
 | `web/package-lock.json` | TASK-097, TASK-102 | serialize: wave1=TASK-097, wave2=TASK-102 |
 | `web/package.json` | TASK-097, TASK-102 | serialize: wave1=TASK-097, wave2=TASK-102 |
-| `web/src/components/audiobooks/BulkMetadataSearchDialog.tsx` | TASK-196, TASK-165 | serialize: wave1=TASK-196, wave8=TASK-165 |
+| `web/src/components/audiobooks/BulkMetadataSearchDialog.tsx` | TASK-196, TASK-165 | serialize: wave1=TASK-196, wave7=TASK-165 |
+| `web/src/components/bookdetail/BookDetailInfoTab.test.tsx` | TASK-166, TASK-167, TASK-168 | serialize: wave3=TASK-166, wave4=TASK-167, wave5=TASK-168 |
 | `web/src/components/bookdetail/BookDetailInfoTab.tsx` | TASK-166, TASK-167, TASK-168 | serialize: wave3=TASK-166, wave4=TASK-167, wave5=TASK-168 |
+| `web/src/components/bookdetail/BookDetailVersionGroup.test.tsx` | TASK-094, TASK-169 | serialize: wave1=TASK-094, wave6=TASK-169 |
 | `web/src/components/bookdetail/BookDetailVersionGroup.tsx` | TASK-094, TASK-169 | serialize: wave1=TASK-094, wave6=TASK-169 |
-| `web/src/components/dedup/DedupAcousticTab.tsx` | TASK-165, TASK-173 | serialize: wave1=TASK-173, wave8=TASK-165 |
+| `web/src/components/dedup/DedupAcousticTab.tsx` | TASK-165, TASK-173 | serialize: wave1=TASK-173, wave7=TASK-165 |
+| `web/src/components/library/TagCloud.test.tsx` | TASK-161, TASK-162 | serialize: wave1=TASK-162, wave2=TASK-161 |
 | `web/src/components/library/TagCloud.tsx` | TASK-161, TASK-162 | serialize: wave1=TASK-162, wave2=TASK-161 |
+| `web/src/components/review/MetadataPanel.tsx` | TASK-189, TASK-216 | serialize: wave1=TASK-189, wave2=TASK-216 |
+| `web/src/components/review/ReviewWorkspace.refetchStale.test.tsx` | TASK-159, TASK-215 | serialize: wave1=TASK-159, wave2=TASK-215 |
+| `web/src/components/review/ReviewWorkspace.test.tsx` | TASK-159, TASK-217 | serialize: wave1=TASK-159, wave2=TASK-217 |
+| `web/src/components/review/lanes/useMetadataLane.ts` | TASK-214, TASK-165, TASK-217 | serialize: wave1=TASK-214, wave2=TASK-217, wave7=TASK-165 |
+| `web/src/components/review/spine/CompareSpine.test.tsx` | TASK-159, TASK-217 | serialize: wave1=TASK-159, wave2=TASK-217 |
+| `web/src/components/settings/PathsSettingsTab.tsx` | TASK-198, TASK-158 | serialize: wave1=TASK-158, wave2=TASK-198 |
+| `web/src/hooks/useLibraryFilters.ts` | TASK-168, TASK-169 | serialize: wave5=TASK-168, wave6=TASK-169 |
+| `web/src/hooks/useLibraryQuery.test.ts` | TASK-166, TASK-167 | serialize: wave3=TASK-166, wave4=TASK-167 |
 | `web/src/hooks/useLibraryQuery.ts` | TASK-166, TASK-167 | serialize: wave3=TASK-166, wave4=TASK-167 |
-| `web/src/pages/ActivityLog.tsx` | TASK-070, TASK-174 | serialize: wave1=TASK-174, wave5=TASK-070 |
-| `web/src/pages/BookDetail.tsx` | TASK-037, TASK-100, TASK-165 | serialize: wave1=TASK-100, wave6=TASK-037, wave8=TASK-165 |
-| `web/src/pages/Library.tsx` | TASK-092, TASK-161, TASK-164, TASK-165, TASK-166, TASK-167, TASK-168, TASK-169 | serialize: wave1=TASK-092, wave2=TASK-161, wave3=TASK-166, wave4=TASK-167, wave5=TASK-168, wave6=TASK-169, wave7=TASK-164, wave8=TASK-165 |
+| `web/src/pages/ActivityLog.tsx` | TASK-070, TASK-174 | serialize: wave1=TASK-174, wave6=TASK-070 |
+| `web/src/pages/BookDetail.tsx` | TASK-037, TASK-100, TASK-165 | serialize: wave1=TASK-100, wave5=TASK-037, wave7=TASK-165 |
+| `web/src/pages/Library.test.tsx` | TASK-126, TASK-168 | serialize: wave1=TASK-126, wave5=TASK-168 |
+| `web/src/pages/Library.tsx` | TASK-092, TASK-161, TASK-165, TASK-166, TASK-167, TASK-168, TASK-169 | serialize: wave1=TASK-092, wave2=TASK-161, wave3=TASK-166, wave4=TASK-167, wave5=TASK-168, wave6=TASK-169, wave7=TASK-165 |
 | `web/src/pages/Settings.tsx` | TASK-198, TASK-158 | serialize: wave1=TASK-158, wave2=TASK-198 |
-| `web/src/services/api.ts` | TASK-037, TASK-070 | serialize: wave5=TASK-070, wave6=TASK-037 |
+| `web/src/services/api.ts` | TASK-037, TASK-070, TASK-214 | serialize: wave1=TASK-214, wave5=TASK-037, wave6=TASK-070 |
+| `web/tests/e2e/utils/test-helpers.ts` | TASK-093, TASK-198 | serialize: wave1=TASK-093, wave2=TASK-198 |
 
-Waves: wave 1: 136, wave 2: 38, wave 3: 12, wave 4: 8, wave 5: 5, wave 6: 6, wave 7: 2, wave 8: 3.
+Waves: wave 1: 128, wave 2: 38, wave 3: 15, wave 4: 7, wave 5: 8, wave 6: 5, wave 7: 2.
 
 #### Soft collisions (append-only hub files — NOT wave-serialized; resolved by the per-merge sibling rebase + conflict ladder)
 
@@ -109,7 +140,7 @@ Waves: wave 1: 136, wave 2: 38, wave 3: 12, wave 4: 8, wave 5: 5, wave 6: 6, wav
 | `docs/api/openapi.json` | TASK-051, TASK-052, TASK-053 |
 | `internal/database/mock_store.go` | TASK-020, TASK-028, TASK-029, TASK-030, TASK-031, TASK-032, TASK-033, TASK-034, TASK-035, TASK-037, TASK-038, TASK-039, TASK-040, TASK-139 |
 | `internal/database/mocks/mock_store.go` | TASK-020, TASK-028, TASK-029, TASK-031, TASK-032, TASK-033, TASK-035, TASK-037, TASK-038, TASK-039, TASK-040, TASK-139 |
-| `internal/plugins/maintenance/plugin.go` | TASK-180, TASK-045, TASK-068, TASK-071, TASK-072, TASK-074, TASK-076, TASK-078, TASK-200, TASK-103, TASK-104, TASK-105, TASK-111, TASK-112, TASK-114 |
+| `internal/plugins/maintenance/plugin.go` | TASK-180, TASK-045, TASK-068, TASK-071, TASK-072, TASK-074, TASK-076, TASK-078, TASK-200, TASK-103, TASK-111, TASK-112, TASK-114 |
 
 Rule for the coordinator: after every merge touching a hub file, rebase each sibling that lists the same hub; a registrar/mock conflict is a 1–3 line append and goes to rung 2 (conflict-resolver) at most — never rung 4.
 
@@ -135,27 +166,26 @@ Execution mode: `/parallel-sweep` — trigger: 7 tasks (≥3 threshold) with dis
 | TASK-007 | L50 | Wire scripts/test_check_memory_leaks.py into a CI job (repo-guards) | **Haiku-class** | One-line addition to an existing CI step, no new logic — just add a second unittest discov | 1 |
 | TASK-191 | L921 | Bump the github-common reusable-workflow pins in at least two PRs, low | **Sonnet-class** | mechanical version-pin bumps across 8 files but requires splitting into >=2 sequenced PRs  | 2 |
 | TASK-009 | L2568 | Teach the ABS fixture-capture harness to record request headers | **Sonnet-class** | Small, self-contained script change with a clear existing pattern (KEPT_HEADERS) to extend | 1 |
-| TASK-010 | SEC-CODEQL-BACKLOG | Add top-level `permissions:` blocks to the 3 workflows flagged by acti | **Haiku-class** | Mechanical, 3 files, same fix pattern each time — add a minimal top-level permissions bloc | 1 |
+| TASK-010 | SEC-CODEQL-BACKLOG | Add top-level `permissions:` blocks to the 3 workflows flagged by acti | **Sonnet-class** | Mechanical, 3 files, same fix pattern each time — add a minimal top-level permissions bloc | 1 |
 | TASK-011 | SEC-8 | Pin SHA256 checksums for Dockerfile-fetched utfcpp/taglib tarballs | **Haiku-class** | mechanical: download once, record the known-good sha256, add a verification step — no desi | 1 |
 | TASK-012 | L4312 | scripts/setup-prometheus-auth.py does NOT share the server-side shell  | **Haiku-class** | documentation-only comment addition, no logic change needed | 1 |
 | TASK-013 | L4844 | Build a report-only scan for book rows that may have been spuriously c | **Sonnet-class** | Combines a filesystem-pattern reuse (find_bogus_dirs), a live-API paginated book query, an | 1 |
-| TASK-014 | REPO-SIZE-1 | Remove committed mtls-bridge build artifact and gitignore it | **Haiku-class** | git rm + two-line gitignore add + a small size-guard addition to an existing hook script;  | 1 |
+| TASK-014 | REPO-SIZE-1 | Remove committed mtls-bridge build artifact and gitignore it | **Sonnet-class** | git rm + two-line gitignore add + a small size-guard addition to an existing hook script;  | 1 |
 | TASK-015 | REPO-SIZE-1 | Stop committing series_dedup.py's generated dump/fix cache files | **Haiku-class** | git rm + gitignore two lines; investigation already confirmed no downstream Go consumer | 2 |
 
 Execution mode: `/parallel-sweep` — trigger: 10 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main).
 
-### WS — config · 6 tasks
+### WS — config · 5 tasks
 
 | Task | TODO id | Title | Tier | Why tier | Wave |
 |------|---------|-------|------|----------|------|
-| TASK-016 | L1247 | Rename write_back_metadata config key to auto_write_tags_on_fetch with | **Opus-class** | Mechanical rename but with a correctness-critical backward-compat alias (a bug here silent | 6 |
+| TASK-016 | L1247 | Rename write_back_metadata config key to auto_write_tags_on_fetch with | **Opus-class** | Mechanical rename but with a correctness-critical backward-compat alias (a bug here silent | 4 |
 | TASK-017 | CFG-AUDIT | Fix APIRateLimitPerMinute default drift between fresh-install (0) and  | **Haiku-class** | Single-value alignment across two or three constants, no logic change. | 1 |
-| TASK-018 | CFG-AUDIT | Fix ai_backend.local_base_url hardcoded developer LAN IP default | **Sonnet-class** | Straightforward default-value fix, but needs to check EffectiveLLMMode's fallback behavior | 2 |
-| TASK-019 | CFG-AUDIT | Fix ChapterConsolidationThresholdMin omitted from ResetToDefaults (fac | **Haiku-class** | One missing field in a large struct literal — add it. | 3 |
-| TASK-020 | CFG-AUDIT | Delete the fully inert --enable-sqlite3-i-know-the-risks flag and Enab | **Sonnet-class** | Pure removal but touches ~8 files (flag registration, config struct, 5 call sites passing  | 4 |
-| TASK-021 | L10750 | Scan and fingerprint the assembled-source download root as a read-only | **Opus-class** | new config surface (a second scan root with different semantics — read-only, non-organizin | 7 |
+| TASK-018 | CFG-AUDIT | Fix ai_backend.local_base_url hardcoded developer LAN IP default | **Sonnet-class** | Straightforward default-value fix, but needs to check EffectiveLLMMode's fallback behavior | 5 |
+| TASK-019 | CFG-AUDIT | Fix ChapterConsolidationThresholdMin omitted from ResetToDefaults (fac | **Haiku-class** | One missing field in a large struct literal — add it. | 2 |
+| TASK-020 | CFG-AUDIT | Delete the fully inert --enable-sqlite3-i-know-the-risks flag and Enab | **Sonnet-class** | Pure removal but touches ~8 files (flag registration, config struct, 5 call sites passing  | 3 |
 
-Execution mode: `/parallel-sweep` — trigger: 6 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
+Execution mode: `/parallel-sweep` — trigger: 5 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
 
 ### WS — database · 20 tasks
 
@@ -178,13 +208,13 @@ Execution mode: `/parallel-sweep` — trigger: 6 tasks (≥3 threshold) with dis
 | TASK-034 | L4728 | Add Func override fields to MockStore's ~86 hardwired-zero-return meth | **Haiku-class** | Purely mechanical — for each of the ~86 methods, add one `XFunc func(...) (...)` field to  | 1 |
 | TASK-035 | L5271 | Add DeleteNarrator to the store (CRUD building block only) | **Opus-class** | Mechanical CRUD addition with a clear model (DeleteAuthor) to mirror, but touches the memd | 1 |
 | TASK-036 | L5290 | Fix DeleteAuthor's junction cleanup: it scans the dead book_author: ke | **Opus-class** | Bug fix on the prod-data author-deletion path with a clear existing pattern (GetAllAuthorB | 2 |
-| TASK-037 | L10523 | Omnibus/anthology book_type field — Part 1 of the omnibus-detection-an | **Opus-class** | schema migration + cross-layer (DB/API/FE) field threading on a prod-data path; needs care | 6 |
+| TASK-037 | L10523 | Omnibus/anthology book_type field — Part 1 of the omnibus-detection-an | **Opus-class** | schema migration + cross-layer (DB/API/FE) field threading on a prod-data path; needs care | 5 |
 | TASK-038 | L10526 | Filter system-sourced tags out of the Browse-by-Tag cloud | **Sonnet-class** | requires a new source-aware aggregation over the book_tag: keyspace (not just tag_idx:), t | 1 |
-| TASK-039 | L10728 | Add transcribe_status to the book-summary list projection and a fronte | **Sonnet-class** | touches the database summary projection (2 construction sites) plus a new frontend filter  | 3 |
+| TASK-039 | L10728 | Add transcribe_status to the book-summary list projection and a fronte | **Sonnet-class** | touches the database summary projection (2 construction sites) plus a new frontend filter  | 4 |
 
 Execution mode: `/parallel-sweep` — trigger: 20 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
 
-### WS — dedup · 15 tasks
+### WS — dedup · 14 tasks
 
 | Task | TODO id | Title | Tier | Why tier | Wave |
 |------|---------|-------|------|----------|------|
@@ -193,7 +223,6 @@ Execution mode: `/parallel-sweep` — trigger: 20 tasks (≥3 threshold) with di
 | TASK-180 | L1350 | Measure whether dedup:duration-abridged (3,573) is over-firing before  | **Sonnet-class** | Requires reading the abridged-detection condition, sampling real tagged pairs, and manuall | 1 |
 | TASK-042 | VG-DOUBLE-PRIMARY | Forward fix: demote pre-existing version-group members when a merge re | **Opus-class** | Correctness-critical write-path fix on the merge path; the change itself is a bounded quer | 3 |
 | TASK-043 | L3966 | Add a dry-run parameter to dedup.series-dedup | **Sonnet-class** | Threading a new param through DedupSeries and its call site (internal/server/duplicates_op | 1 |
-| TASK-181 | L4222 | Find the CreateBook path(s) that copy a dangling SeriesID onto newly-c | **Opus-class** | genuine root-cause investigation with no confirmed anchor yet -- requires either productio | 2 |
 | TASK-044 | L4288 | Apply the unfiltered ref-count guard to the two remaining series delet | **Opus-class** | same fix pattern as the already-shipped L4281 fix, but applied across two different packag | 3 |
 | TASK-045 | L4304 | Build a dry-run report-only classifier for series that look like they  | **Sonnet-class** | a new whole-series-table maintenance op with a two-bucket fuzzy-match classifier (exact-eq | 1 |
 | TASK-046 | L4698 | Route merge.AsExternalIDReassigner through database.AsCapability inste | **Sonnet-class** | One-line body swap copying an existing sibling helper's exact pattern. | 4 |
@@ -201,12 +230,12 @@ Execution mode: `/parallel-sweep` — trigger: 20 tasks (≥3 threshold) with di
 | TASK-192 | INIT-1 T05 | Clamp ComposeScore against per-kind confidence bounds; route calibrate | **Opus-class** | owner decision explicitly names Opus tier; touches the core scoring formula (noisy-OR comp | 1 |
 | TASK-048 | AP-1b | Physically co-locate a Combine survivor's files under RootDir after Co | **Opus-class** | touches the file-move/organize path on a prod-data operation (Combine); needs careful revi | 5 |
 | TASK-049 | L10750 | Acoustic-confirm signal: promote near-dupe title-leak pairs using Whol | **Opus-class** | modifies the auto-merge eligibility gate on a prod-data-mutating path (dedup merges); must | 2 |
-| TASK-050 | L10750 | Shattered-book reassembly: match fragment file-sets against the refere | **Opus-class** | new matching algorithm (set containment over an LSH index) feeding an auto-regroup decisio | 8 |
-| TASK-193 | DEC-10 | Wire Round-2 confidence-bound clamping into a distinct apply_confidenc | **Opus-class** | Touches the dedup auto-merge threshold gate (auto_resolve.go) and the live scoring call si | 8 |
+| TASK-050 | L10750 | Shattered-book reassembly: match fragment file-sets against the refere | **Opus-class** | new matching algorithm (set containment over an LSH index) feeding an auto-regroup decisio | 3 |
+| TASK-193 | DEC-10 | Wire Round-2 confidence-bound clamping into a distinct apply_confidenc | **Opus-class** | Touches the dedup auto-merge threshold gate (auto_resolve.go) and the live scoring call si | 7 |
 
-Execution mode: `/parallel-sweep` — trigger: 15 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
+Execution mode: `/parallel-sweep` — trigger: 14 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
 
-### WS — docs · 13 tasks
+### WS — docs · 12 tasks
 
 | Task | TODO id | Title | Tier | Why tier | Wave |
 |------|---------|-------|------|----------|------|
@@ -218,48 +247,45 @@ Execution mode: `/parallel-sweep` — trigger: 15 tasks (≥3 threshold) with di
 | TASK-054 | L497 | Re-verify docs/reference/abs-target-client-contract.md §11's 'safe to  | **Sonnet-class** | Requires re-checking each §11 entry (not just the 3 already known-stale) against real app/ | 1 |
 | TASK-055 | L1852 | Document the todo.d fragment race (assembled between filing and finish | **Haiku-class** | Pure documentation addition with the exact wording/placement already specified by the item | 1 |
 | TASK-056 | L4463 | Consolidate the August executive-summary roundup through 2026-08-19 | **Sonnet-class** | Requires reading and synthesizing ~22 individual executive summaries into the plain-langua | 1 |
-| TASK-194 | TODO-SEC-SYSTEMD | Harden the systemd unit: ProtectSystem=strict, ReadWritePaths, Capabil | **Opus-class** | mechanical systemd directive addition across two duplicate files, but requires care gettin | 1 |
 | TASK-057 | ABS-SYNC-Phase8 | Phase 8 — write the ABS topology, runbook, and migration guide (Cloudf | **Opus-class** | Pure documentation synthesis task pulling together several already-known operational facts | 1 |
 | TASK-058 | L10635 | Update execution-manifest doc to reflect the now-settled human gates | **Haiku-class** | mechanical status-table edit reflecting decisions already made elsewhere in this session | 1 |
 | TASK-059 | L10706 | Close out the 2026-05-01 re-audit block (TEST-2/DEP-1/DEAD-1/CTX-4/LOG | **Haiku-class** | editing a TODO.md prose bullet to record verified closure; no code change beyond the DEP-1 | 1 |
 | TASK-060 | T13 | Docs truth-up with measured sandbox/prod dedup numbers | **Haiku-class** | mechanical doc-number updates against already-measured values, following a fully pre-writt | 1 |
 
-Execution mode: `/parallel-sweep` — trigger: 13 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
+Execution mode: `/parallel-sweep` — trigger: 12 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
 
-### WS — itunes · 7 tasks
+### WS — itunes · 6 tasks
 
 | Task | TODO id | Title | Tier | Why tier | Wave |
 |------|---------|-------|------|----------|------|
 | TASK-184 | ITUNES-SMARTCRIT-PARSE | Measure iTunes XML track Persistent ID coverage against the local DB b | **Sonnet-class** | A bounded, mechanical measurement against existing, already-proven parsing infrastructure  | 1 |
-| TASK-061 | ITUNES-SMARTCRIT-PARSE | Import the 224 materialized-Playlist-Items smart playlists as static s | **Opus-class** | Real feature work extending an existing tested service, but the algorithm (resolve track I | 2 |
 | TASK-185 | PLAYBACK-IMPORT | Report the iTunes listened/in-progress status pipeline's actual wiring | **Sonnet-class** | The hard part of the investigation (tracing 3 packages, finding the exact gap) is already  | 1 |
 | TASK-062 | PERF-5 | internal/itunes/backfill.go BackfillExternalIDs: replace offset pagina | **Opus-class** | loop-restructuring across a function with error-handling nuance (H7 comment about not sile | 1 |
 | TASK-063 | PERF-5 | internal/itunes/backfill.go BackfillITunesTrackPIDs: same offset-pagin | **Sonnet-class** | same mechanical rewrite as part 1, smaller function | 2 |
-| TASK-064 | REGROUP-PARTCHAPTER-PARSER | Add a Part->disc / Chapter->track filename parser so 'P0-C0'-style fol | **Opus-class** | Adds a new pattern into a dense, carefully evidence-ranked classification decision tree (c | 1 |
+| TASK-064 | REGROUP-PARTCHAPTER-PARSER | Add a Part->disc / Chapter->track filename parser so 'P0-C0'-style fol | **Opus-class** | Adds a new pattern into a dense, carefully evidence-ranked classification decision tree (c | 2 |
 | TASK-065 | L10390 | P2 relocate-only sync cycle — the composed cycle already exists (RunRe | **Opus-class** | The hard/dangerous part (the composition, guard wiring, quiescence, oracle) is already bui | 6 |
 
-Execution mode: `/parallel-sweep` — trigger: 7 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
+Execution mode: `/parallel-sweep` — trigger: 6 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
 
-### WS — maintenance · 14 tasks
+### WS — maintenance · 13 tasks
 
 | Task | TODO id | Title | Tier | Why tier | Wave |
 |------|---------|-------|------|----------|------|
 | TASK-066 | L606 | Wire a durable freshness stamp for maintenance.chapters-backfill befor | **Sonnet-class** | touches 3 files across 2 packages (plugin interface, server wiring, op logic) and must not | 1 |
 | TASK-067 | L642 | Extend the REPOINT repair to recover BookFile rows via Book.FilePath ( | **Opus-class** | extends an existing production-critical repair op's candidate-derivation strategy; must no | 3 |
 | TASK-068 | L670 | Build a REPORT-ONLY counter for Book.FilePath collisions (rows sharing | **Sonnet-class** | small self-contained report op but must use a bounded worker pool / sharded map per the re | 1 |
-| TASK-069 | L1009 | Give maintenance jobs (v1, internal/maintenance) per-job store interfa | **Sonnet-class** | mechanical per-job (37 jobs) but touches every job's Run signature plus both registry call | 1 |
-| TASK-070 | L3488 | Add a user-configurable activity-log retention window (default 7 days, | **Sonnet-class** | spans backend config + an existing maintenance op + a new frontend control; needs the 0=ne | 5 |
+| TASK-070 | L3488 | Add a user-configurable activity-log retention window (default 7 days, | **Opus-class** | spans backend config + an existing maintenance op + a new frontend control; needs the 0=ne | 6 |
 | TASK-071 | L3602 | Build a detection-only report of other title-fragment author rows (the | **Sonnet-class** | requires designing a report-only heuristic (rows beginning with '-' plus a broader dirty-s | 1 |
 | TASK-072 | L3795 | New maintenance op: merge an operator-confirmed list of duplicate real | **Opus-class** | Deletes author rows and rewrites book links on a prod data path; needs a deliberately narr | 2 |
 | TASK-073 | L4137 | Read-through audit of the 8 ctxOpID consumer call sites now that op ID | **Opus-class** | requires reading 8 call sites plus their downstream CreateOperationChange consumers across | 1 |
 | TASK-074 | L4144 | Build a report-only census of books with a placeholder author already  | **Sonnet-class** | a new whole-library maintenance op with a worker pool, following an existing pattern but r | 1 |
 | TASK-075 | L5275 | Extend purge-empty-authors' report to categorize the 822 zero-book-but | **Sonnet-class** | Small, additive report extension reusing an existing op's structures, but needs a sensible | 1 |
-| TASK-076 | L5281 | Author-narrator swap repair, routed through the review queue (cross-ta | **Opus-class** | New cross-table detection heuristic plus review-queue integration on a prod-data path (aut | 1 |
+| TASK-076 | L5281 | Author-narrator swap repair, routed through the review queue (cross-ta | **Opus-class** | New cross-table detection heuristic plus review-queue integration on a prod-data path (aut | 2 |
 | TASK-077 | L5424 | Narrow the 3 remaining maintenance-jobs callees off maintenance.JobSto | **Sonnet-class** | Mechanical interface-narrowing with a clear, already-demonstrated pattern in the same file | 1 |
 | TASK-078 | ABS-SYNC-TASK-04 | TASK-04: build the idempotent sync-ID backfill over the existing libra | **Opus-class** | Full-library maintenance op with a mandatory bounded worker pool (CLAUDE.md concurrency ru | 1 |
 | TASK-195 | DEC-13 | Add a zero-size bucket to maintenance.missing-file-audit (the delta TA | **Sonnet-class** | Small, additive extension to an already-well-tested report-only op; no prod-data mutation, | 1 |
 
-Execution mode: `/parallel-sweep` — trigger: 14 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
+Execution mode: `/parallel-sweep` — trigger: 13 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
 
 ### WS — metadata · 4 tasks
 
@@ -288,7 +314,7 @@ Execution mode: `/parallel-sweep` — trigger: 4 tasks (≥3 threshold) with dis
 
 Execution mode: `/parallel-sweep` — trigger: 9 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
 
-### WS — missing-file-lane · 31 tasks
+### WS — missing-file-lane · 28 tasks
 
 | Task | TODO id | Title | Tier | Why tier | Wave |
 |------|---------|-------|------|----------|------|
@@ -299,8 +325,8 @@ Execution mode: `/parallel-sweep` — trigger: 9 tasks (≥3 threshold) with dis
 | TASK-093 | L5758 | Audit remaining setupMockApi startsWith() catch-alls for shadowed spec | **Haiku-class** | Read-and-verify ordering audit across one file, no new logic to design. | 1 |
 | TASK-094 | L6252 | Restore version-group count and current-version marker on Book Detail | **Sonnet-class** | Touches two related components; needs the version count plumbed to the header chip label. | 1 |
 | TASK-198 | L6394 | Diagnose and fix scan-import-organize.spec.ts's 7 stuck-on-'Add Import | **Sonnet-class** | requires actually running Playwright and reading a DOM snapshot to diagnose a still-unknow | 2 |
-| TASK-095 | L6701 | Instrument sort_by usage to inform the enabled_sort_indexes decision | **Haiku-class** | One log line at an existing, well-understood call site. | 2 |
-| TASK-096 | L7435 | Require every mutating operation to declare and enforce dry_run suppor | **Opus-class** | Cross-cutting registry contract change touching every mutating OperationDef; needs careful | 2 |
+| TASK-095 | L6701 | Instrument sort_by usage to inform the enabled_sort_indexes decision | **Sonnet-class** | One log line at an existing, well-understood call site. | 2 |
+| TASK-096 | L7435 | Require every mutating operation to declare and enforce dry_run suppor | **Opus-class** | Cross-cutting registry contract change touching every mutating OperationDef; needs careful | 3 |
 | TASK-097 | TODO-MUI-3 | Remove the now-redundant react-is override from web/package.json | **Haiku-class** | single-line package.json edit plus npm install and a build/test check | 1 |
 | TASK-098 | L7736 | Echo which filters the server actually applied in the /audiobooks list | **Sonnet-class** | small, well-scoped handler + response-shape change with an already-validated filter list t | 3 |
 | TASK-199 | L7819 | Render Library sub-nav items (In Progress/Finished) in collapsed-sideb | **Sonnet-class** | requires a real UI/UX decision embedded in the fix (how do 3 sub-items appear under one co | 1 |
@@ -310,13 +336,10 @@ Execution mode: `/parallel-sweep` — trigger: 9 tasks (≥3 threshold) with dis
 | TASK-102 | L8273 | TypeScript 6.0.3 → 7.0.2 migration (the one remaining piece of the fro | **Opus-class** | the item itself says this is 'not a version bump... budget as a migration' — a different c | 2 |
 | TASK-200 | L8316 | Build the tiered per-file intro-transcription backfill (Tiers 0/1/1b/2 | **Opus-class** | a 5-tier, ~284,000-file, multi-day-GPU-cost backfill with an escalation rule (1b) whose wh | 1 |
 | TASK-201 | L8316 | Wire per-file intro classification into the regroup-shattered-books cl | **Opus-class** | changing a signal's RANK in an existing classifier (making intro evidence outrank runtime) | 3 |
-| TASK-202 | L8316 | Wire per-file intro classification into First Aid as a tier-2 signal b | **Opus-class** | adding a new tier-2 signal that 'lets the verdict pick the fixer' implies a decision-routi | 4 |
 | TASK-103 | L8433 | Build a report-only op categorizing the transcribe_status vs IntroTran | **Sonnet-class** | a bounded-concurrency read-only scan + TSV report, following an established in-repo patter | 1 |
-| TASK-104 | L8551 | Build the version-group acoustic audit op (tier 2 of First Aid) | **Opus-class** | cross-signal (acoustic + independent transcript) auto-fix op mutating VersionGroupID/IsPri | 1 |
-| TASK-105 | L8611 | Build chapters backfill from a near-exact-acoustic-match duplicate (or | **Opus-class** | cross-book matching (fingerprint gate) plus chapter-offset derivation from 3 different sou | 2 |
 | TASK-106 | L8646 | Import found playlist files (.m3u/.m3u8/.pls/.cue/.xspf) during scan,  | **Opus-class** | four file formats to parse, entry-to-book_file resolution with a real 38.2%-missing-book_f | 1 |
 | TASK-107 | L8646 | Export a playlist back to .m3u | **Sonnet-class** | small, single-endpoint feature with an existing playlist-membership accessor to build on | 1 |
-| TASK-108 | L8675 | Add the review/rating half of app-to-server reading-state sync (readin | **Sonnet-class** | extends an existing, well-understood merge-semantics endpoint with one more field; needs r | 1 |
+| TASK-108 | L8675 | Add the review/rating half of app-to-server reading-state sync (readin | **Opus-class** | extends an existing, well-understood merge-semantics endpoint with one more field; needs r | 1 |
 | TASK-109 | L8707 | Parse Deluge torrent release names into structured candidate metadata  | **Opus-class** | richer structured-metadata parsing than the existing title-only parser, feeding an existin | 1 |
 | TASK-110 | L8738 | Audit book/file grouping against Deluge torrent file-list membership ( | **Opus-class** | cross-references torrent file-membership against book grouping at library scale, feeding a | 2 |
 | TASK-111 | L8837 | Build the pre-apply snapshot tool for the 138 pending multidisc holds | **Opus-class** | a read-only report generator over existing review-hold data with an existing pickPrimary h | 1 |
@@ -324,30 +347,29 @@ Execution mode: `/parallel-sweep` — trigger: 9 tasks (≥3 threshold) with dis
 | TASK-113 | L8890 | Missing-input triggering: enqueue the producer op when a waiting_deps  | **Opus-class** | modifies core operations-registry scheduling logic (shipped flag-OFF and dormant per the i | 1 |
 | TASK-114 | L8943 | Never delete — re-associate: combine debris books into a template matc | **Opus-class** | novel duration-based template-matching logic against a prod data path with hard never-dele | 1 |
 
-Execution mode: `/parallel-sweep` — trigger: 31 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
+Execution mode: `/parallel-sweep` — trigger: 28 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
 
 ### WS — operations · 4 tasks
 
 | Task | TODO id | Title | Tier | Why tier | Wave |
 |------|---------|-------|------|----------|------|
-| TASK-115 | L4477 | Distinguish 'nothing to cancel' from 'cancelled' in registry.Cancel so | **Sonnet-class** | Touches a shared registry method with 3 call sites across 2 packages, needs a sentinel-err | 1 |
+| TASK-115 | L4477 | Distinguish 'nothing to cancel' from 'cancelled' in registry.Cancel so | **Sonnet-class** | Touches a shared registry method with 3 call sites across 2 packages, needs a sentinel-err | 2 |
 | TASK-116 | L4586 | Forward IsCanceled() through reporterLogger to the ops registry's canc | **Opus-class** | The code change itself is a 4-line method override, but the item explicitly requires READI | 1 |
 | TASK-117 | L4703 | Give prodSchedulerStore an Unwrap() so capability lookups can see past | **Sonnet-class** | Needs a design call the item itself doesn't spell out: prodSchedulerStore only holds the n | 1 |
 | TASK-118 | L4743 | Delete internal/operations/mocks — its only referencer is dead, perman | **Sonnet-class** | The deletion itself is mechanical, but deciding what to do with the one (broken, dead) ref | 1 |
 
 Execution mode: `/parallel-sweep` — trigger: 4 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
 
-### WS — organize · 5 tasks
+### WS — organize · 4 tasks
 
 | Task | TODO id | Title | Tier | Why tier | Wave |
 |------|---------|-------|------|----------|------|
 | TASK-119 | F5 | Replace the size-equality heuristic in OrganizeBookDirectory's destina | **Sonnet-class** | small, localized change but touches a prod-data-path chokepoint (organize/rename) that thr | 1 |
-| TASK-120 | F5 | Route the three organize/rename paths through organizer.MoveBookFile's | **Opus-class** | a structural refactor across the three rename paths in different packages (organizer.Organ | 2 |
 | TASK-121 | L4919 | Make resolveOrganizedFilePath's plan-on-faith fallback loud and verify | **Opus-class** | Prod-data path (organize writes book_file rows from this) with a subtle three-way branch a | 1 |
 | TASK-122 | L5021 | Add an {edition_suffix} folder-pattern token | **Sonnet-class** | Small, well-scoped addition with an exact model to copy, but touches the organize target-p | 1 |
-| TASK-203 | DEC-11 | Add a detection-only counter + structured log for generateTargetPath p | **Sonnet-class** | Small, well-scoped, but touches the concurrent whole-library organize worker pool (8 worke | 4 |
+| TASK-203 | DEC-11 | Add a detection-only counter + structured log for generateTargetPath p | **Sonnet-class** | Small, well-scoped, but touches the concurrent whole-library organize worker pool (8 worke | 5 |
 
-Execution mode: `/parallel-sweep` — trigger: 5 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
+Execution mode: `/parallel-sweep` — trigger: 4 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
 
 ### WS — scanner · 2 tasks
 
@@ -367,7 +389,7 @@ Execution mode: SERIAL (coordinator-driven) — fewer than 3 tasks.
 
 Execution mode: SERIAL (coordinator-driven) — fewer than 3 tasks.
 
-### WS — server · 23 tasks
+### WS — server · 22 tasks
 
 | Task | TODO id | Title | Tier | Why tier | Wave |
 |------|---------|-------|------|----------|------|
@@ -376,28 +398,27 @@ Execution mode: SERIAL (coordinator-driven) — fewer than 3 tasks.
 | TASK-205 | L283 | Replace TestServerStartGracefulShutdown's fixed 6s sleep with a bounde | **Sonnet-class** | requires touching Server struct + Start() + a test in the same package without breaking ot | 5 |
 | TASK-128 | CFG-AUDIT | Fix EnableRateLimit=false not actually disabling rate limiting | **Sonnet-class** | Small, localized fix but touches a security-relevant gate on the HTTP server startup path. | 2 |
 | TASK-129 | L1957 | Fix wipeActivity dry-run count saturating at 2 | **Sonnet-class** | Needs either a new dedicated activity-count method across multiple ActivityStorer implemen | 2 |
-| TASK-130 | L3384 | Register SearchIndexDroppedCount (and a dirty-backlog gauge) as Promet | **Sonnet-class** | Mechanical addition following an existing, well-established gauge-registration pattern in  | 2 |
-| TASK-131 | L3443 | Fix audiobook_organizer_books_total to report the true total, not just | **Sonnet-class** | Small, precisely located fix — either swap one function call or add a second gauge; the on | 3 |
+| TASK-130 | L3384 | Register SearchIndexDroppedCount (and a dirty-backlog gauge) as Promet | **Sonnet-class** | Mechanical addition following an existing, well-established gauge-registration pattern in  | 3 |
+| TASK-131 | L3443 | Fix audiobook_organizer_books_total to report the true total, not just | **Sonnet-class** | Small, precisely located fix — either swap one function call or add a second gauge; the on | 4 |
 | TASK-132 | L4329 | Fix indexedStore.UpdateBook to enqueue a Bleve DELETE when the update  | **Sonnet-class** | small, precise change on a decorator that sits on every book mutation in the app — must no | 1 |
 | TASK-133 | L4334 | Regression test: soft-deleting an indexed book must be unsearchable wi | **Sonnet-class** | must be written to FAIL against the current buggy UpdateBook (proving the bug) and then PA | 2 |
 | TASK-134 | L4449 | Add a wiring-level test proving the server actually constructs CancelO | **Sonnet-class** | Requires constructing a real *aiscan.PipelineManager and *database.AIScanStore (not just i | 1 |
 | TASK-135 | L4575 | Convert metadata.batch-apply-cached from ResumeDrop to real checkpoint | **Opus-class** | Mechanical once the template is understood, but requires correctly reasoning about which f | 1 |
 | TASK-136 | L4575 | Convert reconcile.apply from ResumeDrop to real checkpoint/resume | **Opus-class** | Same mechanical-but-careful conversion as part 1, applied to a second op whose params shap | 1 |
-| TASK-137 | L4732 | Fix TestOrganizeService_PerformOrganize_NoBooksToOrganize to mock the  | **Haiku-class** | Swap one mock field name for the correct one and add a real assertion; mechanical once the | 1 |
+| TASK-137 | L4732 | Fix TestOrganizeService_PerformOrganize_NoBooksToOrganize to mock the  | **Sonnet-class** | Swap one mock field name for the correct one and add a real assertion; mechanical once the | 1 |
 | TASK-206 | TODO-SRVTIMEOUT | Split or speed up the internal/server test package -- migrate call sit | **Opus-class** | requires profiling which parts of full server construction (container.Start, search index  | 1 |
 | TASK-138 | ABS-SYNC | Exempt the ABS router group from the global BasicAuth() middleware | **Sonnet-class** | Small, surgical middleware change, but it is a security-boundary edit (auth exemption) so  | 1 |
-| TASK-139 | ABS-SYNC | Prune expired abs_sess: records on the existing session-cleanup schedu | **Haiku-class** | Mechanical: add one interface method + one call inside an already-existing loop, following | 4 |
+| TASK-139 | ABS-SYNC | Prune expired abs_sess: records on the existing session-cleanup schedu | **Haiku-class** | Mechanical: add one interface method + one call inside an already-existing loop, following | 3 |
 | TASK-140 | L10372 | Retire the unsafe cleanup_merged.go handler as a guarded no-op (owner  | **Sonnet-class** | Small diff, but it is a prod data-loss guard on a route that currently CAN delete real lib | 1 |
 | TASK-141 | L10525 | Add regression tests for the 2 untested deluge hydrate sites | **Haiku-class** | mechanical: mirror an existing, adjacent test pattern for 2 more call sites | 1 |
-| TASK-207 | TODO-SRVTIMEOUT | (duplicate reference) INTERNAL-SERVER-PKG-STALL structural decision -- | **Opus-class** | identical to todo_line 10104 -- see that item's why_tier | 2 |
 | TASK-208 | DEC-6 | Migrate internal/server test fixtures to setupTestServerWithStore — it | **Sonnet-class** | Mechanical fixture consolidation across two files, but itunes_error_test.go's 11 sites eac | 1 |
-| TASK-209 | DEC-6 | Migrate internal/server test fixtures to setupTestServerWithStore — it | **Sonnet-class** | Mechanical, but indexed_store_test.go and similar_books_test.go have multiple sites per fi | 1 |
+| TASK-209 | DEC-6 | Migrate internal/server test fixtures to setupTestServerWithStore — it | **Sonnet-class** | Mechanical, but indexed_store_test.go and similar_books_test.go have multiple sites per fi | 3 |
 | TASK-210 | DEC-6 | Migrate internal/server test fixtures to setupTestServerWithStore — se | **Sonnet-class** | server_coverage_phase2_test.go's 4 sites live inside `for _, tt := range ...` subtest loop | 1 |
-| TASK-211 | DEC-6 | Migrate internal/server test fixtures to setupTestServerWithStore — co | **Sonnet-class** | 10 files, 1 site each — individually trivial, but 3 of them (ai_jobs, reading, rating) rou | 1 |
+| TASK-211 | DEC-6 | Migrate internal/server test fixtures to setupTestServerWithStore — co | **Sonnet-class** | 10 files, 1 site each — individually trivial, but 3 of them (ai_jobs, reading, rating) rou | 2 |
 
-Execution mode: `/parallel-sweep` — trigger: 23 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
+Execution mode: `/parallel-sweep` — trigger: 22 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
 
-### WS — server-handlers · 18 tasks
+### WS — server-handlers · 19 tasks
 
 | Task | TODO id | Title | Tier | Why tier | Wave |
 |------|---------|-------|------|----------|------|
@@ -405,13 +426,13 @@ Execution mode: `/parallel-sweep` — trigger: 23 tasks (≥3 threshold) with di
 | TASK-143 | ABS-N3 | N-3: stop advertising Delete/Update permissions the library surface ca | **Sonnet-class** | Small, localized DTO change, but requires judgment about what value is truthful (false vs. | 1 |
 | TASK-144 | ABS-N5 | N-5: /search narrators must omit numBooks, not emit 0 | **Haiku-class** | One-line field removal mirroring an existing sibling handler's shape in the same file — fu | 2 |
 | TASK-145 | ABS-N6 | N-6: log + metric when listening-stats read fails (currently silent 0) | **Haiku-class** | Small, localized addition of a log line and a metric increment inside an existing error br | 1 |
-| TASK-146 | ABS-N10 | N-10: advertised login rate limit (10/10min) does not match the real t | **Haiku-class** | Two-constant correction, using already-exported values from absauth — fully mechanical, no | 2 |
-| TASK-147 | L127 | Align ABS conformance fixtures with the oracle so CompareValues stays  | **Opus-class** | 767-line fixture-seeding file, 12 currently-red tests to diagnose one by one (distinguishi | 3 |
+| TASK-146 | ABS-N10 | N-10: advertised login rate limit (10/10min) does not match the real t | **Haiku-class** | Two-constant correction, using already-exported values from absauth — fully mechanical, no | 3 |
+| TASK-147 | L127 | Align ABS conformance fixtures with the oracle so CompareValues stays  | **Opus-class** | 767-line fixture-seeding file, 12 currently-red tests to diagnose one by one (distinguishi | 4 |
 | TASK-212 | L476 | Add GET /api/libraries/:libraryId/series/:seriesId to the ABS surface | **Sonnet-class** | single-item variant of an existing well-documented handler (LibrarySeries) in the same fil | 3 |
-| TASK-148 | L491 | Re-capture the series ABS fixture against a populated library (it curr | **Sonnet-class** | Requires actually running a real capture (hitting a populated library's /api/libraries/:id | 4 |
+| TASK-148 | L491 | Re-capture the series ABS fixture against a populated library (it curr | **Sonnet-class** | Requires actually running a real capture (hitting a populated library's /api/libraries/:id | 5 |
 | TASK-149 | L685 | Detect multi-file books whose synthesized chapter timeline stops short | **Sonnet-class** | small, localized fix in one file's request-time code path plus a log-based detector; low r | 1 |
-| TASK-213 | ORGANIZE-4TH-COPY | Replace the single-file OrganizeBook call in filesystem.go's auto-orga | **Sonnet-class** | small, well-templated fix (copy an already-proven pattern from two sibling files) but touc | 2 |
-| TASK-150 | L2481 | Audit apply-shaped endpoints for missing tag/file-I/O writeback | **Opus-class** | Multi-file investigation across handler packages requiring judgment about which paths muta | 1 |
+| TASK-213 | ORGANIZE-4TH-COPY | Replace the single-file OrganizeBook call in filesystem.go's auto-orga | **Opus-class** | small, well-templated fix (copy an already-proven pattern from two sibling files) but touc | 2 |
+| TASK-150 | L2481 | Audit apply-shaped endpoints for missing tag/file-I/O writeback | **Opus-class** | Multi-file investigation across handler packages requiring judgment about which paths muta | 2 |
 | TASK-151 | L2589 | Document the hardcoded ABS timeBase as a permanent, owner-approved all | **Haiku-class** | Single-line comment addition at a known anchor; no logic change, no design decision left t | 2 |
 | TASK-152 | PERF-4 | Bound the iTunes search handler's unbounded SearchBooks(search, 0, 0)  | **Sonnet-class** | Requires picking a sane bound and wiring a truncation warning without breaking the existin | 1 |
 | TASK-153 | L4507 | Implement POST /api/session/local (2xx stub) | **Haiku-class** | A single trivial route: authenticate, respond 200 with a non-empty body, per the spec's ow | 1 |
@@ -419,23 +440,22 @@ Execution mode: `/parallel-sweep` — trigger: 23 tasks (≥3 threshold) with di
 | TASK-155 | L4563 | Move /tasks/* and /maintenance-window/* off the legacy v1 operations h | **Sonnet-class** | A mechanical handler-extraction refactor (move 6 methods + their route registrations to a  | 1 |
 | TASK-156 | ABS-SYNC-Phase7 | Phase 7 — socket.io for Absorb (deprioritized by the item's own text;  | **Sonnet-class** | New protocol surface (socket.io) with a narrow scope (Absorb-only, one auth handshake), bu | 2 |
 | TASK-157 | L10521 | Parallelize the per-candidate synchronous label/breakdown refresh in D | **Opus-class** | concurrency-safety review needed: UpdateCandidateStatus/UpsertLabeledExample must be safe  | 2 |
+| TASK-214 | REV-EMPTY-2 | Cap GET /api/v1/audiobooks/metadata/cache/review to a default page siz | **Sonnet-class** | Requires widening a shared narrow interface plus regenerating (or hand-mirroring) a mocker | 1 |
 
-Execution mode: `/parallel-sweep` — trigger: 18 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
+Execution mode: `/parallel-sweep` — trigger: 19 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
 
-### WS — web · 20 tasks
+### WS — web · 22 tasks
 
 | Task | TODO id | Title | Tier | Why tier | Wave |
 |------|---------|-------|------|----------|------|
 | TASK-158 | 2026-08-20-dual-path-settings-panel.md#1 | Add a Settings panel section to edit path_aliases | **Sonnet-class** | New component + multi-file state wiring (Settings.tsx state, useSettingsHandlers.ts payloa | 1 |
 | TASK-159 | 2026-08-20-dual-path-settings-panel.md#3 | Add and use a test-reset hook for the module-scope path-alias/path-var | **Haiku-class** | Small, mechanical: add one exported reset function per file plus a beforeEach call in up t | 1 |
-| TASK-160 | SEC-9 | Move OpenAI API key validation server-side (currently sent from the br | **Sonnet-class** | A small, well-scoped new backend endpoint plus a frontend call-site swap — standard proxy- | 1 |
+| TASK-160 | SEC-9 | Move OpenAI API key validation server-side (currently sent from the br | **Opus-class** | A small, well-scoped new backend endpoint plus a frontend call-site swap — standard proxy- | 1 |
 | TASK-161 | L1350 | Strip dedup:* and metadata:source:* namespaces from Browse by Tag widg | **Sonnet-class** | Small, self-contained frontend filter/format change with clear before/after examples given | 2 |
 | TASK-162 | L1350 | Reformat metadata:* tags in Browse by Tag: strip prefix, 'key: value'  | **Sonnet-class** | Pure string-formatting change, but must handle the 3-segment case (metadata:language:en →  | 1 |
 | TASK-188 | L1727 | Harden MuiMenu against the documented React setState-drop defect (exit | **Sonnet-class** | The fix pattern is already proven and documented in the same file for Drawer -- this is ap | 1 |
-| TASK-163 | L1744 | Find the mechanism behind the intermittent webkit-only flake in batch- | **Opus-class** | Root-causing a webkit-only, intermittent (not reliably reproducible) e2e timing flake requ | 1 |
-| TASK-164 | REVIEW-COMBINE-FIRST | Let the owner combine/merge duplicate books from the metadata chooser, | **Opus-class** | New cross-surface UI feature (reach existing combine/merge dialogs from the metadata choos | 7 |
 | TASK-189 | REVIEW-PREVIEW | Play the first ~2 minutes of part 1's audio directly from the review m | **Sonnet-class** | Mostly UI wiring against an already-bounded, already-proven endpoint, but requires a real  | 1 |
-| TASK-165 | L2486 | Review the 17 apiFetch-callers' catch handlers for session-expiry mess | **Opus-class** | Mechanically similar review across 18 files, but each catch site needs a judgment call on  | 8 |
+| TASK-165 | L2486 | Review the 17 apiFetch-callers' catch handlers for session-expiry mess | **Opus-class** | Mechanically similar review across 18 files, but each catch site needs a judgment call on  | 7 |
 | TASK-166 | L3156 | Make the book-detail page's Author field(s) link to a library view fil | **Sonnet-class** | Requires both a new UI affordance (real <a href> per author, per the item's own notes) and | 3 |
 | TASK-167 | L3161 | Make the book-detail page's Series field link to a library view filter | **Sonnet-class** | Same shape and same new-plumbing requirement as the author link task (todo_line 3156) — ne | 4 |
 | TASK-168 | L3164 | Make Narrator, Publisher, Genre, and Release Year fields link to filte | **Sonnet-class** | Unlike author_id/series_id (dedicated int params needing new plumbing), these four go thro | 5 |
@@ -446,8 +466,12 @@ Execution mode: `/parallel-sweep` — trigger: 18 tasks (≥3 threshold) with di
 | TASK-173 | L10660 | Add resizable/sortable columns to the acoustic dedup candidates table | **Sonnet-class** | requires preserving the checkbox-select-all column and busy/selected row styling while swa | 1 |
 | TASK-174 | L10660 | Add resizable/sortable columns to the Activity Log table | **Sonnet-class** | row bodies are heterogeneous (plain/batched/digest) so only the header (resize+visibility) | 1 |
 | TASK-175 | L10660 | Add resizable/sortable columns to the split-book dedup candidates tabl | **Sonnet-class** | header-only ConfigurableTable integration plus sorting the already-paginated `candidates`  | 1 |
+| TASK-215 | REV-EMPTY-1 | Never send batchFetchCandidates({}) from the Search providers command | **Haiku-class** | One-line call-site edit plus a small, template-following new test file; no new types or cr | 2 |
+| TASK-216 | REV-EMPTY-1 | Show a loading skeleton, not the empty state, while the metadata revie | **Sonnet-class** | The guard condition has a real correctness trap (guarding on `loading` alone would flicker | 2 |
+| TASK-217 | REV-EMPTY-3 | Evidence panel: explain a missing score derivation in plain language a | **Sonnet-class** | Touches a shared, documented interface (SpineContext) and its sole real constructor plus t | 2 |
+| TASK-218 | REV-EMPTY-4 | OperationActivityPanel: stop re-appending the last SSE log line on eve | **Haiku-class** | Single-file, single-effect fix with a stable, already-existing dedup key (`sequence`) to u | 1 |
 
-Execution mode: `/parallel-sweep` — trigger: 20 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
+Execution mode: `/parallel-sweep` — trigger: 22 tasks (≥3 threshold) with disjoint files per wave (collision matrix above), Bucket-1 briefs, gate = per-brief How-to-test block (make ci is red on main). Review-critical tasks inside this workstream are **SINGLE-AGENT (strong model)** — never parallelized with each other, PR left open for the owner.
 
 
 ### Coordinator protocol (verbatim)
@@ -491,13 +515,18 @@ Execution mode: `/parallel-sweep` — trigger: 20 tasks (≥3 threshold) with di
 | L629 Decide the detection heuristic for per-chapter split files m | No detector or heuristic exists in the codebase: grep -rn 'per-chapter\|split.*fragment\|97e56ed2' --include=*.go . -> 0 hits outside TODO.md. The TODO item is  |
 | L665 Decide which of Book.FilePath / BookFile.FilePath is authori | This is a data-model authority question, not covered by any of the 14 owner decisions (decision #12 covers building the repoint repair, not which field wins whe |
 | L680 Stored Book.Duration is short of the real container duration | maintenance.duration-reextract exists and re-derives real durations (internal/plugins/maintenance/duration_reextract.go), but its durationDiffMeaningful gate (d |
+| L872 Route the three organize/rename paths through organizer.Move | [verify-10.json] The brief tells the executor to design rather than implement, in four separate places. Step 3: 'Design (write up before implementing, given eff |
+| L1009 Give maintenance jobs (v1, internal/maintenance) per-job sto | [verify-10.json] The brief is self-blocking by its own steps. Step 1-2: 'If maintenance_dispatcher.go still exists, recommend to the coordinator that Phase 1 .. |
 | L1275 Decide whether cover-art embedding on auto-fetch should be g | Confirmed at internal/metafetch/service_fetch.go: `mfs.embedCoverInBookFiles(updatedBook, coverPath)` at L301 executes unconditionally whenever a cover URL was  |
 | L1317 Decide: build enforcement for AuthRateLimitPerMinute, or rem | Confirmed AuthRateLimitPerMinute is fully wired (declared internal/config/config.go:811, loaded :1702, validated :2225, persisted internal/config/persistence.go |
 | L1317 Decide: wire up or remove dead Settings-UI subsystems (Stora | Confirmed Storage Quota fields (EnableDiskQuota, DiskQuotaPercent, EnableUserQuotas, DefaultUserQuotaGB) are read back ONLY for status display, never for enforc |
 | L1403 Decide whether/how to make the E2E CI check a required, enfo | Owner decision required per the item text itself ('Owner decision required — do not enable unattended'), and the owner's 2026-08-21 decision list does not addre |
 | L1462 Decide fix order for iTunes smart-playlist extraction: XML-f | The item itself frames this as needing a decision ('Two candidate directions — needs a decision') and the owner's 2026-08-21 decision list does not address it.  |
+| L1517 Import the 224 materialized-Playlist-Items smart playlists a | [verify-10.json] The brief's entry condition and its data model are both undecided. Goal: 'Gated behind part 1's coverage measurement passing a reasonable thres |
 | L1517 Fix ParseSmartCriteria's binary layout (nested SLst containe | The blob format is only partially reverse-engineered at HEAD and the item explicitly marks the remaining pieces unresolved: the SLst container nesting boundarie |
+| L1744 Find the mechanism behind the intermittent webkit-only flake | [verify-8.json] This is an investigation, not an executable change. The Goal is 'Determine why...'; step 2 is 'Run the test repeatedly ... to establish a reprod |
 | L1767 Decide the trigger for PushDirty (iTunes playlist push-back  | Confirmed `PushDirty()` at internal/itunes/service/playlist_sync.go:193 still has zero non-test callers (`grep -rn PushDirty --include=*.go . | grep -v _test.go |
+| L2025 Let the owner combine/merge duplicate books from the metadat | [verify-8.json] The brief itself says the design does not exist: 'the bulk-metadata-review and dedup-label-review-panel plans were both archived without shippin |
 | L2537 Decide storage precision for per-file duration (int seconds  | database.BookFile.Duration is `int` (internal/database/store.go:825, struct BookFile at :800); mapper.go:217 widens it with `DurationSec: float64(f.Duration)` w |
 | L2568 Derive deviceType from captured User-Agent once headers are  | play.go:307 hardcodes deviceType='unknown' and play.go:315-317 only echoes a client-supplied deviceInfo map; there is no derivation logic to build because there |
 | L2583 Decide storage representation for pre-CE / era-suffixed publ | Book.PrintYear is `*int` (internal/database/store.go:202 'PrintYear *int'); the ABS DTO layer renders publishedYear as a string sourced from this int (browse.go |
@@ -526,6 +555,8 @@ Execution mode: `/parallel-sweep` — trigger: 20 tasks (≥3 threshold) with di
 | L6701 Decide which sort fields to enable in enabled_sort_indexes | Confirmed unresolved at HEAD: `grep -n 'EnabledSortIndexes \[\]string' internal/config/config.go` -> 1 hit, defaulting to empty, matching the item's option 1 as |
 | L7736 Decide: flat AND-only filters= param vs a composable AND/OR  | handler.go's filters= query param only supports a flat list of FieldFilter{field,value} ANDed together — no OR, no nested grouping, and no POST /audiobooks/quer |
 | L8094 How does the (unbuilt) combine-into-one-book track programma | series_denumber.go already detects the bracketed shape structurally (ShapeBracketed, bracketedPosition regex) but has no mechanism to decide WHICH bracketed-num |
+| L8551 Build the version-group acoustic audit op (tier 2 of First A | [verify-7.json] The op's auto-apply path clears VersionGroupID and rewrites IsPrimaryVersion on production rows, but three inputs that decide WHETHER to write a |
+| L8611 Build chapters backfill from a near-exact-acoustic-match dup | [verify-7.json] Step 4 is 'Find or add the M4B chapter-atom write function (search internal/audioutil, internal/mediainfo for existing atom-writing code first)' |
 | L9666 Detect multi-copy books (distinct file sets under different  | No existing detector distinguishes 'multi-copy' (same book, disjoint file sets, different folders) from an ordinary row-duplicate or a version-group: `grep -rln |
 | L10303 Decide the authoritative DRM detection path and wire it into | Both DRM paths exist independently and neither is wired into the scanner: `grep -n 'func DetectDRM' internal/audioutil/drm.go` -> 1 hit (L38); `grep -n 'HasActi |
 | L10406 isAudiobookITL under-classifies audiobooks — needs an owner  | Confirmed both under-classification claims: `sed -n '35,49p' internal/itunes/library_shape.go` shows isAudiobookITL checks `strings.Contains(kind, "audiobook")` |
@@ -539,16 +570,20 @@ Execution mode: `/parallel-sweep` — trigger: 20 tasks (≥3 threshold) with di
 | L10582 Decide whether to proceed with CONS-18 Part 2 (file-tag dura | docs/archive/todo-2026-H1.md:1067 records the owner's own prior scoping: 'Scoping found it is non-trivial + low-payoff... Build after the dedup re-scope settles |
 | L10598 Choose between the two subprocess-isolation RPC design optio | docs/specs/subprocess-isolation-rpc.md is a Draft-status spec (Owner: TBD) explicitly presenting 'Design — Two viable options' with no decision recorded, and co |
 | L10727 Library centralization backlog | TODO.md:10727 itself says 'needs a brainstorming session; future work' — no scope, files, or acceptance criteria are defined anywhere in the repo (`grep -rn 'li |
+| L10750 Scan and fingerprint the assembled-source download root as a | [verify-10.json] Step 2 is a schema-design assignment, not an implementation step: 'Design a minimal record shape for a reference-corpus file ... WITHOUT reusin |
 | L10783 Overhaul the review interface ("make it not suck") — needs a | The item's own text prescribes the deliverable as a SPEC, not code: 'Needs a concrete redesign spec: read-only audit of the current review page... → propose red |
 | L10788 Consolidate the dedup page into the review page | The item's own text says this 'Depends on item 51 (the review UI must be good enough to absorb the dedup results first)' and instructs to 'Investigate current d |
 | L0 Make PathAliases the single source for the Windows prefix us | This TODO item asks to invert the direction of coupling that docs/design/2026-08-20-dual-path-display.md Decision 1 explicitly rejected: that decision (grep -n  |
 | L0 Decide how a persisted path_aliases value re-derives after a | The TODO item's own text is phrased as a decision to make ('Decide how path_aliases re-derives...'), not a spec to implement. Confirmed at code level: SeedPathA |
 | L0 Replace the fixed resume_policy enum with a condition-based  | The TODO's own 'Design note' explicitly frames this as requiring new architecture ('this is a real expansion, not a tweak... express it as one predicate among o |
 | L232 Once a stuck test is named, find the unbounded wait (sync.Wa | Re-confirmed at HEAD: no goroutine dump artifact exists anywhere in the repo (`grep -rln 'goroutine dump' docs/ TODO.md` returns only this TODO's own prose). Th |
+| L4222 Find the CreateBook path(s) that copy a dangling SeriesID on | [verify-9.json] The brief cannot be completed from a worktree. Step 3 requires production activity-log forensics ('Cross-reference book 01KZSX7TW6BZXJX11F8K6Y0D |
 | L10077 Restrict the origin's bind address so Cloudflare Access is t | The default ExecStart in the repo's own tracked unit file still binds every interface -- grep -n 'ExecStart=.*--host' deploy/audiobook-organizer.service deploy/ |
+| L10094 Harden the systemd unit: ProtectSystem=strict, ReadWritePath | [verify-7.json] Two of the brief's own inputs are unresolved and it says so: (a) the Whisper egress port is contradictory and step 6 FORBIDS picking either valu |
 | L10512 Async breakdown-refresh for bulk/cluster dismiss -- decide i | The scope-18.md block's own text is a hedge, not a decision: 'per-pair synchronous refresh may need an async variant at scale (latency note)' -- 'may need' with |
 | L2467 Repair tags/covers for books applied from the Metadata Revie | The item's own text ends with 'Owner decision — no code needed if a library-wide run is acceptable', and this specific decision is NOT among the 14 owner decisi |
 | L7209 Library 'Sort by' control: restore it or delete the dead onS | The TODO's own text: 'Test side DONE (#2230); product decision STILL OPEN' -- the 4 e2e tests this item's title describes as broken were already repaired to dri |
+| L8316 Wire per-file intro classification into First Aid as a tier- | [verify-7.json] The brief does not know which module it is supposed to change and says so twice - Goal: 'Locate the actual First Aid diagnostic system ... do no |
 
 ---
 
@@ -700,7 +735,7 @@ Route these to `docs/operations/pending-prod-actions.md`. ⚠️ A running scan 
 
 ## Cost / efficiency strategy (fan-out)
 
-- **Tier split:** Haiku-class for mechanical edits; Sonnet-class default; Opus-class only for review-critical / cross-cutting. Actual: Sonnet-class 106, Opus-class 65, Haiku-class 39.
+- **Tier split:** Haiku-class for mechanical edits; Sonnet-class default; Opus-class only for review-critical / cross-cutting. Actual: Sonnet-class 108, Opus-class 58, Haiku-class 37.
 - **Coordinator owns git/gh:** workers stay in their worktree and report done; only the coordinator merges + rebases siblings. PRs merge on green CI; review-critical PRs stay open for the owner.
 - **Concurrency cap: 4 workers at a time on this machine.** 16 concurrent agents crashed the session on 2026-08-21.
 - **Waves respect the collision table** — never co-schedule two tasks touching the same file.

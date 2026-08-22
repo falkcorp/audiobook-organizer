@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-037-omnibus-anthology-book-type-field-part-1-of-the-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e9c4f2c8-15f1-4a8a-8e25-64e893e35760 -->
+<!-- guid: f98f3d05-ccc7-4ec2-8380-27e6b07d226a -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-037 — Omnibus/anthology book_type field — Part 1 of the omnibus-detection-and-dedup spec (TODO.md L10523)
 
-**Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · database subagent · **Why:** schema migration + cross-layer (DB/API/FE) field threading on a prod-data path; needs careful review · **Depends on:** none · **Wave:** 6 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · database subagent · **Why:** schema migration + cross-layer (DB/API/FE) field threading on a prod-data path; needs careful review · **Depends on:** none · **Wave:** 5 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` line 10523 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**Omnibus detection + dedup** — spec-only" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-14.json`.
 
@@ -104,7 +104,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 **This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: (1) the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; (2) every mutation is journaled through the existing undo ledger (`CreateOperationChange` — verify: `grep -rn "func.*CreateOperationChange" internal/database/*.go`) so `internal/undo` can replay it — a mutation without a journal row is a defect; (3) acceptance includes a test that applies on a fixture and then undoes via `internal/undo` and asserts the fixture is byte-identical; (4) the apply path refuses to start while a `library.scan` operation is running or queued (check the registry for an active scan before mutating — a running scan clobbers applied metadata). Idempotency: re-running in dry-run must report 0 pending changes after a successful apply. Rollback of the CODE = `git revert`; rollback of the DATA = the undo ledger, which is why (2) is not optional. PR stays open for the owner — the coordinator never admin-merges it.
 
-If the first acceptance check below already passes at HEAD (``grep -n "book_type" internal/database/bookcore.go` shows the new field.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — ``grep -n "book_type" internal/database/bookcore.go` shows the new field.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

@@ -332,8 +332,9 @@
   "verdict_evidence": "No existing counter/report exists for this: grep -rln \"CountUnknownAuthorPaths\\|AuditUnknownAuthor\\|baked.*Unknown Author\" internal --include=*.go returns 0 hits outside preview.go's comment (which only describes the gate, not a census).",
   "domain": "internal/plugins/maintenance",
   "exact_files": [
+   "internal/plugins/maintenance/plugin.go",
    "internal/plugins/maintenance/unknown_author_audit.go",
-   "internal/plugins/maintenance/plugin.go"
+   "internal/plugins/maintenance/unknown_author_audit_test.go"
   ],
   "verified_anchors": [
    {
@@ -403,7 +404,8 @@
   "gate": "make ci",
   "notes": "This is a NEW report op, not covered verbatim by any owner decision in the scope file, but follows the same 'report ops actionable, mutating ops parked' principle as owner decision 9 (PH-2b) and decision 11 (generateTargetPath counter) \u2014 flagging for coordinator confirmation since it is inferred by analogy, not an explicit decision line.",
   "review_notes": [
-   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re"
+   "[simplicity-scope.json] internal/plugins/maintenance/plugin.go is the single registration point for every maintenance op (one `defs := []sdk.OperationDef{...}` literal). Ten tasks create a brand-new op file under internal/plugins/maintenance/ but do NOT list plugin.go in exact_files, so (a) the ops they build will never re",
+   "[verify-10.json] exact_files is ['internal/plugins/maintenance/plugin.go','internal/plugins/maintenance/unknown_author_audit.go'] but the Tests section adds internal/plugins/maintenance/unknown_author_audit_test.go, and honouring the Reuse block additionally requires internal/organizer/organizer.go (export the place"
   ]
  },
  {
@@ -714,7 +716,8 @@
   "verdict_evidence": "The exact line numbers the TODO cites are unchanged at HEAD: grep -n \"offset := 0\\|GetAllBooksCore(10000, offset)\" internal/itunes/backfill.go shows the first loop's offset:=0 at L60 and GetAllBooksCore(10000, offset) at L68, matching 'backfill.go:60-68' verbatim.",
   "domain": "internal/itunes",
   "exact_files": [
-   "internal/itunes/backfill.go"
+   "internal/itunes/backfill.go",
+   "internal/itunes/backfill_test.go"
   ],
   "verified_anchors": [
    {
@@ -763,7 +766,8 @@
   "gate": "make ci",
   "notes": "See part 2 (same todo_line) for the second, unnamed-in-TODO-but-identical-pattern loop at BackfillITunesTrackPIDs (lines 178-184 in the same file) \u2014 Fix It Right's depth rule says this should be fixed alongside part 1 rather than left as a sequential duplicate of the same bug.",
   "review_notes": [
-   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for "
+   "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
+   "[verify-10.json] exact_files is ['internal/itunes/backfill.go'] alone, but the Tests section adds cross-page-mutation coverage to internal/itunes/backfill_test.go (exists at HEAD) and the store double that must gain the new method lives there too."
   ]
  },
  {
@@ -775,7 +779,8 @@
   "verdict_evidence": "A second, structurally identical offset-pagination loop exists in the same file, unmentioned by the TODO item's line range but sharing the exact defect: grep -n \"offset := 0\" internal/itunes/backfill.go returns a second hit at L178, feeding GetAllBooksCore(10000, offset) at L184.",
   "domain": "internal/itunes",
   "exact_files": [
-   "internal/itunes/backfill.go"
+   "internal/itunes/backfill.go",
+   "internal/itunes/backfill_test.go"
   ],
   "verified_anchors": [
    {
@@ -820,7 +825,8 @@
   "notes": "Same file/PR as part 1 \u2014 do this as one combined change, not two separate PRs, since they're the identical bug pattern in the same file.",
   "review_notes": [
    "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
+   "[verify-10.json] exact_files is ['internal/itunes/backfill.go'] and omits internal/itunes/backfill_test.go, which the Tests section explicitly extends."
   ]
  },
  {
@@ -1333,7 +1339,8 @@
   "verdict_evidence": "indexed_store.go's UpdateBook unconditionally calls s.server.enqueueIndex(id, false) (upsert) regardless of whether the updated book's MarkedForDeletion is now true: grep -n \"func (s \\*indexedStore) UpdateBook\" internal/server/indexed_store.go returns 1 hit at L68, and its body (L69-73) has no MarkedForDeletion/IsSoftDeleted check at all.",
   "domain": "internal/server",
   "exact_files": [
-   "internal/server/indexed_store.go"
+   "internal/server/indexed_store.go",
+   "internal/server/indexed_store_test.go"
   ],
   "verified_anchors": [
    {
@@ -1396,7 +1403,9 @@
   "notes": "review_critical=true: this decorator sits on every book mutation server-wide; a mistake here either re-breaks the soft-delete leak (under-fix) or breaks restore/normal updates (over-fix).",
   "review_notes": [
    "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
+   "[verify-8.json] The Tests section is not optional ('write it as part of the same change, not deferred') and both named tests (TestIndexedStore_SoftDeleteIsUnsearchableWithoutReconcile and the anti-over-suppression TestIndexedStoreUpdateBook_RestoreStillReindexes) must live in internal/server/indexed_store_test.go. ",
+   "[coordinator] dropped reviewer-introduced dependency on L4334 (its own regression test) \u2014 cycle"
   ]
  },
  {
@@ -1432,7 +1441,7 @@
   "effort": "S",
   "tier": "sonnet",
   "why_tier": "must be written to FAIL against the current buggy UpdateBook (proving the bug) and then PASS after L4329's fix \u2014 sequencing matters",
-  "review_critical": true,
+  "review_critical": false,
   "goal": "Add TestIndexedStore_SoftDeleteIsUnsearchableWithoutReconcile to internal/server/indexed_store_test.go: index a book, soft-delete it via the indexedStore.UpdateBook path (mirroring internal/merge/service.go's SoftDeleteBook, i.e. set MarkedForDeletion=true and call store.UpdateBook), then assert a title-search probe (via the searchIndex directly, not through reconcileSearchIndexCoverage) returns zero hits \u2014 proving the immediate soft-delete path removes the doc rather than relying on the periodic reconciler to clean it up later.",
   "background": [
    "This is deliberately a DIFFERENT test surface than L4192's TestSearchCoverage_StaleDocsAreDeleted, which tests the periodic reconciler's cleanup of ALREADY-stale docs. This test proves the immediate, synchronous-enqueue path (indexedStore.UpdateBook) itself does the right thing at soft-delete time, with no reconcile pass in between \u2014 that's the literal ask: 'assert a title probe returns nothing WITHOUT a boot reconcile.'",
@@ -1460,7 +1469,8 @@
   "notes": "Implement this together with L4329 (todo_line 4329) as one PR \u2014 the test has no standalone value against the current buggy code beyond proving the bug exists, and the coordinator should not schedule these as two independently-mergeable tasks.",
   "review_notes": [
    "[simplicity-scope.json] Four cases where a fix and its own regression test are split into two tasks, two PRs and two waves \u2014 the opposite of the repo's own TDD rule, and it guarantees a window on main where the fix is unproven. TASK-003 (fix nil IsPrimaryVersion on the author path, w3) / TASK-004 (the conformance test for ",
-   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta"
+   "[simplicity-scope.json] The tier split is internally contradictory and, in the shape the docs render, expensive. skeleton has two disagreeing fields: `tier` says sonnet 109 / haiku 39 / opus 27, while `tier_label` (the field the READMEs and brief headers render) says Sonnet-class 73 / Opus-class 65 / Haiku-class 37 \u2014 38 ta",
+   "[verify-8.json] The review-critical Idempotency boilerplate imposes four MANDATORY requirements that a test-only, additive brief cannot satisfy: '(1) the op/endpoint defaults to dry-run/apply=false', '(3) acceptance includes a test that applies on a fixture and then undoes via internal/undo and asserts the fixture "
   ]
  }
 ]

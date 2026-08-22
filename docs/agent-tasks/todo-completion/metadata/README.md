@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/metadata/README.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 55689631-ad32-40da-adad-7733541fcd19 -->
+<!-- guid: a911d9cc-1a11-4f55-b89f-3841f77c6718 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Workstream — metadata (todo-completion)
@@ -26,8 +26,7 @@
 
 ## Collision / wave note
 
-- `internal/metafetch/service_apply.go`: TASK-081, TASK-120 → serialize by wave (TASK-081=w1, TASK-120=w2)
-- `web/src/components/audiobooks/BulkMetadataSearchDialog.tsx`: TASK-196, TASK-165 → serialize by wave (TASK-196=w1, TASK-165=w8)
+- `web/src/components/audiobooks/BulkMetadataSearchDialog.tsx`: TASK-196, TASK-165 → serialize by wave (TASK-196=w1, TASK-165=w7)
 
 | Wave | Tasks | Prereq | Parallel-safe because |
 |------|-------|--------|-----------------------|

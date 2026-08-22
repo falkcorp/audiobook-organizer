@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-097-remove-the-now-redundant-react-is-override-from-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 431a35d3-af95-4ef6-bfab-b117b0d6f85d -->
+<!-- guid: b21c0726-bffb-49a5-abe4-b2df4fc89fd1 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-097 — Remove the now-redundant react-is override from web/package.json (TODO-MUI-3)
@@ -45,10 +45,11 @@ Delete the stale "react-is": "^19.0.0" line from web/package.json's overrides ob
 
 ## Step-by-step
 
-1. Open web/package.json.
-2. In the top-level "overrides" object, delete the line `"react-is": "^19.0.0",` and keep minimatch and brace-expansion.
-3. Run `cd web && npm install` to regenerate the lockfile without the override.
-4. Run `npm run build` and `npm test` inside web/ to confirm nothing regresses now that react-is resolves naturally instead of being forced.
+1. Open web/package.json. Verify the shape first: `sed -n '35,39p' web/package.json` shows the overrides object as minimatch, brace-expansion, then `"react-is": "^19.0.0"` at L38 as the LAST key with NO trailing comma.
+2. Delete the react-is entry AND the trailing comma on the now-last key: after the edit the object must read `"overrides": { "minimatch": ">=10.2.1", "brace-expansion": "^5.0.7" }` with valid JSON. Confirm with `python3 -m json.tool web/package.json > /dev/null`.
+3. Run `npm --prefix web install` to regenerate web/package-lock.json without the override.
+4. Run `npm --prefix web run build` and `npm --prefix web test` to confirm react-is resolving naturally does not regress anything.
+5. Do NOT attempt a file-header bump on web/package.json or web/package-lock.json — both are strict JSON with no comment syntax and neither carries a header at HEAD (`head -3 web/package.json` shows the bare `{`).
 
 Then, always:
 - Keep the change purely removal — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.

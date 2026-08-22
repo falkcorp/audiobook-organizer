@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-160-move-openai-api-key-validation-server-side-curre.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 2ba5ef02-f366-4d04-90f2-95be304cb16a -->
+<!-- guid: 307a8399-307c-41e0-b3fb-27470a9a5b0a -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-160 — Move OpenAI API key validation server-side (currently sent from the browser) (SEC-9)
 
-**Priority:** P2 · **Effort:** M · **Recommended subagent:** Sonnet-class · web subagent · **Why:** A small, well-scoped new backend endpoint plus a frontend call-site swap — standard proxy-validation pattern, not architecturally tricky, but touches both Go and TS so worth sonnet over haiku for the cross-stack coordination. · **Depends on:** none · **Wave:** 1
+**Priority:** P2 · **Effort:** M · **Recommended subagent:** Opus-class · web subagent · **Why:** A small, well-scoped new backend endpoint plus a frontend call-site swap — standard proxy-validation pattern, not architecturally tricky, but touches both Go and TS so worth sonnet over haiku for the cross-stack coordination. · **Depends on:** none · **Wave:** 1
 
 Source: `TODO.md` line 376 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**SEC-9: the OpenAI API key is sent from the brows" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-01.json`.
 
@@ -63,26 +63,866 @@ Then, always:
 
 ## Tests
 
-- Go: internal/server/handlers/<file>_test.go — TestValidateOpenAIKey_ValidKey (mock the OpenAI call via an httptest server, assert valid:true) and TestValidateOpenAIKey_InvalidKey (mock a 401, assert valid:false) and TestValidateOpenAIKey_NetworkError (mock a timeout/5xx, assert a distinguishable error, not silently valid:false).
-- Web: web/src/components/wizard/WelcomeWizard.test.tsx (or wherever this repo's wizard tests live) — assert the component now calls the local backend endpoint, not api.openai.com, using a network mock/spy.
+- i
+- n
+- t
+- e
+- r
+- n
+- a
+- l
+- /
+- s
+- e
+- r
+- v
+- e
+- r
+- /
+- h
+- a
+- n
+- d
+- l
+- e
+- r
+- s
+- /
+- o
+- p
+- e
+- n
+- a
+- i
+- _
+- v
+- a
+- l
+- i
+- d
+- a
+- t
+- e
+- _
+- t
+- e
+- s
+- t
+- .
+- g
+- o
+-  
+- (
+- n
+- e
+- w
+- )
+- :
+-  
+- T
+- e
+- s
+- t
+- V
+- a
+- l
+- i
+- d
+- a
+- t
+- e
+- O
+- p
+- e
+- n
+- A
+- I
+- K
+- e
+- y
+- _
+- V
+- a
+- l
+- i
+- d
+- K
+- e
+- y
+-  
+- (
+- h
+- t
+- t
+- p
+- t
+- e
+- s
+- t
+-  
+- s
+- e
+- r
+- v
+- e
+- r
+-  
+- r
+- e
+- t
+- u
+- r
+- n
+- i
+- n
+- g
+-  
+- 2
+- 0
+- 0
+- ,
+-  
+- a
+- s
+- s
+- e
+- r
+- t
+-  
+- v
+- a
+- l
+- i
+- d
+- :
+- t
+- r
+- u
+- e
+- )
+- ,
+-  
+- T
+- e
+- s
+- t
+- V
+- a
+- l
+- i
+- d
+- a
+- t
+- e
+- O
+- p
+- e
+- n
+- A
+- I
+- K
+- e
+- y
+- _
+- I
+- n
+- v
+- a
+- l
+- i
+- d
+- K
+- e
+- y
+-  
+- (
+- 4
+- 0
+- 1
+-  
+- -
+- >
+-  
+- v
+- a
+- l
+- i
+- d
+- :
+- f
+- a
+- l
+- s
+- e
+- )
+- ,
+-  
+- T
+- e
+- s
+- t
+- V
+- a
+- l
+- i
+- d
+- a
+- t
+- e
+- O
+- p
+- e
+- n
+- A
+- I
+- K
+- e
+- y
+- _
+- N
+- e
+- t
+- w
+- o
+- r
+- k
+- E
+- r
+- r
+- o
+- r
+-  
+- (
+- 5
+- x
+- x
+- /
+- t
+- i
+- m
+- e
+- o
+- u
+- t
+-  
+- -
+- >
+-  
+- a
+-  
+- d
+- i
+- s
+- t
+- i
+- n
+- g
+- u
+- i
+- s
+- h
+- a
+- b
+- l
+- e
+-  
+- e
+- r
+- r
+- o
+- r
+- ,
+-  
+- N
+- O
+- T
+-  
+- a
+-  
+- s
+- i
+- l
+- e
+- n
+- t
+-  
+- v
+- a
+- l
+- i
+- d
+- :
+- f
+- a
+- l
+- s
+- e
+- )
+- ,
+-  
+- a
+- n
+- d
+-  
+- T
+- e
+- s
+- t
+- V
+- a
+- l
+- i
+- d
+- a
+- t
+- e
+- O
+- p
+- e
+- n
+- A
+- I
+- K
+- e
+- y
+- _
+- D
+- o
+- e
+- s
+- N
+- o
+- t
+- L
+- o
+- g
+- K
+- e
+- y
+-  
+- (
+- a
+- s
+- s
+- e
+- r
+- t
+-  
+- t
+- h
+- e
+-  
+- r
+- a
+- w
+-  
+- k
+- e
+- y
+-  
+- n
+- e
+- v
+- e
+- r
+-  
+- r
+- e
+- a
+- c
+- h
+- e
+- s
+-  
+- t
+- h
+- e
+-  
+- l
+- o
+- g
+-  
+- s
+- i
+- n
+- k
+- )
+- .
+-  
+- w
+- e
+- b
+- /
+- s
+- r
+- c
+- /
+- c
+- o
+- m
+- p
+- o
+- n
+- e
+- n
+- t
+- s
+- /
+- w
+- i
+- z
+- a
+- r
+- d
+- /
+- W
+- e
+- l
+- c
+- o
+- m
+- e
+- W
+- i
+- z
+- a
+- r
+- d
+- .
+- t
+- e
+- s
+- t
+- .
+- t
+- s
+- x
+-  
+- (
+- n
+- e
+- w
+- )
+- :
+-  
+- m
+- o
+- c
+- k
+-  
+- t
+- h
+- e
+-  
+- n
+- e
+- t
+- w
+- o
+- r
+- k
+-  
+- l
+- a
+- y
+- e
+- r
+-  
+- a
+- n
+- d
+-  
+- a
+- s
+- s
+- e
+- r
+- t
+-  
+- t
+- h
+- e
+-  
+- c
+- o
+- m
+- p
+- o
+- n
+- e
+- n
+- t
+-  
+- c
+- a
+- l
+- l
+- s
+-  
+- t
+- h
+- e
+-  
+- l
+- o
+- c
+- a
+- l
+-  
+- b
+- a
+- c
+- k
+- e
+- n
+- d
+-  
+- p
+- a
+- t
+- h
+-  
+- a
+- n
+- d
+-  
+- n
+- e
+- v
+- e
+- r
+-  
+- a
+- p
+- i
+- .
+- o
+- p
+- e
+- n
+- a
+- i
+- .
+- c
+- o
+- m
+- .
 
 Anti-over-suppression: N/A
 
 ## How to test
 
 ```bash
-npm --prefix web run lint && npm --prefix web test
+go build ./... && go vet ./... && go test ./internal/server/handlers/... -count=1 && npm --prefix web run lint && npm --prefix web test
 ```
 Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
 ## Acceptance criteria
 
-- [ ] `grep -n 'api.openai.com' web/src/components/wizard/WelcomeWizard.tsx` returns 0 hits.
-- [ ] `go test ./internal/server/handlers/... -run ValidateOpenAIKey -v` passes.
-- [ ] `npm --prefix web test -- WelcomeWizard` passes.
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] a
+- [ ] p
+- [ ] i
+- [ ] .
+- [ ] o
+- [ ] p
+- [ ] e
+- [ ] n
+- [ ] a
+- [ ] i
+- [ ] .
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] '
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] s
+- [ ] r
+- [ ] c
+- [ ] /
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] p
+- [ ] o
+- [ ] n
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] w
+- [ ] i
+- [ ] z
+- [ ] a
+- [ ] r
+- [ ] d
+- [ ] /
+- [ ] W
+- [ ] e
+- [ ] l
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] e
+- [ ] W
+- [ ] i
+- [ ] z
+- [ ] a
+- [ ] r
+- [ ] d
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ] x
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] 0
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] (
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] ,
+- [ ]  
+- [ ] L
+- [ ] 1
+- [ ] 6
+- [ ] 0
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] b
+- [ ] u
+- [ ] i
+- [ ] l
+- [ ] d
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] &
+- [ ] &
+- [ ]  
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] v
+- [ ] e
+- [ ] t
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] &
+- [ ] &
+- [ ]  
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] /
+- [ ] h
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ] l
+- [ ] e
+- [ ] r
+- [ ] s
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] -
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] V
+- [ ] a
+- [ ] l
+- [ ] i
+- [ ] d
+- [ ] a
+- [ ] t
+- [ ] e
+- [ ] O
+- [ ] p
+- [ ] e
+- [ ] n
+- [ ] A
+- [ ] I
+- [ ] K
+- [ ] e
+- [ ] y
+- [ ]  
+- [ ] -
+- [ ] c
+- [ ] o
+- [ ] u
+- [ ] n
+- [ ] t
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] e
+- [ ] x
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] 0
+- [ ] ;
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ]  
+- [ ] W
+- [ ] e
+- [ ] l
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] e
+- [ ] W
+- [ ] i
+- [ ] z
+- [ ] a
+- [ ] r
+- [ ] d
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] ;
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] l
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] .
 - [ ] Anti-over-suppression: N/A
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/server/handlers/... -count=1 && npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_web_160.md`.
 

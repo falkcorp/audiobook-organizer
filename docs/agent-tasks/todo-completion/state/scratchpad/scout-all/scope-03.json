@@ -373,7 +373,8 @@
   "verdict_evidence": "Confirmed `viper.SetDefault(\"ai_backend.local_base_url\", \"http://192.168.0.20:11434/v1\")` at internal/config/config.go:1575, and ResetToDefaults() hardcodes the same IP again at L2432 (`LocalBaseURL: \"http://192.168.0.20:11434/v1\"`). Confirmed at config.go:577 that any non-empty LocalBaseURL flips EffectiveLLMMode toward local-LLM mode.",
   "domain": "internal/config",
   "exact_files": [
-   "internal/config/config.go"
+   "internal/config/config.go",
+   "internal/config/config_test.go"
   ],
   "verified_anchors": [
    {
@@ -397,7 +398,7 @@
   "effort": "S",
   "tier": "sonnet",
   "why_tier": "Straightforward default-value fix, but needs to check EffectiveLLMMode's fallback behavior doesn't silently break for people relying on the current default resolving locally on THIS owner's LAN (unlikely to be relied upon by anyone else, but verify).",
-  "review_critical": false,
+  "review_critical": true,
   "goal": "Change the fresh-install default for ai_backend.local_base_url from the owner's specific LAN IP (192.168.0.20) to empty string, so a fresh install on someone else's network does not silently attempt local-LLM mode against a dead endpoint. Document the previous default's origin (developer's own Ollama host) in a comment instead of shipping it as the default.",
   "background": [
    "config.go:577's mode-selection logic treats ANY non-empty LocalBaseURL as 'use local mode' \u2014 there is no separate 'is this actually reachable' check before committing to that mode."
@@ -424,7 +425,9 @@
   "notes": "Flag this one for prod-deploy coordination per edge_cases above \u2014 verify the owner's prod snapshot has an explicit local_base_url before shipping, per 'never flip a config default that prod silently depends on' caution.",
   "review_notes": [
    "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin"
+   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin",
+   "[verify-10.json] exact_files is ['internal/config/config.go'] but the Tests section requires two assertions in internal/config/config_test.go (fresh-install default empty) and in the EffectiveLLMMode test file.",
+   "[verify-10.json] The brief's own edge case says this silently changes the owner's running deployment: 'The owner's own deployment currently relies on this default being pre-filled; after this change ... local-LLM mode will silently stop being selected on next boot', and the Coordinator note invokes 'never flip a con"
   ]
  },
  {
@@ -436,7 +439,8 @@
   "verdict_evidence": "Confirmed the field's doc comment at internal/config/config.go:759-763 states 'Default 10. Set to 0 to disable consolidation.' Confirmed fresh-install viper default is correctly 10 (`viper.SetDefault(\"chapter_consolidation_threshold_min\", 10)` at L1282). Confirmed ResetToDefaults() (func body spans config.go:2280 to the matching closing brace ~322 lines later) contains zero occurrences of ChapterConsolidationThresholdMin, so a factory reset leaves it at the Go zero value 0, which per the doc comment means 'disabled'.",
   "domain": "internal/config",
   "exact_files": [
-   "internal/config/config.go"
+   "internal/config/config.go",
+   "internal/config/config_test.go"
   ],
   "verified_anchors": [
    {
@@ -481,7 +485,8 @@
   "notes": "Simplest, lowest-risk sub-item of the CFG-AUDIT triage \u2014 good haiku candidate.",
   "review_notes": [
    "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin"
+   "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin",
+   "[verify-10.json] exact_files is ['internal/config/config.go'] but the Tests section requires 'internal/config/config_test.go -- add an assertion that after calling ResetToDefaults(), AppConfig.ChapterConsolidationThresholdMin == 10'. That file exists at HEAD and already exercises ResetToDefaults (internal/config/con"
   ]
  },
  {
@@ -493,14 +498,18 @@
   "verdict_evidence": "Confirmed `func InitializeStore(dbType, path string, _ bool) (Store, error)` at internal/database/store.go:1306 discards its third (EnableSQLite) parameter entirely as `_ bool`. Confirmed the sqlite case inside that function (L1311-1312) unconditionally errors: `case \"sqlite\", \"sqlite3\": return nil, fmt.Errorf(\"SQLite3 support has been removed. PebbleDB is the only supported database backend. Migrate data with 'audiobook-organizer migrate-from-sqlite' if needed\")` regardless of the flag's value. Confirmed the referenced `migrate-from-sqlite` subcommand does not exist: `grep -rn 'migrate-from-sqlite' cmd/*.go` returns 0 hits for a command registration (only appears inside this error string).",
   "domain": "internal/config",
   "exact_files": [
-   "cmd/root.go",
-   "internal/config/config.go",
-   "internal/database/store.go",
+   "cmd/child_mode.go",
+   "cmd/commands_test.go",
    "cmd/dedup_bench.go",
    "cmd/diagnostics.go",
+   "cmd/root.go",
    "cmd/seed.go",
-   "cmd/child_mode.go",
-   "cmd/commands_test.go"
+   "docs/configuration.md",
+   "docs/database-architecture.md",
+   "internal/config/config.go",
+   "internal/config/config_test.go",
+   "internal/config/config_unit_test.go",
+   "internal/database/store.go"
   ],
   "verified_anchors": [
    {
@@ -566,7 +575,8 @@
   "review_notes": [
    "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
    "[simplicity-scope.json] Under-scoped split: five tasks are carved out of ONE TODO.md line (L1317, '**CFG-AUDIT** Triage the findings in ...') and then serialized across waves 2,3,4,5 because they all edit internal/config/config.go. TASK-017 (one default value), TASK-018 (one hardcoded IP default), TASK-019 (one missing lin",
-   "[simplicity-scope.json] Busywork occupying a wave slot. TASK-033 'Repoint store.go:17's broken doc reference to the archived design spec' is a one-comment-line edit, yet it is wave 2 of the five-deep internal/database/store.go chain, which means TASK-037 and TASK-039 (real schema work) each wait an extra merge round-trip f"
+   "[simplicity-scope.json] Busywork occupying a wave slot. TASK-033 'Repoint store.go:17's broken doc reference to the archived design spec' is a one-comment-line edit, yet it is wave 2 of the five-deep internal/database/store.go chain, which means TASK-037 and TASK-039 (real schema work) each wait an extra merge round-trip f",
+   "[verify-10.json] exact_files is wrong in both directions. It OMITS the two test files that must change: internal/config/config_test.go (EnableSQLite at L207, L222-223, L380, L409-410) and internal/config/config_unit_test.go (L368 `assert.False(t, AppConfig.EnableSQLite)`) -- both break the build the moment the struc"
   ]
  },
  {
@@ -704,6 +714,7 @@
   "verdict_evidence": "Confirmed tags are stored as flat strings with no namespace filtering anywhere between store and UI: web/src/components/library/TagCloud.tsx renders every entry in its `availableTags` prop verbatim via `renderChip` (label={`${t.tag} (${t.count})`}), no prefix-based hide/allow-list exists. Confirmed the tag writers: internal/dedup/engine.go:1364-1390 and internal/dedup/collectors_metadata.go:240-264 write `dedup:duration-match` / `dedup:duration-abridged` as book tags; internal/metafetch/service_apply.go:813-822 writes `metadata:source:*` / `metadata:language:*`.",
   "domain": "web (frontend)",
   "exact_files": [
+   "web/src/components/library/TagCloud.test.tsx",
    "web/src/components/library/TagCloud.tsx",
    "web/src/pages/Library.tsx"
   ],
@@ -764,7 +775,8 @@
   "review_notes": [
    "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
    "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
+   "[verify-8.json] Both required tests (the hide test and the named anti-over-suppression selected-but-hidden twin) go in web/src/components/library/TagCloud.test.tsx, which exists at HEAD but is NOT in exact_files (['web/src/components/library/TagCloud.tsx','web/src/pages/Library.tsx']). Conversely web/src/pages/Libr"
   ]
  },
  {
@@ -776,6 +788,7 @@
   "verdict_evidence": "Confirmed the current chip label is built verbatim from the raw tag string (`label={`${t.tag} (${t.count})`}` in TagCloud.tsx renderChip), so a tag like `metadata:language:en` renders literally as `metadata:language:en (15036)` with no reformatting \u2014 exactly the owner's complaint.",
   "domain": "web (frontend)",
   "exact_files": [
+   "web/src/components/library/TagCloud.test.tsx",
    "web/src/components/library/TagCloud.tsx"
   ],
   "verified_anchors": [
@@ -815,11 +828,15 @@
    "A value containing a colon itself (unlikely per current writers, but not structurally forbidden) would be truncated by a naive 3-way split \u2014 use `tag.split(':').slice(2).join(':')` for the value segment to be safe rather than a strict 3-part split."
   ],
   "anti_over_suppression": "N/A \u2014 pure formatting, no suppression involved.",
-  "depends_on_lines": [],
+  "depends_on_lines": [
+   "TASK-161 must land first; either swap the waves (TASK-161=w1, TASK-162=w2) or drop the 'near isHiddenTagNamespace (from part 1)' placement reference so this brief stands alone"
+  ],
   "gate": "npm --prefix web run lint && npm --prefix web test",
   "notes": "Ship in the same PR as part 1 (same file, same renderChip function).",
   "review_notes": [
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n"
+   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
+   "[verify-8.json] The wave order is inverted against the brief's own stated dependency. Step 1 says: 'add a pure function formatTagLabel(tag: string): string near `isHiddenTagNamespace` (from part 1)'. isHiddenTagNamespace is created by TASK-161, and the web README's wave table places TASK-161 in wave 2 and TASK-162 ",
+   "[verify-8.json] All four required assertions are in web/src/components/library/TagCloud.test.tsx (which exists at HEAD), but exact_files is only ['web/src/components/library/TagCloud.tsx']."
   ]
  },
  {
@@ -972,11 +989,12 @@
   "src_id": "ITUNES-SMARTCRIT-PARSE",
   "title": "Import the 224 materialized-Playlist-Items smart playlists as static snapshots (no criteria parsing needed)",
   "part": 2,
-  "verdict": "actionable",
-  "verdict_evidence": "The item establishes this as the low-risk, high-value half: '224 of 292 carry materialized Playlist Items (116,822 track refs) \u2014 actual current membership, needing no criteria parsing at all.' Confirmed the resolution mechanism (Track ID \u2192 XML Tracks entry \u2192 Persistent ID \u2192 BookFile.ITunesPersistentID \u2192 GetBookByITunesPersistentID) is entirely within already-parsed/already-indexed data, sidestepping the still-broken ParseSmartCriteria path covered by part 3.",
+  "verdict": "needs_design",
+  "verdict_evidence": "[verify-10.json] The brief's entry condition and its data model are both undecided. Goal: 'Gated behind part 1's coverage measurement passing a reasonable threshold (owner to set, e.g. >90%)' -- the threshold is explicitly the owner's to set and has not been set, and part 1 (TASK-184) is itself a measurement that cannot run without the owner's library. The storage shape is left open in three places: 'a UserPlaylist with type=smart (or a distinct static/snapshot sub-type if the schema wants to distinguish ...)', step 1 'extend MigrateSmartPlaylists (or add a sibling method)', step 3 'check the UserPlaylist schema for a static-membership field vs. a query field'. Both acceptance criteria are runs against the owner's real iTunes library. This is a design decision plus a prod run, not an executable Bucket-1 brief. | The item establishes this as the low-risk, high-value half: '224 of 292 carry materialized Playlist Items (116,822 track refs) \u2014 actual current membership, needing no criteria parsing at all.' Confirmed the resolution mechanism (Track ID \u2192 XML Tracks entry \u2192 Persistent ID \u2192 BookFile.ITunesPersistentID \u2192 GetBookByITunesPersistentID) is entirely within already-parsed/already-indexed data, sidestepping the still-broken ParseSmartCriteria path covered by part 3.",
   "domain": "internal/itunes",
   "exact_files": [
    "internal/itunes/service/playlist_sync.go",
+   "internal/itunes/service/playlist_sync_test.go",
    "internal/plugins/maintenance/itunes_playlist_import.go"
   ],
   "verified_anchors": [
@@ -1038,7 +1056,11 @@
    1517
   ],
   "gate": "make ci",
-  "notes": "review_critical=true: this creates real UserPlaylist rows from a resolved book mapping \u2014 a resolution bug would silently populate playlists with wrong books. Depends on part 1 (PID coverage measurement) passing before this ships to the owner's real library."
+  "notes": "review_critical=true: this creates real UserPlaylist rows from a resolved book mapping \u2014 a resolution bug would silently populate playlists with wrong books. Depends on part 1 (PID coverage measurement) passing before this ships to the owner's real library.",
+  "review_notes": [
+   "[verify-10.json] exact_files is ['internal/itunes/service/playlist_sync.go','internal/plugins/maintenance/itunes_playlist_import.go'] but the Tests section requires a new fixture-backed test in internal/itunes/service/playlist_sync_test.go, which exists at HEAD (verified by `ls`).",
+   "[verify-10.json] "
+  ]
  },
  {
   "todo_line": 1517,
@@ -1180,8 +1202,8 @@
   "todo_line": 1744,
   "src_id": null,
   "title": "Find the mechanism behind the intermittent webkit-only flake in batch-operations.spec.ts:100 (selection persists across page navigation)",
-  "verdict": "actionable",
-  "verdict_evidence": "Confirmed the test exists at the cited location: web/tests/e2e/batch-operations.spec.ts contains `test('selection persists across page navigation', ...)` starting at line 99 (1-indexed), matching the item's `:100` citation closely enough to be the same test given normal line drift. The item explicitly retracts an earlier wrong claim (main was NOT actually red, that was a single-run false read) and asks specifically for the flake MECHANISM, not a re-run-until-green fix, per the project's own 'fix flaky tests' standard.",
+  "verdict": "needs_design",
+  "verdict_evidence": "[verify-8.json] This is an investigation, not an executable change. The Goal is 'Determine why...'; step 2 is 'Run the test repeatedly ... to establish a reproducible failure rate'; step 3 is 'add temporary diagnostic logging/tracing'; step 4 is 'Identify the specific race: likely candidates are (a) ... or (b) ...'; and the edge-case section leaves open whether the fix belongs in test code or app code ('both are legitimate outcomes, decide based on what step 4 actually finds'). No mechanism is known, so no steps can be written and no acceptance can be stated. The single verified anchor (grep -n 'selection persists across page navigation' web/tests/e2e/batch-operations.spec.ts -> 1 hit at L100) locates the test but says nothing about the cause. Bucket 1 should carry a scoped repro/measurement task whose deliverable is a written mechanism, with the fix filed separately once the mechanism is known. | Confirmed the test exists at the cited location: web/tests/e2e/batch-operations.spec.ts contains `test('selection persists across page navigation', ...)` starting at line 99 (1-indexed), matching the item's `:100` citation closely enough to be the same test given normal line drift. The item explicitly retracts an earlier wrong claim (main was NOT actually red, that was a single-run false read) and asks specifically for the flake MECHANISM, not a re-run-until-green fix, per the project's own 'fix flaky tests' standard.",
   "domain": "web (frontend)",
   "exact_files": [
    "web/tests/e2e/batch-operations.spec.ts"
@@ -1226,7 +1248,8 @@
   "gate": "npm --prefix web run lint && npm --prefix web test",
   "notes": "Low severity/low frequency (observed twice total, both times passed on re-run) \u2014 reasonable to timebox this investigation rather than block other work on it.",
   "review_notes": [
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n"
+   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
+   "[verify-8.json] "
   ]
  },
  {
@@ -1693,8 +1716,8 @@
   "todo_line": 2025,
   "src_id": "REVIEW-COMBINE-FIRST",
   "title": "Let the owner combine/merge duplicate books from the metadata chooser, before applying metadata \u2014 BLOCKED on two data-correctness bugs landing first",
-  "verdict": "actionable",
-  "verdict_evidence": "Confirmed both existing flows this item wants reached from a new surface: 'Combine into One Book' at web/src/components/BatchToolbar.tsx:128 ('Combine into One Book' button text) wired through web/src/pages/Library.tsx's handleCombineIntoOneBook (~L1289-1321, calls `api.combineBooks(keepId, mergeIds, override)`) to `POST /api/v1/audiobooks/combine` (internal/server/wire_dedup_routes.go:75, `duplicatesH.CombineBooks`). 'Merge as Versions' state exists at Library.tsx:362-366 (combineDialogOpen etc. \u2014 actually the merge-as-versions dialog state is separate, confirmed present per the item's cited Library.tsx:1232). The item explicitly states this is 'Blocked-ish' on VG-DOUBLE-PRIMARY (this scope's L2373) landing first, since building combine-before-apply on top of a merge that can leave two primaries would produce more of them, faster.",
+  "verdict": "needs_design",
+  "verdict_evidence": "[verify-8.json] The brief itself says the design does not exist: 'the bulk-metadata-review and dedup-label-review-panel plans were both archived without shipping \u2014 there is no existing \"one home\" for this to slot into, it must be designed fresh.' It is also gated on two other items landing (step 1: 'DO NOT START until L2373 (VG-DOUBLE-PRIMARY) part 1 ... has landed', plus Depends on TASK-042, TASK-186), and step 5 asks the worker to confirm a branch fix landed on main before relying on it. Its own anchors are real (grep -n 'Combine into One Book' web/src/components/BatchToolbar.tsx -> L128; grep -n 'api.combineBooks' web/src/pages/Library.tsx -> L1306; grep -n 'audiobooks/combine' internal/server/wire_dedup_routes.go -> L75; grep -n 'handleMergeAsVersions' web/src/pages/Library.tsx -> L1268) but they only prove the BACKEND exists \u2014 the UI design, the state-preservation contract and the host component are all open. This is a design task on a prod-data (hard-delete) path, not an implementable brief. | Confirmed both existing flows this item wants reached from a new surface: 'Combine into One Book' at web/src/components/BatchToolbar.tsx:128 ('Combine into One Book' button text) wired through web/src/pages/Library.tsx's handleCombineIntoOneBook (~L1289-1321, calls `api.combineBooks(keepId, mergeIds, override)`) to `POST /api/v1/audiobooks/combine` (internal/server/wire_dedup_routes.go:75, `duplicatesH.CombineBooks`). 'Merge as Versions' state exists at Library.tsx:362-366 (combineDialogOpen etc. \u2014 actually the merge-as-versions dialog state is separate, confirmed present per the item's cited Library.tsx:1232). The item explicitly states this is 'Blocked-ish' on VG-DOUBLE-PRIMARY (this scope's L2373) landing first, since building combine-before-apply on top of a merge that can leave two primaries would produce more of them, faster.",
   "domain": "web (frontend)",
   "exact_files": [
    "web/src/pages/Library.tsx",
@@ -1764,7 +1787,8 @@
   "notes": "review_critical=true: this sits directly on the version-group primary-election bug (L2373) and the apply-writes-tags fix \u2014 both are prod-data-correctness paths. Explicitly sequence AFTER L2373 part 1 lands, per the item's own 'Blocked-ish \u2014 read first' framing.",
   "review_notes": [
    "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
-   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v"
+   "[simplicity-scope.json] The web workstream is 18 tasks in 8 waves, 7 of which contain exactly one task, purely because web/src/pages/Library.tsx appears in 8 tasks' exact_files. Nothing about the work is sequential \u2014 TASK-166 (author link), TASK-167 (series link), TASK-168 (narrator/publisher/genre/year links), TASK-169 (v",
+   "[verify-8.json] "
   ]
  },
  {

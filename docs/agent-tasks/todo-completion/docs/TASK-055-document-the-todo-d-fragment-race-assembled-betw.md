@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/docs/TASK-055-document-the-todo-d-fragment-race-assembled-betw.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 8ba1e93e-4c8a-4d11-a663-8b3a286180c6 -->
+<!-- guid: e22bdb98-ab0f-48f1-9068-48cb5a89b1ba -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-055 — Document the todo.d fragment race (assembled between filing and finishing) as a process rule, not a mechanical guard (TODO.md L1852)
@@ -97,7 +97,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`Both todo.d/README.md and CLAUDE.md contain the new rule text; `grep -n 'assembled between' todo.d/README.md CLAUDE.md` (or similar phrase used) returns hits in both files.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `Both todo.d/README.md and CLAUDE.md contain the new rule text; `grep -n 'assembled between' todo.d/README.md CLAUDE.md` (or similar phrase used) returns hits in both files.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-113-missing-input-triggering-enqueue-the-producer-op.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: eb516086-21c8-418c-adc7-02fb23f0dbfd -->
+<!-- guid: 26e7c2ea-914b-4c9d-9d5e-2616741bf9ba -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-113 — Missing-input triggering: enqueue the producer op when a waiting_deps requirement's input has never run (TODO.md L8890)
@@ -37,6 +37,9 @@ When a waiting_deps op's ReqOpCompleted requirement names a producer op type tha
   grep -n 'ReqOpCompleted\|waiting_deps' internal/operations/registry/deps.go internal/operations/registry/deps_scheduler.go | wc -l   # >10 hits across both files — ReqOpCompleted/waiting_deps evaluation and scheduling already exist
   grep -n 'PromoteToQueued' internal/operations/registry/deps_scheduler.go   # 4 hits (interface decl, comment, call site) in deps_scheduler.go — the scheduler has PromoteToQueued
   grep -n 'func.*Enqueue' internal/operations/registry/deps_scheduler.go   # 0 hits — no Enqueue-producer function exists in deps_scheduler.go today — the scheduler never enqueues a missing producer (no Enqueue-producer function in this file)
+  grep -n 'func (r \*Registry) EnqueueOp' internal/operations/registry/registry.go   # 1 hit at L573 — the real op-submission path the producer must reuse is Registry.EnqueueOp
+  grep -n 'reg    \*Registry' internal/operations/registry/deps_scheduler.go   # 1 hit at L55 — DepsScheduler already holds a *Registry, so it can call EnqueueOp without a new interface
+  grep -n 'waiting_deps' internal/operations/registry/registry.go   # hits at L701 (status assignment) and L754-755 (parked log) — the park-into-waiting_deps site that must call the new method lives in registry.go, not deps*.go
   ```
 
 ### Reuse — don't invent
@@ -59,7 +62,521 @@ Then, always:
 
 ### Edge-case semantics (conservative defaults — treat unknown as unknown, never as disqualifying)
 
-- A producer op type that doesn't exist/isn't registered must fail loudly (log + leave the dependent parked with a clear reason), not silently enqueue nothing and pretend it tried.
+- A
+-  
+- p
+- r
+- o
+- d
+- u
+- c
+- e
+- r
+-  
+- o
+- p
+-  
+- t
+- h
+- a
+- t
+-  
+- I
+- T
+- S
+- E
+- L
+- F
+-  
+- p
+- a
+- r
+- k
+- s
+-  
+- i
+- n
+-  
+- w
+- a
+- i
+- t
+- i
+- n
+- g
+- _
+- d
+- e
+- p
+- s
+-  
+- m
+- u
+- s
+- t
+-  
+- n
+- o
+- t
+-  
+- r
+- e
+- -
+- t
+- r
+- i
+- g
+- g
+- e
+- r
+-  
+- e
+- n
+- q
+- u
+- e
+- u
+- e
+- -
+- t
+- h
+- e
+- -
+- p
+- r
+- o
+- d
+- u
+- c
+- e
+- r
+-  
+- r
+- e
+- c
+- u
+- r
+- s
+- i
+- v
+- e
+- l
+- y
+-  
+- -
+-  
+- b
+- o
+- u
+- n
+- d
+-  
+- t
+- h
+- e
+-  
+- c
+- h
+- a
+- i
+- n
+-  
+- (
+- d
+- o
+-  
+- n
+- o
+- t
+-  
+- e
+- n
+- q
+- u
+- e
+- u
+- e
+-  
+- a
+-  
+- p
+- r
+- o
+- d
+- u
+- c
+- e
+- r
+-  
+- f
+- r
+- o
+- m
+-  
+- w
+- i
+- t
+- h
+- i
+- n
+-  
+- a
+-  
+- p
+- r
+- o
+- d
+- u
+- c
+- e
+- r
+- -
+- t
+- r
+- i
+- g
+- g
+- e
+- r
+- e
+- d
+-  
+- p
+- a
+- r
+- k
+- )
+-  
+- a
+- n
+- d
+-  
+- a
+- s
+- s
+- e
+- r
+- t
+-  
+- i
+- t
+-  
+- w
+- i
+- t
+- h
+-  
+- a
+-  
+- t
+- e
+- s
+- t
+- .
+-  
+- A
+-  
+- p
+- r
+- o
+- d
+- u
+- c
+- e
+- r
+-  
+- o
+- p
+-  
+- t
+- y
+- p
+- e
+-  
+- t
+- h
+- a
+- t
+-  
+- i
+- s
+-  
+- n
+- o
+- t
+-  
+- r
+- e
+- g
+- i
+- s
+- t
+- e
+- r
+- e
+- d
+-  
+- m
+- u
+- s
+- t
+-  
+- f
+- a
+- i
+- l
+-  
+- l
+- o
+- u
+- d
+- l
+- y
+-  
+- (
+- l
+- o
+- g
+-  
+- +
+-  
+- l
+- e
+- a
+- v
+- e
+-  
+- t
+- h
+- e
+-  
+- d
+- e
+- p
+- e
+- n
+- d
+- e
+- n
+- t
+-  
+- p
+- a
+- r
+- k
+- e
+- d
+-  
+- w
+- i
+- t
+- h
+-  
+- a
+-  
+- c
+- l
+- e
+- a
+- r
+-  
+- r
+- e
+- a
+- s
+- o
+- n
+- )
+- ,
+-  
+- n
+- o
+- t
+-  
+- s
+- i
+- l
+- e
+- n
+- t
+- l
+- y
+-  
+- e
+- n
+- q
+- u
+- e
+- u
+- e
+-  
+- n
+- o
+- t
+- h
+- i
+- n
+- g
+- .
+-  
+- T
+- h
+- e
+-  
+- '
+- h
+- a
+- s
+-  
+- t
+- h
+- i
+- s
+-  
+- o
+- p
+- T
+- y
+- p
+- e
+-  
+- A
+- N
+- Y
+-  
+- r
+- u
+- n
+-  
+- f
+- o
+- r
+-  
+- t
+- h
+- e
+-  
+- s
+- u
+- b
+- j
+- e
+- c
+- t
+- '
+-  
+- l
+- o
+- o
+- k
+- u
+- p
+-  
+- n
+- e
+- e
+- d
+- s
+-  
+- a
+-  
+- n
+- a
+- m
+- e
+- d
+-  
+- s
+- t
+- o
+- r
+- e
+-  
+- m
+- e
+- t
+- h
+- o
+- d
+-  
+- -
+-  
+- a
+- d
+- d
+-  
+- i
+- t
+-  
+- t
+- o
+-  
+- S
+- c
+- h
+- e
+- d
+- u
+- l
+- e
+- r
+- S
+- t
+- o
+- r
+- e
+-  
+- e
+- x
+- p
+- l
+- i
+- c
+- i
+- t
+- l
+- y
+-  
+- r
+- a
+- t
+- h
+- e
+- r
+-  
+- t
+- h
+- a
+- n
+-  
+- r
+- e
+- a
+- c
+- h
+- i
+- n
+- g
+-  
+- f
+- o
+- r
+-  
+- d
+- a
+- t
+- a
+- b
+- a
+- s
+- e
+- .
+- S
+- t
+- o
+- r
+- e
+- .
 
 ## Tests
 
@@ -100,7 +617,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/operations/registry/... -run DepsScheduler_Enqueues passes both cases.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'ReqOpCompleted\|waiting_deps' internal/operations/registry/deps.go internal/operations/registry/deps_scheduler.go | wc -l` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

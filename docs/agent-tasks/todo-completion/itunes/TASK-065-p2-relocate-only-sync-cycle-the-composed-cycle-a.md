@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/TASK-065-p2-relocate-only-sync-cycle-the-composed-cycle-a.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 395dcec6-3108-41c1-a1f8-1dc00e5ea7db -->
+<!-- guid: 95337038-9d38-411d-97a7-a658ac9edffd -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-065 — P2 relocate-only sync cycle — the composed cycle already exists (RunRelocateSyncCycle); wire it to a caller and add an end-to-end test (TODO.md L10390)
@@ -105,7 +105,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 **This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: (1) the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; (2) every mutation is journaled through the existing undo ledger (`CreateOperationChange` — verify: `grep -rn "func.*CreateOperationChange" internal/database/*.go`) so `internal/undo` can replay it — a mutation without a journal row is a defect; (3) acceptance includes a test that applies on a fixture and then undoes via `internal/undo` and asserts the fixture is byte-identical; (4) the apply path refuses to start while a `library.scan` operation is running or queued (check the registry for an active scan before mutating — a running scan clobbers applied metadata). Idempotency: re-running in dry-run must report 0 pending changes after a successful apply. Rollback of the CODE = `git revert`; rollback of the DATA = the undo ledger, which is why (2) is not optional. PR stays open for the owner — the coordinator never admin-merges it.
 
-If the first acceptance check below already passes at HEAD (``go test ./internal/itunes/... ./internal/server/... -run 'SyncCycle'` passes`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'func RunRelocateSyncCycle' internal/itunes/relocate_sync_cycle.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

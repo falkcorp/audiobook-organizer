@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-071-build-a-detection-only-report-of-other-title-fra.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 6921fde3-b06d-489c-80e4-9d2a16151491 -->
+<!-- guid: 7dc18d72-04ac-4377-aafd-b5f74ce20efb -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-071 — Build a detection-only report of other title-fragment author rows (the 57 rows beginning with '-') (TODO.md L3602)
@@ -76,7 +76,7 @@ Anti-over-suppression test: `TestAuthorTitleFragmentScan_DoesNotFlagRealNames` �
 ## How to test
 
 ```bash
-go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1
+go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/plugins/maintenance/... -count=1
 ```
 Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
@@ -86,7 +86,7 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 - [ ] running the op against a seeded corpus containing 3 known-bad names and 3 known-good names reports exactly 3 flagged
 - [ ] Anti-over-suppression test: `TestAuthorTitleFragmentScan_DoesNotFlagRealNames` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/plugins/maintenance/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_maintenance_071.md`.
 
@@ -106,7 +106,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/plugins/maintenance/... -run AuthorTitleFragmentScan passes`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -rn 'TitleFragmentAuthor\|title-fragment-author\|author.title.fragment.report' internal/plugins/maintenance/*.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

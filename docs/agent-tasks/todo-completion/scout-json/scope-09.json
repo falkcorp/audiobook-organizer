@@ -378,7 +378,8 @@
   "verdict_evidence": "internal/operations/registry/register.go:59-64 `type prodSchedulerStore struct { opRegistryStore }` has no Unwrap() method (grep -n \"func (p \\*prodSchedulerStore)\" internal/operations/registry/register.go shows only BookFiles), so database.AsCapability treats it as an opaque, non-StoreUnwrapper value and stops there rather than reaching the concrete store inside it.",
   "domain": "internal/operations/registry",
   "exact_files": [
-   "internal/operations/registry/register.go"
+   "internal/operations/registry/register.go",
+   "internal/operations/registry/register_test.go"
   ],
   "verified_anchors": [
    {
@@ -430,17 +431,18 @@
   "tests": [
    "internal/operations/registry/register_test.go (or a new file): TestProdSchedulerStoreUnwrap \u2014 construct a prodSchedulerStore with a known full store, call database.AsCapability[SomeKnownCapability](schedStore), assert it resolves through to the full store instead of stopping at prodSchedulerStore."
   ],
-  "acceptance": [
-   "go build ./internal/operations/registry/... exits 0.",
-   "go vet ./internal/operations/registry/... exits 0 (confirms the var _ StoreUnwrapper assertion compiles)."
-  ],
+  "acceptance": "`grep -n 'func (p \\*prodSchedulerStore) Unwrap() database.Store' internal/operations/registry/register.go` hits; `grep -n 'var _ database.StoreUnwrapper = (\\*prodSchedulerStore)(nil)' internal/operations/registry/register.go` hits; `go test ./internal/operations/registry/... -run TestProdSchedulerStoreUnwrap -count=1 -v` passes; go build ./... && go vet ./... exit 0.",
   "edge_cases": [
    "serviceregistry.Get[database.Store](c, KeyStore) must resolve the SAME underlying store instance as serviceregistry.Get[opRegistryStore](c, KeyStore) \u2014 confirm serviceregistry.Get is not itself constructing a new value per call (it should be a singleton container lookup); if it constructs fresh per-type wrappers, this whole approach needs revisiting and the item becomes needs_design."
   ],
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Marked review_critical=false because the item itself says no capability lookup currently runs through prodSchedulerStore \u2014 this is pure preventive hardening matching the audit's stated pattern (SERVER-GLOBAL-STORE-AUDIT / the third-capability-lost incident at server_lifecycle.go:1737-1766). If serviceregistry.Get's per-generic-type resolution turns out not to return the same singleton for KeyStore under two different type parameters, downgrade this to needs_design and ask: does the container guarantee identity across generic Get[T] calls on the same key?"
+  "notes": "Marked review_critical=false because the item itself says no capability lookup currently runs through prodSchedulerStore \u2014 this is pure preventive hardening matching the audit's stated pattern (SERVER-GLOBAL-STORE-AUDIT / the third-capability-lost incident at server_lifecycle.go:1737-1766). If serviceregistry.Get's per-generic-type resolution turns out not to return the same singleton for KeyStore under two different type parameters, downgrade this to needs_design and ask: does the container guarantee identity across generic Get[T] calls on the same key?",
+  "review_notes": [
+   "[verify-7.json] The acceptance set is satisfied by making no change at all. Box 1 is `go build ./internal/operations/registry/... exits 0` and box 2 is `go vet ./internal/operations/registry/... exits 0` - both already true at HEAD. Nothing greps for the Unwrap method or the `var _ database.StoreUnwrapper` assertio",
+   "[verify-7.json] Tests names 'internal/operations/registry/register_test.go (or a new file)' for TestProdSchedulerStoreUnwrap. That file does not exist at HEAD (`ls internal/operations/registry/register_test.go` -> No such file) and exact_files is internal/operations/registry/register.go only, so the test deliverabl"
+  ]
  },
  {
   "todo_line": 4714,
@@ -802,7 +804,7 @@
   "reuse": [],
   "polarity": "transform",
   "effort": "S",
-  "tier": "haiku",
+  "tier": "sonnet",
   "why_tier": "Swap one mock field name for the correct one and add a real assertion; mechanical once the right field is identified (already identified above).",
   "review_critical": false,
   "goal": "Fix TestOrganizeService_PerformOrganize_NoBooksToOrganize to mock GetAllBooksCoreFunc (what PerformOrganize actually calls) instead of GetAllBooksFunc, and strengthen its assertions so a broken PerformOrganize would actually fail the test.",
@@ -811,9 +813,12 @@
   ],
   "steps": [
    "Open internal/server/organize_service_test.go.",
-   "In TestOrganizeService_PerformOrganize_NoBooksToOrganize (~L33-48), replace `GetAllBooksFunc: func(limit, offset int) ([]database.Book, error) { return []database.Book{}, nil }` with `GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) { return []database.BookCore{}, nil }` (matching MockStore's actual GetAllBooksCoreFunc signature \u2014 verify the exact param/return types via `grep -n \"GetAllBooksCoreFunc \" internal/database/mock_store.go` before writing this).",
-   "Add a second test, TestOrganizeService_PerformOrganize_WithBooks, that sets GetAllBooksCoreFunc to return a non-empty []database.BookCore slice (1-2 books with a FilePath needing organization) plus whatever other MockStore Funcs PerformOrganize's happy path touches (check organizer/service.go's other orgSvc.db.* calls in the non-BookIDs branch \u2014 e.g. UpdateBook, snapshot/backup calls \u2014 and stub each with a Func that records it was called), then assert PerformOrganize returns nil error AND that the recorded calls happened \u2014 this is the anti-over-suppression twin so the suite cannot silently regress back to a vacuous 'zero books, err==nil' pass.",
-   "Bump the file's version header and last-edited date."
+   "In TestOrganizeService_PerformOrganize_NoBooksToOrganize (L33-49), replace the `GetAllBooksFunc: func(limit, offset int) ([]database.Book, error)` stub at L35 with `GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) { return []database.BookCore{}, nil }` \u2014 the exact field and signature are at internal/database/mock_store.go:44. PerformOrganize pages through GetAllBooksCore (internal/organizer/service.go:265 and :312), never GetAllBooks, so the current stub is inert and the test passes vacuously.",
+   "Add TestOrganizeService_PerformOrganize_WithBooks in the same file. FIRST pin the filesystem: `origCfg := config.AppConfig; config.AppConfig.RootDir = t.TempDir(); t.Cleanup(func() { config.AppConfig = origCfg })` \u2014 PerformOrganize reaches orgSvc.organizeBooks (internal/organizer/service.go:335) and does real file I/O under RootDir, so an unsandboxed run writes outside the test.",
+   "Populate GetAllBooksCoreFunc with 1-2 BookCore rows whose FilePath points at files created under that same t.TempDir(), and stub every other MockStore Func PerformOrganize's non-BookIDs branch reaches, recording that each was called.",
+   "Assert PerformOrganize returns nil AND that the recorded calls fired \u2014 this is the anti-over-suppression twin that stops the suite regressing to a vacuous 'zero books, err==nil' pass.",
+   "Bump the file header (version + last-edited: 2026-08-21) on internal/server/organize_service_test.go.",
+   "Add changelog fragment changelog.d/20260821_server_137.md (no file header)."
   ],
   "tests": [
    "TestOrganizeService_PerformOrganize_NoBooksToOrganize (fixed): mocks GetAllBooksCoreFunc, asserts err == nil.",
@@ -824,12 +829,16 @@
    "Manually verify the anti-over-suppression property: temporarily break PerformOrganize's book-fetch loop (e.g. force an early `return nil`) and confirm TestOrganizeService_PerformOrganize_WithBooks goes red while _NoBooksToOrganize stays green \u2014 then revert the temporary break."
   ],
   "edge_cases": [
-   "PerformOrganize's paging loop (service.go ~L257-278) breaks when `len(page) < fetchPageSize` (1000) \u2014 a 1-2 book fake page satisfies this on the first iteration, so the new WithBooks test does not need to simulate pagination across multiple pages."
+   "PerformOrganize's paging loop breaks when len(page) < fetchPageSize (1000), so a 1-2 book fake page terminates on the first iteration \u2014 no multi-page simulation needed.",
+   "config.AppConfig is process-global and shared across the whole internal/server test binary: the WithBooks test MUST snapshot and restore it, or it leaks a RootDir into every sibling test that runs after it."
   ],
   "anti_over_suppression": "TestOrganizeService_PerformOrganize_WithBooks",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "This scope's L4728 item (MockStore Func-field audit) is a prerequisite in spirit but not a hard dependency: GetAllBooksCoreFunc already exists on MockStore today, so this fix does not need L4728 to land first."
+  "notes": "This scope's L4728 item (MockStore Func-field audit) is a prerequisite in spirit but not a hard dependency: GetAllBooksCoreFunc already exists on MockStore today, so this fix does not need L4728 to land first.",
+  "review_notes": [
+   "[verify-8.json] Step 3 orders a new test, TestOrganizeService_PerformOrganize_WithBooks, that feeds PerformOrganize a non-empty book list 'with a FilePath needing organization'. PerformOrganize does not stop at the store: internal/organizer/service.go:335 calls orgSvc.organizeBooks(...), which performs real filesys"
+  ]
  },
  {
   "todo_line": 4739,
@@ -965,19 +974,17 @@
   "tests": [
    "If porting: the ported test must compile and pass under the DEFAULT build (no `mocks` tag) so it actually runs in CI, unlike its predecessor."
   ],
-  "acceptance": [
-   "test -d internal/operations/mocks returns non-zero.",
-   "go build ./... exits 0.",
-   "go vet -tags mocks ./... exits 0 (no more orphaned broken references anywhere under that tag).",
-   "grep -rn \"queuemocks\" --include=\"*.go\" . returns 0 hits."
-  ],
+  "acceptance": "`test -d internal/operations/mocks` returns non-zero; go build ./... exits 0; go vet -tags mocks ./... exits 0; `grep -rn 'queuemocks' --include='*.go' .` returns 0 hits; `grep -n 'ProgressReporter' .mockery.yaml` returns 0 hits.",
   "edge_cases": [
    "internal/server/scan_edge_cases_test.go and other *_test.go files may ALSO carry `//go:build mocks` \u2014 grep -rln \"go:build mocks\" --include=\"*_test.go\" . before finishing, to make sure this class of dead-and-broken-under-its-own-tag test isn't larger than this one file."
   ],
   "anti_over_suppression": "N/A",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "The item as literally written ('effectively unreferenced') undersells what was found: the sole referencer isn't just unreferenced-in-spirit, it's dead code that doesn't even compile under the only tag that would include it. Worth a wider grep (see edge_cases) for siblings before closing this out as a one-file fix."
+  "notes": "The item as literally written ('effectively unreferenced') undersells what was found: the sole referencer isn't just unreferenced-in-spirit, it's dead code that doesn't even compile under the only tag that would include it. Worth a wider grep (see edge_cases) for siblings before closing this out as a one-file fix.",
+  "review_notes": [
+   "[verify-7.json] The gate is guaranteed to FAIL the moment the task is done correctly. The gate and the 'Gate green ... exits 0' acceptance box are `go build ./... && go vet ./... && go test ./internal/operations/mocks/... ./internal/server/... -count=1`, but step 5 deletes internal/operations/mocks/ - the very pack"
+  ]
  },
  {
   "todo_line": 4832,
@@ -1098,7 +1105,8 @@
   "verdict_evidence": "No existing script or report covers this specific check: `grep -rln \"purely numeric title\\|numeric_title\\|spurious.*book.*row\" --include=\"*.py\" --include=\"*.go\" scripts/ internal/` returns nothing, and `ls scripts/ | grep -i \"spurious\\|purge\\|soft.delete\"` is empty. The defect class is confirmed real and understood: internal/organizer/path_format.go:55-63's scrubVar comment cites the exact real-prod pattern ('Tarkin - Star Wars - 3/85' -> 85 separate Book records instead of one Book with 85 BookFiles), and scripts/repair_stranded_tracks.py's structural detector already enumerates the 1,145 affected books/38,895 files (b2e29bb0 commit message) that this investigation should cross-reference against.",
   "domain": "scripts",
   "exact_files": [
-   "scripts/find_spurious_stranded_book_rows.py"
+   "scripts/find_spurious_stranded_book_rows.py",
+   "scripts/tests/test_find_spurious_stranded_book_rows.py"
   ],
   "verified_anchors": [
    {
@@ -1177,7 +1185,10 @@
    4832
   ],
   "gate": "n/a (docs)",
-  "notes": "Explicitly a REPORT-only deliverable per owner decision #9's precedent and the item's own 'Report counts before proposing any restore. Do not mass-restore rows.' Depends on L4832's find_bogus_dirs() (already built, not blocking)."
+  "notes": "Explicitly a REPORT-only deliverable per owner decision #9's precedent and the item's own 'Report counts before proposing any restore. Do not mass-restore rows.' Depends on L4832's find_bogus_dirs() (already built, not blocking).",
+  "review_notes": [
+   "[verify-10.json] exact_files is ['scripts/find_spurious_stranded_book_rows.py'] but the Tests section creates 'scripts/tests/test_find_spurious_stranded_book_rows.py' -- and scripts/tests/ does not exist at HEAD (verified: `ls scripts/tests` -> No such file or directory), so the task also creates a new directory out"
+  ]
  },
  {
   "todo_line": 4848,

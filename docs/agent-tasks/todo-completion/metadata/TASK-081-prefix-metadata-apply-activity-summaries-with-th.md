@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/metadata/TASK-081-prefix-metadata-apply-activity-summaries-with-th.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e20ecc12-9c69-4889-8d65-17565f0b4bcb -->
+<!-- guid: ef42e684-05bf-43dc-a787-a60f3dba42e9 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-081 — Prefix metadata-apply activity summaries with the book title and render empty old-value as '(none)' (TODO.md L3517)

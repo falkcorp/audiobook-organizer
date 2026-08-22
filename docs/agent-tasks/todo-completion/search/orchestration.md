@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/search/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 2ce00a4e-f57b-43e5-8f7c-ac515fd73df8 -->
+<!-- guid: ecd1e03f-372b-4386-b1c3-044a65c6bd4f -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — search workstream (todo-completion)
@@ -24,7 +24,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/search/... -count=1 ; go build ./... && go vet ./... && go test ./internal/search/... ./internal/server/handlers/... -count=1`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/search/... -count=1 ; go build ./... && go vet ./... && go test ./internal/search/... ./internal/server/handlers/... -count=1 && npm --prefix web run lint && npm --prefix web test`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/dedup/orchestration.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 8ff7a3e5-eed7-4a9b-a4ee-bdc7934e57a2 -->
+<!-- guid: 891c9b2e-97a3-483d-a18b-532c51a2b769 -->
 <!-- last-edited: 2026-08-21 -->
 
 # Orchestration — dedup workstream (todo-completion)
@@ -20,13 +20,13 @@ flowchart LR
       TASK192[TASK-192 clamp-composescore-against-p]
     end
     subgraph Wave2
-      TASK181[TASK-181 find-the-createbook-path-s-t]
       TASK047[TASK-047 narrow-collectduration-s-tag]
       TASK049[TASK-049 acoustic-confirm-signal-prom]
     end
     subgraph Wave3
       TASK042[TASK-042 forward-fix-demote-pre-exist]
       TASK044[TASK-044 apply-the-unfiltered-ref-cou]
+      TASK050[TASK-050 shattered-book-reassembly-ma]
     end
     subgraph Wave4
       TASK046[TASK-046 route-merge-asexternalidreas]
@@ -34,11 +34,9 @@ flowchart LR
     subgraph Wave5
       TASK048[TASK-048 physically-co-locate-a-combi]
     end
-    subgraph Wave8
-      TASK050[TASK-050 shattered-book-reassembly-ma]
+    subgraph Wave7
       TASK193[TASK-193 wire-round-2-confidence-boun]
     end
-    TASK021 --> TASK050
     TASK040 --> TASK042
     TASK040 --> TASK046
     TASK040 --> TASK048
@@ -60,7 +58,7 @@ An edge `A --> B` means B waits for A's merge (shared file or explicit dependenc
 
 > **Coordinator owns git. Workers never push.** Each worker operates only inside its
 > assigned worktree: edit, test, commit — then stop. Workers never run `git push`,
-> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/config/... ./internal/dedup/... ./internal/dedup/unified/... ./internal/models/... ./internal/plugins/dedup/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/dedup/... ./internal/merge/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/maintenance/jobs/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/unified/... ./internal/plugins/dedup/... -count=1 ; go build ./... && go vet ./... && go test ./internal/itunes/service/... ./internal/scanner/... -count=1 ; go build ./... && go vet ./... && go test ./internal/merge/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1`) in each
+> `gh pr`, or any merge command. The coordinator runs the gate (`go build ./... && go vet ./... && go test ./internal/config/... ./internal/dedup/... ./internal/dedup/unified/... ./internal/models/... ./internal/plugins/dedup/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/dedup/... ./internal/merge/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/maintenance/jobs/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/... ./internal/server/... -count=1 ; go build ./... && go vet ./... && go test ./internal/dedup/unified/... ./internal/plugins/dedup/... -count=1 ; go build ./... && go vet ./... && go test ./internal/merge/... -count=1 ; go build ./... && go vet ./... && go test ./internal/plugins/maintenance/... -count=1`) in each
 > finished worktree, opens the PR, merges (rebase/FF unless the repo profile says
 > otherwise), and then **rebases every open sibling worktree** before dispatching
 > anything else.

@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-139-prune-expired-abs-sess-records-on-the-existing-s.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: d788f987-894a-4b8e-9b56-9fed3aacfa73 -->
+<!-- guid: e8953d2a-d14d-4e06-933a-bec59aec62f5 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-139 — Prune expired abs_sess: records on the existing session-cleanup schedule (ABS-SYNC)
 
-**Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · server subagent · **Why:** Mechanical: add one interface method + one call inside an already-existing loop, following an adjacent line's exact pattern · **Depends on:** none · **Wave:** 4
+**Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · server subagent · **Why:** Mechanical: add one interface method + one call inside an already-existing loop, following an adjacent line's exact pattern · **Depends on:** none · **Wave:** 3
 
 Source: `TODO.md` line 10298 as of commit 46628240 (later edits shift lines) — re-find it with `grep -n -F "**ABS-SYNC: prune expired `abs_sess:` records on a" TODO.md` (line numbers drift; the grep is built from the line's own text). Scope file: `scope-13.json`.
 
@@ -80,9 +80,574 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] `grep -n 'DeleteExpiredABSSessions' internal/server/server_lifecycle.go` shows a call inside the session-cleanup ticker block
-- [ ] `go build ./...` succeeds with the new interface method (proves PebbleStore already satisfies it structurally, since pebble_store_abssession.go:308 has the matching signature)
-- [ ] `make ci` passes
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] D
+- [ ] e
+- [ ] l
+- [ ] e
+- [ ] t
+- [ ] e
+- [ ] E
+- [ ] x
+- [ ] p
+- [ ] i
+- [ ] r
+- [ ] e
+- [ ] d
+- [ ] A
+- [ ] B
+- [ ] S
+- [ ] S
+- [ ] e
+- [ ] s
+- [ ] s
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] s
+- [ ] '
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] _
+- [ ] l
+- [ ] i
+- [ ] f
+- [ ] e
+- [ ] c
+- [ ] y
+- [ ] c
+- [ ] l
+- [ ] e
+- [ ] .
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] s
+- [ ] h
+- [ ] o
+- [ ] w
+- [ ] s
+- [ ]  
+- [ ] a
+- [ ]  
+- [ ] c
+- [ ] a
+- [ ] l
+- [ ] l
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] s
+- [ ] i
+- [ ] d
+- [ ] e
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] s
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] -
+- [ ] c
+- [ ] l
+- [ ] e
+- [ ] a
+- [ ] n
+- [ ] u
+- [ ] p
+- [ ]  
+- [ ] t
+- [ ] i
+- [ ] c
+- [ ] k
+- [ ] e
+- [ ] r
+- [ ]  
+- [ ] b
+- [ ] l
+- [ ] o
+- [ ] c
+- [ ] k
+- [ ]  
+- [ ] (
+- [ ] 0
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] D
+- [ ] e
+- [ ] l
+- [ ] e
+- [ ] t
+- [ ] e
+- [ ] E
+- [ ] x
+- [ ] p
+- [ ] i
+- [ ] r
+- [ ] e
+- [ ] d
+- [ ] A
+- [ ] B
+- [ ] S
+- [ ] S
+- [ ] e
+- [ ] s
+- [ ] s
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] s
+- [ ] '
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] _
+- [ ] o
+- [ ] p
+- [ ] s
+- [ ] _
+- [ ] s
+- [ ] t
+- [ ] o
+- [ ] r
+- [ ] e
+- [ ] .
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] s
+- [ ] h
+- [ ] o
+- [ ] w
+- [ ] s
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] n
+- [ ] e
+- [ ] w
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] f
+- [ ] a
+- [ ] c
+- [ ] e
+- [ ]  
+- [ ] m
+- [ ] e
+- [ ] t
+- [ ] h
+- [ ] o
+- [ ] d
+- [ ]  
+- [ ] n
+- [ ] e
+- [ ] x
+- [ ] t
+- [ ]  
+- [ ] t
+- [ ] o
+- [ ]  
+- [ ] D
+- [ ] e
+- [ ] l
+- [ ] e
+- [ ] t
+- [ ] e
+- [ ] E
+- [ ] x
+- [ ] p
+- [ ] i
+- [ ] r
+- [ ] e
+- [ ] d
+- [ ] S
+- [ ] e
+- [ ] s
+- [ ] s
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] (
+- [ ] c
+- [ ] u
+- [ ] r
+- [ ] r
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] l
+- [ ] y
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] o
+- [ ] n
+- [ ] l
+- [ ] y
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] i
+- [ ] s
+- [ ]  
+- [ ] L
+- [ ] 2
+- [ ] 2
+- [ ] 7
+- [ ]  
+- [ ] D
+- [ ] e
+- [ ] l
+- [ ] e
+- [ ] t
+- [ ] e
+- [ ] E
+- [ ] x
+- [ ] p
+- [ ] i
+- [ ] r
+- [ ] e
+- [ ] d
+- [ ] S
+- [ ] e
+- [ ] s
+- [ ] s
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] s
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] b
+- [ ] u
+- [ ] i
+- [ ] l
+- [ ] d
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] s
+- [ ] u
+- [ ] c
+- [ ] c
+- [ ] e
+- [ ] e
+- [ ] d
+- [ ] s
+- [ ] ,
+- [ ]  
+- [ ] p
+- [ ] r
+- [ ] o
+- [ ] v
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ]  
+- [ ] P
+- [ ] e
+- [ ] b
+- [ ] b
+- [ ] l
+- [ ] e
+- [ ] S
+- [ ] t
+- [ ] o
+- [ ] r
+- [ ] e
+- [ ]  
+- [ ] a
+- [ ] l
+- [ ] r
+- [ ] e
+- [ ] a
+- [ ] d
+- [ ] y
+- [ ]  
+- [ ] s
+- [ ] a
+- [ ] t
+- [ ] i
+- [ ] s
+- [ ] f
+- [ ] i
+- [ ] e
+- [ ] s
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] w
+- [ ] i
+- [ ] d
+- [ ] e
+- [ ] n
+- [ ] e
+- [ ] d
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] f
+- [ ] a
+- [ ] c
+- [ ] e
+- [ ]  
+- [ ] (
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] d
+- [ ] a
+- [ ] t
+- [ ] a
+- [ ] b
+- [ ] a
+- [ ] s
+- [ ] e
+- [ ] /
+- [ ] p
+- [ ] e
+- [ ] b
+- [ ] b
+- [ ] l
+- [ ] e
+- [ ] _
+- [ ] s
+- [ ] t
+- [ ] o
+- [ ] r
+- [ ] e
+- [ ] _
+- [ ] a
+- [ ] b
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] s
+- [ ] i
+- [ ] o
+- [ ] n
+- [ ] .
+- [ ] g
+- [ ] o
+- [ ] :
+- [ ] 3
+- [ ] 0
+- [ ] 8
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] o
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] d
+- [ ] a
+- [ ] t
+- [ ] a
+- [ ] b
+- [ ] a
+- [ ] s
+- [ ] e
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] d
+- [ ] a
+- [ ] t
+- [ ] a
+- [ ] b
+- [ ] a
+- [ ] s
+- [ ] e
+- [ ] /
+- [ ] m
+- [ ] o
+- [ ] c
+- [ ] k
+- [ ] s
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] .
+- [ ] /
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ] e
+- [ ] r
+- [ ] n
+- [ ] a
+- [ ] l
+- [ ] /
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] v
+- [ ] e
+- [ ] r
+- [ ] /
+- [ ] .
+- [ ] .
+- [ ] .
+- [ ]  
+- [ ] -
+- [ ] c
+- [ ] o
+- [ ] u
+- [ ] n
+- [ ] t
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] e
+- [ ] x
+- [ ] i
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] 0
+- [ ] .
 - [ ] Anti-over-suppression test: `N/A — this is a straightforward wiring addition, not a filter/guard` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/database/... ./internal/database/mocks/... ./internal/server/... -count=1` exits 0; `go vet`/lint clean.
@@ -105,7 +670,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (``grep -n 'DeleteExpiredABSSessions' internal/server/server_lifecycle.go` shows a call inside the session-cleanup ticker block`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -rn 'DeleteExpiredABSSessions' internal/database/pebble_store_abssession.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-175-add-resizable-sortable-columns-to-the-split-book.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 4ee3da6f-a39c-4618-ae18-de59ab2ad5ee -->
+<!-- guid: e947bd1a-2a05-485d-944f-6d2c6c86bef8 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-175 — Add resizable/sortable columns to the split-book dedup candidates table (TODO.md L10660)
@@ -75,8 +75,409 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] `npm --prefix web run lint` passes.
-- [ ] Manual: Dedup > Split-book tab, resize/sort a column, confirm pagination still shows the correct total count and rows.
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] u
+- [ ] s
+- [ ] e
+- [ ] C
+- [ ] o
+- [ ] n
+- [ ] f
+- [ ] i
+- [ ] g
+- [ ] u
+- [ ] r
+- [ ] a
+- [ ] b
+- [ ] l
+- [ ] e
+- [ ] T
+- [ ] a
+- [ ] b
+- [ ] l
+- [ ] e
+- [ ] '
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] s
+- [ ] r
+- [ ] c
+- [ ] /
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] p
+- [ ] o
+- [ ] n
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] d
+- [ ] e
+- [ ] d
+- [ ] u
+- [ ] p
+- [ ] /
+- [ ] D
+- [ ] e
+- [ ] d
+- [ ] u
+- [ ] p
+- [ ] S
+- [ ] p
+- [ ] l
+- [ ] i
+- [ ] t
+- [ ] B
+- [ ] o
+- [ ] o
+- [ ] k
+- [ ] T
+- [ ] a
+- [ ] b
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ] x
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] >
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] (
+- [ ] 0
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] "
+- [ ] s
+- [ ] t
+- [ ] o
+- [ ] r
+- [ ] a
+- [ ] g
+- [ ] e
+- [ ] K
+- [ ] e
+- [ ] y
+- [ ] :
+- [ ]  
+- [ ] '
+- [ ] d
+- [ ] e
+- [ ] d
+- [ ] u
+- [ ] p
+- [ ] -
+- [ ] s
+- [ ] p
+- [ ] l
+- [ ] i
+- [ ] t
+- [ ] -
+- [ ] b
+- [ ] o
+- [ ] o
+- [ ] k
+- [ ] -
+- [ ] c
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ] i
+- [ ] d
+- [ ] a
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] '
+- [ ] "
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] t
+- [ ] a
+- [ ] b
+- [ ] l
+- [ ] e
+- [ ] .
+- [ ] s
+- [ ] o
+- [ ] r
+- [ ] t
+- [ ] R
+- [ ] o
+- [ ] w
+- [ ] s
+- [ ] (
+- [ ] c
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ] i
+- [ ] d
+- [ ] a
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] )
+- [ ] '
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] R
+- [ ] e
+- [ ] s
+- [ ] i
+- [ ] z
+- [ ] a
+- [ ] b
+- [ ] l
+- [ ] e
+- [ ] H
+- [ ] e
+- [ ] a
+- [ ] d
+- [ ] e
+- [ ] r
+- [ ] C
+- [ ] e
+- [ ] l
+- [ ] l
+- [ ] '
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] >
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ] ;
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ]  
+- [ ] D
+- [ ] e
+- [ ] d
+- [ ] u
+- [ ] p
+- [ ] S
+- [ ] p
+- [ ] l
+- [ ] i
+- [ ] t
+- [ ] B
+- [ ] o
+- [ ] o
+- [ ] k
+- [ ] T
+- [ ] a
+- [ ] b
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ]  
+- [ ] i
+- [ ] n
+- [ ] c
+- [ ] l
+- [ ] u
+- [ ] d
+- [ ] i
+- [ ] n
+- [ ] g
+- [ ]  
+- [ ] t
+- [ ] h
+- [ ] e
+- [ ]  
+- [ ] e
+- [ ] x
+- [ ] p
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ] e
+- [ ] d
+- [ ] -
+- [ ] r
+- [ ] o
+- [ ] w
+- [ ] -
+- [ ] s
+- [ ] u
+- [ ] r
+- [ ] v
+- [ ] i
+- [ ] v
+- [ ] e
+- [ ] s
+- [ ] -
+- [ ] s
+- [ ] o
+- [ ] r
+- [ ] t
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ] ;
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] l
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] .
 - [ ] Anti-over-suppression test: `test: 'expanded row state survives a column-header sort'` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.
@@ -99,7 +500,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (``npm --prefix web run lint` passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'CandidateRow\|TablePagination' web/src/components/dedup/DedupSplitBookTab.tsx` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

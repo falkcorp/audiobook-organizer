@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/operations/TASK-116-forward-iscanceled-through-reporterlogger-to-the.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: a70a2d2f-ce7d-406c-b903-fe521dae8f76 -->
+<!-- guid: 986062b6-1df4-4561-831a-3e1cfec45a37 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-116 — Forward IsCanceled() through reporterLogger to the ops registry's cancellation signal (TODO.md L4586)
@@ -47,12 +47,11 @@ Add an IsCanceled() override to reporterLogger (internal/operations/progress.go)
 
 ## Step-by-step
 
-1. Read internal/scanner/service.go around line 227, internal/organizer/service.go around lines 968 and 1153, and internal/reconcile/reconcile.go around line 622 — for EACH, determine what state the function leaves behind when that branch is taken (in-progress work abandoned? DB rows left half-written? files left half-moved?) and note whether that is safe now vs. needs its own guard/cleanup first.
-2. If any guard is found unsafe to enable as-is, scope a SEPARATE follow-up fix for that guard specifically rather than blocking this whole item — flip the ones that are safe, leave a TODO comment on the ones that are not, citing the specific unsafe state found.
-3. In internal/operations/progress.go, add: `func (l *reporterLogger) IsCanceled() bool { if l.reporter == nil { return false }; return l.reporter.IsCanceled() }` immediately after the existing With method (around line 102).
-4. Update the existing doc comment at lines 104-114 (currently explaining why IsCanceled deliberately does NOT forward) to instead explain that it NOW forwards, and reference this change's date/rationale, replacing the stale 'Tracked in todo.d/20260816-logger-iscanceled-forwarding.md' pointer if that fragment no longer exists.
+1. Read internal/scanner/service.go around L227, internal/organizer/service.go around L968 and L1153, and internal/reconcile/reconcile.go around L622. For EACH, determine what state the function leaves behind when that branch is taken (in-progress work abandoned? DB rows left half-written? files left half-moved?).
+2. If ANY of the four is unsafe to enable as-is, STOP and report - do not land the override. Forwarding IsCanceled is all-or-nothing: the single reporterLogger method arms all four guards simultaneously and there is no per-guard opt-out, so a 'flip the safe ones' outcome does not exist. The follow-up fix for the unsafe guard must land FIRST, in its own PR, before this one.
+3. Only if all four are safe: in internal/operations/progress.go, add `func (l *reporterLogger) IsCanceled() bool { if l.reporter == nil { return false }; return l.reporter.IsCanceled() }` immediately after the existing With method (progress.go:100).
+4. Update the doc comment above it (currently explaining why IsCanceled deliberately does NOT forward) to state that it now forwards and why. The pointer it names, todo.d/20260816-logger-iscanceled-forwarding.md, no longer exists (`ls` -> No such file) - drop it rather than re-creating it.
 5. Bump internal/operations/progress.go's version header.
-6. Ship this behind careful monitoring of the first production scan/organize/reconcile run afterward — per the file's own stated concern, this activates 4 previously-dead branches simultaneously in code that runs at library scale.
 
 Then, always:
 - Keep the change purely transform — do not touch adjacent code, do not reorder imports beyond the formatter, do not change signatures unless a step above says so explicitly.
@@ -70,12 +69,12 @@ Then, always:
 - {'file': 'internal/operations/progress_test.go', 'name': 'TestReporterLogger_IsCanceled_ForwardsToReporter (new)', 'asserts': "reporterLogger.IsCanceled() returns the wrapped ProgressReporter's IsCanceled() value, both true and false cases, and returns false (not panic) when reporter is nil"}
 - {'file': 'internal/scanner/service_test.go', 'name': 'TestScanDirectory_CancelledViaReporter_StopsCleanly (new)', 'asserts': 'with a reporter reporting IsCanceled()=true (not just ctx cancellation), the scan loop exits via the log.IsCanceled() branch at service.go:227 and leaves no partial per-folder writes uncommitted'}
 
-Anti-over-suppression test: `N/A — this restores a suppressed guard rather than adding a new filter.` — a known-good input still passes with the new guard active.
+Anti-over-suppression test: `TestScanDirectory_NotCancelled_ProcessesEveryFolder - with a reporter whose IsCanceled() returns false throughout, assert the scan visits and commits every seeded folder and takes the service.go:227 branch zero times, proving the newly-armed guard does not over-fire on a normal run.` — a known-good input still passes with the new guard active.
 
 ## How to test
 
 ```bash
-go build ./... && go vet ./... && go test ./internal/operations/... -count=1
+go build ./... && go vet ./... && go test ./internal/operations/... ./internal/scanner/... -count=1
 ```
 Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing staticcheck findings unrelated to this task. Run `staticcheck ./<changed-pkg>/...` and fix only findings in files you touched. A failing test in a package you did not change is not yours — report it, do not fix it.
 
@@ -83,9 +82,9 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 - [ ] `go test ./internal/operations/... -run TestReporterLogger_IsCanceled` passes.
 - [ ] `go test ./internal/scanner/... ./internal/organizer/... ./internal/reconcile/...` all pass after the change, with no new failures in existing cancellation-related tests.
-- [ ] Anti-over-suppression test: `N/A — this restores a suppressed guard rather than adding a new filter.` — a known-good input still passes with the new guard active.
+- [ ] Anti-over-suppression test: `TestScanDirectory_NotCancelled_ProcessesEveryFolder - with a reporter whose IsCanceled() returns false throughout, assert the scan visits and commits every seeded folder and takes the service.go:227 branch zero times, proving the newly-armed guard does not over-fire on a normal run.` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
-- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/operations/... -count=1` exits 0; `go vet`/lint clean.
+- [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/operations/... ./internal/scanner/... -count=1` exits 0; `go vet`/lint clean.
 - [ ] File headers bumped on every changed file (`grep -n "last-edited: 2026-08-21" <file>` hits for each).
 - [ ] Changelog fragment present: `test -f changelog.d/20260821_operations_116.md`.
 

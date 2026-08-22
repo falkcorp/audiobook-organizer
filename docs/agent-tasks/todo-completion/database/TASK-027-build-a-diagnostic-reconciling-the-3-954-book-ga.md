@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-027-build-a-diagnostic-reconciling-the-3-954-book-ga.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 72a41c54-246b-43ac-ac0a-e0a706aa192f -->
+<!-- guid: 89bb2ea9-d3a4-4241-b0d9-08c3a1ea326d -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-027 — Build a diagnostic reconciling the 3,954-book gap between the store's live-book count and the API list endpoint's total (TODO.md L3414)
@@ -99,7 +99,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`The diagnostic prints a definitive answer: either 'no real gap — the original 67,824 figure was a Bleve DocCount() snapshot, already explained/fixed' or a concrete list of book IDs and their differentiating field values explaining a genuine third population.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'ListBookIDs' internal/database/pebble_store.go | head -3` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

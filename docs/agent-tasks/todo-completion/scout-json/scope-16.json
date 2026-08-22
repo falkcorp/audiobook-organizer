@@ -7,10 +7,11 @@
   "verdict_evidence": "path_aliases is config-and-seed only today: web/src/services/api.ts:852 declares `path_aliases?: PathAlias[]` on Config but no component reads/writes it in web/src/pages/Settings.tsx (grep -n \"path_aliases\" web/src/pages/Settings.tsx returns 0 hits); docs/design/2026-08-20-dual-path-display.md:474 lists 'Settings UI' as an explicit open question deferred from v1.",
   "domain": "web",
   "exact_files": [
-   "web/src/components/settings/PathAliasesSection.tsx",
    "web/src/components/settings/PathAliasesSection.test.tsx",
-   "web/src/pages/Settings.tsx",
-   "web/src/hooks/useSettingsHandlers.ts"
+   "web/src/components/settings/PathAliasesSection.tsx",
+   "web/src/components/settings/PathsSettingsTab.tsx",
+   "web/src/hooks/useSettingsHandlers.ts",
+   "web/src/pages/Settings.tsx"
   ],
   "verified_anchors": [
    {
@@ -92,12 +93,7 @@
    "web/src/components/settings/PathAliasesSection.test.tsx 'Add Alias appends an empty row without touching existing rows' -- anti-over-suppression check that add doesn't clear or reorder existing aliases.",
    "web/src/components/settings/PathAliasesSection.test.tsx 'delete removes only the targeted row' -- 3-row input, delete row index 1, assert onChange payload is [row0, row2] in that order."
   ],
-  "acceptance": [
-   "npm --prefix web run lint passes with no new errors.",
-   "npm --prefix web test -- PathAliasesSection passes all new tests.",
-   "grep -n \"path_aliases: pathAliases\" web/src/hooks/useSettingsHandlers.ts returns 1 hit, proving the panel's state reaches the PATCH /config payload.",
-   "Manual smoke (optional, not required for CI): load Settings, Paths tab shows the new Path Aliases section seeded from GET /config path_aliases, edit a row, Save, reload page, edited value persists."
-  ],
+  "acceptance": "test -f web/src/components/settings/PathAliasesSection.tsx and test -f web/src/components/settings/PathAliasesSection.test.tsx both succeed (neither exists at HEAD); grep -n 'path_aliases: pathAliases' web/src/hooks/useSettingsHandlers.ts returns 1 hit (0 at HEAD), proving the panel's state reaches the PATCH /config payload; grep -n 'PathAliasesSection' web/src/components/settings/PathsSettingsTab.tsx returns >=1 hit; npm --prefix web test -- PathAliasesSection passes all four new tests; npm --prefix web run lint passes with no new errors.",
   "edge_cases": [
    "config.path_aliases is null/undefined on a fresh install (SeedPathAliases may not have run yet, or DB has no config row) -- must render an empty list with just the 'Add Alias' button, not throw.",
    "A row with all-empty fields ('' root) should still be sendable (server-side validation, not client-side, decides whether an empty root is rejected) -- do not silently drop empty rows on save, since that would surprise a user who just clicked Add and hasn't filled it in yet.",
@@ -109,7 +105,9 @@
   "notes": "Server-side PATCH /config already accepts path_aliases (internal/config/persistence.go:904-905 calls SeedPathAliases/ValidatePathAliases on load) -- confirm during implementation whether the config PATCH handler round-trips path_aliases unchanged (it should, since Config is decoded generically), but this was not independently verified by this scout pass; if the PATCH handler drops unknown/optional fields, that's a small additional backend fix, not a redesign.",
   "review_notes": [
    "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n"
+   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
+   "[verify-8.json] Idempotency check is a green-gate assertion, not a check for this task's own artifact: 'If the first acceptance check below already passes at HEAD (`npm --prefix web run lint passes with no new errors.`), this task is already applied \u2014 run the acceptance checks instead of re-applying.' Lint passing ",
+   "[verify-8.json] Step 3 offers two placements and states a preference for the one outside scope: '...or pass pathAliases/setPathAliases as props into PathsSettingsTab and render it there instead, matching how DelugeSettingsTab is nested inside PathsSettingsTab at PathsSettingsTab.tsx:260 -- prefer this nesting'. web"
   ]
  },
  {
@@ -218,11 +216,7 @@
   "tests": [
    "web/src/components/common/PathLinks.test.tsx -- no new test needed for the reset function itself (it's a 1-line test-only helper), but add one regression test 'usePathAliases re-fetches after __resetPathAliasesCacheForTests()' that: renders a consumer, waits for aliases to load, calls the reset export, changes the getConfig mock's resolved value, renders a second consumer, and asserts the second one reflects the new mocked value (proving the cache was actually cleared, not just resettable-in-theory)."
   ],
-  "acceptance": [
-   "npm --prefix web run lint passes.",
-   "npm --prefix web test -- PathLinks passes including the new re-fetch-after-reset test.",
-   "npm --prefix web test (full run) shows the same pass/fail counts as before this change for ReviewWorkspace.test.tsx, ReviewWorkspace.refetchStale.test.tsx, RegroupSpine.test.tsx, DupesSpine.test.tsx, CompareSpine.test.tsx -- i.e. this is a no-op for existing assertions, proven by an unchanged test count/result."
-  ],
+  "acceptance": "grep -n '__resetPathAliasesCacheForTests' web/src/components/common/PathLinks.tsx returns 1 export (0 at HEAD); grep -n '__resetPathVarsCacheForTests' web/src/utils/formatPath.ts returns 1 export (0 at HEAD); grep -rl '__resetPath.*CacheForTests' web/src --include='*.test.tsx' lists all 6 target test files; npm --prefix web test -- PathLinks passes including the new re-fetch-after-reset test; npm --prefix web run lint passes.",
   "edge_cases": [
    "Calling the reset function while a fetch promise is still in flight (not yet resolved) should be safe -- setting the `let` to null just means the in-flight promise's resolution no longer gets cached; the in-flight consumer's `.then` still fires against its own promise reference. No special-casing needed."
   ],
@@ -232,7 +226,8 @@
   "notes": "Purely a test-isolation hardening task; ships independently of items #1/#2/#4 in this fragment.",
   "review_notes": [
    "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
-   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n"
+   "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
+   "[verify-8.json] Idempotency: 'If the first acceptance check below already passes at HEAD (`npm --prefix web run lint passes.`), this task is already applied.' Lint being green is unrelated to whether the reset hooks exist. Verified they do not: grep -n 'cachedAliasesPromise' web/src/components/common/PathLinks.tsx "
   ]
  },
  {

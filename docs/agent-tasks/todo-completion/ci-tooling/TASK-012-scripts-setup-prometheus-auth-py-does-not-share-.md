@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-012-scripts-setup-prometheus-auth-py-does-not-share-.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 7a1fa65a-8ae8-42b0-8427-a3a1d3341e2e -->
+<!-- guid: b510a9ed-994c-4940-b795-7c61b08c84d5 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-012 — scripts/setup-prometheus-auth.py does NOT share the server-side shell script's dead-indentation bug (TODO.md L4312)
@@ -93,7 +93,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`grep -n "does not share" scripts/setup-prometheus-auth.py returns 1 hit.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `grep -n "does not share" scripts/setup-prometheus-auth.py returns 1 hit.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

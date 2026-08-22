@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/itunes/TASK-185-report-the-itunes-listened-in-progress-status-pi.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 6b2647e7-dc25-4fc4-8542-39de6f1afb81 -->
+<!-- guid: 2be1af75-4c03-409d-a4dc-ec8633f55464 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-185 — Report the iTunes listened/in-progress status pipeline's actual wiring gap: PositionSync is fully built but its maintenance op is an unimplemented stub (PLAYBACK-IMPORT)
@@ -101,7 +101,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`docs/audits/2026-08-21-itunes-playback-import-wiring.md exists and answers all 4 original questions with specific file:line citations, distinguishing 'not implemented' from 'implemented but unwired' from 'wired but buggy' for each of the 4 stages.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `docs/audits/2026-08-21-itunes-playback-import-wiring.md exists and answers all 4 original questions with specific file:line citations, distinguishing 'not implemented' from 'implemented but unwired' from 'wired but buggy' for each of the 4 stages.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

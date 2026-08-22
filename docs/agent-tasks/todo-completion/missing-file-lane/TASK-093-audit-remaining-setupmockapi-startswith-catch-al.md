@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-093-audit-remaining-setupmockapi-startswith-catch-al.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: ec2f5cbc-226e-42fd-b283-92222213baff -->
+<!-- guid: feab0b58-0d58-4d90-8328-16a04cf90f49 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-093 — Audit remaining setupMockApi startsWith() catch-alls for shadowed specific branches (TODO.md L5758)
@@ -35,6 +35,8 @@ For each of the 10 remaining `pathname.startsWith(...)` branches in web/tests/e2
   ```bash
   grep -n 'startsWith' \''(\'\''/api/v1/audiobooks/\'\'')' \'\''and .audiobooks/batch. below below above' web/tests/e2e/utils/test-helpers.ts || grep -n audiobooks/batch web/tests/e2e/utils/test-helpers.ts   # 1 hit ~L1626, preceded by comment ~L1623 — the batch hazard is already fixed with an explanatory comment
   grep -c '\.startsWith(' web/tests/e2e/utils/test-helpers.ts   # 10 — 10 startsWith() prefix catch-alls remain in the dispatcher
+  grep -n 'audiobooks/batch' web/tests/e2e/utils/test-helpers.ts   # 2 hits: L1623 comment, L1626 `if (pathname === '/api/v1/audiobooks/batch' && method === 'POST')` — the /audiobooks/batch shadowing hazard is already fixed and carries an explanatory comment
+  grep -n '\.startsWith(' web/tests/e2e/utils/test-helpers.ts   # L762, L1571, L1603, L1618, L1636, L1646, L1683, L1715, L1745, L1750 — the 10 sites are at the line numbers the Background lists
   ```
 
 ### Reuse — don't invent

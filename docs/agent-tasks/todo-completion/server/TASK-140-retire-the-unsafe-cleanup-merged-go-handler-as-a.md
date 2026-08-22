@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-140-retire-the-unsafe-cleanup-merged-go-handler-as-a.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b360bf89-1384-4500-a138-ba4ae33a304d -->
+<!-- guid: 15db1197-ea2b-4838-bdab-7a26b59e8836 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-140 — Retire the unsafe cleanup_merged.go handler as a guarded no-op (owner decision: MEASURE-AND-STOP, no bulk removal) (TODO.md L10372)
@@ -37,6 +37,7 @@ Make POST /api/v1/itunes/cleanup-merged a guarded no-op: dry_run continues to re
   grep -n 'SafeWriteITL(itlPath, \*ops)' internal/server/itl_cleanup.go   # 1 hit ~L53 — cleanupMergedHandler is live and can still apply a real ITL track removal (dry_run=false path)
   grep -n 'no-op\|noop\|disabled\|guard' internal/server/itl_cleanup.go   # 0 hits — the handler has no disabled/no-op guard today
   grep -n 'IsPrimaryVersion' internal/itunes/cleanup_merged.go   # 1 hit ~L87 — the removal criterion the handler relies on is IsPrimaryVersion==false, which the owner separately flagged unsafe (see TODO L10435)
+  grep -n 'ops.IsEmpty()\|c.Query("dry_run")\|SafeWriteITL(itlPath\|RespondWithOK' internal/server/itl_cleanup.go   # dry_run branch L40 returning RespondWithOK at L41; ops.IsEmpty() L45 returning RespondWithOK(gin.H{"applied": true, ...}) at L46; SafeWriteITL(itlPath, *ops) at L53; final RespondWithOK applied:true at L60 — the three branch anchors step 1 depends on, and the IsEmpty body that step 1 and the edge case disagree about
   ```
 
 ### Reuse — don't invent
@@ -58,7 +59,9 @@ Then, always:
 
 ### Edge-case semantics (conservative defaults — treat unknown as unknown, never as disqualifying)
 
-- ops.IsEmpty() (line 45 today) becomes unreachable/irrelevant once apply always refuses — remove or repurpose that branch rather than leaving dead code.
+- The `if ops.IsEmpty()` branch at internal/server/itl_cleanup.go:45 MUST be deleted, not repurposed: after the retirement there is exactly one success path (dry_run=true) and one refusal path (everything else). An empty-ops apply request is an apply request and must get the same 410 refusal as any other — it must NOT keep returning 200 `applied: true`, which would report a successful apply on a path that no longer applies anything.
+- The refusal must be returned before any ITL path resolution or file access, so a missing/unreadable .itl file cannot turn the refusal into a 500 — treat unknown iTunes state as 'refused', never as 'failed'.
+- dry_run=true must keep returning 200 with the preview even when ops is empty (an empty preview is a valid measurement, not an error).
 
 ## Tests
 
@@ -76,8 +79,13 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] `go test ./internal/server/... -run TestCleanupMergedHandler` passes both new tests
-- [ ] a manual curl of `POST /api/v1/itunes/cleanup-merged?dry_run=false` against a test server returns the retirement message and the target .itl file's mtime/bytes are unchanged
+- [ ] A dry_run=true request returns 200 with the preview payload, including when the computed ops set is empty.
+- [ ] A dry_run=false request AND a request with the dry_run param omitted BOTH return HTTP 410 with `applied: false` and the retirement message — asserted for a non-empty ops fixture and for an empty ops fixture (the deleted IsEmpty branch's case).
+- [ ] `grep -n 'ops.IsEmpty()' internal/server/itl_cleanup.go` returns ZERO hits.
+- [ ] `grep -n 'SafeWriteITL' internal/server/itl_cleanup.go` returns ZERO hits.
+- [ ] The .itl fixture's bytes are byte-identical before and after the dry_run=false call.
+- [ ] File header bumped: `grep -n 'last-edited: 2026-08-21' internal/server/itl_cleanup.go` hits.
+- [ ] Changelog fragment present: `test -f changelog.d/20260821_server_140.md`.
 - [ ] Anti-over-suppression test: `TestCleanupMergedHandler_DryRun_StillReturnsPreview is the anti-over-suppression check — proves the retirement did not also kill the harmless measurement path` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/server/... -count=1` exits 0; `go vet`/lint clean.

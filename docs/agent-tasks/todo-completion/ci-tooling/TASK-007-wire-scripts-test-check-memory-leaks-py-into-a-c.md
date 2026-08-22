@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/ci-tooling/TASK-007-wire-scripts-test-check-memory-leaks-py-into-a-c.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: bc174ca1-d0a0-4e3a-8a47-2788150cc383 -->
+<!-- guid: 04803c91-7529-49fa-996a-5594e19354ee -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-007 — Wire scripts/test_check_memory_leaks.py into a CI job (repo-guards) (TODO.md L50)
@@ -98,7 +98,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (``grep -n "discover -s scripts" .github/workflows/ci.yml` returns 1 hit.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — ``grep -n "discover -s scripts" .github/workflows/ci.yml` returns 1 hit.` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

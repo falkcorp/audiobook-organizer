@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/server/TASK-210-migrate-internal-server-test-fixtures-to-setupte.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: c00ac26c-e6fd-4a9d-acd1-6692bb6139ce -->
+<!-- guid: bbb37ed6-5a33-4d93-899e-0bd9f0e30f83 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-210 — Migrate internal/server test fixtures to setupTestServerWithStore — server_coverage_phase2_test.go, deluge_integration_test.go, search_reconciler_test.go, maintenance_window_handlers_test.go, user_tags_authz_test.go, playlist_handlers_test.go, handlers_integration_test.go (DEC-6)
@@ -29,9 +29,10 @@ For server_coverage_phase2_test.go, deluge_integration_test.go, and search_recon
 
 ## Background (verify before editing)
 
-- server_coverage_phase2_test.go's 4 sites (L76,134,168,223) are the clearest evidence of the exact bug class DEC-6 targets: each is preceded one line earlier by a manual `allowOpDefinitionUpserts(mockStore)` call (L75,133,167,222) — this is precisely the boilerplate setupTestServerWithStore already performs internally (server_test.go:167), duplicated by hand at every call site instead of being reused.
-- The 4 wrapper-helper files each define ONE function (setupMaintenanceTestServer, setupUserTagsAuthzTestServer, setupPlaylistTestServer, setupHandlerTestServer) that other test functions in the SAME file call repeatedly (call counts: 4, 2, 10, 13 respectively, per grep -rn '<fnName>(' <file> --include="*_test.go") — migrating the wrapper's internals (not its call sites) is a single edit that benefits every downstream caller in that file with no call-site churn.
-- user_tags_authz_test.go's wrapper has a 5-value return signature (srv, adminToken, viewerToken, bookID, cleanup) — its body does more than construct a server (it also seeds sessions and a book); only the construction portion should delegate to setupTestServerWithStore, the seeding logic stays as-is.
+- setupTestServerWithStore (internal/server/server_test.go:151) does FOUR things, not three: gin.SetMode(gin.TestMode), config.AppConfig.RootDir="" with a whole-config restore in cleanup (L160-161), allowOpDefinitionUpserts(store) (L167), database.SetGlobalStore(store), then NewServer(store). The RootDir pin is the one that silently changes behaviour.
+- server_coverage_phase2_test.go's 4 sites (L76,134,168,223) are each preceded by a manual allowOpDefinitionUpserts(mockStore) (L75,133,167,222) — genuine duplication that becomes redundant post-migration. This file already pins RootDir itself via its own pinEmptyRootDir helper (L29), so it is safe.
+- user_tags_authz_test.go's wrapper sets RootDir: tempDir at L49 before NewServer at L79. Migrating its construction blanks that RootDir for the duration of the test. Re-pin config.AppConfig.RootDir = tempDir immediately after the setupTestServerWithStore call, and never delete the L49 config setup as a 'duplicate'.
+- The 4 wrapper-helper files each define one function other tests in the same file call repeatedly — setupMaintenanceTestServer (4 callers), setupUserTagsAuthzTestServer (2), setupPlaylistTestServer (10), setupHandlerTestServer (13, plus 3 CROSS-FILE callers in reset_handler_test.go). Migrate the wrapper's internals and use t.Cleanup(cleanup) so no signature and no call site changes.
 
 - **Re-verify these anchors before editing** — line numbers drift; a zero-hit grep means STOP and report:
   ```bash
@@ -39,6 +40,12 @@ For server_coverage_phase2_test.go, deluge_integration_test.go, and search_recon
   grep -n "NewServer(store)" internal/server/deluge_integration_test.go   # 2 hits at L113,161 — deluge_integration_test.go has 2 real NewServer(store) sites (plus unrelated httptest.NewServer mock-backend sites, not counted)
   grep -n "NewServer(store)" internal/server/search_reconciler_test.go   # 2 hits at L46,242 — search_reconciler_test.go has 2 NewServer(store) sites
   grep -n "^func setupMaintenanceTestServer\|^func setupUserTagsAuthzTestServer\|^func setupPlaylistTestServer\|^func setupHandlerTestServer" internal/server/maintenance_window_handlers_test.go internal/server/user_tags_authz_test.go internal/server/playlist_handlers_test.go internal/server/handlers_integration_test.go   # 4 hits, one per file: maintenance_window_handlers_test.go:26, user_tags_authz_test.go:38, playlist_handlers_test.go:24, handlers_integration_test.go:190 — 4 files each define their own duplicate setup*TestServer wrapper that calls NewServer directly
+  grep -n 'config.AppConfig.RootDir = ""\|allowOpDefinitionUpserts(store)' internal/server/server_test.go   # exactly 2 hits: L161 `config.AppConfig.RootDir = ""` and L167 `allowOpDefinitionUpserts(store)` — the fixture pins RootDir to empty — the omitted side effect
+  grep -n 'RootDir' internal/server/user_tags_authz_test.go   # 1 hit at L49: RootDir: tempDir, — user_tags_authz_test.go sets its own RootDir before constructing
+  grep -n 'NewServer(\|allowOpDefinitionUpserts(' internal/server/server_coverage_phase2_test.go   # 8 hits: allowOpDefinitionUpserts at L75,133,167,222 each immediately preceding NewServer at L76,134,168,223 — server_coverage_phase2_test.go duplicates allowOpDefinitionUpserts at every site
+  grep -n 'NewServer(store)' internal/server/deluge_integration_test.go internal/server/search_reconciler_test.go   # deluge_integration_test.go L113,161; search_reconciler_test.go L46,242 — 2 real sites each in deluge_integration_test.go and search_reconciler_test.go
+  grep -n 'NewServer(' internal/server/maintenance_window_handlers_test.go internal/server/user_tags_authz_test.go internal/server/playlist_handlers_test.go internal/server/handlers_integration_test.go   # L41, L79, L45, L220 respectively — the 4 wrapper definitions and their internal NewServer lines
+  grep -rn 'setupHandlerTestServer(' internal/server --include='*_test.go'   # 13 in handlers_integration_test.go plus 3 in reset_handler_test.go (L26, L81, L108) — setupHandlerTestServer has cross-file callers the brief's in-file count of 13 misses
   ```
 
 ### Reuse — don't invent
@@ -63,8 +70,10 @@ Then, always:
 
 ### Edge-case semantics (conservative defaults — treat unknown as unknown, never as disqualifying)
 
-- If t.Cleanup(cleanup) is used inside a wrapper helper instead of returning cleanup explicitly, verify the wrapper's existing callers that currently do `defer cleanup()` on a returned value are updated (removed) consistently — do not leave a double-cleanup (t.Cleanup registered inside the helper AND a stale `defer cleanup()` at the call site referencing a variable that no longer exists, which would simply fail to compile and surface immediately).
-- handlers_integration_test.go's setupHandlerTestServer uses mockDB (grep -n 'NewServer(mockDB)' internal/server/handlers_integration_test.go) — confirm mockDB is the same *mocks.MockStore type allowOpDefinitionUpserts type-asserts against; if it is a different mock type, setupTestServerWithStore's allowOpDefinitionUpserts call becomes a silent no-op (safe) rather than an error, but note this explicitly rather than assuming.
+- Never delete a config.AppConfig assignment as 'boilerplate setupTestServerWithStore already performs'. The fixture BLANKS RootDir; it does not reproduce a test's chosen value.
+- setupTestServerWithStore's cleanup restores config.AppConfig wholesale and does NOT restore the previous global store — a wrapper that saves/restores the global store itself must keep doing so.
+- handlers_integration_test.go's setupHandlerTestServer uses mockDB; confirm it is *mocks.MockStore, the type allowOpDefinitionUpserts type-asserts against (server_test.go: `ms, ok := store.(*mocks.MockStore)`). A different mock type makes that call a silent no-op, which is safe but should be noted.
+- If t.Cleanup(cleanup) goes inside a wrapper, make sure no call site still does `defer cleanup()` on a value the wrapper no longer returns.
 
 ## Tests
 

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-179-database-store-40-build-the-ast-go-types-ci-gate.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 574141c7-7e72-4cc7-a2e1-d1b650b379f4 -->
+<!-- guid: b61da377-5a66-4123-bc38-6694649670d1 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-179 — database.Store (40) -- build the AST/go-types CI gate that makes it unreachable in new files (Phase 2 item 2 of the kill-v1-and-narrow plan) (TODO.md L969)
@@ -112,7 +112,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`The new tool run against current HEAD reports the true count (expected close to but possibly above 91, per the plan doc's undercount warning) with zero unexpected new hits once the baseline is seeded from its own output.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run find internal/database -iname 'iface_misc*'` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

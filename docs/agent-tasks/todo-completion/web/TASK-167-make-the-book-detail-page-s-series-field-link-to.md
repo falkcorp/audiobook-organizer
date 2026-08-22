@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/web/TASK-167-make-the-book-detail-page-s-series-field-link-to.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: 8664b178-2b2f-479e-a804-05916e3e171c -->
+<!-- guid: bcc9a636-c7af-4f14-8c31-b5eb5fc06e83 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-167 — Make the book-detail page's Series field link to a library view filtered by that series, landing at series_index (TODO.md L3161)
@@ -75,7 +75,316 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] npm --prefix web run lint && npm --prefix web test passes.
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] i
+- [ ] e
+- [ ] s
+- [ ] _
+- [ ] i
+- [ ] d
+- [ ] '
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] s
+- [ ] r
+- [ ] c
+- [ ] /
+- [ ] h
+- [ ] o
+- [ ] o
+- [ ] k
+- [ ] s
+- [ ] /
+- [ ] u
+- [ ] s
+- [ ] e
+- [ ] L
+- [ ] i
+- [ ] b
+- [ ] r
+- [ ] a
+- [ ] r
+- [ ] y
+- [ ] Q
+- [ ] u
+- [ ] e
+- [ ] r
+- [ ] y
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] >
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] (
+- [ ] 0
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] g
+- [ ] r
+- [ ] e
+- [ ] p
+- [ ]  
+- [ ] -
+- [ ] n
+- [ ]  
+- [ ] '
+- [ ] s
+- [ ] e
+- [ ] r
+- [ ] i
+- [ ] e
+- [ ] s
+- [ ] _
+- [ ] i
+- [ ] d
+- [ ] '
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ] /
+- [ ] s
+- [ ] r
+- [ ] c
+- [ ] /
+- [ ] c
+- [ ] o
+- [ ] m
+- [ ] p
+- [ ] o
+- [ ] n
+- [ ] e
+- [ ] n
+- [ ] t
+- [ ] s
+- [ ] /
+- [ ] b
+- [ ] o
+- [ ] o
+- [ ] k
+- [ ] d
+- [ ] e
+- [ ] t
+- [ ] a
+- [ ] i
+- [ ] l
+- [ ] /
+- [ ] B
+- [ ] o
+- [ ] o
+- [ ] k
+- [ ] D
+- [ ] e
+- [ ] t
+- [ ] a
+- [ ] i
+- [ ] l
+- [ ] I
+- [ ] n
+- [ ] f
+- [ ] o
+- [ ] T
+- [ ] a
+- [ ] b
+- [ ] .
+- [ ] t
+- [ ] s
+- [ ] x
+- [ ]  
+- [ ] r
+- [ ] e
+- [ ] t
+- [ ] u
+- [ ] r
+- [ ] n
+- [ ] s
+- [ ]  
+- [ ] >
+- [ ] =
+- [ ] 1
+- [ ]  
+- [ ] h
+- [ ] i
+- [ ] t
+- [ ]  
+- [ ] (
+- [ ] 0
+- [ ]  
+- [ ] a
+- [ ] t
+- [ ]  
+- [ ] H
+- [ ] E
+- [ ] A
+- [ ] D
+- [ ] )
+- [ ] ;
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ]  
+- [ ] B
+- [ ] o
+- [ ] o
+- [ ] k
+- [ ] D
+- [ ] e
+- [ ] t
+- [ ] a
+- [ ] i
+- [ ] l
+- [ ] I
+- [ ] n
+- [ ] f
+- [ ] o
+- [ ] T
+- [ ] a
+- [ ] b
+- [ ]  
+- [ ] a
+- [ ] n
+- [ ] d
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] t
+- [ ] e
+- [ ] s
+- [ ] t
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ]  
+- [ ] u
+- [ ] s
+- [ ] e
+- [ ] L
+- [ ] i
+- [ ] b
+- [ ] r
+- [ ] a
+- [ ] r
+- [ ] y
+- [ ] Q
+- [ ] u
+- [ ] e
+- [ ] r
+- [ ] y
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] ;
+- [ ]  
+- [ ] n
+- [ ] p
+- [ ] m
+- [ ]  
+- [ ] -
+- [ ] -
+- [ ] p
+- [ ] r
+- [ ] e
+- [ ] f
+- [ ] i
+- [ ] x
+- [ ]  
+- [ ] w
+- [ ] e
+- [ ] b
+- [ ]  
+- [ ] r
+- [ ] u
+- [ ] n
+- [ ]  
+- [ ] l
+- [ ] i
+- [ ] n
+- [ ] t
+- [ ]  
+- [ ] p
+- [ ] a
+- [ ] s
+- [ ] s
+- [ ] e
+- [ ] s
+- [ ] .
 - [ ] Anti-over-suppression: N/A
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `npm --prefix web run lint && npm --prefix web test` exits 0; `go vet`/lint clean.
@@ -98,7 +407,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`npm --prefix web run lint && npm --prefix web test passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run sed -n '228,233p' web/src/components/bookdetail/BookDetailInfoTab.tsx` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

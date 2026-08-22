@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-026-triage-the-remaining-misc-codeql-alerts-js-findi.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: f463f8ae-f920-43d5-875d-8ad0fdb5aa0c -->
+<!-- guid: 0925a409-4f9e-4b1b-9a11-4c8c6db6fa12 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-026 — Triage the remaining misc CodeQL alerts: JS findings, uncontrolled-allocation-size FP, and the drifted clear-text-logging FP (SEC-CODEQL-BACKLOG)

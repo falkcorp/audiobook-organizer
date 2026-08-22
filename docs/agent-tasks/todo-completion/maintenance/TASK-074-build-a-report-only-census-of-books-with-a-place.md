@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/maintenance/TASK-074-build-a-report-only-census-of-books-with-a-place.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: e1e5a9a7-c180-454f-b56a-e92887c15d09 -->
+<!-- guid: 4b64db79-b3b7-4c28-8935-be656138073c -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-074 — Build a report-only census of books with a placeholder author already baked into their organizer-tree path but resolvable metadata (TODO.md L4144)
@@ -104,7 +104,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`go test ./internal/plugins/maintenance/... -run TestUnknownAuthorAudit passes.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `POST /api/v1/operations/v2 {"def_id":"maintenance.unknown-author-audit"} against a running dev server returns a report with non-negative counts and does not change any book row (verify via a before/after GetBooksCore diff).` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

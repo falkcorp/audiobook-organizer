@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/misc-go/TASK-085-add-search-index-metrics-docs-total-dirty-backlo.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: b24caf91-59d5-4a40-80c3-d0257e6aaf34 -->
+<!-- guid: 424d67e7-8827-4de7-93d5-71d014ea02ed -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-085 — Add search-index metrics (docs total, dirty backlog) to /metrics — the search index has zero metrics today (TODO.md L3433)
@@ -100,7 +100,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`A local /metrics scrape after the change includes 'audiobook_organizer_search_index_docs_total'.`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `the artifact this task adds is present: re-run grep -n 'search\|bleve\|dirty' internal/metrics/metrics.go` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 

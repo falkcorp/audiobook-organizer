@@ -10,7 +10,8 @@
   "exact_files": [
    ".gitignore",
    "mtls-bridge",
-   "scripts/setup-git-hooks.sh"
+   "scripts/setup-git-hooks.sh",
+   "scripts/test-git-hooks.sh"
   ],
   "verified_anchors": [
    {
@@ -38,7 +39,7 @@
   ],
   "polarity": "removal",
   "effort": "S",
-  "tier": "haiku",
+  "tier": "sonnet",
   "why_tier": "git rm + two-line gitignore add + a small size-guard addition to an existing hook script; no ambiguity",
   "review_critical": false,
   "goal": "Stop the compiled mtls-bridge binary (and its Windows twin) from living in git history going forward, per owner-approved Option (d) forward-only hygiene (docs/plans/2026-07-10-repo-size-history-rewrite-plan.md L195-223): remove the tracked binary from HEAD, gitignore it and its Windows counterpart, and add a pre-commit size guard so a rebuilt binary can never be re-added silently.",
@@ -72,7 +73,11 @@
   "anti_over_suppression": "N/A \u2014 this is a removal/hygiene task, not a filter/guard whose over-suppression would hide real bugs; the size-guard test case is the guard's own correctness check.",
   "depends_on_lines": [],
   "gate": "make ci",
-  "notes": "Owner decision #1 (2026-08-21) already settled Option (d) vs history rewrite. The GitHub Support gc ticket (step 1 of the 4-step plan) is an ops action for the owner, not code \u2014 do not attempt it. Do NOT touch git history or run filter-repo."
+  "notes": "Owner decision #1 (2026-08-21) already settled Option (d) vs history rewrite. The GitHub Support gc ticket (step 1 of the 4-step plan) is an ops action for the owner, not code \u2014 do not attempt it. Do NOT touch git history or run filter-repo.",
+  "review_notes": [
+   "[verify-10.json] exact_files is ['.gitignore','mtls-bridge','scripts/setup-git-hooks.sh'] but the Tests section says 'scripts/test-git-hooks.sh already exists -- extend it with a case for the new size guard' and acceptance #3 runs it (`bash scripts/test-git-hooks.sh` passes including the new size-guard case). The fi",
+   "[verify-10.json] Rated Haiku-class as 'git rm + two-line gitignore add + a small size-guard addition ... no ambiguity', but step 3 is a shell size guard written inside a quoted heredoc that must iterate `git diff --cached --name-only --diff-filter=A`, size each staged blob with `git cat-file -s :<path>`, and disting"
+  ]
  },
  {
   "todo_line": 10632,
@@ -200,7 +205,8 @@
   "verdict_evidence": "internal candidates table in web/src/components/dedup/DedupAcousticTab.tsx L1136-1308 is a plain MUI <Table> (TableContainer/Table/TableHead/TableBody, no ConfigurableTable) with a checkbox-select column, Book A/Book B/Similarity/Actions columns and no expand/collapse rows \u2014 a clean fit for the existing `useConfigurableTable` hook already used elsewhere (web/src/components/settings/WriteBackPreviewTable.tsx:23-25).",
   "domain": "web",
   "exact_files": [
-   "web/src/components/dedup/DedupAcousticTab.tsx"
+   "web/src/components/dedup/DedupAcousticTab.tsx",
+   "web/src/components/dedup/__tests__/DedupAcousticTab.test.tsx"
   ],
   "verified_anchors": [
    {
@@ -249,10 +255,7 @@
    "web/src/components/dedup/__tests__/DedupAcousticTab.test.tsx (create if absent \u2014 check `find web/src -iname 'DedupAcousticTab*test*'` first) \u2014 assert clicking a column header toggles sort direction and the candidate order changes accordingly (render with 3 fixture candidates of differing similarity, click 'Similarity' header, assert new row order).",
    "Anti-over-suppression: a test asserting the checkbox column's select-all/select-one behavior still works after the refactor (no regression in `selectedCandIds` state)."
   ],
-  "acceptance": [
-   "`npm --prefix web run lint` passes with no new errors in DedupAcousticTab.tsx.",
-   "Manual: load the Dedup > Acoustic tab, drag a column header edge, confirm the column resizes and the width persists across a page reload (localStorage)."
-  ],
+  "acceptance": "grep -n 'useConfigurableTable' web/src/components/dedup/DedupAcousticTab.tsx returns >=1 hit (0 at HEAD); grep -n \"storageKey: 'dedup-acoustic-candidates'\" returns 1 hit; grep -n 'ResizableHeaderCell' web/src/components/dedup/DedupAcousticTab.tsx returns >=1 hit; grep -n 'table.sortRows(candidates)' returns 1 hit (candidates.map((c) => is at L1163 at HEAD); npm --prefix web test -- DedupAcousticTab passes including the select-all regression test; npm --prefix web run lint passes.",
   "edge_cases": [
    "Empty candidates list \u2014 table should render header only, no crash on `table.sortRows([])`.",
    "A candidate whose bookCache entry hasn't loaded yet (async) \u2014 sortValue must handle undefined book gracefully (fallback to empty string, not throw)."
@@ -265,7 +268,9 @@
    "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
    "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
    "[simplicity-scope.json] All three tasks close the SAME TODO.md line, and that line is not a checkbox at all, so the brief's close-out instruction is inapplicable and will be improvised three different ways by three agents in the same wave. TODO.md:10660 is '36. **1.16 \u2014 resizable/sortable columns** (H1:2750) \u2014 remaining: d",
-   "[simplicity-scope.json] Every brief points at a package-level protocol document that does not exist. 212 files in the package reference `docs/agent-tasks/ORCHESTRATION.md` (as `../ORCHESTRATION.md` / `../../ORCHESTRATION.md`), including the line in each brief '(Protocol also in `docs/agent-tasks/ORCHESTRATION.md` \u2014 the inl"
+   "[simplicity-scope.json] Every brief points at a package-level protocol document that does not exist. 212 files in the package reference `docs/agent-tasks/ORCHESTRATION.md` (as `../ORCHESTRATION.md` / `../../ORCHESTRATION.md`), including the line in each brief '(Protocol also in `docs/agent-tasks/ORCHESTRATION.md` \u2014 the inl",
+   "[verify-8.json] Idempotency check is a green-gate assertion rather than a check for this task's artifact: 'If the first acceptance check below already passes at HEAD (`npm --prefix web run lint` passes with no new errors in DedupAcousticTab.tsx.), this task is already applied.' Lint is green on main whether or not ",
+   "[verify-8.json] exact_files is ['web/src/components/dedup/DedupAcousticTab.tsx'] alone, but the brief names a required anti-over-suppression test ('select-all checkbox still selects all visible rows after ConfigurableTable conversion') plus a sort-order test, in 'web/src/components/dedup/__tests__/DedupAcousticTab."
   ]
  },
  {
@@ -360,7 +365,8 @@
   "verdict_evidence": "web/src/pages/ActivityLog.tsx's entries table (TableContainer/Table at L2091-2092) is a plain MUI table with static headers (Time/Level/Type/Summary/Source/Tags, L2093-2100) and no ConfigurableTable usage; rows are heterogeneous (plain entries, `<BatchActivityEntry>` sub-component for batched entries L2105-2114, and inline digest-expansion rows), so this needs more than a drop-in swap.",
   "domain": "web",
   "exact_files": [
-   "web/src/pages/ActivityLog.tsx"
+   "web/src/pages/ActivityLog.tsx",
+   "web/src/pages/__tests__/ActivityLog.test.tsx"
   ],
   "verified_anchors": [
    {
@@ -403,10 +409,7 @@
   "tests": [
    "web/src/pages/__tests__/ActivityLog.test.tsx (check `find web/src -iname 'ActivityLog*test*'` for existing coverage first) \u2014 add a case asserting clicking the 'Time' header reverses row order, and that batched/digest rows still render correctly after a sort is applied."
   ],
-  "acceptance": [
-   "`npm --prefix web run lint` passes.",
-   "Manual: Activity Log page \u2014 resize a column by dragging its edge, reload the page, confirm the width persisted; click 'Type' header, confirm rows re-sort without breaking digest-entry expand/collapse."
-  ],
+  "acceptance": "grep -n 'useConfigurableTable' web/src/pages/ActivityLog.tsx returns >=1 hit (0 at HEAD); grep -n \"storageKey: 'activity-log'\" returns 1 hit; grep -n 'table.sortRows(entries)' returns 1 hit (entries.map((entry) => is at L2105 at HEAD); grep -n '<TableCell>Time</TableCell>' returns 0 hits (1 at HEAD, L2095); npm --prefix web test -- ActivityLog passes including the digest expand/collapse regression test; npm --prefix web run lint passes.",
   "edge_cases": [
    "A batched entry's summary field may be synthesized/absent \u2014 sortValue for Summary must handle undefined without throwing.",
    "Sorting must not desync from the live-refresh polling (existing 'stale data' warning banner at L2087) \u2014 sort is applied client-side per render, so a background refresh naturally reflows through the same sortRows() call; no extra care needed beyond not caching a stale sorted copy in state."
@@ -418,7 +421,9 @@
   "review_notes": [
    "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
    "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
-   "[simplicity-scope.json] All three tasks close the SAME TODO.md line, and that line is not a checkbox at all, so the brief's close-out instruction is inapplicable and will be improvised three different ways by three agents in the same wave. TODO.md:10660 is '36. **1.16 \u2014 resizable/sortable columns** (H1:2750) \u2014 remaining: d"
+   "[simplicity-scope.json] All three tasks close the SAME TODO.md line, and that line is not a checkbox at all, so the brief's close-out instruction is inapplicable and will be improvised three different ways by three agents in the same wave. TODO.md:10660 is '36. **1.16 \u2014 resizable/sortable columns** (H1:2750) \u2014 remaining: d",
+   "[verify-8.json] Idempotency is the same green-gate false positive: 'If the first acceptance check below already passes at HEAD (`npm --prefix web run lint` passes.), this task is already applied.' Verified unconverted: grep -n 'ConfigurableTable' web/src/pages/ActivityLog.tsx -> 0 hits, and the header row is still ",
+   "[verify-8.json] exact_files is ['web/src/pages/ActivityLog.tsx'] alone. The Tests section requires web/src/pages/__tests__/ActivityLog.test.tsx (`ls` -> No such file or directory) plus the named anti-over-suppression test 'digest-entry expand/collapse still works after entries are sorted by a resizable-column heade"
   ]
  },
  {
@@ -430,7 +435,8 @@
   "verdict_evidence": "web/src/components/dedup/DedupSplitBookTab.tsx's candidates table (TableContainer/Table L345-346) uses a plain MUI table with a custom `<CandidateRow>` sub-component per row (L358-365, taking `expanded`/`onToggle` props) plus `<TablePagination>` below it (L369+) \u2014 expand/collapse state per row means only the header can cleanly reuse ConfigurableTable's resize/sort machinery, similar to part 4's Activity Log case.",
   "domain": "web",
   "exact_files": [
-   "web/src/components/dedup/DedupSplitBookTab.tsx"
+   "web/src/components/dedup/DedupSplitBookTab.tsx",
+   "web/src/components/dedup/__tests__/DedupSplitBookTab.test.tsx"
   ],
   "verified_anchors": [
    {
@@ -467,10 +473,7 @@
   "tests": [
    "web/src/components/dedup/__tests__/DedupSplitBookTab.test.tsx (check `find web/src/components/dedup -iname 'DedupSplitBookTab*test*'` for existing coverage) \u2014 add a case asserting a header click re-sorts candidates and pagination page resets/stays consistent (e.g. clicking a header while on page 2 either resets to page 0 or keeps showing valid rows, whichever the existing pagination component does by default \u2014 assert current behavior, don't invent new behavior)."
   ],
-  "acceptance": [
-   "`npm --prefix web run lint` passes.",
-   "Manual: Dedup > Split-book tab, resize/sort a column, confirm pagination still shows the correct total count and rows."
-  ],
+  "acceptance": "grep -n 'useConfigurableTable' web/src/components/dedup/DedupSplitBookTab.tsx returns >=1 hit (0 at HEAD); grep -n \"storageKey: 'dedup-split-book-candidates'\" returns 1 hit; grep -n 'table.sortRows(candidates)' returns 1 hit; grep -n 'ResizableHeaderCell' returns >=1 hit; npm --prefix web test -- DedupSplitBookTab passes including the expanded-row-survives-sort test; npm --prefix web run lint passes.",
   "edge_cases": [
    "Sorting while a row is expanded (`expanded.has(c.id)`) \u2014 the Set is keyed by candidate id, not row index, so expand state survives resorting automatically; verify no regression."
   ],
@@ -481,7 +484,9 @@
   "review_notes": [
    "[simplicity-scope.json] TODO.md is the single largest same-file collision in the package and it is absent from the collision matrix entirely. Every one of the 175 briefs ends with the instruction 'If the task is a TODO.md close-out, check the box `- [ ]` -> `- [x]` on the source line and append ` \u2014 closed 2026-08-21 (TASK-",
    "[simplicity-scope.json] The gate string shipped to 10 tasks is not a runnable shell command: `npm --prefix web run lint && npm --prefix web test (web)` \u2014 the unquoted `(web)` is a subshell token and every POSIX shell/zsh fails to parse it. TASK-070's gate contains a literal `|` used as prose punctuation ('make ci  (Go) | n",
-   "[simplicity-scope.json] All three tasks close the SAME TODO.md line, and that line is not a checkbox at all, so the brief's close-out instruction is inapplicable and will be improvised three different ways by three agents in the same wave. TODO.md:10660 is '36. **1.16 \u2014 resizable/sortable columns** (H1:2750) \u2014 remaining: d"
+   "[simplicity-scope.json] All three tasks close the SAME TODO.md line, and that line is not a checkbox at all, so the brief's close-out instruction is inapplicable and will be improvised three different ways by three agents in the same wave. TODO.md:10660 is '36. **1.16 \u2014 resizable/sortable columns** (H1:2750) \u2014 remaining: d",
+   "[verify-8.json] Same green-gate false positive: 'If the first acceptance check below already passes at HEAD (`npm --prefix web run lint` passes.), this task is already applied.' Verified unconverted: grep -n 'ConfigurableTable' web/src/components/dedup/DedupSplitBookTab.tsx -> 0 hits.",
+   "[verify-8.json] exact_files is ['web/src/components/dedup/DedupSplitBookTab.tsx'] alone, while the Tests section requires web/src/components/dedup/__tests__/DedupSplitBookTab.test.tsx (does not exist) carrying the named anti-over-suppression test 'expanded row state survives a column-header sort' \u2014 precisely the in"
   ]
  },
  {
@@ -1044,8 +1049,8 @@
   "src_id": null,
   "part": 1,
   "title": "Scan and fingerprint the assembled-source download root as a read-only reference corpus",
-  "verdict": "actionable",
-  "verdict_evidence": "config.Config has exactly one library root (`RootDir string` at internal/config/config.go:623, the only root-path field in the whole struct \u2014 `grep -n 'LibraryPath\\|ScanRoot\\|RootDir' internal/config/config.go` shows only RootDir), so there is currently no way to scan a second, distinct root as a read-only reference corpus without conflating it with the active organized library \u2014 this is the genuine prerequisite gap the scope text itself identifies ('the assembled source-download root is NOT a configured scan path... title search for a known source book = 0 hits').",
+  "verdict": "needs_design",
+  "verdict_evidence": "[verify-10.json] Step 2 is a schema-design assignment, not an implementation step: 'Design a minimal record shape for a reference-corpus file ... WITHOUT reusing the full Book/BookFile schema ... likely a new small table/keyspace, e.g. internal/database keys under a `refcorpus:` prefix.' Step 1 leaves the config surface equally open ('a new config field (e.g. `ReferenceCorpusPaths []string` or a single `SourceCorpusRoot string`)') and self-contradicts on the loading mechanism (see the check-10 finding). Choosing a new persisted keyspace, its key layout, and a second scan-root config surface are owner decisions that cannot be delegated to an executor; the brief should be split into a design note plus an implementation brief once the shape is fixed. | config.Config has exactly one library root (`RootDir string` at internal/config/config.go:623, the only root-path field in the whole struct \u2014 `grep -n 'LibraryPath\\|ScanRoot\\|RootDir' internal/config/config.go` shows only RootDir), so there is currently no way to scan a second, distinct root as a read-only reference corpus without conflating it with the active organized library \u2014 this is the genuine prerequisite gap the scope text itself identifies ('the assembled source-download root is NOT a configured scan path... title search for a known source book = 0 hits').",
   "domain": "internal/config",
   "exact_files": [
    "internal/config/config.go",
@@ -1109,7 +1114,8 @@
   "gate": "make ci",
   "notes": "This is the load-bearing prerequisite for parts 2 and 3 of this same TODO item and for the whole shattered-book-reassembly feature (part 3 below) \u2014 without it there is no ground truth to match fragments against. review_critical=true given the standing 'NEVER mutate the active iTunes tree' rule extends to this new root by explicit owner design constraint.",
   "review_notes": [
-   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)"
+   "[simplicity-scope.json] Waves are declared GLOBAL in BREAKDOWN but rendered as LOCAL in every workstream doc, and the two readings produce completely different schedules. BREAKDOWN \u00a7'Same-file collision rule' is subtitled 'drives wave ordering \u2014 GLOBAL across workstreams' and gives global counts (wave 1: 107 ... wave 8: 1)",
+   "[verify-10.json] "
   ]
  },
  {

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion/missing-file-lane/TASK-089-log-a-warning-when-getallseriesbookcounts-itself.md -->
 <!-- version: 1.0.0 -->
-<!-- guid: fd66992d-ea30-49ad-a41e-2c18992a7f3d -->
+<!-- guid: 34439dcf-a521-4b2f-af13-13f5b8a100a7 -->
 <!-- last-edited: 2026-08-21 -->
 
 # TASK-089 — Log a warning when GetAllSeriesBookCounts() itself errors in LibrarySeries (TODO.md L5494)
@@ -96,7 +96,7 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-If the first acceptance check below already passes at HEAD (`grep -n 'series book counts unavailable' internal/server/handlers/abs/browse.go returns 1 hit`), this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
+If this presence check already passes at HEAD — `grep -n 'series book counts unavailable' internal/server/handlers/abs/browse.go returns 1 hit` — this task is already applied — run the acceptance checks instead of re-applying. Rollback = `git revert` the single commit; pre-existing behaviour is untouched (purely additive change).
 
 ## Coordinator notes
 
