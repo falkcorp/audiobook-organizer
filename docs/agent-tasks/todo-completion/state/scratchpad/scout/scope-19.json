@@ -1,0 +1,241 @@
+[
+  {
+    "todo_line": 90006,
+    "src_id": "DEC-6",
+    "part": 1,
+    "title": "Migrate internal/server test fixtures to setupTestServerWithStore — itunes_error_test.go, version_lifecycle_test.go",
+    "verdict": "actionable",
+    "verdict_evidence": "`grep -rn \"func newTestServer\" internal/server` returns 0 hits — the exact helper name the decision names does not exist at HEAD. The real shared fixture is `setupTestServerWithStore` (internal/server/server_test.go:151), already documented as reused 275 times across 35 files by its neighbor setupTestServer's doc comment (server_test.go:36-47). 46 real `NewServer(...)` construction sites bypass it across 23 files (measured via `grep -rn \"NewServer(\" internal/server --include=\"*_test.go\"` then excluding httptest.NewServer and server_test.go's own definitions) — close to the decision's approximate '~60'. This part covers itunes_error_test.go (11 sites) and version_lifecycle_test.go (1 site) = 12.",
+    "domain": "internal/server",
+    "exact_files": [
+      "internal/server/itunes_error_test.go",
+      "internal/server/version_lifecycle_test.go"
+    ],
+    "verified_anchors": [
+      {"claim": "no function literally named newTestServer exists", "grep_cmd": "grep -rn \"func newTestServer\" internal/server", "expect": "0 hits"},
+      {"claim": "setupTestServerWithStore is the real, already-heavily-reused shared fixture", "grep_cmd": "grep -n \"func setupTestServerWithStore\" internal/server/server_test.go", "expect": "1 hit at L151"},
+      {"claim": "itunes_error_test.go has 11 direct NewServer(env.Store) construction sites", "grep_cmd": "grep -n \"NewServer(\" internal/server/itunes_error_test.go", "expect": "11 hits at L34,66,83,130,162,175,201,217,233,259,283"},
+      {"claim": "version_lifecycle_test.go has 1 direct NewServer(store) construction site", "grep_cmd": "grep -n \"NewServer(\" internal/server/version_lifecycle_test.go", "expect": "1 hit at L37"}
+    ],
+    "reuse": [
+      {"name": "setupTestServerWithStore(t, store) (*Server, func())", "file": "internal/server/server_test.go", "verify_grep": "grep -n \"func setupTestServerWithStore\" internal/server/server_test.go"},
+      {"name": "allowOpDefinitionUpserts(store) — already called internally by setupTestServerWithStore for MockStore", "file": "internal/server/server_test.go", "verify_grep": "grep -n \"func allowOpDefinitionUpserts\" internal/server/server_test.go"}
+    ],
+    "polarity": "transform",
+    "effort": "M",
+    "tier": "sonnet",
+    "why_tier": "Mechanical fixture consolidation across two files, but itunes_error_test.go's 11 sites each hand-roll manual opRegistry.Start/Shutdown boilerplate that must be judged, not blindly deleted — a haiku-class run is likely to either strip needed opRegistry wiring or leave true duplicates behind.",
+    "review_critical": false,
+    "goal": "Replace every ad-hoc `server := NewServer(env.Store)` / `srv := NewServer(store)` construction in itunes_error_test.go and version_lifecycle_test.go with a call to the already-existing shared fixture `setupTestServerWithStore(t, store)` (internal/server/server_test.go:151), removing any now-redundant manual boilerplate it already performs (gin.SetMode(gin.TestMode), database.SetGlobalStore(store), allowOpDefinitionUpserts(store) for mock stores) while preserving anything setupTestServerWithStore does NOT do (most notably: it does not start the operations registry — see server_test.go:100-102's comment that only setupTestServerFS does that — so itunes_error_test.go's manual `server.opRegistry.Start(context.Background())` / deferred Shutdown pairs must be kept as-is).",
+    "background": [
+      "internal/server/server_test.go:151 defines setupTestServerWithStore(t, store) (*Server, func()) — sets gin.TestMode, calls allowOpDefinitionUpserts(store), database.SetGlobalStore(store), NewServer(store), and returns a cleanup that stops fileIOPool/writeBackBatcher and restores config.AppConfig.",
+      "itunes_error_test.go builds its env via testutil.SetupIntegration(t) (grep -n \"testutil.SetupIntegration\" internal/server/itunes_error_test.go), then at 11 separate TestITunesImport_* functions calls `server := NewServer(env.Store)` directly followed by a manual opRegistry.Start/Shutdown pair — that manual pair is NOT something setupTestServerWithStore performs, so it must be kept.",
+      "version_lifecycle_test.go's single call site at L37 constructs from a plain store with no such extra wiring, per a quick read of its surrounding function (verify before editing: grep -n -B5 -A5 \"NewServer(\" internal/server/version_lifecycle_test.go)."
+    ],
+    "steps": [
+      "1. Open internal/server/itunes_error_test.go. For each of the 11 lines (34,66,83,130,162,175,201,217,233,259,283), replace `server := NewServer(env.Store)` with `server, cleanup := setupTestServerWithStore(t, env.Store)` followed immediately by `defer cleanup()`.",
+      "2. Immediately after each replacement, keep the existing `if server.opRegistry != nil { server.opRegistry.Start(context.Background()); defer func() { _ = server.opRegistry.Shutdown(context.Background()) }() }` block UNCHANGED — setupTestServerWithStore does not start the registry, so this remains necessary. Do not delete it.",
+      "3. Confirm no line in the same test function duplicates gin.SetMode/database.SetGlobalStore/allowOpDefinitionUpserts already covered by setupTestServerWithStore — remove only exact duplicates, nothing else (grep -n -A3 -B3 each construction site before editing to check).",
+      "4. Repeat for internal/server/version_lifecycle_test.go:37 — replace the construction with setupTestServerWithStore(t, store), add defer cleanup(), and verify (by reading the surrounding ~15 lines) whether any manual opRegistry wiring exists there too; if none, no extra step is needed.",
+      "5. Bump the version header and last-edited date on both files (per CLAUDE.md file-header rule).",
+      "6. Run: go build ./... && go vet ./... && go test ./internal/server/... -run 'TestITunesImport|TestServerVersionLifecycle' -count=1 (adjust the -run pattern to the actual Test function names in these two files if they differ — list them first with grep -n \"^func Test\" internal/server/itunes_error_test.go internal/server/version_lifecycle_test.go)."
+    ],
+    "tests": [
+      "No new test is required — this is a pure fixture-construction refactor. Existing tests in itunes_error_test.go and version_lifecycle_test.go must pass unchanged: run go test ./internal/server/... -run 'TestITunesImport' -count=1 and confirm identical pass/fail outcomes to a pre-change baseline run."
+    ],
+    "acceptance": [
+      "grep -c \"NewServer(\" internal/server/itunes_error_test.go returns 0 (all 11 sites migrated; the only remaining NewServer( reference, if any, would be inside setupTestServerWithStore itself, which is not in this file).",
+      "grep -c \"NewServer(\" internal/server/version_lifecycle_test.go returns 0.",
+      "go build ./... && go vet ./... && go test ./internal/server/... -count=1 exits 0."
+    ],
+    "edge_cases": [
+      "A construction site inside a subtest table loop (none in these two files per the anchors above, but verify before editing) would need its defer cleanup() inside the loop body, not once outside — check the immediate surrounding braces of each site before applying the mechanical replacement.",
+      "If env.Store is ever nil in a given test (unlikely given testutil.SetupIntegration's contract, but verify), setupTestServerWithStore must be given the same nil-safety it already has for MockStore-typed stores — the type assertion in allowOpDefinitionUpserts (`ms, ok := store.(*mocks.MockStore)`) simply fails the assertion and is a no-op for a non-mock, non-nil store, which is the expected path here."
+    ],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "go build ./... && go vet ./... && go test ./internal/server/... -count=1",
+    "notes": "Part 1 of 4 (DEC-6 split by disjoint file sets for collision-free parallel waves). Total measured hand-built *Server call sites across internal/server: 46, across 23 files — split as Part1=12 (itunes_error_test.go, version_lifecycle_test.go), Part2=12, Part3=12, Part4=10. fingerprint_rescan_test.go's newRescanTestServer is deliberately EXCLUDED from all 4 parts (it hand-builds a bare &Server{store: mockStore} on purpose, per its own doc comment, to avoid wiring the operations queue — migrating it would change TestFingerprintRescan_* behavior)."
+  },
+  {
+    "todo_line": 90006,
+    "src_id": "DEC-6",
+    "part": 2,
+    "title": "Migrate internal/server test fixtures to setupTestServerWithStore — itunes_integration_test.go, indexed_store_test.go, similar_books_test.go, e2e_workflow_test.go",
+    "verdict": "actionable",
+    "verdict_evidence": "Same finding as Part 1 (no newTestServer helper exists; setupTestServerWithStore is the real shared fixture). This part's 4 files carry 12 of the 46 measured direct NewServer(...) construction sites: itunes_integration_test.go (5), indexed_store_test.go (4), similar_books_test.go (2), e2e_workflow_test.go (1).",
+    "domain": "internal/server",
+    "exact_files": [
+      "internal/server/itunes_integration_test.go",
+      "internal/server/indexed_store_test.go",
+      "internal/server/similar_books_test.go",
+      "internal/server/e2e_workflow_test.go"
+    ],
+    "verified_anchors": [
+      {"claim": "itunes_integration_test.go has 5 direct NewServer(env.Store) sites", "grep_cmd": "grep -n \"NewServer(\" internal/server/itunes_integration_test.go", "expect": "5 hits at L56,124,172,222,256"},
+      {"claim": "indexed_store_test.go has 4 direct NewServer(store) sites", "grep_cmd": "grep -n \"NewServer(\" internal/server/indexed_store_test.go", "expect": "4 hits at L51,99,144,183"},
+      {"claim": "similar_books_test.go has 2 direct NewServer(store) sites", "grep_cmd": "grep -n \"NewServer(\" internal/server/similar_books_test.go", "expect": "2 hits at L42,136"},
+      {"claim": "e2e_workflow_test.go has 1 direct NewServer(env.Store) site", "grep_cmd": "grep -n \"NewServer(\" internal/server/e2e_workflow_test.go", "expect": "1 hit at L49"}
+    ],
+    "reuse": [
+      {"name": "setupTestServerWithStore(t, store) (*Server, func())", "file": "internal/server/server_test.go", "verify_grep": "grep -n \"func setupTestServerWithStore\" internal/server/server_test.go"}
+    ],
+    "polarity": "transform",
+    "effort": "M",
+    "tier": "sonnet",
+    "why_tier": "Mechanical, but indexed_store_test.go and similar_books_test.go have multiple sites per file (possibly in table-driven subtests) that need per-site defer placement judged correctly.",
+    "review_critical": false,
+    "goal": "Same transformation as Part 1, applied to itunes_integration_test.go (5 sites), indexed_store_test.go (4 sites), similar_books_test.go (2 sites), e2e_workflow_test.go (1 site): replace each direct NewServer(store)/NewServer(env.Store) with setupTestServerWithStore(t, store) + defer cleanup(), deleting only exactly-duplicated boilerplate (gin.SetMode/database.SetGlobalStore/allowOpDefinitionUpserts) that setupTestServerWithStore already performs, and preserving anything it does not (e.g. manual opRegistry start/shutdown, if present).",
+    "background": [
+      "Same base facts as Part 1's background — setupTestServerWithStore (server_test.go:151) is the real shared fixture; it does not start the operations registry.",
+      "Before editing each site, read the ~15 surrounding lines (grep -n -B5 -A10 \"NewServer(\" <file>) to check for a manual opRegistry.Start/Shutdown pair (as seen in itunes_error_test.go in Part 1) or other custom wiring that must be preserved rather than deleted."
+    ],
+    "steps": [
+      "1. For each of the 12 cited line numbers across the 4 files, replace the NewServer(...) construction with `<var>, cleanup := setupTestServerWithStore(t, <store-var>)` followed by `defer cleanup()`, keeping the original result variable name (srv/server).",
+      "2. Before deleting any surrounding line, confirm it duplicates exactly what setupTestServerWithStore already does (gin.SetMode(gin.TestMode), database.SetGlobalStore(store), allowOpDefinitionUpserts(store)) — delete only those exact duplicates.",
+      "3. If indexed_store_test.go's or similar_books_test.go's sites are inside a `for _, tt := range ...` or `t.Run(...)` subtest body, ensure `defer cleanup()` is placed INSIDE that body (each subtest/iteration gets its own cleanup), not once at the outer function scope.",
+      "4. Bump version headers on all 4 files.",
+      "5. List each file's Test function names first (grep -n \"^func Test\" <file>) and run: go build ./... && go vet ./... && go test ./internal/server/... -run '<the discovered Test names joined with |>' -count=1."
+    ],
+    "tests": [
+      "No new test required — pure fixture refactor. Run the existing tests in all 4 files and confirm identical pass/fail outcomes to a pre-change baseline: go test ./internal/server/... -count=1 (or scoped -run to just these files' Test funcs)."
+    ],
+    "acceptance": [
+      "grep -c \"NewServer(\" internal/server/itunes_integration_test.go internal/server/indexed_store_test.go internal/server/similar_books_test.go internal/server/e2e_workflow_test.go each returns 0.",
+      "go build ./... && go vet ./... && go test ./internal/server/... -count=1 exits 0."
+    ],
+    "edge_cases": [
+      "indexed_store_test.go's 4 sites (L51,99,144,183) are likely 4 separate Test functions, not one table loop — verify with grep -n \"^func Test\" internal/server/indexed_store_test.go before assuming a shared-loop pattern; if they are indeed 4 separate functions, each gets its own straightforward defer cleanup() with no loop-scoping concern.",
+      "e2e_workflow_test.go likely exercises a longer end-to-end flow — confirm its single site's surrounding context doesn't rely on a specific NewServer(...) side effect (e.g. a particular initial config.AppConfig.RootDir) that setupTestServerWithStore's config-pinning (RootDir=\"\", server_test.go:161) would change; if the test needs a non-empty RootDir, keep a manual override line after the setupTestServerWithStore call rather than silently dropping the requirement."
+    ],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "go build ./... && go vet ./... && go test ./internal/server/... -count=1",
+    "notes": "Part 2 of 4. See Part 1's notes for the full 46-site/23-file breakdown and the fingerprint_rescan_test.go exclusion."
+  },
+  {
+    "todo_line": 90006,
+    "src_id": "DEC-6",
+    "part": 3,
+    "title": "Migrate internal/server test fixtures to setupTestServerWithStore — server_coverage_phase2_test.go, deluge_integration_test.go, search_reconciler_test.go, maintenance_window_handlers_test.go, user_tags_authz_test.go, playlist_handlers_test.go, handlers_integration_test.go",
+    "verdict": "actionable",
+    "verdict_evidence": "Same base finding as Parts 1-2. This part's 7 files carry 12 of the 46 measured sites: server_coverage_phase2_test.go (4, inside subtest loops with mockStore), deluge_integration_test.go (2), search_reconciler_test.go (2), and 4 files with the file's own duplicate 'setup*TestServer' wrapper helper (1 site each: maintenance_window_handlers_test.go, user_tags_authz_test.go, playlist_handlers_test.go, handlers_integration_test.go).",
+    "domain": "internal/server",
+    "exact_files": [
+      "internal/server/server_coverage_phase2_test.go",
+      "internal/server/deluge_integration_test.go",
+      "internal/server/search_reconciler_test.go",
+      "internal/server/maintenance_window_handlers_test.go",
+      "internal/server/user_tags_authz_test.go",
+      "internal/server/playlist_handlers_test.go",
+      "internal/server/handlers_integration_test.go"
+    ],
+    "verified_anchors": [
+      {"claim": "server_coverage_phase2_test.go has 4 mockStore-based NewServer sites, each already manually calling allowOpDefinitionUpserts(mockStore) first — direct proof of the exact duplication DEC-6 targets", "grep_cmd": "grep -n \"NewServer(\\|allowOpDefinitionUpserts(\" internal/server/server_coverage_phase2_test.go", "expect": "8 hits: allowOpDefinitionUpserts at L75,133,167,222 each immediately preceding NewServer at L76,134,168,223"},
+      {"claim": "deluge_integration_test.go has 2 real NewServer(store) sites (plus unrelated httptest.NewServer mock-backend sites, not counted)", "grep_cmd": "grep -n \"NewServer(store)\" internal/server/deluge_integration_test.go", "expect": "2 hits at L113,161"},
+      {"claim": "search_reconciler_test.go has 2 NewServer(store) sites", "grep_cmd": "grep -n \"NewServer(store)\" internal/server/search_reconciler_test.go", "expect": "2 hits at L46,242"},
+      {"claim": "4 files each define their own duplicate setup*TestServer wrapper that calls NewServer directly", "grep_cmd": "grep -n \"^func setupMaintenanceTestServer\\|^func setupUserTagsAuthzTestServer\\|^func setupPlaylistTestServer\\|^func setupHandlerTestServer\" internal/server/maintenance_window_handlers_test.go internal/server/user_tags_authz_test.go internal/server/playlist_handlers_test.go internal/server/handlers_integration_test.go", "expect": "4 hits, one per file: maintenance_window_handlers_test.go:26, user_tags_authz_test.go:38, playlist_handlers_test.go:24, handlers_integration_test.go:190"}
+    ],
+    "reuse": [
+      {"name": "setupTestServerWithStore(t, store) (*Server, func())", "file": "internal/server/server_test.go", "verify_grep": "grep -n \"func setupTestServerWithStore\" internal/server/server_test.go"},
+      {"name": "allowOpDefinitionUpserts(store) — already called internally by setupTestServerWithStore, making the manual calls in server_coverage_phase2_test.go redundant once migrated", "file": "internal/server/server_test.go", "verify_grep": "grep -n \"func allowOpDefinitionUpserts\" internal/server/server_test.go"}
+    ],
+    "polarity": "transform",
+    "effort": "M",
+    "tier": "sonnet",
+    "why_tier": "server_coverage_phase2_test.go's 4 sites live inside `for _, tt := range ...` subtest loops (confirm with the surrounding braces before editing) and already have their own manual allowOpDefinitionUpserts call that becomes redundant post-migration — a purely mechanical find-replace would leave a harmless but sloppy duplicate call; a Sonnet-tier read of the surrounding ~10 lines per site is warranted. The 4 wrapper-helper files (maintenance/user_tags_authz/playlist/handlers_integration) require deciding whether to migrate the WRAPPER's internals (keep the file's distinct helper name and signature, delegate its body to setupTestServerWithStore) or retire the wrapper and repoint its call sites directly — the wrapper's own return signature (user_tags_authz_test.go's five-tuple return, for instance) makes 'delegate internals, keep signature' the lower-risk choice; document that choice explicitly per file.",
+    "review_critical": false,
+    "goal": "For server_coverage_phase2_test.go, deluge_integration_test.go, and search_reconciler_test.go, replace each direct NewServer(...) construction with setupTestServerWithStore(t, store) the same way as Parts 1-2, removing the now-redundant manual allowOpDefinitionUpserts(mockStore) calls that precede each of server_coverage_phase2_test.go's 4 sites (setupTestServerWithStore performs this call internally — see server_test.go:167). For the 4 files with their own duplicate 'setup*TestServer' wrapper helper (setupMaintenanceTestServer, setupUserTagsAuthzTestServer, setupPlaylistTestServer, setupHandlerTestServer), keep each wrapper's existing name and return signature (its call sites elsewhere in the same file must not change) but rewrite its INTERNAL body to construct via setupTestServerWithStore instead of hand-rolling NewServer + manual global-state wiring, so the file has exactly one place performing raw construction.",
+    "background": [
+      "server_coverage_phase2_test.go's 4 sites (L76,134,168,223) are the clearest evidence of the exact bug class DEC-6 targets: each is preceded one line earlier by a manual `allowOpDefinitionUpserts(mockStore)` call (L75,133,167,222) — this is precisely the boilerplate setupTestServerWithStore already performs internally (server_test.go:167), duplicated by hand at every call site instead of being reused.",
+      "The 4 wrapper-helper files each define ONE function (setupMaintenanceTestServer, setupUserTagsAuthzTestServer, setupPlaylistTestServer, setupHandlerTestServer) that other test functions in the SAME file call repeatedly (call counts: 4, 2, 10, 13 respectively, per grep -rn '<fnName>(' <file> --include=\"*_test.go\") — migrating the wrapper's internals (not its call sites) is a single edit that benefits every downstream caller in that file with no call-site churn.",
+      "user_tags_authz_test.go's wrapper has a 5-value return signature (srv, adminToken, viewerToken, bookID, cleanup) — its body does more than construct a server (it also seeds sessions and a book); only the construction portion should delegate to setupTestServerWithStore, the seeding logic stays as-is."
+    ],
+    "steps": [
+      "1. In server_coverage_phase2_test.go, at each of the 4 sites (L76,134,168,223), delete the preceding `allowOpDefinitionUpserts(mockStore)` line and replace `srv := NewServer(mockStore)` with `srv, cleanup := setupTestServerWithStore(t, mockStore); defer cleanup()`. Verify each site is inside its own subtest/loop iteration body first (grep -n -B15 'NewServer(mockStore)' internal/server/server_coverage_phase2_test.go) so defer cleanup() lands inside that scope, not once outside a shared loop.",
+      "2. In deluge_integration_test.go (L113,161) and search_reconciler_test.go (L46,242), apply the same NewServer(store) -> setupTestServerWithStore(t, store) + defer cleanup() replacement as Parts 1-2, deleting only exact-duplicate boilerplate.",
+      "3. In maintenance_window_handlers_test.go's setupMaintenanceTestServer (L26-...), find its internal `srv := NewServer(store)` (L41) and any manual config/global-store lines above it; replace the construction with `srv, cleanup := setupTestServerWithStore(t, store)`, thread `cleanup` into whatever this wrapper already returns to its callers (check its current signature and whether it currently returns a cleanup func at all — if it doesn't, either add one and update its ~4 call sites to `defer cleanup()`, or call `t.Cleanup(cleanup)` inside the wrapper itself so the signature does not need to change — prefer t.Cleanup(cleanup) to avoid touching call sites).",
+      "4. Repeat step 3's approach for setupUserTagsAuthzTestServer (user_tags_authz_test.go:38, NewServer at L79 — preserve the session/book seeding logic that follows construction unchanged, only replace the construction line and add t.Cleanup(cleanup) or thread the returned cleanup into the existing 5th return value slot), setupPlaylistTestServer (playlist_handlers_test.go:24, NewServer at L45), and setupHandlerTestServer (handlers_integration_test.go:190, NewServer at L220).",
+      "5. Bump version headers on all 7 files.",
+      "6. List Test function names in each file and run: go build ./... && go vet ./... && go test ./internal/server/... -run '<discovered Test names>' -count=1."
+    ],
+    "tests": [
+      "No new test required — pure fixture refactor. Run every existing test in these 7 files (go test ./internal/server/... -count=1) and confirm identical pass/fail outcomes to a pre-change baseline, with special attention to server_coverage_phase2_test.go's mock-based subtests (a missed allowOpDefinitionUpserts equivalent would surface as a testify FailNow on an unexpected UpsertOpDefinitionV2 call)."
+    ],
+    "acceptance": [
+      "grep -c \"NewServer(mockStore)\" internal/server/server_coverage_phase2_test.go returns 0.",
+      "grep -c \"NewServer(store)\" internal/server/deluge_integration_test.go internal/server/search_reconciler_test.go internal/server/maintenance_window_handlers_test.go internal/server/playlist_handlers_test.go each returns 0.",
+      "grep -c \"NewServer(\" internal/server/user_tags_authz_test.go internal/server/handlers_integration_test.go each returns 0.",
+      "go build ./... && go vet ./... && go test ./internal/server/... -count=1 exits 0."
+    ],
+    "edge_cases": [
+      "If t.Cleanup(cleanup) is used inside a wrapper helper instead of returning cleanup explicitly, verify the wrapper's existing callers that currently do `defer cleanup()` on a returned value are updated (removed) consistently — do not leave a double-cleanup (t.Cleanup registered inside the helper AND a stale `defer cleanup()` at the call site referencing a variable that no longer exists, which would simply fail to compile and surface immediately).",
+      "handlers_integration_test.go's setupHandlerTestServer uses mockDB (grep -n 'NewServer(mockDB)' internal/server/handlers_integration_test.go) — confirm mockDB is the same *mocks.MockStore type allowOpDefinitionUpserts type-asserts against; if it is a different mock type, setupTestServerWithStore's allowOpDefinitionUpserts call becomes a silent no-op (safe) rather than an error, but note this explicitly rather than assuming."
+    ],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "go build ./... && go vet ./... && go test ./internal/server/... -count=1",
+    "notes": "Part 3 of 4. See Part 1's notes for the full 46-site/23-file breakdown and the fingerprint_rescan_test.go exclusion. This part additionally covers 4 of the 8 duplicate wrapper-helper files identified at HEAD (the other 4 — ai_jobs_handlers_test.go, reading_handlers_test.go, metadata_handlers_test.go's setupRatingTestServer, and fingerprint_rescan_test.go's excluded newRescanTestServer — are in Part 4 or excluded)."
+  },
+  {
+    "todo_line": 90006,
+    "src_id": "DEC-6",
+    "part": 4,
+    "title": "Migrate internal/server test fixtures to setupTestServerWithStore — cover_history_test.go, server_middleware_test.go, ai_jobs_handlers_test.go, entity_tag_handlers_test.go, import_collision_test.go, reading_handlers_test.go, user_handlers_test.go, organize_integration_test.go, server_op_registration_test.go, metadata_handlers_test.go",
+    "verdict": "actionable",
+    "verdict_evidence": "Same base finding as Parts 1-3. This part's 10 files each carry exactly 1 of the 46 measured direct NewServer(...) sites, rounding out the full set (12+12+12+10=46).",
+    "domain": "internal/server",
+    "exact_files": [
+      "internal/server/cover_history_test.go",
+      "internal/server/server_middleware_test.go",
+      "internal/server/ai_jobs_handlers_test.go",
+      "internal/server/entity_tag_handlers_test.go",
+      "internal/server/import_collision_test.go",
+      "internal/server/reading_handlers_test.go",
+      "internal/server/user_handlers_test.go",
+      "internal/server/organize_integration_test.go",
+      "internal/server/server_op_registration_test.go",
+      "internal/server/metadata_handlers_test.go"
+    ],
+    "verified_anchors": [
+      {"claim": "each of the 10 files has exactly 1 direct NewServer(...) construction site", "grep_cmd": "grep -n \"NewServer(\" internal/server/cover_history_test.go internal/server/server_middleware_test.go internal/server/ai_jobs_handlers_test.go internal/server/entity_tag_handlers_test.go internal/server/import_collision_test.go internal/server/reading_handlers_test.go internal/server/user_handlers_test.go internal/server/organize_integration_test.go internal/server/server_op_registration_test.go internal/server/metadata_handlers_test.go", "expect": "10 hits total, 1 per file: cover_history_test.go:44, server_middleware_test.go:38, ai_jobs_handlers_test.go:40, entity_tag_handlers_test.go:36, import_collision_test.go:38, reading_handlers_test.go:35, user_handlers_test.go:35, organize_integration_test.go:53, server_op_registration_test.go:46, metadata_handlers_test.go:32"},
+      {"claim": "ai_jobs_handlers_test.go, reading_handlers_test.go, and metadata_handlers_test.go each define their own single-use wrapper helper (setupAIJobsTestServer, setupReadingTestServer, setupRatingTestServer) around their site", "grep_cmd": "grep -n \"^func setupAIJobsTestServer\\|^func setupReadingTestServer\\|^func setupRatingTestServer\" internal/server/ai_jobs_handlers_test.go internal/server/reading_handlers_test.go internal/server/metadata_handlers_test.go", "expect": "3 hits: ai_jobs_handlers_test.go:25, reading_handlers_test.go:19, metadata_handlers_test.go:19"}
+    ],
+    "reuse": [
+      {"name": "setupTestServerWithStore(t, store) (*Server, func())", "file": "internal/server/server_test.go", "verify_grep": "grep -n \"func setupTestServerWithStore\" internal/server/server_test.go"}
+    ],
+    "polarity": "transform",
+    "effort": "M",
+    "tier": "sonnet",
+    "why_tier": "10 files, 1 site each — individually trivial, but 3 of them (ai_jobs, reading, rating) route through their own single-use wrapper helper whose internals must be migrated the same way as Part 3's wrapper files, requiring the same judgment about how to thread cleanup.",
+    "review_critical": false,
+    "goal": "Replace the single direct NewServer(...) construction in each of the 10 files with setupTestServerWithStore(t, store) + defer cleanup() (for the 7 files that construct inline) or migrate the wrapper's internals the same way as Part 3 (for ai_jobs_handlers_test.go's setupAIJobsTestServer, reading_handlers_test.go's setupReadingTestServer, and metadata_handlers_test.go's setupRatingTestServer), removing only exactly-duplicated boilerplate.",
+    "background": [
+      "cover_history_test.go, server_middleware_test.go, entity_tag_handlers_test.go, import_collision_test.go, user_handlers_test.go, organize_integration_test.go, and server_op_registration_test.go construct their single *Server inline within their one Test function (no wrapper helper) — these are the simplest of the 46 sites to migrate.",
+      "ai_jobs_handlers_test.go's setupAIJobsTestServer (L25) returns (*Server, *database.PebbleStore) — a two-value, non-cleanup-returning signature; its 5 call sites elsewhere in the file must keep receiving those same two values, so t.Cleanup(cleanup) inside the wrapper (rather than changing its signature) is the lower-risk migration.",
+      "reading_handlers_test.go's setupReadingTestServer and metadata_handlers_test.go's setupRatingTestServer are structurally identical single-purpose wrappers, each with a handful of call sites in-file (5 and 2 respectively, per the DEC-6 call-count grep run earlier in this scope's investigation)."
+    ],
+    "steps": [
+      "1. For the 7 inline-construction files (cover_history_test.go:44, server_middleware_test.go:38, entity_tag_handlers_test.go:36, import_collision_test.go:38, user_handlers_test.go:35, organize_integration_test.go:53, server_op_registration_test.go:46), replace `srv := NewServer(<store-var>)` with `srv, cleanup := setupTestServerWithStore(t, <store-var>); defer cleanup()`, deleting only lines that exactly duplicate setupTestServerWithStore's internal gin.SetMode/database.SetGlobalStore/allowOpDefinitionUpserts calls.",
+      "2. For ai_jobs_handlers_test.go's setupAIJobsTestServer (NewServer at L40): replace its internal construction with `srv, cleanup := setupTestServerWithStore(t, store)`, add `t.Cleanup(cleanup)` inside the wrapper immediately after (so its existing `(*Server, *database.PebbleStore)` return signature and all 5 call sites need zero changes), and delete now-redundant manual boilerplate inside the wrapper only.",
+      "3. Apply the same t.Cleanup(cleanup)-inside-the-wrapper approach to reading_handlers_test.go's setupReadingTestServer (NewServer at L35) and metadata_handlers_test.go's setupRatingTestServer (NewServer at L32).",
+      "4. Bump version headers on all 10 files.",
+      "5. List Test function names per file and run: go build ./... && go vet ./... && go test ./internal/server/... -run '<discovered Test names>' -count=1."
+    ],
+    "tests": [
+      "No new test required — pure fixture refactor. Run every existing test in these 10 files (go test ./internal/server/... -count=1) and confirm identical pass/fail outcomes to a pre-change baseline."
+    ],
+    "acceptance": [
+      "grep -c \"NewServer(\" internal/server/cover_history_test.go internal/server/server_middleware_test.go internal/server/ai_jobs_handlers_test.go internal/server/entity_tag_handlers_test.go internal/server/import_collision_test.go internal/server/reading_handlers_test.go internal/server/user_handlers_test.go internal/server/organize_integration_test.go internal/server/server_op_registration_test.go internal/server/metadata_handlers_test.go each returns 0.",
+      "go build ./... && go vet ./... && go test ./internal/server/... -count=1 exits 0.",
+      "Combined with Parts 1-3: grep -rn \"NewServer(\" internal/server --include=\"*_test.go\" | grep -v server_test.go | grep -v fingerprint_rescan_test.go | grep -v httptest.NewServer returns 0 hits across the whole package."
+    ],
+    "edge_cases": [
+      "reset_handler_test.go calls metadata_handlers_test.go's setupRatingTestServer (a cross-file caller, not counted among the 10 direct-construction sites) — after migrating setupRatingTestServer's internals in step 3, its unchanged signature means reset_handler_test.go needs NO edit; verify this with go build after the change rather than assuming."
+    ],
+    "anti_over_suppression": "N/A",
+    "depends_on_lines": [],
+    "gate": "go build ./... && go vet ./... && go test ./internal/server/... -count=1",
+    "notes": "Part 4 of 4 — final part. Combined with Parts 1-3, this closes out all 46 measured hand-built *Server call sites (23 files) except the deliberately-excluded fingerprint_rescan_test.go. After all 4 parts land, TODO-SRVTIMEOUT (internal/server test-package stall) has one fewer duplicated-fixture contributor, though the timeout problem itself is a separate, larger item not fully resolved by this migration alone."
+  }
+]

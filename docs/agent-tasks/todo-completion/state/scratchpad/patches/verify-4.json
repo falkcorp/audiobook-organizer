@@ -1,0 +1,353 @@
+[
+ {
+  "task_id": "TASK-051",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "docs/README.md's collision section says 'No same-file collisions inside this workstream' and wave 1 is 'disjoint files within the wave (computed collision matrix)', but TASK-051, TASK-052, and TASK-053 all list exact_files=['docs/api/openapi.json'] and are all Wave 1 with Depends on: none. Verified: grep -n 'exact_files' on each task in skeleton.json all resolve to docs/api/openapi.json; all three briefs' '## ... Wave: 1' headers confirmed via grep -n 'Wave:' on each TASK file. Three weak models editing the same JSON paths object in parallel worktrees, each deleting a different subset of path entries with no serialization, will produce conflicting diffs/merge order problems on the same file \u2014 exactly the 'break a sibling' failure mode.",
+    "fix": {
+     "depends_on_lines": [
+      "TASK-051 (wave1) -> TASK-052 (wave2, depends on TASK-051) -> TASK-053 (wave3, depends on TASK-052), all serialized on docs/api/openapi.json"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-052",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "docs/README.md's collision section says 'No same-file collisions inside this workstream' and wave 1 is 'disjoint files within the wave (computed collision matrix)', but TASK-051, TASK-052, and TASK-053 all list exact_files=['docs/api/openapi.json'] and are all Wave 1 with Depends on: none. Verified: grep -n 'exact_files' on each task in skeleton.json all resolve to docs/api/openapi.json; all three briefs' '## ... Wave: 1' headers confirmed via grep -n 'Wave:' on each TASK file. Three weak models editing the same JSON paths object in parallel worktrees, each deleting a different subset of path entries with no serialization, will produce conflicting diffs/merge order problems on the same file \u2014 exactly the 'break a sibling' failure mode.",
+    "fix": {
+     "depends_on_lines": [
+      "TASK-051 (wave1) -> TASK-052 (wave2, depends on TASK-051) -> TASK-053 (wave3, depends on TASK-052), all serialized on docs/api/openapi.json"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-053",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "docs/README.md's collision section says 'No same-file collisions inside this workstream' and wave 1 is 'disjoint files within the wave (computed collision matrix)', but TASK-051, TASK-052, and TASK-053 all list exact_files=['docs/api/openapi.json'] and are all Wave 1 with Depends on: none. Verified: grep -n 'exact_files' on each task in skeleton.json all resolve to docs/api/openapi.json; all three briefs' '## ... Wave: 1' headers confirmed via grep -n 'Wave:' on each TASK file. Three weak models editing the same JSON paths object in parallel worktrees, each deleting a different subset of path entries with no serialization, will produce conflicting diffs/merge order problems on the same file \u2014 exactly the 'break a sibling' failure mode.",
+    "fix": {
+     "depends_on_lines": [
+      "TASK-051 (wave1) -> TASK-052 (wave2, depends on TASK-051) -> TASK-053 (wave3, depends on TASK-052), all serialized on docs/api/openapi.json"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-054",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency/Rollback section uses the generic 'the symbol already lives at its NEW location and is absent from the old one' relocation template, but this task is a re-verification/prose-update of an existing doc section (\u00a711 'safe to stub' list) in place \u2014 not a symbol move \u2014 there is no 'old location' vs 'new location' to grep for, so a weak model has no concrete, runnable check for whether the task is already applied; it will either invent a nonexistent 'old site' to grep or skip the idempotency check entirely."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-055",
+  "verdict": "pass",
+  "findings": []
+ },
+ {
+  "task_id": "TASK-056",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency/Rollback section uses the generic 'the symbol already lives at its NEW location and is absent from the old one' relocation template, but this task is a consolidation/edit of an existing executive-summary doc in place \u2014 not a symbol move \u2014 there is no 'old location' vs 'new location' to grep for, so a weak model has no concrete, runnable check for whether the task is already applied; it will either invent a nonexistent 'old site' to grep or skip the idempotency check entirely."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-057",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 8,
+    "problem": "Skeleton's machine `tier` field says 'sonnet' but `tier_label` (what the rendered brief header and README both show) says 'Opus-class', for a REVIEW-CRITICAL prod-data-path task. Verified via: python3 -c \"import json; d=json.load(open('skeleton.json')); [print(t['id'], t['tier'], t['tier_label']) for t in d['tasks'] if t['id'] in ('TASK-057','TASK-142','TASK-150','TASK-157')]\" -> all four (057,142,150,157) print 'sonnet Opus-class'. If the brief is regenerated from the `tier` field (the machine-readable one), a review-critical prod-data task silently downgrades to Sonnet, violating check 7 (review-critical must be Opus-class, never weak-tier).",
+    "fix": {
+     "tier": "opus"
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Tests section says 'N/A \u2014 documentation only' and Acceptance has zero apply/dry-run/undo checkboxes, yet Idempotency/Rollback carries the full 'this task touches persisted data... Mandatory: (1) apply=false dry-run default (2) journaled through CreateOperationChange (3) byte-identical undo-fixture test (4) refuse while library.scan is running' boilerplate for what is purely writing a new markdown runbook. None of those 4 mandatory items map to any real op/endpoint this task creates, so a weak model either invents a fake apply/dry-run path that doesn't belong in a docs task, or silently ignores 'Mandatory' language \u2014 undefined which, and neither is checkable by any acceptance command."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-058",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency/Rollback section uses the generic 'the symbol already lives at its NEW location and is absent from the old one' relocation template, but this task is an update of an existing execution-manifest doc's status table in place \u2014 not a symbol move \u2014 there is no 'old location' vs 'new location' to grep for, so a weak model has no concrete, runnable check for whether the task is already applied; it will either invent a nonexistent 'old site' to grep or skip the idempotency check entirely."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-059",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 6,
+    "problem": "Step 1 explicitly instructs: 'In TODO.md, replace the L10706-10709 bullet body with a closure note...' \u2014 a direct edit to TODO.md. But the same brief's standard 'Then, always' block says 'Do NOT edit TODO.md \u2014 the coordinator closes the source item in one commit per wave... In your final report, state the exact TODO.md line text to check off.' These directly contradict: one weak model follows step 1 and edits TODO.md itself; another follows the boilerplate rule and instead only reports the line text. Verified via reading the brief's Step 1 and 'Then, always' sections side by side (both present in the same file)."
+   },
+   {
+    "severity": "fatal",
+    "check": 9,
+    "problem": "exact_files is [] (empty) in skeleton.json for TASK-059, but Step 2 requires creating a new todo.d/ fragment file for DEP-1e, and Step 1 (per the brief's own text) edits TODO.md directly \u2014 neither file is listed in exact_files. Verified: python3 -c \"import json;d=json.load(open('skeleton.json'));print([t['exact_files'] for t in d['tasks'] if t['id']=='TASK-059'])\" -> [].",
+    "fix": {
+     "exact_files": [
+      "TODO.md"
+     ]
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "Step 1's closure note claims 'TEST-2/DEAD-1/CTX-4/LOG-5/R-9/R-10/DEP-1a-d all verified resolved or moot', but the brief's 're-verify these anchors' block (and the skeleton's verified_anchors list, 7 entries) has zero grep evidence for R-9 \u2014 only DEAD-1, CTX-4, LOG-5, R-10, DEP-1a-d, DEP-1e, and TEST-2 have anchors. R-9 is asserted resolved with no verification at all, unlike every sibling item in the same sentence."
+   },
+   {
+    "severity": "fatal",
+    "check": 2,
+    "problem": "The DEP-1e re-verify anchor's second grep \u2014 `grep -n 'ITunesPath: b.ITunesPath\\|ITunesPath: c.ITunesPath' internal/database/bookcore.go` \u2014 returns 0 hits at HEAD (verified by running it directly), not the 2 hits the brief's inline comment claims ('1 hit + 2 hits'). The actual source at bookcore.go:207,321 uses gofmt-aligned multi-space formatting ('ITunesPath:               b.ITunesPath,'), which the single-space grep pattern misses. A weak model running this exact grep as instructed gets a false negative and would wrongly conclude the field is not copied at those sites.",
+    "fix": {
+     "verified_anchors": [
+      {
+       "claim": "DEP-1e still open \u2014 field still declared and copied",
+       "grep_cmd": "grep -n 'ITunesPath: *b.ITunesPath\\|ITunesPath: *c.ITunesPath' internal/database/bookcore.go",
+       "expect": "2 hits (L207, L321), tolerant of gofmt alignment spaces"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-060",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency/Rollback section uses the generic 'the symbol already lives at its NEW location and is absent from the old one' relocation template, but this task is an update of existing docs (STATUS.md / pending-prod-actions.md) with measured numbers in place \u2014 not a symbol move \u2014 there is no 'old location' vs 'new location' to grep for, so a weak model has no concrete, runnable check for whether the task is already applied; it will either invent a nonexistent 'old site' to grep or skip the idempotency check entirely."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-123",
+  "verdict": "pass",
+  "findings": []
+ },
+ {
+  "task_id": "TASK-124",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency/Rollback section uses the generic 'the symbol already lives at its NEW location and is absent from the old one' relocation template, but this task is an in-place swap of ai_failure.go's string-matching body for the typed internal/ai classifier, in the same file \u2014 not a move to a new file/location \u2014 there is no 'old location' vs 'new location' to grep for, so a weak model has no concrete, runnable check for whether the task is already applied; it will either invent a nonexistent 'old site' to grep or skip the idempotency check entirely."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-125",
+  "verdict": "pass",
+  "findings": []
+ },
+ {
+  "task_id": "TASK-126",
+  "verdict": "pass",
+  "findings": []
+ },
+ {
+  "task_id": "TASK-142",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 8,
+    "problem": "Skeleton's machine `tier` field says 'sonnet' but `tier_label` (what the rendered brief header and README both show) says 'Opus-class', for a REVIEW-CRITICAL prod-data-path task. Verified via: python3 -c \"import json; d=json.load(open('skeleton.json')); [print(t['id'], t['tier'], t['tier_label']) for t in d['tasks'] if t['id'] in ('TASK-057','TASK-142','TASK-150','TASK-157')]\" -> all four (057,142,150,157) print 'sonnet Opus-class'. If the brief is regenerated from the `tier` field (the machine-readable one), a review-critical prod-data task silently downgrades to Sonnet, violating check 7 (review-critical must be Opus-class, never weak-tier).",
+    "fix": {
+     "tier": "opus"
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 3,
+    "problem": "Step 3 adds a real guard: ListAutoMergeJournalEntries(0) means UNLIMITED per its doc comment today, but the new handler must 'supply a real default rather than passing through a raw 0' (cap 50) \u2014 this changes behavior for any future limit=0 caller from 'all entries' to 'first 50'. Both 'Tests' and 'Acceptance' say 'Anti-over-suppression: N/A'. No listed test asserts a large/legit journal (>50 entries, or a caller relying on limit=0=unlimited) still gets correct results under the new default \u2014 the guard is untested for its happy-path/non-suppression case."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-143",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency/Rollback section uses the generic 'the symbol already lives at its NEW location and is absent from the old one' relocation template, but this task is flipping two boolean fields in defaultPermissions() in place \u2014 not a symbol move \u2014 there is no 'old location' vs 'new location' to grep for, so a weak model has no concrete, runnable check for whether the task is already applied; it will either invent a nonexistent 'old site' to grep or skip the idempotency check entirely."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-144",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency/Rollback section uses the generic 'the symbol already lives at its NEW location and is absent from the old one' relocation template, but this task is removing a hardcoded numBooks:0 field from an existing gin.H literal in place \u2014 not a symbol move \u2014 there is no 'old location' vs 'new location' to grep for, so a weak model has no concrete, runnable check for whether the task is already applied; it will either invent a nonexistent 'old site' to grep or skip the idempotency check entirely."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-145",
+  "verdict": "pass",
+  "findings": []
+ },
+ {
+  "task_id": "TASK-146",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency/Rollback section uses the generic 'the symbol already lives at its NEW location and is absent from the old one' relocation template, but this task is replacing a hardcoded literal (RateLimitLoginRequests: 10) with a derived constant expression in the same struct literal \u2014 not a symbol move \u2014 there is no 'old location' vs 'new location' to grep for, so a weak model has no concrete, runnable check for whether the task is already applied; it will either invent a nonexistent 'old site' to grep or skip the idempotency check entirely."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-147",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency/Rollback section uses the generic 'the symbol already lives at its NEW location and is absent from the old one' relocation template, but this task is editing existing ABS conformance test fixtures/expectations in place to fix 12 red tests \u2014 not a symbol move \u2014 there is no 'old location' vs 'new location' to grep for, so a weak model has no concrete, runnable check for whether the task is already applied; it will either invent a nonexistent 'old site' to grep or skip the idempotency check entirely."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-148",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency/Rollback section uses the generic 'the symbol already lives at its NEW location and is absent from the old one' relocation template, but this task is re-capturing a test fixture JSON file's contents in place \u2014 not a symbol move \u2014 there is no 'old location' vs 'new location' to grep for, so a weak model has no concrete, runnable check for whether the task is already applied; it will either invent a nonexistent 'old site' to grep or skip the idempotency check entirely."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-149",
+  "verdict": "pass",
+  "findings": []
+ },
+ {
+  "task_id": "TASK-150",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 8,
+    "problem": "Skeleton's machine `tier` field says 'sonnet' but `tier_label` (what the rendered brief header and README both show) says 'Opus-class', for a REVIEW-CRITICAL prod-data-path task. Verified via: python3 -c \"import json; d=json.load(open('skeleton.json')); [print(t['id'], t['tier'], t['tier_label']) for t in d['tasks'] if t['id'] in ('TASK-057','TASK-142','TASK-150','TASK-157')]\" -> all four (057,142,150,157) print 'sonnet Opus-class'. If the brief is regenerated from the `tier` field (the machine-readable one), a review-critical prod-data task silently downgrades to Sonnet, violating check 7 (review-critical must be Opus-class, never weak-tier).",
+    "fix": {
+     "tier": "opus"
+    }
+   },
+   {
+    "severity": "fatal",
+    "check": 4,
+    "problem": "Goal is a read-only investigation producing docs/audits/2026-08-21-apply-endpoint-fileio-audit.md; Step 6 explicitly says 'do not fix it inline here' even if a defect is found. Tests says 'N/A for the audit itself.' Yet Idempotency/Rollback carries the full apply-path boilerplate: 'Mandatory: (1) apply=false dry-run default (2) CreateOperationChange journaling (3) byte-identical undo-fixture test (4) refuse while library.scan is running.' None of these map to any code this task writes (it writes one new markdown file). Not one of these 4 'mandatory' items appears as an actual Acceptance checkbox, so they're unenforceable as written, and a weak model has no way to satisfy or verify them for a docs-only audit."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-151",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency/Rollback section uses the generic 'the symbol already lives at its NEW location and is absent from the old one' relocation template, but this task is adding an explanatory comment above an existing hardcoded TimeBase value in place \u2014 not a symbol move \u2014 there is no 'old location' vs 'new location' to grep for, so a weak model has no concrete, runnable check for whether the task is already applied; it will either invent a nonexistent 'old site' to grep or skip the idempotency check entirely."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-152",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 5,
+    "problem": "Idempotency/Rollback section uses the generic 'the symbol already lives at its NEW location and is absent from the old one' relocation template, but this task is adding a bound/cap to an existing unbounded SearchBooks(search,0,0) call in place \u2014 not a symbol move \u2014 there is no 'old location' vs 'new location' to grep for, so a weak model has no concrete, runnable check for whether the task is already applied; it will either invent a nonexistent 'old site' to grep or skip the idempotency check entirely."
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-153",
+  "verdict": "pass",
+  "findings": []
+ },
+ {
+  "task_id": "TASK-154",
+  "verdict": "pass",
+  "findings": []
+ },
+ {
+  "task_id": "TASK-155",
+  "verdict": "pass",
+  "findings": []
+ },
+ {
+  "task_id": "TASK-156",
+  "verdict": "pass",
+  "findings": []
+ },
+ {
+  "task_id": "TASK-157",
+  "verdict": "fail",
+  "findings": [
+   {
+    "severity": "fatal",
+    "check": 8,
+    "problem": "Skeleton's machine `tier` field says 'sonnet' but `tier_label` (what the rendered brief header and README both show) says 'Opus-class', for a REVIEW-CRITICAL prod-data-path task. Verified via: python3 -c \"import json; d=json.load(open('skeleton.json')); [print(t['id'], t['tier'], t['tier_label']) for t in d['tasks'] if t['id'] in ('TASK-057','TASK-142','TASK-150','TASK-157')]\" -> all four (057,142,150,157) print 'sonnet Opus-class'. If the brief is regenerated from the `tier` field (the machine-readable one), a review-critical prod-data task silently downgrades to Sonnet, violating check 7 (review-critical must be Opus-class, never weak-tier).",
+    "fix": {
+     "tier": "opus"
+    }
+   }
+  ]
+ },
+ {
+  "task_id": "TASK-182",
+  "verdict": "pass",
+  "findings": []
+ },
+ {
+  "task_id": "TASK-183",
+  "verdict": "pass",
+  "findings": []
+ }
+]
