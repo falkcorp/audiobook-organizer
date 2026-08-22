@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.89.0
+// version: 2.90.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-08-19
+// last-edited: 2026-08-22
 
 package database
 
@@ -1320,7 +1320,7 @@ func InitializeStore(dbType, path string, _ bool) (Store, error) {
 		return nil, fmt.Errorf("unsupported database type: %s (only 'pebble' is supported)", dbType)
 	}
 
-	globalStore = s
+	SetGlobalStore(s)
 
 	// Run migrations to ensure schema is up to date
 	if err := RunMigrations(s); err != nil {
@@ -1332,14 +1332,15 @@ func InitializeStore(dbType, path string, _ bool) (Store, error) {
 
 // CloseStore closes the global store
 func CloseStore() error {
-	// Grab and nil the global ref first so lingering goroutines
-	// see nil and fail gracefully instead of hitting a closed DB.
+	// Grab and nil the global ref under the write lock so a concurrent
+	// GetGlobalStore (which only takes the read lock) can never observe
+	// a store that CloseStore has already started closing.
+	globalStoreMu.Lock()
 	store := globalStore
 	globalStore = nil
+	globalStoreMu.Unlock()
 
 	if store != nil {
-		// Brief pause to let in-flight goroutines notice the nil
-		time.Sleep(100 * time.Millisecond)
 		return store.Close()
 	}
 	return nil
