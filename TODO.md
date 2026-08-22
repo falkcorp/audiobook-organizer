@@ -91,8 +91,9 @@ into one of the curated sections below, is a normal direct edit.
       a failed gate run older than 30 minutes and no open auto-revert issue exists,
       file the issue. Covers the case where the `workflow_run` listener never fires
       (runner outage, cancelled run).
-- [ ] `scripts/test_check_memory_leaks.py` is executed by no workflow. Either wire it
-      into `repo-guards` next to the auto-revert selector tests, or delete it.
+- [x] ~~`scripts/test_check_memory_leaks.py` is executed by no workflow. Either wire it
+      into `repo-guards` next to the auto-revert selector tests, or delete it.~~ —
+      closed 2026-08-22 (PR #2700, TASK-007): wired into a CI job.
 
 - [ ] 🔌 **ABS coverage gaps N-1 … N-10** (audit:
       [`docs/audits/2026-08-11-abs-coverage-gap-audit.md`](docs/audits/2026-08-11-abs-coverage-gap-audit.md)).
@@ -122,9 +123,10 @@ into one of the curated sections below, is a normal direct edit.
       5. **N-5 — `/search` narrators emit `numBooks: 0`** (`browse.go:949`), which renders
          "0 books" beside every narrator. The contract says omit the field; `/narrators`
          does, `/search` does not.
-      6. **N-6 — a stats read failure reports `total = 0`** (`stats.go:73-79`),
+      6. ~~**N-6 — a stats read failure reports `total = 0`**~~ (`stats.go:73-79`),
          indistinguishable from "never listened". Keep the 200 (a 5xx flips the client's
-         connection dot) but log at warn + add a metric.
+         connection dot) but log at warn + add a metric. — ✅ DONE 2026-08-22
+         (PR #2701, TASK-145): 200 kept, warn log + metric added.
       7. **N-7/N-8/N-9/N-10** — 4 golden fixtures never loaded by any test (all write
          endpoints); `absRouteList()` reports 46 of 48 registrations so its
          "covers EVERY registered route" guard test is false; play-session `mediaMetadata`
@@ -163,8 +165,15 @@ into one of the curated sections below, is a normal direct edit.
       5. **Make `run-sweep.sh` fail loudly on a package it cannot parse.** It discovers work
          via `find -name 'TASK-*.md'` and 4 of 10 live packages have none, so it emits
          nothing — indistinguishable from "nothing to do".
-      6. **Write headers for the CURRENT files still missing them** (the 76 fleet files are
-         archived; the remainder are live docs).
+      6. ~~**Write headers for the CURRENT files still missing them**~~ (the 76 fleet files are
+         archived; the remainder are live docs). — ✅ DONE 2026-08-22 (PR #2713,
+         TASK-183): **37** files headered, not the briefed 35 (expected drift); acceptance
+         grep returns 0. `docs/development/writing-a-plugin.md` was a false positive — it
+         already had all four fields in one block comment, converted to the one-line form.
+         Still open, deliberately out of scope: 36 docs under
+         `docs/agent-tasks/todo-completion/state/scratchpad/` sit below the audit's
+         `-maxdepth 4` and remain headerless — decide whether that tree should be
+         header-exempt like `todo.d/`.
 
 ## ABS
 
@@ -1894,10 +1903,15 @@ step 4 propagates to the server package with no edit there.
       by inspection alone; grep for `PlaylistItem` at the time of the fix in case
       something has picked it up since.
 
-- [ ] **A `todo.d` fragment assembled between the PR that files it and the PR
+- [x] ~~**A `todo.d` fragment assembled between the PR that files it and the PR
       that finishes it leaves an open task in `TODO.md` for completed work.**
       Hit for real on 2026-08-10; found only because `TODO.md` happened to be
-      re-read after the merge. Nothing reported it.
+      re-read after the merge. Nothing reported it.~~ — closed 2026-08-22
+      (PR #2714, TASK-055): documented as a process rule in `todo.d/README.md`
+      ("Finishing work that had a fragment") and `CLAUDE.md`'s Post-Task Hygiene,
+      deliberately **not** as a mechanical guard — the race is a human-timing
+      problem a linter cannot see. Hit again in this very wave: the ConcurrencyKey
+      fragment filed a task that shipped as #2709 the same day.
 
       **Exact timeline** (`git log` on `main`):
 
@@ -4777,10 +4791,14 @@ proposal's scope stays reviewable. Items marked ⚠ are agent-reported and not h
 
 **Test quality**
 
-- [ ] ⚠ `internal/database/mock_store.go` — ~88 of `MockStore`'s 399 methods have no `Func`
+- [x] ~~⚠ `internal/database/mock_store.go` — ~88 of `MockStore`'s 399 methods have no `Func`
       override field and are hardwired to a zero return no test can change.
       `GetAllAuthorBookCounts` (`:863`) returns `map[int]int{}, nil` unconditionally, so
-      `TestListAuthors_Success` asserts against a response where every author has `BookCount: 0`.
+      `TestListAuthors_Success` asserts against a response where every author has `BookCount: 0`.~~
+      — closed 2026-08-22 (PR #2704, TASK-034): 89 methods gained `XFunc` override fields
+      (override-guard count 313 → 402). Guarded by a structural AST test
+      (`mock_store_override_test.go`) that fails naming every method still missing a guard,
+      with a positive control so a broken parser cannot pass vacuously.
 - [ ] ⚠ `internal/server/organize_service_test.go:34` — vacuous test. It sets `GetAllBooksFunc`;
       the code under test calls `GetAllBooksCore`, whose func field is unset → `nil, nil`.
       `TestOrganizeService_PerformOrganize_NoBooksToOrganize` asserts only `err == nil` and
@@ -5576,7 +5594,11 @@ before anyone is asked to trust a dry run of a repointing job.
       when the series carries no items. The books are not random; they are *the library*.
 
       **(b) `numBooks` comes from `GetAllSeriesBookCounts()`, whose error path is
-      silent:**
+      silent:** — ⚠️ **instrumented 2026-08-22 (PR #2699, TASK-089): the `slog.Warn`
+      this asked for now exists**, so a failing count query is no longer
+      indistinguishable from an empty library. The *behaviour* is unchanged and
+      deliberately so — the fallback still reports 0. Defect **(a)** (`books` hardcoded
+      empty) is untouched, so this parent item stays open.
 
       ```go
       counts, err := h.library.GetAllSeriesBookCounts()
@@ -5807,7 +5829,12 @@ before anyone is asked to trust a dry run of a repointing job.
       async flow would be new coverage rather than repair. Removing the dead code is
       a separate change from the e2e repair and was deliberately not bundled with it.
 
-- [ ] **Audit `setupMockApi` for more branches shadowed by earlier prefix catch-alls.**
+- [x] ~~**Audit `setupMockApi` for more branches shadowed by earlier prefix catch-alls.**~~
+      — closed 2026-08-22 (PR #2710, TASK-093): audited all 10 `startsWith()` catch-alls,
+      **0 shadowed branches** found. Branch census reconciles exactly (67 exact + 10
+      catch-all + 21 + 3 = 101 = every `pathname` condition). Both detectors were verified
+      against a deliberately-broken copy (exit 1) and the real file (exit 0), so this is
+      evidence of absence, not a dead check. No dispatcher change needed. Original text:
       `web/tests/e2e/utils/test-helpers.ts` had `pathname === '/api/v1/audiobooks/batch'`
       sitting *below* `pathname.startsWith('/api/v1/audiobooks/') && method === 'POST'`,
       so every batch update silently got the generic `{ message: 'OK' }` back and
@@ -7652,10 +7679,18 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
     Detail, Activity Log, System > Maintenance, Dedup tabs.
   - Rollback: `git revert` of this single PR.
 
-- [ ] **TODO-MUI-3** MUI upgrade Step 3 — React 18 → 19 (OPTIONAL but
+- [x] ~~**TODO-MUI-3** MUI upgrade Step 3 — React 18 → 19~~ (OPTIONAL but
       recommended; brief: `docs/plans/2026-08-07-mui-upgrade-path.md`; requires
       TODO-MUI-2 merged — MUI v7 supports React 19, v5/v6 pairings are riskier;
       do NOT combine with the v9 bump in the same session/PR)
+      — closed 2026-08-22. PR #2703 (TASK-097) removed the last outstanding
+      sub-bullet, the `react-is` override. Because that PR was a one-line
+      `package.json` edit and this item is the whole React 18→19 upgrade, every
+      other bullet was re-checked at HEAD before closing rather than closing on
+      the strength of the last edit: `react`/`react-dom` are `^19.2.8`,
+      `@types/react`/`@types/react-dom` are `^19.2.x`, `overrides` retains only
+      `minimatch` and `brace-expansion` (no `react-is`), and `grep -rn "test-utils"
+      web/src` is empty. All bullets satisfied.
   - Why: MUI v9 does NOT require React 19 (peers `^17 || ^18 || ^19`), but
     upgrading first deletes the `react-is` override hack, matches the
     combination MUI tests first-class, and pre-positions for the post-v9
@@ -10586,7 +10621,8 @@ Companion docs:
    refresh may need an async variant at scale (latency note).
 8. **Omnibus detection + dedup** — spec-only
    ([`docs/superpowers/specs/`](docs/superpowers/specs/) 2026-05-31); not started.
-9. **Regression tests for the 2 untested deluge hydrate sites** (H1:568) — optional.
+9. ~~**Regression tests for the 2 untested deluge hydrate sites**~~ (H1:568) — optional.
+   — ✅ DONE 2026-08-22 (PR #2705, TASK-141).
 10. **Hide system-sourced tags from the Browse-by-Tag cloud** (H1:433) — UX preference,
     not a bug.
 
@@ -10649,6 +10685,11 @@ Companion docs:
     — T1 shipped (18570a39); T2 = human-gated Deluge spike blocks T3–T7.
 23. **Fingerprint UI verifications ×2** (H1:1383-1384) — [hold] verify the 14K
     false-positive purge is visible in dedup UI; book-sig coverage % renders.
+    **PARTIAL 2026-08-22 (PR #2708, TASK-172):** half 2 done — a frontend test now
+    asserts the book-sig coverage % badge renders (`EmbeddingDedupTab`, not
+    `DedupEmbeddingTab` as the brief called it). Half 1 — the 14K false-positive purge
+    being visible in the dedup UI — is a **live-prod** verification and is still open.
+    Item stays open until that runs.
 
 ## Workflow / ops (4)
 
@@ -10931,3 +10972,18 @@ H1/H2/H3/H4/H8/H9/M1/M2/M3/M7 logging batch (T05) (#2010).
 - [x] **T11** — F7 (quarantine → RunItems) · R-9 (path_repair pool + 3 concurrency hazards) · R-8 (unknown-duration group guard) (#2004)
 - [x] **T12** — devops: 8 IP-scrub scripts · op-stall alert (commented; metric TBD, Infra #36) · coverage floor on PR gate · systemd dedupe · credential entropy (#2001)
 - [ ] **T13** — docs truth-up with measured sandbox/prod numbers (dedup/STATUS.md, pending-prod-actions.md, exec summary) — in progress
+      **PARTIAL 2026-08-22 (PR #2712, TASK-060) — box stays open by design, T03 has not run.**
+      Found `docs/dedup/STATUS.md`'s "Sandbox validation results" table carrying
+      **production's** numbers under a sandbox heading: its purge-apply row
+      (`purgeable=7,891, keep=278, review=2,150` over `10,319`) is the prod journal line
+      verbatim, while the sandbox purge-apply wave (T03) has never run. Proven by
+      arithmetic — sandbox `7,878+278+392+1,756 = 10,304` and prod `7,891+278+2,150 = 10,319`
+      each sum exactly to their own total, 15 apart (`keep=278` is identical in both and
+      does *not* discriminate). Table split, prod rows moved under the prod section with the
+      journal line as provenance, T03-dependent sandbox rows marked `PENDING` rather than
+      back-filled. Also corrected the present-tense claim that ~1,311 is the review backlog:
+      prod measured **5,947** on 2026-08-12 (~4.5× regrowth). No figure was re-measurable at
+      HEAD (all are prod measurements reachable only via the live server), so each now carries
+      an inline source and as-of date instead of being laundered forward as current. One
+      question left explicitly unresolved in the doc rather than guessed: whether the sandbox
+      baseline was truly 10,319 or had copied prod's number.
