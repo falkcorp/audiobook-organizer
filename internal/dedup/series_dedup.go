@@ -1,5 +1,5 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-08-23
 
@@ -94,6 +94,24 @@ func ExtractSeriesNameForDedup(name string) (string, bool) {
 }
 
 // enrichSeries loads books (up to 5) and author name for each series.
+//
+// Deliberately stays on GetBooksBySeriesIDCore — the LISTING getter — while the
+// merge paths below were switched to GetBooksBySeriesIDAllVersions. Do not
+// "finish the conversion" here.
+//
+// The reason the merge paths need AllVersions is that they REPOINT rows and
+// then DeleteSeries, so a book they cannot see is a book left holding a deleted
+// series. This function does neither: it fills SeriesBookSummary{ID, Title,
+// CoverURL} for a truncated preview card that is JSON-serialized to the dedup
+// scan response and never read by a write path. Nothing here can strand a row.
+//
+// Switching it would instead re-introduce a bug that was already fixed once: a
+// non-primary version is an alternate rip of a book already in the preview, and
+// showing both is exactly the defect
+// TestGetBooksBySeriesIDCore_MemDBAndPebbleAgree was written to prevent after a
+// series listing served during the ~132 s warmup window showed every alternate
+// rip alongside the book it duplicates. With the list capped at 5, duplicates
+// would also crowd out real books.
 func enrichSeries(store Store, seriesList []database.Series, authorNameMap map[int]string) []SeriesWithBooks {
 	result := make([]SeriesWithBooks, 0, len(seriesList))
 	for _, s := range seriesList {
@@ -313,12 +331,14 @@ func DedupSeries(
 	// UNFILTERED reference counts, read once up front and used below to refuse
 	// any delete that would strand a book.
 	//
-	// The merge loop reassigns books it gets from GetBooksBySeriesIDCore, which
-	// SKIPS trashed and non-primary rows. Deleting the series afterwards
-	// therefore orphans exactly the rows the reassignment could not see. That
-	// is not hypothetical: series_bookref.go records 6,893 phantom series IDs
-	// held by 13,322 live books, measured on production, from precisely this
-	// shape in executeSeriesPrune.
+	// The merge loop now reassigns books it gets from
+	// GetBooksBySeriesIDAllVersions, which sees non-primary versions — but it
+	// still SKIPS TRASHED rows, and deleting the series afterwards therefore
+	// still orphans any trashed row holding it. Half the hazard is closed, not
+	// all of it, so this guard stays. That is not hypothetical:
+	// series_bookref.go records 6,893 phantom series IDs held by 13,322 live
+	// books, measured on production, from precisely this shape in
+	// executeSeriesPrune.
 	//
 	// Fails CLOSED. A store that cannot answer the unfiltered question aborts
 	// the whole op rather than falling back to the filtered count -- that
@@ -391,7 +411,12 @@ func DedupSeries(
 			// Description/VersionNotes/BookSig*). Hydrating keeps the write
 			// correct and self-contained.
 			// See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-			books, err := store.GetBooksBySeriesIDCore(s.ID)
+			//
+			// AllVersions, not the Core listing getter: this loop repoints every
+			// row it is handed and then deletes s.ID. A non-primary version the
+			// listing getter hides is one this loop never repoints, and it is
+			// left holding a series that no longer exists.
+			books, err := store.GetBooksBySeriesIDAllVersions(s.ID)
 			if err != nil {
 				result.Errors = append(result.Errors,
 					fmt.Sprintf("failed to get books for series %d: %v", s.ID, err))
@@ -595,7 +620,12 @@ func MergeSeries(
 		// Description/VersionNotes/BookSig*). Hydrating keeps the write
 		// correct and self-contained.
 		// See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
-		books, err := store.GetBooksBySeriesIDCore(mergeID)
+		//
+		// AllVersions, not the Core listing getter: this loop repoints every
+		// row it is handed and then calls DeleteSeries(mergeID) below. A
+		// non-primary version the listing getter hides is one this loop never
+		// repoints, and it is left holding a series that no longer exists.
+		books, err := store.GetBooksBySeriesIDAllVersions(mergeID)
 		if err != nil {
 			result.Errors = append(result.Errors,
 				fmt.Sprintf("failed to get books for series %d: %v", mergeID, err))
@@ -668,7 +698,13 @@ func MergeSeries(
 			_ = progress.Log("info",
 				fmt.Sprintf("Linking books to %d authors", len(allAuthorIDs)), nil)
 		}
-		allBooks, err := store.GetBooksBySeriesIDCore(keepID)
+		// AllVersions, not the Core listing getter. This one is a WRITE the
+		// listing getter would silently under-apply rather than strand: the
+		// authors collected from every merged-away series are linked onto the
+		// books of the kept series, and a non-primary version skipped here
+		// never gets them. Nothing revisits it — the merged series is gone by
+		// this point — so the missing credits are permanent.
+		allBooks, err := store.GetBooksBySeriesIDAllVersions(keepID)
 		if err == nil {
 			for _, book := range allBooks {
 				existing, _ := store.GetBookAuthors(book.ID)

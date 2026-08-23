@@ -14277,6 +14277,68 @@ func (_c *MockStore_GetBooksByMetadataSourceHash_Call) RunAndReturn(run func(has
 	return _c
 }
 
+// GetBooksBySeriesIDAllVersions provides a mock function for the type MockStore
+func (_mock *MockStore) GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error) {
+	ret := _mock.Called(seriesID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBooksBySeriesIDAllVersions")
+	}
+
+	var r0 []database.BookCore
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(int) ([]database.BookCore, error)); ok {
+		return returnFunc(seriesID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(int) []database.BookCore); ok {
+		r0 = returnFunc(seriesID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.BookCore)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
+		r1 = returnFunc(seriesID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetBooksBySeriesIDAllVersions_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBooksBySeriesIDAllVersions'
+type MockStore_GetBooksBySeriesIDAllVersions_Call struct {
+	*mock.Call
+}
+
+// GetBooksBySeriesIDAllVersions is a helper method to define mock.On call
+//   - seriesID int
+func (_e *MockStore_Expecter) GetBooksBySeriesIDAllVersions(seriesID any) *MockStore_GetBooksBySeriesIDAllVersions_Call {
+	return &MockStore_GetBooksBySeriesIDAllVersions_Call{Call: _e.mock.On("GetBooksBySeriesIDAllVersions", seriesID)}
+}
+
+func (_c *MockStore_GetBooksBySeriesIDAllVersions_Call) Run(run func(seriesID int)) *MockStore_GetBooksBySeriesIDAllVersions_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 int
+		if args[0] != nil {
+			arg0 = args[0].(int)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetBooksBySeriesIDAllVersions_Call) Return(bookCores []database.BookCore, err error) *MockStore_GetBooksBySeriesIDAllVersions_Call {
+	_c.Call.Return(bookCores, err)
+	return _c
+}
+
+func (_c *MockStore_GetBooksBySeriesIDAllVersions_Call) RunAndReturn(run func(seriesID int) ([]database.BookCore, error)) *MockStore_GetBooksBySeriesIDAllVersions_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetBooksBySeriesIDCore provides a mock function for the type MockStore
 func (_mock *MockStore) GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error) {
 	ret := _mock.Called(seriesID)
