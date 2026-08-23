@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/tests/test_find_spurious_stranded_book_rows.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 3e6f8b12-9d47-4a5c-b8e1-2f7a5c9d0e63
 # last-edited: 2026-08-23
 """Tests for scripts/find_spurious_stranded_book_rows.py.
@@ -227,6 +227,41 @@ class TestBuildReport(unittest.TestCase):
         self.assertEqual(report.total_books_scanned, 0)
         self.assertTrue(all(n == 0 for n in report.counts.values()))
 
+    def test_warns_when_wreckage_found_but_nothing_cross_references_it(self):
+        # affected_dirs is non-empty (wreckage WAS found on disk) but no
+        # book's file_path falls inside any of them -- the classic symptom
+        # of --root's path prefix not matching what the DB recorded (a
+        # different mount point, relative vs. absolute, etc). This must be
+        # surfaced loudly, not silently reported as "no high-confidence
+        # matches" indistinguishable from "no wreckage cross-references at
+        # all".
+        affected = {"/mnt/bigdata/books/BookA/Project Hail Mary - 24"}
+        books = [
+            # Same wreckage shape, but under a DIFFERENT root prefix than
+            # affected_dirs -- e.g. a Mac SMB mount vs. the DB's real path.
+            {"id": "1", "title": "31", "file_path": "/Volumes/nas/BookA/Project Hail Mary - 24/31.mp3"},
+        ]
+        report = fsb.build_report(books, affected, "/Volumes/nas", "http://test")
+        joined = " ".join(report.notes)
+        self.assertIn("WARNING", joined)
+        self.assertIn("path prefix", joined)
+
+    def test_no_warning_when_there_is_no_wreckage_on_disk_at_all(self):
+        # affected_dirs empty is the ordinary "nothing found" case -- not a
+        # mismatch, so no warning should fire.
+        report = fsb.build_report([], set(), "/lib", "http://test")
+        joined = " ".join(report.notes)
+        self.assertNotIn("WARNING", joined)
+
+    def test_no_warning_when_cross_reference_succeeds(self):
+        affected = {"/lib/BookA/Project Hail Mary - 24"}
+        books = [
+            {"id": "1", "title": "31", "file_path": "/lib/BookA/Project Hail Mary - 24/31.mp3"},
+        ]
+        report = fsb.build_report(books, affected, "/lib", "http://test")
+        joined = " ".join(report.notes)
+        self.assertNotIn("WARNING", joined)
+
 
 # --- read_token() ---------------------------------------------------------
 
@@ -297,6 +332,25 @@ class TestFetchAllBooksPagination(unittest.TestCase):
         with mock.patch.object(fsb, "_http_get_json", side_effect=pages):
             books = list(fsb.fetch_all_books("http://test", "tok", False, page_size=50))
         self.assertEqual([b["id"] for b in books], ["1"])
+
+    def test_unexpected_response_shape_raises_instead_of_yielding_zero_silently(self):
+        # If the API response contract ever changes (e.g. "items" renamed or
+        # dropped), the old behavior was `.get("items", [])` -- silently
+        # treating it as an empty page, exiting 0 with a report claiming zero
+        # books everywhere. That is indistinguishable from "empty library"
+        # and would hide a real integration break. It must now raise.
+        with mock.patch.object(
+            fsb, "_http_get_json", return_value={"data": {"audiobooks": [], "total": 0}}
+        ), self.assertRaises(RuntimeError) as ctx:
+            list(fsb.fetch_all_books("http://test", "tok", False, page_size=50))
+        self.assertIn("items", str(ctx.exception))
+
+    def test_response_with_no_data_envelope_and_no_items_also_raises(self):
+        # Repo targets Python 3.8 (see ruff target-version), which doesn't
+        # support parenthesized multi-context `with`, so this stays nested.
+        with mock.patch.object(fsb, "_http_get_json", return_value={"status": "ok"}):  # noqa: SIM117
+            with self.assertRaises(RuntimeError):
+                list(fsb.fetch_all_books("http://test", "tok", False, page_size=50))
 
 
 # --- end-to-end against a real filesystem + a real local HTTP server ------
