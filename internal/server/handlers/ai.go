@@ -1,5 +1,5 @@
 // file: internal/server/handlers/ai.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
 // last-edited: 2026-08-23
 
@@ -97,16 +97,21 @@ type AudiobookUpdater interface {
 	UpdateAudiobook(ctx context.Context, id string, payload map[string]any) (*database.Book, error)
 }
 
-// --- op param wrappers ---
+// --- op param types ---
 //
-// These mirror the unexported server-package types of the same shape
-// (server.aiReviewOpParams / server.aiMergeApplyOpParams /
-// server.aiMergeApplySuggestion). EnqueueOp json.Marshals params immediately,
-// and the op executors in package server json.Unmarshal them back into their
-// own copies — so the wire shape (JSON tags) must stay byte-identical to the
-// server-side definitions, even though the Go types live in two packages.
+// These are the params for the two AI author ops, and they are EXPORTED for a
+// reason. Package server used to declare its own structurally-identical copies
+// (server.aiReviewOpParams / aiMergeApplyOpParams / aiMergeApplySuggestion),
+// because this package enqueues the op and that package decodes it in Run.
+// Nothing coupled the two but matching JSON tags: edit one side's fields and
+// the build stays green while the op silently decodes a zero value at runtime.
+// That is not hypothetical — dropping the legacy_op_id field on 2026-08-23
+// required editing both halves in lockstep, and only the second edit was load-
+// bearing. The copies are gone; ai_ops.go decodes into these types directly, so
+// the drift is a compile error instead of a wire-shape bug.
 
-type aiReviewOpParams struct {
+// AIReviewOpParams holds the serializable parameters for the ai.author-review op.
+type AIReviewOpParams struct {
 	Mode        string                   `json:"mode"`
 	DedupGroups []dedup.AuthorDedupGroup `json:"dedup_groups,omitempty"`
 }
@@ -120,7 +125,8 @@ type aiAuthorScanOpParams struct {
 
 // AIMergeApplySuggestion is the per-item suggestion for the merge-apply op. It
 // is exported because it doubles as the HTTP request body shape for
-// ApplyAuthorReview. JSON tags mirror server.aiMergeApplySuggestion exactly.
+// ApplyAuthorReview, and because AIMergeApplyOpParams carries it across the
+// package boundary into ai_ops.go.
 type AIMergeApplySuggestion struct {
 	GroupIndex    int    `json:"group_index"`
 	Action        string `json:"action"`
@@ -130,7 +136,9 @@ type AIMergeApplySuggestion struct {
 	Rename        bool   `json:"rename"`
 }
 
-type aiMergeApplyOpParams struct {
+// AIMergeApplyOpParams holds the serializable parameters for the
+// ai.author-merge-apply op.
+type AIMergeApplyOpParams struct {
 	Suggestions []AIMergeApplySuggestion `json:"suggestions"`
 }
 
@@ -213,7 +221,7 @@ func (h *AIHandler) activeAuthorReview(mode string) *database.OperationV2Row {
 		if rows[i].DefID != AIAuthorReviewDefID {
 			continue
 		}
-		var p aiReviewOpParams
+		var p AIReviewOpParams
 		if err := json.Unmarshal([]byte(rows[i].Params), &p); err != nil {
 			continue
 		}
@@ -794,7 +802,7 @@ func (h *AIHandler) ReviewDuplicateAuthors(c *gin.Context) {
 	// can poll it. Returning a separately-minted id here is the defect that made
 	// the diagnostics export undownloadable (#2747) and the folder scan's
 	// progress unpollable (#2762).
-	reviewParams := aiReviewOpParams{Mode: mode, DedupGroups: dedupGroups}
+	reviewParams := AIReviewOpParams{Mode: mode, DedupGroups: dedupGroups}
 	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), AIAuthorReviewDefID, reviewParams)
 	if enqErr != nil {
 		httputil.InternalError(c, "failed to enqueue operation", enqErr)
@@ -830,7 +838,7 @@ func (h *AIHandler) ApplyAuthorReview(c *gin.Context) {
 
 	// See ReviewDuplicateAuthors: the returned id is EnqueueOp's, and no v1 row
 	// is minted alongside it.
-	applyParams := aiMergeApplyOpParams{Suggestions: req.Suggestions}
+	applyParams := AIMergeApplyOpParams{Suggestions: req.Suggestions}
 	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), AIAuthorMergeApplyDefID, applyParams)
 	if enqErr != nil {
 		httputil.InternalError(c, "failed to enqueue operation", enqErr)
