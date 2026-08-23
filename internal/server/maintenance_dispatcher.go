@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_dispatcher.go
-// version: 1.9.0
+// version: 2.0.0
 // guid: 55555555-5555-5555-5555-555555555555
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package server
 
@@ -9,16 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
-	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/gin-gonic/gin"
-	ulid "github.com/oklog/ulid/v2"
 )
 
 // listMaintenanceJobs returns the catalogue of all registered maintenance jobs.
@@ -150,105 +147,38 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 		dryRun = *req.DryRun
 	}
 
-	opID := ulid.Make().String()
-	opType := "maintenance:" + jobID
-	store := s.Ops()
-
-	// Create the operation record first so it appears in active operations / activity bell.
-	if _, err := store.CreateOperation(opID, opType, nil); err != nil {
-		httputil.RespondWithInternalError(c, "failed to create operation record")
-		return
-	}
-
-	// Persist the resolved dry_run so a restart mid-run can resume FAITHFULLY
-	// rather than guess.
+	// Enqueue the run. This mints a v2 operations row and nothing else.
 	//
-	// database.Operation carries no params field, so before this the resume path
-	// (resumeLegacyOp in server_lifecycle.go) had no record of the operator's
-	// choice at all and fell through to Go's zero value — turning an interrupted
-	// PREVIEW into a real mutation, under the original operation's own ID. Seven
-	// jobs are both CanResume() and advertise dry_run:true, one of which
-	// (cleanup-empty-folders) removes directories from disk.
+	// It used to mint a v1 row FIRST -- store.CreateOperation, plus
+	// operations.SaveParams to persist the resolved dry_run, plus a
+	// DeleteOperationWithLogs to clean the row up again when the enqueue merged
+	// into an already-active run and left it twinned to nothing. All of that is
+	// gone with the row.
 	//
-	// This mirrors the bulk_write_back case in the same switch, which already
-	// saves its params and reloads them on resume.
+	// The comment justifying that row said it existed "so it appears in active
+	// operations / activity bell". Neither half held any longer: /operations/active
+	// and /operations/recent answer 410 Gone and the UI reads the v2-only
+	// /operations/timeline, while the activity bell writes ActivityEntry rows keyed
+	// by an operation id STRING with no foreign key to any operations row -- so the
+	// bell follows the id this run reports, which is now its own v2 id.
 	//
-	// A save failure does not fail the request: the operator asked for this job
-	// and it is about to run correctly. Only a subsequent restart is affected,
-	// and resumeLegacyOp falls back to the advertised default there. Log it so
-	// the degraded resume is not silent.
-	if err := operations.SaveParams(store, opID, maintenanceJobOpParams{
-		LegacyOpID: opID,
-		JobID:      jobID,
-		DryRun:     dryRun,
-	}); err != nil {
-		slog.Warn("maintenance job params not saved; a resume would fall back to the advertised dry_run default",
-			"opID", opID, "jobID", jobID, "dryRun", dryRun, "err", err)
-	}
-
+	// Persisting dry_run separately is likewise unnecessary: the v2 row HAS a params
+	// field, and both registry resume paths preserve it verbatim (resumeRestart
+	// updates the row in place, resumeRequeue copies row.Params onto the new row).
+	// A restart mid-run therefore resumes with the operator's actual choice instead
+	// of reconstructing it, which is what the v1 row could never do -- database.Operation
+	// has no params field, and that gap is what turned an interrupted PREVIEW into a
+	// real mutation before #2419 worked around it.
 	v2OpID, err := s.opRegistry.EnqueueOp(c.Request.Context(), maintenanceOpID(jobID), maintenanceJobOpParams{
-		LegacyOpID: opID,
-		JobID:      jobID,
-		DryRun:     dryRun,
+		JobID:  jobID,
+		DryRun: dryRun,
 	})
 	if err != nil {
 		httputil.RespondWithConflict(c, err.Error())
 		return
 	}
 
-	// EnqueueOp merges a request into an already-active run when it asks for the
-	// same work (same job, same dry_run). That is the point — a double-clicked
-	// job should not run twice over the same rows — but it leaves THIS request's
-	// v1 row twinned to nothing: propagateLegacyOpStatus only ever mirrors onto
-	// the winner's legacy id, so ours would sit at "pending" forever and be
-	// re-resumed by resumeInterruptedOperations on every restart. That is exactly
-	// the stuck-row pathology the bridge was written to end, so the row is
-	// deleted rather than left behind or parked in a new "superseded" status.
-	//
-	// The row is still created BEFORE the enqueue, not after. Enqueueing first
-	// and creating only on a win would avoid the orphan outright, but the op can
-	// be dispatched and reach a terminal status the instant it is queued — and
-	// propagateLegacyOpStatus would then look for a v1 row that does not exist
-	// yet. Deleting a row we know we do not need has no such window.
-	if winner := s.mergedIntoLegacyOpID(v2OpID, opID); winner != "" {
-		if delErr := store.DeleteOperationWithLogs(opID); delErr != nil {
-			slog.Warn("maintenance job enqueue merged into an active run, but its now-orphaned v1 row could not be deleted; it will sit at pending",
-				"opID", opID, "jobID", jobID, "winnerOpID", winner, "err", delErr)
-		}
-		// Answer with the run the caller is actually waiting on.
-		opID = winner
-	}
-
 	httputil.RespondWithSuccess(c, http.StatusAccepted, struct {
 		OperationID string `json:"operation_id"`
-	}{OperationID: opID})
-}
-
-// mergedIntoLegacyOpID reports the legacy op id of the run that absorbed this
-// enqueue, or "" when this request started a run of its own.
-//
-// The registry returns the winning v2 op id either way and does not say which
-// happened, so the answer is read back from the winner's params: if its
-// legacy_op_id is some OTHER row, this request was merged. A read failure
-// reports "" — that keeps the caller's own row, which is the recoverable
-// direction (a stale row an operator can clear, rather than a deleted row for a
-// run that is genuinely ours).
-func (s *Server) mergedIntoLegacyOpID(v2OpID, ourLegacyOpID string) string {
-	if v2OpID == "" {
-		return ""
-	}
-	row, err := s.Ops().GetOperationV2(v2OpID)
-	if err != nil || row == nil || row.Params == "" {
-		return ""
-	}
-	var p struct {
-		LegacyOpID string `json:"legacy_op_id"`
-	}
-	if err := json.Unmarshal([]byte(row.Params), &p); err != nil {
-		return ""
-	}
-	if p.LegacyOpID == "" || p.LegacyOpID == ourLegacyOpID {
-		return ""
-	}
-	return p.LegacyOpID
+	}{OperationID: v2OpID})
 }

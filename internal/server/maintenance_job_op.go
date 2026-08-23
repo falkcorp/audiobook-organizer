@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_job_op.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 7f3a9c21-4b8e-4d56-a123-0e5f6c7d8e9f
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package server
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -129,22 +130,57 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 			}
 
 			store := s.storeForWiring()
-			ctx = maintenance.WithOperationID(ctx, p.LegacyOpID)
+
+			// The correlation id for everything this run records OUTSIDE its own
+			// v2 row: the activity entries below, the per-item results the 8 jobs
+			// that call maintenance.OperationIDFromCtx write via
+			// CreateOperationResult, and the operation summary log.
+			//
+			// This is the run's OWN v2 id. It used to be p.LegacyOpID, the id of a
+			// v1 operations row the dispatcher minted alongside the enqueue -- a row
+			// that no longer exists. All three of those stores are keyed by an
+			// operation id STRING with no foreign key to any operations row, so
+			// re-keying them here IS the whole migration for them; nothing has to be
+			// moved or backfilled. It also fixes what the legacy id never did: these
+			// records now name an operation an operator can actually look up.
+			//
+			// Same shape as maintenance.window, which made this move first
+			// (scheduler_maintenance_window_op.go). The fallback covers rows still
+			// in flight across the deploy, whose params were written by the old
+			// dispatcher and do carry a legacy id.
+			opID := opsregistry.ReporterOpID(reporter)
+			if opID == "" {
+				opID = p.LegacyOpID
+			}
+
+			ctx = maintenance.WithOperationID(ctx, opID)
 			progress := registryProgressAdapter{r: reporter}
 			adapter := &maintenance.ProgressAdapter{Ops: progress}
 
 			// Execute the job synchronously in this Run closure.
 			runErr := job.Run(ctx, store, adapter, p.DryRun)
 
-			// Emit an activity summary if an activity writer is available and a legacy
-			// operation ID was provided. Prefer any saved OperationSummaryLog created
-			// by the job; fall back to the job name.
-			if s.activityWriter != nil && p.LegacyOpID != "" {
-				activity.FlushOperation(s.activityWriter, p.LegacyOpID)
-				if sum, serr := store.GetOperationSummaryLog(p.LegacyOpID); serr == nil && sum != nil && sum.Result != nil {
-					activity.EmitInfo(s.activityWriter, p.LegacyOpID, jobID, jobID, *sum.Result, activity.AlwaysShow)
+			// Emit an activity summary. Prefer any OperationSummaryLog the job
+			// saved; fall back to the job name.
+			//
+			// The empty-id guard is kept rather than dropped. ReporterOpID returns
+			// "" for a reporter that does not implement OpID(), and an entry written
+			// with an empty operation id does not merely go uncorrelated -- the
+			// activity feed groups by that id, so every such entry from every op
+			// piles into one bucket. Skipping is the better failure, but it must not
+			// be a SILENT one: an id this code could not obtain is exactly the
+			// condition that would blind the feed without anyone noticing, so say so.
+			if s.activityWriter != nil {
+				if opID == "" {
+					slog.Warn("maintenance job produced no operation id; skipping its activity summary",
+						"jobID", jobID)
 				} else {
-					activity.EmitInfo(s.activityWriter, p.LegacyOpID, jobID, jobID, job.Name(), activity.AlwaysShow)
+					activity.FlushOperation(s.activityWriter, opID)
+					if sum, serr := store.GetOperationSummaryLog(opID); serr == nil && sum != nil && sum.Result != nil {
+						activity.EmitInfo(s.activityWriter, opID, jobID, jobID, *sum.Result, activity.AlwaysShow)
+					} else {
+						activity.EmitInfo(s.activityWriter, opID, jobID, jobID, job.Name(), activity.AlwaysShow)
+					}
 				}
 			}
 

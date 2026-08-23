@@ -373,8 +373,14 @@ func TestRunMaintenanceJob_MalformedBodyIsRejected(t *testing.T) {
 }
 
 // TestRunMaintenanceJob_PersistsResolvedDryRun asserts the value is written
-// where resumeLegacyOp can find it. Without this the resume path has no record
-// of the operator's choice and falls back to a guess.
+// where a resume can find it. Without this the resume path has no record of the
+// operator's choice and falls back to a guess.
+//
+// It reads the v2 row's params, not a v1 params blob. Retiring the v1 minter
+// removed the operations.SaveParams call this used to check, and that is a
+// STRENGTHENING rather than a loss: the v1 row carried no params field at all,
+// which is the whole reason a side-table blob existed, whereas the v2 row stores
+// params natively and both registry resume paths carry them across verbatim.
 func TestRunMaintenanceJob_PersistsResolvedDryRun(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
@@ -404,12 +410,19 @@ func TestRunMaintenanceJob_PersistsResolvedDryRun(t *testing.T) {
 		t.Fatalf("no operation_id in response %s", w.Body.String())
 	}
 
-	saved, err := operations.LoadParams[maintenanceJobOpParams](server.Ops(), opID)
+	row, err := server.Ops().GetOperationV2(opID)
 	if err != nil {
-		t.Fatalf("LoadParams: %v", err)
+		t.Fatalf("GetOperationV2(%q): %v", opID, err)
 	}
-	if saved == nil {
-		t.Fatal("no params persisted for the operation; a restart would resume on a guess")
+	if row == nil {
+		t.Fatalf("the id returned to the caller (%q) resolves to no v2 operation row", opID)
+	}
+	if row.Params == "" {
+		t.Fatal("no params persisted on the operation; a restart would resume on a guess")
+	}
+	var saved maintenanceJobOpParams
+	if err := json.Unmarshal([]byte(row.Params), &saved); err != nil {
+		t.Fatalf("decode v2 params %s: %v", row.Params, err)
 	}
 	if saved.JobID != probeAdvertisesTrue.ID() {
 		t.Errorf("persisted JobID = %q, want %q", saved.JobID, probeAdvertisesTrue.ID())
