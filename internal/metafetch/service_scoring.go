@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
 // last-edited: 2026-08-23
 
@@ -705,7 +705,8 @@ func ScoreOneResultWithBreakdown(
 		rec := newScoreRecorder(0, "Title/author match",
 			"No significant word overlap with the search title — "+
 				"later bonuses are skipped entirely.")
-		return 0, *rec.breakdown()
+		bd := rec.breakdown()
+		return bd.Score, *bd
 	}
 	score, steps := ApplyNonBaseAdjustmentsWithBreakdown(base, r, len(searchWords))
 	return score, ScoreBreakdown{Score: score, Steps: steps}
