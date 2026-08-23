@@ -1,5 +1,5 @@
 // file: internal/server/ai_ops.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-08-23
 
@@ -22,28 +22,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )
 
-// aiReviewOpParams holds the serializable parameters for the ai.author-review op.
-type aiReviewOpParams struct {
-	Mode        string                   `json:"mode"`
-	DedupGroups []dedup.AuthorDedupGroup `json:"dedup_groups,omitempty"`
-}
-
-// aiMergeApplySuggestion is the per-item suggestion for the merge-apply op.
-// This struct is shared between the HTTP request body and the op params so it
-// is JSON-serializable end-to-end.
-type aiMergeApplySuggestion struct {
-	GroupIndex    int    `json:"group_index"`
-	Action        string `json:"action"`
-	CanonicalName string `json:"canonical_name"`
-	KeepID        int    `json:"keep_id"`
-	MergeIDs      []int  `json:"merge_ids"`
-	Rename        bool   `json:"rename"`
-}
-
-// aiMergeApplyOpParams holds the serializable parameters for the ai.author-merge-apply op.
-type aiMergeApplyOpParams struct {
-	Suggestions []aiMergeApplySuggestion `json:"suggestions"`
-}
+// The params for both ops are handlers.AIReviewOpParams and
+// handlers.AIMergeApplyOpParams. This file used to declare its own
+// structurally-identical copies so it could decode what the handler enqueued;
+// see the comment on those types for why a JSON-tag-only coupling between two
+// packages is the wrong way to share a wire shape.
 
 // RegisterAIAuthorReviewOp registers the "ai.author-review" v2 OperationDef.
 func (s *Server) RegisterAIAuthorReviewOp(reg *opsregistry.Registry) error {
@@ -62,7 +45,7 @@ func (s *Server) RegisterAIAuthorReviewOp(reg *opsregistry.Registry) error {
 		Permissions:     []auth.Permission{auth.PermLibraryEditMetadata},
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkOpenAI},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
-			var p aiReviewOpParams
+			var p handlers.AIReviewOpParams
 			if len(rawParams) > 0 {
 				if err := json.Unmarshal(rawParams, &p); err != nil {
 					return fmt.Errorf("ai.author-review: decode params: %w", err)
@@ -113,7 +96,7 @@ func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 		Permissions:     []auth.Permission{auth.PermLibraryEditMetadata},
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
-			var p aiMergeApplyOpParams
+			var p handlers.AIMergeApplyOpParams
 			if len(rawParams) > 0 {
 				if err := json.Unmarshal(rawParams, &p); err != nil {
 					return fmt.Errorf("ai.author-merge-apply: decode params: %w", err)

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0e40aea8-a75e-4dc9-9521-11521efacaf8
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package handlers_test
 
@@ -479,4 +479,113 @@ func TestAIHandler_ListAIJobs_ClampsLimit(t *testing.T) {
 	c, w := newAICtx(http.MethodGet, "/ai-jobs?type=dedup_review&status=pending&limit=9999&offset=-5", "", nil)
 	h.ListAIJobs(c)
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// ── ReviewDuplicateAuthors: the same-mode in-flight guard ─────────────────
+//
+// The guard answers a request with the run already in flight instead of
+// starting a second one. It matches v2 rows on DefID and on the mode decoded
+// out of Params — neither of which the compiler checks against what EnqueueOp
+// actually wrote. A guard that stops matching does not fail loudly: it just
+// returns nil forever and every request starts another concurrent review. So
+// each arm below pins one way it could go quietly wrong.
+
+func enableAI(t *testing.T) func() {
+	t.Helper()
+	orig := config.AppConfig
+	config.AppConfig.EnableAIParsing = true
+	config.AppConfig.OpenAIAPIKey = "test-key"
+	return func() { config.AppConfig = orig }
+}
+
+// activeReviewRow builds a row shaped like the one EnqueueOp writes. Params is
+// a JSON literal rather than a marshalled AIReviewOpParams so this asserts the
+// wire shape itself: if the json tag on Mode is ever renamed, the guard stops
+// matching, and only a literal here notices.
+func activeReviewRow(id, defID, paramsJSON string) database.OperationV2Row {
+	return database.OperationV2Row{ID: id, DefID: defID, Status: "running", Params: paramsJSON}
+}
+
+// reviewRequest serves one review request against the given active rows.
+// wantEnqueue says whether the guard is expected to let the request through:
+// when false, the mock registry carries no EnqueueOp expectation, so a second
+// run starting anyway fails the test on an unexpected call.
+func reviewRequest(t *testing.T, rows []database.OperationV2Row, body string, wantEnqueue bool) *httptest.ResponseRecorder {
+	t.Helper()
+	store := databasemocks.NewMockStore(t)
+	store.EXPECT().ListActiveOperationsV2().Return(rows, nil)
+	reg := handlersmocks.NewMockOperationsRegistry(t)
+	if wantEnqueue {
+		reg.EXPECT().EnqueueOp(mock.Anything, handlers.AIAuthorReviewDefID, mock.Anything).
+			Return("op-new", nil).Once()
+	}
+	h := handlers.NewAIHandler(store, nil, nil, nil, aiDedupCache(), reg,
+		func(b *database.Book) any { return b })
+	c, w := newAICtx(http.MethodPost, "/authors/duplicates/ai-review", body, nil)
+	h.ReviewDuplicateAuthors(c)
+	return w
+}
+
+func TestAIHandler_ReviewDuplicateAuthors_SameModeReturnsTheRunningOp(t *testing.T) {
+	defer enableAI(t)()
+	w := reviewRequest(t,
+		[]database.OperationV2Row{activeReviewRow("op-live", handlers.AIAuthorReviewDefID, `{"mode":"full"}`)},
+		`{"mode":"full"}`, false)
+
+	assert.Equal(t, http.StatusAccepted, w.Code)
+	assert.Contains(t, w.Body.String(), "op-live",
+		"the caller must get the id of the run already in flight, not a new one")
+}
+
+// The guard is per-MODE, not per-def. A groups run must not block a full run —
+// that is the whole reason this is not just a ConcurrencyKey.
+func TestAIHandler_ReviewDuplicateAuthors_ADifferentModeDoesNotBlock(t *testing.T) {
+	defer enableAI(t)()
+	w := reviewRequest(t,
+		[]database.OperationV2Row{activeReviewRow("op-groups", handlers.AIAuthorReviewDefID, `{"mode":"groups"}`)},
+		`{"mode":"full"}`, true)
+
+	assert.Equal(t, http.StatusAccepted, w.Code)
+	assert.NotContains(t, w.Body.String(), "op-groups")
+}
+
+// An unrelated op that happens to be active must not be mistaken for a review.
+func TestAIHandler_ReviewDuplicateAuthors_AnotherDefDoesNotBlock(t *testing.T) {
+	defer enableAI(t)()
+	w := reviewRequest(t,
+		[]database.OperationV2Row{activeReviewRow("op-scan", "library.scan", `{"mode":"full"}`)},
+		`{"mode":"full"}`, true)
+
+	assert.Equal(t, http.StatusAccepted, w.Code)
+	assert.NotContains(t, w.Body.String(), "op-scan")
+}
+
+// A row whose params do not decode is skipped, not treated as a match — the
+// alternative is one malformed row wedging every future review request.
+func TestAIHandler_ReviewDuplicateAuthors_UndecodableParamsAreSkipped(t *testing.T) {
+	defer enableAI(t)()
+	w := reviewRequest(t,
+		[]database.OperationV2Row{activeReviewRow("op-bad", handlers.AIAuthorReviewDefID, `{{not json`)},
+		`{"mode":"full"}`, true)
+
+	assert.Equal(t, http.StatusAccepted, w.Code)
+	assert.NotContains(t, w.Body.String(), "op-bad")
+}
+
+// A store that cannot answer must not block the user from starting a review.
+// Worst case is two concurrent runs, which is what the v1 scan did too.
+func TestAIHandler_ReviewDuplicateAuthors_LookupFailureDoesNotBlock(t *testing.T) {
+	defer enableAI(t)()
+	store := databasemocks.NewMockStore(t)
+	store.EXPECT().ListActiveOperationsV2().Return(nil, errors.New("pebble closed"))
+	reg := handlersmocks.NewMockOperationsRegistry(t)
+	reg.EXPECT().EnqueueOp(mock.Anything, handlers.AIAuthorReviewDefID, mock.Anything).Return("op-new", nil)
+	h := handlers.NewAIHandler(store, nil, nil, nil, aiDedupCache(), reg,
+		func(b *database.Book) any { return b })
+
+	c, w := newAICtx(http.MethodPost, "/authors/duplicates/ai-review", `{"mode":"full"}`, nil)
+	h.ReviewDuplicateAuthors(c)
+
+	assert.Equal(t, http.StatusAccepted, w.Code)
+	assert.Contains(t, w.Body.String(), "op-new")
 }
