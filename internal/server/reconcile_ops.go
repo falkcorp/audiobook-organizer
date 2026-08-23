@@ -1,11 +1,12 @@
 // file: internal/server/reconcile_ops.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5c2d8f41-a3e7-4b19-8d60-9f1e2c3a4b5d
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 // reconcile_ops registers the v2 OperationDefs for the reconcile scan and
-// reconcile apply operations. The HTTP handlers in reconcile.go create v1 op
-// records for backward compatibility and then enqueue these defs.
+// reconcile apply operations. The HTTP handlers in reconcile.go enqueue these
+// defs directly and read the run back with reconcileOperationView; they no
+// longer mint a v1 op record alongside.
 
 package server
 

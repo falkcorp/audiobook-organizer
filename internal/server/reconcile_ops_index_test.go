@@ -1,7 +1,7 @@
 // file: internal/server/reconcile_ops_index_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6d0a3c84-1b57-4e92-8f36-9c2e5a710db4
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package server
 
@@ -25,8 +25,23 @@ type reconcileIndexStore struct {
 	v1ByID map[string]*database.Operation
 }
 
+// Honours limit. It sorts on CreatedAt, which is never nil, so it lacks the
+// NULLS-LAST trap the v2 listing has — but it still truncates BEFORE the caller
+// can filter by Type, so a small limit passed through would drop old reconcile
+// rows behind newer rows of other types. Ignoring limit here would leave the v1
+// half of storeScanBound guarded by nothing.
 func (s *reconcileIndexStore) ListOperations(limit, offset int) ([]database.Operation, int, error) {
-	return s.v1, len(s.v1), s.v1Err
+	if s.v1Err != nil {
+		return nil, 0, s.v1Err
+	}
+	all := append([]database.Operation(nil), s.v1...)
+	sort.SliceStable(all, func(i, j int) bool {
+		return all[i].CreatedAt.After(all[j].CreatedAt)
+	})
+	if len(all) > limit {
+		all = all[:limit]
+	}
+	return all, len(s.v1), nil
 }
 
 func (s *reconcileIndexStore) ListOperationsV2Since(_ time.Time, limit int) ([]database.OperationV2Row, error) {
@@ -178,5 +193,28 @@ func TestRecentReconcileScans_KeepsLegacyHistoryVisible(t *testing.T) {
 	}
 	if got := recentReconcileScans(store, 50); len(got) != 1 || got[0].ID != "historical" {
 		t.Fatalf("legacy-only history must still be listed, got %+v", got)
+	}
+}
+
+// The v1 half of the same trap. ListOperations truncates to its limit before
+// this code can filter by Type, so an OLD reconcile scan sitting behind a wall
+// of newer rows of other types is dropped by a small limit. The caller's limit
+// bounds the answer; only storeScanBound may bound the store scan.
+func TestRecentReconcileScans_OldLegacyScanSurvivesACrowdedV1Table(t *testing.T) {
+	now := time.Now()
+
+	// The reconcile scan is the OLDEST row, so a truncating limit loses it first.
+	v1 := []database.Operation{
+		{ID: "old-scan", Type: reconcileScanLegacyType, Status: "completed", CreatedAt: now.Add(-72 * time.Hour)},
+	}
+	for i := 0; i < 300; i++ {
+		v1 = append(v1, database.Operation{
+			ID: "noise", Type: "scan", Status: "completed", CreatedAt: now,
+		})
+	}
+
+	got := recentReconcileScans(&reconcileIndexStore{v1: v1}, 50)
+	if len(got) != 1 || got[0].ID != "old-scan" {
+		t.Fatalf("an old reconcile scan must survive a crowded v1 table, got %d rows", len(got))
 	}
 }
