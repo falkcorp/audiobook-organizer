@@ -1,5 +1,5 @@
 // file: internal/server/handlers/diagnostics_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8ab4b825-05c3-4569-b450-0dca6b872771
 // last-edited: 2026-08-22
 
@@ -112,11 +112,15 @@ func TestDiagnosticsHandler_StartExport_InvalidCategory_400(t *testing.T) {
 
 // ── DownloadExport ────────────────────────────────────────────────────────
 
-func TestDiagnosticsHandler_DownloadExport_NotFound(t *testing.T) {
+// GetOperationV2 returns (nil, nil) for a row that is not there, so absent and
+// broken are distinguishable — and must stay distinguished. This test and the
+// one below it were a single test asserting 404 for a store ERROR, which told a
+// user whose database had just failed that their export never existed.
+func TestDiagnosticsHandler_DownloadExport_AbsentRowIs404(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
 	// Looked up as a v2 row: StartExport hands back an EnqueueOp id, so a legacy
 	// lookup here would miss every export this endpoint is ever asked for.
-	store.EXPECT().GetOperationV2("missing").Return(nil, assert.AnError)
+	store.EXPECT().GetOperationV2("missing").Return(nil, nil)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/export/missing/download", "",
@@ -124,6 +128,48 @@ func TestDiagnosticsHandler_DownloadExport_NotFound(t *testing.T) {
 	h.DownloadExport(c)
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestDiagnosticsHandler_DownloadExport_StoreErrorIs500(t *testing.T) {
+	store := databasemocks.NewMockStore(t)
+	store.EXPECT().GetOperationV2("boom").Return(nil, assert.AnError)
+
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
+	c, w := newDiagCtx(http.MethodGet, "/diagnostics/export/boom/download", "",
+		gin.Params{{Key: "operationId", Value: "boom"}})
+	h.DownloadExport(c)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code,
+		"a store failure must not be reported as a missing export")
+}
+
+// TestDiagnosticsHandler_DownloadExport_TerminalFailureIsNot202 covers the case
+// that made a killed export indistinguishable from a running one.
+//
+// interrupted_dropped is not hypothetical: diagnostics.export declares a 30m
+// Timeout but no ProgressTimeout, so the watchdog's 5m default applies, and any
+// export slower than that is cancelled and lands here.
+func TestDiagnosticsHandler_DownloadExport_TerminalFailureIsNot202(t *testing.T) {
+	for _, status := range []string{"failed", "canceled", "interrupted_dropped", "interrupted_quiesced"} {
+		t.Run(status, func(t *testing.T) {
+			store := databasemocks.NewMockStore(t)
+			msg := "collect books: pebble: closed"
+			store.EXPECT().GetOperationV2("op-x").Return(&database.OperationV2Row{
+				ID: "op-x", Status: status,
+				ProgressMessage: "Generating export data",
+				ErrorMessage:    &msg,
+			}, nil)
+
+			h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
+			c, w := newDiagCtx(http.MethodGet, "/diagnostics/export/op-x/download", "",
+				gin.Params{{Key: "operationId", Value: "op-x"}})
+			h.DownloadExport(c)
+
+			assert.NotEqual(t, http.StatusAccepted, w.Code,
+				"a terminal op reported as 202 makes a polling client wait forever")
+			assert.Equal(t, http.StatusInternalServerError, w.Code)
+		})
+	}
 }
 
 func TestDiagnosticsHandler_DownloadExport_NotCompleted_202(t *testing.T) {
