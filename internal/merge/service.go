@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-08-19
+// last-edited: 2026-08-23
 
 package merge
 
@@ -195,14 +195,47 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 
 	// Determine version group ID (reuse if any book already has one)
 	versionGroupID := ""
+	reusedGroup := false
 	for _, b := range books {
 		if b.VersionGroupID != nil && *b.VersionGroupID != "" {
 			versionGroupID = *b.VersionGroupID
+			reusedGroup = true
 			break
 		}
 	}
 	if versionGroupID == "" {
 		versionGroupID = ulid.Make().String()
+	}
+
+	// INVARIANT (VG-DOUBLE-PRIMARY): a version group must never have more than
+	// one is_primary_version=true member. When we REUSE an existing group ID,
+	// ALL current members must be re-evaluated, not just the ones in this
+	// call. The primary-flag loop below writes only the books in `books`, so a
+	// member that joined the group in a PRIOR merge and is absent from this
+	// call would keep its is_primary_version=true and the group would end up
+	// with two live primaries — measured on prod 2026-08-11 in 10 of 15
+	// sampled groups.
+	//
+	// Load the pre-existing membership BEFORE any write so a read failure
+	// aborts the merge with nothing half-applied. GetBooksByVersionGroup
+	// already filters soft-deleted rows, so this is the live membership only;
+	// a soft-deleted row still flagged primary is a separate invariant
+	// (store_invariants (a)) that this accessor cannot see and this fix does
+	// not claim to repair.
+	//
+	// RACE, deliberately unfixed here: this read-then-write is protected only
+	// by mergeSerializeMu, which covers the merge family. A non-merge writer
+	// (regroup apply, reconcile.ElectMissingPrimaries) that adds a primary to
+	// this group between the read and the writes below can still leave two.
+	// Out of scope per the item; noted so the next reader does not assume it
+	// is handled.
+	var preExistingMembers []database.Book
+	if reusedGroup {
+		members, err := ms.db.GetBooksByVersionGroup(versionGroupID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load version group %s membership: %w", versionGroupID, err)
+		}
+		preExistingMembers = members
 	}
 
 	// Update all books to share the version group. Winner is
@@ -218,6 +251,42 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 		if _, err := ms.db.UpdateBook(book.ID, book); err != nil {
 			return nil, fmt.Errorf("failed to update book %s: %w", book.ID, err)
 		}
+	}
+
+	// Demote every pre-existing member of a REUSED group that the loop above
+	// did not just write. Two independent guards, because the books in this
+	// call frequently already carry versionGroupID and are therefore in
+	// preExistingMembers too: `seen` is exactly the set of book IDs passed to
+	// this call, and resolvedPrimaryID is checked separately so we can never
+	// demote the winner and produce a group with ZERO primaries.
+	//
+	// The election itself is deliberately NOT widened to these books: an
+	// explicit primaryID must win (documented MergeBooks semantics), and
+	// merge's BookIsBetter rule is not reconcile.electPrimaryFor's
+	// earliest-created rule — running a second, disagreeing election here is
+	// the bug class this fix exists to remove. The winner is whoever this call
+	// elected; everyone else in the group is demoted.
+	//
+	// nil is NOT false: a nil IsPrimaryVersion counts as PRIMARY everywhere
+	// that reads it (pebble_store.go `eff := book.IsPrimaryVersion == nil ||
+	// *book.IsPrimaryVersion`, memdb_reads.go likewise), so a nil member must
+	// be rewritten to an explicit false rather than skipped. Only members
+	// already storing an explicit false are left alone.
+	for i := range preExistingMembers {
+		member := &preExistingMembers[i]
+		if seen[member.ID] || member.ID == resolvedPrimaryID {
+			continue
+		}
+		if member.IsPrimaryVersion != nil && !*member.IsPrimaryVersion {
+			continue
+		}
+		notPrimary := false
+		member.IsPrimaryVersion = &notPrimary
+		if _, err := ms.db.UpdateBook(member.ID, member); err != nil {
+			return nil, fmt.Errorf("failed to demote pre-existing version-group member %s: %w", member.ID, err)
+		}
+		slog.Info("merge demoted pre-existing version-group member",
+			"id", member.ID, "group", versionGroupID, "primary", resolvedPrimaryID)
 	}
 
 	// --- Per-loser cleanup ---

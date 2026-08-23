@@ -1,14 +1,14 @@
 // file: internal/merge/store.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
-// last-edited: 2026-08-19
+// last-edited: 2026-08-23
 
 package merge
 
 import "github.com/falkcorp/audiobook-organizer/internal/database"
 
 // The store surface this package needs, measured with an empty-interface
-// compiler probe under -gcflags=-e: 18 methods, no forwarding constraints. It
+// compiler probe under -gcflags=-e: 19 methods, no forwarding constraints. It
 // was database.Store (398 methods) until 2026-08-19.
 //
 // Grouped rather than declared flat so each consumer can name the slice it uses:
@@ -68,6 +68,21 @@ type mergeExternalIDReader interface {
 	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
 }
 
+// mergeVersionGroupReader loads every CURRENT live member of a version group.
+// MergeBooks needs it to demote pre-existing members when it reuses an
+// existing group's ID (VG-DOUBLE-PRIMARY): without it, a member that joined
+// the group in a PRIOR merge and is absent from this call keeps its
+// is_primary_version=true and the group ends up with two primaries.
+//
+// Deliberately its own single-method interface rather than an addition to
+// BookReader/BookWriter: those two are exported precisely so internal/importer
+// and internal/dedup can forward their own stores into BookTitle and
+// SoftDeleteBook, and widening either would force a method on callers that do
+// not need it. Only Store composes this.
+type mergeVersionGroupReader interface {
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+}
+
 // syncCapabilityStore is deliberately `any`: FollowFileMove and
 // followSyncFilesForBookChange never call a method on the store themselves.
 // They hand it to database.AsSyncFileStore / AsSyncIdentityStore, which take
@@ -84,4 +99,5 @@ type Store interface {
 	mergeAuthorStore
 	UserProgressMerger
 	mergeExternalIDReader
+	mergeVersionGroupReader
 }
