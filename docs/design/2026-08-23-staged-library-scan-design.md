@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-08-23-staged-library-scan-design.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 4c1e8b73-2a9f-4d06-b5e1-7f3a90c2d846 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -286,6 +286,59 @@ Bounded retry with a visible terminus:
 Retrying forever with only a log line is rejected: it burns cycles on a
 permanently bad file and makes the log the sole witness. Silence is the failure
 mode this repo keeps rediscovering.
+
+## Resolved in review — round 2, 2026-08-23 **[OWNER]**
+
+### The provisional filter lives in the store, not at each call site
+
+Risk 2 said a missed call site means comparing books by an absent hash, and that
+it needed a deliberate enumeration rather than a grep. The accepted answer removes
+the need for the enumeration to be complete: **the dedup- and bulk-sensitive read
+paths go through store methods that exclude provisional rows by default.**
+
+- The safe behaviour is what a caller gets by writing the obvious thing.
+- Including provisional rows requires calling a differently-named method, so it is
+  visible in review and greppable after the fact.
+- A read path added next year inherits the exclusion without anyone remembering.
+
+This is the same shape as the compile-probe / let-the-compiler-partition work in
+the store-decoupling lane, one rung down: not type-enforced, but the default is
+safe and the unsafe case has to be spelled out.
+
+### A changed file keeps its old hash, marked stale
+
+When Discover sees size or mtime differ on a known file, the row goes back to
+`NeedsDeepScan = true` **and keeps its previous `FileHash`, plus a stale marker.**
+
+- Dedup already excludes provisional rows, so the stale hash is never compared.
+- If the deep pass then fails repeatedly, the book still has its previous hash on
+  record rather than nothing — the failure is recoverable and non-destructive.
+- Clearing the hash immediately was rejected for exactly that reason: it converts a
+  deep-pass failure into permanent data loss on a row that was previously fine.
+
+### A moved file is repointed, not re-ingested
+
+If a path disappears and a new path appears with the same `(size, mtime)`, Discover
+treats it as a **move**: the existing row is repointed to the new path, keeping its
+hash, chapters and metadata, and `NeedsDeepScan` stays `false`. No re-hash, no
+provisional window, no transient duplicate.
+
+Two consequences worth stating:
+
+- **This is upstream of the repoint lane.** That lane measured 14,439 repointable
+  rows and found the collision bucket to be genuine duplicate books. Detecting the
+  move at scan time stops new rows entering that backlog at the source, rather than
+  repairing them afterwards.
+- **Discover becomes two-phase.** "This path is gone" is only knowable once the
+  whole walk has finished, so move matching runs after the walk, not during it.
+
+### New media auto-queues a deep pass at low priority
+
+Adding media queues a deep pass for just those books at **low priority** — it starts
+on its own and yields to interactive work — with a control to promote it to run
+immediately. The default requires no click, matching *"by default it's just
+backgrounded"*, while the override is one action rather than a settings change.
+Prompting on every import was rejected as inconsistent with that default.
 
 ## Open questions for review
 
