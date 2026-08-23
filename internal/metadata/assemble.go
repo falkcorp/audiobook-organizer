@@ -1,5 +1,5 @@
 // file: internal/metadata/assemble.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 1b2c3d4e-5f6a-7b8c-9d0e-1f2a3b4c5d6e
 // last-edited: 2026-08-23
 
@@ -279,7 +279,15 @@ func (bm *AssembledMetadata) PrimaryAuthor() string {
 // so the joined results cannot reach outside dirPath either. CodeQL does not
 // model those barriers, so suppress the false positive.
 func listAudioFiles(dirPath string, supportedExts []string) []string {
-	entries, err := os.ReadDir(dirPath) // lgtm[go/path-injection]
+	// CodeQL go/path-injection: verified false positive, DISMISSED via the
+	// code-scanning API (source comments are not a suppression mechanism in
+	// this repo — see the changelog fragment for the evidence). Every caller
+	// reaches here past fileops.ValidateUserPath (internal/importer/service.go)
+	// or walks the scanner's configured import roots; ReadDir is read-only and
+	// non-recursive, and each entry name is a single path element, so the Join
+	// below cannot escape dirPath. Caveat recorded: the allow-list is lexical
+	// and does not resolve symlinks.
+	entries, err := os.ReadDir(dirPath)
 	if err != nil {
 		return nil
 	}
