@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series_refcount_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f871254-fb7f-475b-a668-ec240f1b0ef3
 // last-edited: 2026-08-23
 
@@ -57,8 +57,14 @@ func TestCsMergeSeriesGroup_KeepsSeriesRowWhenHiddenBooksStillReferenceIt(t *tes
 	// cannot see them, so deleting the row would strand them.
 	f := &csFakeMerger{visible: map[int][]database.BookCore{7: {{ID: "VISIBLE"}}}}
 
-	if err := csMergeSeriesGroup(f, 1, []int{7}, map[int]int{7: 4}); err != nil {
+	merged, refused, err := csMergeSeriesGroup(f, 1, []int{7}, map[int]int{7: 4})
+	if err != nil {
 		t.Fatalf("csMergeSeriesGroup returned an error, want a clean refusal: %v", err)
+	}
+	if merged != 0 || refused != 1 {
+		t.Fatalf("a refusal must be reported to the caller as (merged=0, refused=1), got (%d, %d) — "+
+			"the caller counts merged>0 as an applied group, so a mis-report makes the refusal invisible",
+			merged, refused)
 	}
 
 	for _, id := range f.deleted {
@@ -79,8 +85,12 @@ func TestCsMergeSeriesGroup_StillDeletesAGenuinelyUnreferencedSeries(t *testing.
 	// the test above while silently turning the job into a no-op.
 	f := &csFakeMerger{visible: map[int][]database.BookCore{7: {{ID: "ONLYBOOK"}}}}
 
-	if err := csMergeSeriesGroup(f, 1, []int{7}, map[int]int{7: 1}); err != nil {
+	merged, refused, err := csMergeSeriesGroup(f, 1, []int{7}, map[int]int{7: 1})
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if merged != 1 || refused != 0 {
+		t.Fatalf("a real merge must report (merged=1, refused=0), got (%d, %d)", merged, refused)
 	}
 
 	found := false
@@ -101,8 +111,12 @@ func TestCsMergeSeriesGroup_AbsentFromRefCountsMeansUnreferenced(t *testing.T) {
 	// would make the job stop deleting the orphans it exists to remove.
 	f := &csFakeMerger{visible: map[int][]database.BookCore{7: nil}}
 
-	if err := csMergeSeriesGroup(f, 1, []int{7}, map[int]int{}); err != nil {
+	merged, refused, err := csMergeSeriesGroup(f, 1, []int{7}, map[int]int{})
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if merged != 1 || refused != 0 {
+		t.Fatalf("an absent key means unreferenced, so this must report (merged=1, refused=0), got (%d, %d)", merged, refused)
 	}
 	if len(f.deleted) != 1 || f.deleted[0] != 7 {
 		t.Fatalf("a series absent from the ref-count map is unreferenced and must be deleted, got deleted=%v", f.deleted)

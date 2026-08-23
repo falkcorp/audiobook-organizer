@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: a1000002-0000-0000-0000-000000000002
 // last-edited: 2026-08-23
 
@@ -67,7 +67,7 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 	reporter.SetTotal(len(allSeries))
 
 	// Phase 1: single-book series
-	var singleApplied, singleFound int
+	var singleApplied, singleFound, singleSkipped int
 	deletedIDs := make(map[int]bool)
 
 	for _, ser := range allSeries {
@@ -100,9 +100,17 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 		// count==1 here, and unlinking the one visible book then deleting the
 		// row strands the other three.
 		if refCounts[ser.ID] > 1 {
-			slog.Info("Skipping 1-book series: more books reference it than the filtered count shows",
-				"seriesID", ser.ID, "seriesName", ser.Name,
-				"filtered_count", count, "unfiltered_count", refCounts[ser.ID])
+			// Counted and reported through the reporter, not just slog. A
+			// skip here is a series this job DECLINED to collapse; if it were
+			// only incremented like the thousands of non-candidates above,
+			// the summary could not distinguish "the guard saved a series"
+			// from "nothing matched", and the guard would be invisible in the
+			// job output an operator actually reads.
+			singleSkipped++
+			reporter.Log("warn", fmt.Sprintf(
+				"Kept 1-book series %d (%q): %d books reference it but the filtered count shows %d "+
+					"(trashed or non-primary rows would have been stranded)",
+				ser.ID, ser.Name, refCounts[ser.ID], count), nil)
 			reporter.Increment()
 			continue
 		}
@@ -129,7 +137,7 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 		normGroups[key] = append(normGroups[key], ser)
 	}
 
-	var dupApplied, dupFound int
+	var dupApplied, dupFound, dupRefused int
 	for normName, group := range normGroups {
 		if len(group) < 2 {
 			continue
@@ -152,15 +160,29 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 		}
 
 		if !dryRun {
-			if mergeErr := csMergeSeriesGroup(store, keeper.ID, mergeIDs, refCounts); mergeErr != nil {
+			merged, refused, mergeErr := csMergeSeriesGroup(store, keeper.ID, mergeIDs, refCounts)
+			dupRefused += refused
+			switch {
+			case mergeErr != nil:
 				slog.Error("Failed to merge series group", "normName", normName, "err", mergeErr)
-			} else {
+			case merged > 0:
+				// Only a group in which at least one series row was actually
+				// removed counts as applied. Previously a group where EVERY
+				// merge was refused still incremented dupApplied, so the
+				// summary reported merges that did not happen.
 				dupApplied++
 			}
 		}
 	}
 
-	slog.Info("Done single_found single_applied dup_groups_found dup_applied dryRun", "singleFound", singleFound, "singleApplied", singleApplied, "dupFound", dupFound, "dupApplied", dupApplied, "dryRun", dryRun)
+	if singleSkipped > 0 || dupRefused > 0 {
+		reporter.Log("warn", fmt.Sprintf(
+			"Reference guard kept %d single-book series and %d merged-from series that the filtered "+
+				"count reported as empty; rerun once those rows are visible", singleSkipped, dupRefused), nil)
+	}
+	slog.Info("Done single_found single_applied single_skipped dup_groups_found dup_applied dup_refused dryRun",
+		"singleFound", singleFound, "singleApplied", singleApplied, "singleSkipped", singleSkipped,
+		"dupFound", dupFound, "dupApplied", dupApplied, "dupRefused", dupRefused, "dryRun", dryRun)
 	return nil
 }
 
@@ -192,26 +214,40 @@ func csUnlinkAndDeleteSeries(store seriesUnlinker, book *database.BookCore, seri
 // hides trashed and non-primary rows. Deleting a series whose unfiltered count
 // exceeds what was reassigned strands those rows on a series ID that no longer
 // resolves.
-func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int, refCounts map[int]int) error {
+// It returns (merged, refused, err): merged is the number of series rows
+// actually deleted, refused the number kept back by the reference guard. The
+// caller needs both -- a group in which every merge was refused is not a
+// completed merge, and reporting it as one is how a refusal becomes invisible.
+func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int, refCounts map[int]int) (int, int, error) {
+	var merged, refused int
 	for _, fromID := range mergeIDs {
 		books, err := store.GetBooksBySeriesIDCore(fromID)
 		if err != nil {
-			return fmt.Errorf("GetBooksBySeriesIDCore(%d): %w", fromID, err)
+			return merged, refused, fmt.Errorf("GetBooksBySeriesIDCore(%d): %w", fromID, err)
 		}
+		// moved counts rows actually reassigned, mirroring the dedup path. The
+		// nil-hydration skip below must NOT count: refCounts is a snapshot
+		// taken before this loop, so a row we cannot hydrate is ambiguous --
+		// either it was deleted since the snapshot (refCounts is stale-high and
+		// refusing merely defers the row removal to the next run) or hydration
+		// is inconsistent and the row still holds fromID. Refusing is correct
+		// in the second case and cheap in the first.
+		moved := 0
 		for _, book := range books {
 			current, err := store.GetBookByID(book.ID)
 			if err != nil {
-				return fmt.Errorf("GetBookByID(%s): %w", book.ID, err)
+				return merged, refused, fmt.Errorf("GetBookByID(%s): %w", book.ID, err)
 			}
 			if current == nil {
 				continue
 			}
 			current.SeriesID = &keepID
 			if _, err = store.UpdateBook(book.ID, current); err != nil {
-				return fmt.Errorf("UpdateBook(%s): %w", book.ID, err)
+				return merged, refused, fmt.Errorf("UpdateBook(%s): %w", book.ID, err)
 			}
+			moved++
 		}
-		if stranded := refCounts[fromID] - len(books); stranded > 0 {
+		if stranded := refCounts[fromID] - moved; stranded > 0 {
 			// Books were still reassigned above -- that is strictly an
 			// improvement and is not rolled back. Only the row removal is
 			// refused, leaving a resolvable series ID for the rows we could
@@ -219,14 +255,16 @@ func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int, refCount
 			// those rows become visible.
 			slog.Warn("Keeping merged-from series row: books reference it that the filtered getter cannot see",
 				"seriesID", fromID, "keepID", keepID,
-				"reassigned", len(books), "stranded_if_deleted", stranded)
+				"reassigned", moved, "stranded_if_deleted", stranded)
+			refused++
 			continue
 		}
 		if err = store.DeleteSeries(fromID); err != nil {
-			return fmt.Errorf("DeleteSeries(%d): %w", fromID, err)
+			return merged, refused, fmt.Errorf("DeleteSeries(%d): %w", fromID, err)
 		}
+		merged++
 	}
-	return nil
+	return merged, refused, nil
 }
 
 var csNonAlphanumRE = regexp.MustCompile(`[^\p{L}\p{N}\s]+`)
