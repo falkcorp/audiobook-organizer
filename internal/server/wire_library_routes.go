@@ -1,7 +1,7 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-08-11
+// last-edited: 2026-08-23
 
 package server
 
@@ -84,6 +84,7 @@ func (s *Server) wireLibraryRoutes(
 	protected.DELETE("/playlists/:id/books/:bookID", playlistH.RemoveBookFromPlaylist)
 	protected.POST("/playlists/:id/reorder", playlistH.ReorderPlaylist)
 	protected.POST("/playlists/:id/materialize", playlistH.MaterializePlaylist)
+	protected.GET("/playlists/:id/export.m3u", playlistH.ExportPlaylistM3U)
 
 	// Collections. This is the ONLY surface that can create a dynamic
 	// (query-backed) collection: Audiobookshelf has no such concept, so its
