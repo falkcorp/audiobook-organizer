@@ -76,3 +76,45 @@
       `VGBACKFILL-BOUNDS-FRAGILE`'s fix got. Fixing gap 1 at `CreateBook` may
       make much of this sweep unnecessary — do that first and re-measure
       blast radius before committing to a 47/50/N-site mechanical sweep.
+
+      ---
+
+      **MEASURED 2026-08-23 (the census finding 8.3 of the #2787 review asked
+      for, half-answered).** Finding 8.3 said "do not fix it without
+      measuring." Every book ID reachable through the API was enumerated and
+      its first byte after `book:` checked against the `'0'`–`'9'` lower
+      bound:
+
+      | population | endpoint | ids | leading byte | outside `book:0`..`book:;` |
+      |---|---|---:|---|---:|
+      | live | `/api/v1/audiobooks` (`show_quarantined=true`) | 56,727 | `'0'` ×56,727 | **0** |
+      | soft-deleted | `/api/v1/audiobooks/soft-deleted` | 16,124 | `'0'` ×16,124 | **0** |
+      | **total** | | **72,851** | 100% `'0'` | **0** |
+
+      All 72,851 are exactly 26 characters — canonical ULIDs, with no
+      caller-supplied UUID or other format anywhere in the live keyspace. The
+      digit-only lower bound therefore holds today with a full byte of margin
+      (`'0'` vs. the `'9'` ceiling; ULIDs do not reach a leading `'1'` until
+      ~2065).
+
+      **This measurement does NOT close gap 1, and only partly closes gap 2:**
+
+      - It measures **IDs**, not **keys**. A row whose value is corrupt enough
+        that neither listing decodes it is invisible to this instrument by
+        construction — and that population is exactly what the memdb
+        known-incomplete work (#2794/#2787) exists to handle. A true answer
+        needs a raw Pebble prefix scan on the server, which the API cannot
+        express.
+      - It says nothing about **colons inside an ID** (gap 1). Both listings
+        return IDs as JSON strings; none contained a colon, but `CreateBook`
+        still accepts a caller-supplied ID verbatim, so the invariant remains
+        unenforced at the one place it could be.
+      - Non-book prefixes (`author:`, `series:`, `work:` …) were **not**
+        measured. The 47–50 other sites use the same idiom over different
+        keyspaces with different ID generators.
+
+      **What this changes about the recommendation:** the sweep is now
+      confirmed *not* urgent — there is no live row outside the bound, so this
+      is latent, not active. Fix gap 1 at `CreateBook` first as the fragment
+      already recommends; that makes the invariant true by construction rather
+      than true by luck, and re-measuring after it lands is cheap.
