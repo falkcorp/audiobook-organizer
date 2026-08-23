@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.55.0
+// version: 1.56.0
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
-// last-edited: 2026-08-21
+// last-edited: 2026-08-23
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -1045,6 +1045,7 @@ export const BookDetail = () => {
         segments={segments}
         itunesLinked={itunesLinked}
         itunesPidCount={itunesPidCount}
+        versions={versions}
         activeTab={activeTab}
         onBack={() => {
           const returnUrl = sanitizeReturn(sessionStorage.getItem('library_return_url')) || '/library';
