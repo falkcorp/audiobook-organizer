@@ -1,6 +1,6 @@
 // file: internal/config/aibackend_test.go
-// version: 1.0.0
-// last-edited: 2026-07-03
+// version: 1.1.0
+// last-edited: 2026-08-23
 
 package config
 
@@ -38,6 +38,22 @@ func TestEffectiveEmbeddingMode(t *testing.T) {
 			name: "disabled when enabled but nothing configured",
 			mut:  func(c *Config) { c.Embedding.Enabled = true },
 			want: AIBackendModeDisabled,
+		},
+		{
+			// TASK-018: AIBackend.LocalBaseURL is not read by
+			// EffectiveEmbeddingMode at all (it derives solely from
+			// Embedding.BaseURL), so leaving it empty after removing the
+			// hardcoded LAN-IP default cannot change this outcome — openai
+			// still wins on key + enabled, matching "openai when key set and
+			// no base url" above but with LocalBaseURL set explicitly to
+			// document the invariant.
+			name: "openai when local_base_url empty, key set",
+			mut: func(c *Config) {
+				c.AIBackend.LocalBaseURL = ""
+				c.Embedding.Enabled = true
+				c.OpenAIAPIKey = "sk-x"
+			},
+			want: AIBackendModeOpenAI,
 		},
 	}
 	for _, tt := range tests {
@@ -81,6 +97,29 @@ func TestEffectiveLLMMode(t *testing.T) {
 		{
 			name: "disabled with key but no consumer enabled",
 			mut:  func(c *Config) { c.OpenAIAPIKey = "sk-x" },
+			want: AIBackendModeDisabled,
+		},
+		{
+			// TASK-018: with the hardcoded LAN-IP default removed,
+			// LocalBaseURL="" (the fresh-install state) must fall through
+			// the `c.AIBackend.LocalBaseURL != "" || c.Embedding.BaseURL !=
+			// ""` local-mode check cleanly to the openai branch, not select
+			// local mode against an empty/unreachable URL.
+			name: "openai when local_base_url empty, key set and consumer enabled",
+			mut: func(c *Config) {
+				c.AIBackend.LocalBaseURL = ""
+				c.OpenAIAPIKey = "sk-x"
+				c.EnableAIParsing = true
+			},
+			want: AIBackendModeOpenAI,
+		},
+		{
+			// Same fall-through, but with nothing else configured either —
+			// must land on disabled, never local or a panic.
+			name: "disabled when local_base_url empty and nothing else configured",
+			mut: func(c *Config) {
+				c.AIBackend.LocalBaseURL = ""
+			},
 			want: AIBackendModeDisabled,
 		},
 	}
