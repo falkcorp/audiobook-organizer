@@ -1,5 +1,5 @@
 // file: internal/config/register.go
-// version: 1.2.0
+// version: 1.2.1
 // last-edited: 2026-08-23
 
 package config
@@ -29,12 +29,19 @@ func init() {
 //
 // This wraps serviceregistry.Get[*Config](c, serviceregistry.KeyConfig)
 // (ARCH-8): the wrapped call and its panic-on-missing/undeclared-Needs
-// behavior are unchanged, but the key string and the return type are now
-// fixed by this function's signature rather than chosen ad hoc at each
-// call site, so a typo'd key or a mismatched type argument is a compile
-// error here instead of a runtime panic there. It does NOT change what
-// happens when "config" truly isn't present (still panics) — see
-// internal/serviceregistry/container_test.go for that invariant.
+// behavior are unchanged, but the key and the return type are now fixed
+// TOGETHER by this function's signature instead of chosen independently
+// at each call site, so a call site can no longer pair KeyConfig with the
+// wrong type (or vice versa) — that pairing mismatch is now impossible to
+// express, where before it type-checked and panicked at the type assertion
+// inside Get. (A misspelled key was already a compile error before this
+// change, via the KeyConfig constant — every call site already used it,
+// not a bare string literal.) It does NOT change what happens when
+// "config" truly isn't present (still panics) — see
+// internal/serviceregistry/container_test.go for that invariant. Both
+// GetConfig here and the wrapped Get[T] resolve lazily at call time, at
+// the same point in the same Build closures the old bare Get[T](c,
+// KeyConfig) calls ran at, so no registration-order behavior changed.
 //
 // This accessor cannot live in internal/serviceregistry itself: that
 // package is a dependency of this one (see the Register call above), so
