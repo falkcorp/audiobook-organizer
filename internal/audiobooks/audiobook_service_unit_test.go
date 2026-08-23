@@ -1,7 +1,7 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-20
+// last-edited: 2026-08-23
 
 package audiobooks
 
@@ -183,6 +183,66 @@ func TestAudiobookService_GetAudiobooks_BySeriesID(t *testing.T) {
 	books, err := svc.GetAudiobooks(context.Background(), 10, 0, "", nil, &seriesID)
 	assert.NoError(t, err)
 	assert.Len(t, books, 1)
+}
+
+// TestAudiobookService_GetAudiobooks_ByAuthorID_IsPrimaryVersionNilCountsAsPrimary
+// exercises the author-path post-filter in GetAudiobooks
+// (internal/audiobooks/service_query.go, the `if f.IsPrimaryVersion != nil`
+// block reached via the authorID branch). Storage already treats a nil
+// IsPrimaryVersion as primary — see pebble_store.go's own IsPrimaryVersion
+// filter and the memdb "is_primary_version" index default (Default: true in
+// memdb_schema.go). GetBooksByAuthorIDCore itself counts nil as primary, so
+// a nil-flagged book survives that getter and reaches this post-filter,
+// which must classify it the same way or the author path and the
+// library-wide pushdown path disagree on the same book. Three rows —
+// explicit true, explicit false, and nil — make the three cases DISAGREE:
+// a fixture without the nil row would pass whether or not nil is treated as
+// primary, and would prove nothing about this fix.
+func TestAudiobookService_GetAudiobooks_ByAuthorID_IsPrimaryVersionNilCountsAsPrimary(t *testing.T) {
+	authorID := 99
+	booksCore := []database.BookCore{
+		{ID: "explicit-true", IsPrimaryVersion: boolPtr(true)},
+		{ID: "explicit-false", IsPrimaryVersion: boolPtr(false)},
+		{ID: "nil-flag", IsPrimaryVersion: nil},
+	}
+
+	t.Run("is_primary_version=true", func(t *testing.T) {
+		mockStore := mocks.NewMockStore(t)
+		svc := NewAudiobookService(mockStore)
+		mockStore.EXPECT().GetBooksByAuthorIDCore(authorID).Return(booksCore, nil)
+
+		isPrimary := true
+		books, err := svc.GetAudiobooks(context.Background(), 10, 0, "", &authorID, nil, ListFilters{
+			IsPrimaryVersion: &isPrimary,
+		})
+		assert.NoError(t, err)
+
+		gotIDs := make([]string, 0, len(books))
+		for _, b := range books {
+			gotIDs = append(gotIDs, b.ID)
+		}
+		assert.ElementsMatch(t, []string{"explicit-true", "nil-flag"}, gotIDs,
+			"nil counts as primary, so it must match is_primary_version=true alongside the explicit-true row")
+	})
+
+	t.Run("is_primary_version=false", func(t *testing.T) {
+		mockStore := mocks.NewMockStore(t)
+		svc := NewAudiobookService(mockStore)
+		mockStore.EXPECT().GetBooksByAuthorIDCore(authorID).Return(booksCore, nil)
+
+		isPrimary := false
+		books, err := svc.GetAudiobooks(context.Background(), 10, 0, "", &authorID, nil, ListFilters{
+			IsPrimaryVersion: &isPrimary,
+		})
+		assert.NoError(t, err)
+
+		gotIDs := make([]string, 0, len(books))
+		for _, b := range books {
+			gotIDs = append(gotIDs, b.ID)
+		}
+		assert.ElementsMatch(t, []string{"explicit-false"}, gotIDs,
+			"only the explicit-false row should match is_primary_version=false; nil is primary, not non-primary")
+	})
 }
 
 // --- GetAudiobook (single) ---
