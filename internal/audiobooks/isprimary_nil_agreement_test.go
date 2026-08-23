@@ -1,5 +1,5 @@
 // file: internal/audiobooks/isprimary_nil_agreement_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 69cb8a54-5f1e-4d77-a32a-38f6fe11cc10
 // last-edited: 2026-08-23
 
@@ -344,6 +344,24 @@ func TestIsPrimaryVersion_SerializationAgreesOnCacheHit_NoPushdown(t *testing.T)
 	require.ElementsMatch(t, []string{"explicit-true", "nil-flag"}, idsOf(miss),
 		"the in-Go post-filter must select exactly {explicit true, nil}")
 
+	// NOT asserted here, deliberately: idsOf(hit) is {explicit-true,
+	// explicit-false, nil-flag} -- the cache HIT returns a book the filter
+	// explicitly excluded. Measured, not inferred:
+	//
+	//	extra elements in list B: "explicit-false"
+	//	listA: {"explicit-true", "nil-flag"}
+	//	listB: {"explicit-true", "explicit-false", "nil-flag"}
+	//
+	// That is a SEPARATE pre-existing bug and not the one this file is about.
+	// service_query.go's listCache.Set runs unconditionally right after
+	// bookSummariesToBooks, but didPushdown -- the flag that decides whether the
+	// filter was actually applied -- is not consulted until several lines later.
+	// So on the fallback path the UNFILTERED projection is cached under a key
+	// that encodes p=true, and the in-Go post-filter that fixes the returned
+	// slice runs too late to fix the cached one. It mis-serves explicit-false
+	// rows just as much as nil ones, so it is not a nil-semantics defect at all.
+	// Asserting it here would make this test fail for a reason it does not
+	// diagnose. Filed separately; see todo.d.
 	missEff, missPresent := effectiveAtSerializationSite(t, miss, "nil-flag")
 	hitEff, hitPresent := effectiveAtSerializationSite(t, hit, "nil-flag")
 
