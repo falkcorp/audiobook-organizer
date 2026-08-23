@@ -1,17 +1,21 @@
 // file: internal/database/memdb_warmup_writeloss_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e1c9f27-3a64-4b18-9d02-c7f5a8e3b410
-// last-edited: 2026-08-06
+// last-edited: 2026-08-23
 
 package database
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/cockroachdb/pebble/v2"
 )
 
 // Acceptance tests for the memdb warmup lost-update window.
@@ -43,10 +47,28 @@ func countIDs(t *testing.T, store *PebbleStore) map[string]bool {
 	return set
 }
 
-// seedBooksStore creates a store at dir, writes n real books through the
-// normal write path, and closes it. Reopening dir then forces a warmup that
-// has to rescan all n books, which is what widens the write-loss window
+// seedBooksStore creates a store at dir and writes n real book: rows —
+// exactly what a subsequent NewPebbleStore's warmup scan reads back via
+// ListBookIDs/GetBookByID — then closes it. Reopening dir forces a warmup
+// that has to rescan all n books, which is what widens the write-loss window
 // enough to observe deterministically.
+//
+// This writes one synced Pebble batch for all n rows instead of calling
+// CreateBook n times. CreateBook commits its own synced batch AND issues a
+// second, separately-synced RecordPathChange write per call — 2n fsyncs for
+// n books — none of which this seeding step needs: the tests below only
+// exercise the book: primary-key scan during warmup and read books back
+// through GetBookByID/ListBookIDs (both point-gets/scans the book: prefix
+// only), and DeleteBook's teardown of the book:path: index is a no-op on a
+// key that was never written. Measured before this change, seedBooksStore's
+// 4 callers accounted for ~29% of internal/database's whole -short
+// wall-clock time (see docs/agent-tasks/todo-completion, TASK-178); this
+// keeps the on-disk row bytes and the scan surface identical while cutting
+// the seeding I/O from 2n fsyncs to 1.
+//
+// Caveat for future callers: seeded books have no book:path: index (and no
+// path_history: rows), so GetBookByPath-style lookups on a seeded book will
+// return nil — look seeded books up by ID (as every test in this file does).
 func seedBooksStore(t *testing.T, dir string, n int) {
 	t.Helper()
 	seed, err := NewPebbleStore(dir)
@@ -54,14 +76,36 @@ func seedBooksStore(t *testing.T, dir string, n int) {
 		t.Fatalf("seed NewPebbleStore: %v", err)
 	}
 	seed.WaitForWarmup()
+
+	batch := seed.db.NewBatch()
+	now := time.Now()
 	for i := 0; i < n; i++ {
-		if _, err := seed.CreateBook(&Book{
-			Title:    fmt.Sprintf("Seed %d", i),
-			FilePath: fmt.Sprintf("/seed/%d", i),
-		}); err != nil {
-			t.Fatalf("seed CreateBook %d: %v", i, err)
+		id, err := newULID()
+		if err != nil {
+			t.Fatalf("seed newULID %d: %v", i, err)
+		}
+		book := stripBookSigForRow(&Book{
+			ID:        id,
+			Title:     fmt.Sprintf("Seed %d", i),
+			FilePath:  fmt.Sprintf("/seed/%d", i),
+			CreatedAt: &now,
+			UpdatedAt: &now,
+		})
+		data, err := json.Marshal(book)
+		if err != nil {
+			batch.Close()
+			t.Fatalf("seed marshal %d: %v", i, err)
+		}
+		key := []byte(fmt.Sprintf("book:%s", id))
+		if err := batch.Set(key, data, nil); err != nil {
+			batch.Close()
+			t.Fatalf("seed batch.Set %d: %v", i, err)
 		}
 	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		t.Fatalf("seed batch.Commit: %v", err)
+	}
+
 	if err := seed.Close(); err != nil {
 		t.Fatalf("seed Close: %v", err)
 	}
