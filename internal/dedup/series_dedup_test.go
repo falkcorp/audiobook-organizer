@@ -464,3 +464,106 @@ func TestMergeSeries_CustomRename(t *testing.T) {
 	assert.Equal(t, 0, result.MergedCount, "no series to merge, just rename")
 	assert.Equal(t, "New Name", renamedTo)
 }
+
+// --- TASK-044: the unfiltered ref-count guard -------------------------------
+//
+// GetBooksBySeriesIDCore hides trashed and non-primary rows. The merge loop
+// reassigns what that getter returns and then deletes the series, so any hidden
+// row is stranded on a series ID that no longer resolves. database/series_bookref.go
+// records the production result of exactly this shape: 6,893 phantom series IDs
+// held by 13,322 live books.
+//
+// These tests seed the divergence directly -- one VISIBLE book, three total
+// references -- because a fixture where the two counts agree passes with or
+// without the guard.
+
+// seriesRefStore is a MockStore that can also answer the unfiltered question.
+// MockStore does implement SeriesBookRefStore, but its zero value returns an
+// empty map, which reads as "nothing references anything" and would let every
+// delete through -- so the counts must be supplied explicitly.
+type seriesRefStore struct {
+	*database.MockStore
+	refCounts map[int]int
+}
+
+func (s seriesRefStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
+	return s.refCounts, nil
+}
+
+// newSeriesMergeFixture builds the two-same-name-series setup shared below.
+// Series 2 merges into series 1 and has exactly ONE book visible to the
+// filtered getter.
+func newSeriesMergeFixture(t *testing.T, refCounts map[int]int) (seriesRefStore, *[]int) {
+	t.Helper()
+	deleted := &[]int{}
+	mock := &database.MockStore{}
+	mock.GetAllSeriesFunc = func() ([]database.Series, error) {
+		return []database.Series{{ID: 1, Name: "Foundation"}, {ID: 2, Name: "Foundation"}}, nil
+	}
+	mock.GetBooksBySeriesIDCoreFunc = func(id int) ([]database.BookCore, error) {
+		if id == 2 {
+			return []database.BookCore{{ID: "VISIBLE1", SeriesID: &id}}, nil
+		}
+		return nil, nil
+	}
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		sid := 2
+		return &database.Book{ID: id, SeriesID: &sid}, nil
+	}
+	mock.UpdateBookFunc = func(_ string, b *database.Book) (*database.Book, error) { return b, nil }
+	mock.DeleteSeriesFunc = func(id int) error {
+		*deleted = append(*deleted, id)
+		return nil
+	}
+	return seriesRefStore{MockStore: mock, refCounts: refCounts}, deleted
+}
+
+func TestDedupSeries_RefusesDeleteThatWouldStrandHiddenBooks(t *testing.T) {
+	// One book visible to the filtered getter, THREE rows actually pointing at
+	// series 2. The other two are trashed or non-primary -- invisible to the
+	// reassignment, and orphaned if the row is deleted.
+	store, deleted := newSeriesMergeFixture(t, map[int]int{2: 3})
+
+	result, err := DedupSeries(context.Background(), store, nil, false)
+	require.NoError(t, err)
+
+	assert.NotContains(t, *deleted, 2, "series 2 must survive: two rows still reference it that the merge could not reassign")
+	assert.Equal(t, 0, result.TotalMerged, "a refused delete is not a completed merge")
+	require.Len(t, result.Errors, 1, "the refusal must be reported, not silently skipped")
+	assert.Contains(t, result.Errors[0], "still reference it")
+
+	// The visible book IS still reassigned. Moving it is strictly an
+	// improvement and is deliberately not rolled back -- only the row removal
+	// is refused.
+	assert.Equal(t, 1, result.TotalBooksReassigned)
+}
+
+func TestDedupSeries_StillDeletesWhenNothingHiddenReferencesIt(t *testing.T) {
+	// POSITIVE CONTROL. Without this, a guard that refuses every delete passes
+	// the test above and the op silently stops doing its job.
+	store, deleted := newSeriesMergeFixture(t, map[int]int{2: 1})
+
+	result, err := DedupSeries(context.Background(), store, nil, false)
+	require.NoError(t, err)
+
+	assert.Contains(t, *deleted, 2, "the one reference was reassigned, so the row is genuinely unreferenced and must be deleted")
+	assert.Equal(t, 1, result.TotalMerged)
+	assert.Empty(t, result.Errors)
+}
+
+func TestDedupSeries_DryRunMakesTheSameRefusalAsApply(t *testing.T) {
+	// The guard sits BEFORE the dryRun branch so preview and apply cannot
+	// disagree. A dry run that reports a merge the real run would refuse is
+	// worse than no dry run, because it will be trusted -- and TASK-029 is
+	// queued to edit this same loop.
+	store, deleted := newSeriesMergeFixture(t, map[int]int{2: 3})
+
+	result, err := DedupSeries(context.Background(), store, nil, true)
+	require.NoError(t, err)
+
+	assert.True(t, result.DryRun)
+	assert.Empty(t, *deleted, "a dry run must never delete")
+	assert.Equal(t, 0, result.TotalMerged, "the preview must predict the refusal, not report a merge that will not happen")
+	require.Len(t, result.Errors, 1)
+	assert.Contains(t, result.Errors[0], "still reference it")
+}
