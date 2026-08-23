@@ -1,11 +1,12 @@
 // file: internal/database/author_bookref_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 53e2c4ec-167f-4096-990e-5e348ba07236
 // last-edited: 2026-08-23
 
 package database
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -318,6 +319,17 @@ func TestSetBookAuthors_CreditWithoutBookIDStillReachesMemDB(t *testing.T) {
 		{AuthorID: author.ID, Role: "author"},
 	}))
 
+	// WITHOUT THIS the test does not test anything. `store.GetAll...` is the
+	// PebbleStore method, which since the §1 fix falls THROUGH to the
+	// authoritative Pebble scan whenever the memdb is flagged short -- and a
+	// rejected insert flags it. So with the backfill reverted the assertions
+	// below still see 1, from Pebble, and the regression passes.
+	//
+	// Verified empirically, not reasoned: neutralising the backfill made this
+	// test FAIL before the fall-through landed and PASS after it, in the same PR.
+	require.Empty(t, store.mem().LostRows(),
+		"a rejected memdb insert taints the store, and the counts below would then be answered by the Pebble fall-through rather than by memdb")
+
 	memCounts, err := store.GetAllAuthorBookRefCounts()
 	require.NoError(t, err)
 	pebCounts, err := store.getAllAuthorBookRefCountsPebble()
@@ -435,6 +447,24 @@ func TestGetAllAuthorBookRefCounts_FallsThroughWithTheCORRECTAnswer(t *testing.T
 	require.Equal(t, 1, before[legacy], "fixture check: the trashed book still references its legacy author")
 	require.Equal(t, 1, before[coauthor], "fixture check: the junction credit is a real reference")
 
+	// Actually REMOVE the row from memdb, not just set the flag. With the flag
+	// alone the memdb and Pebble answers are identical, so `got` matches whether
+	// or not a fall-through happened and the test cannot tell them apart.
+	// Deleting first makes the two answers DIFFER, so only a real fall-through
+	// can produce the Pebble number below.
+	func() {
+		txn := store.mem().db.Txn(true)
+		defer txn.Commit()
+		n, err := txn.DeleteAll(memTableBookAuthors, memIdxID)
+		require.NoError(t, err)
+		require.Equal(t, 1, n, "fixture check: exactly one junction row to remove")
+	}()
+	// Prove the memdb answer is now WRONG, so the assertions below are meaningful.
+	shortCounts, err := store.mem().GetAllAuthorBookRefCounts()
+	require.NoError(t, err, "not flagged yet, so the memdb still answers -- short")
+	require.Zero(t, shortCounts[coauthor],
+		"precondition: memdb alone now reports the co-author as referenced by nothing")
+
 	store.mem().recordLostRows(memTableBookAuthors, 1)
 
 	got, err := store.GetAllAuthorBookRefCounts()
@@ -454,6 +484,54 @@ func TestGetAllAuthorBookRefCounts_FallsThroughWithTheCORRECTAnswer(t *testing.T
 func mustMemAuthorCountsErr(m *MemStore) error {
 	_, err := m.GetAllAuthorBookRefCounts()
 	return err
+}
+
+// ── The loss that travels the SUCCESS path (review finding, CRITICAL) ──────
+//
+// The other three loss sites all end in an ABORTED memdb transaction, which is
+// how applyMemSync catches them centrally. UpsertBookToMemDB ends in a
+// COMMITTED one: it clears a book's junction rows, then skips the reinsert
+// because the Pebble read errored, and commits an empty set while the memdb
+// reports itself complete. A detector hooked to the failure path cannot see it.
+//
+// This is strictly MORE permissive than the Pebble scan this PR made fatal:
+// GetBookAuthors errors on an undecodable credit list, and on that identical
+// row getAllAuthorBookRefCountsPebble refuses outright.
+
+func TestUpsertBookToMemDB_UnreadableCreditListDoesNotSilentlyEmptyMemdb(t *testing.T) {
+	store := seedAuthorRefStore(t, t.TempDir())
+	book := mkAuthorRefBook(t, store, "CorruptCredits", 0, true, false)
+	author, err := store.CreateAuthor("Only Credited Here")
+	require.NoError(t, err)
+	require.NoError(t, store.SetBookAuthors(book.ID, []BookAuthor{
+		{BookID: book.ID, AuthorID: author.ID, Role: "co-author"},
+	}))
+
+	require.Len(t, memBookAuthorRows(t, store), 1, "fixture check: memdb holds the credit")
+	require.Empty(t, store.mem().LostRows(), "fixture check: nothing lost yet")
+
+	// Corrupt the credit list so GetBookAuthors returns an error. Nothing that
+	// goes through SetBookAuthors can produce this, so only a direct write can
+	// reach the path.
+	require.NoError(t, store.db.Set([]byte("book_authors:"+book.ID), []byte("{not json"), nil))
+
+	// Any book mutation triggers this -- a scan, an organize, an UpdateBook.
+	store.UpsertBookToMemDB(context.Background(), book)
+
+	require.NotEmpty(t, memBookAuthorRows(t, store),
+		"memdb must KEEP the rows it could not reload; clearing and committing "+
+			"nothing is the fail-open -- the co-author is credited on no other book")
+	require.NotZero(t, store.mem().LostRows()[memTableBookAuthors],
+		"the table must be flagged, because the retained rows may themselves be "+
+			"stale-short; the flag is what makes the ref counter distrust them")
+
+	// End to end: the guard must now refuse rather than report a silent zero.
+	// The fall-through reaches the Pebble scan, which is fatal on this same
+	// corrupt row -- so the caller gets an error and fails closed. Before the
+	// fix this returned (0, nil) and purge-empty-authors deleted the author.
+	_, err = store.GetAllAuthorBookRefCounts()
+	require.Error(t, err,
+		"a corrupt credit list must not read as \"referenced by nothing\"")
 }
 
 // memBookAuthorRows returns every book_authors row the memdb actually holds.

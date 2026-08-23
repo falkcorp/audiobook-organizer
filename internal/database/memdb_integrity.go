@@ -1,5 +1,5 @@
 // file: internal/database/memdb_integrity.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c1e4b90-2d63-4a85-9f27-e0b3a5c48d61
 // last-edited: 2026-08-23
 
@@ -34,23 +34,41 @@ import (
 // (pebble_store.go), so in production the hardened scan never ran and the memdb
 // branch answered from a short map with a nil error.
 //
-// (An author-side twin of that counter is in flight on PR #2787 and will use
-// this same mechanism. It does not exist in this package yet — do not go
-// looking for author_bookref.go.)
+// BOTH unfiltered reference counters use this mechanism: series_bookref.go and
+// author_bookref.go. The author twin passes TWO table names rather than one,
+// because a lost book_authors row is a co-author credit that pass 2 cannot
+// recover from the legacy Book.AuthorID field.
 //
 // So MemStore carries a per-table "I know I am missing rows" flag, set at every
-// place a row can go missing. There are THREE, and they are not all in warmup:
+// place a row can go missing. There are FOUR as of 2026-08-23, and they are not
+// all in warmup. If you add a fifth, update this count — it reads as an
+// exhaustive audit, so leaving it stale makes it a lie rather than merely dated:
 //
 //  1. warmup cannot decode a Pebble value,
 //  2. warmup's insert is rejected by a schema/index rule,
 //  3. applyMemSync's transaction aborts at RUNTIME — a write that succeeded in
 //     Pebble and was then rejected by a memdb index rule. No warmup involved,
 //     and it leaves exactly the same divergence.
+//  4. UpsertBookToMemDB cannot re-read a book's book_authors / book_narrators /
+//     book_files from Pebble, so it has nothing to reinsert after clearing.
 //
 // (3) is the one that keeps the delete guard fail-open in steady state, and it
 // is recorded against memTableUnknown, because applyMemSync is handed an opaque
-// `fn func(txn memTxn) error` and genuinely cannot know which table the failed
-// insert was for. See memTableUnknown for why that is the safe direction.
+// closure and genuinely cannot know which table the failed insert was for. See
+// memTableUnknown for why that is the safe direction.
+//
+// (4) is the one that DEFEATED this whole mechanism before it was found, and it
+// is worth understanding because the next such bug will look like it. The other
+// three all end in an ABORTED transaction, which is why applyMemSync can catch
+// them centrally. (4) ends in a COMMITTED one: the clear succeeds, the reinsert
+// is skipped because the read errored, and memdb commits an empty set for that
+// book while reporting itself complete. A central abort-handler is structurally
+// blind to it. It is recorded at the site, against the specific table, and the
+// clear is now skipped entirely so the stale rows survive rather than being
+// replaced by nothing.
+//
+// The lesson generalizes: a loss detector that hooks the failure path cannot see
+// a loss that travels the SUCCESS path.
 //
 // The signal is deliberately coarse — "this table is known-incomplete" — not a
 // list of which rows were lost. Knowing WHICH rows were lost would require

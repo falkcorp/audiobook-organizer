@@ -1,5 +1,5 @@
 // file: internal/database/memdb_sync.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000005
 // last-edited: 2026-08-23
 
@@ -53,6 +53,19 @@ import (
 // (replayed into it) or applied after it (memPtr already visible) — never
 // neither.
 func (p *PebbleStore) memSync(op string, fn func(txn memTxn) error) {
+	p.memSyncWithStore(op, func(txn memTxn, _ *MemStore) error { return fn(txn) })
+}
+
+// memSyncWithStore is memSync for the rare op that must reach the MemStore
+// itself -- specifically to call recordLostRows when it discovers it cannot
+// reload rows it is about to replace.
+//
+// It cannot be done by capturing p.mem() at the call site: during warmup the op
+// is BUFFERED and replayed later against a MemStore that does not exist yet, so
+// a captured pointer is nil (loss silently dropped) or stale (loss recorded on
+// a store nobody reads). The MemStore that actually applies the op is the only
+// correct target, and only applyMemSync knows which one that is.
+func (p *PebbleStore) memSyncWithStore(op string, fn func(txn memTxn, m *MemStore) error) {
 	p.memPending.mu.Lock()
 	if p.memPending.state == memPendingBuffering {
 		if len(p.memPending.ops) >= memPendingOpCap {
@@ -87,9 +100,9 @@ func (p *PebbleStore) memSync(op string, fn func(txn memTxn) error) {
 // applyMemSync runs fn inside a memdb write transaction. Always commits on
 // success; aborts and logs on error. Shared by the live path and by the warmup
 // replay, so a replayed write behaves exactly like a live one.
-func applyMemSync(m *MemStore, op string, fn func(txn memTxn) error) {
+func applyMemSync(m *MemStore, op string, fn func(txn memTxn, m *MemStore) error) {
 	txn := m.db.Txn(true)
-	if err := fn(txn); err != nil {
+	if err := fn(txn, m); err != nil {
 		txn.Abort()
 		// The write SUCCEEDED in Pebble and is now absent from memdb: memdb is
 		// short by at least one row until the next warmup rebuilds it. Logging
@@ -153,7 +166,28 @@ func (p *PebbleStore) UpsertBookToMemDB(ctx context.Context, book *Book) {
 	bns, bnErr := p.GetBookNarrators(snapshot.ID)
 	files, fileErr := p.loadBookFilesForBookID(snapshot.ID)
 
-	p.memSync("UpsertBook", func(txn memTxn) error {
+	// A read that FAILED must not be replayed as "this book has no rows".
+	//
+	// Each block below clears the book's rows and reinserts what Pebble returned.
+	// When the read errored, `bas`/`bns`/`files` are nil -- so clearing and then
+	// skipping the reinsert commits an EMPTY set for that book. That is a
+	// committed transaction, not an aborted one, so applyMemSync's recordLostRows
+	// never fires and the memdb reports itself complete while short.
+	//
+	// For book_authors that is the fail-OPEN this file's guard exists to close,
+	// and it is strictly WORSE than the Pebble path: GetBookAuthors returns an
+	// error on an undecodable credit list, and on that identical row the Pebble
+	// ref scan (author_bookref.go) is deliberately FATAL. A co-author credited
+	// only on this book would count zero and purge-empty-authors would delete a
+	// name that exists nowhere else.
+	//
+	// So: skip the clear entirely, and flag the table. Keeping memdb's existing
+	// rows is not provably correct either -- they may be stale-short if the write
+	// being synced ADDED a credit -- which is exactly why the flag is required
+	// rather than optional. The flag makes the ref counter fall through to the
+	// authoritative Pebble scan; the retained rows just avoid making it worse in
+	// the meantime.
+	p.memSyncWithStore("UpsertBook", func(txn memTxn, m *MemStore) error {
 		// Strip heavy fields (Description, BookSigV1, etc.) — memdb
 		// only needs lightweight projections for indexed iteration.
 		// Pebble retains the full Book; callers needing full payload
@@ -163,10 +197,14 @@ func (p *PebbleStore) UpsertBookToMemDB(ctx context.Context, book *Book) {
 		}
 
 		// book_authors: clear existing rows for this book, then reinsert from Pebble.
-		if _, err := txn.DeleteAll(memTableBookAuthors, memIdxBookID, snapshot.ID); err != nil {
-			return fmt.Errorf("clear book_authors: %w", err)
-		}
-		if baErr == nil {
+		if baErr != nil {
+			m.recordLostRows(memTableBookAuthors, 1)
+			slog.Error("memdb sync: could not reload book_authors, leaving memdb rows in place and flagging the table as known-incomplete",
+				"book_id", snapshot.ID, "error", baErr)
+		} else {
+			if _, err := txn.DeleteAll(memTableBookAuthors, memIdxBookID, snapshot.ID); err != nil {
+				return fmt.Errorf("clear book_authors: %w", err)
+			}
 			for i := range bas {
 				ba := bas[i]
 				if err := txn.Insert(memTableBookAuthors, &ba); err != nil {
@@ -175,11 +213,15 @@ func (p *PebbleStore) UpsertBookToMemDB(ctx context.Context, book *Book) {
 			}
 		}
 
-		// book_narrators
-		if _, err := txn.DeleteAll(memTableBookNarrators, memIdxBookID, snapshot.ID); err != nil {
-			return fmt.Errorf("clear book_narrators: %w", err)
-		}
-		if bnErr == nil {
+		// book_narrators — same shape as book_authors above.
+		if bnErr != nil {
+			m.recordLostRows(memTableBookNarrators, 1)
+			slog.Error("memdb sync: could not reload book_narrators, leaving memdb rows in place and flagging the table as known-incomplete",
+				"book_id", snapshot.ID, "error", bnErr)
+		} else {
+			if _, err := txn.DeleteAll(memTableBookNarrators, memIdxBookID, snapshot.ID); err != nil {
+				return fmt.Errorf("clear book_narrators: %w", err)
+			}
 			for i := range bns {
 				bn := bns[i]
 				if err := txn.Insert(memTableBookNarrators, &bn); err != nil {
@@ -188,11 +230,16 @@ func (p *PebbleStore) UpsertBookToMemDB(ctx context.Context, book *Book) {
 			}
 		}
 
-		// book_files: clear and reload from Pebble
-		if _, err := txn.DeleteAll(memTableBookFiles, memIdxBookID, snapshot.ID); err != nil {
-			return fmt.Errorf("clear book_files: %w", err)
-		}
-		if fileErr == nil {
+		// book_files: clear and reload from Pebble. Flagging matters here too --
+		// purge-empty-authors' require_zero_files safety reads a file count.
+		if fileErr != nil {
+			m.recordLostRows(memTableBookFiles, 1)
+			slog.Error("memdb sync: could not reload book_files, leaving memdb rows in place and flagging the table as known-incomplete",
+				"book_id", snapshot.ID, "error", fileErr)
+		} else {
+			if _, err := txn.DeleteAll(memTableBookFiles, memIdxBookID, snapshot.ID); err != nil {
+				return fmt.Errorf("clear book_files: %w", err)
+			}
 			for i := range files {
 				bf := files[i]
 				if err := txn.Insert(memTableBookFiles, stripBookFileForMemdb(&bf)); err != nil {

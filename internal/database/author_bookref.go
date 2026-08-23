@@ -114,8 +114,12 @@ func (m *MemStore) GetAllAuthorBookRefCounts() (map[int]int, error) {
 	// BOTH tables, because both passes below feed the same answer. The series
 	// twin names only memTableBooks; this one would be fail-open if it did the
 	// same, since a lost book_authors row is a co-author credit that exists
-	// NOWHERE else -- the legacy Book.AuthorID field holds one author, so pass 2
-	// cannot recover it the way it can recover a primary credit.
+	// nowhere THIS COUNTER READS -- the legacy Book.AuthorID field holds one
+	// author, so pass 2 cannot recover a co-author the way it can recover a
+	// primary credit. (Book.Authors on the book row can also carry the full list
+	// for iTunes-imported books, but neither pass reads it, so it is not a
+	// recovery path here. Do not weaken this guard on the strength of it without
+	// first checking every writer populates it.)
 	if err := m.requireTablesComplete("author reference count", memTableBookAuthors, memTableBooks); err != nil {
 		return nil, err
 	}
