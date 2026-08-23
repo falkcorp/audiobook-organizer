@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/todo-completion/database/TASK-026-triage-the-remaining-misc-codeql-alerts-js-findi.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: 9d660fdc-9cfe-4c0e-aefd-01e22c186ea2 -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-08-23 -->
 
 # TASK-026 — Triage the remaining misc CodeQL alerts: JS findings, uncontrolled-allocation-size FP, and the drifted clear-text-logging FP (SEC-CODEQL-BACKLOG)
 
@@ -23,9 +23,41 @@ git rebase origin/main
 
 (Protocol also in `docs/agent-tasks/ORCHESTRATION.md` — the inline block above is authoritative for this task.)
 
+> ## ⚠️ REWRITTEN 2026-08-23 — parts (1) and (3) rested on a FALSE premise
+>
+> **`lgtm[]` suppresses NOTHING in this repo.** It is the legacy LGTM.com
+> mechanism, which GitHub code scanning never adopted. Measured twice: on
+> PR #2781 the markers were removed and all four affected alerts stayed open
+> across the merge (only an API dismissal closed #1429/#1105); and directly on
+> 2026-08-23, `internal/audiobooks/service_mutation.go:63` carries
+> `// lgtm[go/path-injection]` on that exact line **today** while alert **#1104**
+> for that exact `path:line` is still `open`. Reproduce:
+> ```bash
+> grep -n 'lgtm\[' internal/audiobooks/service_mutation.go
+> gh api /repos/falkcorp/audiobook-organizer/code-scanning/alerts/1104 -q '.state'
+> ```
+>
+> Everywhere this brief says "add an `lgtm[...]` comment", the real action is
+> **dismiss via the code-scanning API**:
+> ```bash
+> gh api -X PATCH /repos/falkcorp/audiobook-organizer/code-scanning/alerts/<N> \
+>   -f state=dismissed -f dismissed_reason='false positive' \
+>   -f dismissed_comment='<why, max 280 bytes>'
+> ```
+> Then **read the alert back** and confirm `state == "dismissed"` — an accepted
+> PATCH is not proof, and a dismissal here has reappeared before (#1094 was
+> dismissed and #1105 immediately reappeared for the same sink). Resolve alerts
+> by **PATH**, not by a remembered number.
+>
+> A code comment explaining the reasoning is still worth adding as
+> documentation. It is **not** the suppression and must never be reported as
+> having handled a finding. Running this brief as originally written would have
+> marked findings "handled" while they stayed open — worse than leaving them
+> alone, because the next reader would trust the marker.
+
 ## Goal
 
-(1) Add `// lgtm[go/uncontrolled-allocation-size]` above the `out := make([]BookSummary, 0, cap0)` line in internal/database/memdb_summaries.go (~line 154), citing the existing clamp logic at lines 80 and 151-152 as already-verified bounds. (2) Query the GitHub code-scanning API for alert on server.go's original go/clear-text-logging finding to get its current file:line (it has moved since the alert's line-151 snapshot); re-verify the %T-does-not-render-values reasoning still applies at its new location, then either re-affirm the suppression there or dismiss the stale alert in the UI if the flagged code was deleted entirely. (3) Pull the 3 js/remote-property-injection, 2 js/trivial-conditional, and 1 js/insecure-temporary-file alerts from the code-scanning API (their files were not named in the TODO item) and triage each individually — these are lower severity ('high'/'none') and were explicitly deprioritized behind the Go findings in the item's suggested order.
+(1) Re-verify that the clamp logic near `out := make([]BookSummary, 0, cap0)` in internal/database/memdb_summaries.go really does bound the allocation (find it BY TEXT — the ~line 154 anchor is stale), then dismiss the go/uncontrolled-allocation-size alert via the code-scanning API citing that clamp. Add a plain code comment recording the reasoning as documentation, but do not mistake the comment for the suppression. (2) Query the GitHub code-scanning API for alert on server.go's original go/clear-text-logging finding to get its current file:line (it has moved since the alert's line-151 snapshot); re-verify the %T-does-not-render-values reasoning still applies at its new location, then either re-affirm the suppression there or dismiss the stale alert in the UI if the flagged code was deleted entirely. (3) Pull the 3 js/remote-property-injection, 2 js/trivial-conditional, and 1 js/insecure-temporary-file alerts from the code-scanning API (their files were not named in the TODO item) and triage each individually — these are lower severity ('high'/'none') and were explicitly deprioritized behind the Go findings in the item's suggested order.
 
 ## Background (verify before editing)
 
@@ -45,9 +77,9 @@ git rebase origin/main
 
 ## Step-by-step
 
-1. Add the memdb_summaries.go lgtm comment as described in goal (1) — this one is straightforward, no re-location needed.
+1. Find the allocation in internal/database/memdb_summaries.go BY TEXT (`grep -n 'make(\[\]BookSummary'`), read the clamp logic that is claimed to bound it, and confirm the bound actually holds for an attacker-influenced input — do not accept "a clamp exists" as "the allocation is bounded". Then dismiss the alert via the API per the banner, and read it back.
 2. Use `gh api /repos/<org>/<repo>/code-scanning/alerts/662` (or the correct alert number for the clear-text-logging finding) to get its current `most_recent_instance.location` file/line, which will show where CodeQL now sees the flagged pattern (if it still exists) or that the alert auto-closed (if the flagged code was deleted).
-3. If the alert is still open at a new location, re-verify the %T-argument reasoning holds there (the dynamic-type-name-only argument does not depend on which function calls it) and add the lgtm comment there instead of at the stale server.go:360.
+3. If the alert is still open at a new location, re-verify the %T-argument reasoning holds there (the dynamic-type-name-only argument does not depend on which function calls it), then dismiss it via the API at its CURRENT location. Add the explanatory comment at the real line, not the stale server.go:360.
 4. Pull the JS alert list via the code-scanning API filtered by rule (js/remote-property-injection, js/trivial-conditional, js/insecure-temporary-file) to get their actual files, since the TODO item didn't name them.
 5. Triage each JS alert individually — read the flagged code, decide fix vs. suppress, same pattern as the Go findings in parts 1-4 of this todo_line.
 
@@ -63,7 +95,7 @@ Then, always:
 
 ## Tests
 
-- N/A for lgtm-only suppressions.
+- N/A for dismissal-only changes (no behaviour change).
 - For any JS finding that gets a real code fix: whatever test framework covers that file (Vitest for web/, or the relevant CI script's own test harness).
 
 Anti-over-suppression: N/A
@@ -77,7 +109,9 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] grep -n 'lgtm\[go/uncontrolled-allocation-size\]' internal/database/memdb_summaries.go returns 1 hit.
+- [ ] The go/uncontrolled-allocation-size alert reads back as `state == "dismissed"` from the code-scanning API, with the clamp cited in `dismissed_comment`.
+- [ ] Zero `lgtm[` markers added: `git diff | grep -c 'lgtm\['` returns 0.
+- [ ] Every alert triaged in parts (2) and (3) ends either fixed, dismissed-and-read-back, or explicitly reported as left-open with a reason. None left silent.
 - [ ] The clear-text-logging alert (whatever its current alert number/location) is either re-suppressed at its real current location or confirmed auto-closed — not left silently stale at a line that no longer exists.
 - [ ] Anti-over-suppression: N/A
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).

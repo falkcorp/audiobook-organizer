@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/todo-completion/metadata/TASK-080-assess-the-2-critical-go-request-forgery-ssrf-co.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 2.0.0 -->
 <!-- guid: cad914e8-4852-4440-9408-d6ea5f781e7d -->
-<!-- last-edited: 2026-08-21 -->
+<!-- last-edited: 2026-08-23 -->
 
 # TASK-080 — Assess the 2 critical go/request-forgery (SSRF) CodeQL alerts on cover-fetch paths (SEC-CODEQL-BACKLOG)
 
@@ -23,9 +23,52 @@ git rebase origin/main
 
 (Protocol also in `docs/agent-tasks/ORCHESTRATION.md` — the inline block above is authoritative for this task.)
 
+> ## ⚠️ TWO CORRECTIONS, 2026-08-23 — read before starting
+>
+> **1. `lgtm[]` suppresses NOTHING in this repo.** It is the legacy LGTM.com
+> mechanism, which GitHub code scanning never adopted. Measured twice: on
+> PR #2781 the markers were removed and all four affected alerts stayed open
+> across the merge (only an API dismissal closed #1429/#1105); and directly on
+> 2026-08-23, `internal/audiobooks/service_mutation.go:63` carries
+> `// lgtm[go/path-injection]` on that exact line **today** while alert **#1104**
+> for that exact `path:line` is still `open`. Reproduce:
+> ```bash
+> grep -n 'lgtm\[' internal/audiobooks/service_mutation.go
+> gh api /repos/falkcorp/audiobook-organizer/code-scanning/alerts/1104 -q '.state'
+> ```
+> Wherever this brief says "add an `lgtm[go/request-forgery]` comment", the real
+> action is **dismiss via the code-scanning API** (syntax in the rewritten step 3).
+> A comment is documentation, not suppression, and must never be reported as
+> having handled a finding.
+>
+> **2. This brief pre-decides its own conclusion. Do not let it.** The Background
+> section and step 3 assert that both sites "have real, host/IP-resolved
+> validation already present". That is the *hypothesis you are being asked to
+> test*, not a given — this is a **critical-severity SSRF finding on a path that
+> fetches a URL supplied by a third-party metadata provider**. Treat every claim
+> in Background as unverified until you have read the code yourself. If
+> validation is absent, partial, or bypassable, the correct outcome is a **fix**,
+> and reporting that is a success for this task, not a failure.
+>
+> Do not accept "there is a validator" as "the validator is sufficient". Test it
+> against the actual threat model:
+> - **Scheme:** `file://`, `gopher://`, `dict://` — is the allowlist positive
+>   (http/https only) or a blocklist?
+> - **Redirects:** does the client follow a 302 to `169.254.169.254`? A
+>   `CheckRedirect` that is absent means the scheme/IP check ran on the *first*
+>   URL only.
+> - **DNS rebinding:** validate-then-fetch resolves the host twice. Only a
+>   `DialContext`-level check (like the claimed `safeCoverDialContext`) closes
+>   this; a string check on the URL does not.
+> - **Encodings:** IPv6 (`[::1]`, `[::ffff:169.254.169.254]`), decimal/octal IPv4
+>   (`2852039166`), and trailing-dot hostnames.
+>
+> A validator that checks the URL *string* but not the *connection* is
+> bypassable. That distinction is the whole finding.
+
 ## Goal
 
-Read the full call chain into both cover.go:135 and covers.go:82 to determine what, if anything, validates coverURL before the fetch (the nolint comments claim validation happens elsewhere — confirm or refute this for the SSRF threat model specifically: can a malicious metadata provider return a coverURL pointing at an internal/link-local address like 169.254.169.254 or a file:// scheme?). If no real validation exists, add a scheme allowlist (http/https only) and a private/link-local IP block (using net.IP.IsPrivate/IsLoopback/IsLinkLocalUnicast after resolving the host) before the Get call. If validation genuinely already prevents SSRF, add an `// lgtm[go/request-forgery]` comment citing exactly where the validation happens, since CodeQL does not read #nolint/#nosec-style suppressions.
+Read the full call chain into both cover.go:135 and covers.go:82 to determine what, if anything, validates coverURL before the fetch (the nolint comments claim validation happens elsewhere — confirm or refute this for the SSRF threat model specifically: can a malicious metadata provider return a coverURL pointing at an internal/link-local address like 169.254.169.254 or a file:// scheme?). If no real validation exists, add a scheme allowlist (http/https only) and a private/link-local IP block (using net.IP.IsPrivate/IsLoopback/IsLinkLocalUnicast after resolving the host) before the Get call. If validation genuinely already prevents SSRF — tested against the full bypass list in the banner above, not merely present — dismiss the alert through the code-scanning API, citing exactly where the validation happens. CodeQL does not read `#nolint`/`#nosec`-style suppressions, and it does not read `lgtm[]` either; the API is the only mechanism that works here.
 
 ## Background (verify before editing)
 
@@ -47,7 +90,46 @@ Read the full call chain into both cover.go:135 and covers.go:82 to determine wh
 
 1. Read internal/metadata/cover.go top-to-bottom around lines 20-137: confirm validateCoverURL (scheme allowlist) and safeCoverDialContext (private/loopback/link-local IPv4+IPv6 block via DNS-resolved-IP check) are both wired into the client used at line 137.
 2. Read internal/covers/covers.go's only caller (internal/server/covers.go:24-45) and confirm covers.IsAllowedCoverSource(coverURL) gates every call to FetchAndCacheCover.
-3. Given both sites have real, host/IP-resolved validation already present, add `// lgtm[go/request-forgery]` directly above cover.go:137 and covers.go:82, each citing the exact validating function/file:line found above (do not add a duplicate/parallel validator).
+3. **Decide, per site, from what you actually found in steps 1–2** — not from
+   this brief's Background, which is the hypothesis under test.
+
+   **(a) If validation is genuinely sufficient** against the full threat model
+   in the banner above (scheme allowlist, connection-level private/loopback/
+   link-local block, redirect handling), then dismiss the alert through the
+   code-scanning API — the ONLY mechanism that changes an alert's state here:
+   ```bash
+   gh api -X PATCH /repos/falkcorp/audiobook-organizer/code-scanning/alerts/<N> \
+     -f state=dismissed \
+     -f dismissed_reason='false positive' \
+     -f dismissed_comment='coverURL is scheme-allowlisted by validateCoverURL and the client dials via safeCoverDialContext, which rejects private/loopback/link-local IPs post-resolution. Re-verified 2026-08-23 (TASK-080).'
+   ```
+   - Resolve `<N>` by PATH, not by a remembered number — dismissals have not
+     always survived line shifts here (#1094 was dismissed and #1105 immediately
+     reappeared for the same sink):
+     ```bash
+     gh api '/repos/falkcorp/audiobook-organizer/code-scanning/alerts?state=open&per_page=100' --paginate \
+       -q '.[] | select(.rule.id=="go/request-forgery") | "\(.number)\t\(.most_recent_instance.location.path):\(.most_recent_instance.location.start_line)"'
+     ```
+   - `dismissed_comment` is **capped at 280 bytes**.
+   - `false positive` is the right reason ONLY if the validation really does
+     make the flow safe. If the code is intentionally-unsafe-but-accepted, that
+     is `won't fix` — and on a critical SSRF finding it almost certainly is not
+     acceptable, so prefer (b).
+   - **Read the alert back** and confirm `state == "dismissed"`. An accepted
+     PATCH is not proof.
+   - You may ALSO add a plain code comment citing the validating
+     function:file:line. That is useful documentation for the next reader. It is
+     **not** the suppression and must not be reported as such.
+
+   **(b) If validation is absent, partial, or bypassable** — including any of
+   the banner's bypasses being open — do NOT dismiss. Fix it: a positive scheme
+   allowlist (http/https), and a `DialContext` that rejects
+   `IsPrivate`/`IsLoopback`/`IsLinkLocalUnicast`/`IsUnspecified` on the
+   *resolved* IP for both IPv4 and IPv6, plus a `CheckRedirect` that re-applies
+   the same check per hop. Reuse the existing helper if one is really there;
+   do not build a second parallel validator.
+
+   **This PR is REVIEW-CRITICAL and stays open for the owner either way.**
 4. Run `grep -n 169.254 internal/metadata/cover_test.go` and `grep -n TestIsAllowedCoverSource internal/covers/covers_test.go` to confirm the anti-over-suppression and blocked-case tests already exist and pass; do not add duplicate tests.
 
 Then, always:
@@ -77,8 +159,17 @@ Do NOT use `make ci` as the gate: it is red on `main` from 10 pre-existing stati
 
 ## Acceptance criteria
 
-- [ ] go vet ./... and make ci pass.
-- [ ] The two alert lines each have either a fix (scheme/IP validation) or an `lgtm[go/request-forgery]` suppression with a cited validating function — not left silent.
+- [ ] `go build ./... && go vet ./...` exits 0. Do NOT gate on `make ci` — it is
+      red on `main` for pre-existing reasons unrelated to this task.
+- [ ] Each of the two alerts ends in one of exactly two states, with evidence:
+      **fixed** (scheme allowlist + connection-level IP block + redirect
+      re-check), or **dismissed via the code-scanning API and read back as
+      `state == "dismissed"`**. Neither may be left silent, and a code comment
+      alone counts as silent.
+- [ ] Zero `lgtm[` markers added: `git diff | grep -c 'lgtm\['` returns 0.
+- [ ] The banner's bypass list (scheme, redirects, DNS rebinding, IPv6/decimal
+      encodings) was checked per site and the finding for each is stated
+      explicitly — "validation exists" is not an answer to any of them.
 - [ ] Anti-over-suppression test: `cover_test.go / covers_test.go case asserting a normal public HTTPS cover URL still fetches successfully after the fix (not just that the bad case is blocked).` — a known-good input still passes with the new guard active.
 - [ ] Edge cases above hold (nil/empty/unknown never disqualify; a test asserts it where a filter/guard is added).
 - [ ] Gate green: `go build ./... && go vet ./... && go test ./internal/covers/... ./internal/metadata/... -count=1` exits 0; `go vet`/lint clean.
