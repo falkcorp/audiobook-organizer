@@ -1,5 +1,5 @@
 // file: internal/serviceregistry/container.go
-// version: 1.2.0
+// version: 1.2.1
 // last-edited: 2026-08-23
 
 package serviceregistry
@@ -248,14 +248,20 @@ func (c *Container) Stop(ctx context.Context) error {
 // e.g. config.GetConfig(c) instead of Get[*config.Config](c, KeyConfig), or
 // plugin.GetEventBus(c) instead of Get[*plugin.EventBus](c, KeyEventBus).
 // Those wrap this exact function (same panic behavior, unchanged) but fix
-// the key string and T in the function signature, so a typo'd key or a
-// mismatched type argument is a compile error at the call site instead of
-// a runtime panic here. They live in the owning package (internal/config,
-// internal/plugin), not here — this package is a dependency of theirs, so
-// importing them back here would be a cycle. Get[T] stays the mechanism
-// for every service without one, including "store" (KeyStore), which is
-// deliberately consumed through many different narrowed interface types
-// and so has no single accessor to offer.
+// BOTH the key and T together in the function signature, so a call site can
+// no longer pair a valid key with the wrong type (or vice versa) — e.g.
+// Get[*plugin.EventBus](c, KeyConfig) type-checks today and panics on the
+// type assertion below; the typed accessor makes that pairing impossible
+// to express. Misspelling the key itself was ALREADY a compile error
+// before this change, via the Key* constants in keys.go — every existing
+// call site already passed one of those, not a bare string literal, so
+// that part of the safety story is unchanged. They live in the owning
+// package (internal/config, internal/plugin), not here — this package is
+// a dependency of theirs, so importing them back here would be a cycle.
+// Get[T] stays the mechanism for every service without one, including
+// "store" (KeyStore), which is deliberately consumed through many
+// different narrowed interface types and so has no single accessor to
+// offer.
 func Get[T any](c *Container, name string) T {
 	if c.activeBuilder != "" {
 		def := registered[c.activeBuilder]

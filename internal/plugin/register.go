@@ -1,5 +1,5 @@
 // file: internal/plugin/register.go
-// version: 1.1.0
+// version: 1.1.1
 // last-edited: 2026-08-23
 
 package plugin
@@ -28,10 +28,16 @@ func init() {
 //
 // This wraps serviceregistry.Get[*EventBus](c, serviceregistry.KeyEventBus)
 // (ARCH-8): the wrapped call and its panic-on-missing/undeclared-Needs
-// behavior are unchanged, but the key string and the return type are now
-// fixed by this function's signature rather than chosen ad hoc at each
-// call site, so a typo'd key or a mismatched type argument is a compile
-// error here instead of a runtime panic there.
+// behavior are unchanged, but the key and the return type are now fixed
+// TOGETHER by this function's signature instead of chosen independently
+// at each call site, so a call site can no longer pair KeyEventBus with
+// the wrong type (or vice versa) — that pairing mismatch is now
+// impossible to express, where before it type-checked and panicked at the
+// type assertion inside Get. (A misspelled key was already a compile
+// error before this change, via the KeyEventBus constant — every call
+// site already used it, not a bare string literal.) GetEventBus resolves
+// lazily at call time, same as the wrapped Get[T] did, so no
+// registration-order behavior changed.
 //
 // This accessor cannot live in internal/serviceregistry itself: that
 // package is a dependency of this one (see the Register call above), so
