@@ -251,11 +251,17 @@ type bulkWriteBackOpParams struct {
 // batchSaveOpParams mirrors the server-private op-param struct (batch_save_op.go)
 // byte-for-byte so the JSON enqueued via OperationsRegistry.EnqueueOp (generic
 // json.Marshal) is identical.
+//
+// ⚠️ "BYTE-FOR-BYTE" IS AN UNCHECKED CLAIM. The two structs are coupled only by
+// their JSON tags, so dropping a field from one and leaving it on the other
+// still compiles and still marshals — it just emits a key the decoder ignores.
+// That is exactly what happened here: LegacyOpID was removed from the server
+// side and this copy kept it, silently sending "legacy_op_id":"" . Both were
+// cleaned up on 2026-08-22. Change one, change the other in the same commit.
 type batchSaveOpParams struct {
-	LegacyOpID string   `json:"legacy_op_id"`
-	BookIDs    []string `json:"book_ids"`
-	Organize   bool     `json:"organize"`
-	Force      bool     `json:"force"`
+	BookIDs  []string `json:"book_ids"`
+	Organize bool     `json:"organize"`
+	Force    bool     `json:"force"`
 }
 
 // batchUpdateMetadata handles batch metadata updates with validation
@@ -1340,27 +1346,22 @@ func (h *Handler) batchWriteBackAudiobooksImpl(c *gin.Context) {
 		return
 	}
 
-	store := h.store
 	doOrganize := req.Organize || req.Rename
-
-	// Create a supervisor operation for tracking
-	opID := ulid.Make().String()
-	if _, err := store.CreateOperation(opID, "batch_save_to_files", nil); err != nil {
-		httputil.InternalError(c, "failed to create operation", err)
-		return
-	}
 
 	bookIDs := make([]string, len(req.BookIDs))
 	copy(bookIDs, req.BookIDs)
 	totalBooks := len(bookIDs)
 
+	// Return the id EnqueueOp minted rather than minting a v1 row and handing
+	// back its id. Operation logs are written under this same id by the Run
+	// func, so a caller holding it can read both status and logs.
 	params := batchSaveOpParams{
-		LegacyOpID: opID,
-		BookIDs:    bookIDs,
-		Organize:   doOrganize,
-		Force:      req.Force,
+		BookIDs:  bookIDs,
+		Organize: doOrganize,
+		Force:    req.Force,
 	}
-	if _, enqErr := h.opRegistry.EnqueueOp(c.Request.Context(), "metadata.batch-save", params); enqErr != nil {
+	opID, enqErr := h.opRegistry.EnqueueOp(c.Request.Context(), "metadata.batch-save", params)
+	if enqErr != nil {
 		httputil.InternalError(c, "failed to enqueue operation", enqErr)
 		return
 	}
