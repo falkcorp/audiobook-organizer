@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion/handoff/2026-08-23-open-findings.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 3f9c0a71-5b28-4d6e-9a13-7c40e8b2d561 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -253,3 +253,91 @@ prefix check PASSES. Needs a real fix, not a classification.
 
 Also outside 083's scope and still open: `#1603`
 (`internal/fileops/hash.go`), `#1543` (`internal/metafetch/service.go`).
+
+## 8. From the #2787 review sweep, 2026-08-23 — 3 OPEN, deliberately deferred
+
+Three review agents (go-specialist, silent-failure-hunter, comment-analyzer) ran
+on #2787's diff. Five findings were fixed in-PR; three were filed as `todo.d`
+fragments rather than folded in, to keep an owner-gated prod-data PR reviewable.
+Those three are recorded here because a `todo.d` fragment is invisible until the
+daily collector folds it into `TODO.md`.
+
+### 8.1 OPEN — the bulk purge's headline safety is itself a filtered counter
+
+`author_purge_empty.go` labels `require_zero_files` **"🔴 THIS IS THE SAFETY THAT
+MATTERS"** and defaults it ON, to protect the 822 authors whose zero-book count
+looks more like a broken link than an empty author. It reads
+`GetAllAuthorFileCounts`, and BOTH implementations (`memdb_reads.go`,
+`pebble_store_authors.go`) scan only the primary-version index, skip
+soft-deleted books, and map books to authors through the legacy `Book.AuthorID`
+field only — never the junction.
+
+So `fileCounts[id]` is **unconditionally 0** for a junction-only co-author, and
+for any legacy author whose books are all trashed or all non-primary. Those are
+precisely the three populations the ref guard exists for. **The backup safety
+cannot hold back a single case the primary guard was built to catch.**
+
+The same function still carries the three defects #2787 fixed in the ref scan:
+undecodable book row silently skipped, `iter.Error()` never checked, and a
+swallowed `GetBookFilesForIDsCore` error.
+
+Structural point worth keeping: the candidate selector, the ref gate and the
+file safety all read the SAME lossy memdb. They are correlated, not independent
+— which is why a loss site that never sets the `lostRows` flag (8.4) defeats all
+three at once.
+
+### 8.2 OPEN — seven unlogged error drops in `memdb_sync.go`
+
+Seven delete helpers do `if err != nil || obj == nil { continue }` around a
+`txn.First`, so a real lookup failure is indistinguishable from an absent row and
+is neither logged nor recorded. All fail **closed** for the ref counters (memdb
+retains a row Pebble deleted → over-count), which is why they are not urgent —
+but they are seven silent error drops in the one file that owns the memdb/Pebble
+invariant. Related: `loadBookFilesForBookID` drops undecodable rows and returns
+nil, and `UpsertBookToMemDB` uses that short list to REPLACE memdb's `book_files`
+for the book.
+
+### 8.3 OPEN — `book:0`..`book:;` needs a MEASUREMENT, not a guess
+
+~20 sites scan book records with that hand-written range, admitting only `'0'`–
+`'9'` and `':'` as the first byte after the colon. Every minting site produces a
+ULID (leading `0`–`7`), so it holds today — but `CreateBook` only mints when
+`book.ID == ""`, so importers and restore paths supply their own, and
+`pebble_store.go` describes the same keyspace as "below any UUID character
+(0-9, a-f, '-')", which a UUID-leading id falls outside in BOTH directions.
+
+Deliberately left unmeasured rather than graded: it needs a live prefix scan for
+`book:` keys whose first byte after the colon is not a digit. **Do not "fix" it
+without measuring** — widening is safe, but the narrow range is the package-wide
+convention and changing ~20 sites on a guess is not.
+
+### 8.4 FIXED, recorded because the next such bug will look like it
+
+`UpsertBookToMemDB` lost rows on the **committed** path: it cleared a book's
+`book_authors`/`book_narrators`/`book_files` and skipped the reinsert when the
+Pebble read had errored, committing an empty set while memdb reported itself
+complete. The other three loss sites all end in an ABORTED transaction, which is
+how `applyMemSync` catches them centrally — so `recordLostRows` never fired and
+`requireTablesComplete` returned nil.
+
+It was strictly MORE permissive than the path #2782 hardened: `GetBookAuthors`
+errors on an undecodable credit list, and on that identical row the Pebble ref
+scan is fatal.
+
+**The generalizable lesson, now in `memdb_integrity.go`: a loss detector that
+hooks the failure path cannot see a loss that travels the success path.** That
+file's confident "there are THREE" was itself the camouflage — it read as an
+exhaustive audit, so nothing looked for a fourth shape. The count now says FOUR,
+is dated, and asks the next editor to update it.
+
+### 8.5 FIXED — a later commit defused an earlier test, in the same PR
+
+The §2 regression test was mutation-verified as discriminating when written. The
+§1 fall-through then defused it: with the backfill reverted, the bad insert is
+rejected → the store is flagged → the call falls through to Pebble → the correct
+answer comes back → **the test passes against broken code.** Confirmed by
+re-running the mutation at HEAD, not by argument.
+
+Re-armed with `require.Empty(t, store.mem().LostRows())`. **Re-run mutation
+matrices at final HEAD, not only when each test is authored** — a fix that makes
+the system more robust can make a test less discriminating.
