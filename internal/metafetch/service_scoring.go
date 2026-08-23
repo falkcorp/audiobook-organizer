@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
-// last-edited: 2026-08-20
+// last-edited: 2026-08-23
 
 package metafetch
 
@@ -699,15 +699,13 @@ func ScoreOneResultWithBreakdown(
 		// Preserve the original early return, which skips the bonus entirely.
 		// Recorded as a single zero base step so the panel can say WHY the
 		// candidate scored nothing instead of rendering an empty breakdown.
-		return 0, ScoreBreakdown{
-			Score: 0,
-			Steps: []ScoreStep{{
-				ID: "base", Label: "Title/author match", Op: ScoreOpBase,
-				Operand: 0, Running: 0,
-				Detail: "No significant word overlap with the search title — " +
-					"later bonuses are skipped entirely.",
-			}},
-		}
+		// Built via newScoreRecorder rather than a hand-rolled ScoreStep so
+		// this path can never drift from the shape ApplyNonBaseAdjustmentsWithBreakdown
+		// uses for its own base step.
+		rec := newScoreRecorder(0, "Title/author match",
+			"No significant word overlap with the search title — "+
+				"later bonuses are skipped entirely.")
+		return 0, *rec.breakdown()
 	}
 	score, steps := ApplyNonBaseAdjustmentsWithBreakdown(base, r, len(searchWords))
 	return score, ScoreBreakdown{Score: score, Steps: steps}
