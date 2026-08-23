@@ -436,8 +436,11 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// Recover interrupted file I/O operations (cover embed, tag write, rename)
 	RecoverInterruptedFileOps(s.fileIOPool)
 
-	// Resume interrupted metadata candidate fetch operations
-	s.resumeInterruptedMetadataFetch()
+	// Interrupted metadata candidate fetches are resumed by the operations
+	// registry, not from here: metadata.candidate-fetch declares
+	// ResumePolicy=ResumeRestart and its Run skips books that already have
+	// result rows. The hand-rolled resume that used to run here read the v1
+	// interrupted-ops list, which no longer has rows for this op.
 
 	s.startBackfills()
 

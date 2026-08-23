@@ -11,14 +11,20 @@
 package metabatch
 
 // FetchOpParams is the JSON params for the metadata.candidate-fetch
-// v2 OperationDef. LegacyOpID is the v1 operation record ID written
-// by the HTTP handler — OperationResult rows are keyed on this so
-// that handleGetPendingReview, handleGetOperationResults, and the
-// dedup scan in handleBatchFetchCandidates all continue working
-// unchanged.
+// v2 OperationDef.
+//
+// It carried a LegacyOpID until 2026-08-22: the handler minted a v1
+// operations row, stamped its id here, and Run keyed OperationResult
+// rows on it. The comment justifying that named three readers it kept
+// working — and one of the three, handleGetPendingReview, did not
+// exist anywhere in the repo. Results now key on the op's own v2 id,
+// which every reader already has.
+//
+// AlreadyDone is gone too. It was the resume path's way of telling Run
+// how far a previous attempt got; Run now derives that by reading the
+// result rows it already wrote, so the count cannot disagree with the
+// data the way a params field could.
 type FetchOpParams struct {
-	LegacyOpID  string   `json:"legacy_op_id"`
-	BookIDs     []string `json:"book_ids"`
-	TotalBooks  int      `json:"total_books"`
-	AlreadyDone int      `json:"already_done"` // used by resume path
+	BookIDs    []string `json:"book_ids"`
+	TotalBooks int      `json:"total_books"`
 }
