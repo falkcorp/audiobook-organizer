@@ -286,8 +286,11 @@ func (s *Server) handleGetOperationResults(c *gin.Context) {
 
 	store := s.Ops()
 
-	op, err := store.GetOperationByID(opID)
-	if err != nil || op == nil {
+	// Resolve from EITHER keyspace. A v1-only lookup 404s on every run started
+	// since the handler stopped minting a v1 row — the client would hold an id
+	// the results endpoint refuses to acknowledge.
+	op := metabatch.ResolveCandidateFetch(store, opID)
+	if op == nil {
 		httputil.RespondWithNotFound(c, "operation", opID)
 		return
 	}
