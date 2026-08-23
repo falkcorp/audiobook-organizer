@@ -1,5 +1,5 @@
 // file: internal/database/author_bookref_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 53e2c4ec-167f-4096-990e-5e348ba07236
 // last-edited: 2026-08-23
 
@@ -355,6 +355,105 @@ func TestSetBookAuthors_ExplicitBookIDIsUnchanged(t *testing.T) {
 	require.Len(t, rows, 1)
 	require.Equal(t, keep.ID, rows[0].BookID,
 		"an explicitly-set BookID must survive the backfill untouched")
+}
+
+// ── The memdb fail-open (open-findings §1) ─────────────────────────────────
+//
+// UseMemDB is hardcoded true, so every production call to
+// GetAllAuthorBookRefCounts takes the memdb branch. The Pebble scan's hardening
+// -- abort on an undecodable row, check both iterators' Error() -- therefore
+// never ran in production, and a memdb that dropped a book_authors row at
+// warmup answered "referenced by nothing" with a nil error.
+//
+// The series half of this fix merged as #2794; this is its author twin. It
+// differs in one way that matters: the author counter scans TWO tables, and a
+// lost book_authors row is unrecoverable in a way a lost book row is not.
+
+// seedAuthorRefFixture builds a library where the filtered and unfiltered
+// counters DISAGREE, so a test cannot pass by accident: `legacy` is referenced
+// only by a trashed book, `coauthor` only by a junction row.
+func seedAuthorRefFixture(t *testing.T, store *PebbleStore) (legacy, coauthor int) {
+	t.Helper()
+	la, err := store.CreateAuthor("Legacy Only Author")
+	require.NoError(t, err)
+	ca, err := store.CreateAuthor("Junction Only Coauthor")
+	require.NoError(t, err)
+
+	book := mkAuthorRefBook(t, store, "TrashedWithCoauthor", la.ID, true, true)
+	require.NoError(t, store.SetBookAuthors(book.ID, []BookAuthor{
+		{BookID: book.ID, AuthorID: ca.ID, Role: "co-author"},
+	}))
+	return la.ID, ca.ID
+}
+
+// TestGetAllAuthorBookRefCounts_MemdbRefusesWhenBookAuthorsIncomplete is the
+// refusal itself. A short count here is the fail-open.
+func TestGetAllAuthorBookRefCounts_MemdbRefusesWhenBookAuthorsIncomplete(t *testing.T) {
+	store := seedAuthorRefStore(t, t.TempDir())
+	seedAuthorRefFixture(t, store)
+
+	m := store.mem()
+	require.NotNil(t, m)
+	require.NoError(t, mustMemAuthorCountsErr(m), "positive control: a clean memdb must ANSWER, not refuse")
+
+	m.recordLostRows(memTableBookAuthors, 1)
+
+	_, err := m.GetAllAuthorBookRefCounts()
+	require.ErrorIs(t, err, ErrMemdbIncomplete)
+	require.Contains(t, err.Error(), "author reference count")
+	require.Contains(t, err.Error(), memTableBookAuthors,
+		"the log must name which table could not be trusted")
+}
+
+// TestGetAllAuthorBookRefCounts_LostBookRowAlsoRefuses pins the SECOND table.
+// A guard that named only book_authors would still fail open on a lost book row
+// carrying a legacy AuthorID.
+func TestGetAllAuthorBookRefCounts_LostBookRowAlsoRefuses(t *testing.T) {
+	store := seedAuthorRefStore(t, t.TempDir())
+	seedAuthorRefFixture(t, store)
+
+	m := store.mem()
+	require.NotNil(t, m)
+	m.recordLostRows(memTableBooks, 1)
+
+	_, err := m.GetAllAuthorBookRefCounts()
+	require.ErrorIs(t, err, ErrMemdbIncomplete)
+}
+
+// TestGetAllAuthorBookRefCounts_FallsThroughWithTheCORRECTAnswer is the point
+// of the whole design. Refusing would be merely SAFE; falling through to the
+// authoritative scan is CORRECT, and purge-empty-authors keeps running.
+//
+// Asserting only errors.Is(ErrMemdbIncomplete) would not prove the caller ever
+// gets a usable number, so this asserts the number.
+func TestGetAllAuthorBookRefCounts_FallsThroughWithTheCORRECTAnswer(t *testing.T) {
+	store := seedAuthorRefStore(t, t.TempDir())
+	legacy, coauthor := seedAuthorRefFixture(t, store)
+
+	before, err := store.GetAllAuthorBookRefCounts()
+	require.NoError(t, err)
+	require.Equal(t, 1, before[legacy], "fixture check: the trashed book still references its legacy author")
+	require.Equal(t, 1, before[coauthor], "fixture check: the junction credit is a real reference")
+
+	store.mem().recordLostRows(memTableBookAuthors, 1)
+
+	got, err := store.GetAllAuthorBookRefCounts()
+	require.NoError(t, err, "the tainted memdb must not stall the caller — it must fall through")
+
+	want, err := store.getAllAuthorBookRefCountsPebble()
+	require.NoError(t, err)
+	require.Equal(t, want, got, "the fall-through must return the authoritative Pebble answer")
+	require.Equal(t, 1, got[legacy])
+	require.Equal(t, 1, got[coauthor],
+		"a co-author credit exists nowhere but book_authors — losing it silently is the delete-authorizing bug")
+}
+
+// mustMemAuthorCountsErr returns the error (or nil) from the memdb counter,
+// used as a positive control so a refusal test cannot pass against a store that
+// refuses unconditionally.
+func mustMemAuthorCountsErr(m *MemStore) error {
+	_, err := m.GetAllAuthorBookRefCounts()
+	return err
 }
 
 // memBookAuthorRows returns every book_authors row the memdb actually holds.
