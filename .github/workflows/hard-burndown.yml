@@ -1,6 +1,28 @@
 # file: .github/workflows/hard-burndown.yml
-# version: 1.1.0
+# version: 1.2.0
 name: Hard burndown (failed-batch retry)
+
+
+# Least privilege for the GITHUB_TOKEN handed to the reusable workflow below.
+#
+# contents: read is not a guess and not a copy from a sibling workflow: it is
+# exactly what reusable-burndown.yml already declares for itself, and a called
+# workflow's token is the INTERSECTION of its own permissions with the
+# caller's. That workflow's ceiling is therefore already contents:read, so
+# naming the same set here cannot reduce what it can do -- it only stops this
+# caller from silently handing over the repository default.
+#
+# Nothing here needs more. Every GitHub write the burndown performs
+# (gh pr edit / gh pr comment) authenticates with a GitHub App token minted
+# from BURNDOWN_BOT_APP_ID + BURNDOWN_BOT_PRIVATE_KEY, which is independent of
+# workflow permissions entirely. The only GITHUB_TOKEN use is as the fallback
+# arm of `secrets.JF_CI_GH_PAT || secrets.GITHUB_TOKEN` for a ghcr.io docker
+# login; if that fallback is ever actually taken it needs packages:read, but
+# it cannot get it today either, because the reusable workflow already caps
+# itself at contents:read. Granting packages:read here would not change that
+# and would overstate what this caller needs.
+permissions:
+  contents: read
 
 on:
   schedule:
