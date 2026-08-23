@@ -1,5 +1,5 @@
 // file: internal/database/memdb_integrity_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b8f61d4-9c07-4e3a-a154-8d29f0b7e3c6
 // last-edited: 2026-08-23
 
@@ -273,7 +273,7 @@ func TestApplyMemSyncFailureTaintsTheRefCount(t *testing.T) {
 	require.Equal(t, 1, counts[seriesID])
 
 	// A sync whose closure fails: exactly what a rejected index write does.
-	applyMemSync(mem, "test.failing-op", func(memTxn) error {
+	applyMemSync(mem, "test.failing-op", func(memTxn, *MemStore) error {
 		return errors.New("simulated index rejection")
 	})
 
@@ -304,7 +304,7 @@ func TestApplyMemSyncSuccessDoesNotTaint(t *testing.T) {
 	mem, err := NewMemStore()
 	require.NoError(t, err)
 
-	applyMemSync(mem, "test.succeeding-op", func(memTxn) error { return nil })
+	applyMemSync(mem, "test.succeeding-op", func(memTxn, *MemStore) error { return nil })
 
 	require.Empty(t, mem.LostRows(),
 		"a sync that COMMITTED lost nothing; recording here would make every "+

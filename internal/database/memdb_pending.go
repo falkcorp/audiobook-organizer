@@ -1,5 +1,5 @@
 // file: internal/database/memdb_pending.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c4f2a71-6d93-4e05-b1a8-2f7e9c6d0b34
 // last-edited: 2026-08-06
 
@@ -111,7 +111,12 @@ type memPendingBuffer struct {
 // have run against a live memdb, plus its op name for logging.
 type memPendingOp struct {
 	op string
-	fn func(txn memTxn) error
+	// fn takes the MemStore as well as the txn so an op can flag a table as
+	// known-incomplete (recordLostRows) at the moment it applies. A buffered op
+	// cannot capture the MemStore at enqueue time -- it does not exist yet --
+	// and recording against the wrong one is the same as not recording at all.
+	// Almost every op ignores it; see memSync, which wraps the plain form.
+	fn func(txn memTxn, m *MemStore) error
 }
 
 // beginMemWarmupBuffering arms the buffer.
