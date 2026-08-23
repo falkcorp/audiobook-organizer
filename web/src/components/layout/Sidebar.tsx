@@ -1,7 +1,7 @@
 // file: web/src/components/layout/Sidebar.tsx
-// version: 1.20.0
+// version: 1.21.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-08-21
+// last-edited: 2026-08-23
 import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
@@ -195,25 +195,15 @@ export function Sidebar({
               anchorEl={libraryMenuAnchor}
               open={Boolean(libraryMenuAnchor)}
               onClose={() => setLibraryMenuAnchor(null)}
-              // Apply the proven stuck-modal fix locally rather than relying on
-              // the global MuiMenu default. theme.ts ships MuiMenu with
-              // `transitionDuration.exit: 0`, and its own investigation record
-              // is explicit that this only NARROWS the race and does not close
-              // it -- measured stalling 10/10 even with `exit: 0` in place. The
-              // line that actually works, proven on MuiDrawer, is
-              // `slotProps.transition.exit: false`, which makes RTG take its
-              // synchronous performExit branch so no setState can be dropped.
-              //
-              // This matters more here than anywhere it has been seen before:
-              // the sidebar renders on EVERY page, and a stalled exit leaves a
-              // `position: fixed; inset: 0` Modal root with pointer-events, so
-              // the failure mode is the entire app going unclickable rather
-              // than one dialog misbehaving. Visually identical either way.
-              //
-              // Scoped to this Menu deliberately. Moving MuiMenu as a whole to
-              // `exit: false` is TASK-188 and touches every Select and picker
-              // in the app; that is not this task's call to make.
-              slotProps={{ transition: { exit: false } }}
+              // The stuck-modal mitigation this Menu used to set inline
+              // (`slotProps={{ transition: { exit: false } }}`) now lives in
+              // theme.ts's MuiMenu defaultProps and reaches every Menu,
+              // including this one -- pinned by theme.slot-merge.test.ts,
+              // which feeds the real defaults through MUI's real resolveProps.
+              // Removed here rather than kept as belt-and-braces: two copies of
+              // the same mitigation invite the two to drift, and a local copy
+              // implies this Menu is special when it is not. The reasoning and
+              // the measurements live in theme.ts.
               transformOrigin={{ horizontal: 'left', vertical: 'top' }}
               anchorOrigin={{ horizontal: 'right', vertical: 'top' }}
             >
