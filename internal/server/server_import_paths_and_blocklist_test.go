@@ -1,7 +1,7 @@
 // file: internal/server/server_import_paths_and_blocklist_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2f4a6b8c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-04-30
+// last-edited: 2026-08-22
 
 package server
 
@@ -99,10 +99,16 @@ func TestImportPaths_ListNilAndRemoveInvalidID(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestAddImportPath_Returns201 verifies the happy-path: creating an import path
-// returns 201 Created. The async folder scan runs via the v2 opRegistry worker
-// pool and is not directly observable here; scan execution is covered by
-// integration tests.
+// TestAddImportPath_Returns201 verifies the happy-path through the real router:
+// creating an import path returns 201 Created and hands back the id of the
+// folder scan that was actually enqueued.
+//
+// Until 2026-08-22 this test made CreateOperation return an error so the handler
+// short-circuited before enqueuing, which made it a 201-only smoke test that
+// never reached the registry. AddImportPath no longer mints a v1 row at all, so
+// the enqueue always runs and InsertOperationV2 is the write to intercept.
+// Capturing the row here is what proves the def id and the id contract end to
+// end; handlers.TestAddImportPath_* cover the same seam at unit grain.
 func TestAddImportPath_Returns201(t *testing.T) {
 	origCfg := config.AppConfig
 	t.Cleanup(func() { config.AppConfig = origCfg })
@@ -115,10 +121,13 @@ func TestAddImportPath_Returns201(t *testing.T) {
 	store.EXPECT().SetRootDir(mock.Anything).Return()
 	created := &database.ImportPath{ID: 123, Path: importDir, Name: "Test Import", Enabled: true}
 	store.EXPECT().CreateImportPath(importDir, "Test Import").Return(created, nil)
-	// opRegistry calls CreateOperation before enqueuing; return an error so we
-	// skip the enqueue path and fall through to the plain 201 response.
-	store.EXPECT().CreateOperation(mock.Anything, "scan", mock.Anything).
-		Return(nil, fmt.Errorf("not needed")).Maybe()
+
+	var enqueued database.OperationV2Row
+	store.EXPECT().InsertOperationV2(mock.Anything).
+		RunAndReturn(func(row database.OperationV2Row) error {
+			enqueued = row
+			return nil
+		}).Once()
 
 	server, cleanup := setupTestServerWithStore(t, store)
 	defer cleanup()
@@ -130,6 +139,19 @@ func TestAddImportPath_Returns201(t *testing.T) {
 	server.router.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusCreated, w.Code)
+	require.Equal(t, "library.folder-auto-scan", enqueued.DefID)
+
+	// The id in the body must be the one the registry keyed the row under. The
+	// client polls it via /operations/v2, so a different id can never resolve.
+	// httputil.RespondWithCreated wraps the payload in a {"data": …} envelope.
+	var resp struct {
+		Data struct {
+			ScanOperationID string `json:"scan_operation_id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, enqueued.ID, resp.Data.ScanOperationID,
+		"scan_operation_id must be the enqueued op id, not a separately minted one")
 }
 
 // TestAddImportPath_RejectsTraversal verifies that a request path containing
@@ -145,8 +167,8 @@ func TestAddImportPath_RejectsTraversal(t *testing.T) {
 
 	store := dbmocks.NewMockStore(t)
 	store.EXPECT().SetRootDir(mock.Anything).Return()
-	// No CreateImportPath / CreateOperation expectation: mockery fails the test
-	// if the handler calls the store despite the traversal path.
+	// No CreateImportPath / InsertOperationV2 expectation: mockery fails the test
+	// if the handler reaches the store or the registry despite the traversal path.
 
 	server, cleanup := setupTestServerWithStore(t, store)
 	defer cleanup()
