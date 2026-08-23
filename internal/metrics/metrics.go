@@ -1,5 +1,5 @@
 // file: internal/metrics/metrics.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 9f8e7d6c-5b4a-3210-9fed-cba876543210
 // last-edited: 2026-08-22
 
@@ -46,6 +46,19 @@ var (
 		Namespace: "audiobook_organizer",
 		Name:      "books_total",
 		Help:      "Current total number of books in library",
+	})
+	// searchIndexDocsGauge is the counterpart to booksGauge that TODO L3433
+	// asked for: books_total was already exported, but nothing exported the
+	// search index's own document count, so a divergence between the two
+	// (e.g. the 2026-08-14 incident where 67,824 indexed docs sat against
+	// 63,871 live books) had no dashboard signal. This is a raw Bleve
+	// DocCount(), NOT a book count: it can exceed books_total when stale or
+	// soft-deleted documents remain indexed, which is exactly the condition
+	// this gauge exists to make visible when graphed against books_total.
+	searchIndexDocsGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "audiobook_organizer",
+		Name:      "search_index_docs_total",
+		Help:      "Current document count in the Bleve search index (DocCount) — counts index documents, not live books; may diverge from books_total when stale or soft-deleted documents remain indexed",
 	})
 	foldersGauge = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "audiobook_organizer",
@@ -180,7 +193,7 @@ var (
 func Register() {
 	registerOnce.Do(func() {
 		prometheus.MustRegister(operationStarted, operationCompleted, operationFailed, operationCanceled, operationDuration,
-			booksGauge, foldersGauge, memoryAllocGauge, goroutinesGauge,
+			booksGauge, searchIndexDocsGauge, foldersGauge, memoryAllocGauge, goroutinesGauge,
 			cacheHits, cacheMisses, cacheSets, cacheInvalidations, cacheEvictions, cacheSize, cacheGetDuration,
 			itunesLocationUnmappable, aiBackendAvailable,
 			opItemsProcessed, opItemsTotal,
@@ -217,10 +230,15 @@ func ObserveOperationDuration(opType string, d time.Duration) {
 }
 
 // Gauges
-func SetBooks(n int)          { booksGauge.Set(float64(n)) }
-func SetFolders(n int)        { foldersGauge.Set(float64(n)) }
-func SetMemoryAlloc(b uint64) { memoryAllocGauge.Set(float64(b)) }
-func SetGoroutines(n int)     { goroutinesGauge.Set(float64(n)) }
+func SetBooks(n int) { booksGauge.Set(float64(n)) }
+
+// SetSearchIndexDocs mirrors SetBooks for the search index's own document
+// count (TODO L3433). Takes uint64 to match BleveIndex.DocCount()'s return
+// type directly, with no lossy int conversion at the call site.
+func SetSearchIndexDocs(n uint64) { searchIndexDocsGauge.Set(float64(n)) }
+func SetFolders(n int)            { foldersGauge.Set(float64(n)) }
+func SetMemoryAlloc(b uint64)     { memoryAllocGauge.Set(float64(b)) }
+func SetGoroutines(n int)         { goroutinesGauge.Set(float64(n)) }
 
 // SetOpProgress records the current/total items-processed progress for an
 // in-flight operation (OPS-5 op-stall detection). Call on every

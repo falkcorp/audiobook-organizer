@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 3.24.1
+// version: 3.25.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-08-22
 
@@ -521,6 +521,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 					metrics.SetFolders(folderCount)
 					metrics.SetMemoryAlloc(alloc.Alloc)
 					metrics.SetGoroutines(runtime.NumGoroutine())
+					s.updateSearchIndexMetrics()
 
 					s.hub.SendSystemStatus(map[string]any{
 						"books":        bookCount,
@@ -837,6 +838,34 @@ func (s *Server) Start(cfg ServerConfig) error {
 	backgroundWG.Wait()
 	slog.Info("Server exited")
 	return nil
+}
+
+// updateSearchIndexMetrics pushes the search index's own document count to
+// Prometheus (search_index_docs_total, TODO L3433) — the missing counterpart
+// to books_total that lets a Grafana/Prometheus dashboard graph the two
+// against each other and catch a divergence like the 2026-08-14 incident
+// (67,824 indexed docs vs 63,871 live books) instead of it going unnoticed.
+//
+// Called from the same 5s metrics ticker as metrics.SetBooks (see Start,
+// above). DocCount() is a native Bleve call, not a document scan, so it is
+// safe at that cadence — unlike AllDocIDs(), which walks every document and
+// is reserved for the boot-time coverage reconciler.
+//
+// Extracted as its own method (rather than inlined in the ticker closure) so
+// it can be exercised directly in tests without driving the ticker.
+func (s *Server) updateSearchIndexMetrics() {
+	if s.searchIndex == nil {
+		// Same nil guard as reconcileSearchIndexCoverage (search_coverage.go):
+		// the index may not be open yet (or ever, in a search-disabled config).
+		// Skipping here is not a disqualifying condition — just nothing to report.
+		return
+	}
+	n, err := s.searchIndex.DocCount()
+	if err != nil {
+		slog.Warn("search index metrics: DocCount failed", "err", err)
+		return
+	}
+	metrics.SetSearchIndexDocs(n)
 }
 
 // startCacheWarmers launches the fire-and-forget cache pre-warmers plus the
