@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-08-23-staged-library-scan-design.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4c1e8b73-2a9f-4d06-b5e1-7f3a90c2d846 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -216,13 +216,78 @@ for `ffprobe`** subprocess spawns. Model on `internal/plugins/acoustid/backfill.
    continuous background scanner while the clobber bug is live would make the
    existing hazard dramatically more likely to fire.
 
+## Resolved in review — 2026-08-23 **[OWNER]**
+
+### Duration comes from the tag header, not ffprobe
+
+The fast pass already opens and parses each file's tag header. Duration usually
+lives in that same structure — the `moov` atom for M4B/M4A, the Xing/Info frame
+for VBR MP3 — so reading it costs no extra subprocess and no extra file read.
+
+- Where the header carries a duration, the provisional row shows the real one.
+- Where it does not (a minority: raw CBR MP3 without a Xing frame, some odd
+  encoders), duration stays zero and the deep pass fills it in.
+- `ffprobe` stays **out** of the fast pass. It is the second-largest cost in the
+  current scan and putting it back on the critical path defeats the redesign.
+
+This adds a dependency on header parsing being correct for duration, which the
+deep pass later corroborates — a disagreement between header duration and
+`ffprobe` duration is a signal worth logging, not silently overwriting.
+
+### Provisional books are excluded from bulk writes, not just dedup
+
+Browsing and playing an un-hashed book is harmless. **Merging** one is not: a
+merge decided without a hash rests on title/author similarity alone, and this
+repo has already measured that dedup collisions are frequently genuine duplicate
+books rather than false pairs. A bulk operation that silently joins two different
+books is exactly the class of data loss the missing-file lane exists to prevent.
+
+So `NeedsDeepScan == true` excludes a row from:
+
+- dedup candidate sets (as drafted), **and**
+- bulk apply / bulk merge / organize.
+
+It does **not** restrict browsing, playing, or a single deliberate manual edit —
+a user acting on one book can see what they are doing. This preserves the "fully
+visible and playable" decision while removing the automated-write hazard.
+
+### OverrideLocked: extract one predicate, repoint the existing sites
+
+Enforcement today is **three hand-rolled sites, and they do not agree** (measured
+on `main`, 2026-08-23; an earlier draft of this document said two):
+
+| Site | Condition |
+|---|---|
+| `internal/plugins/maintenance/repair_junk_titles.go:141` | `OverrideLocked \|\| OverrideValue != nil \|\| FetchedValue != nil` |
+| `internal/plugins/maintenance/title_repair.go:117` | `OverrideLocked \|\| OverrideValue != nil` |
+| `internal/server/handlers/metadata/handler.go:1001` | `OverrideLocked \|\| OverrideValue != nil` |
+
+The other 23 non-test references are struct fields and DTO pass-throughs — they
+carry the flag, they do not enforce it.
+
+The deep pass must **not** become a fourth variant. Extract a single canonical
+predicate, migrate all three existing sites onto it, and have the deep pass call
+the same one. This costs more changed call sites and is the correct fix: the
+drifting `FetchedValue` clause is resolved deliberately rather than copied or
+dropped by accident, and there is one place to mutation-test.
+
+Landing it as part of the scan work rather than a preceding PR was the owner's
+call; Risk 4 below still holds, so the predicate and its regression test must be
+in place **before** the background deep pass is switched on.
+
+### A stuck provisional row must surface itself
+
+Bounded retry with a visible terminus:
+
+- Count attempts on the row.
+- Past the threshold, stop retrying, mark the row failed and record the last error.
+- Surface it in the existing operations/diagnostics view.
+
+Retrying forever with only a log line is rejected: it burns cycles on a
+permanently bad file and makes the log the sole witness. Silence is the failure
+mode this repo keeps rediscovering.
+
 ## Open questions for review
 
-1. Should the fast pass also run `ffprobe` for **duration** only? Duration is
-   user-visible and its absence is noticeable, but it costs a subprocess per file —
-   the second-largest cost in the scan. Excluded in this draft.
-2. Should a provisional book be excluded from **bulk apply/merge** operations, not
-   just dedup? The owner chose "fully visible", but a bulk merge against an
-   un-hashed book is a different risk from merely browsing it.
-3. Does the "pending full scan" state need a UI affordance beyond a badge — e.g. a
+1. Does the "pending full scan" state need a UI affordance beyond a badge — e.g. a
    count, or a way to prioritise one book's deep pass on demand?
