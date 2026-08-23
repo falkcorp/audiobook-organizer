@@ -1,14 +1,18 @@
 // file: internal/metrics/metrics_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-07-18
+// last-edited: 2026-08-22
 
 package metrics
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -109,6 +113,43 @@ func TestSetBooks(t *testing.T) {
 	for _, val := range testValues {
 		SetBooks(val)
 		t.Logf("Set books gauge to: %d", val)
+	}
+}
+
+// TestSetSearchIndexDocs pins the search_index_docs_total gauge (TODO
+// L3433) against the underlying prometheus.Gauge value, not just "did not
+// panic" — SetBooks's own sibling tests only log, which would let a
+// mis-wired Set (e.g. onto the wrong var) pass silently.
+func TestSetSearchIndexDocs(t *testing.T) {
+	Register()
+
+	testValues := []uint64{0, 1, 100, 67824}
+
+	for _, val := range testValues {
+		SetSearchIndexDocs(val)
+		if got := testutil.ToFloat64(searchIndexDocsGauge); got != float64(val) {
+			t.Errorf("SetSearchIndexDocs(%d): gauge reads %v, want %v", val, got, val)
+		}
+	}
+}
+
+// TestSearchIndexDocsGauge_AppearsInScrape asserts the metric name a
+// Prometheus scrape actually sees, via the real promhttp.Handler() (the
+// same handler /metrics is wired to in internal/server), not just the
+// in-process gauge value. Registration living in the var block is not
+// enough on its own — MustRegister must actually be called with this gauge
+// in its argument list for the name to reach a scrape.
+func TestSearchIndexDocsGauge_AppearsInScrape(t *testing.T) {
+	Register()
+	SetSearchIndexDocs(12345)
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	promhttp.Handler().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "audiobook_organizer_search_index_docs_total") {
+		t.Fatalf("audiobook_organizer_search_index_docs_total not present in a /metrics scrape:\n%.500s", body)
 	}
 }
 
