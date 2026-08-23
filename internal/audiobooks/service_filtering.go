@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-08-19
+// last-edited: 2026-08-23
 
 package audiobooks
 
@@ -740,6 +740,40 @@ func bookSummaryToBook(summary database.BookSummary) database.Book {
 	}
 }
 
+// normalizeEffectivePrimaryVersion rewrites every book's nullable
+// IsPrimaryVersion to the concrete boolean that this request's filters just
+// used, so the value a client reads out of the JSON body agrees with the value
+// the server filtered on.
+//
+// Without it the listing response is self-contradicting. database.Book tags the
+// field `json:"is_primary_version,omitempty"`, so a nil *bool omits the key
+// ENTIRELY — not `null`. A client sees no field (`undefined`, falsy in the
+// web UI) on a row that ?is_primary_version=true had just selected, because
+// every filter in the pipeline resolves nil to primary while the serializer
+// passed the raw pointer straight through. Measured on a three-row Pebble
+// fixture before this change: the nil-flagged book came back from
+// is_primary_version=true with no is_primary_version key at all, alongside an
+// explicit-true row that carried `"is_primary_version":true`. In production
+// that is 5,731 ungrouped books whose serialized field disagrees with the
+// filter that returned them.
+//
+// Scope is deliberately the listing response only. The store still returns the
+// raw tri-state, and GET /audiobooks/:id is untouched: normalizing at the
+// storage layer would light BookDetailHeader's "Primary Version" chip on those
+// same 5,731 ungrouped books, a UI change nothing asked for. Making the flag
+// explicit ON DISK is a separate, deliberate operation — the
+// maintenance.normalize-primary-flags job from PR #2449.
+//
+// Mutates in place. It assigns a fresh *bool per element rather than writing
+// through the existing pointer, which may be shared with a store-internal
+// object.
+func normalizeEffectivePrimaryVersion(books []database.Book) {
+	for i := range books {
+		eff := database.EffectiveIsPrimaryVersion(books[i].IsPrimaryVersion)
+		books[i].IsPrimaryVersion = &eff
+	}
+}
+
 // bookSummariesToBooks converts a slice of BookSummary to Book structs.
 func bookSummariesToBooks(summaries []database.BookSummary) []database.Book {
 	books := make([]database.Book, len(summaries))
@@ -861,7 +895,7 @@ func (svc *AudiobookService) countSummariesPushdownFiltered(filter database.Book
 	n := 0
 	for _, s := range summaries {
 		if filter.IsPrimaryVersion != nil {
-			eff := s.IsPrimaryVersion == nil || *s.IsPrimaryVersion
+			eff := database.EffectiveIsPrimaryVersion(s.IsPrimaryVersion)
 			if eff != *filter.IsPrimaryVersion {
 				continue
 			}
