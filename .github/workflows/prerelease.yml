@@ -1,7 +1,7 @@
 # file: .github/workflows/prerelease.yml
-# version: 2.10.4
+# version: 2.11.0
 # guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-# last-edited: 2026-07-06
+# last-edited: 2026-08-22
 
 name: Prerelease on Merge
 
@@ -48,3 +48,35 @@ jobs:
       # this commit correctly. Skip until fixed upstream in gha-release-go.
       go-run-linters: false
     secrets: inherit
+
+  check-rc-ordinal:
+    name: Fail when RC count for this version hits 10
+    needs: prerelease
+    # Only inspect actual -rc.N tags, and only when the reusable workflow
+    # actually created a release this run (e.g. skip on a failed/no-op run
+    # where release-tag is only the *intended* tag, never minted).
+    if: >-
+      needs.prerelease.outputs.release-created == 'true' &&
+      contains(needs.prerelease.outputs.release-tag, '-rc.')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Count RCs for this base version and fail at 10
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.prerelease.outputs.release-tag }}
+        run: |
+          set -euo pipefail
+          # Strip the -rc.N suffix to get the base version (e.g. v0.217.9),
+          # same convention as .github/workflows/cleanup-rc-releases.yml.
+          BASE="${TAG%%-rc.*}"
+          echo "Just-minted tag: $TAG  →  base version: $BASE"
+
+          RELEASES_JSON="$(mktemp)"
+          gh release list --repo "$REPO" --limit 200 \
+            --json tagName,isPrerelease > "$RELEASES_JSON"
+
+          .github/scripts/check-rc-ordinal.sh "$RELEASES_JSON" "$BASE"

@@ -1,0 +1,9 @@
+[
+  {"tagName": "v0.217-rc.1",   "isPrerelease": true},
+  {"tagName": "v0.217.9-rc.1", "isPrerelease": true},
+  {"tagName": "v0.216-rc.4",   "isPrerelease": true},
+  {"tagName": "v0.216-rc.3",   "isPrerelease": true},
+  {"tagName": "v0.216-rc.2",   "isPrerelease": true},
+  {"tagName": "v0.216-rc.1",   "isPrerelease": true},
+  {"tagName": "v0.215.0",      "isPrerelease": false}
+]
