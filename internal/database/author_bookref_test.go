@@ -181,7 +181,39 @@ func TestGetAllAuthorBookRefCounts_UnreferencedAuthorsAreAbsent(t *testing.T) {
 // unsupported backend — which is how several ops silently no-opped in prod.
 func TestAsAuthorBookRefStore_ResolvesPebbleStore(t *testing.T) {
 	store := seedAuthorRefStore(t, t.TempDir())
+	// Seed a real reference the FILTERED counter cannot see, so the count
+	// comparison below is about data rather than about two empty maps.
+	mkAuthorRefBook(t, store, "Trashed But Still Referenced", 7, true, true)
 	require.NotNil(t, AsAuthorBookRefStore(store))
 	require.Nil(t, AsAuthorBookRefStore(nil))
 	require.Nil(t, AsAuthorBookRefStore(struct{}{}))
+
+	// 🔴 THE DECORATOR CASE — the one this test's name is about, and the only
+	// one that fails if the lookup stops walking the chain. Asserting on a BARE
+	// *PebbleStore above proves nothing about production: the bare store
+	// satisfies the interface directly, so it passes even with a plain type
+	// assertion. Verified by mutation: replacing AsCapability with
+	// `s.(AuthorBookRefStore)` left the three assertions above GREEN.
+	//
+	// decoratorStore (store_capability_test.go) embeds the Store INTERFACE, so
+	// only Store's method set is promoted — exactly the shape of
+	// internal/server.indexedStore, the Bleve wrapper the live store always
+	// carries. AuthorBookRefStore is deliberately not part of Store.
+	wrapped := &decoratorStore{Store: store}
+	require.NotNil(t, AsAuthorBookRefStore(wrapped),
+		"capability must resolve THROUGH the Bleve-style decorator; a bare type "+
+			"assertion returns nil here, which is exactly where the guard matters")
+
+	// Counts must survive the indirection, not merely resolve to something.
+	viaWrapped, err := AsAuthorBookRefStore(wrapped).GetAllAuthorBookRefCounts()
+	require.NoError(t, err)
+	direct, err := AsAuthorBookRefStore(store).GetAllAuthorBookRefCounts()
+	require.NoError(t, err)
+	require.Equal(t, direct, viaWrapped)
+	require.NotEmpty(t, direct, "fixture must actually hold references, or the comparison is vacuous")
+
+	// A decorator that has NOT opted into unwrapping stays opaque: reaching
+	// around it would bypass whatever behaviour it exists to add, so the guard
+	// must fail closed rather than guess.
+	require.Nil(t, AsAuthorBookRefStore(&decoratorNoUnwrap{Store: store}))
 }
