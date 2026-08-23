@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.84.1
+// version: 1.84.2
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-08-20
+// last-edited: 2026-08-21
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -340,7 +340,6 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     >
   >({});
   const logContainerRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const bulkFetchCancelRef = useRef(false);
   const bulkOrganizeCancelRef = useRef(false);
   const [softDeletedExpanded, setSoftDeletedExpanded] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -388,10 +387,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   const [scanningPathId, setScanningPathId] = useState<string | null>(null);
   const [removingPathId, setRemovingPathId] = useState<string | null>(null);
 
-  const [bulkFetchDialogOpen, setBulkFetchDialogOpen] = useState(false);
   const [bulkSearchOpen, setBulkSearchOpen] = useState(false);
-  const [bulkFetchInProgress] = useState(false);
-  const [bulkFetchProgress, setBulkFetchProgress] = useState<BulkActionProgress | null>(null);
   const [bulkOrganizeDialogOpen, setBulkOrganizeDialogOpen] = useState(false);
   const [bulkOrganizeInProgress, setBulkOrganizeInProgress] = useState(false);
   const [bulkOrganizeProgress, setBulkOrganizeProgress] = useState<BulkActionProgress | null>(null);
@@ -1442,38 +1438,6 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     }
   };
 
-  const handleBulkFetchMetadata = async () => {
-    if (!hasSelection) {
-      toast('Select audiobooks to fetch metadata for.', 'info');
-      return;
-    }
-    try {
-      // Build a SelectionSpec: use a filter for cross-page selections so the
-      // server resolves IDs at execution time; use explicit IDs for page selections.
-      const selection: api.SelectionSpec =
-        crossPageFilter !== null ? { filter: crossPageFilter } : { book_ids: effectiveSelectedIds };
-      await api.startBulkMetadataFetch(selection);
-      toast(
-        `Metadata fetch queued for ${effectiveSelectedCount.toLocaleString()} books — watch the bell for progress.`,
-        'success'
-      );
-      setSelectedAudiobooks([]);
-      setCrossPageFilter(null);
-    } catch (error) {
-      console.error('Failed to start bulk metadata fetch:', error);
-      toast('Failed to start bulk metadata fetch.', 'error');
-    }
-  };
-
-  const handleCancelBulkFetch = () => {
-    if (!bulkFetchInProgress) {
-      setBulkFetchDialogOpen(false);
-      setBulkFetchProgress(null);
-      return;
-    }
-    bulkFetchCancelRef.current = true;
-  };
-
   const handleBulkWriteBack = async () => {
     const ids = effectiveSelectedIds.filter((id) => {
       // When cross-page selection is active, we can't filter by marked_for_deletion.
@@ -2220,7 +2184,6 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         <LibraryDialogs
           selectedAudiobooks={selectedAudiobooks}
           setSelectedAudiobooks={setSelectedAudiobooks}
-          hasSelection={hasSelection}
           selectedHasActive={selectedHasActive}
           selectedHasImport={selectedHasImport}
           toast={toast}
@@ -2303,11 +2266,6 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           manualImportInProgress={manualImportInProgress}
           manualImportOp={manualImportOp}
           handleManualPathImport={handleManualPathImport}
-          bulkFetchDialogOpen={bulkFetchDialogOpen}
-          handleCancelBulkFetch={handleCancelBulkFetch}
-          bulkFetchProgress={bulkFetchProgress}
-          bulkFetchInProgress={bulkFetchInProgress}
-          handleBulkFetchMetadata={handleBulkFetchMetadata}
           bulkSearchOpen={bulkSearchOpen}
           setBulkSearchOpen={setBulkSearchOpen}
           versionManagingAudiobook={versionManagingAudiobook}

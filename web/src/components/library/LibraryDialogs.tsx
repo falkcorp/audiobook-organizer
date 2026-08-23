@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryDialogs.tsx
-// version: 1.7.0
+// version: 1.7.1
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-08-20
+// last-edited: 2026-08-21
 import React from 'react';
 import {
   Typography,
@@ -60,7 +60,6 @@ interface DeleteOptions {
 interface LibraryDialogsProps {
   selectedAudiobooks: Audiobook[];
   setSelectedAudiobooks: (books: Audiobook[]) => void;
-  hasSelection: boolean;
   selectedHasActive: boolean;
   selectedHasImport: boolean;
   toast: ToastFn;
@@ -170,13 +169,6 @@ interface LibraryDialogsProps {
   manualImportOp: api.OperationV2 | null;
   handleManualPathImport: () => void;
 
-  // Bulk fetch dialog
-  bulkFetchDialogOpen: boolean;
-  handleCancelBulkFetch: () => void;
-  bulkFetchProgress: BulkActionProgress | null;
-  bulkFetchInProgress: boolean;
-  handleBulkFetchMetadata: () => void;
-
   // Bulk search dialog
   bulkSearchOpen: boolean;
   setBulkSearchOpen: (open: boolean) => void;
@@ -234,7 +226,6 @@ interface LibraryDialogsProps {
 export const LibraryDialogs = ({
   selectedAudiobooks,
   setSelectedAudiobooks,
-  hasSelection,
   selectedHasActive,
   selectedHasImport,
   toast,
@@ -317,11 +308,6 @@ export const LibraryDialogs = ({
   manualImportInProgress,
   manualImportOp,
   handleManualPathImport,
-  bulkFetchDialogOpen,
-  handleCancelBulkFetch,
-  bulkFetchProgress,
-  bulkFetchInProgress,
-  handleBulkFetchMetadata,
   bulkSearchOpen,
   setBulkSearchOpen,
   versionManagingAudiobook,
@@ -949,52 +935,6 @@ export const LibraryDialogs = ({
           disabled={manualImportInProgress || !manualImportPath.trim()}
         >
           {manualImportInProgress ? 'Importing...' : 'Start import'}
-        </Button>
-      </DialogActions>
-    </Dialog>
-
-    <Dialog open={bulkFetchDialogOpen} onClose={handleCancelBulkFetch}>
-      <DialogTitle>Bulk Fetch Metadata</DialogTitle>
-      <DialogContent>
-        <Typography variant="body1" gutterBottom>
-          Fetch metadata for {selectedAudiobooks.length} selected books.
-        </Typography>
-        {bulkFetchProgress && (
-          <Box sx={{ mt: 2 }}>
-            <Typography variant="body2" gutterBottom>
-              {bulkFetchProgress.completed} / {bulkFetchProgress.total} completed
-            </Typography>
-            <LinearProgress
-              variant="determinate"
-              value={
-                bulkFetchProgress.total > 0
-                  ? (bulkFetchProgress.completed / bulkFetchProgress.total) * 100
-                  : 0
-              }
-            />
-            {bulkFetchProgress.results.length > 0 && (
-              <List dense sx={{ mt: 2 }}>
-                {bulkFetchProgress.results.map((result) => (
-                  <ListItem key={result.book_id}>
-                    <ListItemText
-                      primary={result.title || result.book_id}
-                      secondary={getResultLabel(result)}
-                    />
-                  </ListItem>
-                ))}
-              </List>
-            )}
-          </Box>
-        )}
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={handleCancelBulkFetch}>{bulkFetchInProgress ? 'Cancel' : 'Close'}</Button>
-        <Button
-          variant="contained"
-          onClick={handleBulkFetchMetadata}
-          disabled={bulkFetchInProgress || !hasSelection}
-        >
-          {bulkFetchInProgress ? 'Fetching\u2026' : 'Fetch Metadata'}
         </Button>
       </DialogActions>
     </Dialog>
