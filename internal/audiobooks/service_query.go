@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-08-13
+// last-edited: 2026-08-23
 
 package audiobooks
 
@@ -343,7 +343,10 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 				}
 			}
 			if f.IsPrimaryVersion != nil {
-				bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion
+				// nil counts as primary, matching pebble_store.go's filter and
+				// the memdb index default (memdb_schema.go Default: true) --
+				// see TODO.md is_primary_version investigation.
+				bPrimary := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
 				if *f.IsPrimaryVersion != bPrimary {
 					continue
 				}
@@ -528,7 +531,10 @@ func (svc *AudiobookService) CountAudiobooksFiltered(ctx context.Context, filter
 	count := 0
 	for _, b := range books {
 		if filters.IsPrimaryVersion != nil {
-			bPrimary := b.IsPrimaryVersion != nil && *b.IsPrimaryVersion
+			// nil counts as primary, matching pebble_store.go's filter and
+			// the memdb index default (memdb_schema.go Default: true) --
+			// see TODO.md is_primary_version investigation.
+			bPrimary := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
 			if *filters.IsPrimaryVersion != bPrimary {
 				continue
 			}
