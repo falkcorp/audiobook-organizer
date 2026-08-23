@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_versiongroup_backfill.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 9f3b7c21-6d84-4a5e-b0c9-2e7fa1d85b36
-// last-edited: 2026-08-11
+// last-edited: 2026-08-23
 // PERF-VERSIONS: one-time backfill that writes the
 // book:versiongroup:<gid>:<id> secondary index for every existing book
 // that has a VersionGroupID. Without this, /audiobooks/:id/versions
@@ -32,7 +32,22 @@ import (
 // next start; UpdateBook's now-unconditional write keeps it complete after
 // that. This IS the production repair — no manual step. Bump again if the key
 // format or the set of indexed books ever changes.
-const versionGroupBackfillKey = "system:backfill:versiongroup_index_v2_done"
+//
+// BUMPED v2 -> v3 (2026-08-23): the scan's iterator bounds were
+// []byte("book:0")..[]byte("book:;"), a byte range that only covers book IDs
+// whose first character is an ASCII digit ('0'-'9', 0x30-0x39). Every book ID
+// minted today is a ULID and happens to start with a digit, so this was
+// latent, not an observed under-scan — but CreateBook only mints a ULID when
+// book.ID == "" (see CreateBook in pebble_store.go), so a caller-supplied
+// non-ULID, letter-leading ID is constructible and would have been silently
+// invisible to the v2 scan, with no error surfaced anywhere. The bounds are
+// now the true prefix range for "book:" ([]byte("book:")..[]byte("book;")),
+// which the existing one-colon structural filter below already safely
+// narrows back down to primary rows. Bumping the sentinel forces every
+// deployment — including ones that already completed v2 under the narrower
+// bounds — to re-run once under the wider bounds, since the bound fix has no
+// effect on pre-existing letter-leading IDs otherwise.
+const versionGroupBackfillKey = "system:backfill:versiongroup_index_v3_done"
 
 // versionGroupBackfillChunk is how many index rows are buffered before a
 // commit.
@@ -94,9 +109,18 @@ func (p *PebbleStore) BackfillVersionGroupIndex() error {
 		"sentinel", versionGroupBackfillKey,
 		"chunk", versionGroupBackfillChunk)
 
+	// A true prefix scan for "book:" — the upper bound increments the last
+	// byte of the prefix itself (':' 0x3A -> ';' 0x3B), not the last byte of
+	// an assumed-digit ID. The old bounds (book:0..book:;) only covered book
+	// IDs whose first character was an ASCII digit; a letter-leading ID (or
+	// any non-digit-leading ID) sorts outside that range and would be
+	// silently skipped. This wider range also picks up secondary-index rows
+	// (book:versiongroup:..., book:organizedhash:..., etc.), which is safe
+	// because the one-colon structural filter below already discriminates
+	// primary rows from secondary indexes independent of byte range.
 	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
+		LowerBound: []byte("book:"),
+		UpperBound: []byte("book;"),
 	})
 	if err != nil {
 		slog.Error("versiongroup-backfill: cannot open iterator", "err", err)
