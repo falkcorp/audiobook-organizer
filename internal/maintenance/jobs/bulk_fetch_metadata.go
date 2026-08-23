@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/bulk_fetch_metadata.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b3c9d7e8-0f1a-2b3c-4d5e-6f7a8b9c0d1e
 // last-edited: 2026-08-23
 
@@ -329,6 +329,16 @@ func bmf_stripChapterFromTitle(title string) string {
 // once the ctx id became the v2 row id, requeueing moved the anchor on every resume
 // and an interrupted run re-fetched the entire library over the network. ResumeRestart
 // updates the row in place, so the id — and therefore the skip-set — is stable.
+//
+// SCOPE: this makes the declaration correct, and correct is only consulted on
+// one path. resumeAfterStartup takes its candidates from ListActiveOperationsV2
+// (the opv2:act: index = queued|running), and every clean shutdown writes a
+// status that deletes that key -- so a job stopped by a deploy is invisible to
+// the sweep whatever its policy says, and only a hard kill leaves a row it can
+// act on. That gap is pre-existing, affects every v2 op, and is tracked in
+// todo.d/20260823-v2-resume-sweep-is-blind-to-interrupted-rows.md. Declaring
+// ResumeDrop here would additionally throw the run away on the one path that
+// does work.
 func (j *bulkFetchMetadataJob) Policy() maintenance.ExecutionPolicy {
 	return maintenance.RestartPolicy()
 }

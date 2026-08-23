@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.37.0 -->
+<!-- version: 10.38.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -5998,6 +5998,17 @@ jobs~~ — **RESOLVED 2026-08-23.** All five (`bulk-deluge-import`, `cleanup-emp
 in the same change, because its skip-set is keyed on the op id and requeue was moving its own
 resume anchor. `gatedByDryRun` in `internal/maintenance/jobs/policy_declaration_test.go` is now
 empty.
+
+⚠️ **Scope bound, measured while making the above change:** a correct `ResumePolicy` is
+only consulted on one path. `resumeAfterStartup` takes its candidates from
+`ListActiveOperationsV2()` = the `opv2:act:` index = `queued|running`, and **every** clean
+shutdown writes a status that deletes that key (clean drain → `canceled`; shutdown timeout
+→ `interrupted_quiesced`; worker abandonment → same). So a job stopped by a deploy is
+invisible to the sweep no matter what it declares, and only a hard kill leaves a row the
+sweep can act on. Pre-existing, affects every v2 op, and it is the v2 twin of the v1 bug
+already fixed in `isResumableOpStatus`. Tracked in
+`todo.d/20260823-v2-resume-sweep-is-blind-to-interrupted-rows.md` — do **not** fix it in a
+maintenance PR.
 
 ⚠️ Do not confuse `internal/maintenance/jobs/repair_missing_files.go` (job `repair-missing-files`,
 one of the 37, **repoints**, zero delete calls) with

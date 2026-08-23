@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-23-the-second-set-of-books-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 0f4c8a52-6b19-4d73-ae05-91c2f8d3b746 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -111,9 +111,27 @@ It tracks its finished books against the job's identifier, and the way it was se
 resume issued a *new* identifier each time — so an interrupted run started the whole
 library over, re-fetching tens of thousands of records across the network for no reason.
 
-All six are fixed: they now resume the original run in place, keeping both the preview
-setting and the record of what they already finished. Two smaller faults in the same
-release were fixed alongside — a database failure while looking up a job's results was
+All six now declare the right thing, and where resuming happens at all it keeps both the
+preview setting and the record of what was already finished.
+
+**That is a smaller claim than it sounds, and the smaller version is the honest one.**
+Checking whether the fix actually fires turned up a separate, older gap: when the app is
+shut down in the ordinary way — a deploy, a restart — a running job is marked finished
+in a way that removes it from the list the startup code consults. So the startup code
+never sees it, whatever the job's settings say. The settings only get consulted if the
+app was killed outright, without a chance to shut down cleanly.
+
+So: the five jobs were declaring the wrong thing and now declare the right thing, which
+had to be fixed either way. But an interrupted job still may not come back after a normal
+restart, and that is a second problem in a different part of the system, now written down
+rather than assumed away. It is not fixed here, because fixing it changes restart
+behaviour for every long-running job in the app and deserves its own change and its own
+testing.
+
+The same trap twice in one document is the point worth keeping: the first draft of this
+correction said the six jobs "now resume the original run in place" — a claim that had
+not been checked, inside a section whose entire subject is a claim that outlived its
+reason. Two smaller faults in the same release were fixed alongside — a database failure while looking up a job's results was
 being reported as "no such job", which would have sent an operator hunting for a bad
 identifier instead of a sick database; and a warning that was supposed to fire when a job
 could not obtain an identifier was positioned so that it only covered part of what goes

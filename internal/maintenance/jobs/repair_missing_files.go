@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/repair_missing_files.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: f1a7b5e6-8c9d-0e1f-2a3b-4c5d6e7f8a90
 // last-edited: 2026-08-23
 
@@ -573,7 +573,16 @@ func rmfr_repairOne(
 }
 
 // Policy: ResumeRestart. CanResume() is true and this job checkpoints nothing,
-// so a resume re-runs it; ResumeRestart is what makes that actually happen.
+// so a resume re-runs it; ResumeRestart is what allows that to happen at all.//
+// SCOPE: this makes the declaration correct, and correct is only consulted on
+// one path. resumeAfterStartup takes its candidates from ListActiveOperationsV2
+// (the opv2:act: index = queued|running), and every clean shutdown writes a
+// status that deletes that key -- so a job stopped by a deploy is invisible to
+// the sweep whatever its policy says, and only a hard kill leaves a row it can
+// act on. That gap is pre-existing, affects every v2 op, and is tracked in
+// todo.d/20260823-v2-resume-sweep-is-blind-to-interrupted-rows.md. Declaring
+// ResumeDrop here would additionally throw the run away on the one path that
+// does work.
 //
 // This was ResumeDrop until 2026-08-23, on the reasoning that a dry_run:true job
 // could not take ResumeRequeue because server.resumeV2Op re-enqueues with nil
