@@ -35,9 +35,14 @@ type CandidateFetchOp struct {
 	// the Resume Review picker renders it; dropping it here would have blanked
 	// the column for every run without anything failing.
 	CompletedAt *time.Time
-	// Legacy is true for a v1 operations row. Callers do not normally care;
-	// it exists so the eventual v1 retirement can measure what is still out
-	// there rather than guess.
+	// Legacy is true for a v1 operations row.
+	//
+	// ⚠️ NOT a census field. Historical runs wrote a v1 row and a v2 row under
+	// DIFFERENT ids — the handler minted one, EnqueueOp the other — so the `seen`
+	// map in CandidateFetchOps cannot merge a twin, and one logical run surfaces
+	// as a populated v1 entry plus an empty v2 one. Counting Legacy entries
+	// therefore over-counts. It is benign for the readers here, which all drop
+	// zero-result ops.
 	Legacy bool
 }
 
@@ -78,8 +83,22 @@ func CandidateFetchOps(store CandidateFetchOpLister, limit int) []CandidateFetch
 
 	// v2 — the keyspace new runs land in. A zero `since` means "all history";
 	// ListOperationsV2Since additionally always includes non-terminal rows, so a
-	// long-running fetch cannot fall out of its own listing.
-	if rows, err := store.ListOperationsV2Since(time.Time{}, limit); err == nil {
+	// long-running fetch cannot fall out of the `since` WINDOW.
+	//
+	// 🔑 BUT IT CAN FALL OUT OF THE LIMIT, and the caller's `limit` must not be
+	// what decides that. ListOperationsV2Since sorts StartedAt DESC NULLS LAST
+	// and truncates AFTER sorting but BEFORE we filter by DefID — so a QUEUED op
+	// (StartedAt is nil until a worker picks it up) sorts to the very bottom and
+	// is the first row dropped. Passing the caller's 200 through would mean that
+	// once ~200 v2 rows have started, a just-enqueued fetch is invisible to the
+	// dedup guard and a second request re-requests every book the first had
+	// queued — exactly what IsActiveFetchStatus exists to prevent.
+	//
+	// So we ask the store for a generous bound, filter to this def, and apply the
+	// caller's limit to the RESULT. The over-fetch is close to free: the store
+	// loads every row and sorts them regardless of the limit.
+	const storeScanBound = 5000
+	if rows, err := store.ListOperationsV2Since(time.Time{}, storeScanBound); err == nil {
 		for _, row := range rows {
 			if row.DefID != CandidateFetchDefID || seen[row.ID] {
 				continue
@@ -94,8 +113,8 @@ func CandidateFetchOps(store CandidateFetchOpLister, limit int) []CandidateFetch
 		}
 	}
 
-	// v1 — history only.
-	if ops, err := store.GetRecentOperations(limit); err == nil {
+	// v1 — history only. Same reasoning as above: bound the scan, not the answer.
+	if ops, err := store.GetRecentOperations(storeScanBound); err == nil {
 		for _, op := range ops {
 			if op.Type != candidateFetchOpType || seen[op.ID] {
 				continue
@@ -114,6 +133,9 @@ func CandidateFetchOps(store CandidateFetchOpLister, limit int) []CandidateFetch
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].CreatedAt.After(out[j].CreatedAt)
 	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
 	return out
 }
 
@@ -179,7 +201,11 @@ type CandidateFetchResolver interface {
 // resolved at neither endpoint. Checking v2 first and falling back to v1 means
 // the id in a client's hand resolves whichever era it came from.
 func ResolveCandidateFetch(store CandidateFetchResolver, opID string) *database.Operation {
-	if row, err := store.GetOperationV2(opID); err == nil && row != nil {
+	// The DefID guard matters: GET /operations/:id/results is a GENERIC route, so
+	// any op id reaches here. Without it a library.scan id would resolve to a 200
+	// with an empty result set and a fabricated type of "metadata_candidate_fetch"
+	// — worse than the 404 it used to get.
+	if row, err := store.GetOperationV2(opID); err == nil && row != nil && row.DefID == CandidateFetchDefID {
 		op := &database.Operation{
 			ID:           row.ID,
 			Type:         candidateFetchOpType,
