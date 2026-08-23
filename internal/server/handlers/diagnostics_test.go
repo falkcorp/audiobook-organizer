@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8ab4b825-05c3-4569-b450-0dca6b872771
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package handlers_test
 
@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -225,54 +224,96 @@ func TestDiagnosticsHandler_SubmitAI_NoAPIKey_400(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestDiagnosticsHandler_SubmitAI_NilParserFallback verifies the synchronous
-// 202 response plus the async "no AI parser available" fallback path. The
-// handler does its real work in a goroutine, so we synchronize on the mock
-// store's terminal UpdateOperationStatus("completed", ...) call rather than
-// sleeping.
-func TestDiagnosticsHandler_SubmitAI_NilParserFallback(t *testing.T) {
+// TestDiagnosticsHandler_SubmitAI_ReturnsEnqueuedOpID pins the same identity
+// StartExport's test pins, for the same reason: the id in the body is the one
+// the client polls at /diagnostics/ai-results/:operationId, so a handler that
+// returns anything other than the enqueued op's id reports progress that never
+// arrives. SubmitAI used to mint its own ULID and hand-drive a legacy row; the
+// run is now the diagnostics.ai-analyze op and the id must be that op's.
+func TestDiagnosticsHandler_SubmitAI_ReturnsEnqueuedOpID(t *testing.T) {
 	orig := config.AppConfig
 	defer func() { config.AppConfig = orig }()
 	config.AppConfig.OpenAIAPIKey = "test-key"
 
 	store := databasemocks.NewMockStore(t)
-	diagSvc := handlersmocks.NewMockDiagnosticsService(t)
+	reg := handlersmocks.NewMockOperationsRegistry(t)
 
-	done := make(chan struct{})
+	const enqueuedID = "01JENQUEUED00000000DIAGAI"
+	reg.EXPECT().EnqueueOp(mock.Anything, handlers.DiagnosticsAIDefID,
+		mock.MatchedBy(func(p any) bool {
+			// The category and description the caller sent must reach the op —
+			// they select the prompt and are the whole point of the request.
+			params, ok := p.(handlers.DiagnosticsAIOpParams)
+			return ok && params.Category == "metadata" && params.Description == "why so many dupes"
+		})).Return(enqueuedID, nil)
 
-	store.EXPECT().CreateOperation(mock.Anything, "diagnostics_ai", mock.Anything).
-		Return(&database.Operation{}, nil)
-	// Intermediate progress updates (running 10/50/70) — match loosely.
-	store.EXPECT().UpdateOperationStatus(mock.Anything, "running", mock.Anything, mock.Anything, mock.Anything).
-		Return(nil).Maybe()
-	store.EXPECT().UpdateOperationResultData(mock.Anything, mock.Anything).Return(nil).Maybe()
-	// Terminal fallback status — close the done channel so the test can join.
-	store.EXPECT().UpdateOperationStatus(mock.Anything, "completed", 100, 100, "Batch data prepared (no AI parser available)").
-		Run(func(_ string, _ string, _ int, _ int, _ string) { close(done) }).
-		Return(nil)
-
-	diagSvc.EXPECT().CollectAllBooks().Return([]database.BookCore{{ID: "b1", Title: "X"}}, nil)
-
-	// batchParser is nil → the no-parser fallback path.
-	h := handlers.NewDiagnosticsHandler(store, diagSvc, nil, nil, nil, nil, nil)
-	c, w := newDiagCtx(http.MethodPost, "/diagnostics/submit-ai", `{"category":"general"}`, nil)
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, reg, nil)
+	c, w := newDiagCtx(http.MethodPost, "/diagnostics/submit-ai",
+		`{"category":"metadata","description":"why so many dupes"}`, nil)
 	h.SubmitAI(c)
 
 	assert.Equal(t, http.StatusAccepted, w.Code)
-	assert.Contains(t, w.Body.String(), "submitted")
 
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("async submit-ai fallback did not complete in time")
+	var body struct {
+		Data struct {
+			OperationID string `json:"operation_id"`
+			Status      string `json:"status"`
+		} `json:"data"`
 	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, enqueuedID, body.Data.OperationID,
+		"must return the enqueued op's id, not a separately-minted one")
+	assert.Equal(t, "queued", body.Data.Status)
+}
+
+// TestDiagnosticsHandler_SubmitAI_EmptyCategoryDefaultsToGeneral pins that the
+// default is applied before the params are handed to the op, not left for the
+// op to guess.
+func TestDiagnosticsHandler_SubmitAI_EmptyCategoryDefaultsToGeneral(t *testing.T) {
+	orig := config.AppConfig
+	defer func() { config.AppConfig = orig }()
+	config.AppConfig.OpenAIAPIKey = "test-key"
+
+	store := databasemocks.NewMockStore(t)
+	reg := handlersmocks.NewMockOperationsRegistry(t)
+	reg.EXPECT().EnqueueOp(mock.Anything, handlers.DiagnosticsAIDefID,
+		mock.MatchedBy(func(p any) bool {
+			params, ok := p.(handlers.DiagnosticsAIOpParams)
+			return ok && params.Category == "general"
+		})).Return("op-1", nil)
+
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, reg, nil)
+	c, w := newDiagCtx(http.MethodPost, "/diagnostics/submit-ai", `{}`, nil)
+	h.SubmitAI(c)
+
+	assert.Equal(t, http.StatusAccepted, w.Code)
+}
+
+// TestDiagnosticsHandler_SubmitAI_EnqueueFailureIs500 pins that a failed enqueue
+// is not reported as an accepted submission. The old handler could not fail this
+// way — it answered 202 and then lost the work in a goroutine.
+func TestDiagnosticsHandler_SubmitAI_EnqueueFailureIs500(t *testing.T) {
+	orig := config.AppConfig
+	defer func() { config.AppConfig = orig }()
+	config.AppConfig.OpenAIAPIKey = "test-key"
+
+	store := databasemocks.NewMockStore(t)
+	reg := handlersmocks.NewMockOperationsRegistry(t)
+	reg.EXPECT().EnqueueOp(mock.Anything, handlers.DiagnosticsAIDefID, mock.Anything).
+		Return("", assert.AnError)
+
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, reg, nil)
+	c, w := newDiagCtx(http.MethodPost, "/diagnostics/submit-ai", `{"category":"general"}`, nil)
+	h.SubmitAI(c)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
 // ── GetAIResults ──────────────────────────────────────────────────────────
 
 func TestDiagnosticsHandler_GetAIResults_NotFound(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
-	store.EXPECT().GetOperationByID("missing").Return(nil, assert.AnError)
+	store.EXPECT().GetOperationV2("missing").Return(nil, assert.AnError)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/ai-results/missing", "",
@@ -282,10 +323,35 @@ func TestDiagnosticsHandler_GetAIResults_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+// TestDiagnosticsHandler_GetAIResults_ReadsTheV2Row is the guard that fails if
+// the lookup is pointed back at the legacy keyspace: the run writes its result
+// to its own v2 row, so a GetOperationByID reader would find nothing.
+func TestDiagnosticsHandler_GetAIResults_ReadsTheV2Row(t *testing.T) {
+	store := databasemocks.NewMockStore(t)
+	rd := `{"suggestions":[{"id":"s1","action":"merge_versions"}],"raw_responses":[{"custom_id":"c1"}]}`
+	store.EXPECT().GetOperationV2("op-1").
+		Return(&database.OperationV2Row{ID: "op-1", Status: "completed", ResultData: diagStrPtr(rd)}, nil)
+	store.AssertNotCalled(t, "GetOperationByID", mock.Anything)
+
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
+	c, w := newDiagCtx(http.MethodGet, "/diagnostics/ai-results/op-1", "",
+		gin.Params{{Key: "operationId", Value: "op-1"}})
+	h.GetAIResults(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "s1")
+	assert.Contains(t, w.Body.String(), "c1", "raw_responses must survive the round trip too")
+}
+
+// TestDiagnosticsHandler_GetAIResults_NotCompleted_200 reports a run still in
+// flight, carrying the v2 row's progress message so the client has something to
+// show. ProgressMessage is the v2 field; the legacy row called it Message.
 func TestDiagnosticsHandler_GetAIResults_NotCompleted_200(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
-	store.EXPECT().GetOperationByID("op-1").
-		Return(&database.Operation{ID: "op-1", Status: "running"}, nil)
+	store.EXPECT().GetOperationV2("op-1").
+		Return(&database.OperationV2Row{
+			ID: "op-1", Status: "running", ProgressMessage: "Batch b-9: in_progress (poll 3/288)",
+		}, nil)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/ai-results/op-1", "",
@@ -295,13 +361,18 @@ func TestDiagnosticsHandler_GetAIResults_NotCompleted_200(t *testing.T) {
 	// GetAIResults uses RespondWithOK (200) for the not-completed branch,
 	// unlike DownloadExport which uses 202.
 	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "running")
+	assert.Contains(t, w.Body.String(), "poll 3/288",
+		"the in-flight message must reach the client, not be dropped for an empty string")
 }
 
-func TestDiagnosticsHandler_GetAIResults_Completed_WithSuggestions(t *testing.T) {
+// TestDiagnosticsHandler_GetAIResults_CompletedWithNoResult_IsEmptyNot500 pins
+// that a completed run whose payload never landed answers with an empty
+// suggestion list rather than failing.
+func TestDiagnosticsHandler_GetAIResults_CompletedWithNoResult_IsEmptyNot500(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
-	rd := `{"suggestions":[{"id":"s1","action":"merge_versions"}]}`
-	store.EXPECT().GetOperationByID("op-1").
-		Return(&database.Operation{ID: "op-1", Status: "completed", ResultData: diagStrPtr(rd)}, nil)
+	store.EXPECT().GetOperationV2("op-1").
+		Return(&database.OperationV2Row{ID: "op-1", Status: "completed"}, nil)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/ai-results/op-1", "",
@@ -309,7 +380,7 @@ func TestDiagnosticsHandler_GetAIResults_Completed_WithSuggestions(t *testing.T)
 	h.GetAIResults(c)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "s1")
+	assert.Contains(t, w.Body.String(), `"suggestions":[]`)
 }
 
 // ── ApplySuggestions ──────────────────────────────────────────────────────
@@ -326,7 +397,7 @@ func TestDiagnosticsHandler_ApplySuggestions_MissingFields_400(t *testing.T) {
 
 func TestDiagnosticsHandler_ApplySuggestions_OperationNotFound(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
-	store.EXPECT().GetOperationByID("op-x").Return(nil, assert.AnError)
+	store.EXPECT().GetOperationV2("op-x").Return(nil, assert.AnError)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodPost, "/diagnostics/apply-suggestions",
@@ -341,8 +412,8 @@ func TestDiagnosticsHandler_ApplySuggestions_MergeVersions(t *testing.T) {
 	mergeSvc := handlersmocks.NewMockMergeService(t)
 
 	rd := `{"suggestions":[{"id":"s1","action":"merge_versions","book_ids":["b1","b2"],"primary_id":"b1"}]}`
-	store.EXPECT().GetOperationByID("op-1").
-		Return(&database.Operation{ID: "op-1", Status: "completed", ResultData: diagStrPtr(rd)}, nil)
+	store.EXPECT().GetOperationV2("op-1").
+		Return(&database.OperationV2Row{ID: "op-1", Status: "completed", ResultData: diagStrPtr(rd)}, nil)
 	mergeSvc.EXPECT().MergeBooks([]string{"b1", "b2"}, "b1").Return(nil, nil)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, mergeSvc, nil, nil, nil, nil)

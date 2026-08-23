@@ -1,6 +1,6 @@
 // file: web/src/pages/Diagnostics.tsx
-// version: 1.5.2
-// last-edited: 2026-08-19
+// version: 1.6.0
+// last-edited: 2026-08-23
 // guid: f2323fc4-b3e7-4298-9ec5-759447cbd643
 
 import { useState, useCallback, useRef, useEffect } from 'react';
@@ -232,7 +232,11 @@ export function Diagnostics() {
     setAiResults(null);
     try {
       const result = await api.submitDiagnosticsAI(selectedCategory, description);
-      setSuccessMsg(`AI analysis submitted: ${result.request_count} request(s)`);
+      // Was `${result.request_count} request(s)` — a field this response has
+      // never carried, so the toast read "undefined request(s)". The count is
+      // known only once the run has built its batch, and now arrives with the
+      // progress updates the poll below renders.
+      setSuccessMsg('AI analysis queued — progress appears below.');
       startPolling(result.operation_id, 'ai');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to submit AI analysis');

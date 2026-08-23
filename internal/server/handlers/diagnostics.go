@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
@@ -13,8 +13,6 @@
 package handlers
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -29,7 +27,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/gin-gonic/gin"
-	ulid "github.com/oklog/ulid/v2"
 )
 
 // --- narrow dependency interfaces ---
@@ -62,6 +59,22 @@ type MergeService interface {
 // is a silent wire-shape drift, not a build error. legacy_op_id was dropped from
 // both on 2026-08-22.
 type diagnosticsExportOpParams struct {
+	Category    string `json:"category"`
+	Description string `json:"description"`
+}
+
+// DiagnosticsAIDefID is the registry id of the AI-diagnostics OperationDef,
+// shared with its registration in package server so the two cannot drift.
+const DiagnosticsAIDefID = "diagnostics.ai-analyze"
+
+// DiagnosticsAIOpParams is the param shape for DiagnosticsAIDefID.
+//
+// Deliberately exported and used verbatim by the server-side registration,
+// rather than mirrored the way diagnosticsExportOpParams above is. A mirrored
+// pair is coupled only by its JSON tags, so dropping a field on one side is
+// silent wire-shape drift instead of a build error — the same trap that made
+// the AI author-review params worth deleting in #2771.
+type DiagnosticsAIOpParams struct {
 	Category    string `json:"category"`
 	Description string `json:"description"`
 }
@@ -143,28 +156,24 @@ type diagnosticsStore interface {
 	diagnosticsOperationStore
 }
 
-// diagnosticsOperationStore is the operation bookkeeping the apply/export paths
-// do while a long diagnostics run is in flight.
+// diagnosticsOperationStore is the operation bookkeeping the diagnostics
+// endpoints do while a long run is in flight.
 //
-// GetOperationV2 serves the export path, which is fully v2: its op is created by
-// EnqueueOp and its result is written by the op's own reporter.
+// One method, because every diagnostics flow is now a registered OperationDef
+// whose op is created by EnqueueOp and whose result is written by its own
+// reporter: the export op, and — since diagnostics.ai-analyze replaced the bare
+// goroutine that used to drive a legacy row by hand — the AI flow as well.
+// GetOperationV2 reads that row back for DownloadExport, GetAIResults and
+// ApplySuggestions alike.
 //
-// The legacy methods below it belong to the AI-diagnostics flow, which is not a
-// registered OperationDef at all but a bare goroutine driving a legacy row by
-// hand. Verified by call site rather than assumed, because the obvious guess is
-// wrong: the four write methods are SubmitAI-only, but GetOperationByID is
-// called from GetAIResults and ApplySuggestions and NOT from SubmitAI. All three
-// handlers read rows SubmitAI minted, so they still retire together — but anyone
-// deleting GetOperationByID on a "submit-ai owns this" reading would break the
-// other two.
+// The five legacy methods that stood here (CreateOperation, GetOperationByID and
+// the three status/result/error writers) went with that goroutine. A previous
+// note warned that they did not share a single owner — the writers were
+// SubmitAI's, but GetOperationByID was read by GetAIResults and ApplySuggestions
+// — and that they would nonetheless retire together, since all three handlers
+// read rows SubmitAI minted. They did.
 type diagnosticsOperationStore interface {
 	GetOperationV2(id string) (*database.OperationV2Row, error)
-
-	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
-	GetOperationByID(id string) (*database.Operation, error)
-	UpdateOperationError(id, errorMessage string) error
-	UpdateOperationResultData(id string, resultData string) error
-	UpdateOperationStatus(id, status string, progress, total int, message string) error
 }
 
 type DiagnosticsHandler struct {
@@ -350,107 +359,28 @@ func (h *DiagnosticsHandler) SubmitAI(c *gin.Context) {
 		req.Category = "general"
 	}
 
-	store := h.store
-	if store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
+	if h.registry == nil {
+		httputil.RespondWithInternalError(c, "operations registry not initialized")
 		return
 	}
 
-	opID := ulid.Make().String()
-	_, err := store.CreateOperation(opID, "diagnostics_ai", nil)
+	// Everything this used to do inline — collect books, build the JSONL, upload
+	// it, create the batch, then wait out a run that OpenAI may take 24h to
+	// finish — now belongs to the diagnostics.ai-analyze OperationDef, which
+	// reports progress and stores its result on its own v2 row. The handler's
+	// only job is to enqueue it.
+	opID, err := h.registry.EnqueueOp(c.Request.Context(), DiagnosticsAIDefID, DiagnosticsAIOpParams{
+		Category:    req.Category,
+		Description: req.Description,
+	})
 	if err != nil {
-		httputil.InternalError(c, "failed to create operation", err)
+		httputil.InternalError(c, "failed to enqueue diagnostics AI analysis", err)
 		return
 	}
-
-	ds := h.diagService
-	if ds == nil {
-		ds = diagnostics.NewService(store, nil, config.AppConfig.ITunes.LibraryReadPath)
-	}
-
-	category := req.Category
-	description := req.Description
-
-	// The AI parser for file upload and batch creation. Resolved by the
-	// controller from server.batchPoller.parser (may be nil).
-	parser := h.batchParser
-
-	// Run async: generate export, build JSONL, submit to OpenAI
-	go func() {
-		_ = store.UpdateOperationStatus(opID, "running", 10, 100, "Generating export data")
-
-		// Collect books for JSONL
-		allBooks, collectErr := ds.CollectAllBooks()
-		if collectErr != nil {
-			_ = store.UpdateOperationError(opID, collectErr.Error())
-			return
-		}
-
-		slimBooks := make([]diagnostics.SlimBook, len(allBooks))
-		for i, b := range allBooks {
-			slimBooks[i] = diagnostics.ToSlimBook(b)
-		}
-
-		_ = store.UpdateOperationStatus(opID, "running", 50, 100, "Building batch JSONL")
-
-		jsonlData, buildErr := diagnostics.BuildBatchJSONL(category, description, slimBooks, nil, nil, nil)
-		if buildErr != nil {
-			_ = store.UpdateOperationError(opID, buildErr.Error())
-			return
-		}
-
-		// Count request lines
-		requestCount := 0
-		for _, b := range jsonlData {
-			if b == '\n' {
-				requestCount++
-			}
-		}
-		if len(jsonlData) > 0 && jsonlData[len(jsonlData)-1] != '\n' {
-			requestCount++
-		}
-
-		_ = store.UpdateOperationStatus(opID, "running", 70, 100, "Submitting to OpenAI batch API")
-
-		// Upload JSONL and create batch with metadata tagging
-		if parser != nil {
-			ctx := context.Background()
-			buf := bytes.NewBuffer(jsonlData)
-			file, uploadErr := parser.UploadBatchFile(ctx, buf)
-			if uploadErr != nil {
-				_ = store.UpdateOperationError(opID, fmt.Sprintf("upload batch file: %v", uploadErr))
-				return
-			}
-
-			batchID, createErr := parser.CreateBatchWithMetadata(ctx, file, "diagnostics")
-			if createErr != nil {
-				_ = store.UpdateOperationError(opID, fmt.Sprintf("create batch: %v", createErr))
-				return
-			}
-
-			resultJSON, _ := json.Marshal(map[string]interface{}{
-				"status":        "submitted",
-				"request_count": requestCount,
-				"batch_id":      batchID,
-			})
-			_ = store.UpdateOperationResultData(opID, string(resultJSON))
-			_ = store.UpdateOperationStatus(opID, "running", 80, 100, fmt.Sprintf("Batch %s submitted, awaiting completion", batchID))
-			slog.Info("diagnostics_ai batch submitted with requests", "batchID", batchID, "requestCount", requestCount)
-		} else {
-			// Fallback: store JSONL metadata without actual submission
-			resultJSON, _ := json.Marshal(map[string]interface{}{
-				"status":        "submitted",
-				"request_count": requestCount,
-				"batch_id":      "pending-" + opID,
-			})
-			_ = store.UpdateOperationResultData(opID, string(resultJSON))
-			_ = store.UpdateOperationStatus(opID, "completed", 100, 100, "Batch data prepared (no AI parser available)")
-		}
-	}()
 
 	httputil.RespondWithSuccess(c, 202, gin.H{
 		"operation_id": opID,
-		"status":       "submitted",
+		"status":       "queued",
 	})
 }
 
@@ -464,17 +394,21 @@ func (h *DiagnosticsHandler) GetAIResults(c *gin.Context) {
 		return
 	}
 
-	op, err := store.GetOperationByID(opID)
+	op, err := store.GetOperationV2(opID)
 	if err != nil || op == nil {
 		httputil.RespondWithNotFound(c, "operation", opID)
 		return
 	}
 
+	// "completed" is the terminal-success status in both keyspaces, so this
+	// comparison did not have to change when the run moved to a v2 row. Any
+	// other status (queued / running / failed / canceled) is reported straight
+	// back for the client to keep polling on.
 	if op.Status != "completed" {
 		httputil.RespondWithOK(c, gin.H{
 			"operation_id": opID,
 			"status":       op.Status,
-			"message":      op.Message,
+			"message":      op.ProgressMessage,
 		})
 		return
 	}
@@ -526,7 +460,7 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 		return
 	}
 
-	op, err := store.GetOperationByID(req.OperationID)
+	op, err := store.GetOperationV2(req.OperationID)
 	if err != nil || op == nil {
 		httputil.RespondWithNotFound(c, "operation", req.OperationID)
 		return

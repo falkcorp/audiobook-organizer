@@ -4769,10 +4769,20 @@ export async function downloadDiagnosticsExport(operationId: string): Promise<Bl
   return response.blob();
 }
 
+/**
+ * Starts the AI diagnostics analysis and returns the operation to poll.
+ *
+ * The declared shape used to include `batch_id` and `request_count`, neither of
+ * which the server has ever sent here: both are only known once the run has
+ * built its JSONL and created the batch, which happens well after the 202. The
+ * caller rendered `request_count` into a toast that therefore always read
+ * "undefined request(s)". Both now reach the UI through the operation's own
+ * progress message instead.
+ */
 export async function submitDiagnosticsAI(
   category: string,
   description: string
-): Promise<{ operation_id: string; batch_id: string; status: string; request_count: number }> {
+): Promise<EnqueuedOperation> {
   const response = await apiFetch(`${API_BASE}/diagnostics/submit-ai`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
