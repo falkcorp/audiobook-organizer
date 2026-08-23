@@ -1,6 +1,7 @@
 // file: web/src/components/ChangeLog.tsx
-// version: 1.5.2
+// version: 1.6.0
 // guid: 00f575de-ecea-45b7-9aa5-d6dbbc3f21f6
+// last-edited: 2026-08-23
 
 import { useCallback, useEffect, useState } from 'react';
 import { Box, Button, CircularProgress, Stack, Typography } from '@mui/material';
@@ -133,103 +134,131 @@ export const ChangeLog = ({ bookId, refreshKey, onRevert, onCompareSnapshot }: C
 
   return (
     <Stack spacing={0} data-testid="changelog-timeline">
-      {entries.map((entry, idx) => (
-        <Box
-          key={`${entry.timestamp}-${idx}`}
-          sx={[
-            {
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: 2,
-              py: 1.5,
-              px: 1,
-              borderColor: 'divider',
-              cursor:
-                entry.type === 'metadata_apply' || entry.type === 'tag_write'
-                  ? 'pointer'
-                  : undefined,
-              '&:hover': { bgcolor: 'action.hover' },
-            },
-            idx < entries.length - 1
-              ? {
-                  borderBottom: '1px solid',
-                }
-              : {
-                  borderBottom: 'none',
-                },
-          ]}
-          onClick={() => {
-            if (entry.type === 'metadata_apply' || entry.type === 'tag_write') {
-              onCompareSnapshot?.(entry.timestamp);
-            }
-          }}
-        >
-          {/* Timestamp */}
-          <Typography
-            variant="caption"
-            sx={{
-              color: 'text.secondary',
-              minWidth: 140,
-              flexShrink: 0,
-              pt: 0.25,
+      {entries.map((entry, idx) => {
+        const clickable = entry.type === 'metadata_apply' || entry.type === 'tag_write';
+        return (
+          <Box
+            key={`${entry.timestamp}-${idx}`}
+            // Deliberately NOT role="button"/tabIndex/aria-label on this row:
+            // it contains a nested interactive Button (Revert, and now
+            // Compare snapshot below). A role="button" element has
+            // "Children Presentational: True" per the ARIA spec, so nesting
+            // real interactive controls inside one is undefined/broken for
+            // assistive tech, and an aria-label here would also override the
+            // accessible name computed from this row's own text (timestamp,
+            // type, summary), making every actionable row announce as just
+            // "Compare snapshot, button" and nothing else. The onClick below
+            // stays as a mouse-only convenience; keyboard/screen-reader users
+            // reach the same action via the real "Compare snapshot" button
+            // in the Actions stack.
+            sx={[
+              {
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 2,
+                py: 1.5,
+                px: 1,
+                borderColor: 'divider',
+                cursor: clickable ? 'pointer' : undefined,
+                '&:hover': { bgcolor: 'action.hover' },
+              },
+              idx < entries.length - 1
+                ? {
+                    borderBottom: '1px solid',
+                  }
+                : {
+                    borderBottom: 'none',
+                  },
+            ]}
+            onClick={() => {
+              if (clickable) {
+                onCompareSnapshot?.(entry.timestamp);
+              }
             }}
           >
-            {formatTimestamp(entry.timestamp)}
-          </Typography>
-
-          {/* Icon + summary */}
-          <Stack
-            direction="row"
-            spacing={1}
-            sx={{
-              alignItems: 'center',
-              flex: 1,
-              minWidth: 0,
-            }}
-          >
-            <Typography variant="body2" sx={{ flexShrink: 0 }}>
-              {TYPE_ICONS[entry.type] || '\u2022'}
+            {/* Timestamp */}
+            <Typography
+              variant="caption"
+              sx={{
+                color: 'text.secondary',
+                minWidth: 140,
+                flexShrink: 0,
+                pt: 0.25,
+              }}
+            >
+              {formatTimestamp(entry.timestamp)}
             </Typography>
-            <Box sx={{ flex: 1, minWidth: 0 }}>
-              <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                {TYPE_LABELS[entry.type] || entry.type}
-              </Typography>
-              <Typography
-                variant="body2"
-                noWrap
-                sx={{
-                  color: 'text.secondary',
-                }}
-              >
-                {entry.summary}
-              </Typography>
-            </Box>
-          </Stack>
 
-          {/* Actions */}
-          <Stack direction="row" spacing={1} sx={{ flexShrink: 0, alignItems: 'center' }}>
-            {idx > 0 &&
-              (entry.type === 'metadata_apply' ||
-                entry.type === 'tag_write' ||
-                entry.type === 'rename') && (
+            {/* Icon + summary */}
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{
+                alignItems: 'center',
+                flex: 1,
+                minWidth: 0,
+              }}
+            >
+              <Typography variant="body2" sx={{ flexShrink: 0 }}>
+                {TYPE_ICONS[entry.type] || '\u2022'}
+              </Typography>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                  {TYPE_LABELS[entry.type] || entry.type}
+                </Typography>
+                <Typography
+                  variant="body2"
+                  noWrap
+                  sx={{
+                    color: 'text.secondary',
+                  }}
+                >
+                  {entry.summary}
+                </Typography>
+              </Box>
+            </Stack>
+
+            {/* Actions */}
+            <Stack direction="row" spacing={1} sx={{ flexShrink: 0, alignItems: 'center' }}>
+              {clickable && (
                 <Button
                   size="small"
-                  variant="outlined"
-                  color="warning"
-                  startIcon={<RestoreIcon />}
-                  disabled={reverting === entry.timestamp}
+                  variant="text"
                   onClick={(e) => {
+                    // Without this, activating the button also bubbles a
+                    // click to the row's own onClick above, firing
+                    // onCompareSnapshot twice for one mouse click.
                     e.stopPropagation();
-                    handleRevert(entry.timestamp);
+                    onCompareSnapshot?.(entry.timestamp);
                   }}
                   sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
                 >
-                  {reverting === entry.timestamp ? 'Reverting...' : 'Revert'}
+                  Compare snapshot
                 </Button>
               )}
-          </Stack>
-        </Box>
-      ))}
+              {idx > 0 &&
+                (entry.type === 'metadata_apply' ||
+                  entry.type === 'tag_write' ||
+                  entry.type === 'rename') && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    color="warning"
+                    startIcon={<RestoreIcon />}
+                    disabled={reverting === entry.timestamp}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRevert(entry.timestamp);
+                    }}
+                    sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
+                  >
+                    {reverting === entry.timestamp ? 'Reverting...' : 'Revert'}
+                  </Button>
+                )}
+            </Stack>
+          </Box>
+        );
+      })}
     </Stack>
   );
 };
