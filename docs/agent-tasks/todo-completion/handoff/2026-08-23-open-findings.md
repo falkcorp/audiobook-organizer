@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion/handoff/2026-08-23-open-findings.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3f9c0a71-5b28-4d6e-9a13-7c40e8b2d561 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -147,6 +147,11 @@ across the merge. Only a code-scanning API dismissal closed #1429 and #1105.
 Running 084 as briefed would ship three inert comments and mark the findings
 "handled" while they stayed open — worse than leaving it alone. Rewrite it to
 dismiss via the API, or to fix the code.
+
+**Two more briefs rest on the same false premise**, found by a keyword sweep:
+**TASK-026** (part 1 of 3) and **TASK-080** (conditionally, at step 3). Rewrite
+those the same way. The sweep was widened beyond "lgtm" and found no others
+(one false positive: TASK-189 matched "nosec" inside "nanoseconds").
 
 ## 7. TASK-083 is partially done, not done
 
