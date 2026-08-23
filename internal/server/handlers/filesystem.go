@@ -1,5 +1,5 @@
 // file: internal/server/handlers/filesystem.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: c4d5e6f7-a8b9-0123-cdef-012345678901
 // last-edited: 2026-08-23
 
@@ -277,8 +277,17 @@ func (h *FilesystemHandler) AddImportPath(c *gin.Context) {
 	}
 
 	// Fallback: synchronous scan when op registry is unavailable.
+	//
+	// folder.Path is the value CreateImportPath stored from cleanPath above,
+	// i.e. the output of pathvalidation.CleanAbsolutePath, which rejects any
+	// relative path and any path whose filepath.Clean form differs from the
+	// input (so no traversal sequence survives). It deliberately does NOT
+	// confine the path to a root: an import root is by design an arbitrary
+	// absolute directory chosen by the operator, and the access control on this
+	// value is authn/authz on POST /api/v1/import-paths, not containment.
+	// CodeQL does not model that barrier, so suppress the false positive.
 	if folder.Enabled && h.opEnqueuer == nil {
-		if _, statErr := os.Stat(folder.Path); statErr == nil {
+		if _, statErr := os.Stat(folder.Path); statErr == nil { // lgtm[go/path-injection]
 			books, scanErr := scanner.ScanDirectory(c.Request.Context(), folder.Path, nil)
 			if scanErr == nil {
 				if len(books) > 0 {
