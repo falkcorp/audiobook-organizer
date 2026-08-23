@@ -1,7 +1,7 @@
 // file: internal/database/activity_store_instrumented.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-0002-bcde-000000000002
-// last-edited: 2026-08-11
+// last-edited: 2026-08-23
 
 package database
 
@@ -133,16 +133,26 @@ func (i *InstrumentedActivityStorer) GetDistinctSources(ctx context.Context, fil
 	return sources, nil
 }
 
-// WipeAllActivity traces the WipeAllActivity operation.
-func (i *InstrumentedActivityStorer) WipeAllActivity() (int64, error) {
-	_, span := tracer.Start(context.Background(), "activity_store.wipe_all_activity")
+// WipeAllActivity traces the WipeAllActivity operation. ctx is forwarded to
+// both the span and the wrapped store — this must not become a
+// context.Background() sink, since WipeAllActivity is reachable from a live
+// request (handleWipe) and a swallowed ctx here would silently defeat its
+// cancellability.
+func (i *InstrumentedActivityStorer) WipeAllActivity(ctx context.Context) (int64, error) {
+	ctx, span := tracer.Start(ctx, "activity_store.wipe_all_activity")
 	defer span.End()
 
-	count, err := i.store.WipeAllActivity()
+	count, err := i.store.WipeAllActivity(ctx)
 	if err != nil {
 		span.RecordError(err)
 		span.SetAttributes(attribute.Bool("error", true))
-		return 0, err
+		// Unlike the other wrapped methods above, the count on error is not
+		// discarded: WipeAllActivity's contract is that on cancellation it
+		// returns rows ACTUALLY deleted so far, and returning 0 here would
+		// silently misreport a partial wipe as a no-op to every caller of
+		// this instrumented wrapper.
+		span.SetAttributes(attribute.Int64("entries_wiped", count))
+		return count, err
 	}
 	span.SetAttributes(attribute.Int64("entries_wiped", count))
 	return count, nil

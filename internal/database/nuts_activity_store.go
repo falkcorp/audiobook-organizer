@@ -1,7 +1,7 @@
 // file: internal/database/nuts_activity_store.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c3d4e5f6-a7b8-0003-cdef-000000000003
-// last-edited: 2026-08-21
+// last-edited: 2026-08-23
 
 package database
 
@@ -410,10 +410,22 @@ func (s *NutsActivityStore) GetDistinctSources(_ context.Context, f ActivityFilt
 	return out, nil
 }
 
-// WipeAllActivity deletes every entry from all tier buckets. Returns total count.
-func (s *NutsActivityStore) WipeAllActivity() (int64, error) {
+// WipeAllActivity deletes every entry from all tier buckets. Returns the
+// count of rows actually deleted.
+//
+// NutsActivityStore is retired and unwired (see the package-level NOTE in
+// dual_write_activity_store.go); its scanTierKeysAndValues has no per-row
+// ctx plumbing and this is not being added for a backend on its way out. ctx
+// is still checked once per tier, before that tier's full scan starts, which
+// is a real (if coarse) cancellation point: a caller that cancels between
+// tiers stops the wipe before the next tier is read, rather than the ctx
+// parameter being accepted and silently ignored.
+func (s *NutsActivityStore) WipeAllActivity(ctx context.Context) (int64, error) {
 	var total int64
 	for _, tier := range actTiers {
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
 		kvs, err := s.scanTierKeysAndValues(tier, nil, nil)
 		if err != nil {
 			return total, err

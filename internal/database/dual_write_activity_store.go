@@ -1,7 +1,7 @@
 // file: internal/database/dual_write_activity_store.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f6a7b8c9-d0e1-0006-f012-000000000006
-// last-edited: 2026-08-11
+// last-edited: 2026-08-23
 
 // Package database — dual-write wrapper for the activity migration window.
 //
@@ -118,10 +118,13 @@ func (d *DualWriteActivityStore) Prune(olderThan time.Time, tier string) (int, e
 	return nutsCnt, nutsErr
 }
 
-// WipeAllActivity runs on both; returns primary backend's result.
-func (d *DualWriteActivityStore) WipeAllActivity() (int64, error) {
-	nutsCnt, nutsErr := d.nuts.WipeAllActivity()
-	pebbleCnt, pebbleErr := d.pebble.WipeAllActivity()
+// WipeAllActivity runs on both; returns primary backend's result. ctx is
+// forwarded to both backends unchanged — this wrapper is a pass-through, not
+// a context.Background() sink, so cancelling the caller's ctx cancels both
+// underlying wipes exactly as it would a single-backend call.
+func (d *DualWriteActivityStore) WipeAllActivity(ctx context.Context) (int64, error) {
+	nutsCnt, nutsErr := d.nuts.WipeAllActivity(ctx)
+	pebbleCnt, pebbleErr := d.pebble.WipeAllActivity(ctx)
 
 	if pebbleErr != nil {
 		slog.Warn("[dual-write] pebble WipeAllActivity failed", "err", pebbleErr)
