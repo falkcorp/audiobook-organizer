@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_orphan_row_test.go
-// version: 2.0.0
+// version: 3.0.0
 // guid: 2d6a14f8-9c05-4e73-b8a1-3f70e2d54c69
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package server
 
@@ -64,24 +64,29 @@ func init() {
 	maintenance.Register(probeBlocking)
 }
 
-// TestRunMaintenanceJob_MergedRequestLeavesNoOrphanRow covers the row that
-// enqueue-dedupe would otherwise strand.
+// TestRunMaintenanceJob_MintsV2RowOnly pins what replaced the orphan-row
+// pathology, rather than the cleanup that used to paper over it.
 //
-// runMaintenanceJob creates a v1 operations row BEFORE enqueueing, so a request
-// that merges into an already-active run ends up with a row twinned to nothing.
-// propagateLegacyOpStatus only ever mirrors onto the WINNER's legacy id, so that
-// row would never leave "pending" — and resumeInterruptedOperations sweeps
-// exactly those rows on every restart and re-resumes them, forever.
+// runMaintenanceJob used to create a v1 operations row BEFORE enqueueing, so a
+// request that merged into an already-active run ended up with a row twinned to
+// nothing. propagateLegacyOpStatus only ever mirrors onto the WINNER's legacy
+// id, so that row never left "pending" — and resumeInterruptedOperations swept
+// exactly those rows on every restart and re-resumed them, forever. That was not
+// hypothetical: it is the pathology legacy_op_status.go was written to end after
+// every maintenance-job row of 2026-08-14 sat at "pending" while the jobs had in
+// fact completed.
 //
-// That is not hypothetical: it is the pathology legacy_op_status.go was written
-// to end after every maintenance-job row of 2026-08-14 sat at "pending" while
-// the jobs had in fact completed. Enabling dedupe without handling this would
-// have reintroduced the same stuck row through a different door.
+// Retiring the v1 minter removes the orphan by removing the row. The cleanup
+// this test used to assert on (DeleteOperationWithLogs on the merged request's
+// row) is gone with it, so the assertion moves to the invariant that makes the
+// cleanup unnecessary: a maintenance run writes NO v1 row at all, and the id
+// handed back to the caller resolves as a v2 operation.
 //
-// The assertion is on the ROW COUNT, not on the handler's return value. A test
-// that only checked both responses carry the same operation_id would pass with
-// the orphan still sitting in the table.
-func TestRunMaintenanceJob_MergedRequestLeavesNoOrphanRow(t *testing.T) {
+// The merge assertion is worth keeping for a second reason. The params are now
+// identical across the two requests — the per-request legacy_op_id stamp is
+// gone — so this is the first time the dedupe fires on plain byte-equality
+// rather than on sameParamsIgnoringLegacyID's key-wise path.
+func TestRunMaintenanceJob_MintsV2RowOnly(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 	// Deferred AFTER cleanup so it runs BEFORE it (LIFO): a parked run must be
@@ -97,32 +102,38 @@ func TestRunMaintenanceJob_MergedRequestLeavesNoOrphanRow(t *testing.T) {
 
 	// Precondition. The first op is either still queued (registry not started) or
 	// parked inside Run (registry started); both count as ACTIVE, so the second
-	// request must merge. If this ever fires, the test is not exercising the
-	// orphan path and the count assertion below would be checking nothing.
+	// request must merge. If this ever fires, the dedupe regressed.
 	if first != second {
 		t.Fatalf("the second request did not merge into the first (%q vs %q); "+
-			"without a merge there is no orphan row to clean up and this test "+
-			"is not exercising what it claims", first, second)
+			"with legacy_op_id gone the two param blobs are byte-identical, so "+
+			"the dedupe should fire on the exact comparison", first, second)
 	}
 
-	after := countOperationRows(t, server)
-
-	if got := after - before; got != 1 {
-		t.Fatalf("two merged requests left %d new v1 operation rows, want 1; "+
-			"the merged request's row was not cleaned up and will sit at "+
-			"\"pending\" and be re-resumed on every restart", got)
+	if got := countOperationRows(t, server) - before; got != 0 {
+		t.Fatalf("running a maintenance job left %d new v1 operation rows, want 0; "+
+			"the v1 minter is supposed to be retired, and any row it writes sits at "+
+			"\"pending\" and is re-resumed on every restart", got)
 	}
 
-	// Positive control: the one surviving row must be the WINNER's. Without this,
-	// a handler that deleted BOTH rows and returned a dangling id would satisfy
-	// the count above while leaving the run with no v1 twin at all.
-	row, err := server.Ops().GetOperationByID(first)
+	// The returned id must resolve as a v2 row for the job that was asked for.
+	// Without this the count above would be satisfied by a handler that returned
+	// a dangling id, leaving the caller nothing to poll.
+	row, err := server.Ops().GetOperationV2(first)
 	if err != nil {
-		t.Fatalf("GetOperationByID(%q): %v", first, err)
+		t.Fatalf("GetOperationV2(%q): %v", first, err)
 	}
 	if row == nil {
-		t.Fatalf("the winning run's own v1 row %q is gone; the cleanup deleted "+
-			"the wrong row and propagateLegacyOpStatus now has nothing to mirror onto", first)
+		t.Fatalf("the id returned to the caller (%q) resolves to no v2 operation row", first)
+	}
+	if want := maintenanceOpID(jobID); row.DefID != want {
+		t.Fatalf("returned op has def_id %q, want %q", row.DefID, want)
+	}
+
+	// And it must NOT be a v1 id. A handler that still minted a v1 row and
+	// returned it would satisfy every assertion above except this one.
+	if legacy, lerr := server.Ops().GetOperationByID(first); lerr == nil && legacy != nil {
+		t.Fatalf("the returned id %q also names a v1 operations row (type %q); "+
+			"the v1 minter was not actually retired", first, legacy.Type)
 	}
 }
 
