@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring_breakdown_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a4d7f21-5e83-4c06-b1d7-3f8092ac5e14
-// last-edited: 2026-08-20
+// last-edited: 2026-08-23
 
 package metafetch
 
@@ -135,8 +135,19 @@ func TestBreakdown_ZeroBaseIsExplained(t *testing.T) {
 	if score != 0 {
 		t.Fatalf("expected zero score, got %v", score)
 	}
+	// The returned score and bd.Score must be the SAME number, not two
+	// independently-sourced zeros. ScoreOneResultWithBreakdown derives the
+	// base==0 return from the same scoreRecorder that produces bd, so this
+	// can only diverge if that link is ever replaced by a hardcoded literal.
+	if score != bd.Score {
+		t.Fatalf("returned score (%v) and bd.Score (%v) must be the same value", score, bd.Score)
+	}
 	if len(bd.Steps) != 1 || bd.Steps[0].Op != ScoreOpBase {
 		t.Fatalf("expected a single base step, got %+v", bd.Steps)
+	}
+	if bd.Steps[0].Operand != 0 || bd.Steps[0].Running != 0 {
+		t.Fatalf("expected Operand=0 and Running=0, got Operand=%v Running=%v",
+			bd.Steps[0].Operand, bd.Steps[0].Running)
 	}
 	if bd.Steps[0].Detail == "" {
 		t.Fatal("zero-base step must explain itself")
