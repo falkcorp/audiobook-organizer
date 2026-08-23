@@ -1,5 +1,5 @@
 # file: .github/workflows/auto-revert-backstop.yml
-# version: 1.0.0
+# version: 1.0.1
 # guid: e43efbad-f562-475b-9741-a921778a20c8
 # last-edited: 2026-08-22
 
@@ -70,11 +70,13 @@ jobs:
             exit 0
           fi
 
-          echo "found=true" >> "$GITHUB_OUTPUT"
-          echo "conclusion=$(echo "$RUN_JSON" | jq -r '.conclusion // ""')" >> "$GITHUB_OUTPUT"
-          echo "sha=$(echo "$RUN_JSON" | jq -r '.headSha // ""')" >> "$GITHUB_OUTPUT"
-          echo "created_at=$(echo "$RUN_JSON" | jq -r '.createdAt // ""')" >> "$GITHUB_OUTPUT"
-          echo "url=$(echo "$RUN_JSON" | jq -r '.url // ""')" >> "$GITHUB_OUTPUT"
+          {
+            echo "found=true"
+            echo "conclusion=$(echo "$RUN_JSON" | jq -r '.conclusion // ""')"
+            echo "sha=$(echo "$RUN_JSON" | jq -r '.headSha // ""')"
+            echo "created_at=$(echo "$RUN_JSON" | jq -r '.createdAt // ""')"
+            echo "url=$(echo "$RUN_JSON" | jq -r '.url // ""')"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Check age and conclusion
         id: check
