@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 3.6.0
+// version: 4.0.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-08-19
+// last-edited: 2026-08-22
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.

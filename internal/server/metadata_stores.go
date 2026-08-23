@@ -1,7 +1,7 @@
 // file: internal/server/metadata_stores.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b8e04c27-5a91-4f36-9d18-2c73e5a081f4
-// last-edited: 2026-08-19
+// last-edited: 2026-08-22
 
 package server
 

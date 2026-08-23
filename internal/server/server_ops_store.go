@@ -1,5 +1,5 @@
 // file: internal/server/server_ops_store.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
 // last-edited: 2026-08-22
 
