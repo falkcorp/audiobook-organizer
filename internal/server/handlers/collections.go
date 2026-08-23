@@ -6,6 +6,7 @@
 package handlers
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -345,7 +346,7 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 	}
 
 	if err := h.store.UpdateCollection(col); err != nil {
-		if strings.Contains(err.Error(), "already in use") || strings.Contains(err.Error(), "version conflict") {
+		if errors.Is(err, database.ErrCollectionVersionConflict) || strings.Contains(err.Error(), "already in use") {
 			httputil.RespondWithConflict(c, err.Error())
 			return
 		}
@@ -404,7 +405,7 @@ func (h *CollectionHandler) MaterializeCollection(c *gin.Context) {
 			// h.load at the top of this handler, so a version conflict here
 			// means something else wrote the collection in between — a real,
 			// expected race under concurrent access, not a server fault.
-			if strings.Contains(uerr.Error(), "version conflict") {
+			if errors.Is(uerr, database.ErrCollectionVersionConflict) {
 				httputil.RespondWithConflict(c, uerr.Error())
 				return
 			}

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_collections.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4c9e2b71-6f83-4a15-9d02-7e5b1a83c064
 // last-edited: 2026-08-22
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -176,6 +177,17 @@ func (p *PebbleStore) ListCollections(collectionType string, limit, offset int) 
 	return all[offset:end], total, nil
 }
 
+// ErrCollectionVersionConflict is returned by UpdateCollection when the
+// caller's Collection.Version does not match the currently-stored row's
+// Version -- i.e. the row changed between the caller's read and its write.
+//
+// Callers detect it with errors.Is, not by matching the message: the wrapped
+// error carries the collection id and both versions for the log, and that
+// wording is free to change without silently breaking every call site. The
+// duplicate-name conflict in this same file still signals by string match;
+// see todo.d for converting it too.
+var ErrCollectionVersionConflict = errors.New("collection version conflict")
+
 // UpdateCollection rewrites a collection, moving the name index if the name
 // changed.
 func (p *PebbleStore) UpdateCollection(col *Collection) error {
@@ -231,7 +243,7 @@ func (p *PebbleStore) UpdateCollection(col *Collection) error {
 	// per-collection lock (or a pebble conditional-write primitive); that is
 	// out of scope for this change.
 	if col.Version != prev.Version {
-		return fmt.Errorf("collection %s version conflict: expected %d, got %d", col.ID, prev.Version, col.Version)
+		return fmt.Errorf("collection %s: %w: expected %d, got %d", col.ID, ErrCollectionVersionConflict, prev.Version, col.Version)
 	}
 
 	lower := util.NormalizeString(col.Name)

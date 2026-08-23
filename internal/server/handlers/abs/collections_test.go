@@ -1,11 +1,12 @@
 // file: internal/server/handlers/abs/collections_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0f5a92c3-71b8-4d26-9e04-3ca8175bd6e1
-// last-edited: 2026-08-16
+// last-edited: 2026-08-22
 
 package abs_test
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -33,6 +34,13 @@ type abscolFakeStore struct {
 	creates int
 	updates int
 	deletes int
+	// staleRead, when non-nil, is returned ONCE by the next GetCollection call
+	// for its ID instead of the live row, then cleared. It exists to simulate
+	// a caller whose read happened before a concurrent caller's write landed —
+	// the interleave that the Collection.Version compare-and-swap exists to
+	// catch — without spinning up real goroutines against gin/httptest, which
+	// cannot be made to land in a deterministic order.
+	staleRead *database.Collection
 }
 
 func (f *abscolFakeStore) ListCollections(t string, _, _ int) ([]database.Collection, int, error) {
@@ -49,6 +57,11 @@ func (f *abscolFakeStore) ListCollections(t string, _, _ int) ([]database.Collec
 func (f *abscolFakeStore) GetCollection(id string) (*database.Collection, error) {
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.staleRead != nil && f.staleRead.ID == id {
+		cp := *f.staleRead
+		f.staleRead = nil
+		return &cp, nil
 	}
 	for i := range f.cols {
 		if f.cols[i].ID == id {
@@ -71,6 +84,13 @@ func (f *abscolFakeStore) CreateCollection(col *database.Collection) (*database.
 	return col, nil
 }
 
+// UpdateCollection mirrors PebbleStore.UpdateCollection's compare-and-swap on
+// Version (internal/database/pebble_store_collections.go): a write built from
+// a stale read — col.Version not matching the currently-stored row's Version —
+// is rejected instead of silently clobbering whatever landed since. Real
+// callers reach this through the same "already in use"-style string match the
+// handlers use for the CAS conflict, so the error text matters, not just its
+// presence.
 func (f *abscolFakeStore) UpdateCollection(col *database.Collection) error {
 	f.updates++
 	if f.err != nil {
@@ -78,6 +98,15 @@ func (f *abscolFakeStore) UpdateCollection(col *database.Collection) error {
 	}
 	for i := range f.cols {
 		if f.cols[i].ID == col.ID {
+			if col.Version != f.cols[i].Version {
+				// Wrap the real sentinel, not a lookalike message: the
+				// handler detects this with errors.Is, so a fake that only
+				// reproduced the wording would silently stop matching and
+				// this test would pass against a broken handler.
+				return fmt.Errorf("collection %s: %w: expected %d, got %d",
+					col.ID, database.ErrCollectionVersionConflict, f.cols[i].Version, col.Version)
+			}
+			col.Version = f.cols[i].Version + 1
 			f.cols[i] = *col
 			return nil
 		}
@@ -497,5 +526,86 @@ func TestCollections_DynamicMembershipIsNotEditable(t *testing.T) {
 	}
 	if store.updates != 0 {
 		t.Fatalf("the rejected edit still wrote to the store (%d updates)", store.updates)
+	}
+}
+
+// TestAddBookToCollection_ConcurrentAdds_SecondGets409 pins the CAS this task
+// added to PebbleStore.UpdateCollection (internal/database/pebble_store_collections.go)
+// at the HTTP boundary this handler actually exercises.
+//
+// AddBookToCollection has no locking of its own: it reads the collection via
+// lookupCollection, mutates BookIDs in memory, and writes it back — a classic
+// read-modify-write. Two requests racing on the same collection, where the
+// second one's read happened before the first one's write landed, must not
+// both succeed: the second must be rejected (409), not silently accept and
+// clobber the first request's change. A test that only checks the version
+// counter incremented would pass even if both writes silently landed one after
+// another — it would not prove the CONFLICTING write was ever rejected. This
+// test instead asserts on the actual outcome that matters: one write wins
+// (200, its book present), the other is refused (409, its book absent), and no
+// request silently lost its change.
+//
+// Real goroutines through gin/httptest have no guaranteed interleave, so the
+// race is engineered explicitly via abscolFakeStore.staleRead: request B's
+// GetCollection is made to return the pre-A snapshot, exactly reproducing "B
+// read before A wrote" without depending on scheduler timing.
+func TestAddBookToCollection_ConcurrentAdds_SecondGets409(t *testing.T) {
+	seed := seedOracleLibrary(t)
+	initial := database.Collection{
+		ID: "c1", Name: "Road Trip", Type: database.CollectionTypeStatic, Version: 1,
+	}
+	store := &abscolFakeStore{cols: []database.Collection{initial}}
+	h := newHarness(t, "jwt", nil, withLibrary(seed), withUserData(fixtureUserData()), withCollections(store))
+	h.seedUser(t, "u1", "curator", "", "pw-pw-pw-pw")
+	abscolGrantManage(t, h, "u1")
+	tok := str(t, userObj(t, h.login(t, "curator", "pw-pw-pw-pw")), "accessToken")
+
+	// Caller A: reads the collection at Version 1, adds seed.singleID, and
+	// writes it back. This must succeed and bump the stored Version to 2.
+	codeA, _ := h.doAny(t, request{
+		method:  http.MethodPost,
+		path:    "/api/collections/c1/book",
+		headers: bearer(tok),
+		body:    map[string]any{"id": absplSyncIDFor(t, seed, seed.singleID)},
+	})
+	if codeA != http.StatusOK {
+		t.Fatalf("caller A: POST = %d, want 200", codeA)
+	}
+	if store.cols[0].Version != 2 {
+		t.Fatalf("after caller A, store.cols[0].Version = %d, want 2", store.cols[0].Version)
+	}
+
+	// Caller B: engineer its read to be the PRE-A snapshot (Version 1, no
+	// books) — this is the stale read a genuinely concurrent second request
+	// would have gotten had it read before A's write landed.
+	stale := initial
+	store.staleRead = &stale
+
+	codeB, bodyB := h.doAny(t, request{
+		method:  http.MethodPost,
+		path:    "/api/collections/c1/book",
+		headers: bearer(tok),
+		body:    map[string]any{"id": absplSyncIDFor(t, seed, seed.multiID)},
+	})
+	if codeB != http.StatusConflict {
+		t.Fatalf("caller B: POST = %d, want 409 — a write built from a stale read must not "+
+			"silently succeed and clobber caller A's change; body: %v", codeB, bodyB)
+	}
+
+	// The decisive assertion: the store holds caller A's change and ONLY
+	// caller A's change. A version counter that merely incremented would not
+	// prove this — it would pass even if both writes had silently landed
+	// sequentially, one clobbering the other with no rejection at all.
+	final := store.cols[0]
+	if len(final.BookIDs) != 1 || final.BookIDs[0] != seed.singleID {
+		t.Fatalf("final BookIDs = %v, want exactly [%s] (caller A's book only — "+
+			"caller B's rejected write must not have been applied)", final.BookIDs, seed.singleID)
+	}
+	if final.Version != 2 {
+		t.Fatalf("final Version = %d, want 2 (unchanged by caller B's rejected write)", final.Version)
+	}
+	if store.updates != 2 {
+		t.Fatalf("store.updates = %d, want 2 (one accepted write from A, one rejected attempt from B)",
+			store.updates)
 	}
 }
