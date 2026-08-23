@@ -1,5 +1,5 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
 // last-edited: 2026-08-22
 
@@ -177,11 +177,25 @@ func (h *Handler) ListBookDuplicateScanResults(c *gin.Context) {
 // to the retired v1 table. Handing back a v1 id here made every one of these
 // endpoints report failure for work that actually succeeded.
 //
-// The zero-valued progress fields are carried deliberately rather than omitted.
-// The web client types this response as its Operation interface, whose
-// progress/total/message are non-optional, and renders it immediately as the
-// initial state of the progress bar — before the first poll lands. Omitting
-// them would make the declared type a lie and blank the bar for one interval.
+// ID is the only field here read back from the enqueue. Everything else is a
+// PLACEHOLDER for the single render frame before the client's first poll
+// returns, and is carried rather than omitted because the web client types this
+// response as its Operation interface, whose progress/total/message/created_at
+// are non-optional — omitting them would make that declared type a lie and
+// blank the progress bar for one interval.
+//
+// Status is "queued" because that is the status EnqueueOp actually writes on a
+// new row (registry/registry.go:691). Do not put a v1 status word like
+// "pending" here: the client polls GET /operations/v2/:id and compares against
+// the v2 vocabulary, so a v1 word matches nothing on the first frame.
+//
+// These placeholders can be momentarily wrong in one case, and that is
+// accepted: EnqueueOp's ConcurrencyKey dedupe returns an ALREADY-RUNNING op's
+// id when one matches, so status/progress/created_at describe a fresh run that
+// is really mid-flight. The first poll (≤1s) replaces all of them with the real
+// row. Reading the row back to avoid that would mean re-adding the store
+// dependency this package just shed, to fix a value that is stale for under a
+// second.
 type dupOpResponse struct {
 	ID        string `json:"id"`
 	Type      string `json:"type"`
@@ -195,26 +209,25 @@ type dupOpResponse struct {
 
 // launchOp enqueues defID with params and responds 202 with the enqueued v2
 // operation. opType is the client-facing label for the operation; it is not a
-// registry key. Returns false if the registry is nil or the enqueue fails
-// (response already written).
-func (h *Handler) launchOp(c *gin.Context, defID, opType, detail string, params any) bool {
+// registry key. On failure it writes the error response itself and returns
+// without a 202, so callers have nothing to check.
+func (h *Handler) launchOp(c *gin.Context, defID, opType, detail string, params any) {
 	if h.opRegistry == nil {
 		httputil.RespondWithInternalError(c, "operation registry not initialized")
-		return false
+		return
 	}
 	opID, err := h.opRegistry.EnqueueOp(c.Request.Context(), defID, params)
 	if err != nil {
 		httputil.InternalError(c, "failed to enqueue operation", err)
-		return false
+		return
 	}
 	httputil.RespondWithSuccess(c, 202, dupOpResponse{
 		ID:        opID,
 		Type:      opType,
-		Status:    "pending",
+		Status:    "queued",
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 		Detail:    detail,
 	})
-	return true
 }
 
 // ScanBookDuplicates triggers an async scan for book duplicates using metadata
