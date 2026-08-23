@@ -11,13 +11,26 @@
       (`pebble_store_ops_v2.go:277`) — deliberately, so a terminal row leaves the
       active set and stops poisoning `EnqueueOp`'s ConcurrencyKey dedupe.
 
-      Every shutdown path writes such a status. A clean drain cancels the run and
-      it finishes `canceled`; the shutdown-timeout branch writes
-      `interrupted_quiesced` (`registry.go:1075`); worker abandonment writes the
-      same (`worker.go:370`, whose comment says outright that the point is to make
-      "the row leave the opv2 active index"). All three delete the key, so the next
-      startup's sweep sees nothing. Only a SIGKILL — where no shutdown path runs
-      and the row is left `running` — leaves a row the sweep can act on.
+      Every shutdown path writes such a status. **Updated 2026-08-23 after
+      PR #2793:** the clean-drain branch no longer finishes `canceled` — a run
+      cancelled by shutdown now goes through `finalStatusForCanceledRun`
+      (`worker.go:611`, called from both the in-process and subprocess paths) and
+      records `interrupted_quiesced` or `interrupted_dropped` per the def's
+      declared `ResumePolicy`, while a run the *operator* cancelled still records
+      `canceled`. The shutdown-timeout branch (`registry.go:1075`) and worker
+      abandonment (`worker.go:370`) already wrote `interrupted_quiesced`.
+
+      **That does not fix this item, and it is worth being precise about why.**
+      `interrupted_*` is not `running` or `queued` either, so
+      `UpdateOperationV2Status` deletes the `opv2:act:` key just the same and the
+      next startup's sweep still sees nothing. Only a SIGKILL — where no shutdown
+      path runs and the row is left `running` — leaves a row the sweep can act on.
+
+      What #2793 *did* change is that the fix is now possible. Before it, a
+      deploy-interrupted run and an operator-cancelled run were both spelled
+      `canceled`, so any sweep that went looking for resumable rows would have had
+      to guess, and the likely failure was restarting work somebody deliberately
+      stopped. The distinction now exists in the record; nothing reads it yet.
 
       There is **no** `ListInterruptedOperationsV2`: the only v2 listings are
       `ListQueuedOperationsV2`, `ListActiveOperationsV2` and
