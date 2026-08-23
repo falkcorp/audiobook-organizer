@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/find_spurious_stranded_book_rows.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 7c90e537-566f-4c72-ae73-033055c31c4a
 # last-edited: 2026-08-23
 """REPORT-ONLY scan for Book rows the .tmp-rename path-construction bug may
@@ -178,8 +178,22 @@ def fetch_all_books(base: str, token: str, insecure: bool, page_size: int = DEFA
         url = f"{base.rstrip('/')}/api/v1/audiobooks?limit={page_size}&offset={offset}"
         body = _http_get_json(url, token, insecure)
         payload = body.get("data") if isinstance(body, dict) and "data" in body else body
-        items = payload.get("items", []) if isinstance(payload, dict) else []
-        total = payload.get("count", len(items)) if isinstance(payload, dict) else len(items)
+        if not isinstance(payload, dict) or "items" not in payload:
+            # Fail loudly rather than silently yielding zero books. A
+            # response-shape mismatch (e.g. the API contract changing) would
+            # otherwise look identical to "empty library" -- items=[], exit
+            # 0, a report with every count at zero. See
+            # internal/server/audiobooks_helpers.go buildAudiobookListResponse
+            # / internal/server/handlers/audiobooks/handler.go ListAudiobooks
+            # for the current contract this script was verified against.
+            got = sorted(payload.keys()) if isinstance(payload, dict) else type(payload).__name__
+            raise RuntimeError(
+                f"unexpected /api/v1/audiobooks response shape at offset={offset}: "
+                f"expected a dict with an 'items' key (optionally wrapped in a "
+                f"'data' envelope), got: {got}"
+            )
+        items = payload.get("items", [])
+        total = payload.get("count", len(items))
         if not items:
             break
         for book in items:
@@ -266,6 +280,34 @@ def build_report(books, affected_dirs: set, library_root: str, api_base: str) ->
                 }
             )
 
+    notes = [
+        "REPORT-ONLY: no row was modified, restored, or deleted. This "
+        "script has no --fix/--apply flag and never will (owner "
+        "decision #9 / #12: report counts before proposing any "
+        "restore; never mass-restore).",
+    ]
+
+    in_affected_dir_total = (
+        counts["in_affected_dir_numeric_title_only"]
+        + counts["in_affected_dir_path_segment_only"]
+        + counts["in_affected_dir_both_heuristics"]
+        + counts["in_affected_dir_neither_heuristic"]
+    )
+    if affected_dirs and in_affected_dir_total == 0:
+        notes.append(
+            "WARNING: wreckage directories were found on disk under "
+            f"{library_root!r} ({len(affected_dirs)} of them), but zero DB "
+            "rows' file_path fell inside any of them -- all four "
+            "in_affected_dir_* buckets are 0. This usually means the "
+            "library root's path prefix does not match what the database "
+            "recorded for file_path (a different mount point, a relative "
+            "vs. absolute path, or a trailing-slash mismatch), not that "
+            "there is genuinely no cross-reference. Compare a real "
+            "file_path value from the low-confidence matches below (or "
+            "from the API directly) against the affected directories this "
+            "scan found before trusting the result."
+        )
+
     return Report(
         generated_at=datetime.now(timezone.utc).isoformat(),
         library_root=library_root,
@@ -274,7 +316,8 @@ def build_report(books, affected_dirs: set, library_root: str, api_base: str) ->
         affected_directories_found=len(affected_dirs),
         counts=counts,
         matches=matches,
-        notes=[
+        notes=notes
+        + [
             "REPORT-ONLY: no row was modified, restored, or deleted. This "
             "script has no --fix/--apply flag and never will (owner "
             "decision #9 / #12: report counts before proposing any "
@@ -316,6 +359,9 @@ def print_summary(report: Report) -> None:
     print()
     for key in CATEGORY_KEYS:
         print(f"  {key:38} {report.counts.get(key, 0)}")
+    for note in report.notes:
+        if note.startswith("WARNING:"):
+            print(f"\n{note}", file=sys.stderr)
 
 
 def default_report_path() -> str:
@@ -348,19 +394,39 @@ def main(argv: list[str] | None = None) -> int:
     if not args.base:
         ap.error("--base is required (or set ABK_API_URL)")
 
-    print(f"scanning {args.root} for wreckage directories ...", flush=True)
-    affected_dirs = set(find_bogus_dirs(args.root))
+    # Normalize to an absolute path up front. A relative --root would make
+    # find_bogus_dirs return relative paths while the DB's file_path is
+    # always absolute, so every cross-reference would silently miss even
+    # though wreckage directories were genuinely found (see the
+    # affected_directories_found>0-but-zero-cross-reference guard below,
+    # which this also helps avoid tripping spuriously).
+    root = os.path.abspath(args.root)
+
+    print(f"scanning {root} for wreckage directories ...", flush=True)
+    affected_dirs = set(find_bogus_dirs(root))
     print(f"  {len(affected_dirs)} wreckage directories found", flush=True)
 
     print(f"fetching books from {args.base} ...", flush=True)
     token = read_token(args.token_file)
     try:
         books = list(fetch_all_books(args.base, token, args.insecure, args.page_size))
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
+    except urllib.error.HTTPError as e:
+        # HTTPError is a URLError subclass, so it must be caught first. The
+        # response body often names the actual cause (expired vs. revoked
+        # token, etc.) -- the bare status code alone misdiagnoses it.
+        try:
+            detail = e.read().decode(errors="replace")
+        except Exception:
+            detail = ""
+        print(f"FATAL: could not fetch books from {args.base}: HTTP {e.code} {e.reason}", file=sys.stderr)
+        if detail:
+            print(f"  response body: {detail[:2000]}", file=sys.stderr)
+        return 2
+    except (urllib.error.URLError, OSError, RuntimeError) as e:
         print(f"FATAL: could not fetch books from {args.base}: {e}", file=sys.stderr)
         return 2
 
-    report = build_report(books, affected_dirs, args.root, args.base)
+    report = build_report(books, affected_dirs, root, args.base)
     print_summary(report)
 
     report_path = args.report or default_report_path()
