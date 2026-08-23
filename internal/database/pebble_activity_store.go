@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-08-21
+// last-edited: 2026-08-23
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -602,15 +602,33 @@ func (s *PebbleActivityStore) storeSourcesCache(key string, out []SourceCount) {
 	s.sourcesCache[key] = pactSourcesCacheEntry{at: now, out: stored}
 }
 
-// WipeAllActivity deletes every entry from all tier buckets. Returns total count.
-func (s *PebbleActivityStore) WipeAllActivity() (int64, error) {
+// WipeAllActivity deletes every entry from all tier buckets. Returns the
+// count of rows ACTUALLY deleted, whether it finished or was cancelled.
+//
+// Cancellation is checked at two points per tier: once before the tier's scan
+// starts (so an already-cancelled ctx stops before the next tier is even
+// read), and once before each 500-row delete batch (so a large tier's delete
+// loop itself stops promptly rather than draining a fully-scanned kvs slice).
+// scanTierKVs also carries ctx down into its own per-row check, so a
+// cancellation mid-scan of one tier aborts that tier's scan too — see its
+// doc comment. On cancellation, rows already committed in prior batches and
+// prior tiers stay deleted; rows not yet reached are left untouched. There is
+// no partial-tier bookkeeping to resume: a retry just calls WipeAllActivity
+// again, which rescans every tier and deletes whatever remains.
+func (s *PebbleActivityStore) WipeAllActivity(ctx context.Context) (int64, error) {
 	var total int64
 	for _, tier := range actTiers {
-		kvs, err := s.scanTierKVs(context.Background(), tier, nil, nil)
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+		kvs, err := s.scanTierKVs(ctx, tier, nil, nil)
 		if err != nil {
 			return total, err
 		}
 		for i := 0; i < len(kvs); i += 500 {
+			if err := ctx.Err(); err != nil {
+				return total, err
+			}
 			end := i + 500
 			if end > len(kvs) {
 				end = len(kvs)
