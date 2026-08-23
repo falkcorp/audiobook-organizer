@@ -1,7 +1,7 @@
 // file: internal/ai/retry_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-07-17
+// last-edited: 2026-08-23
 
 package ai
 
@@ -20,8 +20,16 @@ import (
 
 // TestIsPermanentAIError_Classification table-tests isPermanentAIError
 // against the permanent/transient matrix described in TASK-12: HTTP
-// 400/401/403/404 and 429-with-insufficient_quota are permanent; plain 429s,
-// 5xx, and non-*openai.Error errors (network/timeout) are transient.
+// 400/401/403/404 and a 429 carrying a quota-exhaustion marker are permanent;
+// plain 429s, 5xx, and non-*openai.Error errors (network/timeout) are transient.
+//
+// ⚠️ The 429 cases below are built to the shape of a REAL captured response, not
+// composed to satisfy the matcher. That distinction is the whole point here: the
+// original table asserted `&openai.Error{StatusCode: 429, Code: "insufficient_quota"}`
+// — a struct no OpenAI response actually produces — so it passed green for months
+// while the classifier missed every genuine exhaustion in production. A constructed
+// fixture proves only that the matcher matches itself. See the same warning,
+// written before this bug was found, at internal/scanner/ai_failure_test.go:19-22.
 func TestIsPermanentAIError_Classification(t *testing.T) {
 	cases := []struct {
 		name string
@@ -32,8 +40,20 @@ func TestIsPermanentAIError_Classification(t *testing.T) {
 		{"401 unauthorized", &openai.Error{StatusCode: 401}, true},
 		{"403 forbidden", &openai.Error{StatusCode: 403}, true},
 		{"404 not found", &openai.Error{StatusCode: 404}, true},
-		{"429 insufficient_quota", &openai.Error{StatusCode: 429, Code: "insufficient_quota"}, true},
+		// The PRODUCTION shape, copied from internal/scanner/ai_failure_test.go's
+		// prodQuotaError (itself taken from the 2026-08-16 incident journal): the
+		// quota marker is in "type" and "code" holds a DIFFERENT string. Until
+		// 2026-08-23 this case failed — the branch read Code alone, so the one
+		// error the classifier exists to catch was retried as transient.
+		{"429 real payload: quota in type, other code", &openai.Error{StatusCode: 429, Type: "insufficient_quota", Code: "credit_balance_exhausted"}, true},
+		// Each field alone, because a provider may populate either one.
+		{"429 quota marker in type only", &openai.Error{StatusCode: 429, Type: "insufficient_quota"}, true},
+		{"429 quota marker in code only", &openai.Error{StatusCode: 429, Code: "insufficient_quota"}, true},
+		{"429 credit_balance_exhausted in type only", &openai.Error{StatusCode: 429, Type: "credit_balance_exhausted"}, true},
+		{"429 credit_balance_exhausted in code only", &openai.Error{StatusCode: 429, Code: "credit_balance_exhausted"}, true},
+		// Discriminating controls: same status, must stay transient.
 		{"429 plain rate limit (no code)", &openai.Error{StatusCode: 429}, false},
+		{"429 real rate limit: both fields set", &openai.Error{StatusCode: 429, Type: "rate_limit_error", Code: "rate_limit_exceeded"}, false},
 		{"429 different code", &openai.Error{StatusCode: 429, Code: "rate_limit_exceeded"}, false},
 		{"500 internal server error", &openai.Error{StatusCode: 500}, false},
 		{"503 service unavailable", &openai.Error{StatusCode: 503}, false},

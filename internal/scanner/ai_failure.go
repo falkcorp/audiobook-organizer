@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_failure.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8f2c05d1-47ab-4e93-b60f-1d9a7e3c5482
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package scanner
 
@@ -16,14 +16,19 @@ import (
 // the next request cannot clear: billing, authentication, or a revoked key.
 //
 // This is the fallback path, checked only when err is not an *ai.PermanentError
-// (see isPermanentAIFailure below). It still earns its keep for two reasons:
+// (see isPermanentAIFailure below). It was justified by two reasons; reason (1)
+// was retired on 2026-08-23 and reason (2) is what keeps this path alive:
 //
-//  1. internal/ai.isPermanentAIError's HTTP-429 branch only fires when the
-//     provider's own "code" field is exactly "insufficient_quota". The
-//     production error this package's test suite is built from carries
-//     "type": "insufficient_quota" but "code": "credit_balance_exhausted" --
-//     openai-go's Error.Code decodes the "code" field, so that response is
-//     NOT covered by the typed 429 check and still needs a text match.
+//  1. NO LONGER TRUE as of 2026-08-23 -- kept as a record of what changed.
+//     internal/ai.isPermanentAIError's HTTP-429 branch used to fire only when
+//     the provider's "code" field was exactly "insufficient_quota", so the
+//     production error this package's test suite is built from ("type":
+//     "insufficient_quota", "code": "credit_balance_exhausted") was NOT covered
+//     by the typed check and reached main only via the text match below. That
+//     branch now checks BOTH "type" and "code" against a marker set
+//     (internal/ai/retry.go, isPermanentQuota429), so the prod payload is
+//     classified typed-first and arrives here already wrapped as
+//     *ai.PermanentError. This fallback no longer carries that case alone.
 //  2. aiParser can point at any OpenAI-compatible baseURL (Ollama and others),
 //     and the SDK request path only returns a structured *openai.Error when
 //     the error body parses as the expected {"error": {...}} JSON shape --
