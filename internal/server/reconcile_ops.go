@@ -22,17 +22,15 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
 )
 
-// reconcileScanOpParams carries the v1 operation ID written by the HTTP
-// handler so the Run func can write results back under the same ID.
-type reconcileScanOpParams struct {
-	LegacyOpID string `json:"legacy_op_id"`
-}
+// reconcileScanOpParams is empty: a reconcile scan takes no inputs. It carried a
+// LegacyOpID until 2026-08-22 so Run could write results onto a v1 row the
+// handler minted; results now go to this run's own v2 row.
+type reconcileScanOpParams struct{}
 
-// reconcileApplyOpParams carries the v1 operation ID and the set of matches
-// to apply from the HTTP request body.
+// reconcileApplyOpParams carries the set of matches to apply from the HTTP
+// request body.
 type reconcileApplyOpParams struct {
-	LegacyOpID string                         `json:"legacy_op_id"`
-	Matches    []reconcile.ReconcileApplyItem `json:"matches"`
+	Matches []reconcile.ReconcileApplyItem `json:"matches"`
 }
 
 // RegisterReconcileScanOpV2 registers the "reconcile.scan" v2 OperationDef.
@@ -61,14 +59,21 @@ func (s *Server) RegisterReconcileScanOpV2(reg *opsregistry.Registry) error {
 				return fmt.Errorf("reconcile.scan: database not initialized")
 			}
 			progress := registryProgressAdapter{r: reporter}
-			runErr := reconcile.RunReconcileScan(store, ctx, p.LegacyOpID, progress)
-			if s.activityWriter != nil && p.LegacyOpID != "" {
-				activity.FlushOperation(s.activityWriter, p.LegacyOpID)
+			opID := opsregistry.ReporterOpID(reporter)
+			saveResult := func(payload any) error {
+				return opsregistry.ReporterSetResult(reporter, payload)
+			}
+			runErr := reconcile.RunReconcileScan(store, ctx, saveResult, progress)
+			// Activity tags on this run's own id. It used to tag on the legacy id,
+			// so dropping the stamp without repointing would leave the entries
+			// written but orphaned from the operation that produced them.
+			if s.activityWriter != nil && opID != "" {
+				activity.FlushOperation(s.activityWriter, opID)
 				summary := "Reconcile scan completed"
 				if runErr != nil {
 					summary = fmt.Sprintf("Reconcile scan failed: %v", runErr)
 				}
-				activity.EmitInfo(s.activityWriter, p.LegacyOpID, "reconcile.scan", "reconcile", summary, activity.AlwaysShow)
+				activity.EmitInfo(s.activityWriter, opID, "reconcile.scan", "reconcile", summary, activity.AlwaysShow)
 			}
 			return runErr
 		},
@@ -102,14 +107,25 @@ func (s *Server) RegisterReconcileApplyOp(reg *opsregistry.Registry) error {
 			}
 			progress := registryProgressAdapter{r: reporter}
 			log := operations.LoggerFromReporter(progress)
-			runErr := reconcile.ExecuteReconcile(ctx, store, p.LegacyOpID, p.Matches, log)
-			if s.activityWriter != nil && p.LegacyOpID != "" {
-				activity.FlushOperation(s.activityWriter, p.LegacyOpID)
+			opID := opsregistry.ReporterOpID(reporter)
+			// The undo log keys OperationChange rows on this id. That keyspace takes
+			// an arbitrary string, so it does not care which era the id came from —
+			// but an EMPTY id would file every change row under one blank key, so it
+			// is checked rather than assumed.
+			if opID == "" {
+				return fmt.Errorf("reconcile.apply: reporter returned no operation id")
+			}
+			saveResult := func(payload any) error {
+				return opsregistry.ReporterSetResult(reporter, payload)
+			}
+			runErr := reconcile.ExecuteReconcile(ctx, store, opID, saveResult, p.Matches, log)
+			if s.activityWriter != nil {
+				activity.FlushOperation(s.activityWriter, opID)
 				summary := fmt.Sprintf("Reconcile apply completed: %d matches applied", len(p.Matches))
 				if runErr != nil {
 					summary = fmt.Sprintf("Reconcile apply failed: %v", runErr)
 				}
-				activity.EmitInfo(s.activityWriter, p.LegacyOpID, "reconcile.apply", "reconcile", summary, activity.AlwaysShow)
+				activity.EmitInfo(s.activityWriter, opID, "reconcile.apply", "reconcile", summary, activity.AlwaysShow)
 			}
 			return runErr
 		},
