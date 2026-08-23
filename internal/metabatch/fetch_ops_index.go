@@ -159,6 +159,51 @@ func CandidateFetchBookIDs(store CandidateFetchParamsReader, op CandidateFetchOp
 	return p.BookIDs
 }
 
+// CandidateFetchResolver is the store slice ResolveCandidateFetch reads.
+type CandidateFetchResolver interface {
+	GetOperationByID(id string) (*database.Operation, error)
+	GetOperationV2(id string) (*database.OperationV2Row, error)
+}
+
+// ResolveCandidateFetch looks one operation up by id in EITHER keyspace and
+// returns it in the v1 shape, or nil if neither knows it.
+//
+// WHY THE V1 SHAPE. The results endpoint embeds this object in its response as
+// `operation`, and the review UI reads its fields. Returning a different shape
+// for a v2-keyed run would break the client for exactly the runs that are now
+// the common case, so the v2 row is mapped onto the shape callers already
+// parse rather than the client being asked to handle two.
+//
+// This is the lookup that made the diagnostics export undownloadable in #2747:
+// a handler minted one id, returned another, and the client polled an id that
+// resolved at neither endpoint. Checking v2 first and falling back to v1 means
+// the id in a client's hand resolves whichever era it came from.
+func ResolveCandidateFetch(store CandidateFetchResolver, opID string) *database.Operation {
+	if row, err := store.GetOperationV2(opID); err == nil && row != nil {
+		op := &database.Operation{
+			ID:           row.ID,
+			Type:         candidateFetchOpType,
+			Status:       row.Status,
+			Progress:     row.ProgressCurrent,
+			Total:        row.ProgressTotal,
+			Message:      row.ProgressMessage,
+			CreatedAt:    row.QueuedAt,
+			StartedAt:    row.StartedAt,
+			CompletedAt:  row.CompletedAt,
+			ErrorMessage: row.ErrorMessage,
+			ResultData:   row.ResultData,
+		}
+		if row.ActorUserID != nil {
+			op.UserID = *row.ActorUserID
+		}
+		return op
+	}
+	if op, err := store.GetOperationByID(opID); err == nil && op != nil {
+		return op
+	}
+	return nil
+}
+
 // RemainingBooksToFetch returns the entries of want that have no result row in
 // existing, preserving want's order.
 //

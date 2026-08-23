@@ -23,6 +23,7 @@ type fetchIndexStore struct {
 	v2Err  error
 
 	v2ByID    map[string]*database.OperationV2Row
+	v1ByID    map[string]*database.Operation
 	v1Params  map[string][]byte
 	v2Calls   int
 	v1Calls   int
@@ -282,5 +283,62 @@ func TestIsActiveFetchStatus_SpansBothVocabularies(t *testing.T) {
 		if metabatch.IsActiveFetchStatus(s) {
 			t.Errorf("%q must not count as active", s)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ResolveCandidateFetch — an id from either era must resolve
+// ---------------------------------------------------------------------------
+
+func (s *fetchIndexStore) GetOperationByID(id string) (*database.Operation, error) {
+	if s.v1ByID == nil {
+		return nil, nil
+	}
+	return s.v1ByID[id], nil
+}
+
+// The #2747 shape: a run keyed in v2 must not 404 at an endpoint that used to
+// look ids up in v1 only.
+func TestResolveCandidateFetch_FindsV2KeyedRun(t *testing.T) {
+	now := time.Now()
+	store := &fetchIndexStore{
+		v2ByID: map[string]*database.OperationV2Row{
+			"v2op": {
+				ID: "v2op", DefID: metabatch.CandidateFetchDefID, Status: "running",
+				ProgressCurrent: 3, ProgressTotal: 10, ProgressMessage: "fetched 3/10",
+				QueuedAt: now,
+			},
+		},
+	}
+	op := metabatch.ResolveCandidateFetch(store, "v2op")
+	if op == nil {
+		t.Fatal("a v2-keyed run must resolve, not 404")
+	}
+	if op.Progress != 3 || op.Total != 10 || op.Message != "fetched 3/10" {
+		t.Errorf("progress must carry across the shape mapping, got %d/%d %q",
+			op.Progress, op.Total, op.Message)
+	}
+	if op.Status != "running" {
+		t.Errorf("expected status running, got %q", op.Status)
+	}
+}
+
+// History keyed in v1 must keep resolving too.
+func TestResolveCandidateFetch_StillFindsLegacyRun(t *testing.T) {
+	store := &fetchIndexStore{
+		v1ByID: map[string]*database.Operation{
+			"v1op": {ID: "v1op", Type: "metadata_candidate_fetch", Status: "completed", Progress: 5, Total: 5},
+		},
+	}
+	op := metabatch.ResolveCandidateFetch(store, "v1op")
+	if op == nil || op.ID != "v1op" || op.Progress != 5 {
+		t.Fatalf("a v1-keyed run must still resolve, got %+v", op)
+	}
+}
+
+func TestResolveCandidateFetch_UnknownIDResolvesToNil(t *testing.T) {
+	store := &fetchIndexStore{}
+	if op := metabatch.ResolveCandidateFetch(store, "nope"); op != nil {
+		t.Fatalf("an unknown id must resolve to nil so the caller 404s, got %+v", op)
 	}
 }
