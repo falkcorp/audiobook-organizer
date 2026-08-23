@@ -1,5 +1,5 @@
 // file: internal/dedup/series_dedup_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
 // last-edited: 2026-08-23
 
@@ -7,6 +7,7 @@ package dedup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -567,3 +568,81 @@ func TestDedupSeries_DryRunMakesTheSameRefusalAsApply(t *testing.T) {
 	require.Len(t, result.Errors, 1)
 	assert.Contains(t, result.Errors[0], "still reference it")
 }
+
+// --- Review follow-ups to TASK-044 ------------------------------------------
+
+// TestDedupSeries_RefusesDeleteWhenAReassignmentFailed pins the defect two
+// reviewers found in the first cut of this guard: the subtrahend was
+// len(books) -- what the loop ATTEMPTED -- rather than what it actually moved.
+//
+// Series 2 has two books visible to the filtered getter and an unfiltered count
+// of 2, so nothing is hidden and the old arithmetic computed 2-2 == 0 and
+// deleted the row. But book B's UpdateBook fails, so B is still pointing at
+// series 2 when it is deleted: a phantom series ID produced BY the guard, on
+// the failure path the guard exists to cover.
+func TestDedupSeries_RefusesDeleteWhenAReassignmentFailed(t *testing.T) {
+	deleted := []int{}
+	mock := &database.MockStore{}
+	mock.GetAllSeriesFunc = func() ([]database.Series, error) {
+		return []database.Series{{ID: 1, Name: "Foundation"}, {ID: 2, Name: "Foundation"}}, nil
+	}
+	mock.GetBooksBySeriesIDCoreFunc = func(id int) ([]database.BookCore, error) {
+		if id == 2 {
+			return []database.BookCore{{ID: "A"}, {ID: "B"}}, nil
+		}
+		return nil, nil
+	}
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		sid := 2
+		return &database.Book{ID: id, SeriesID: &sid}, nil
+	}
+	mock.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
+		if id == "B" {
+			return nil, errors.New("pebble write failed")
+		}
+		return b, nil
+	}
+	mock.DeleteSeriesFunc = func(id int) error {
+		deleted = append(deleted, id)
+		return nil
+	}
+	// Unfiltered count agrees with the filtered getter: 2 books, nothing hidden.
+	store := seriesRefStore{MockStore: mock, refCounts: map[int]int{2: 2}}
+
+	result, err := DedupSeries(context.Background(), store, nil, false)
+	require.NoError(t, err)
+
+	assert.NotContains(t, deleted, 2,
+		"book B's reassignment failed, so B still references series 2 — deleting it strands B")
+	assert.Equal(t, 1, result.TotalBooksReassigned, "only A moved")
+	assert.Equal(t, 0, result.TotalMerged, "a refused delete is not a completed merge")
+}
+
+// TestDedupSeries_RefusesToRunWithoutTheUnfilteredCount pins the fail-closed
+// claim itself, which had no test at all. A store that cannot answer the
+// unfiltered question must abort the whole op — never fall back to the filtered
+// count, which is the original bug.
+func TestDedupSeries_RefusesToRunWithoutTheUnfilteredCount(t *testing.T) {
+	mock := &database.MockStore{}
+	mock.GetAllSeriesFunc = func() ([]database.Series, error) {
+		return []database.Series{{ID: 1, Name: "Foundation"}, {ID: 2, Name: "Foundation"}}, nil
+	}
+	mock.DeleteSeriesFunc = func(int) error {
+		t.Fatal("must not delete anything when the unfiltered count is unavailable")
+		return nil
+	}
+	// noRefCounts hides MockStore's own GetAllSeriesBookRefCounts so the
+	// capability lookup genuinely fails. Embedding the interface rather than
+	// the struct is what removes the promoted method.
+	store := noRefCountStore{Store: mock}
+
+	_, err := DedupSeries(context.Background(), store, nil, false)
+	require.Error(t, err, "a store that cannot count unfiltered references must abort the op, not proceed")
+	assert.Contains(t, err.Error(), "unfiltered reference counts")
+}
+
+// noRefCountStore is a database.Store that deliberately does NOT satisfy
+// SeriesBookRefStore. Embedding the interface (not *MockStore) drops the
+// promoted GetAllSeriesBookRefCounts, which is the only way to model a store
+// that cannot answer.
+type noRefCountStore struct{ database.Store }
