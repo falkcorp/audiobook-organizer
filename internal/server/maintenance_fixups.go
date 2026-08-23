@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.14.0
+// version: 2.15.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-08-23
 
@@ -510,7 +510,19 @@ func (s *Server) lookupMaintenanceResultOp(opID, jobID string, legacyTypes ...st
 		return maintenanceResultOp{}, fmt.Errorf("database not initialized")
 	}
 
-	if row, err := store.GetOperationV2(opID); err == nil && row != nil {
+	// Both stores distinguish a miss from a failure the same way: (nil, nil)
+	// means "no such row", (nil, err) means the lookup itself broke. Check the
+	// error FIRST and propagate it. Folding the two together -- the shape this
+	// code had on its first pass -- answers a Pebble failure with 404 "operation
+	// not found", which reads to an operator as "your id is wrong" and sends
+	// them hunting for a bad id instead of a sick database.
+	row, err := store.GetOperationV2(opID)
+	if err != nil {
+		slog.Error("maintenance result lookup failed reading the v2 operations store",
+			"opID", opID, "jobID", jobID, "error", err)
+		return maintenanceResultOp{}, fmt.Errorf("reading v2 operation %s: %w", opID, err)
+	}
+	if row != nil {
 		if row.DefID != maintenanceOpID(jobID) {
 			return maintenanceResultOp{}, errMaintenanceOpWrongJob
 		}
@@ -522,7 +534,12 @@ func (s *Server) lookupMaintenanceResultOp(opID, jobID string, legacyTypes ...st
 	}
 
 	op, err := store.GetOperationByID(opID)
-	if err != nil || op == nil {
+	if err != nil {
+		slog.Error("maintenance result lookup failed reading the v1 operations store",
+			"opID", opID, "jobID", jobID, "error", err)
+		return maintenanceResultOp{}, fmt.Errorf("reading v1 operation %s: %w", opID, err)
+	}
+	if op == nil {
 		return maintenanceResultOp{}, os.ErrNotExist
 	}
 	if !slices.Contains(legacyTypes, op.Type) {
@@ -550,8 +567,14 @@ func (s *Server) handleGetComposerScanResults(c *gin.Context) {
 	case errors.Is(err, errMaintenanceOpWrongJob):
 		httputil.RespondWithBadRequest(c, "not a composer_tag_scan operation")
 		return
-	case err != nil:
+	case errors.Is(err, os.ErrNotExist):
 		httputil.RespondWithNotFound(c, "operation", opID)
+		return
+	case err != nil:
+		// A store failure is not a missing id. Answering 404 here would tell the
+		// operator their operation id was wrong when the database is the thing
+		// that broke.
+		httputil.InternalError(c, "failed to look up operation", err)
 		return
 	}
 
@@ -623,8 +646,14 @@ func (s *Server) handleGetMissingFileRepairResults(c *gin.Context) {
 	case errors.Is(err, errMaintenanceOpWrongJob):
 		httputil.RespondWithBadRequest(c, "not a missing-file-repair operation")
 		return
-	case err != nil:
+	case errors.Is(err, os.ErrNotExist):
 		httputil.RespondWithNotFound(c, "operation", opID)
+		return
+	case err != nil:
+		// A store failure is not a missing id. Answering 404 here would tell the
+		// operator their operation id was wrong when the database is the thing
+		// that broke.
+		httputil.InternalError(c, "failed to look up operation", err)
 		return
 	}
 	rawResults, err := store.GetOperationResults(opID)
