@@ -41,8 +41,8 @@ Hard rules (repo policy, enforced by CI):
   the first between its write and its edit, and one PR was briefly opened carrying
   the other task's body entirely. It was caught only because that agent happened to
   re-read the file. Use `pr-<TASK-ID>.md`, `notes-<TASK-ID>.md`, and so on. Better
-  still, pass PR bodies to `gh pr create --body "$(cat <<'"'"'EOF'"'"' ... EOF\n)"` via a
-  heredoc and skip the temp file.
+  still, pipe the PR body straight into `gh pr create` from a quoted heredoc and
+  never write it to disk at all.
 - Commit with the brief's commit message (conventional commit) and trailer `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`; push with `git push -u origin <branch>`; open a PR with `gh pr create --title "<commit subject>" --body "<summary + test output + brief path>"`. Do NOT merge. Do NOT delete the worktree.
 - If blocked (brief anchor missing at HEAD, ambiguous step, gate failing for a reason you cannot fix within scope): stop, commit what compiles, push, open the PR as DRAFT with the blocker in the body.
 
