@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
-// last-edited: 2026-08-18
+// last-edited: 2026-08-23
 
 // Package handlers — OrganizeHandler covers the rename-preview, rename-apply,
 // organize-preview, and single-book organize HTTP endpoints.
@@ -72,7 +72,10 @@ type OrganizeStore interface {
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
-	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
+	// CreateOperation is deliberately absent. ApplyRename and OrganizeBook are
+	// synchronous and use a bare ULID as the opchange correlation key; leaving
+	// the method off makes minting a v1 row here a compile error rather than
+	// something a reviewer has to catch.
 	CreateOperationChange(change *database.OperationChange) error
 }
 
@@ -161,15 +164,18 @@ func (h *OrganizeHandler) ApplyRename(c *gin.Context) {
 		return
 	}
 
+	// The id is the correlation key for the OperationChange records the rename
+	// writes; undo replays them with a GetOperationChanges prefix scan over
+	// "opchange:<id>:", which never loads an operations row. No row is created.
+	//
+	// One used to be, as v1 type "rename", and nothing ever read it: the v1
+	// list/status/logs routes were retired 2026-08-16, GetOperationTimeline
+	// reads ListOperationsV2Since only, and CreateOperation stamps status
+	// "pending" which isResumableOpStatus excludes — so the restart sweep never
+	// touched it either. Every rename since has left one immortal pending row.
 	opID := ulid.Make().String()
-	op, err := h.store.CreateOperation(opID, "rename", strPtr(id))
-	if err != nil {
-		slog.Error("rename failed to create operation", "err", err)
-		httputil.RespondWithInternalError(c, "failed to create operation record")
-		return
-	}
 
-	result, err := h.renameSvc.ApplyRename(id, op.ID)
+	result, err := h.renameSvc.ApplyRename(id, opID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			httputil.RespondWithNotFound(c, "book", id)
@@ -220,13 +226,9 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 		return
 	}
 
+	// Correlation key only — see ApplyRename above for why no operations row is
+	// created. The v1 row this used to mint as type "organize" was never read.
 	opID := ulid.Make().String()
-	op, err := h.store.CreateOperation(opID, "organize", strPtr(id))
-	if err != nil {
-		slog.Error("organize failed to create operation", "err", err)
-		httputil.RespondWithInternalError(c, "failed to create operation record")
-		return
-	}
 
 	book, err := h.store.GetBookByID(id)
 	if err != nil {
@@ -279,7 +281,7 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 			"book_id":      book.ID,
 			"old_path":     oldPath,
 			"new_path":     newPath,
-			"operation_id": op.ID,
+			"operation_id": opID,
 		})
 		return
 	}
@@ -293,7 +295,7 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 		}
 		_ = h.store.CreateOperationChange(&database.OperationChange{
 			ID:          ulid.Make().String(),
-			OperationID: op.ID,
+			OperationID: opID,
 			BookID:      book.ID,
 			ChangeType:  "organize_rename",
 			FieldName:   "file_path",
@@ -304,7 +306,7 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 			h.publisher.Publish(c.Request.Context(), plugin.NewEvent(plugin.EventFileOrganized, book.ID, map[string]any{
 				"old_path":     oldPath,
 				"new_path":     newPath,
-				"operation_id": op.ID,
+				"operation_id": opID,
 			}))
 		}
 		httputil.RespondWithOK(c, gin.H{
@@ -312,12 +314,12 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 			"book_id":      book.ID,
 			"old_path":     oldPath,
 			"new_path":     newPath,
-			"operation_id": op.ID,
+			"operation_id": opID,
 		})
 		return
 	}
 
-	createdBook, createErr := h.organizeSvc.CreateOrganizedVersion(org, book, newPath, isDir, op.ID, log2)
+	createdBook, createErr := h.organizeSvc.CreateOrganizedVersion(org, book, newPath, isDir, opID, log2)
 	if createErr != nil {
 		httputil.InternalError(c, "failed to create organized version", createErr)
 		return
@@ -340,7 +342,7 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 			"old_path":         oldPath,
 			"new_path":         newPath,
 			"original_book_id": book.ID,
-			"operation_id":     op.ID,
+			"operation_id":     opID,
 		}))
 	}
 
@@ -350,14 +352,10 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 		"original_book_id": book.ID,
 		"old_path":         oldPath,
 		"new_path":         newPath,
-		"operation_id":     op.ID,
+		"operation_id":     opID,
 	})
 }
 
 // -----------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------
-
-// strPtr returns a pointer to s. Used to pass string IDs to CreateOperation
-// which takes *string for its optional bookID / folderPath parameter.
-func strPtr(s string) *string { return &s }
