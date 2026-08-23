@@ -1,5 +1,5 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
 // last-edited: 2026-08-22
 
@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/gin-gonic/gin"
 	ulid "github.com/oklog/ulid/v2"
 )
@@ -148,9 +149,14 @@ type diagnosticsStore interface {
 // GetOperationV2 serves the export path, which is fully v2: its op is created by
 // EnqueueOp and its result is written by the op's own reporter.
 //
-// The legacy methods below it are all reached from one place — the submit-ai
-// handler, which is not a registered OperationDef at all but a bare goroutine
-// driving a legacy row by hand. They go when it becomes a real v2 op.
+// The legacy methods below it belong to the AI-diagnostics flow, which is not a
+// registered OperationDef at all but a bare goroutine driving a legacy row by
+// hand. Verified by call site rather than assumed, because the obvious guess is
+// wrong: the four write methods are SubmitAI-only, but GetOperationByID is
+// called from GetAIResults and ApplySuggestions and NOT from SubmitAI. All three
+// handlers read rows SubmitAI minted, so they still retire together — but anyone
+// deleting GetOperationByID on a "submit-ai owns this" reading would break the
+// other two.
 type diagnosticsOperationStore interface {
 	GetOperationV2(id string) (*database.OperationV2Row, error)
 
@@ -261,8 +267,31 @@ func (h *DiagnosticsHandler) DownloadExport(c *gin.Context) {
 	// where its Run stores the zip path (via ReporterSetResult). The id in the URL
 	// came from EnqueueOp, so looking it up as a legacy row would always 404.
 	op, err := store.GetOperationV2(opID)
-	if err != nil || op == nil {
+	if err != nil {
+		// Split from the not-found case deliberately. GetOperationV2 returns
+		// (nil, nil) for an absent row, so a non-nil error here is a store
+		// failure — reporting that as "no such export" tells the user their
+		// export never existed and logs nothing.
+		httputil.InternalError(c, "failed to load export operation", err)
+		return
+	}
+	if op == nil {
 		httputil.RespondWithNotFound(c, "operation", opID)
+		return
+	}
+
+	// Terminal-but-not-completed has to be distinguishable from still-running.
+	// Both used to take the 202 branch below, which reports a SUCCESS envelope
+	// carrying ProgressMessage — so a failed export was byte-identical to a
+	// running one and a polling client never stopped. ErrorMessage is the only
+	// field the worker writes the reason into, and nothing read it.
+	if opsregistry.IsTerminalStatus(op.Status) && op.Status != "completed" {
+		reason := op.Status
+		if op.ErrorMessage != nil && *op.ErrorMessage != "" {
+			reason = *op.ErrorMessage
+		}
+		httputil.InternalError(c, "diagnostics export did not complete",
+			fmt.Errorf("operation %s ended as %s: %s", opID, op.Status, reason))
 		return
 	}
 

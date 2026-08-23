@@ -1,5 +1,5 @@
 // file: internal/operations/registry/legacy_op_status.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4a8c2f61-b703-49de-95e7-1c0d8b5a3e27
 // last-edited: 2026-08-22
 
@@ -138,10 +138,34 @@ func legacyStatusFor(v2Status string) string {
 	case "completed", "failed", "canceled":
 		return v2Status
 	}
-	if v2Status == "interrupted" || strings.HasPrefix(v2Status, "interrupted_") {
+	if isInterruptedStatus(v2Status) {
 		return "interrupted"
 	}
 	return "" // not a terminal status; nothing to mirror
+}
+
+// isInterruptedStatus is the prefix match the comment above argues for, in one
+// place so IsTerminalStatus and legacyStatusFor cannot disagree about what the
+// interrupted family contains.
+func isInterruptedStatus(v2Status string) bool {
+	return v2Status == "interrupted" || strings.HasPrefix(v2Status, "interrupted_")
+}
+
+// IsTerminalStatus reports whether a v2 operation status is terminal — the op
+// has stopped and will not progress further.
+//
+// Exported so callers outside this package can ask the question without
+// restating the answer. A caller that enumerates terminal statuses itself gets
+// the bug documented on legacyStatusFor above: the interrupted family grew twice
+// (interrupted_quiesced, interrupted_restart) and the enumerated copy silently
+// classified both as "still running". Anything polling on that mistake waits
+// forever.
+func IsTerminalStatus(v2Status string) bool {
+	switch v2Status {
+	case "completed", "failed", "canceled":
+		return true
+	}
+	return isInterruptedStatus(v2Status)
 }
 
 // propagateLegacyOpStatus mirrors a v2 op's terminal status onto the legacy
