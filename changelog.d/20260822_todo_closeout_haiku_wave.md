@@ -1,8 +1,8 @@
 ### Changed
 
-#### Close out the seven TODO items retired by the Haiku wave
+#### Close out the six TODO items retired by the Haiku wave
 
-Six source items are marked done and one is annotated in place: the hardcoded ABS
+Five source items are marked done and one is annotated in place: the hardcoded ABS
 `timeBase`, the `CollectDuration` tagStore widening, the dead `store.go:17` doc
 reference, the unused `internal/scanner/mocks` package, ABS gap N-5, and the
 `ChapterConsolidationThresholdMin` factory-reset omission.
@@ -13,6 +13,7 @@ The `ChapterConsolidationThresholdMin` finding is annotated inline rather than
 ticked because it is one of seven findings inside the CFG-AUDIT triage group —
 ticking the group would have falsely closed the other six.
 
-TASK-015 (stop committing `series_dedup.py`'s generated caches) shipped in this
-wave but closes no checkbox: its source line is the REPO-SIZE-1 numbered entry,
-which is a stop-for-human decision the task does not resolve.
+The wave merged seven PRs but retires six TODO items. TASK-015 (stop committing
+`series_dedup.py`'s generated caches) shipped in it and closes no checkbox: its
+source line is the REPO-SIZE-1 numbered entry, which is a stop-for-human
+decision the task does not resolve.
