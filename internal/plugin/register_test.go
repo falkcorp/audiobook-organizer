@@ -1,5 +1,5 @@
 // file: internal/plugin/register_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8f4a2c17-3e6b-4d5a-9c1f-2b7e4a5d6f8a
 // last-edited: 2026-08-23
 
@@ -45,8 +45,10 @@ func TestGetEventBus_ReturnsBuiltInstance(t *testing.T) {
 	if bus == nil {
 		t.Fatal("GetEventBus() returned nil")
 	}
-	// Same instance as a direct Get[T] call under the same key.
-	want := serviceregistry.Get[*plugin.EventBus](c, serviceregistry.KeyEventBus)
+	// Same instance as a direct Get[T] call under the same key. See
+	// internal/serviceregistry/typed_accessor_regression_test.go for why
+	// the trailing marker below is required on this exact line.
+	want := serviceregistry.Get[*plugin.EventBus](c, serviceregistry.KeyEventBus) // serviceregistry-guard:allow-raw-get -- deliberate comparison, not a regression
 	if bus != want {
 		t.Fatalf("GetEventBus() = %p, want %p (same built instance)", bus, want)
 	}
