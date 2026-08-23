@@ -56,7 +56,7 @@ sound for "merged" and unsound for "not done."
 |---|---|
 | Merged | 22 |
 | Open PR | 2 (#2769 TASK-025, #2770 TASK-094) |
-| Already done, needs closing | 1 (TASK-036 — see below) |
+| Already done, needs closing | 1 (TASK-132 — see below) |
 | Actionable | 107 |
 
 Full three-way breakdown (closed ledger / remaining Sonnet / priority ranking) is on the
