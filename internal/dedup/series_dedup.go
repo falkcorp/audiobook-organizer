@@ -310,6 +310,24 @@ func DedupSeries(
 		return SeriesDedupResult{}, fmt.Errorf("failed to get series: %w", err)
 	}
 
+	// UNFILTERED reference counts, read once up front and used below to refuse
+	// any delete that would strand a book.
+	//
+	// The merge loop reassigns books it gets from GetBooksBySeriesIDCore, which
+	// SKIPS trashed and non-primary rows. Deleting the series afterwards
+	// therefore orphans exactly the rows the reassignment could not see. That
+	// is not hypothetical: series_bookref.go records 6,893 phantom series IDs
+	// held by 13,322 live books, measured on production, from precisely this
+	// shape in executeSeriesPrune.
+	//
+	// Fails CLOSED. A store that cannot answer the unfiltered question aborts
+	// the whole op rather than falling back to the filtered count -- that
+	// fallback IS the bug, and it is silent.
+	refCounts, err := database.SeriesRefCounts(store)
+	if err != nil {
+		return SeriesDedupResult{}, fmt.Errorf("series dedup refusing to run without unfiltered reference counts: %w", err)
+	}
+
 	if progress != nil {
 		denom := len(allSeries)
 		if denom == 0 {
@@ -400,6 +418,22 @@ func DedupSeries(
 					continue
 				}
 				result.TotalBooksReassigned++
+			}
+			// Refuse to delete a series that something we could not reassign
+			// still points at. `books` came from the FILTERED getter, so if the
+			// unfiltered count exceeds what we just moved, the remainder is
+			// trashed or non-primary rows that would be stranded.
+			//
+			// Checked BEFORE the dryRun branch on purpose: the preview must
+			// make the same decision the apply makes, or it reports a merge
+			// that will not happen. TASK-043 built this one-decision-path
+			// property and TASK-029 is queued to edit the same loop.
+			if stranded := refCounts[s.ID] - len(books); stranded > 0 {
+				result.Errors = append(result.Errors,
+					fmt.Sprintf("refusing to delete series %d (%q): %d book(s) still reference it that the filtered "+
+						"getter cannot see (trashed or non-primary); books were reassigned, the series row is kept",
+						s.ID, s.Name, stranded))
+				continue
 			}
 			if dryRun {
 				result.TotalMerged++
