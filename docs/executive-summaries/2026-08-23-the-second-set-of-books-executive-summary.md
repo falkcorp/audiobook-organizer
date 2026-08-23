@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-08-23-the-second-set-of-books-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 0f4c8a52-6b19-4d73-ae05-91c2f8d3b746 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -143,3 +143,43 @@ comment, plan document and note in the codebase said the opposite was happening.
 reason we found it is that the code was re-read after it shipped, against the question
 "is the thing this comment claims actually true?" — and it was not. A justification had
 outlived the reason it was written.
+
+## Second update, same day: half of the shutdown gap is now closed
+
+The correction above ends by saying an interrupted job still may not come back after a
+normal restart, and that fixing it "deserves its own change and its own testing." Part of
+it has since had exactly that, so the paragraph above is no longer the current state.
+
+**What was wrong.** When the app shut down cleanly — a deploy, a service restart — a job
+that was running got written down as **cancelled**. That is the same word the app uses
+when *you* press the cancel button. So the record could not tell the two apart: a job the
+system stopped in the middle of a deploy looked identical to a job a person deliberately
+stopped. Anything downstream trying to decide "should this come back?" had nothing to go
+on, because the one fact it needed had been thrown away at the moment it was recorded.
+
+**What changed.** A shutdown-interrupted job is now recorded as *interrupted*, and it
+carries which of the two kinds it is: one that is safe to pick back up, or one that is
+meant to be dropped. A job **you** cancelled still says cancelled, which was the thing
+most at risk of being broken by this and is now covered by its own test.
+
+**What has not changed, and we want to be plain about it.** Those jobs still do not come
+back on their own. The list the startup code consults contains only jobs that are queued
+or running, and an interrupted job is in neither state, so nothing looks at it. Making
+the startup code go and find them is the other half, and it is deliberately not in this
+release: it changes restart behaviour for every long-running job in the app, and that
+needs to be a decision somebody makes on purpose rather than a side effect of a
+record-keeping fix.
+
+So the honest description is: **the app now writes down the truth about why a job
+stopped, and still does not act on it.** That ordering is on purpose. The record has to
+be right before anything can safely be built on top of it — if the resume sweep had been
+built first, it would have been reading the same word for "the server restarted" and "the
+operator said stop", and the most likely outcome is that it would have restarted work
+somebody had deliberately halted.
+
+**Also cleaned up in the same pass.** One unused setting was removed from the maintenance
+jobs: a fourth way of spelling "re-run this from scratch" that nothing in the app called,
+and that would have been the wrong choice for a maintenance job anyway — it issues a new
+identifier, which is the exact thing that made the bulk metadata fetch forget its
+progress and start the library over. Removing it means the wrong option is no longer
+sitting there to be picked by accident.

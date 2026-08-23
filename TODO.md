@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.39.0 -->
+<!-- version: 10.40.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -6148,8 +6148,9 @@ done. Both now gate on what the def actually declared.
 ⚠️ **Scope bound, measured while making the above change:** a correct `ResumePolicy` is
 only consulted on one path. `resumeAfterStartup` takes its candidates from
 `ListActiveOperationsV2()` = the `opv2:act:` index = `queued|running`, and **every** clean
-shutdown writes a status that deletes that key (clean drain → `canceled`; shutdown timeout
-→ `interrupted_quiesced`; worker abandonment → same). So a job stopped by a deploy is
+shutdown writes a status that deletes that key (clean drain → `interrupted_quiesced` or
+`interrupted_dropped` since PR #2793, `canceled` before it; shutdown timeout →
+`interrupted_quiesced`; worker abandonment → same). So a job stopped by a deploy is
 invisible to the sweep no matter what it declares, and only a hard kill leaves a row the
 sweep can act on. Pre-existing, affects every v2 op, and it is the v2 twin of the v1 bug
 already fixed in `isResumableOpStatus`. Tracked in
