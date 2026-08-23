@@ -1,7 +1,7 @@
 // file: internal/server/handlers/filesystem_autoscan_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e3b1a58-64c0-4d29-9f17-2b8d5c0a4e63
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package handlers_test
 
@@ -116,10 +116,13 @@ func TestAddImportPath_ParamsCarryNoLegacyOpID(t *testing.T) {
 	}
 }
 
-// An enqueue failure falls through to the synchronous-scan branch rather than
-// 500ing, which is the pre-existing contract — the folder WAS created and the
-// caller must hear about it. Assert the folder still comes back and no
-// scan_operation_id is advertised for a run that was never queued.
+// An enqueue failure still answers 201 rather than 500ing: the folder WAS
+// created and the caller must hear about it.
+//
+// It does NOT fall through to the synchronous-scan branch, which is gated on
+// h.opEnqueuer == nil — with a non-nil enqueuer that errors, control skips both
+// branches and lands on the bare RespondWithCreated. So no scan runs at all;
+// assert that no scan_operation_id is advertised for a run that never queued.
 func TestAddImportPath_EnqueueFailureStillReturnsTheFolder(t *testing.T) {
 	enq := &autoscanEnqueuer{returnErr: context.DeadlineExceeded}
 	w := addImportPath(t, enq)
