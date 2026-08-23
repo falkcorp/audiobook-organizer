@@ -28,7 +28,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	"github.com/gin-gonic/gin"
-	ulid "github.com/oklog/ulid/v2"
 )
 
 // -----------------------------------------------------------------------
@@ -250,19 +249,18 @@ func (h *FilesystemHandler) AddImportPath(c *gin.Context) {
 
 	// Auto-scan via the v2 op registry when available.
 	if folder.Enabled && h.opEnqueuer != nil {
-		opID := ulid.Make().String()
+		// Return the id EnqueueOp minted. The client polls this through
+		// api.getOperationStatus, which resolves against /operations/v2 only, so
+		// the separately-minted v1 id this used to hand back could never complete
+		// the poll — the folder list never refreshed its book count.
 		folderPath := folder.Path
-		_, createErr := h.store.CreateOperation(opID, "scan", &folderPath)
-		if createErr == nil {
-			params := folderAutoScanParams{
-				LegacyOpID: opID,
-				FolderPath: folderPath,
-				FolderID:   folder.ID,
-			}
-			if _, enqErr := h.opEnqueuer.EnqueueOp(c.Request.Context(), "library.folder-auto-scan", params); enqErr == nil {
-				httputil.RespondWithCreated(c, gin.H{"importPath": folder, "scan_operation_id": opID})
-				return
-			}
+		params := folderAutoScanParams{
+			FolderPath: folderPath,
+			FolderID:   folder.ID,
+		}
+		if opID, enqErr := h.opEnqueuer.EnqueueOp(c.Request.Context(), "library.folder-auto-scan", params); enqErr == nil {
+			httputil.RespondWithCreated(c, gin.H{"importPath": folder, "scan_operation_id": opID})
+			return
 		}
 	}
 
@@ -358,8 +356,13 @@ func (h *FilesystemHandler) ImportFile(c *gin.Context) {
 // folderAutoScanParams are the parameters for a library.folder-auto-scan op.
 // This mirrors server.folderAutoScanOpParams (defined in server/folder_autoscan_op.go)
 // but is redeclared here to avoid importing internal/server.
+//
+// ⚠️ THE COMPILER CANNOT CHECK THIS PAIR. The two structs are coupled only by
+// their JSON tags, so a field removed from one and left on the other does not
+// fail the build — it silently marshals a key the decoder ignores, or omits one
+// it needs. LegacyOpID was dropped from both on 2026-08-22; if you change either
+// struct, change the other in the same commit.
 type folderAutoScanParams struct {
-	LegacyOpID string `json:"legacy_op_id"`
 	FolderPath string `json:"folder_path"`
 	FolderID   int    `json:"folder_id"`
 }

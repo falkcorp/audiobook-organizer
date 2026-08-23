@@ -26,11 +26,12 @@ import (
 )
 
 // batchSaveOpParams is the JSON params for the metadata.batch-save op.
+// LegacyOpID is gone as of 2026-08-22; operation logs key on this run's own
+// v2 id, which is also the id the handler now returns to the caller.
 type batchSaveOpParams struct {
-	LegacyOpID string   `json:"legacy_op_id"`
-	BookIDs    []string `json:"book_ids"`
-	Organize   bool     `json:"organize"`
-	Force      bool     `json:"force"`
+	BookIDs  []string `json:"book_ids"`
+	Organize bool     `json:"organize"`
+	Force    bool     `json:"force"`
 }
 
 // RegisterBatchSaveToFilesOp registers the "metadata.batch-save" v2 OperationDef.
@@ -61,7 +62,7 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 
 			store := s.storeForWiring()
 			progress := registryProgressAdapter{r: reporter}
-			opID := p.LegacyOpID
+			opID := opsregistry.ReporterOpID(reporter)
 			bookIDs := p.BookIDs
 			totalBooks := len(bookIDs)
 

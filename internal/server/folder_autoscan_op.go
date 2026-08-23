@@ -28,8 +28,12 @@ import (
 )
 
 // folderAutoScanOpParams holds the parameters for a library.folder-auto-scan run.
+// It carried a LegacyOpID until 2026-08-22, on a comment claiming callers
+// polled the twinned v1 row "via the v1 ops endpoint". They do not: the client
+// polls getOperationStatus, which is a pure v2 lookup, and the v1 operation
+// routes were retired as shims. So the id the caller was handed resolved at
+// neither endpoint and the poll could never complete.
 type folderAutoScanOpParams struct {
-	LegacyOpID string `json:"legacy_op_id"`
 	FolderPath string `json:"folder_path"`
 	FolderID   int    `json:"folder_id"`
 }
@@ -176,20 +180,20 @@ func (s *Server) RegisterFolderAutoScanOp(reg *opsregistry.Registry) error {
 				}
 			}
 
-			// Bridge the v2 run completion back to the legacy v1
-			// Operation row so callers (e.g. POST /import-paths) that
-			// returned scan_operation_id = LegacyOpID can poll
-			// completion via the v1 ops endpoint. Without this the
-			// v1 row sticks in "queued" forever even though the work
-			// is done.
+			// Status is NOT written here. The v2 worker derives it from this
+			// function's return value, which is why the legacy row update this
+			// replaced is gone rather than translated.
+			//
+			// Activity entries tag on this op's OWN id. They used to tag on the
+			// legacy id, so dropping the stamp without repointing them would have
+			// silently untagged the whole scan's activity — the entries would still
+			// be written, just orphaned from the operation that produced them.
+			opID := opsregistry.ReporterOpID(reporter)
 			summary := fmt.Sprintf("Auto-scan completed (%d books found)", len(books))
-			if p.LegacyOpID != "" && s.Ops() != nil {
-				_ = s.Ops().UpdateOperationStatus(p.LegacyOpID, "completed", len(books), len(books), summary)
-			}
 			_ = progress.Log("info", fmt.Sprintf("Auto-scan completed. Total books: %d", len(books)), nil)
-			if s.activityWriter != nil && p.LegacyOpID != "" {
-				activity.FlushOperation(s.activityWriter, p.LegacyOpID)
-				activity.EmitInfo(s.activityWriter, p.LegacyOpID, "library.folder-auto-scan", "library", summary, activity.AlwaysShow)
+			if s.activityWriter != nil && opID != "" {
+				activity.FlushOperation(s.activityWriter, opID)
+				activity.EmitInfo(s.activityWriter, opID, "library.folder-auto-scan", "library", summary, activity.AlwaysShow)
 			}
 			return nil
 		},
