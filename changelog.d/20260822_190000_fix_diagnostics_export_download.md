@@ -24,6 +24,24 @@ This is the same defect fixed for the eight duplicate-detection actions
 (#2736), in a second place. The export now returns the id of the operation that
 runs, and the download endpoint reads that operation's stored result.
 
+#### Large diagnostics exports were being cancelled part-way
+
+Separately from the above, an export that took more than five minutes was
+killed while it ran. The export reported no progress at all between "starting"
+and "finished", and the operations watchdog cancels anything that goes quiet
+for five minutes — so on a large library the export was terminated every time,
+while the half-built ZIP went on being written to a file nothing would serve.
+
+Exports now report progress as each part of the archive is written, and stop
+promptly when cancelled.
+
+#### A failed export now says so
+
+If an export failed, was cancelled, or was killed by the watchdog, the download
+endpoint reported it as still in progress. The page waited forever and never
+showed the reason, which was recorded but never read. Failures are now reported
+as failures, with the reason.
+
 The AI-diagnostics submission on the same page shares the broken poller and is
 **not** fixed here — it is not yet a registered operation at all, and converting
 it is tracked separately.
