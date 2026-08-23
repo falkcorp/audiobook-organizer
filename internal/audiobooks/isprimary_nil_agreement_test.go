@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/stretchr/testify/require"
 )
 
@@ -291,6 +292,64 @@ func TestIsPrimaryVersion_SerializationAgreesOnCacheHit(t *testing.T) {
 
 	require.True(t, missPresent, "cache MISS omitted is_primary_version")
 	require.True(t, hitPresent, "cache HIT omitted is_primary_version")
+	require.Equal(t, missEff, hitEff,
+		"the same request serialized is_primary_version differently on a cache hit than on a miss")
+	require.True(t, hitEff, "nil resolves to true on both cache paths")
+}
+
+// TestIsPrimaryVersion_SerializationAgreesOnCacheHit_NoPushdown is the cache
+// test that can actually FAIL if the normalization before listCache.Set is
+// removed, and it exists because the PebbleStore-backed one above cannot.
+//
+// With a conforming store the cached slice and the slice returned at the tail
+// are the SAME backing array, so normalizing only at the tail happens to fix
+// the cached page too — by aliasing, not by design. Take the pushdown away and
+// the aliasing goes with it: summariesPushdown falls back to the unfiltered
+// GetAllBookSummaries with didPushdown=false, the page that gets CACHED is the
+// pre-post-filter projection, and the post-filter then builds a NEW slice which
+// is what the tail normalizes. The cache is left holding raw rows, and the next
+// request for the same page serves them from the early `return cached`.
+//
+// This is the degraded read path — a store without memdb, which production
+// really does run through during the ~2 minute startup warmup — so it is a live
+// path, not a mock-only curiosity.
+func TestIsPrimaryVersion_SerializationAgreesOnCacheHit_NoPushdown(t *testing.T) {
+	mockStore := mocks.NewMockStore(t)
+	// MockStore does not declare HonorsEveryBookSummaryFilter, so it cannot
+	// satisfy filteredSummaryStore and the query is forced down the
+	// unfiltered-fetch + in-Go post-filter path.
+	_, conforms := database.AsCapability[filteredSummaryStore](mockStore)
+	require.False(t, conforms,
+		"fixture invalid: this store pushes the filter down, so the cache would alias the returned slice and the test could not fail")
+
+	summaries := []database.BookSummary{
+		{ID: "explicit-true", Title: "a", IsPrimaryVersion: boolPtr(true)},
+		{ID: "explicit-false", Title: "b", IsPrimaryVersion: boolPtr(false)},
+		{ID: "nil-flag", Title: "c", IsPrimaryVersion: nil},
+	}
+	// Exactly once: the second GetAudiobooks call must be served by the list
+	// cache, which is the whole point of the assertion.
+	mockStore.EXPECT().GetAllBookSummaries(100, 0).Return(summaries, nil).Once()
+
+	svc := NewAudiobookService(mockStore)
+	primary := true
+
+	miss, err := svc.GetAudiobooks(context.Background(), 100, 0, "", nil, nil,
+		ListFilters{IsPrimaryVersion: &primary})
+	require.NoError(t, err)
+	hit, err := svc.GetAudiobooks(context.Background(), 100, 0, "", nil, nil,
+		ListFilters{IsPrimaryVersion: &primary})
+	require.NoError(t, err)
+
+	require.ElementsMatch(t, []string{"explicit-true", "nil-flag"}, idsOf(miss),
+		"the in-Go post-filter must select exactly {explicit true, nil}")
+
+	missEff, missPresent := effectiveAtSerializationSite(t, miss, "nil-flag")
+	hitEff, hitPresent := effectiveAtSerializationSite(t, hit, "nil-flag")
+
+	require.True(t, missPresent, "cache MISS omitted is_primary_version")
+	require.True(t, hitPresent,
+		"cache HIT omitted is_primary_version: the page was cached before it was normalized")
 	require.Equal(t, missEff, hitEff,
 		"the same request serialized is_primary_version differently on a cache hit than on a miss")
 	require.True(t, hitEff, "nil resolves to true on both cache paths")
