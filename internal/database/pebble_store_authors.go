@@ -218,9 +218,17 @@ func (p *PebbleStore) DeleteAuthor(id int) error {
 // association slice for each row it touched, keyed by book ID, so the caller
 // can replay the same edit into memdb once the batch commits.
 func (p *PebbleStore) sweepAuthorFromBookAuthors(batch *pebble.Batch, authorID int) (map[string][]BookAuthor, error) {
+	// prefixUpperBound, not a hand-written "book_authors:~" sentinel. The key
+	// is book_authors:<bookID> and bookID is an opaque string: a literal '~'
+	// (0x7E) upper bound silently excludes any id whose first byte is higher,
+	// which includes every non-ASCII id (UTF-8 continuation bytes start at
+	// 0xC2). Rows skipped by the sweep are exactly the orphaned junction rows
+	// this function exists to remove, so a too-low bound reintroduces the bug
+	// in a narrower, harder-to-see form.
+	prefix := []byte("book_authors:")
 	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book_authors:"),
-		UpperBound: []byte("book_authors:~"),
+		LowerBound: prefix,
+		UpperBound: prefixUpperBound(prefix),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("pebble iterate book_authors: %w", err)
