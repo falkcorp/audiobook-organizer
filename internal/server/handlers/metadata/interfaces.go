@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
-// last-edited: 2026-08-18
+// last-edited: 2026-08-23
 
 // Narrow dependency interfaces for the metadata-domain HTTP handlers (the 19
 // per-book + library metadata endpoints extracted from the server package's
@@ -66,8 +66,10 @@ type MetadataEntityResolver interface {
 // one slot of headroom.
 type MetadataAuditWriter interface {
 	RecordMetadataChange(record *database.MetadataChangeRecord) error
-	// Legacy supervisor op row (batchWriteBackAudiobooks).
-	CreateOperation(id, opType string, folderPath *string) (*database.Operation, error)
+	// CreateOperation is deliberately absent. BatchWriteBackAudiobooks used to
+	// mint a v1 op row here and return its id; it now returns EnqueueOp's. No
+	// call site remains, and leaving the method off makes reintroducing one a
+	// compile error rather than something a reviewer has to notice.
 }
 
 // MetadataRejectionStore records and reads per-book metadata rejections.

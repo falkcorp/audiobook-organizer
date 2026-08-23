@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-07-16
+// last-edited: 2026-08-23
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
@@ -30,6 +30,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	metadatahandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/metadata"
 	metadatamocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/metadata/mocks"
@@ -608,6 +609,36 @@ func TestBatchWriteBackAudiobooks_ReturnsEnqueuedOpID(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), `"operation_id":"op-1"`) {
 		t.Fatalf("must return the enqueued id op-1, got %s", w.Body.String())
+	}
+}
+
+// The params must not carry a legacy_op_id. batchSaveOpParams here is a
+// cross-package MIRROR of server.batchSaveOpParams coupled only by JSON tags —
+// the compiler cannot see the two drift apart, and they already did once: the
+// server side dropped LegacyOpID while this copy kept it, silently marshalling
+// "legacy_op_id":"" on every request. Only a marshalled check catches that, so
+// capture the params the handler actually passed rather than mock.Anything.
+func TestBatchWriteBackAudiobooks_ParamsCarryNoLegacyOpID(t *testing.T) {
+	h, d := newHandler(t)
+	var gotParams any
+	d.reg.EXPECT().EnqueueOp(mock.Anything, "metadata.batch-save", mock.Anything).
+		RunAndReturn(func(_ context.Context, _ string, params any,
+			_ ...opsregistry.EnqueueOption) (string, error) {
+			gotParams = params
+			return "op-1", nil
+		})
+	doReq(h.BatchWriteBackAudiobooks, http.MethodPost, "/audiobooks/batch-write-back",
+		map[string]any{"book_ids": []string{"b1", "b2"}}, nil)
+
+	raw, err := json.Marshal(gotParams)
+	if err != nil {
+		t.Fatalf("params must marshal: %v", err)
+	}
+	if bytes.Contains(raw, []byte("legacy_op_id")) {
+		t.Fatalf("params must not carry legacy_op_id, got %s", raw)
+	}
+	if !bytes.Contains(raw, []byte("book_ids")) {
+		t.Fatalf("params lost book_ids: %s", raw)
 	}
 }
 

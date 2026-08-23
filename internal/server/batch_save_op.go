@@ -1,7 +1,7 @@
 // file: internal/server/batch_save_op.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f2a1b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-08-19
+// last-edited: 2026-08-23
 //
 // batch_save_op registers the "metadata.batch-save" v2 OperationDef.
 // The HTTP handler batchWriteBackAudiobooks creates a v1 op record for
@@ -26,8 +26,7 @@ import (
 )
 
 // batchSaveOpParams is the JSON params for the metadata.batch-save op.
-// LegacyOpID is gone as of 2026-08-22; operation logs key on this run's own
-// v2 id, which is also the id the handler now returns to the caller.
+// LegacyOpID is gone as of 2026-08-22.
 type batchSaveOpParams struct {
 	BookIDs  []string `json:"book_ids"`
 	Organize bool     `json:"organize"`
@@ -35,8 +34,16 @@ type batchSaveOpParams struct {
 }
 
 // RegisterBatchSaveToFilesOp registers the "metadata.batch-save" v2 OperationDef.
-// The HTTP handler batchWriteBackAudiobooks pre-creates a v1 op record for
-// backwards-compatible progress polling, then enqueues here via opRegistry.
+// BatchWriteBackAudiobooks enqueues here and returns this run's v2 id; it no
+// longer pre-creates a v1 op record.
+//
+// Per-book failures are reported with progress.Log, NOT store.AddOperationLog.
+// The two are different keyspaces: AddOperationLog writes "operationlog:<id>:",
+// which only sysinfo.CollectSystemLogs reads, and only for ids it finds via
+// GetRecentOperations — a v1-row scan. With no v1 row minted, logs written
+// there are unreachable by every API, while the v2 readers (GetOperationV2,
+// GetOperationLogs, /system/logs) all read "opv2:log:<id>:" via GetOpLogsV2.
+// dbReporter.Log holds logMu, so this is safe from the worker pool.
 func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "metadata.batch-save",
@@ -62,7 +69,6 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 
 			store := s.storeForWiring()
 			progress := registryProgressAdapter{r: reporter}
-			opID := opsregistry.ReporterOpID(reporter)
 			bookIDs := p.BookIDs
 			totalBooks := len(bookIDs)
 
@@ -79,7 +85,7 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 				book, err := store.GetBookByID(id)
 				if err != nil || book == nil {
 					failed.Add(1)
-					_ = store.AddOperationLog(opID, "warn", fmt.Sprintf("book %s not found", id), nil)
+					_ = progress.Log("warn", fmt.Sprintf("book %s not found", id), nil)
 					return nil
 				}
 
@@ -109,7 +115,7 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 					release()
 					failed.Add(1)
 					detail := wbErr.Error()
-					_ = store.AddOperationLog(opID, "warn", fmt.Sprintf("write-back failed for %s", book.Title), &detail)
+					_ = progress.Log("warn", fmt.Sprintf("write-back failed for %s", book.Title), &detail)
 					return nil
 				}
 				written.Add(1)
@@ -143,7 +149,7 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 						}
 						if orgErr != nil {
 							detail := orgErr.Error()
-							_ = store.AddOperationLog(opID, "warn", fmt.Sprintf("organize failed for %s", book.Title), &detail)
+							_ = progress.Log("warn", fmt.Sprintf("organize failed for %s", book.Title), &detail)
 						} else if newPath != "" && newPath != oldPath {
 							organized.Add(1)
 						}

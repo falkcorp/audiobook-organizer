@@ -1,7 +1,7 @@
 // file: internal/server/handlers/filesystem.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c4d5e6f7-a8b9-0123-cdef-012345678901
-// last-edited: 2026-07-01
+// last-edited: 2026-08-23
 
 // Package handlers — FilesystemHandler covers home-directory, filesystem
 // browse, exclusion CRUD, import-path CRUD, and the on-demand single-file
@@ -262,10 +262,18 @@ func (h *FilesystemHandler) AddImportPath(c *gin.Context) {
 			FolderPath: folderPath,
 			FolderID:   folder.ID,
 		}
-		if opID, enqErr := h.opEnqueuer.EnqueueOp(c.Request.Context(), "library.folder-auto-scan", params); enqErr == nil {
+		opID, enqErr := h.opEnqueuer.EnqueueOp(c.Request.Context(), "library.folder-auto-scan", params)
+		if enqErr == nil {
 			httputil.RespondWithCreated(c, gin.H{"importPath": folder, "scan_operation_id": opID})
 			return
 		}
+		// The folder WAS created, so this still answers 201 — but the scan the
+		// caller asked for is not running and no id is advertised for it. That
+		// used to be swallowed silently on the one path whose whole purpose is
+		// starting a scan; the synchronous fallback below cannot cover it, being
+		// gated on opEnqueuer being nil rather than on the enqueue failing.
+		slog.Warn("folder auto-scan enqueue failed; folder created without a scan",
+			"folder_id", folder.ID, "path", folder.Path, "err", enqErr)
 	}
 
 	// Fallback: synchronous scan when op registry is unavailable.
