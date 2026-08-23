@@ -1,5 +1,5 @@
 // file: internal/server/handlers/filesystem.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: c4d5e6f7-a8b9-0123-cdef-012345678901
 // last-edited: 2026-08-23
 
@@ -287,7 +287,13 @@ func (h *FilesystemHandler) AddImportPath(c *gin.Context) {
 	// value is authn/authz on POST /api/v1/import-paths, not containment.
 	// CodeQL does not model that barrier, so suppress the false positive.
 	if folder.Enabled && h.opEnqueuer == nil {
-		if _, statErr := os.Stat(folder.Path); statErr == nil { // lgtm[go/path-injection]
+		// CodeQL go/path-injection: verified false positive, DISMISSED via the
+		// code-scanning API. folder.Path is the value CleanAbsolutePath already
+		// produced (it requires an absolute path and rejects any path whose
+		// Clean differs), and the route requires auth.PermSettingsManage. This
+		// site rests on authn/authz plus that normalization, and deliberately
+		// does not claim filesystem containment.
+		if _, statErr := os.Stat(folder.Path); statErr == nil {
 			books, scanErr := scanner.ScanDirectory(c.Request.Context(), folder.Path, nil)
 			if scanErr == nil {
 				if len(books) > 0 {

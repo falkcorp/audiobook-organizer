@@ -1,5 +1,5 @@
 // file: internal/fileops/safe_operations.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8f7e6d5c-4b3a-2918-7f6e-5d4c3b2a1908
 // last-edited: 2026-08-23
 
@@ -120,11 +120,18 @@ func (op *FileOperation) Execute() error {
 		// targetPath and the user's only intact copy orphaned at backupPath
 		// with nothing pointing at it.
 		//
-		// op.backupPath is produced by safepath.Join in NewFileOperation, which
-		// rejects absolute components and requires the cleaned result to stay
-		// under backupDir; CodeQL does not model that custom containment
-		// barrier, so suppress the false positive.
-		if _, statErr := os.Stat(op.backupPath); statErr == nil { // lgtm[go/path-injection]
+		// CodeQL go/path-injection: this alert is NOT dismissed, and the
+		// containment argument that first accompanied it was wrong. The
+		// backupPath is built by safepath.Join(filepath.Dir(targetPath), ...),
+		// so its containment ROOT is derived from the tainted value itself;
+		// safepath.Join is a lexical prefix check against whatever root it is
+		// handed and therefore proves nothing about targetPath. What actually
+		// constrains the callers today is upstream — fileops.ValidateUserPath
+		// (internal/fileops/service.go) and the IsAllowedPath gate on the one
+		// request-controlled route into Book.FilePath
+		// (internal/audiobooks/service_mutation.go) — and neither resolves
+		// symlinks. Left open deliberately; see TASK-083.
+		if _, statErr := os.Stat(op.backupPath); statErr == nil {
 			if rbErr := copyFile(op.backupPath, op.targetPath); rbErr != nil {
 				slog.Error("ROLLBACK FAILED: target may be corrupt and the only intact copy is the backup",
 					"target", op.targetPath, "backup", op.backupPath,
@@ -160,11 +167,12 @@ func (op *FileOperation) Execute() error {
 			// then return "operation failed integrity check" — which reads as
 			// "we refused to do it", not "there is a known-bad file on disk".
 			//
-			// op.backupPath is produced by safepath.Join in NewFileOperation,
-			// which rejects absolute components and requires the cleaned result
-			// to stay under backupDir; CodeQL does not model that custom
-			// containment barrier, so suppress the false positive.
-			if _, statErr := os.Stat(op.backupPath); statErr == nil { // lgtm[go/path-injection]
+			// CodeQL go/path-injection: not dismissed. See the identical note
+			// on the step-2 rollback above — the safepath.Join containment is
+			// rooted at filepath.Dir(targetPath), i.e. at the taint, so it does
+			// not cut the flow CodeQL flagged. The real constraints are
+			// upstream and do not resolve symlinks.
+			if _, statErr := os.Stat(op.backupPath); statErr == nil {
 				if rbErr := copyFile(op.backupPath, op.targetPath); rbErr != nil {
 					slog.Error("ROLLBACK FAILED after checksum mismatch: a known-corrupt file is left in place",
 						"target", op.targetPath, "backup", op.backupPath,
