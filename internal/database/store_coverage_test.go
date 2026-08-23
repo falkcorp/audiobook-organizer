@@ -1,7 +1,7 @@
 // file: internal/database/store_coverage_test.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-08-11
+// last-edited: 2026-08-23
 
 // NOTE(fable5 T022): setupCoverageDB ported to PebbleStore; SQLiteStore
 // type assertions updated. Tests for SQLite-only methods (CountTableRows,
@@ -1269,7 +1269,7 @@ func TestCoverage_WipeAllActivity(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wipe
-	_, err = as.WipeAllActivity()
+	_, err = as.WipeAllActivity(context.Background())
 	require.NoError(t, err)
 
 	// Verify empty
