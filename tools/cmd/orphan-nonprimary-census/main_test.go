@@ -1,10 +1,15 @@
 // file: tools/cmd/orphan-nonprimary-census/main_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d4b8a2e-1f6c-4a3d-8e5b-2c7f0a9d3e61
 // last-edited: 2026-08-23
 package main
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -233,5 +238,128 @@ func TestCSVOutputColumns(t *testing.T) {
 	}
 	if !strings.Contains(out, "b1,Book One,2026-08-20T12:00:00Z,,,false\n") {
 		t.Fatalf("unexpected CSV row: %q", out)
+	}
+}
+
+// fakeLibrary serves n books over offset-paginated pages of size pageSize,
+// reporting a deliberately WRONG count, and records the query each page was
+// fetched with.
+type fakeLibrary struct {
+	total       int
+	pageSize    int
+	lyingCount  int
+	gotQueries  []string
+	repeatFirst bool // serve page 2's first row again, simulating window drift
+}
+
+func (f *fakeLibrary) handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		f.gotQueries = append(f.gotQueries, r.URL.RawQuery)
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		if limit <= 0 {
+			limit = 50 // mirrors the server default when `limit` is absent
+		}
+		if limit > f.pageSize {
+			limit = f.pageSize
+		}
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+
+		var items []book
+		for i := offset; i < offset+limit && i < f.total; i++ {
+			id := i
+			if f.repeatFirst && offset > 0 && i == offset {
+				id = offset - 1 // re-serve the previous page's last row
+			}
+			items = append(items, book{
+				ID:               fmt.Sprintf("book-%04d", id),
+				Title:            fmt.Sprintf("Title %d", id),
+				IsPrimaryVersion: ptrBool(false),
+			})
+		}
+		_ = json.NewEncoder(w).Encode(listData{
+			Items: items, Count: f.lyingCount, Limit: limit, Offset: offset,
+		})
+	}
+}
+
+// TestFetchAllBooksIgnoresLyingCount pins the defect that would have silently
+// truncated the census. The production list endpoint reports `count` from
+// CountPrimaryBooks() -- primary, non-deleted books only -- while the item
+// stream is not primary-filtered at all. Measured 2026-08-23: count said
+// 41,741 against a stream of 56,727. A loop that breaks on
+// `len(all) >= count` stops 14,986 books early and looks perfectly healthy
+// doing it, because -min-expected only guards the low end.
+//
+// The fake reports a count barely over half the true total; the fetch must
+// still return every book and terminate only on the empty page.
+func TestFetchAllBooksIgnoresLyingCount(t *testing.T) {
+	f := &fakeLibrary{total: 250, pageSize: 100, lyingCount: 130}
+	srv := httptest.NewServer(f.handler())
+	defer srv.Close()
+
+	books, dupes, err := fetchAllBooks(srv.Client(), srv.URL, "k", 100, 0, 0, false)
+	if err != nil {
+		t.Fatalf("fetchAllBooks: %v", err)
+	}
+	if len(books) != 250 {
+		t.Errorf("got %d books, want 250 -- the loop trusted the count field "+
+			"(%d) and truncated the census", len(books), f.lyingCount)
+	}
+	if dupes != 0 {
+		t.Errorf("got %d duplicates, want 0", dupes)
+	}
+}
+
+// TestFetchAllBooksSendsLimitAndShowQuarantined pins the two query-parameter
+// fixes. `page_size` is ignored by the handler (measured: page_size=5 returned
+// 50 items, limit=5 returned 5), so sending it made -page-size inert. Omitting
+// show_quarantined hid quarantined rows, which are real rows that can carry
+// the anomaly.
+func TestFetchAllBooksSendsLimitAndShowQuarantined(t *testing.T) {
+	f := &fakeLibrary{total: 10, pageSize: 100, lyingCount: 10}
+	srv := httptest.NewServer(f.handler())
+	defer srv.Close()
+
+	if _, _, err := fetchAllBooks(srv.Client(), srv.URL, "k", 5, 0, 0, false); err != nil {
+		t.Fatalf("fetchAllBooks: %v", err)
+	}
+	if len(f.gotQueries) == 0 {
+		t.Fatal("no requests recorded")
+	}
+	for i, q := range f.gotQueries {
+		if !strings.Contains(q, "limit=5") {
+			t.Errorf("request %d query %q: want limit=5 (the param the handler reads)", i, q)
+		}
+		if strings.Contains(q, "page_size=") {
+			t.Errorf("request %d query %q: still sends page_size, which the handler ignores", i, q)
+		}
+		if !strings.Contains(q, "show_quarantined=true") {
+			t.Errorf("request %d query %q: want show_quarantined=true", i, q)
+		}
+	}
+}
+
+// TestFetchAllBooksCountsDuplicates verifies that a row served twice by
+// offset paging over a shifting list is de-duplicated AND reported. A repeat
+// means the window moved, so some other row was skipped -- the count must
+// surface as a lower bound rather than silently inflating the total.
+func TestFetchAllBooksCountsDuplicates(t *testing.T) {
+	f := &fakeLibrary{total: 300, pageSize: 100, lyingCount: 300, repeatFirst: true}
+	srv := httptest.NewServer(f.handler())
+	defer srv.Close()
+
+	books, dupes, err := fetchAllBooks(srv.Client(), srv.URL, "k", 100, 0, 0, false)
+	if err != nil {
+		t.Fatalf("fetchAllBooks: %v", err)
+	}
+	if dupes == 0 {
+		t.Error("got 0 duplicates, want > 0 -- repeated rows went uncounted")
+	}
+	seen := map[string]bool{}
+	for _, b := range books {
+		if seen[b.ID] {
+			t.Fatalf("duplicate %s survived de-duplication", b.ID)
+		}
+		seen[b.ID] = true
 	}
 }
