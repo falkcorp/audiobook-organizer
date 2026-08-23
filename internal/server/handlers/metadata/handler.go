@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-08-16
+// last-edited: 2026-08-23
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -998,7 +998,7 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 
 		shouldApply := func(field string, hasValue bool) bool {
 			entry := state[field]
-			if entry.OverrideLocked || entry.OverrideValue != nil {
+			if entry.HasUserOverride() {
 				return false
 			}
 			if onlyMissing && hasValue {

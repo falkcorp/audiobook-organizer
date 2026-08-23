@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repair_junk_titles.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9c4e7a12-3b58-4d06-8f21-7ae5c0d94b63
-// last-edited: 2026-08-19
+// last-edited: 2026-08-23
 
 package maintenance
 
@@ -138,7 +138,7 @@ func (p *Plugin) runRepairJunkTitles(ctx context.Context, raw json.RawMessage, r
 			if states[i].Field != "title" {
 				continue
 			}
-			if states[i].OverrideLocked || states[i].OverrideValue != nil || states[i].FetchedValue != nil {
+			if states[i].HasUserOverride() || states[i].HasProviderValue() {
 				skipProvenance.Add(1)
 				return nil
 			}

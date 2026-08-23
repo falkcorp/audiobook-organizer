@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_repair.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 13bedd46-9b61-41a2-b791-36813d7ffcb9
-// last-edited: 2026-08-19
+// last-edited: 2026-08-23
 
 package maintenance
 
@@ -114,10 +114,10 @@ func decideTitleRepair(in titleRepairBook, agreedFn func(dirPath string) (agreed
 	// Provenance guard: only proceed when the stored title is file/filename
 	// derived or has no field state at all.
 	if st := in.TitleState; st != nil {
-		if st.OverrideLocked || st.OverrideValue != nil {
+		if st.HasUserOverride() {
 			return titleRepairDecision{Action: actionSkipProvenance, Reason: "title has user override", DirPath: dir, MixedDir: mixed}
 		}
-		if st.FetchedValue != nil {
+		if st.HasProviderValue() {
 			return titleRepairDecision{Action: actionSkipProvenance, Reason: "title has fetched value", DirPath: dir, MixedDir: mixed}
 		}
 	}
