@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-08-14
+// last-edited: 2026-08-23
 
 package database
 
@@ -180,26 +180,23 @@ func (p *PebbleStore) DeleteAuthor(id int) error {
 		return fmt.Errorf("delete author aliases: %w", err)
 	}
 
-	// Delete book_author entries for this author
-	iter, iterErr := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book_author:"),
-		UpperBound: []byte("book_author;"),
-	})
-	if iterErr == nil {
-		defer iter.Close()
-		for iter.First(); iter.Valid(); iter.Next() {
-			val, valErr := iter.ValueAndErr()
-			if valErr != nil {
-				continue
-			}
-			var ba BookAuthor
-			if json.Unmarshal(val, &ba) == nil && ba.AuthorID == id {
-				if err := batch.Delete(iter.Key(), nil); err != nil {
-					batch.Close()
-					return fmt.Errorf("pebble Delete book_author entry: %w", err)
-				}
-			}
-		}
+	// Drop this author from the book_authors junction table.
+	//
+	// The junction is stored one row per book — key "book_authors:<bookID>",
+	// value a JSON array of BookAuthor — so a row cannot simply be deleted:
+	// it may still carry co-authors that must survive. Each matching row is
+	// rewritten without this author, and only deleted outright when the author
+	// was its sole entry. Both writes join the batch the author row is deleted
+	// in, so the junction never outlives the author it points at.
+	//
+	// Cost: one full scan of the junction keyspace per delete. There is no
+	// author -> books reverse index in Pebble, and building one needs a
+	// backfill migration. Bulk callers (the purge-empty-authors maintenance
+	// task) pay this per author.
+	affected, sweepErr := p.sweepAuthorFromBookAuthors(batch, id)
+	if sweepErr != nil {
+		batch.Close()
+		return sweepErr
 	}
 
 	if err := batch.Commit(pebble.Sync); err != nil {
@@ -207,7 +204,73 @@ func (p *PebbleStore) DeleteAuthor(id int) error {
 	}
 	p.DeleteAuthorFromMemDB(id)
 	p.DeleteAuthorAliasesByAuthorIDFromMemDB(id)
+	// Mirror the junction rewrites into memdb. Pebble is the source of truth,
+	// but the query layer reads memdb when it is enabled, so skipping this
+	// leaves the orphaned association visible to every reader that matters.
+	for bookID, remaining := range affected {
+		p.ReplaceBookAuthorsInMemDB(bookID, remaining)
+	}
 	return nil
+}
+
+// sweepAuthorFromBookAuthors stages, on batch, the removal of authorID from
+// every book_authors:<bookID> row that references it. It returns the surviving
+// association slice for each row it touched, keyed by book ID, so the caller
+// can replay the same edit into memdb once the batch commits.
+func (p *PebbleStore) sweepAuthorFromBookAuthors(batch *pebble.Batch, authorID int) (map[string][]BookAuthor, error) {
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte("book_authors:"),
+		UpperBound: []byte("book_authors:~"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pebble iterate book_authors: %w", err)
+	}
+	defer iter.Close()
+
+	affected := make(map[string][]BookAuthor)
+	for iter.First(); iter.Valid(); iter.Next() {
+		val, valErr := iter.ValueAndErr()
+		if valErr != nil {
+			return nil, fmt.Errorf("pebble read book_authors row: %w", valErr)
+		}
+		var authors []BookAuthor
+		if json.Unmarshal(val, &authors) != nil {
+			// A row we cannot parse is a row we cannot safely rewrite; leaving
+			// it alone is strictly better than dropping other authors' links.
+			continue
+		}
+		remaining := make([]BookAuthor, 0, len(authors))
+		for _, a := range authors {
+			if a.AuthorID != authorID {
+				remaining = append(remaining, a)
+			}
+		}
+		if len(remaining) == len(authors) {
+			continue // author not in this book
+		}
+		// iter.Key() is invalidated by Next(); string() copies.
+		key := string(iter.Key())
+		bookID := strings.TrimPrefix(key, "book_authors:")
+		if len(remaining) == 0 {
+			if err := batch.Delete([]byte(key), nil); err != nil {
+				return nil, fmt.Errorf("pebble Delete %s: %w", key, err)
+			}
+			affected[bookID] = nil
+			continue
+		}
+		data, mErr := json.Marshal(remaining)
+		if mErr != nil {
+			return nil, fmt.Errorf("marshal remaining book_authors for %s: %w", bookID, mErr)
+		}
+		if err := batch.Set([]byte(key), data, nil); err != nil {
+			return nil, fmt.Errorf("pebble Set %s: %w", key, err)
+		}
+		affected[bookID] = remaining
+	}
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("pebble iterate book_authors: %w", err)
+	}
+	return affected, nil
 }
 
 func (p *PebbleStore) UpdateAuthorName(id int, name string) error {
