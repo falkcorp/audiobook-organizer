@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_cancel_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e91b7d2-6c04-4a58-9f13-8d27e5a06b41
-// last-edited: 2026-08-11
+// last-edited: 2026-08-23
 
 // Package database — regression suite for CANCELLATION of the activity query.
 //
@@ -226,4 +226,87 @@ func TestQueryByIndexPrefixAbortsWhenCallerGoesAway(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 	assert.Nil(t, entries)
 	assert.Zero(t, total)
+}
+
+// TestWipeAllActivityAbortsMidWipe covers the third reachable-from-a-request
+// scan: WipeAllActivity is invoked from handleWipe, a live HTTP handler, and
+// an uncancellable wipe of a large activity log would reintroduce the same
+// abandoned-request-keeps-running defect as the unbounded Query/
+// GetDistinctSources scans this file otherwise covers.
+//
+// Unlike a test that only asserts ctx.Err() != nil — which would pass even if
+// WipeAllActivity ignored ctx completely and merely happened to return the
+// ambient background error — this drives WipeAllActivity's own delete-batch
+// loop and proves it stops mid-tier, with the batch already committed staying
+// deleted and the rest of that SAME tier left untouched:
+//
+//   - 750 rows are seeded into a single tier ("change"), enough for 2 delete
+//     batches (500 then 250 — see the batch size in WipeAllActivity).
+//   - activityCtxCheckInterval is pinned high (not to 1 as elsewhere in this
+//     file) so scanTierKVs' own per-row check never fires during the scan of
+//     750 rows; every observed ctx.Err() call comes from WipeAllActivity's
+//     own per-tier and per-batch checks, which is what this test targets.
+//   - the tripping context is calibrated (call-by-call below) to return nil
+//     for the per-tier check and the first per-batch check, then Canceled
+//     for the second per-batch check — i.e., AFTER the first 500-row batch
+//     commits, BEFORE the second one starts.
+//
+// Assertions are on rows, not just the error:
+//   - deleted == 500 exactly (the first batch, and only the first batch —
+//     proof the count reflects real committed deletes, not a guess)
+//   - deleted < seeded (proof the scan stopped, not merely errored out after
+//     finishing)
+//   - a fresh, uncancelled Query afterward finds exactly the other 250 rows
+//     still present (proof cancellation deleted nothing beyond what it
+//     reported, and lost nothing either — a retry has real, boundable work
+//     left)
+//
+// NEGATIVE CONTROL: removing the per-batch ctx check in WipeAllActivity's
+// delete loop makes deleted jump to 750 (err becomes nil too — with the
+// scan interval pinned high, nothing except that check would ever observe
+// cancellation during this run) and the Query assertion below fails as a
+// result (0 rows remain instead of 250). Verified red with that check
+// removed, green with it restored.
+func TestWipeAllActivityAbortsMidWipe(t *testing.T) {
+	// Deliberately NOT pinCtxCheckInterval(t) (which sets it to 1): this test
+	// wants scanTierKVs' per-row check to stay silent throughout the 750-row
+	// scan, so every Err() call the tripping context sees comes from
+	// WipeAllActivity's own per-tier/per-batch checks.
+	prevInterval := activityCtxCheckInterval
+	activityCtxCheckInterval = 100000
+	t.Cleanup(func() { activityCtxCheckInterval = prevInterval })
+
+	s := newTestPebbleActivityStore(t)
+
+	const seeded = 750 // 2 delete batches: 500 then 250
+	base := time.Now().UTC().Add(-time.Hour)
+	for i := 0; i < seeded; i++ {
+		_, err := s.Record(ActivityEntry{
+			Tier: "change", Type: "test", Level: "info",
+			Source: "test", Summary: "bulk seed",
+			Timestamp: base.Add(time.Duration(i) * time.Millisecond),
+		})
+		require.NoError(t, err)
+	}
+
+	// Call sequence: (1) WipeAllActivity's per-tier check before scanning
+	// "change" — nil; (2) scanTierKVs' single seen=0 check (interval pinned
+	// above 750, so it never fires again) — nil; (3) the per-batch check
+	// before batch 1 (rows 0-500) — nil, batch 1 commits; (4) the per-batch
+	// check before batch 2 (rows 500-750) — trips.
+	ctx := newTrippingContext(3)
+
+	deleted, err := s.WipeAllActivity(ctx)
+
+	require.Error(t, err, "an abandoned wipe request must surface an error, not silently finish or silently stop")
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, int64(500), deleted, "must report exactly the rows actually deleted (one committed batch), not 0 and not the full seeded count")
+	assert.Less(t, deleted, int64(seeded), "cancellation must stop the scan early, not drain the whole log first")
+
+	// The other 250 rows were never reached: a retry has real, boundable
+	// work left, and cancellation must not have deleted anything beyond the
+	// one batch it reported.
+	_, total, qErr := s.Query(context.Background(), ActivityFilter{Limit: 2000})
+	require.NoError(t, qErr)
+	assert.Equal(t, seeded-500, total, "the un-reached rows must be untouched, not lost and not double-deleted")
 }
