@@ -30,3 +30,22 @@ unfiltered count exceeds the rows they actually reassigned:
 
 All three fail **closed**: a store that cannot answer the unfiltered question
 aborts rather than falling back to the filtered count.
+
+Review of the first cut found two ways the guard could pass on the very failure
+it exists to catch, both now fixed:
+
+- The refusal compared the unfiltered count against `len(books)` — the rows the
+  merge loop *attempted* — rather than the rows it actually reassigned. A book
+  whose `UpdateBook` failed still counted as moved, so a series with no hidden
+  rows at all could be deleted while a book still pointed at it. Both merge
+  paths now count successful reassignments only, and the previously-silent
+  "listed but could not hydrate" case is reported instead of ignored.
+- `getAllSeriesBookRefCountsPebble` never checked `iter.Error()` and skipped
+  undecodable book rows, so a truncated or partially-corrupt scan returned a
+  short map with a nil error. Because every guard reads a missing entry as
+  "unreferenced", that undercount was fail-**open** at all three call sites at
+  once. Both paths are now fatal.
+
+Refusals are also no longer invisible: a group in which every merge was refused
+no longer counts as an applied merge, phase-1 skips are counted, and both are
+surfaced through the job reporter rather than only `slog`.
