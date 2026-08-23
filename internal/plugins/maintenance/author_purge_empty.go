@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_purge_empty.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a2f9c31-84d7-4e05-b1a3-7f92c60d8e54
-// last-edited: 2026-08-17
+// last-edited: 2026-08-23
 
 package maintenance
 
@@ -12,6 +12,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -74,7 +75,12 @@ type emptyAuthorReport struct {
 	// are the population that needs a decision, and a number nobody sees does not
 	// get one.
 	ZeroBooksWithFiles int
-	Eligible           int
+	// HeldByRefs are authors the DISPLAY counter calls zero-book but that are
+	// still referenced by a trashed book, a non-primary version, or a
+	// junction-only co-author credit. Before this guard existed they were
+	// deleted; surfacing the number is how an operator sees the divergence.
+	HeldByRefs int
+	Eligible   int
 	Deleted            int
 	Failed             int
 	Sample             []string
@@ -82,8 +88,8 @@ type emptyAuthorReport struct {
 
 func (r emptyAuthorReport) summary() string {
 	return fmt.Sprintf(
-		"authors=%d zero-book=%d held-back(has files)=%d eligible=%d deleted=%d failed=%d",
-		r.TotalAuthors, r.ZeroBooks, r.ZeroBooksWithFiles, r.Eligible, r.Deleted, r.Failed)
+		"authors=%d zero-book=%d held-back(still referenced)=%d held-back(has files)=%d eligible=%d deleted=%d failed=%d",
+		r.TotalAuthors, r.ZeroBooks, r.HeldByRefs, r.ZeroBooksWithFiles, r.Eligible, r.Deleted, r.Failed)
 }
 
 func (p *Plugin) purgeEmptyAuthorsDef() sdk.OperationDef {
@@ -149,6 +155,42 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 		}
 	}
 
+	// THE DELETE GUARD USES THE UNFILTERED COUNT, NOT bookCounts ABOVE.
+	//
+	// GetAllAuthorBookCounts is a DISPLAY counter: it skips books that are
+	// trashed (MarkedForDeletion) or are non-primary versions, and it never sees
+	// co-authors credited only through the book_authors junction. Every one of
+	// those books still holds the author_id, so purging on a zero from that
+	// counter strands them behind an author row that no longer exists — and an
+	// author's name lives only in that row, so it is not recoverable afterwards.
+	// This is the author-side twin of the series damage recorded in
+	// internal/database/series_bookref.go (6,893 phantom series IDs held by
+	// 13,322 live books + 702 trashed, measured 2026-08-14). This op deletes in
+	// BULK — 4,975 authors were eligible on the live library — so it is by far
+	// the highest-volume way to reproduce that incident.
+	//
+	// bookCounts is still used, but only to pick the CANDIDATE set and to report
+	// ZeroBooks. Deletion is gated on refCounts alone.
+	//
+	// Deliberately fatal when the store cannot answer: falling back to the
+	// filtered counter IS the bug, and it would delete thousands of rows while
+	// reporting success. Computed once for the whole library rather than per
+	// author — it is also the only form in which "referenced by nothing" is
+	// actually answerable.
+	refCounter := database.AsAuthorBookRefStore(store)
+	if refCounter == nil {
+		return fmt.Errorf("purge-empty-authors: store cannot count unfiltered author references (got %T); "+
+			"refusing to purge from a filtered count, which silently strands books whose author "+
+			"is trashed, non-primary, or a junction-only co-author", store)
+	}
+	refCounts, err := refCounter.GetAllAuthorBookRefCounts()
+	if err != nil {
+		return fmt.Errorf("author reference counts (needed for the purge guard): %w", err)
+	}
+
+	// Built BEFORE the dry-run branch below, so `apply=false` and `apply=true`
+	// report and delete exactly the same set. A guard applied only on the apply
+	// path would make the dry run a lie.
 	report := emptyAuthorReport{TotalAuthors: len(authors)}
 	var eligible []int
 	for _, a := range authors {
@@ -156,6 +198,12 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 			continue
 		}
 		report.ZeroBooks++
+		// Zero by the display counter but still referenced by something real.
+		// These are precisely the rows the old guard deleted.
+		if refCounts[a.ID] != 0 {
+			report.HeldByRefs++
+			continue
+		}
 		if params.requireZeroFiles() && fileCounts[a.ID] != 0 {
 			report.ZeroBooksWithFiles++
 			continue
@@ -176,7 +224,8 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 	if !params.Apply {
 		msg := "DRY RUN (nothing deleted) — " + report.summary()
 		reporter.Logger().Info("purge-empty-authors dry run",
-			"eligible", report.Eligible, "sample", report.Sample)
+			"eligible", report.Eligible, "held_by_refs", report.HeldByRefs,
+			"sample", report.Sample)
 		_ = reporter.UpdateProgress(3, 3, msg)
 		return nil
 	}
@@ -212,7 +261,8 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 
 	msg := report.summary()
 	reporter.Logger().Info("purge-empty-authors complete",
-		"deleted", report.Deleted, "failed", report.Failed, "held_back", report.ZeroBooksWithFiles)
+		"deleted", report.Deleted, "failed", report.Failed,
+		"held_by_refs", report.HeldByRefs, "held_back", report.ZeroBooksWithFiles)
 	prog.Done(msg)
 	return nil
 }
