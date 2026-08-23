@@ -1,12 +1,11 @@
 // file: internal/server/openlibrary_service.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-05-15
+// last-edited: 2026-08-22
 
 package server
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -20,7 +19,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
 	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
 	"github.com/gin-gonic/gin"
-	"github.com/oklog/ulid/v2"
 )
 
 // --- HTTP Handlers ---
@@ -88,22 +86,16 @@ func (s *Server) startOLDownload(c *gin.Context) {
 		return
 	}
 
-	tracker := s.olService.Tracker
-	store := s.Ops()
-	opID := ulid.Make().String()
-	folderPath := targetDir
-	if store != nil {
-		_, _ = store.CreateOperation(opID, "ol_dump_download", &folderPath)
-	}
-
-	params := olDownloadOpParams{LegacyOpID: opID, Types: req.Types, TargetDir: targetDir}
-	if _, enqErr := s.opRegistry.EnqueueOp(c.Request.Context(), "openlibrary.download", params); enqErr != nil {
-		slog.Warn("Failed to enqueue OL download, running directly", "enqErr", enqErr)
-		go func() {
-			for _, dumpType := range req.Types {
-				_ = openlibrary.DownloadDump(dumpType, targetDir, tracker)
-			}
-		}()
+	// A failed enqueue is reported as a failure. This used to fall back to running
+	// the download in a detached goroutine and still answer 202 with an id — but
+	// that id tracked nothing, so the work had no progress, no cancellation, no
+	// resume and no record that it ever ran. "Started" was not true of it in any
+	// sense a caller could act on.
+	params := olDownloadOpParams{Types: req.Types, TargetDir: targetDir}
+	opID, enqErr := s.opRegistry.EnqueueOp(c.Request.Context(), "openlibrary.download", params)
+	if enqErr != nil {
+		httputil.InternalError(c, "failed to enqueue OpenLibrary download", enqErr)
+		return
 	}
 
 	httputil.RespondWithSuccess(c, http.StatusAccepted, gin.H{"message": "download started", "types": req.Types, "operation_id": opID})
@@ -127,19 +119,13 @@ func (s *Server) startOLImport(c *gin.Context) {
 		return
 	}
 
-	store := s.Ops()
-	opID := ulid.Make().String()
-	folderPath := targetDir
-	if store != nil {
-		_, _ = store.CreateOperation(opID, "ol_dump_import", &folderPath)
-	}
-
-	importParams := olImportOpParams{LegacyOpID: opID, Types: req.Types, TargetDir: targetDir}
-	if _, enqErr := s.opRegistry.EnqueueOp(c.Request.Context(), "openlibrary.import", importParams); enqErr != nil {
-		slog.Warn("Failed to enqueue OL import, running directly", "enqErr", enqErr)
-		go func() {
-			_ = svc.Import(context.Background(), nil, targetDir, req.Types)
-		}()
+	// See startOLDownload: the detached-goroutine fallback is gone for the same
+	// reason. An enqueue failure is a failure.
+	importParams := olImportOpParams{Types: req.Types, TargetDir: targetDir}
+	opID, enqErr := s.opRegistry.EnqueueOp(c.Request.Context(), "openlibrary.import", importParams)
+	if enqErr != nil {
+		httputil.InternalError(c, "failed to enqueue OpenLibrary import", enqErr)
+		return
 	}
 
 	httputil.RespondWithSuccess(c, http.StatusAccepted, gin.H{"message": "import started", "types": req.Types, "operation_id": opID})

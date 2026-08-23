@@ -1,13 +1,16 @@
 // file: internal/server/handlers/diagnostics_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8ab4b825-05c3-4569-b450-0dca6b872771
-// last-edited: 2026-07-07
+// last-edited: 2026-08-22
 
 package handlers_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +23,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // newDiagCtx builds a gin context with the given path params and an optional
@@ -44,21 +48,57 @@ func diagStrPtr(s string) *string { return &s }
 
 // ── StartExport ───────────────────────────────────────────────────────────
 
-func TestDiagnosticsHandler_StartExport_Enqueues202(t *testing.T) {
+// TestDiagnosticsHandler_StartExport_ReturnsEnqueuedOpID pins the identity that
+// was actually broken: the id in the response body must be the one EnqueueOp
+// returned, because that is the id the client polls and later hands to
+// DownloadExport.
+//
+// The previous version of this test asserted only the 202 and the word
+// "generating". Both stayed true for six days while the handler returned a
+// separately-minted legacy id that resolved at neither endpoint, so the export
+// never reported completion and never downloaded. A test cannot catch an
+// identity bug without asserting the identity.
+func TestDiagnosticsHandler_StartExport_ReturnsEnqueuedOpID(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
 	reg := handlersmocks.NewMockOperationsRegistry(t)
 
-	store.EXPECT().CreateOperation(mock.Anything, "diagnostics_export", mock.Anything).
-		Return(&database.Operation{}, nil)
+	// A value no other code path in this test could produce, so a pass cannot be
+	// explained by an echoed request field or a zero value.
+	const enqueuedID = "01JENQUEUED0000000000EXPORT"
 	reg.EXPECT().EnqueueOp(mock.Anything, "diagnostics.export", mock.Anything).
-		Return("op-1", nil)
+		Return(enqueuedID, nil)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, reg, nil)
 	c, w := newDiagCtx(http.MethodPost, "/diagnostics/export", `{"category":"general"}`, nil)
 	h.StartExport(c)
 
 	assert.Equal(t, http.StatusAccepted, w.Code)
-	assert.Contains(t, w.Body.String(), "generating")
+
+	var body struct {
+		Data struct {
+			OperationID string `json:"operation_id"`
+			Status      string `json:"status"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, enqueuedID, body.Data.OperationID,
+		"must return the enqueued op's id, not a separately-minted one")
+	assert.Equal(t, "queued", body.Data.Status)
+}
+
+// TestDiagnosticsHandler_StartExport_EnqueueFailureIs500 pins that a failed
+// enqueue is not reported as an accepted export.
+func TestDiagnosticsHandler_StartExport_EnqueueFailureIs500(t *testing.T) {
+	store := databasemocks.NewMockStore(t)
+	reg := handlersmocks.NewMockOperationsRegistry(t)
+	reg.EXPECT().EnqueueOp(mock.Anything, "diagnostics.export", mock.Anything).
+		Return("", assert.AnError)
+
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, reg, nil)
+	c, w := newDiagCtx(http.MethodPost, "/diagnostics/export", `{"category":"general"}`, nil)
+	h.StartExport(c)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
 func TestDiagnosticsHandler_StartExport_InvalidCategory_400(t *testing.T) {
@@ -74,7 +114,9 @@ func TestDiagnosticsHandler_StartExport_InvalidCategory_400(t *testing.T) {
 
 func TestDiagnosticsHandler_DownloadExport_NotFound(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
-	store.EXPECT().GetOperationByID("missing").Return(nil, assert.AnError)
+	// Looked up as a v2 row: StartExport hands back an EnqueueOp id, so a legacy
+	// lookup here would miss every export this endpoint is ever asked for.
+	store.EXPECT().GetOperationV2("missing").Return(nil, assert.AnError)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/export/missing/download", "",
@@ -86,8 +128,8 @@ func TestDiagnosticsHandler_DownloadExport_NotFound(t *testing.T) {
 
 func TestDiagnosticsHandler_DownloadExport_NotCompleted_202(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
-	store.EXPECT().GetOperationByID("op-1").
-		Return(&database.Operation{ID: "op-1", Status: "running", Message: "still going"}, nil)
+	store.EXPECT().GetOperationV2("op-1").
+		Return(&database.OperationV2Row{ID: "op-1", Status: "running", ProgressMessage: "still going"}, nil)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/export/op-1/download", "",
@@ -96,6 +138,30 @@ func TestDiagnosticsHandler_DownloadExport_NotCompleted_202(t *testing.T) {
 
 	// Not-completed branch preserves the 202 status code.
 	assert.Equal(t, http.StatusAccepted, w.Code)
+}
+
+// TestDiagnosticsHandler_DownloadExport_Completed_ServesZipFromV2Result closes
+// the loop on the export fix: the op's Run stores {"zip_path": ...} on its own
+// v2 row via ReporterSetResult, and this endpoint has to read it back from
+// there. Nothing else covered that hand-off — the two tests above stop at the
+// error branches, which pass whichever row type is consulted.
+func TestDiagnosticsHandler_DownloadExport_Completed_ServesZipFromV2Result(t *testing.T) {
+	zipPath := filepath.Join(t.TempDir(), "diagnostics.zip")
+	require.NoError(t, os.WriteFile(zipPath, []byte("PK\x03\x04not-a-real-zip"), 0o600))
+
+	store := databasemocks.NewMockStore(t)
+	result := `{"zip_path":"` + zipPath + `"}`
+	store.EXPECT().GetOperationV2("op-done").
+		Return(&database.OperationV2Row{ID: "op-done", Status: "completed", ResultData: &result}, nil)
+
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil, nil, nil)
+	c, w := newDiagCtx(http.MethodGet, "/diagnostics/export/op-done/download", "",
+		gin.Params{{Key: "operationId", Value: "op-done"}})
+	h.DownloadExport(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "PK\x03\x04not-a-real-zip", w.Body.String(),
+		"must serve the file named by the v2 row's result payload")
 }
 
 // ── SubmitAI ──────────────────────────────────────────────────────────────

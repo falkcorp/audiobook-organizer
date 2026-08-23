@@ -1,7 +1,7 @@
 // file: internal/server/diagnostics_ops.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-08-19
+// last-edited: 2026-08-22
 
 // diagnostics_ops registers the diagnostics export OperationDef (v2 UOS).
 
@@ -21,7 +21,6 @@ import (
 )
 
 type diagnosticsExportOpParams struct {
-	LegacyOpID  string `json:"legacy_op_id"`
 	Category    string `json:"category"`
 	Description string `json:"description"`
 }
@@ -58,15 +57,18 @@ func (s *Server) RegisterDiagnosticsExportOp(reg *opsregistry.Registry) error {
 			prog.Start("Generating export data")
 			zipPath, genErr := ds.GenerateExport(p.Category, p.Description)
 			if genErr != nil {
-				if store != nil {
-					_ = store.UpdateOperationError(p.LegacyOpID, genErr.Error())
-				}
 				return fmt.Errorf("generate export: %w", genErr)
 			}
-			resultJSON, _ := json.Marshal(map[string]string{"zip_path": zipPath})
-			if store != nil {
-				_ = store.UpdateOperationResultData(p.LegacyOpID, string(resultJSON))
-				_ = store.UpdateOperationStatus(p.LegacyOpID, "completed", 100, 100, "Export complete")
+			// The zip path is this op's result payload, stored on its own v2 row
+			// and read back by DownloadExport. Persisting it is not bookkeeping we
+			// can lose: a completed export whose path never landed is a download
+			// that 500s with "no result data", so a failure here fails the op.
+			//
+			// Status and error are NOT written here. The v2 worker derives both
+			// from this function's return value, which is why the three legacy
+			// row updates this replaced are gone rather than translated.
+			if err := opsregistry.ReporterSetResult(reporter, map[string]string{"zip_path": zipPath}); err != nil {
+				return fmt.Errorf("persist export result: %w", err)
 			}
 			prog.Done("Export complete")
 			return nil
