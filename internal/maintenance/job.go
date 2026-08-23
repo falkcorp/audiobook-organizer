@@ -1,5 +1,5 @@
 // file: internal/maintenance/job.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 11111111-1111-1111-1111-111111111111
 // last-edited: 2026-08-23
 
@@ -166,30 +166,6 @@ func DefaultPolicy() ExecutionPolicy {
 func RestartPolicy() ExecutionPolicy {
 	p := DefaultPolicy()
 	p.ResumePolicy = opsregistry.ResumeRestart
-	return p
-}
-
-// RequeuePolicy is DefaultPolicy with ResumeRequeue — "re-run from zero".
-//
-// ⚠️ Restricted to jobs that are idempotent AND whose operation id is not an
-// anchor — requeue mints a fresh ULID, so any skip-set keyed on
-// GetOperationResults(id), and the id handed back to the operator, are both lost.
-//
-// HISTORY, because the reason recorded here was overtaken. This used to add "and
-// free of a dry_run parameter", because server.resumeV2Op re-enqueues with literal
-// nil params, under which DryRun unmarshals to false and an interrupted PREVIEW
-// resumes as a real mutation. Two things retired that argument: resumeV2Op is
-// unreachable for maintenance (it dispatches only when opRegistry.Def(op.Type)
-// resolves, and v1 maintenance rows are typed "maintenance:<job>" while v2 defs are
-// "maintenance.<job>" — RegisterOp rejects ids containing ':'), and retiring the v1
-// op minter means no v1 row is created to reach it with. registry.resumeRequeue
-// itself carries Params forward, which TestResume_PreservesParamsAcrossRestartAndRequeue
-// pins for both arms including dry_run:true. The underlying divergence between the
-// two requeue implementations is still recorded in TODO.md, but it no longer gates
-// this choice.
-func RequeuePolicy() ExecutionPolicy {
-	p := DefaultPolicy()
-	p.ResumePolicy = opsregistry.ResumeRequeue
 	return p
 }
 
