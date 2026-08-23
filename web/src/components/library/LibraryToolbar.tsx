@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryToolbar.tsx
-// version: 1.5.2
+// version: 1.6.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-19
+// last-edited: 2026-08-23
 
 import { useState } from 'react';
 import {
@@ -31,6 +31,7 @@ import {
 } from '@mui/icons-material';
 import { ColumnChooser } from '../audiobooks/ColumnChooser';
 import { BatchToolbar } from '../BatchToolbar';
+import { useToast } from '../toast/ToastProvider';
 import type { Audiobook } from '../../types';
 import * as api from '../../services/api';
 import type { SavedFilterPreset } from '../../services/api';
@@ -135,6 +136,20 @@ export const LibraryToolbar = ({
   const [presetsMenuAnchor, setPresetsMenuAnchor] = useState<null | HTMLElement>(null);
   const presetsMenuOpen = Boolean(presetsMenuAnchor);
   const closePresetsMenu = () => setPresetsMenuAnchor(null);
+  const { toast } = useToast();
+
+  // TASK-115: DELETE /operations/v2/:id now answers 404 (not 204) for an id
+  // the registry has already finished with or never heard of — a race any
+  // user can trigger by clicking Cancel right as the progress bar completes.
+  // Report it instead of letting the rejection go unhandled, mirroring the
+  // try/catch + toast pattern in ITunesImport.tsx's cancel button.
+  const handleCancelOp = async (opId: string) => {
+    try {
+      await api.cancelOperation(opId);
+    } catch {
+      toast('Failed to cancel operation — it may have already finished', 'error');
+    }
+  };
 
   return (
     <>
@@ -357,11 +372,7 @@ export const LibraryToolbar = ({
             >
               Organizing: {activeOrganizeOp.progress}/{activeOrganizeOp.total}
             </Typography>
-            <Button
-              size="small"
-              variant="text"
-              onClick={() => api.cancelOperation(activeOrganizeOp.id)}
-            >
+            <Button size="small" variant="text" onClick={() => handleCancelOp(activeOrganizeOp.id)}>
               Cancel
             </Button>
           </Stack>
@@ -397,11 +408,7 @@ export const LibraryToolbar = ({
                 ? `Scanning: ${activeScanOp.progress}/${activeScanOp.total}`
                 : 'Scanning...'}
             </Typography>
-            <Button
-              size="small"
-              variant="text"
-              onClick={() => api.cancelOperation(activeScanOp.id)}
-            >
+            <Button size="small" variant="text" onClick={() => handleCancelOp(activeScanOp.id)}>
               Cancel
             </Button>
           </Stack>
