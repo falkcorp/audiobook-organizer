@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer_regression_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e4f5a6b7-c8d9-e0f1-a2b3-organizer-reg
-// last-edited: 2026-08-16
+// last-edited: 2026-08-23
 
 package organizer
 
@@ -470,4 +470,151 @@ func TestEnsureUnderRoot_RejectsEscape(t *testing.T) {
 func TestEnsureUnderRoot_AcceptsValid(t *testing.T) {
 	err := ensureUnderRoot("/tmp/library/Author/Title/file.m4b", "/tmp/library")
 	assert.NoError(t, err, "valid path inside root should be accepted")
+}
+
+// ---------------------------------------------------------------------------
+// Regression: the destination-adoption check must PROVE sameness.
+//
+// OrganizeBookDirectory used to adopt a file already sitting at the destination
+// whenever it merely had the same SIZE as the source. Two different audiobooks
+// of identical byte length are not rare, and adopting one writes this book's
+// row to point at the other book's audio — unrecoverable from inside the app.
+// The three tests below pin the new contract from both sides:
+//
+//   - same size, DIFFERENT content -> not adopted (the bug)
+//   - same size, SAME content, different inode -> still adopted (the case the
+//     size check was originally added for; without this a change that simply
+//     never adopts would pass every negative test)
+//   - destination unreadable -> not adopted (fails closed on "unknown")
+// ---------------------------------------------------------------------------
+
+// adoptionFixture organizes a two-segment book once and returns the organizer,
+// the book, the source paths and the destination paths the first pass produced.
+// Two segments, not one: OrganizeBookDirectory errors when NOTHING lands, so a
+// single-segment negative test would fail on that error instead of on the
+// adoption decision it means to check.
+func adoptionFixture(t *testing.T) (org *Organizer, book *database.Book, srcPaths, dstPaths []string) {
+	t.Helper()
+
+	rootDir := t.TempDir()
+	importDir := t.TempDir()
+
+	srcPaths = []string{
+		filepath.Join(importDir, "ch01.m4b"),
+		filepath.Join(importDir, "ch02.m4b"),
+	}
+	require.NoError(t, os.WriteFile(srcPaths[0], []byte("chapter-one-audio-payload"), 0644))
+	require.NoError(t, os.WriteFile(srcPaths[1], []byte("chapter-two-audio-payload"), 0644))
+
+	cfg := &config.Config{
+		RootDir:              rootDir,
+		OrganizationStrategy: "copy",             // a real copy: dst gets its own inode, so
+		FolderNamingPattern:  "{author}/{title}", // os.SameFile cannot short-circuit
+		FileNamingPattern:    "{title} - {track:02d}",
+	}
+	org = NewOrganizer(cfg)
+	book = &database.Book{
+		Title:  "Adoption Check",
+		Format: "m4b",
+		Author: &database.Author{Name: "Author"},
+	}
+
+	_, pathMap, err := org.OrganizeBookDirectory(book, segsFor(srcPaths...))
+	require.NoError(t, err)
+	require.Len(t, pathMap, 2, "first organize should place both segments")
+
+	for _, src := range srcPaths {
+		dst, ok := pathMap[src]
+		require.True(t, ok, "first organize should map %s", src)
+		dstPaths = append(dstPaths, dst)
+	}
+
+	// The whole point of these tests is the non-SameFile branch. If the strategy
+	// ever starts hardlinking, os.SameFile answers first and none of this proves
+	// anything, so assert the inodes really are distinct.
+	for i := range srcPaths {
+		srcInfo, err := os.Stat(srcPaths[i])
+		require.NoError(t, err)
+		dstInfo, err := os.Stat(dstPaths[i])
+		require.NoError(t, err)
+		require.False(t, os.SameFile(srcInfo, dstInfo),
+			"fixture requires a distinct inode at the destination, else the SameFile fast path hides the check under test")
+	}
+	return org, book, srcPaths, dstPaths
+}
+
+func TestOrganizeBookDirectory_DstSameSizeDifferentContent_NotAdopted(t *testing.T) {
+	org, book, srcPaths, dstPaths := adoptionFixture(t)
+
+	// Replace segment two's destination with an UNRELATED file of exactly the
+	// same length — the collision the old size-equality check could not see.
+	srcBytes, err := os.ReadFile(srcPaths[1])
+	require.NoError(t, err)
+	occupant := []byte("a-totally-different-book!")
+	require.Len(t, occupant, len(srcBytes), "the occupant must be byte-length identical or this test proves nothing")
+	require.NotEqual(t, srcBytes, occupant)
+	require.NoError(t, os.WriteFile(dstPaths[1], occupant, 0644))
+
+	_, pathMap, err := org.OrganizeBookDirectory(book, segsFor(srcPaths...))
+	require.NoError(t, err, "one segment still lands, so the book must not error")
+
+	assert.NotContains(t, pathMap, srcPaths[1],
+		"a same-size but different-content occupant must NOT be adopted: doing so points this book's row at another book's audio")
+	assert.Contains(t, pathMap, srcPaths[0],
+		"the untouched segment must still be adopted — the guard must not suppress everything")
+	assert.Len(t, pathMap, 1)
+
+	// And the occupant is left exactly as it was: declining to adopt must not
+	// quietly overwrite whatever was there either.
+	after, err := os.ReadFile(dstPaths[1])
+	require.NoError(t, err)
+	assert.Equal(t, occupant, after, "the unrelated occupant's bytes must be untouched")
+}
+
+func TestOrganizeBookDirectory_DstSameSizeSameContent_Adopted(t *testing.T) {
+	org, book, srcPaths, dstPaths := adoptionFixture(t)
+
+	// Rewrite both destinations with byte-identical content through a fresh
+	// file, so they are genuinely new inodes holding the same bytes: the
+	// interrupted-copy-resume case the size check was originally added for.
+	for i := range dstPaths {
+		srcBytes, err := os.ReadFile(srcPaths[i])
+		require.NoError(t, err)
+		require.NoError(t, os.Remove(dstPaths[i]))
+		require.NoError(t, os.WriteFile(dstPaths[i], srcBytes, 0644))
+
+		srcInfo, err := os.Stat(srcPaths[i])
+		require.NoError(t, err)
+		dstInfo, err := os.Stat(dstPaths[i])
+		require.NoError(t, err)
+		require.False(t, os.SameFile(srcInfo, dstInfo),
+			"the rewritten destination must be a different inode, else SameFile adopts it and the content check is untested")
+	}
+
+	_, pathMap, err := org.OrganizeBookDirectory(book, segsFor(srcPaths...))
+	require.NoError(t, err)
+
+	assert.Len(t, pathMap, 2, "byte-identical destinations must still be adopted")
+	for i := range srcPaths {
+		assert.Equal(t, dstPaths[i], pathMap[srcPaths[i]])
+	}
+}
+
+func TestOrganizeBookDirectory_DstUnreadable_NotAdopted(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the permission bits this test relies on")
+	}
+	org, book, srcPaths, dstPaths := adoptionFixture(t)
+
+	// Same size, same content, but we cannot read it to prove that. "Cannot
+	// tell" must resolve to "do not adopt", never to "probably fine".
+	require.NoError(t, os.Chmod(dstPaths[1], 0000))
+	t.Cleanup(func() { _ = os.Chmod(dstPaths[1], 0644) })
+
+	_, pathMap, err := org.OrganizeBookDirectory(book, segsFor(srcPaths...))
+	require.NoError(t, err)
+
+	assert.NotContains(t, pathMap, srcPaths[1],
+		"an unreadable destination is an unknown, and the check must fail closed")
+	assert.Contains(t, pathMap, srcPaths[0])
 }
