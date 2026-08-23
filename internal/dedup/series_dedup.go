@@ -1,7 +1,7 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-08-19
+// last-edited: 2026-08-23
 
 // Package dedup: series_dedup.go contains the extracted execution logic for the
 // "dedup.series-scan", "dedup.series-dedup", and "dedup.series-merge" async
@@ -256,20 +256,52 @@ func ScanSeriesDuplicates(
 
 // SeriesDedupResult summarises the outcome of DedupSeries.
 type SeriesDedupResult struct {
+	// TotalMerged is the number of duplicate series rows merged away. On a
+	// dry run it is the number that WOULD be merged.
 	TotalMerged int
-	Errors      []string
+
+	// TotalBooksReassigned is the number of books moved onto a canonical
+	// series. On a dry run it is the number that WOULD be moved. It exists so
+	// a preview can be compared against the apply that follows it on a second
+	// axis: a preview that predicts the right series count while predicting
+	// the wrong book count is still a preview that lied.
+	TotalBooksReassigned int
+
+	// DryRun echoes the mode the run executed in, so a caller that reads only
+	// the result (an activity row, a log line) can tell a preview from an
+	// apply without also carrying the request params around.
+	DryRun bool
+
+	Errors []string
 }
 
 // DedupSeries groups all series by normalised name and merges every duplicate
 // group, keeping the series with the lowest ID (preferring one with an author).
 // It does NOT invalidate the server cache — the caller must do that.
+//
+// dryRun reports what WOULD be merged without writing anything. The
+// "dedup.series-dedup" op DEFAULTS IT TO TRUE (TODO.md L3966: the op had no
+// dry run at all, and it deletes series rows — a destructive step that
+// deserves to be read before it runs). Pass false to apply.
+//
+// The dry run and the apply share this one loop on purpose: every read, every
+// grouping decision and every canonical-pick runs identically in both modes,
+// and only the two mutating calls (UpdateBook, DeleteSeries) are guarded. A
+// second, preview-only loop could drift from the apply it claims to predict,
+// and a preview that is trusted and wrong is worse than no preview.
+//
+// One divergence is unavoidable and deliberate: the apply counts a merge only
+// after DeleteSeries SUCCEEDS, whereas the dry run counts what it would
+// attempt. A preview can predict the plan, not the store's failures.
 func DedupSeries(
 	_ context.Context,
 	store Store,
 	progress ProgressReporter,
+	dryRun bool,
 ) (SeriesDedupResult, error) {
 	if progress != nil {
-		_ = progress.Log("info", "Starting series deduplication...", nil)
+		_ = progress.Log("info",
+			fmt.Sprintf("Starting series deduplication... (dry_run=%v)", dryRun), nil)
 		_ = progress.UpdateProgress(0, 1, "Starting series deduplication... (0/1, 0.00%)")
 	}
 
@@ -312,7 +344,7 @@ func DedupSeries(
 			fmt.Sprintf("%s (0/%d, 0.00%%)", msg, len(dupGroups)))
 	}
 
-	var result SeriesDedupResult
+	result := SeriesDedupResult{DryRun: dryRun}
 	for gi, group := range dupGroups {
 		if progress != nil && progress.IsCanceled() {
 			_ = progress.Log("warn", "Operation cancelled by user", nil)
@@ -358,10 +390,20 @@ func DedupSeries(
 					continue
 				}
 				full.SeriesID = &keepID
+				if dryRun {
+					result.TotalBooksReassigned++
+					continue
+				}
 				if _, err := store.UpdateBook(full.ID, full); err != nil {
 					result.Errors = append(result.Errors,
 						fmt.Sprintf("failed to reassign book %s: %v", bookCore.ID, err))
+					continue
 				}
+				result.TotalBooksReassigned++
+			}
+			if dryRun {
+				result.TotalMerged++
+				continue
 			}
 			if err := store.DeleteSeries(s.ID); err != nil {
 				result.Errors = append(result.Errors,
@@ -380,8 +422,13 @@ func DedupSeries(
 	}
 
 	if progress != nil {
-		msg := fmt.Sprintf("Series deduplication complete: merged %d duplicates, %d errors",
-			result.TotalMerged, len(result.Errors))
+		verb := "merged"
+		if dryRun {
+			verb = "WOULD merge"
+		}
+		msg := fmt.Sprintf(
+			"Series deduplication complete (dry_run=%v): %s %d duplicates, %d books reassigned, %d errors",
+			dryRun, verb, result.TotalMerged, result.TotalBooksReassigned, len(result.Errors))
 		_ = progress.Log("info", msg, nil)
 		if len(result.Errors) > 0 {
 			errDetail := strings.Join(result.Errors[:minInt(len(result.Errors), 10)], "; ")

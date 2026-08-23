@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.10.0
+// version: 2.11.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -468,11 +468,13 @@ func (s *Server) RegisterSeriesDedupScanOp(reg *opsregistry.Registry) error {
 // RegisterSeriesDedupOp registers the "dedup.series-dedup" v2 OperationDef.
 func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "dedup.series-dedup",
-		Liveness:        opsregistry.LivenessManual,
-		Plugin:          "dedup",
-		DisplayName:     "Series Deduplication",
-		Description:     "Merge all series with identical normalized names, reassigning their books.",
+		ID:          "dedup.series-dedup",
+		Liveness:    opsregistry.LivenessManual,
+		Plugin:      "dedup",
+		DisplayName: "Series Deduplication",
+		Description: "Merge all series with identical normalized names, reassigning their books. " +
+			"Defaults to dry_run=true, which reports what WOULD merge without writing; " +
+			"pass dry_run=false to apply.",
 		DefaultPriority: opsregistry.PriorityNormal,
 		Cancellable:     true,
 		Isolate:         false,
@@ -512,23 +514,47 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 
 			progress := registryProgressAdapter{r: reporter}
 
-			logging.Info(ctx, "series deduplication starting")
+			// Absent dry_run means TRUE. This op deletes series rows and had
+			// no preview at all before TODO.md L3966, so the default has to be
+			// the safe one; a caller that wants the writes says so explicitly.
+			// Same nil-means-true read as maintenance.author-conjunction-repair.
+			dryRun := p.DryRun == nil || *p.DryRun
 
-			_, err := dedup.DedupSeries(ctx, store, progress)
+			logging.Info(ctx, "series deduplication starting", "dry_run", dryRun)
+
+			result, err := dedup.DedupSeries(ctx, store, progress, dryRun)
 			if err != nil {
 				op.SetStatus("failed")
-				logging.Error(ctx, "series deduplication failed", "err", err)
+				logging.Error(ctx, "series deduplication failed", "dry_run", dryRun, "err", err)
 				return err
 			}
 
-			s.dedupCache.InvalidateAll()
+			// A dry run wrote nothing, so there is nothing to invalidate.
+			if !dryRun {
+				s.dedupCache.InvalidateAll()
+			}
 			op.SetStatus("success")
-			logging.Info(ctx, "series deduplication complete")
+			logging.Info(ctx, "series deduplication complete",
+				"dry_run", dryRun, "total_merged", result.TotalMerged,
+				"books_reassigned", result.TotalBooksReassigned,
+				"errors", len(result.Errors))
 
 			if s.activityWriter != nil && opID != "" {
 				activity.FlushOperation(s.activityWriter, opID)
+				// The activity row must say which mode ran. An operator who
+				// cannot tell a preview from an apply in the activity log is
+				// the exact trap the dry run exists to prevent.
+				msg := fmt.Sprintf(
+					"Series deduplication completed: merged %d series, reassigned %d books",
+					result.TotalMerged, result.TotalBooksReassigned)
+				if dryRun {
+					msg = fmt.Sprintf(
+						"Series deduplication PREVIEW (dry_run=true, nothing written): "+
+							"would merge %d series and reassign %d books",
+						result.TotalMerged, result.TotalBooksReassigned)
+				}
 				activity.EmitInfo(s.activityWriter, opID, "dedup.series-dedup", "dedup",
-					"Series deduplication completed", activity.AlwaysShow)
+					msg, activity.AlwaysShow)
 			}
 			return nil
 		},

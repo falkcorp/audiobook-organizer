@@ -1,7 +1,7 @@
 // file: internal/dedup/op_params.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 // Package dedup: op_params.go defines the JSON-unmarshal parameter structs for
 // each of the 8 async dedup OperationDef Run functions. They are kept here so
@@ -39,6 +39,14 @@ type SeriesDedupScanParams struct{}
 // SeriesDedupParams are the parameters for the "dedup.series-dedup" operation.
 type SeriesDedupParams struct {
 	Detail string `json:"detail"`
+
+	// DryRun reports what WOULD be merged without writing it. Defaults to
+	// TRUE when absent (nil), matching
+	// maintenance.author-conjunction-repair: the op DELETES series rows, and
+	// until TODO.md L3966 it had no preview at all. Pass dry_run=false to
+	// apply. Pointer, not bool, so "absent" and "explicitly false" stay
+	// distinguishable — a plain bool would make the safe default unreachable.
+	DryRun *bool `json:"dry_run,omitempty"`
 }
 
 // SeriesPruneParams are the parameters for the "dedup.series-prune" operation.
