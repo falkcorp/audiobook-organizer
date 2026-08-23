@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.15.0
+// version: 3.16.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-08-22
+// last-edited: 2026-08-23
 
 package registry
 
@@ -20,6 +20,13 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/oklog/ulid/v2"
 )
+
+// ErrOpNotFound is returned by Cancel when opID has no live handle and no
+// queued DB row to mark canceled — i.e. the registry has never heard of it
+// (already terminal, or never existed). Callers must not treat this the
+// same as a successful cancel: distinguish "nothing to cancel" from
+// "cancelled" with errors.Is(err, ErrOpNotFound).
+var ErrOpNotFound = errors.New("registry: operation not found")
 
 // Registry is the central in-memory and DB-backed object that owns every
 // OperationDef, dispatches runs, enforces policies, and routes events.
@@ -949,18 +956,25 @@ func (r *Registry) Cancel(opID string) error {
 	if err != nil {
 		return fmt.Errorf("registry: cancel op %s: %w", opID, err)
 	}
-	if updated {
-		r.logger.Info("registry: canceled queued op", "op_id", opID)
-		// R-1: a purely-queued op is never picked up by a worker once canceled,
-		// so no worker-path op.terminal fires — publish it here or the UI bell
-		// leaves the op phantom-"running". def_id is best-effort (the FE only
-		// needs op_id); an empty def_id on a lookup miss is harmless.
-		defID := ""
-		if row, gerr := r.store.GetOperationV2(opID); gerr == nil && row != nil {
-			defID = row.DefID
-		}
-		r.publishOpTerminal(opID, defID, "canceled")
+	if !updated {
+		// Neither a live handle nor a queued DB row — this id was never
+		// queued or running at all (or is already terminal). Distinct from
+		// the success paths above: the caller asked us to stop something
+		// that was never running, so say so instead of silently returning
+		// as if we cancelled it (C-1-style silent-success bug, but for an
+		// unknown id rather than a stub handle).
+		return ErrOpNotFound
 	}
+	r.logger.Info("registry: canceled queued op", "op_id", opID)
+	// R-1: a purely-queued op is never picked up by a worker once canceled,
+	// so no worker-path op.terminal fires — publish it here or the UI bell
+	// leaves the op phantom-"running". def_id is best-effort (the FE only
+	// needs op_id); an empty def_id on a lookup miss is harmless.
+	defID := ""
+	if row, gerr := r.store.GetOperationV2(opID); gerr == nil && row != nil {
+		defID = row.DefID
+	}
+	r.publishOpTerminal(opID, defID, "canceled")
 	return nil
 }
 

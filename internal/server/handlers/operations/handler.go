@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
 // last-edited: 2026-08-23
 
@@ -160,7 +160,15 @@ func (h *Handler) CancelOperation(c *gin.Context) {
 		}
 	}
 
-	// Try cancel via v2 registry (running and queued v2 ops).
+	// Try cancel via v2 registry (running and queued v2 ops). Deliberately
+	// left as `err == nil` rather than distinguishing registry.ErrOpNotFound
+	// from other errors (see TASK-115): this legacy route already tolerates
+	// ANY Cancel error by falling through to the force-update below, so an
+	// unknown id here still ends up 204 via the fallback path — unlike
+	// DELETE /operations/v2/:id, which now answers 404 for an unknown id.
+	// This route is being retired separately per other TODO items; its
+	// force-update fallback is the intended behavior for a stale/legacy id
+	// and is out of scope for this change.
 	if h.registry != nil {
 		if err := h.registry.Cancel(id); err == nil {
 			httputil.RespondWithNoContent(c)

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-17
+// last-edited: 2026-08-23
 
 package handlers_test
 
@@ -142,6 +142,24 @@ func TestOperationsV2Handler_CancelOperationV2_Success(t *testing.T) {
 	h.CancelOperationV2(c)
 
 	assert.Equal(t, http.StatusNoContent, w.Code)
+}
+
+// TestOperationsV2Handler_CancelOperationV2_UnknownID_Returns404 pins
+// TASK-115: when the registry reports there was nothing to cancel
+// (opsregistry.ErrOpNotFound), the handler must answer 404, not the old
+// 204 — a caller asking to cancel an id the registry never heard of must
+// be able to tell that apart from an id it actually cancelled. Paired
+// with the _Success test above (nil -> 204) so the two outcomes are
+// proven to genuinely differ under the same handler.
+func TestOperationsV2Handler_CancelOperationV2_UnknownID_Returns404(t *testing.T) {
+	registry := handlersmocks.NewMockOperationsRegistry(t)
+	registry.EXPECT().Cancel("bad-id").Return(opsregistry.ErrOpNotFound)
+
+	h := handlers.NewOperationsV2Handler(nil, registry, nil, false)
+	c, w := newOpsV2Ctx(http.MethodDelete, "/operations/v2/bad-id", "", gin.Params{{Key: "id", Value: "bad-id"}})
+	h.CancelOperationV2(c)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 // ── TriggerOperationV2 ────────────────────────────────────────────────────

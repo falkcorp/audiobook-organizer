@@ -1,7 +1,7 @@
 // file: internal/server/server_extra_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 61a2d3c4-80ab-4f6f-8c39-15a2ac5b7f0c
-// last-edited: 2026-08-16
+// last-edited: 2026-08-23
 
 package server
 
@@ -280,16 +280,17 @@ func TestOperationEndpointsErrors(t *testing.T) {
 	server.router.ServeHTTP(w, req)
 	require.Equal(t, http.StatusGone, w.Code)
 
-	// Cancel now goes through the v2 route. Both routes answer 204 for an id
-	// they have never heard of, for different reasons: the legacy one
-	// force-updated a legacy `operations` row, while the registry's Cancel
-	// returns nil for an unknown id rather than reporting that there was
-	// nothing to cancel. 204 here is the observed contract, not an endorsement
-	// — see todo.d/20260816-cancel-unknown-op-reports-success.md.
+	// Cancel now goes through the v2 route. TASK-115: registry.Cancel
+	// distinguishes "nothing to cancel" (returns registry.ErrOpNotFound)
+	// from "cancelled" (returns nil), and CancelOperationV2 translates the
+	// former into 404. This route now answers 404 — not the old 204 — for
+	// an id it has never heard of; the legacy DELETE /operations/:id route
+	// (out of scope, being retired separately) still force-updates and
+	// answers 204 regardless, since it tolerates any Cancel error.
 	req = httptest.NewRequest(http.MethodDelete, "/api/v1/operations/v2/bad-id", nil)
 	w = httptest.NewRecorder()
 	server.router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusNoContent, w.Code)
+	require.Equal(t, http.StatusNotFound, w.Code)
 }
 
 func TestImportFileErrors(t *testing.T) {

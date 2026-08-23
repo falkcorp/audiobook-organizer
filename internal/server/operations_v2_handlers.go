@@ -1,7 +1,7 @@
 // file: internal/server/operations_v2_handlers.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-07-12
+// last-edited: 2026-08-23
 
 // UOS-06: SSE event hub, /operations/timeline, single-op introspection,
 // cancel, trigger-op, and /op-defs endpoints.
@@ -126,21 +126,6 @@ func (s *Server) handleGetOperationV2(c *gin.Context) {
 		"operation": opResp,
 		"logs":      logResp,
 	})
-}
-
-// handleCancelOperationV2 implements DELETE /api/v1/operations/v2/:id.
-// Cancels the operation via the registry (if running) or marks it canceled (if queued).
-func (s *Server) handleCancelOperationV2(c *gin.Context) {
-	id := c.Param("id")
-	if s.opRegistry == nil {
-		httputil.RespondWithInternalError(c, "operations registry not initialized")
-		return
-	}
-	if err := s.opRegistry.Cancel(id); err != nil {
-		httputil.InternalError(c, "cancel failed", err)
-		return
-	}
-	httputil.RespondWithNoContent(c)
 }
 
 // handleOperationsSSE implements GET /api/v1/operations/events.
