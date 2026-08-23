@@ -1,7 +1,7 @@
 // file: internal/server/indexed_store.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5d2e4f3a-7b5a-4a70-b8c5-3d7e0f1b9a79
-// last-edited: 2026-08-09
+// last-edited: 2026-08-22
 //
 // indexedStore decorates a database.Store so that every successful
 // book mutation (create / update / delete) schedules an async
@@ -65,10 +65,22 @@ func (s *indexedStore) CreateBook(b *database.Book) (*database.Book, error) {
 // UpdateBook schedules a re-index on success. The update may be a
 // narrow field change but we reindex the full document to keep
 // things simple — BookToDoc is cheap relative to Bleve's cost.
+//
+// A soft-delete (SoftDeleteBook in internal/merge/service.go) goes through
+// this exact path: it sets MarkedForDeletion=true and calls store.UpdateBook,
+// same as any other field edit. Before this check, every UpdateBook — soft-
+// delete included — unconditionally enqueued a REINDEX (delete=false). The
+// worker's IndexBookByID reads the book back via GetBookByID, which does not
+// filter MarkedForDeletion (only the *listing* paths do), so it happily
+// upserted the just-trashed book straight back into Bleve: the book stayed
+// searchable until the next periodic reconcileSearchIndexCoverage pass
+// noticed it as a stale doc and deleted it, which could be minutes away. Now
+// the updated row's own trash bit decides delete vs. reindex, so the search
+// index and the trash agree immediately, with no reconcile pass in between.
 func (s *indexedStore) UpdateBook(id string, b *database.Book) (*database.Book, error) {
 	updated, err := s.Store.UpdateBook(id, b)
 	if err == nil {
-		s.server.enqueueIndex(id, false)
+		s.server.enqueueIndex(id, updated.IsSoftDeleted())
 	}
 	return updated, err
 }
