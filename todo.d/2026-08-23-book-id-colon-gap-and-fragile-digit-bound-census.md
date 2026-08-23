@@ -28,37 +28,43 @@
       **2. The exact same fragile `<prefix>:0`..`<prefix>:;` byte-range
       iterator-bound idiom (digit-only lower bound, `;` upper bound scoped to
       the same colon) that #2801 fixed for the version-group backfill exists
-      at 47 other call sites across 13 files in `internal/database`, none of
-      which were touched by #2801 (out of scope for that PR). Census (grep
-      `\[\]byte\("[a-z_]*:0"\)` across `internal/database/*.go`, excluding
-      test files and excluding the fixed file itself, run 2026-08-23 — exact
-      counts, not approximate):
+      at other call sites across `internal/database`, none of which were
+      touched by #2801 (out of scope for that PR). **Two independent regexes
+      gave two different counts, and neither is an AST-level census — both
+      are lower bounds, not exact totals:**
 
-      | File | Occurrences | Prefix(es) |
-      |---|---|---|
-      | `pebble_store.go` | 20 | `book:` (×20 incl. one bare `lower :=` at L638) |
-      | `pebble_store_authors.go` | 4 | `book:` ×2, `author:` ×1, `author_alias:` ×1 |
-      | `pebble_store_series.go` | 4 | `book:` ×2, `series:` ×1, `book_file:` ×1 |
-      | `pebble_store_stats.go` | 4 | `book:` ×2, `author:` ×1, `series:` ×1 |
-      | `pebble_quick_queries.go` | 2 | `book:` ×2 |
-      | `pebble_store_importpaths.go` | 2 | `book:` ×1, `import_path:` ×1 |
-      | `pebble_store_itunes.go` | 2 | `book:` ×2 |
-      | `pebble_store_scancache.go` | 2 | `book:` ×2 |
-      | `pebble_store_quarantine.go` | 2 | `book:` ×2 |
-      | `pebble_store_works.go` | 2 | `book:` ×1, `work:` ×1 |
-      | `pebble_store_bookfiles.go` | 1 | `book:` ×1 |
-      | `series_bookref.go` | 1 | `book:` ×1 |
-      | `soft_deleted_count.go` | 1 | `book:` ×1 |
-      | **Total** | **47** | across 7 distinct prefixes: `book:`, `author:`, `series:`, `author_alias:`, `import_path:`, `book_file:`, `work:` |
+      - `git grep -nE '\[\]byte\("[a-z_]+:0"\)' -- 'internal/database/*.go'`
+        (anchors on the `[]byte`-wrapped lower bound), run against
+        `origin/main`: **48** hits, all in non-test files, across 14 files
+        (`pebble_store.go` 20; `pebble_store_authors.go`,
+        `pebble_store_series.go`, `pebble_store_stats.go` 4 each;
+        `pebble_quick_queries.go`, `pebble_store_importpaths.go`,
+        `pebble_store_itunes.go`, `pebble_store_scancache.go`,
+        `pebble_store_quarantine.go`, `pebble_store_works.go` 2 each;
+        `pebble_store_bookfiles.go`, `series_bookref.go`,
+        `soft_deleted_count.go`, `pebble_store_versiongroup_backfill.go`
+        1 each — the last one is the site #2801 fixed, so 47 remain
+        unfixed).
+      - `git grep -nE '"[a-z_]+:;"' -- 'internal/database/*.go'` (anchors on
+        the bare-string upper bound instead), run against `origin/main`:
+        **50** hits — 49 in non-test files, plus 1 in
+        `store_invariants_test.go`'s `mustIter(t, ps, "book:0", "book:;")`,
+        which the `[]byte`-wrapped regex above misses entirely because that
+        helper takes plain strings, not `[]byte`.
 
-      A test helper (`internal/database/store_invariants_test.go`'s
-      `mustIter(t, ps, "book:0", "book:;")`) also hardcodes the same literal
-      bounds as string args rather than `[]byte`, so it did not match the
-      grep above — worth including in whatever sweep picks this up.
+      The two disagree because they anchor on different halves of the pair
+      (lower-bound `[]byte(...)` form vs. upper-bound bare-string form), not
+      because one is right and the other wrong — and both regexes miss any
+      bound built by concatenation or `fmt.Sprintf` rather than a single
+      string literal (see `pebble_activity_store.go`'s
+      `[]byte("act:" + tier + ";")` for an example of that shape elsewhere in
+      the package, itself already correct, but a template for how a fragile
+      one could hide from grep too). **Re-run both before sizing a sweep, and
+      expect the true count to be somewhat higher than either.**
 
-      All 47 are latent in the same sense as the version-group backfill was:
-      correct today only because every ID minted so far happens to start with
-      a digit (ULIDs, or small integer author/series IDs). None are a
+      All of these are latent in the same sense as the version-group backfill
+      was: correct today only because every ID minted so far happens to start
+      with a digit (ULIDs, or small integer author/series IDs). None are a
       currently observed data-loss bug. Recommend a `/parallel-sweep`-style
       mechanical pass replacing each `[]byte("<prefix>:0")`/`[]byte("<prefix>:;")`
       pair with the true prefix range `[]byte("<prefix>:")`/`[]byte("<prefix>;")`
@@ -67,4 +73,6 @@
       only AFTER (or alongside) fixing gap 1 above, since several of these
       scans have their own structural/type filters downstream that may share
       the same colon-count assumption and would need the same audit
-      `VGBACKFILL-BOUNDS-FRAGILE`'s fix got.
+      `VGBACKFILL-BOUNDS-FRAGILE`'s fix got. Fixing gap 1 at `CreateBook` may
+      make much of this sweep unnecessary — do that first and re-measure
+      blast radius before committing to a 47/50/N-site mechanical sweep.
