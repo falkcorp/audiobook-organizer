@@ -1,5 +1,6 @@
 // file: internal/serviceregistry/container.go
-// version: 1.1.0
+// version: 1.2.0
+// last-edited: 2026-08-23
 
 package serviceregistry
 
@@ -241,6 +242,20 @@ func (c *Container) Stop(ctx context.Context) error {
 // Panics on missing service or type mismatch (programmer error — fail
 // fast at startup). During Build, also panics if name is not in the
 // active builder's Needs.
+//
+// For a service consumed with the SAME type across many builders (ARCH-8),
+// prefer a typed accessor over a bare Get[T](c, name) call if one exists —
+// e.g. config.GetConfig(c) instead of Get[*config.Config](c, KeyConfig), or
+// plugin.GetEventBus(c) instead of Get[*plugin.EventBus](c, KeyEventBus).
+// Those wrap this exact function (same panic behavior, unchanged) but fix
+// the key string and T in the function signature, so a typo'd key or a
+// mismatched type argument is a compile error at the call site instead of
+// a runtime panic here. They live in the owning package (internal/config,
+// internal/plugin), not here — this package is a dependency of theirs, so
+// importing them back here would be a cycle. Get[T] stays the mechanism
+// for every service without one, including "store" (KeyStore), which is
+// deliberately consumed through many different narrowed interface types
+// and so has no single accessor to offer.
 func Get[T any](c *Container, name string) T {
 	if c.activeBuilder != "" {
 		def := registered[c.activeBuilder]
