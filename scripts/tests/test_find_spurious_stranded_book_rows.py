@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/tests/test_find_spurious_stranded_book_rows.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 3e6f8b12-9d47-4a5c-b8e1-2f7a5c9d0e63
 # last-edited: 2026-08-23
 """Tests for scripts/find_spurious_stranded_book_rows.py.
@@ -222,6 +222,15 @@ class TestBuildReport(unittest.TestCase):
         self.assertIn("no --fix", joined)
         self.assertIn("cannot determine whether", joined)
 
+    def test_notes_contain_no_duplicate_entries(self):
+        # assertIn on a joined string (as above) cannot see a note repeated
+        # verbatim -- the substring is still "in" the joined text either
+        # way. Pins the REPORT-ONLY note previously appearing twice (once
+        # from the mismatch-warning branch's own list, once again as the
+        # first element of the static notes list appended after it).
+        report = fsb.build_report([], set(), "/lib", "http://test")
+        self.assertEqual(len(set(report.notes)), len(report.notes), report.notes)
+
     def test_empty_input_yields_zero_counts_not_an_exception(self):
         report = fsb.build_report([], set(), "/lib", "http://test")
         self.assertEqual(report.total_books_scanned, 0)
@@ -306,7 +315,7 @@ class TestReadToken(unittest.TestCase):
 
 
 class TestFetchAllBooksPagination(unittest.TestCase):
-    def test_pages_until_count_is_reached(self):
+    def test_pages_until_a_short_page_is_seen(self):
         pages = [
             {"data": {"items": [{"id": "1"}, {"id": "2"}], "count": 5, "limit": 2, "offset": 0}},
             {"data": {"items": [{"id": "3"}, {"id": "4"}], "count": 5, "limit": 2, "offset": 2}},
@@ -326,12 +335,49 @@ class TestFetchAllBooksPagination(unittest.TestCase):
         self.assertEqual(books, [])
 
     def test_short_page_stops_even_if_count_claims_more(self):
-        # Defensive stop condition: a short page (fewer items than page_size)
-        # means the server has nothing more, regardless of what `count` says.
+        # A short page (fewer items than page_size) means the server has
+        # nothing more; `count` is never consulted at all (see next test).
         pages = [{"data": {"items": [{"id": "1"}], "count": 99, "limit": 50, "offset": 0}}]
         with mock.patch.object(fsb, "_http_get_json", side_effect=pages):
             books = list(fsb.fetch_all_books("http://test", "tok", False, page_size=50))
         self.assertEqual([b["id"] for b in books], ["1"])
+
+    def test_a_full_first_page_continues_to_a_second_page_regardless_of_count(self):
+        # Pins the C2 fix: audiobooks_helpers.go:100-115 documents `count`
+        # falling back to len(enriched) -- the PAGE length -- whenever the
+        # server's CountAudiobooks[Filtered] call errors. A page-length
+        # `count` is indistinguishable, from the client, between "count
+        # errored" and "there really are exactly page_size books total". The
+        # old implementation used `count` as its sole loop terminator
+        # (`while offset < total`), so a full first page whose `count`
+        # equals page_size stopped the scan right there, silently truncating
+        # to one page. The fix removes `count` from the loop condition
+        # entirely -- only a page shorter than page_size may terminate it --
+        # so this must fetch BOTH pages even though page one's count == 2
+        # (== page_size) claims there is nothing more.
+        pages = [
+            {"data": {"items": [{"id": "1"}, {"id": "2"}], "count": 2, "limit": 2, "offset": 0}},
+            {"data": {"items": [{"id": "3"}], "count": 2, "limit": 2, "offset": 2}},
+        ]
+        with mock.patch.object(fsb, "_http_get_json", side_effect=pages) as mocked:
+            books = list(fsb.fetch_all_books("http://test", "tok", False, page_size=2))
+
+        self.assertEqual([b["id"] for b in books], ["1", "2", "3"])
+        self.assertEqual(mocked.call_count, 2)
+
+    def test_every_request_asks_for_quarantined_rows(self):
+        # Pins the C1 fix: handlers/audiobooks/handler.go:595 defaults
+        # show_quarantined to false, and audiobooks_helpers.go:58 then sets
+        # ExcludeQuarantined = true, dropping quarantined rows from both
+        # items and count. A quarantined-but-not-purged row (missing file on
+        # disk) is exactly the shape this scan hunts for, so every page
+        # request must explicitly ask for them.
+        pages = [{"data": {"items": [{"id": "1"}], "count": 1, "limit": 50, "offset": 0}}]
+        with mock.patch.object(fsb, "_http_get_json", side_effect=pages) as mocked:
+            list(fsb.fetch_all_books("http://test", "tok", False, page_size=50))
+
+        called_url = mocked.call_args[0][0]
+        self.assertIn("show_quarantined=true", called_url)
 
     def test_unexpected_response_shape_raises_instead_of_yielding_zero_silently(self):
         # If the API response contract ever changes (e.g. "items" renamed or
@@ -369,6 +415,18 @@ class _FakeAudiobooksHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         qs = parse_qs(parsed.query)
+        # Mirrors the real default (handlers/audiobooks/handler.go:595):
+        # show_quarantined defaults to false server-side and, unset, would
+        # silently exclude quarantined rows. 400 here so a regression on the
+        # client's show_quarantined=true param fails this E2E test loudly --
+        # sending it and not sending it must NOT be indistinguishable to
+        # this fixture (that indistinguishability is exactly how the C1
+        # regression shipped past 40 passing tests the first time).
+        if qs.get("show_quarantined", ["false"])[0] != "true":
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(b"show_quarantined=true is required by this fake handler")
+            return
         limit = int(qs.get("limit", ["500"])[0])
         offset = int(qs.get("offset", ["0"])[0])
         page = self.books[offset : offset + limit]
@@ -396,7 +454,14 @@ class TestEndToEndAgainstRealFilesystem(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.root = self.tmp.name
+        # realpath, not just the raw tempdir name: on macOS /var is a
+        # symlink to /private/var, and os.chdir()+os.getcwd() (used by the
+        # relative-root test below) resolves through it. Without this,
+        # self.root and the path main()'s os.path.abspath(relative_root)
+        # reconstructs after a chdir would be two different (if equivalent)
+        # strings, breaking the relative-root test on symlink grounds
+        # entirely unrelated to what it's actually testing.
+        self.root = os.path.realpath(self.tmp.name)
 
         # Two sibling wreckage directories sharing a title stem -- the
         # minimum shape find_bogus_dirs' grouping requires (a lone directory
@@ -492,6 +557,43 @@ class TestEndToEndAgainstRealFilesystem(unittest.TestCase):
         # into the high-confidence buckets.
         self.assertEqual(report["counts"]["numeric_title_outside_affected_dir"], 1)
         self.assertEqual(report["counts"]["in_affected_dir_numeric_title_only"], 0)
+
+    def test_a_relative_root_finds_the_same_wreckage_as_the_absolute_one(self):
+        # Every other test in this file passes an already-absolute tempdir
+        # path, which lets main()'s os.path.abspath(args.root) normalization
+        # survive mutation for free -- an absolute path is unchanged by
+        # abspath, so removing that call would never fail those tests. A
+        # relative --root would make find_bogus_dirs return relative paths
+        # while the DB's file_path is always absolute, so the cross-
+        # reference would silently miss every row despite wreckage genuinely
+        # being found on disk -- exactly the path-prefix-mismatch shape the
+        # WARNING note (TestBuildReport) exists to catch, so a regression
+        # here would show up as that warning firing, not as a crash.
+        parent, base = os.path.split(self.root)
+        cwd = os.getcwd()
+        os.chdir(parent)
+        try:
+            rc = fsb.main(
+                [
+                    base,  # relative, not self.root
+                    "--base",
+                    self.base_url,
+                    "--token-file",
+                    self.token_file,
+                    "--report",
+                    self.report_path,
+                ]
+            )
+        finally:
+            os.chdir(cwd)
+
+        self.assertEqual(rc, 0)
+        with open(self.report_path) as f:
+            report = json.load(f)
+
+        self.assertEqual(report["total_books_scanned"], 4)
+        self.assertEqual(report["counts"]["in_affected_dir_both_heuristics"], 2)
+        self.assertNotIn("WARNING", " ".join(report["notes"]))
 
 
 if __name__ == "__main__":
