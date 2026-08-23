@@ -81,9 +81,9 @@ type emptyAuthorReport struct {
 	// deleted; surfacing the number is how an operator sees the divergence.
 	HeldByRefs int
 	Eligible   int
-	Deleted            int
-	Failed             int
-	Sample             []string
+	Deleted    int
+	Failed     int
+	Sample     []string
 }
 
 func (r emptyAuthorReport) summary() string {
