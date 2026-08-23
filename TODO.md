@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.36.0 -->
+<!-- version: 10.37.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -5977,15 +5977,27 @@ interrupted preview into a real mutation. That is the same defect class as the
 
 **19 ops declare `ResumeRequeue`** today (10 under `internal/plugins/dedup/`, 4 under
 `internal/plugins/maintenance/`, plus acoustid/deluge/itunes), so the branch is live code rather
-than dead. ⚠️ **Unverified:** whether any of those 19 actually produce a v1 `operations` row whose
-`Type` matches a registered def ID — which is what it takes to reach `resumeV2Op` at all. Measure
-that before rating severity; it is the difference between a latent trap and an active bug.
+than dead.
 
-Blocks the `ResumeRequeue` upgrade for 5 of the 6 `CanResume`-but-checkpointless maintenance jobs
-in `docs/plans/2026-08-17-maintenance-jobs-to-v2-ops.md` (PR-1 keeps them `ResumeDrop`). Two of
-those 5 are `cleanup_empty_folders` (`os.Remove(dir)` at `:85`, dry-run guarded at `:82`) and
-`repair_missing_files` (`UpdateBookFile` at `:566` — repoints `FilePath`/`Missing`/`FileSize`,
-dry-run guarded at `:532`).
+✅ **MEASURED 2026-08-23 (was "Unverified"): `resumeV2Op` is unreachable for maintenance, and now
+for everything.** Reaching it takes a v1 `operations` row whose `Type` resolves via
+`opRegistry.Def()`. For maintenance that is structurally impossible: v1 rows are typed
+`maintenance:<job>` (colon) while v2 defs are `maintenance.<job>` (dot), and `RegisterOp` *rejects*
+ids containing `:`. More broadly, PR #2784 retired the last live `CreateOperation` call site, so
+**nothing mints a v1 row at all** — `resumeV2Op` has one caller, fed only from
+`GetInterruptedOperations()`, which now returns only pre-deploy rows. Latent trap, not an active
+bug. The `nil`-params defect above is real but no longer reachable on this path.
+
+~~Blocks the `ResumeRequeue` upgrade for 5 of the 6 `CanResume`-but-checkpointless maintenance
+jobs~~ — **RESOLVED 2026-08-23.** All five (`bulk-deluge-import`, `cleanup-empty-folders`,
+`refetch-missing-authors`, `repair-missing-files`, `scan-composer-tags`) now declare
+`ResumeRestart`, which updates the row **in place** and so never reconstructs params — the
+`nil`-params hazard cannot apply to it by construction. This was not optional: PR #2784 deleted
+`resumeLegacyOp`'s default branch, which had been their only working resume, so leaving them
+`ResumeDrop` meant they resumed never. `bulk-fetch-metadata` moved `ResumeRequeue` → `ResumeRestart`
+in the same change, because its skip-set is keyed on the op id and requeue was moving its own
+resume anchor. `gatedByDryRun` in `internal/maintenance/jobs/policy_declaration_test.go` is now
+empty.
 
 ⚠️ Do not confuse `internal/maintenance/jobs/repair_missing_files.go` (job `repair-missing-files`,
 one of the 37, **repoints**, zero delete calls) with

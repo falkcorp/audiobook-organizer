@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/policy_declaration_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6d2f8b41-9e73-4c05-a8d6-1b47e903fa25
-// last-edited: 2026-08-17
+// last-edited: 2026-08-23
 
 package jobs_test
 
@@ -75,9 +75,9 @@ func TestEveryJobDeclaresAUsablePolicy(t *testing.T) {
 // these declarations change nothing, because they restate what
 // internal/server/maintenance_job_op.go already hardcodes for all 37 jobs.
 //
-// The four documented exceptions are listed explicitly rather than skipped, so that
-// a fifth job quietly drifting off the bridge's policy fails here instead of being
-// discovered in PR-2 as an unexplained behaviour change.
+// The documented exceptions are listed explicitly rather than skipped, so that a
+// job quietly drifting off the bridge's policy fails here instead of being
+// discovered later as an unexplained behaviour change.
 func TestPolicyIsBehaviourPreservingVersusTheBridge(t *testing.T) {
 	// What the bridge hardcodes today (maintenance_job_op.go:38-42).
 	const (
@@ -91,7 +91,20 @@ func TestPolicyIsBehaviourPreservingVersusTheBridge(t *testing.T) {
 		"backfill-file-hashes":      opsregistry.ResumeRestart,
 		"recompute-book-aggregates": opsregistry.ResumeRestart,
 		"retention-and-hygiene":     opsregistry.ResumeRestart,
-		"bulk-fetch-metadata":       opsregistry.ResumeRequeue,
+		// Was ResumeRequeue until 2026-08-23. Requeue mints a new op id, and this
+		// job's skip-set is keyed on the op id via GetOperationResults, so requeue
+		// moved its own resume anchor.
+		"bulk-fetch-metadata": opsregistry.ResumeRestart,
+		// Added 2026-08-23. These five declared CanResume()==true while returning
+		// the bridge's ResumeDrop; they were resumed by server.resumeLegacyOp's
+		// default branch off the v1 row, so the declaration never had to be right.
+		// Retiring the v1 op minter deleted that branch and left them not resuming
+		// at all, so the policy now has to say what actually happens.
+		"bulk-deluge-import":      opsregistry.ResumeRestart,
+		"cleanup-empty-folders":   opsregistry.ResumeRestart,
+		"refetch-missing-authors": opsregistry.ResumeRestart,
+		"repair-missing-files":    opsregistry.ResumeRestart,
+		"scan-composer-tags":      opsregistry.ResumeRestart,
 	}
 
 	jobs := maintenance.All()
@@ -138,21 +151,21 @@ func TestPolicyIsBehaviourPreservingVersusTheBridge(t *testing.T) {
 // the old CanResume() bool and the new Policy().ResumePolicy, so the gap is a
 // reviewed decision rather than an accident.
 //
-// CanResume() is still load-bearing — resumeLegacyOp gates on it — and it survives
-// until PR-3. Where the two disagree, Policy() is the intended value.
+// resumeLegacyOp no longer exists: retiring the v1 op minter deleted the branch
+// that gated on CanResume(), so CanResume() is now purely advisory and Policy() is
+// the only thing that resumes anything. That makes a disagreement worse than it
+// used to be, not better — a job claiming CanResume() with ResumeDrop simply never
+// resumes, and nothing reports it.
 func TestPolicyAgreesWithCanResume(t *testing.T) {
-	// CanResume()==true but ResumeDrop: jobs that checkpoint nothing AND advertise
-	// dry_run:true. They cannot take ResumeRequeue until the two requeue
-	// implementations stop disagreeing about params — server.resumeV2Op re-enqueues
-	// with nil, under which DryRun resolves to false and a preview runs for real.
-	// See todo.d/20260817-resumerequeue-two-divergent-implementations.md.
-	gatedByDryRun := map[string]bool{
-		"bulk-deluge-import":      true,
-		"cleanup-empty-folders":   true,
-		"refetch-missing-authors": true,
-		"repair-missing-files":    true,
-		"scan-composer-tags":      true,
-	}
+	// Deliberately EMPTY, and kept rather than deleted so that reintroducing the
+	// disagreement requires naming the job and writing down why.
+	//
+	// It held five jobs until 2026-08-23, all on the reasoning that a dry_run:true
+	// job could not take ResumeRequeue because server.resumeV2Op re-enqueues with
+	// nil params. All five now take ResumeRestart, which updates the row in place
+	// and so never reconstructs params at all; see the Policy() comment on any of
+	// them for why the original blocker no longer applies.
+	gatedByDryRun := map[string]bool{}
 
 	jobs := maintenance.All()
 	if len(jobs) == 0 {

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/scan_composer_tags.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d9e5f3c4-6a7b-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-08-17
+// last-edited: 2026-08-23
 
 package jobs
 
@@ -279,12 +279,25 @@ func sct_categorize(composer, author, narrator, fixMode string) (category, willW
 	return "composer_mismatch", willWrite
 }
 
-// Policy: ResumeDrop, which is what the bridge does today — deliberately NOT
-// ResumeRequeue despite CanResume() being true and this job checkpointing nothing.
-// It advertises dry_run:true, and server.resumeV2Op re-enqueues with nil params,
-// under which DryRun would silently resolve to false and run the job for real.
-// Revisit in PR-2, where the replay is testable. See RequeuePolicy's doc comment
-// and todo.d/20260817-resumerequeue-two-divergent-implementations.md.
+// Policy: ResumeRestart. CanResume() is true and this job checkpoints nothing,
+// so a resume re-runs it; ResumeRestart is what makes that actually happen.
+//
+// This was ResumeDrop until 2026-08-23, on the reasoning that a dry_run:true job
+// could not take ResumeRequeue because server.resumeV2Op re-enqueues with nil
+// params, under which DryRun resolves to false and a preview runs for real. That
+// reasoning no longer applies, on two independent grounds. First, resumeV2Op is
+// unreachable for maintenance: its one caller is fed from GetInterruptedOperations
+// (v1 rows) and dispatches only when opRegistry.Def(op.Type) resolves, but v1
+// maintenance rows are typed "maintenance:<job>" while v2 defs are
+// "maintenance.<job>", and RegisterOp rejects ids containing ":". Second, and
+// decisively, ResumeRestart never requeues at all — it updates the existing row
+// in place, so Params (dry_run included) is preserved by construction rather than
+// reconstructed. TestResume_PreservesParamsAcrossRestartAndRequeue pins that.
+//
+// ResumeDrop was not a no-op choice: until the v1 op minter was retired, these
+// jobs were resumed by server.resumeLegacyOp's default branch off the v1 row, so
+// the declared policy never had to be correct. That branch is gone, and without
+// this a job advertising CanResume() would silently never resume.
 func (j *scanComposerTagsJob) Policy() maintenance.ExecutionPolicy {
-	return maintenance.DefaultPolicy()
+	return maintenance.RestartPolicy()
 }

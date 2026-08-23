@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/bulk_fetch_metadata.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b3c9d7e8-0f1a-2b3c-4d5e-6f7a8b9c0d1e
-// last-edited: 2026-08-17
+// last-edited: 2026-08-23
 
 package jobs
 
@@ -318,10 +318,17 @@ func bmf_stripChapterFromTitle(title string) string {
 	return strings.TrimSpace(cleaned)
 }
 
-// Policy: ResumeRequeue — CanResume() is true but this job checkpoints nothing,
-// so "resume" already means re-run from zero. It is the ONLY one of the six such
-// jobs safe to declare here, because it is the only one with no dry_run parameter
-// to lose to the nil-params requeue path (see RequeuePolicy's doc comment).
+// Policy: ResumeRestart. This was ResumeRequeue until 2026-08-23, on the reasoning
+// that the job "checkpoints nothing, so resume already means re-run from zero".
+// That was true of OpState and false in practice: the results table is this job's
+// de-facto checkpoint. Run() reads GetOperationResults(OperationIDFromCtx(ctx)) to
+// build the `done` skip-set, so the operation id IS the resume anchor.
+//
+// ResumeRequeue mints a fresh ULID for the new row. That was survivable only while
+// the anchor travelled in params as legacy_op_id and was copied across the requeue;
+// once the ctx id became the v2 row id, requeueing moved the anchor on every resume
+// and an interrupted run re-fetched the entire library over the network. ResumeRestart
+// updates the row in place, so the id — and therefore the skip-set — is stable.
 func (j *bulkFetchMetadataJob) Policy() maintenance.ExecutionPolicy {
-	return maintenance.RequeuePolicy()
+	return maintenance.RestartPolicy()
 }
