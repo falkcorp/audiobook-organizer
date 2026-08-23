@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-08-23-staged-library-scan-design.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 4c1e8b73-2a9f-4d06-b5e1-7f3a90c2d846 -->
 <!-- last-edited: 2026-08-23 -->
 
@@ -339,6 +339,61 @@ on its own and yields to interactive work — with a control to promote it to ru
 immediately. The default requires no click, matching *"by default it's just
 backgrounded"*, while the override is one action rather than a settings change.
 Prompting on every import was rejected as inconsistent with that default.
+
+## Resolved in review — round 3, 2026-08-23 **[OWNER]**
+
+### The fast pass never writes metadata to a book that already exists
+
+This closes a clobber vector the earlier drafts did not cover: they discussed
+`OverrideLocked` only in terms of the deep pass, but the fast pass also applies
+"basic metadata", and on a *changed* file that lands on a row a user may have
+curated.
+
+- **New file** → write header-derived metadata. There is nothing to lose.
+- **Changed file** → set `NeedsDeepScan` and the stale marker, and touch nothing
+  else. Title, author, series, everything: untouched.
+
+So exactly **one** code path writes metadata to an existing book — the deep pass,
+through the extracted predicate. One path to audit, one place to mutation-test.
+Routing the fast pass through the same predicate was rejected not because it is
+unsafe in principle but because it doubles the number of guarded write paths for a
+benefit (a slightly fresher title after a re-tag) the deep pass delivers anyway.
+
+### An ambiguous move is not a move
+
+If two or more vanished rows match a new file's `(size, mtime)`, Discover declines
+to repoint: the file is ingested as a new provisional book and the ambiguity is
+recorded.
+
+The asymmetry of the failure modes decides it. A wrong repoint attaches one book's
+hash, chapters and curated metadata to a different book's file, silently and
+permanently. A declined repoint costs a transient duplicate that the deep pass and
+dedup resolve. Guessing by path similarity would handle folder renames
+automatically, but its wrong answers are silent, and this is metadata a user may
+have spent effort on.
+
+### An unparseable header still produces a visible row
+
+A file whose tag header cannot be read is ingested with a title derived from its
+path, and flagged twice: `NeedsDeepScan = true` and header-unparseable. The deep
+pass then tries harder, with `ffprobe`.
+
+- **Nothing on disk is invisible in the app.** Skipping the file was rejected on
+  exactly that ground — silent absence is this repo's recurring failure mode, and a
+  diagnostics-only report is not a substitute for the book appearing.
+- **The junk title is marked as junk.** An unflagged path-derived title is
+  indistinguishable from a curated one, which is how junk-title debt accumulated
+  before; the flag is what lets a later pass find and fix these.
+
+### Provisional state rides on the existing book payload
+
+`needs_deep_scan`, plus the stale-hash and unparseable-header markers, are fields
+on the book response the UI already fetches. No second request, and no separate
+list that can drift out of sync with the library view it annotates.
+
+A dedicated count endpoint was considered for a global "N pending" indicator and
+deferred — it can be added later without changing this shape, and is only worth it
+if the indicator turns out to need it.
 
 ## Open questions for review
 
