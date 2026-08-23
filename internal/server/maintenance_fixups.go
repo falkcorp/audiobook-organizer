@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.13.0
+// version: 2.14.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-08-23
 
@@ -8,10 +8,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
@@ -464,6 +466,71 @@ type composerTagResult struct {
 	Error     string `json:"error,omitempty"`
 }
 
+// maintenanceResultOp is the run metadata both maintenance result routes render
+// alongside the per-item results they decode.
+//
+// It is a keyspace-neutral projection on purpose. The two routes below are the
+// only readers left that care which operations table a maintenance run was
+// recorded in, and after the v1 minter was retired a single job id spans BOTH:
+// runs started before the retirement have a v1 row, runs started after have a v2
+// row, and the results themselves are keyed by an operation id STRING in a table
+// with no foreign key to either. Projecting both shapes onto one struct is what
+// lets the rendering below stay identical for a run from either era.
+type maintenanceResultOp struct {
+	Status   string
+	Progress int
+	Total    int
+}
+
+// errMaintenanceOpWrongJob distinguishes "this id names some other operation"
+// from "this id names nothing", so the routes can answer 400 and 404
+// respectively instead of collapsing both into one misleading status.
+var errMaintenanceOpWrongJob = errors.New("operation belongs to a different job")
+
+// lookupMaintenanceResultOp resolves opID to the run that produced the results
+// stored under it, looking in BOTH operations keyspaces.
+//
+// V2 IS TRIED FIRST because it is the only keyspace new runs land in:
+// runMaintenanceJob mints a v2 row and nothing else, and returns that row's id
+// to the caller, so every id an operator can have obtained since the retirement
+// resolves on the first lookup.
+//
+// THE V1 FALLBACK IS NOT VESTIGIAL. These are operator-facing curl surfaces with
+// no frontend consumer, reached by pasting an operation id from a past run, and
+// the v1 rows for those runs are neither migrated nor deleted by the retirement
+// — they simply stop being created. Dropping the fallback would 404 every run
+// recorded before the deploy while its results sat intact in the results table.
+//
+// legacyTypes are the v1 Type values that identify this job. There is more than
+// one because the v1 dispatcher renamed them once already: the pre-ASYNC-CLEAN-1
+// name, and the "maintenance:<job>" name the job dispatcher wrote afterwards.
+func (s *Server) lookupMaintenanceResultOp(opID, jobID string, legacyTypes ...string) (maintenanceResultOp, error) {
+	store := s.Ops()
+	if store == nil {
+		return maintenanceResultOp{}, fmt.Errorf("database not initialized")
+	}
+
+	if row, err := store.GetOperationV2(opID); err == nil && row != nil {
+		if row.DefID != maintenanceOpID(jobID) {
+			return maintenanceResultOp{}, errMaintenanceOpWrongJob
+		}
+		return maintenanceResultOp{
+			Status:   row.Status,
+			Progress: row.ProgressCurrent,
+			Total:    row.ProgressTotal,
+		}, nil
+	}
+
+	op, err := store.GetOperationByID(opID)
+	if err != nil || op == nil {
+		return maintenanceResultOp{}, os.ErrNotExist
+	}
+	if !slices.Contains(legacyTypes, op.Type) {
+		return maintenanceResultOp{}, errMaintenanceOpWrongJob
+	}
+	return maintenanceResultOp{Status: op.Status, Progress: op.Progress, Total: op.Total}, nil
+}
+
 func (s *Server) handleGetComposerScanResults(c *gin.Context) {
 	opID := c.Param("id")
 	if opID == "" {
@@ -477,15 +544,14 @@ func (s *Server) handleGetComposerScanResults(c *gin.Context) {
 		return
 	}
 
-	op, err := store.GetOperationByID(opID)
-	if err != nil || op == nil {
-		httputil.RespondWithNotFound(c, "operation", opID)
-		return
-	}
-	// Accept both the legacy "composer_tag_scan" type (pre-ASYNC-CLEAN-1) and
-	// the new "maintenance:scan-composer-tags" type created by the job dispatcher.
-	if op.Type != "composer_tag_scan" && op.Type != "maintenance:scan-composer-tags" {
+	op, err := s.lookupMaintenanceResultOp(opID, "scan-composer-tags",
+		"composer_tag_scan", "maintenance:scan-composer-tags")
+	switch {
+	case errors.Is(err, errMaintenanceOpWrongJob):
 		httputil.RespondWithBadRequest(c, "not a composer_tag_scan operation")
+		return
+	case err != nil:
+		httputil.RespondWithNotFound(c, "operation", opID)
 		return
 	}
 
@@ -551,15 +617,14 @@ func (s *Server) handleGetMissingFileRepairResults(c *gin.Context) {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
 	}
-	op, err := store.GetOperationByID(opID)
-	if err != nil || op == nil {
-		httputil.RespondWithNotFound(c, "operation", opID)
-		return
-	}
-	// Accept both the legacy "missing-file-repair" type (pre-ASYNC-CLEAN-1) and
-	// the new "maintenance:repair-missing-files" type created by the job dispatcher.
-	if op.Type != "missing-file-repair" && op.Type != "maintenance:repair-missing-files" {
+	op, err := s.lookupMaintenanceResultOp(opID, "repair-missing-files",
+		"missing-file-repair", "maintenance:repair-missing-files")
+	switch {
+	case errors.Is(err, errMaintenanceOpWrongJob):
 		httputil.RespondWithBadRequest(c, "not a missing-file-repair operation")
+		return
+	case err != nil:
+		httputil.RespondWithNotFound(c, "operation", opID)
 		return
 	}
 	rawResults, err := store.GetOperationResults(opID)
